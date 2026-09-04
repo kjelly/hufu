@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestModelProfileTelemetryIsReportedAndDurableWithoutSecrets(t *testing.T) {
@@ -139,5 +142,210 @@ func TestProviderBoundInvocationFailsClosedOnProfileTelemetryAppendFailure(t *te
 	}
 	if len(statusEvents) != 0 {
 		t.Fatalf("status events = %#v, want no profile status after append failure", statusEvents)
+	}
+}
+
+func TestAuxiliarySidecarsReportOneProfilePerProviderInvocation(t *testing.T) {
+	models := map[string]int{
+		"aux-sidecar-model": 512,
+		"aux-guard-model":   512,
+		"aux-judge-model":   1024,
+	}
+	var statusMu sync.Mutex
+	statusEvents := make([]StatusEvent, 0, 4)
+	requestCounts := make(map[string]int, len(models))
+	var handlerErr error
+	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			statusMu.Lock()
+			handlerErr = fmt.Errorf("decode provider request: %w", err)
+			statusMu.Unlock()
+			http.Error(writer, handlerErr.Error(), http.StatusBadRequest)
+			return
+		}
+		statusMu.Lock()
+		wantOutput, ok := models[body.Model]
+		if !ok {
+			handlerErr = fmt.Errorf("unexpected auxiliary model %q", body.Model)
+		} else {
+			profiles := 0
+			for _, event := range statusEvents {
+				if event.Type == string(EventModelProfileResolved) && event.ModelProfile != nil && event.ModelProfile.ModelID == body.Model {
+					profiles++
+					if event.ModelProfile.MaxOutput.Value != wantOutput {
+						handlerErr = fmt.Errorf("%s max output = %d, want reservation %d", body.Model, event.ModelProfile.MaxOutput.Value, wantOutput)
+					}
+				}
+			}
+			if profiles != requestCounts[body.Model]+1 {
+				handlerErr = fmt.Errorf("%s profile events before request = %d, want %d", body.Model, profiles, requestCounts[body.Model]+1)
+			}
+			requestCounts[body.Model]++
+		}
+		statusMu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(writer, `{"id":"auxiliary","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"{\"approved\":true}"},"finish_reason":"stop"}]}`, body.Model)
+	}))
+	defer provider.Close()
+
+	manager, err := agent.NewProviderManager(provider.URL+"/v1", "auxiliary-secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: manager,
+		resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return auxiliaryProfileIntrospector{}
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-auxiliary-profile", "session-auxiliary-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{
+		providerManager:         manager,
+		modelProfileRuntime:     runtime,
+		session:                 &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "4096"}}},
+		eventStore:              store,
+		executionRunID:          "run-auxiliary-profile",
+		providerBoundaryStarted: true,
+		sidecarModel:            "aux-sidecar-model",
+		guardModel:              "aux-guard-model",
+		judgeModel:              "aux-judge-model",
+		reportStatus: func(event StatusEvent) {
+			statusMu.Lock()
+			statusEvents = append(statusEvents, event)
+			statusMu.Unlock()
+		},
+	}
+
+	s := c.Sidecar()
+	g := c.GuardSidecar()
+	j := c.JudgeSidecar()
+	if s == nil || g == nil || j == nil {
+		t.Fatalf("auxiliary construction returned sidecar=%v guard=%v judge=%v", s != nil, g != nil, j != nil)
+	}
+	if events, err := store.ReadEvents(); err != nil {
+		t.Fatal(err)
+	} else if len(events) != 0 {
+		t.Fatalf("construction telemetry events = %d, want zero", len(events))
+	}
+
+	if _, err := s.Execute(t.Context(), "return a short response"); err != nil {
+		t.Fatalf("sidecar invocation: %v", err)
+	}
+	if _, err := s.Execute(t.Context(), "return a second short response"); err != nil {
+		t.Fatalf("second sidecar invocation: %v", err)
+	}
+	if result, err := g.ReviewToolCall(t.Context(), "worker", "view", "{}", []string{"allow view"}); err != nil || !result.Approved {
+		t.Fatalf("guard invocation result=%#v err=%v, want approved", result, err)
+	}
+	if _, err := j.ExecuteProfile(t.Context(), "return the best candidate", sidecar.JudgeProfile); err != nil {
+		t.Fatalf("judge invocation: %v", err)
+	}
+
+	statusMu.Lock()
+	err = handlerErr
+	statusMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileCounts := make(map[string]int, len(models))
+	for _, event := range events {
+		if event.Type != string(EventModelProfileResolved) {
+			continue
+		}
+		var projection modelprofile.TelemetryProjection
+		if err := json.Unmarshal(event.Payload, &projection); err != nil {
+			t.Fatal(err)
+		}
+		profileCounts[projection.ModelID]++
+		for _, forbidden := range []string{"http://", "https://", "auxiliary-secret", "Bearer"} {
+			if strings.Contains(string(event.Payload), forbidden) {
+				t.Fatalf("durable profile payload contains %q: %s", forbidden, event.Payload)
+			}
+		}
+	}
+	for modelID, want := range map[string]int{"aux-sidecar-model": 2, "aux-guard-model": 1, "aux-judge-model": 1} {
+		if profileCounts[modelID] != want {
+			t.Fatalf("durable %s profile events = %d, want %d", modelID, profileCounts[modelID], want)
+		}
+	}
+	profiles, err := LoadModelProfileTelemetry(workspace, "run-auxiliary-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 4 {
+		t.Fatalf("loaded auxiliary profiles = %d, want four actual invocations", len(profiles))
+	}
+}
+
+func TestAuxiliarySidecarBinderFailsClosedOnProfileTelemetryAppendFailure(t *testing.T) {
+	const modelID = "aux-binder-append-failure"
+	var chatRequests atomic.Int32
+	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/v1/chat/completions" {
+			chatRequests.Add(1)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"id\":\"unexpected\",\"object\":\"chat.completion.chunk\",\"created\":1,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer provider.Close()
+	manager, err := agent.NewProviderManager(provider.URL+"/v1", "binder-secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: manager,
+		resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return auxiliaryProfileIntrospector{}
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-aux-binder-failure", "session-aux-binder-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	var statusEvents []StatusEvent
+	c := &Coordinator{
+		providerManager:         manager,
+		modelProfileRuntime:     runtime,
+		session:                 &TeamSession{Workspace: workspace},
+		eventStore:              store,
+		executionRunID:          "run-aux-binder-failure",
+		providerBoundaryStarted: true,
+		sidecarModel:            modelID,
+		reportStatus:            func(event StatusEvent) { statusEvents = append(statusEvents, event) },
+	}
+	s := c.Sidecar()
+	if s == nil {
+		t.Fatal("sidecar construction failed before injected append failure")
+	}
+	store.syncFile = func() error { return errors.New("injected binder profile append failure") }
+	if _, err := s.Execute(t.Context(), "must not reach provider"); err == nil || !strings.Contains(err.Error(), "bind sidecar context") {
+		t.Fatalf("sidecar error = %v, want binder append failure", err)
+	}
+	if chatRequests.Load() != 0 {
+		t.Fatalf("provider chat requests = %d, want zero after binder append failure", chatRequests.Load())
+	}
+	if len(statusEvents) != 0 {
+		t.Fatalf("status events = %#v, want none after binder append failure", statusEvents)
 	}
 }
