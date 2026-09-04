@@ -390,6 +390,7 @@ func TestWorkerPrepareUsesCanonicalCompactionInputAndFailsClosedOnMandatoryCaps(
 }
 
 func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
+	const runID = "run-downshift-telemetry"
 	strongID := "coordinator-downshift-strong"
 	weakID := "coordinator-downshift-weak"
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
@@ -444,14 +445,20 @@ func TestDownshiftTelemetryOccursOnlyAfterLanguageModelSuccess(t *testing.T) {
 		manager:  providerManager,
 		resolver: modelprofile.NewRuntimeResolverWithCatalog(nil, modelprofile.ProfileCacheOptions{}, catalog),
 	}
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, runID, "session-downshift-telemetry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	c := &Coordinator{
 		providerManager:     providerManager,
 		modelProfileRuntime: profileRuntime,
 		modelList:           []config.ModelEntry{{ID: weakID}, {ID: strongID}},
-		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
+		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 			Generation: agent.GenerationParams{Model: strongID},
 		}},
-		taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+		taskTracker: NewTaskTracker(), eventStore: store, executionRunID: runID, reportStatus: func(StatusEvent) {},
 	}
 	preflight := newCoordinatorRequestPreflight(strongID, "incoming", "system", nil)
 	ctx := context.WithValue(context.Background(), modelKey{}, strongID)
@@ -736,14 +743,7 @@ func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetr
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	syncCalls := 0
-	store.syncFile = func() error {
-		syncCalls++
-		if syncCalls == 3 {
-			return errors.New("injected continuation admission sync failure")
-		}
-		return nil
-	}
+	configureEventStoreSyncFailureForEventType(t, store, modelContinuationEventType, 1, errors.New("injected continuation admission sync failure"))
 	c := &Coordinator{
 		providerManager:     providerManager,
 		modelProfileRuntime: profileRuntime,

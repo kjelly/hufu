@@ -55,6 +55,70 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	}
 }
 
+func configureEventStoreSyncFailure(t *testing.T, store *EventStore, occurrence int, failure error) {
+	t.Helper()
+	if store == nil || store.path == "" {
+		t.Fatal("event store is unavailable")
+	}
+	if occurrence < 1 {
+		t.Fatalf("event occurrence = %d, want positive occurrence", occurrence)
+	}
+	previousSync := store.syncFile
+	if previousSync == nil {
+		t.Fatal("event store sync seam is unavailable")
+	}
+	syncCount := 0
+	store.syncFile = func() error {
+		syncCount++
+		if syncCount == occurrence {
+			return failure
+		}
+		return previousSync()
+	}
+}
+
+func configureEventStoreSyncFailureForEventType(t *testing.T, store *EventStore, eventType string, occurrence int, failure error) {
+	t.Helper()
+	if store == nil || store.path == "" {
+		t.Fatal("event store is unavailable")
+	}
+	if eventType == "" {
+		t.Fatal("event type is empty")
+	}
+	if occurrence < 1 {
+		t.Fatalf("event occurrence = %d, want positive occurrence", occurrence)
+	}
+	previousSync := store.syncFile
+	if previousSync == nil {
+		t.Fatal("event store sync seam is unavailable")
+	}
+	matched := 0
+	store.syncFile = func() error {
+		data, err := os.ReadFile(store.path)
+		if err != nil {
+			return err
+		}
+		var appended RunEvent
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+			if line == "" {
+				continue
+			}
+			var event RunEvent
+			if err := json.Unmarshal([]byte(line), &event); err != nil {
+				return err
+			}
+			appended = event
+		}
+		if appended.Type == eventType {
+			matched++
+			if matched == occurrence {
+				return failure
+			}
+		}
+		return previousSync()
+	}
+}
+
 func TestLearningGapRepairReplaysEventWithoutWorker(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
@@ -320,8 +384,8 @@ func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
 	if err := store.Append(RunEvent{Type: "task_progress", Actor: "worker", Payload: []byte(`{"status":"original"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if store.scanCount != 1 {
-		t.Fatalf("initial scans = %d, want 1", store.scanCount)
+	if store.scanCount != 2 {
+		t.Fatalf("initial scans = %d, want 2", store.scanCount)
 	}
 
 	first, err := store.ReadEvents()
@@ -332,7 +396,7 @@ func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
 		t.Fatalf("cached event count = %d, want 1", len(first))
 	}
 	first[0].Payload[0] = 'X'
-	if store.scanCount != 1 {
+	if store.scanCount != 2 {
 		t.Fatalf("ReadEvents triggered a rescan: %d scans", store.scanCount)
 	}
 	if store.cacheHitCount != 1 {

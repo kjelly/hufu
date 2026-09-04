@@ -17,6 +17,8 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -74,6 +76,12 @@ func TestExecuteTaskWorkerUsesResolvedToolsAfterCoordinatorPreflight(t *testing.
 	defer provider.Close()
 
 	workspace := t.TempDir()
+	const runID = "worker-preflight-run"
+	store, err := NewEventStore(workspace, runID, "session-worker-preflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	worker := &agent.AgentDef{
 		Name: "reviewer", Role: "worker", Tools: "view,grep,glob,ls", Skills: "large", MaxRetries: 0,
 		Timeout: 10, Generation: agent.GenerationParams{Model: modelID, MaxTokens: "128"},
@@ -97,14 +105,21 @@ func TestExecuteTaskWorkerUsesResolvedToolsAfterCoordinatorPreflight(t *testing.
 		projectDir:      workspace,
 		skills:          []*skill.SkillDef{{Name: "large", Description: "large workflow", Path: "skills/large/SKILL.md", Content: "FULL REQUIRED INSTRUCTIONS"}},
 		providerManager: providerManager,
-		coreTools:       agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
-		taskTracker:     NewTaskTracker(),
-		sessionData:     NewSession(),
-		sessionTime:     time.Now(),
-		executionRunID:  "worker-preflight-run",
-		reportStatus:    func(StatusEvent) {},
+		modelProfileRuntime: &ModelProfileRuntime{
+			manager: providerManager,
+			resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return auxiliaryProfileIntrospector{}
+			}, modelprofile.ProfileCacheOptions{}),
+		},
+		coreTools:      agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
+		taskTracker:    NewTaskTracker(),
+		sessionData:    NewSession(),
+		sessionTime:    time.Now(),
+		eventStore:     store,
+		executionRunID: runID,
+		reportStatus:   func(StatusEvent) {},
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review the bounded workset"}})[0]
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review the bounded workset", Execution: ExecutionContract{RequiresResult: true}}})[0]
 	task := TaskDef{Agent: "reviewer", Goal: "review the bounded workset", Execution: ExecutionContract{RequiresResult: true}}
 
 	resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), worker, WorkerToolResolutionRequest{
@@ -223,6 +238,12 @@ func newProtocolRepairProviderCoordinator(t *testing.T) (*Coordinator, *TodoItem
 	t.Cleanup(provider.Close)
 
 	workspace := t.TempDir()
+	const runID = "protocol-repair-preflight-run"
+	store, err := NewEventStore(workspace, runID, "session-protocol-repair-preflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	worker := &agent.AgentDef{
 		Name: "reviewer", Role: "worker", Tools: "view,grep,glob,ls", MaxRetries: 0,
 		Timeout: 10, Generation: agent.GenerationParams{Model: modelID, MaxTokens: "128"},
@@ -245,14 +266,21 @@ func newProtocolRepairProviderCoordinator(t *testing.T) (*Coordinator, *TodoItem
 		session:         session,
 		projectDir:      workspace,
 		providerManager: providerManager,
-		coreTools:       agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
-		taskTracker:     NewTaskTracker(),
-		sessionData:     NewSession(),
-		sessionTime:     time.Now(),
-		executionRunID:  "protocol-repair-preflight-run",
-		reportStatus:    func(StatusEvent) {},
+		modelProfileRuntime: &ModelProfileRuntime{
+			manager: providerManager,
+			resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return auxiliaryProfileIntrospector{}
+			}, modelprofile.ProfileCacheOptions{}),
+		},
+		coreTools:      agent.BuildAllAgentTools(workspace, tools.WithAllowedPaths([]string{workspace})),
+		taskTracker:    NewTaskTracker(),
+		sessionData:    NewSession(),
+		sessionTime:    time.Now(),
+		eventStore:     store,
+		executionRunID: runID,
+		reportStatus:   func(StatusEvent) {},
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "repair the bounded result"}})[0]
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "repair the bounded result", Execution: ExecutionContract{RequiresResult: true}}})[0]
 	return c, item, capture
 }
 
@@ -278,17 +306,17 @@ func assertProtocolRepairProviderSurface(t *testing.T, requests [][]string, want
 	if len(requests) == 0 {
 		t.Fatal("provider made no request")
 	}
-	start := 0
 	if wantWorkerRequest {
-		if !slices.Equal(requests[0], wantWorkerSurface) {
-			t.Fatalf("worker provider-visible tools = %v, want %v", requests[0], wantWorkerSurface)
+		if len(requests) < 2 {
+			t.Fatalf("provider requests = %v, want normal worker requests followed by result-only repair", requests)
 		}
-		start = 1
+		for _, request := range requests[:len(requests)-1] {
+			if !slices.Equal(request, wantWorkerSurface) {
+				t.Fatalf("worker provider-visible tools = %v, want normal surface %v before final repair", request, wantWorkerSurface)
+			}
+		}
 	}
-	if start == len(requests) {
-		t.Fatal("provider made no protocol-repair request")
-	}
-	for _, request := range requests[start:] {
+	for _, request := range requests[len(requests)-1:] {
 		if !slices.Equal(request, []string{submitResultToolName}) {
 			t.Fatalf("protocol-repair provider-visible tools = %v, want [%s]", request, submitResultToolName)
 		}
@@ -304,17 +332,26 @@ func TestResultOnlyRepairUsesSubmitResultAfterInheritedCoordinatorPreflight(t *t
 	c, item, capture := newProtocolRepairProviderCoordinator(t)
 	worker := c.session.Agents["reviewer"]
 	task := TaskDef{Agent: "reviewer", Goal: "repair the bounded result", Execution: ExecutionContract{RequiresResult: true}}
-	resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), worker, WorkerToolResolutionRequest{
-		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionResultRepair,
+	normalResolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), worker, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
 	})
 	if err != nil {
 		t.Fatalf("ResolveTaskTools: %v", err)
+	}
+	resultRepairResolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), worker, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionResultRepair,
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskTools result repair: %v", err)
 	}
 
 	if _, err := c.executeTask(oversizedCoordinatorPreflightContext(t, worker.Generation.Model), task, item.ID); err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}
-	assertProtocolRepairProviderSurface(t, capture.providerRequests(), resolved.Names, true)
+	assertProtocolRepairProviderSurface(t, capture.providerRequests(), normalResolved.Names, true)
+	if !slices.Equal(resultRepairResolved.Names, []string{submitResultToolName}) {
+		t.Fatalf("result-repair provider tools = %v, want [%s]", resultRepairResolved.Names, submitResultToolName)
+	}
 	stored := c.GetTaskResult(item.ID)
 	if stored == nil || stored.Status != TaskResultStatusSuccess || stored.Summary != "protocol repair completed" {
 		t.Fatalf("stored typed result = %#v, want successful protocol repair result", stored)

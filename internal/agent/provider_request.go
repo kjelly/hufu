@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
@@ -16,11 +18,12 @@ import (
 // admission layer. Messages already include the system message and every
 // multimodal/tool part that Fantasy will send for the step.
 type ProviderRequest struct {
-	ModelID    string
-	Call       *fantasy.Call
-	ObjectCall *fantasy.ObjectCall
-	Messages   []fantasy.Message
-	Tools      []fantasy.AgentTool
+	ModelID      string
+	InvocationID string
+	Call         *fantasy.Call
+	ObjectCall   *fantasy.ObjectCall
+	Messages     []fantasy.Message
+	Tools        []fantasy.AgentTool
 	// AdmissionContext is copied into each provider request by the admitted
 	// language-model wrapper. A zero context preserves legacy direct
 	// constructors, which use the compatibility registry in the consumer.
@@ -43,6 +46,9 @@ type ProviderAdmissionContext struct {
 	Estimator           string
 	ContextWindowSource string
 	IsEstimated         bool
+	// ProfileTelemetryJSON is a secret-free, immutable profile projection
+	// carried opaquely to the team-owned durable commit boundary.
+	ProfileTelemetryJSON string
 }
 
 // IsBound reports whether this context is tied to one provider invocation.
@@ -159,16 +165,24 @@ func CountProviderRequestTokens(request ProviderRequest) (int, error) {
 }
 
 type admittedLanguageModel struct {
-	modelID           string
-	inner             fantasy.LanguageModel
-	admission         RequestAdmission
-	invocationLimiter InvocationLimiter
-	admissionContext  ProviderAdmissionContext
+	modelID             string
+	inner               fantasy.LanguageModel
+	admission           RequestAdmission
+	invocationLimiter   InvocationLimiter
+	admissionContext    ProviderAdmissionContext
+	invocationCommitter ProviderInvocationCommitter
 }
 
 // RequestAdmission is the shared pre-provider admission contract.
 type RequestAdmission interface {
 	AdmitProviderRequest(context.Context, ProviderRequest) error
+}
+
+// ProviderInvocationCommitter is the optional durable commit boundary that
+// runs after admission and provider-slot acquisition, but before transport.
+// Implementations must fail closed: a commit error prevents the provider call.
+type ProviderInvocationCommitter interface {
+	CommitProviderInvocation(context.Context, ProviderRequest) error
 }
 
 // InvocationLimiter is an optional coordinator-owned boundary around the
@@ -194,7 +208,8 @@ func NewAdmittedLanguageModelWithContext(modelID string, inner fantasy.LanguageM
 		context.ModelID = modelID
 	}
 	limiter, _ := admission.(InvocationLimiter)
-	return &admittedLanguageModel{modelID: modelID, inner: inner, admission: admission, invocationLimiter: limiter, admissionContext: context}
+	committer, _ := admission.(ProviderInvocationCommitter)
+	return &admittedLanguageModel{modelID: modelID, inner: inner, admission: admission, invocationLimiter: limiter, admissionContext: context, invocationCommitter: committer}
 }
 
 func (m *admittedLanguageModel) acquireInvocation(ctx context.Context) (func(), error) {
@@ -238,8 +253,29 @@ func (m *admittedLanguageModel) request(request ProviderRequest) ProviderRequest
 	return request
 }
 
+func newProviderInvocationID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate provider invocation ID: %w", err)
+	}
+	return fmt.Sprintf("pinv-%s-%x", time.Now().UTC().Format("20060102150405.000000000"), bytes), nil
+}
+
+func (m *admittedLanguageModel) commitInvocation(ctx context.Context, request *ProviderRequest) error {
+	if m.invocationCommitter == nil {
+		return nil
+	}
+	id, err := newProviderInvocationID()
+	if err != nil {
+		return err
+	}
+	request.InvocationID = id
+	return m.invocationCommitter.CommitProviderInvocation(ctx, *request)
+}
+
 func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
-	if err := m.admission.AdmitProviderRequest(ctx, m.request(ProviderRequest{Call: &call})); err != nil {
+	request := m.request(ProviderRequest{Call: &call})
+	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
 	}
 	release, err := m.acquireInvocation(ctx)
@@ -251,15 +287,25 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 			release()
 		}
 	}()
+	if err := m.commitInvocation(ctx, &request); err != nil {
+		return nil, err
+	}
 	return m.inner.Generate(ctx, call)
 }
 
 func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
-	if err := m.admission.AdmitProviderRequest(ctx, m.request(ProviderRequest{Call: &call})); err != nil {
+	request := m.request(ProviderRequest{Call: &call})
+	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
 	}
 	release, err := m.acquireInvocation(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.commitInvocation(ctx, &request); err != nil {
+		if release != nil {
+			release()
+		}
 		return nil, err
 	}
 	streamCtx, cancel, cleanup, stopCleanup := m.streamContext(ctx, release)
@@ -275,7 +321,8 @@ func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 }
 
 func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
-	if err := m.admission.AdmitProviderRequest(ctx, m.request(ProviderRequest{ObjectCall: &call})); err != nil {
+	request := m.request(ProviderRequest{ObjectCall: &call})
+	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
 	}
 	release, err := m.acquireInvocation(ctx)
@@ -287,15 +334,25 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 			release()
 		}
 	}()
+	if err := m.commitInvocation(ctx, &request); err != nil {
+		return nil, err
+	}
 	return m.inner.GenerateObject(ctx, call)
 }
 
 func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
-	if err := m.admission.AdmitProviderRequest(ctx, m.request(ProviderRequest{ObjectCall: &call})); err != nil {
+	request := m.request(ProviderRequest{ObjectCall: &call})
+	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
 	}
 	release, err := m.acquireInvocation(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.commitInvocation(ctx, &request); err != nil {
+		if release != nil {
+			release()
+		}
 		return nil, err
 	}
 	streamCtx, cancel, cleanup, stopCleanup := m.streamContext(ctx, release)

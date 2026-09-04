@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -57,15 +59,25 @@ func TestModelProfileTelemetryIsReportedAndDurableWithoutSecrets(t *testing.T) {
 }
 
 func TestProviderBoundInvocationEmitsModelProfileTelemetry(t *testing.T) {
+	const modelID = "qwen3:8b"
+	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"id":"profile-invocation","object":"chat.completion","created":1,"model":"qwen3:8b","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer provider.Close()
+
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-bound-profile", "session-bound-profile")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	modelID := "qwen3:8b"
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 8_192, MaxOutputTokens: 512})
-	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	manager, err := agent.NewProviderManager(provider.URL+"/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,15 +92,41 @@ func TestProviderBoundInvocationEmitsModelProfileTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ctx == nil || !bound.AdmissionContext.IsBound() || reported.Type != string(EventModelProfileResolved) {
-		t.Fatalf("bound context/status = %#v / %#v", bound, reported)
+	if ctx == nil || !bound.AdmissionContext.IsBound() || bound.AdmissionContext.ProfileTelemetryJSON == "" {
+		t.Fatalf("bound context = %#v", bound)
 	}
 	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(events) != 0 {
+		t.Fatalf("resolution events = %#v, want no event before provider entry", events)
+	}
+
+	languageModel, err := manager.GetProvider(modelID).LanguageModel(ctx, modelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := agent.NewAdmittedLanguageModelWithContext(modelID, languageModel, c.providerAdmission(), bound.AdmissionContext)
+	if _, err := wrapped.Generate(ctx, fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("invoke")}}); err != nil {
+		t.Fatalf("provider-bound invocation: %v", err)
+	}
+	if reported.Type != string(EventModelProfileResolved) || reported.ModelProfile == nil || reported.ModelProfile.InvocationID == "" {
+		t.Fatalf("post-invocation status = %#v", reported)
+	}
+	events, err = store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(events) != 1 || events[0].Type != string(EventModelProfileResolved) {
 		t.Fatalf("events = %#v", events)
+	}
+	var persisted modelprofile.TelemetryProjection
+	if err := json.Unmarshal(events[0].Payload, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.InvocationID != reported.ModelProfile.InvocationID {
+		t.Fatalf("persisted invocation ID = %q, status ID = %q", persisted.InvocationID, reported.ModelProfile.InvocationID)
 	}
 }
 
@@ -130,12 +168,20 @@ func TestProviderBoundInvocationFailsClosedOnProfileTelemetryAppendFailure(t *te
 		executionRunID:      "run-profile-append-failure",
 		reportStatus:        func(event StatusEvent) { statusEvents = append(statusEvents, event) },
 	}
-	_, invocation, err := c.resolveProviderBoundInvocationContext(t.Context(), modelID, nil)
-	if err == nil || !strings.Contains(err.Error(), "persist model profile resolved") {
-		t.Fatalf("resolver error = %v, want durable profile append failure", err)
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(t.Context(), modelID, nil)
+	if err != nil {
+		t.Fatalf("resolver error = %v, want provider-bound snapshot", err)
 	}
-	if invocation.AdmissionContext.IsBound() {
-		t.Fatalf("resolver returned usable invocation after append failure: %#v", invocation)
+	if !invocation.AdmissionContext.IsBound() || invocation.AdmissionContext.ProfileTelemetryJSON == "" {
+		t.Fatalf("resolver returned unusable invocation: %#v", invocation)
+	}
+	languageModel, err := manager.GetProvider(modelID).LanguageModel(ctx, modelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := agent.NewAdmittedLanguageModelWithContext(modelID, languageModel, c.providerAdmission(), invocation.AdmissionContext)
+	if _, err := wrapped.Generate(ctx, fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("must not reach provider")}}); err == nil || !strings.Contains(err.Error(), "persist model profile resolved") {
+		t.Fatalf("provider invocation error = %v, want durable profile append failure", err)
 	}
 	if chatRequests.Load() != 0 {
 		t.Fatalf("provider chat requests = %d, want 0 after append failure", chatRequests.Load())
@@ -338,14 +384,16 @@ func TestAuxiliarySidecarBinderFailsClosedOnProfileTelemetryAppendFailure(t *tes
 	if s == nil {
 		t.Fatal("sidecar construction failed before injected append failure")
 	}
-	store.syncFile = func() error { return errors.New("injected binder profile append failure") }
-	if _, err := s.Execute(t.Context(), "must not reach provider"); err == nil || !strings.Contains(err.Error(), "bind sidecar context") {
+	configureEventStoreSyncFailureForEventType(t, store, string(EventModelProfileResolved), 1, errors.New("injected binder profile append failure"))
+	if _, err := s.Execute(t.Context(), "must not reach provider"); err == nil || !strings.Contains(err.Error(), "persist model profile resolved") {
 		t.Fatalf("sidecar error = %v, want binder append failure", err)
 	}
 	if chatRequests.Load() != 0 {
 		t.Fatalf("provider chat requests = %d, want zero after binder append failure", chatRequests.Load())
 	}
-	if len(statusEvents) != 0 {
-		t.Fatalf("status events = %#v, want none after binder append failure", statusEvents)
+	for _, event := range statusEvents {
+		if event.Type == string(EventModelProfileResolved) {
+			t.Fatalf("profile status event = %#v, want none after binder append failure", event)
+		}
 	}
 }

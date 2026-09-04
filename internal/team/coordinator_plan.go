@@ -180,7 +180,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	if err != nil {
 		return "", false, nil, err
 	}
-	result, _, err := c.runAgentWithStatusAndHistory(ctx, pr.agent, "plan-reviewer", preparedPrompt, nil, &taskTiming{})
+	result, _, err := c.runAgentWithStatusAndHistory(ctx, pr.agent, "plan-reviewer", preparedPrompt, nil, &taskTiming{}, fantasy.StepCountIs(1))
 	if err != nil {
 		return "", false, nil, err
 	}
