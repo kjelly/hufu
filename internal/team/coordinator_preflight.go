@@ -183,7 +183,7 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 		return fullSystem, fullTools, false, nil
 	}
 
-	fullTokens := requestContextTokens(ctx, modelID, fullSystem, userPrompt, stepMessages, fullTools)
+	fullTokens := requestContextTokens(ctx, modelID, fullSystem, userPrompt, stepMessages, fullTools, admission)
 	if fullTokens <= budget {
 		// Fantasy keeps the last non-nil step tool set for the remainder of a
 		// stream. Explicitly restore the complete coordinator configuration on
@@ -197,22 +197,22 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	system := compactCoordinatorSystemPrompt(fullSystem, false)
 	tools := fullTools
 	for pass := 0; pass < 3; pass++ {
-		fixedTokens := requestContextTokens(ctx, modelID, "", userPrompt, stepMessages, nil)
-		toolTokens, _ := defaultCounter.CountTools(ctx, modelID, tools)
+		fixedTokens := requestContextTokens(ctx, modelID, "", userPrompt, stepMessages, nil, admission)
+		toolTokens, _ := defaultCounter.countToolsWithAdmission(ctx, modelID, tools, admission)
 		maxSystemTokens := budget - fixedTokens - toolTokens
 		if maxSystemTokens > 0 {
-			if shaped := shrinkCoordinatorSystemToBudget(ctx, modelID, system, maxSystemTokens); shaped != "" {
+			if shaped := shrinkCoordinatorSystemToBudget(ctx, modelID, system, maxSystemTokens, admission); shaped != "" {
 				system = shaped
 			}
 		}
 
-		systemTokens, _ := defaultCounter.CountText(ctx, modelID, system)
+		systemTokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, system, admission)
 		maxToolTokens := budget - fixedTokens - systemTokens
 		if maxToolTokens > 0 {
-			tools = projectCoordinatorToolsToBudget(ctx, modelID, fullTools, maxToolTokens)
+			tools = projectCoordinatorToolsToBudget(ctx, modelID, fullTools, maxToolTokens, admission)
 		}
 
-		total := requestContextTokens(ctx, modelID, system, userPrompt, stepMessages, tools)
+		total := requestContextTokens(ctx, modelID, system, userPrompt, stepMessages, tools, admission)
 		if total <= budget {
 			return system, tools, true, nil
 		}
@@ -227,11 +227,13 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	return system, tools, true, nil
 }
 
-func requestContextTokens(ctx context.Context, modelID, system, prompt string, messages []fantasy.Message, tools []fantasy.AgentTool) int {
-	if tokens, err := defaultCounter.CountProviderRequest(ctx, modelID, providerCallFromContextRequest(modelID, system, prompt, messages, tools)); err == nil {
+func requestContextTokens(ctx context.Context, modelID, system, prompt string, messages []fantasy.Message, tools []fantasy.AgentTool, admission agent.ProviderAdmissionContext) int {
+	request := providerCallFromContextRequest(modelID, system, prompt, messages, tools)
+	request.AdmissionContext = admission
+	if tokens, err := defaultCounter.CountProviderRequest(ctx, modelID, request); err == nil {
 		return tokens
 	}
-	messageTokens, _ := defaultCounter.CountMessages(ctx, modelID, messages)
+	messageTokens, _ := defaultCounter.countMessagesWithAdmission(ctx, modelID, messages, admission)
 	// Fantasy passes the initial system and user prompt inside opts.Messages.
 	// Count the request as it will actually be sent: replace those messages
 	// with the preflight overrides instead of counting them a second time. The
@@ -239,21 +241,21 @@ func requestContextTokens(ctx context.Context, modelID, system, prompt string, m
 	// callers that provide only conversation history.
 	if system != "" {
 		if systemMessage, ok := firstMessageWithRole(messages, fantasy.MessageRoleSystem); ok {
-			messageTokens -= countSingleMessage(ctx, modelID, systemMessage)
-			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
+			messageTokens -= countSingleMessage(ctx, modelID, systemMessage, admission)
+			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system), admission)
 		} else {
-			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system))
+			messageTokens += countSingleMessage(ctx, modelID, fantasy.NewSystemMessage(system), admission)
 		}
 	}
 	if !hasExactUserMessage(messages, prompt) {
-		messageTokens += countSingleMessage(ctx, modelID, fantasy.NewUserMessage(prompt))
+		messageTokens += countSingleMessage(ctx, modelID, fantasy.NewUserMessage(prompt), admission)
 	}
-	toolTokens, _ := defaultCounter.CountTools(ctx, modelID, tools)
+	toolTokens, _ := defaultCounter.countToolsWithAdmission(ctx, modelID, tools, admission)
 	return messageTokens + toolTokens
 }
 
-func countSingleMessage(ctx context.Context, modelID string, message fantasy.Message) int {
-	tokens, _ := defaultCounter.CountMessages(ctx, modelID, []fantasy.Message{message})
+func countSingleMessage(ctx context.Context, modelID string, message fantasy.Message, admission agent.ProviderAdmissionContext) int {
+	tokens, _ := defaultCounter.countMessagesWithAdmission(ctx, modelID, []fantasy.Message{message}, admission)
 	return tokens
 }
 
@@ -394,11 +396,11 @@ func compactEnvironmentBody(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func shrinkCoordinatorSystemToBudget(ctx context.Context, modelID, prompt string, maxTokens int) string {
+func shrinkCoordinatorSystemToBudget(ctx context.Context, modelID, prompt string, maxTokens int, admission agent.ProviderAdmissionContext) string {
 	if maxTokens <= 0 {
 		return ""
 	}
-	if tokens, _ := defaultCounter.CountText(ctx, modelID, prompt); tokens <= maxTokens {
+	if tokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, prompt, admission); tokens <= maxTokens {
 		return prompt
 	}
 	preamble, sections := splitCoordinatorPromptSections(prompt)
@@ -416,17 +418,17 @@ func shrinkCoordinatorSystemToBudget(ctx context.Context, modelID, prompt string
 			continue
 		}
 		current := renderCoordinatorPromptSections(preamble, sections)
-		currentTokens, _ := defaultCounter.CountText(ctx, modelID, current)
+		currentTokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, current, admission)
 		if currentTokens <= maxTokens {
 			return current
 		}
-		sectionTokens, _ := defaultCounter.CountText(ctx, modelID, sections[i].body)
+		sectionTokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, sections[i].body, admission)
 		allowed := maxTokens - (currentTokens - sectionTokens)
 		if allowed <= 0 {
 			sections[i].body = ""
 			continue
 		}
-		sections[i].body = squeezeTextToTokenBudget(ctx, modelID, sections[i].body, allowed)
+		sections[i].body = squeezeTextToTokenBudget(ctx, modelID, sections[i].body, allowed, admission)
 	}
 	result := renderCoordinatorPromptSections(preamble, sections)
 	// Return the best deterministic reduction even when required sections alone
@@ -435,11 +437,11 @@ func shrinkCoordinatorSystemToBudget(ctx context.Context, modelID, prompt string
 	return result
 }
 
-func squeezeTextToTokenBudget(ctx context.Context, modelID, text string, maxTokens int) string {
+func squeezeTextToTokenBudget(ctx context.Context, modelID, text string, maxTokens int, admission agent.ProviderAdmissionContext) string {
 	if maxTokens <= 0 {
 		return ""
 	}
-	if tokens, _ := defaultCounter.CountText(ctx, modelID, text); tokens <= maxTokens {
+	if tokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, text, admission); tokens <= maxTokens {
 		return text
 	}
 	runes := []rune(text)
@@ -447,7 +449,7 @@ func squeezeTextToTokenBudget(ctx context.Context, modelID, text string, maxToke
 	for lo < hi {
 		mid := (lo + hi + 1) / 2
 		candidate := squeezeText(string(runes[:mid]), mid)
-		tokens, _ := defaultCounter.CountText(ctx, modelID, candidate)
+		tokens, _ := defaultCounter.countTextWithAdmission(ctx, modelID, candidate, admission)
 		if tokens <= maxTokens {
 			lo = mid
 		} else {
@@ -460,7 +462,7 @@ func squeezeTextToTokenBudget(ctx context.Context, modelID, text string, maxToke
 	return squeezeText(string(runes[:lo]), lo)
 }
 
-func projectCoordinatorToolsToBudget(ctx context.Context, modelID string, tools []fantasy.AgentTool, maxTokens int) []fantasy.AgentTool {
+func projectCoordinatorToolsToBudget(ctx context.Context, modelID string, tools []fantasy.AgentTool, maxTokens int, admission agent.ProviderAdmissionContext) []fantasy.AgentTool {
 	if len(tools) == 0 || maxTokens <= 0 {
 		return tools
 	}
@@ -473,7 +475,7 @@ func projectCoordinatorToolsToBudget(ctx context.Context, modelID string, tools 
 		}
 		selected = append(selected, tool)
 		selectedNames[tool.Info().Name] = true
-		tokens, _ := defaultCounter.CountTools(ctx, modelID, []fantasy.AgentTool{tool})
+		tokens, _ := defaultCounter.countToolsWithAdmission(ctx, modelID, []fantasy.AgentTool{tool}, admission)
 		used += tokens
 	}
 	if used > maxTokens {
@@ -483,7 +485,7 @@ func projectCoordinatorToolsToBudget(ctx context.Context, modelID string, tools 
 		if tool == nil || selectedNames[tool.Info().Name] {
 			continue
 		}
-		tokens, _ := defaultCounter.CountTools(ctx, modelID, []fantasy.AgentTool{tool})
+		tokens, _ := defaultCounter.countToolsWithAdmission(ctx, modelID, []fantasy.AgentTool{tool}, admission)
 		if used+tokens > maxTokens {
 			continue
 		}

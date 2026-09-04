@@ -106,6 +106,49 @@ func TestEstimatorTokenCounts(t *testing.T) {
 	})
 }
 
+func TestBoundEmptyEstimatorUsesConservativeLocalFallback(t *testing.T) {
+	const modelID = "bound-empty-estimator-fallback"
+	previous := GlobalModelSpecRegistry().GetSpec(modelID)
+	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID:   modelID,
+		Estimator: "qwen",
+	})
+
+	request := agent.ProviderRequest{
+		ModelID: modelID,
+		Messages: []fantasy.Message{
+			fantasy.NewUserMessage(strings.Repeat("bound empty estimator ", 500)),
+		},
+		AdmissionContext: agent.ProviderAdmissionContext{
+			ModelID:          modelID,
+			ProviderIdentity: "local",
+			Bound:            true,
+		},
+	}
+	got, err := defaultCounter.CountProviderRequest(t.Context(), modelID, request)
+	if err != nil {
+		t.Fatalf("count bound request: %v", err)
+	}
+	want := estimateTextTokens(string(mustSerializeProviderRequest(t, request)), conservativeTokenEstimator)
+	if got != want {
+		t.Fatalf("bound empty estimator count = %d, want local estimated count %d", got, want)
+	}
+	registryCount := estimateTextTokens(string(mustSerializeProviderRequest(t, request)), "qwen")
+	if got == registryCount {
+		t.Fatalf("bound empty estimator consulted registry estimator: count = %d", got)
+	}
+}
+
+func mustSerializeProviderRequest(t *testing.T, request agent.ProviderRequest) []byte {
+	t.Helper()
+	data, err := agent.SerializeProviderRequest(request)
+	if err != nil {
+		t.Fatalf("serialize provider request: %v", err)
+	}
+	return data
+}
+
 func TestContextBudgetAndReport(t *testing.T) {
 	spec := ModelContextSpec{
 		ModelID:            "claude-3-5-sonnet",

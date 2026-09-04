@@ -146,6 +146,7 @@ func (r *ModelProfileRuntime) AdmissionContext(ctx context.Context, modelID stri
 			ContextWindow:       operatorContext,
 			MaxOutputTokens:     maxOutputTokens,
 			SafetyMarginTokens:  safetyMargin,
+			Estimator:           conservativeTokenEstimator,
 			ContextWindowSource: "unavailable",
 			IsEstimated:         operatorContext <= 0,
 		}

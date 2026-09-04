@@ -23,6 +23,12 @@ func (auxiliaryProfileIntrospector) InspectModel(context.Context, providerintros
 	return providerintrospection.RuntimeModelInfo{ConfiguredContext: 32_768, MaxOutputTokens: 256}, nil
 }
 
+type failingProfileIntrospector struct{}
+
+func (failingProfileIntrospector) InspectModel(context.Context, providerintrospection.ProviderRef, string) (providerintrospection.RuntimeModelInfo, error) {
+	return providerintrospection.RuntimeModelInfo{}, errors.New("profile unavailable")
+}
+
 func TestAdmissionContextForAuxiliaryUsesConfiguredTeamMaxOutput(t *testing.T) {
 	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
@@ -45,6 +51,27 @@ func TestAdmissionContextForAuxiliaryUsesConfiguredTeamMaxOutput(t *testing.T) {
 	bound := c.admissionContextFor(t.Context(), "auxiliary-model", nil)
 	if bound.MaxOutputTokens != 4096 {
 		t.Fatalf("auxiliary admission max output = %d, want configured team value 4096 (provider advertised 256)", bound.MaxOutputTokens)
+	}
+}
+
+func TestAdmissionContextProfileErrorUsesConservativeEstimator(t *testing.T) {
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatalf("NewProviderManager failed: %v", err)
+	}
+	runtime := &ModelProfileRuntime{
+		manager: providerManager,
+		resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+			return failingProfileIntrospector{}
+		}, modelprofile.ProfileCacheOptions{}),
+	}
+
+	bound := runtime.AdmissionContext(t.Context(), "profile-error-model", 0, 0, 0)
+	if !bound.IsBound() {
+		t.Fatalf("profile error context is not bound: %#v", bound)
+	}
+	if bound.Estimator != conservativeTokenEstimator || !bound.IsEstimated {
+		t.Fatalf("profile error estimator = %q/%t, want conservative estimated fallback", bound.Estimator, bound.IsEstimated)
 	}
 }
 

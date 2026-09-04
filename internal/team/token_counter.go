@@ -389,6 +389,8 @@ type DefaultTokenCounter struct {
 	registry *ModelSpecRegistry
 }
 
+const conservativeTokenEstimator = "estimated"
+
 func NewDefaultTokenCounter(r *ModelSpecRegistry) *DefaultTokenCounter {
 	if r == nil {
 		r = globalRegistry
@@ -399,18 +401,35 @@ func NewDefaultTokenCounter(r *ModelSpecRegistry) *DefaultTokenCounter {
 var defaultCounter = NewDefaultTokenCounter(globalRegistry)
 
 func (tc *DefaultTokenCounter) CountText(ctx context.Context, modelID, text string) (int, error) {
+	return tc.countTextWithEstimator(text, tc.registry.GetSpec(modelID).Estimator), nil
+}
+
+func (tc *DefaultTokenCounter) countTextWithAdmission(ctx context.Context, modelID, text string, admission agent.ProviderAdmissionContext) (int, error) {
 	if text == "" {
 		return 0, nil
 	}
-	spec := tc.registry.GetSpec(modelID)
-	return estimateTextTokens(text, spec.Estimator), nil
+	return tc.countTextWithEstimator(text, tc.estimatorForAdmission(modelID, admission)), nil
+}
+
+func (tc *DefaultTokenCounter) countTextWithEstimator(text, estimator string) int {
+	if text == "" {
+		return 0
+	}
+	return estimateTextTokens(text, estimator)
 }
 
 func (tc *DefaultTokenCounter) CountMessages(ctx context.Context, modelID string, messages []fantasy.Message) (int, error) {
+	return tc.countMessagesWithEstimator(modelID, messages, tc.registry.GetSpec(modelID).Estimator), nil
+}
+
+func (tc *DefaultTokenCounter) countMessagesWithAdmission(ctx context.Context, modelID string, messages []fantasy.Message, admission agent.ProviderAdmissionContext) (int, error) {
+	return tc.countMessagesWithEstimator(modelID, messages, tc.estimatorForAdmission(modelID, admission)), nil
+}
+
+func (tc *DefaultTokenCounter) countMessagesWithEstimator(modelID string, messages []fantasy.Message, estimator string) int {
 	if len(messages) == 0 {
-		return 0, nil
+		return 0
 	}
-	spec := tc.registry.GetSpec(modelID)
 	total := 0
 	for _, msg := range messages {
 		// Message role overhead (approx 4 tokens per message for formatting tags)
@@ -419,39 +438,56 @@ func (tc *DefaultTokenCounter) CountMessages(ctx context.Context, modelID string
 			switch part.GetType() {
 			case fantasy.ContentTypeText:
 				if p, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
-					total += estimateTextTokens(p.Text, spec.Estimator)
+					total += estimateTextTokens(p.Text, estimator)
 				}
 			case fantasy.ContentTypeReasoning:
 				if p, ok := fantasy.AsMessagePart[fantasy.ReasoningPart](part); ok {
-					total += estimateTextTokens(p.Text, spec.Estimator)
+					total += estimateTextTokens(p.Text, estimator)
 				}
 			case fantasy.ContentTypeToolCall:
 				if p, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
-					total += estimateTextTokens(p.ToolName+" "+p.Input, spec.Estimator)
+					total += estimateTextTokens(p.ToolName+" "+p.Input, estimator)
 				}
 			case fantasy.ContentTypeToolResult:
 				if p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
 					txt, _ := toolResultOutputText(p.Output)
-					total += estimateTextTokens(txt, spec.Estimator)
+					total += estimateTextTokens(txt, estimator)
 				}
 			}
 		}
 	}
-	return total, nil
+	return total
 }
 
 func (tc *DefaultTokenCounter) CountTools(ctx context.Context, modelID string, tools []fantasy.AgentTool) (int, error) {
+	return tc.countToolsWithEstimator(modelID, tools, tc.registry.GetSpec(modelID).Estimator), nil
+}
+
+func (tc *DefaultTokenCounter) countToolsWithAdmission(ctx context.Context, modelID string, tools []fantasy.AgentTool, admission agent.ProviderAdmissionContext) (int, error) {
+	return tc.countToolsWithEstimator(modelID, tools, tc.estimatorForAdmission(modelID, admission)), nil
+}
+
+func (tc *DefaultTokenCounter) countToolsWithEstimator(modelID string, tools []fantasy.AgentTool, estimator string) int {
 	if len(tools) == 0 {
-		return 0, nil
+		return 0
 	}
-	spec := tc.registry.GetSpec(modelID)
 	total := 0
 	for _, tool := range tools {
 		toolDef := tool.Info()
 		text := fmt.Sprintf("Tool: %s Description: %s Parameters: %v", toolDef.Name, toolDef.Description, toolDef.Parameters)
-		total += estimateTextTokens(text, spec.Estimator)
+		total += estimateTextTokens(text, estimator)
 	}
-	return total, nil
+	return total
+}
+
+func (tc *DefaultTokenCounter) estimatorForAdmission(modelID string, admission agent.ProviderAdmissionContext) string {
+	if admission.IsBound() {
+		if admission.Estimator != "" {
+			return admission.Estimator
+		}
+		return conservativeTokenEstimator
+	}
+	return tc.registry.GetSpec(modelID).Estimator
 }
 
 func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID string, request agent.ProviderRequest) (int, error) {
@@ -460,12 +496,7 @@ func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID
 	if err != nil {
 		return 0, err
 	}
-	estimator := request.AdmissionContext.Estimator
-	if estimator == "" {
-		// Preserve compatibility for unbound requests and older bound contexts
-		// that predate the provider-bound estimator projection.
-		estimator = tc.registry.GetSpec(modelID).Estimator
-	}
+	estimator := tc.estimatorForAdmission(modelID, request.AdmissionContext)
 	return estimateTextTokens(string(data), estimator), nil
 }
 

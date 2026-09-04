@@ -66,6 +66,99 @@ func TestCoordinatorRequestPreflightRetainsBoundAdmissionContext(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRequestPreflightUsesBoundEstimatorForPrepare(t *testing.T) {
+	const modelID = "preflight-bound-estimator-prepare"
+	previous := GlobalModelSpecRegistry().GetSpec(modelID)
+	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID:            modelID,
+		ContextWindow:      128_000,
+		MaxOutputTokens:    512,
+		SafetyMarginTokens: 64,
+		Estimator:          conservativeTokenEstimator,
+	})
+
+	system := strings.Repeat("bound estimator system text ", 1_000)
+	prompt := strings.Repeat("bound estimator prompt ", 100)
+	bound := agent.ProviderAdmissionContext{
+		ModelID:            modelID,
+		ProviderIdentity:   "local",
+		Bound:              true,
+		MaxOutputTokens:    512,
+		SafetyMarginTokens: 64,
+		Estimator:          "qwen",
+	}
+	request := providerCallFromContextRequest(modelID, system, prompt, nil, nil)
+	request.AdmissionContext = bound
+	boundTokens, err := defaultCounter.CountProviderRequest(t.Context(), modelID, request)
+	if err != nil {
+		t.Fatalf("count bound request: %v", err)
+	}
+	legacyRequest := request
+	legacyRequest.AdmissionContext = agent.ProviderAdmissionContext{}
+	legacyTokens, err := defaultCounter.CountProviderRequest(t.Context(), modelID, legacyRequest)
+	if err != nil {
+		t.Fatalf("count registry request: %v", err)
+	}
+	if legacyTokens <= boundTokens {
+		t.Fatalf("registry tokens = %d, bound tokens = %d; want global estimated count to be larger", legacyTokens, boundTokens)
+	}
+
+	bound.ContextWindow = boundTokens + bound.MaxOutputTokens + bound.SafetyMarginTokens
+	preflight := newCoordinatorRequestPreflightWithAdmission(modelID, prompt, system, nil, bound)
+	_, _, applied, err := preflight.prepare(t.Context(), nil, prompt, bound.MaxOutputTokens, 0)
+	if err != nil {
+		t.Fatalf("prepare() error = %v", err)
+	}
+	if applied {
+		t.Fatalf("prepare() projected a request that fits the bound qwen budget: bound=%d legacy=%d", boundTokens, legacyTokens)
+	}
+}
+
+func TestCoordinatorPreflightShapingUsesBoundEstimator(t *testing.T) {
+	const modelID = "preflight-bound-estimator-shaping"
+	previous := GlobalModelSpecRegistry().GetSpec(modelID)
+	t.Cleanup(func() { GlobalModelSpecRegistry().RegisterSpec(previous) })
+	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+		ModelID:   modelID,
+		Estimator: conservativeTokenEstimator,
+	})
+	bound := agent.ProviderAdmissionContext{
+		ModelID:          modelID,
+		ProviderIdentity: "local",
+		Bound:            true,
+		Estimator:        "qwen",
+	}
+
+	system := "Required coordinator contract.\n\n## Environment & Rules\n" + strings.Repeat("environment detail ", 600)
+	systemBudget, _ := defaultCounter.countTextWithAdmission(t.Context(), modelID, system, bound)
+	shapedSystem := shrinkCoordinatorSystemToBudget(t.Context(), modelID, system, systemBudget, bound)
+	if shapedSystem != system {
+		t.Fatalf("bound estimator unnecessarily shaped system prompt: got %d bytes, want %d", len(shapedSystem), len(system))
+	}
+	legacySystem := shrinkCoordinatorSystemToBudget(t.Context(), modelID, system, systemBudget, agent.ProviderAdmissionContext{})
+	if legacySystem == system {
+		t.Fatal("regression setup did not make registry estimator shape the system prompt")
+	}
+
+	required := fantasy.NewAgentTool("agent", "required", func(context.Context, coordinatorPreflightTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse("ok"), nil
+	})
+	optional := fantasy.NewAgentTool("team_info", strings.Repeat("optional guidance ", 1_000), func(context.Context, coordinatorPreflightTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse("ok"), nil
+	})
+	tools := []fantasy.AgentTool{required, optional}
+	toolBudget, _ := defaultCounter.countToolsWithAdmission(t.Context(), modelID, tools, bound)
+	projectedTools := projectCoordinatorToolsToBudget(t.Context(), modelID, tools, toolBudget, bound)
+	if len(projectedTools) != len(tools) {
+		t.Fatalf("bound estimator unnecessarily projected tools: got %d, want %d", len(projectedTools), len(tools))
+	}
+	legacyTools := projectCoordinatorToolsToBudget(t.Context(), modelID, tools, toolBudget, agent.ProviderAdmissionContext{})
+	if len(legacyTools) >= len(tools) {
+		t.Fatalf("regression setup did not make registry estimator project optional tools: got %d tools", len(legacyTools))
+	}
+}
+
 func TestCoordinatorPromptExplainsWorkerSkillInstructions(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{
@@ -129,7 +222,7 @@ func TestCoordinatorRequestPreflightShapesFullRequest(t *testing.T) {
 		t.Fatal("tool projection removed a required coordinator tool")
 	}
 	budget := CalculateContextBudget(GlobalModelSpecRegistry().GetSpec(modelID), 0, 0).Available
-	if got := requestContextTokens(context.Background(), modelID, shapedSystem, "review the project", nil, shapedTools); got > budget {
+	if got := requestContextTokens(context.Background(), modelID, shapedSystem, "review the project", nil, shapedTools, agent.ProviderAdmissionContext{}); got > budget {
 		t.Fatalf("shaped request has %d tokens, budget is %d", got, budget)
 	}
 }
