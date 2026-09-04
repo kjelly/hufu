@@ -350,10 +350,7 @@ func TestDetectAndCacheProviderContextLengthsPreservesOperatorOverride(t *testin
 	defer srv.Close()
 
 	modelID := "qwen3"
-	prior := globalRegistry.GetSpec(modelID)
-	t.Cleanup(func() {
-		globalRegistry.RegisterSpec(prior)
-	})
+	preserveRegisteredModelSpec(t, globalRegistry, modelID)
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
 		ModelID: modelID, ContextWindow: 8_192, ContextWindowSource: "operator", IsEstimated: false,
 	})
@@ -375,10 +372,7 @@ func TestDetectAndCacheProviderContextLengthsPreservesOperatorOverride(t *testin
 
 func TestDetectAndCacheProviderContextLengthsOperatorWinsConcurrentProbe(t *testing.T) {
 	modelID := "qwen3"
-	prior := globalRegistry.GetSpec(modelID)
-	t.Cleanup(func() {
-		globalRegistry.RegisterSpec(prior)
-	})
+	preserveRegisteredModelSpec(t, globalRegistry, modelID)
 
 	probeStarted := make(chan struct{})
 	releaseProbe := make(chan struct{})
