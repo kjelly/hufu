@@ -117,6 +117,9 @@ func (r *ModelProfileRuntime) profileForProvider(ctx context.Context, modelID st
 			FallbackContext: legacy.ContextWindow,
 		},
 	}
+	if strings.TrimSpace(catalogProvider) != "" {
+		input.Provider = strings.ToLower(strings.TrimSpace(catalogProvider))
+	}
 	if operatorContext > 0 {
 		input.Context.OperatorContext = operatorContext
 	}

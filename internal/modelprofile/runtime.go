@@ -773,18 +773,14 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	if len(catalogProviderArg) > 0 {
 		lookupProvider = catalogProviderArg[0]
 	}
-	lookupIdentity := provider
+	var catalogModelID string
 	if strings.TrimSpace(lookupProvider) != "" {
-		// A diagnostic override deliberately selects a different catalog
-		// namespace. Its identity must not inherit the bound provider's alias
-		// rules, which are only valid for the original provider reference.
-		lookupIdentity = providerintrospection.ProviderRef{
-			Provider: lookupProvider,
-			Name:     lookupProvider,
-			Type:     provider.Type,
-		}
+		// A diagnostic override is a catalog namespace, not a provider adapter.
+		// Resolve its qualifier without inheriting runtime fallback semantics.
+		lookupProvider, catalogModelID = catalogLookupIdentityForNamespace(lookupProvider, modelID)
+	} else {
+		lookupProvider, catalogModelID = catalogLookupIdentity(provider, modelID)
 	}
-	lookupProvider, catalogModelID := catalogLookupIdentity(lookupIdentity, modelID)
 	result, found := catalog.Lookup(lookupProvider, catalogModelID)
 	if !found {
 		return
@@ -807,6 +803,16 @@ func applyCatalogEvidence(catalog modelcatalog.Reader, input *ModelProfileInput,
 	applyCatalogCapability(&input.Capabilities.Attachments, model.Attachment)
 	applyCatalogCapability(&input.Capabilities.Reasoning, model.Reasoning)
 	applyCatalogCapability(&input.Capabilities.Temperature, model.Temperature)
+}
+
+func catalogLookupIdentityForNamespace(providerName, modelID string) (string, string) {
+	providerName = strings.ToLower(strings.TrimSpace(providerName))
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	qualifier, remainder, ok := strings.Cut(modelID, "/")
+	if ok && strings.EqualFold(strings.TrimSpace(qualifier), providerName) {
+		return providerName, remainder
+	}
+	return providerName, modelID
 }
 
 func applyCatalogCapability(target *CapabilityEvidence, value *bool) {
