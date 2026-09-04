@@ -118,11 +118,12 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 			continue
 		}
 		seen[candidateID] = true
-		candidateContext := c.admissionContextForWithOutput(ctx, candidateID, nil, maxOutputTokens)
-		candidatePreflight := newCoordinatorRequestPreflightWithAdmission(candidateID, prompt, fullSystem, fullTools, candidateContext)
-		candidateSpec := modelContextSpecForProviderRequest(agent.ProviderRequest{
-			ModelID: candidateID, AdmissionContext: candidateContext,
-		}).WithEffectiveMaxOutputTokens(maxOutputTokens)
+		candidateContext, candidateInvocation, err := c.resolveProviderBoundInvocationContextWithOutput(ctx, candidateID, nil, maxOutputTokens)
+		if err != nil {
+			continue
+		}
+		candidateAdmission := candidateInvocation.AdmissionContext
+		candidateSpec := candidateInvocation.ModelContext
 		candidateOutputReservation := candidateSpec.MaxOutputTokens
 		// A downshift must not trade a proven CannotFit for an unknown
 		// capacity: estimated candidates stay ineligible even though the
@@ -130,7 +131,7 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if candidateSpec.IsEstimated || candidateSpec.ContextWindow <= 0 {
 			continue
 		}
-		candidatePreflight.bindAdmissionContext(candidateContext)
+		candidatePreflight := newCoordinatorRequestPreflightWithAdmission(candidateID, prompt, fullSystem, fullTools, candidateAdmission)
 		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, candidateOutputReservation, stepNumber)
 		if err != nil {
 			continue
@@ -144,7 +145,7 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 			ModelID: candidateID, System: requestSystem, Tools: requestTools, Messages: messages,
 			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: candidateOutputReservation,
 			SafetyMarginTokens: candidateSpec.SafetyMarginTokens, StepNumber: stepNumber,
-			AdmissionContext: candidateContext,
+			AdmissionContext: candidateAdmission,
 		}, "downshift_candidate", CoordTodoID, attempt)
 		if err != nil || admission.Decision == ContextWindowCannotFit || admission.Messages == nil {
 			continue
@@ -157,12 +158,12 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if err != nil {
 			continue
 		}
-		model = agent.NewAdmittedLanguageModelWithContext(candidateID, model, c.providerAdmission(), candidateContext)
+		model = agent.NewAdmittedLanguageModelWithContext(candidateID, model, c.providerAdmission(), candidateAdmission)
 		payload := map[string]any{"from_model": currentModel, "to_model": candidateID, "request_tokens": admission.RequestTokens, "available": admission.Budget.Available, "step": stepNumber}
 		if err := c.emitEvent(modelContinuationEventType, "coordinator", CoordTodoID, payload); err != nil {
 			return coordinatorModelContinuation{}, fmt.Errorf("persist coordinator model continuation admission: %w", err)
 		}
-		downshift := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: candidateID, AdmissionContext: candidateContext, ReservedOutputTokens: candidateOutputReservation, SafetyMarginTokens: candidateSpec.SafetyMarginTokens, Window: candidateSpec.ContextWindow, StepNumber: stepNumber}, admission, "downshift", CoordTodoID, attempt)
+		downshift := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: candidateID, AdmissionContext: candidateAdmission, ReservedOutputTokens: candidateOutputReservation, SafetyMarginTokens: candidateSpec.SafetyMarginTokens, Window: candidateSpec.ContextWindow, StepNumber: stepNumber}, admission, "downshift", CoordTodoID, attempt)
 		downshift.Decision = "downshift"
 		downshift.FallbackReason = "earlier_model_admitted"
 		if err := c.recordContextWindowTelemetry(EventContextWindowDownshift, downshift, CoordTodoID); err != nil {
@@ -171,14 +172,9 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		return coordinatorModelContinuation{
 			Model: model, Messages: admission.Messages, System: candidateSystem, Tools: candidateTools,
 			ToolsSet: applied, Preflight: candidatePreflight,
-			Invocation: providerBoundInvocationContext{
-				ModelID: candidateID, AdmissionContext: candidateContext,
-				ModelContext: candidateSpec,
-			},
+			Invocation: candidateInvocation,
 			Context: withCoordinatorRequestPreflight(
-				withProviderBoundInvocationContext(context.WithValue(ctx, modelKey{}, candidateID), providerBoundInvocationContext{
-					ModelID: candidateID, AdmissionContext: candidateContext, ModelContext: candidateSpec,
-				}), candidatePreflight),
+				context.WithValue(candidateContext, modelKey{}, candidateID), candidatePreflight),
 		}, nil
 	}
 	exhausted := c.newContextWindowTelemetry(EventContextWindowDownshift, ContextWindowRequest{ModelID: currentModel, ReservedOutputTokens: maxOutputTokens, StepNumber: stepNumber}, ContextWindowAdmission{Decision: ContextWindowCannotFit}, "downshift", CoordTodoID, attempt)

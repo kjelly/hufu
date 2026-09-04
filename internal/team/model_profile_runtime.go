@@ -351,7 +351,9 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutput(ctx contex
 	resolved := c.modelProfileRuntime.ResolveAdmission(ctx, modelID, operatorContext, maxOutput, 0)
 	bound := resolved.Admission
 	if bound.IsBound() {
-		c.reportModelProfileResolved(resolved.ProfileResolution)
+		if err := c.reportModelProfileResolved(resolved.ProfileResolution); err != nil {
+			return ctx, providerBoundInvocationContext{}, err
+		}
 	}
 	if !bound.IsBound() {
 		return ctx, providerBoundInvocationContext{}, fmt.Errorf("provider-bound context unavailable for model %q", modelID)

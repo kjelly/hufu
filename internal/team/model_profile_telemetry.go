@@ -9,16 +9,22 @@ import (
 
 // reportModelProfileResolved persists and reports the canonical profile
 // projection for a provider-bound invocation. Startup warmups do not call it.
-func (c *Coordinator) reportModelProfileResolved(projection modelprofile.TelemetryProjection) {
+// The status projection is published only after the durable event append
+// succeeds, so callers can fail closed before constructing or invoking a
+// provider model when persistence is unavailable.
+func (c *Coordinator) reportModelProfileResolved(projection modelprofile.TelemetryProjection) error {
 	if c == nil {
-		return
+		return nil
 	}
-	_ = c.emitEvent(string(EventModelProfileResolved), "coordinator", "", projection)
+	if err := c.emitEvent(string(EventModelProfileResolved), "coordinator", "", projection); err != nil {
+		return fmt.Errorf("persist model profile resolved: %w", err)
+	}
 	status := c.newEvent(string(EventModelProfileResolved)).
 		withModel(projection.ModelID).
 		withMessage(fmt.Sprintf("model profile resolved: %s/%s effective context=%d (%s)", projection.Provider, projection.ModelID, projection.Effective.Value, projection.Effective.Source))
 	status.ModelProfile = &projection
 	c.report(status)
+	return nil
 }
 
 // LoadModelProfileTelemetry reads only model_profile_resolved events for the
