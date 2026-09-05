@@ -154,14 +154,14 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			discipline.stopped = true
 		}
 		discipline.mu.Unlock()
-		if err := c.projectAssumptionIndex(discipline); err != nil {
-			return applied, fmt.Errorf("projecting assumption state: %w", err)
-		}
 		if critical != "" && !alreadyStopped {
 			c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
 				Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated,
 				Detail: fmt.Sprintf("critical assumption %s was contradicted", critical),
 			})
+		}
+		if err := c.projectAssumptionIndex(discipline); err != nil {
+			return applied, fmt.Errorf("projecting assumption state: %w", err)
 		}
 		applied++
 	}
@@ -174,8 +174,11 @@ func (c *Coordinator) projectAssumptionIndex(discipline *taskDiscipline) error {
 		return err
 	}
 	entry, found, err := index.Get(discipline.decisionID)
-	if err != nil || !found {
+	if err != nil {
 		return err
+	}
+	if !found {
+		return fmt.Errorf("decision index has no entry for decision %s", discipline.decisionID)
 	}
 	discipline.mu.Lock()
 	entry.Assumptions = append([]DecisionAssumption(nil), discipline.assumptions...)
