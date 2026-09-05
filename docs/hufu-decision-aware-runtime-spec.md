@@ -1525,7 +1525,13 @@ type CommitGatePolicy struct {
 
 ```text
 RequireVerification   task.Verify != "" 或 task.VerifySpec != nil
-RequireEvidence       task 有至少一筆 Required == true 的 EvidenceRequirement
+RequireEvidence       task.VerifySpec 帶有至少一條 assertion
+                      （Assertions / ToolCallAssertions / TaskResultAssertions）
+                      — 現況沒有「每個 task 的 EvidenceRequirement」來源，
+                      而只有帶 assertion 的 verify_spec 會產出 EvidenceResult。
+                      require-verification 與 require-evidence 因此刻意不同：
+                      `verify: test -f out.pdf` 證明有東西跑過，
+                      帶 assertion 的 verify_spec 才產出可供 acceptance 判定的結構化證據
 RequireReconcile      task.Recovery == RecoveryReconcile 且 task.ReconcileTool != ""
 RequireRollback       該任務將使用的工具具備 ToolRecoverySpec.CompensateTool != ""
                       （即存在補償操作；本 repo 沒有 rollback recovery policy）
@@ -1997,10 +2003,15 @@ Phase 2
                                          provenance 的階段編排與 resume
 
 Phase 3
-  internal/team/stop_policy.go
-  internal/team/commit_gate.go
-  internal/team/replan.go
+  internal/team/stop_policy.go           checkpoint 評估與 kill criterion（純函式）
+  internal/team/commit_gate.go           commit 前提判定（純函式）
+  internal/team/replan.go                assumption lifecycle、stale 標記、replan 事件
+  internal/team/decision_discipline.go   runtime 掛載：per-task arm / 兩個 hook
 ```
+
+Phase 3 的掛載點在 `internal/team/tool_policy_gate.go` 的 `policyGatedTool.Run`：
+commit gate 在 `t.inner.Run` 之前、checkpoint 在其之後。未 arm discipline 的
+task（即預設的 `off` profile）兩個 hook 皆為 no-op。
 
 每個檔案都必須有對應的 `_test.go`。
 若某檔逼近 800 行，先橫向切分（例如 `decision_aggregate_stats.go`），

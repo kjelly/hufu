@@ -565,6 +565,11 @@ type Coordinator struct {
 	// resolving to the same storage; tokenBudgetRoot still decides which
 	// coordinator's ledger is authoritative for a run.
 	budgetLedger
+	// disciplines holds the armed execution contract per task. An empty map is
+	// the normal state: only tasks under a decision profile arm one, so both
+	// discipline hooks are no-ops for every other task (spec §29-§32).
+	disciplineMu                  sync.Mutex
+	disciplines                   map[string]*taskDiscipline
 	tokenBudgetOwner              *Coordinator
 	acceptanceCmd                 string // optional shell command run at finish
 	acceptanceSpec                *AcceptanceSpec

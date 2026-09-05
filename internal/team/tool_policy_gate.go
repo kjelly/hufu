@@ -325,7 +325,38 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		effectiveInput = transformedInput
 	}
 	call.Input = effectiveInput
+
+	// Execution discipline (docs/hufu-decision-aware-runtime-spec.md §29-§32).
+	// Both checks are no-ops unless the task armed a discipline, which only
+	// happens under a decision profile, so every other task is unaffected.
+	disciplineTodoID, _ := ctx.Value(todoIDKey{}).(string)
+	if denial := t.coordinator.checkpointDenial(disciplineTodoID); denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind: "policy_denied", ReasonCode: ReasonKillCriterionReached,
+			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+		})
+		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+		sequence.markFailedAt(reservedSlot, t.Info().Name, denial)
+		return fantasy.NewTextErrorResponse(denial), nil
+	}
+	// The commit gate runs before the tool process starts, so a task missing a
+	// required prerequisite performs zero mutations rather than being caught
+	// after one.
+	if denial := t.coordinator.commitGateDenial(ctx, disciplineTodoID, t.Info().Name); denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind: "policy_denied", ReasonCode: "commit_gate_blocked",
+			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+		})
+		t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+		sequence.markFailedAt(reservedSlot, t.Info().Name, denial)
+		return fantasy.NewTextErrorResponse(denial), nil
+	}
+
 	response, err := t.inner.Run(ctx, call)
+
+	// A checkpoint is evaluated after the call completes. It is deterministic
+	// and makes zero LLM calls; a stop takes effect on the next call.
+	t.coordinator.recordToolCall(ctx, disciplineTodoID, err != nil || response.IsError)
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
 		// A rejected delegation is deliberately returned as an error response so
 		// the model sees the violation.  The coordinator owns the pending bit;
