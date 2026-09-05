@@ -1039,17 +1039,31 @@ type DecisionAssumption struct {
 }
 ```
 
-### 18.1 誰能改變 status（新增）
+### 18.1 誰能改變 status
 
-草稿未定義狀態來源，會導致 runtime 無法判斷。V1 只有三個來源：
+草稿未定義狀態來源，會導致 runtime 無法判斷。只有三個來源：
 
 ```text
-1. 任務的 submit_result 中明確宣告 assumption 查核結果（帶 assumption ID）
-2. verify / adversarial_verify 的結構化結果中明確指名的 assumption ID
-3. 明確的操作者指令
+1. 任務的 submit_result 中的 assumption_checks（帶 assumption ID）
+   → internal/team/coordinator_tools_result.go，提交時套用
+2. 任務契約宣告該 verification 檢查哪些 assumption
+   （verify-spec.assumption-refs）→ 驗證本身的通過/失敗決定狀態
+3. 操作者指令：hufu decision assume <decision-id> <assumption-id> --status ...
+   → 透過跨 run 索引，在形成決策的 run 結束後仍可使用
 ```
 
 runtime **絕不**自行推論 status。無人查核的假設永遠停在 `unknown`。
+
+**可回報的狀態只有 `supported` 與 `contradicted`**。`unknown` 是「沒有查核」
+而不是一個發現；`stale` 是 runtime 自己的結論（先前的查核不再適用），
+不是 worker 或 verification 能宣稱的東西。
+
+**回報者只能回報決策已宣告的假設**，不能事後發明新的：指名未宣告 ID 的
+查核會被拒絕（在 submit_result 路徑上是 contract violation，不是警告）。
+
+第 2 個來源之所以獨立於第 1 個，是因為它不依賴 worker 對自己工作的說法：
+契約指定哪個 verification 覆蓋哪些假設，該 verification 自己的通過或失敗
+決定狀態。
 
 ### 18.2 status 對執行的影響
 
@@ -2114,6 +2128,7 @@ Phase 2
   internal/team/decision_challenge.go    challenge 與 premortem 的提示、匿名化、驗證
   internal/team/decision_revision.go     單輪獨立修訂與 round 2 投影
   internal/team/decision_provenance.go   union-find 分組與警示
+  internal/team/decision_assumptions.go  §18.1 三個假設狀態來源的套用與驗證
   internal/team/decision_engine_stages.go  premortem / challenge / revision /
                                          provenance 的階段編排與 resume
 
@@ -2500,18 +2515,9 @@ crash / recovery
 - checkpoint 回傳 stop / replan 時的實際作用：
   `RequestReplan`、`MarkDecisionStale` 必須真的被呼叫。
 
-**明確延後的項目（維護者決定）**
-
-假設狀態的來源（§18.1）**不在本 phase**。三個來源都需要各自的契約：
-`submit_result` 要新增一個指名 assumption ID 的欄位、verify 結果要能結構化地
-指名 assumption、操作者要有一個 CLI 入口。這三個都是新的對外介面，
-規模與 Phase 3.5 的接線工作相當，硬塞進來只會讓兩件事都做不乾淨。
-
-在它完成之前的實際效果：`DecisionAssumption` 可以在任務契約中宣告、
-會進入 sealed evidence 與 `DecisionRecord`、判斷者看得到它們，
-但狀態永遠停在 `unknown`。因此 `assumption_invalid` kill criterion 與
-`on-critical-assumption-contradicted` 這條 replan 路徑在 production
-不會觸發——它們的邏輯與測試都完整，只是沒有輸入。
+**假設狀態的來源**：三個來源皆已實作，見 §18.1。它們解鎖了
+`assumption_invalid` kill criterion 與 `on-critical-assumption-contradicted`
+這條 replan 路徑——在此之前兩者的邏輯與測試都完整，只是沒有輸入。
 
 **選項從哪裡來（本 phase 的範圍決定）**
 
@@ -2658,9 +2664,9 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 > [~] 子系統完成且有 deterministic 測試，但缺少 production 輸入
 > ```
 >
-> 2026-09-05 後續：Phase 3.5 已接線，多數項目轉為 [x]。剩下兩個 [~]
-> 的共同原因是**沒有輸入**，不是沒有實作：假設狀態的三個來源未接線
-> （見 Phase 3.5 延後項），而 `SideEffectState` 只在 crash 復原路徑有值。
+> 2026-09-05 後續：Phase 3.5 已接線，§18.1 的三個假設狀態來源亦已實作。
+> 唯一剩下的 [~] 是 `SideEffectState`，它只在 crash 復原路徑有值——
+> 正常執行期間為空是正確的，不是缺口。
 
 ```text
 [x] 決策能力以任務區域 runtime 行為整合
@@ -2677,7 +2683,7 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 [x] premortem 支援
 [x] challenge 與有界修訂
 [x] 持久化的 DecisionRecord
-[~] typed assumptions，狀態來源明確且為 append-only（來源未接線，見 Phase 3.5 延後項）
+[x] typed assumptions，狀態來源明確且為 append-only（三個來源皆已接線，§18.1）
 [x] evidence provenance 與可推導的獨立性分組（advisory）
 [x] 執行前持久化 StopPolicy
 [x] runtime 擁有的 commit gate，每個前提都可判定

@@ -21,6 +21,7 @@ func resetDecisionCLIFlags() {
 	decisionResolveOutcome, decisionResolveBy, decisionResolveNotes = "", "", ""
 	decisionResolveEvidence, decisionResolveLessons = nil, nil
 	decisionResolveForecast = 0
+	decisionAssumeStatus, decisionAssumeNote = "", ""
 }
 
 // buildDecisionCLIFixture writes a workspace holding two unresolved decisions
@@ -46,6 +47,10 @@ func buildDecisionCLIFixture(t *testing.T) string {
 			DecisionID: "dec-2", RunID: "run-43", Profile: "standard",
 			Question: "Roll back?", FinalOption: "defer", Probability: 0.4,
 			CreatedAt: base.Add(time.Hour),
+			Assumptions: []team.DecisionAssumption{
+				{ID: "A1", Statement: "traffic stays flat", Critical: true},
+				{ID: "A2", Statement: "the vendor API is stable"},
+			},
 		},
 	} {
 		if err := index.Append(entry); err != nil {
@@ -277,4 +282,86 @@ func errorsAsDecisionExit(err error, target **decisionExitError) bool {
 		return true
 	}
 	return false
+}
+
+// The operator source works after the run that formed the decision has exited,
+// which is the whole reason it exists (spec §18.1 source 3).
+func TestDecisionAssumeRecordsAnOperatorCheck(t *testing.T) {
+	resetDecisionCLIFlags()
+	workspace := buildDecisionCLIFixture(t)
+
+	out, err := runDecisionCLI(t, "assume", "dec-2", "A1", "-w", workspace,
+		"--status", "contradicted", "--note", "traffic doubled in week 2")
+	if err != nil {
+		t.Fatalf("decision assume = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "critical assumption") {
+		t.Fatalf("output did not flag the critical assumption:\n%s", out)
+	}
+	if !strings.Contains(out, "The decision record was not modified.") {
+		t.Fatalf("output did not state the record was untouched:\n%s", out)
+	}
+
+	index, err := team.OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, found, err := index.Get("dec-2")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if entry.CriticalAssumptionContradicted() != "A1" {
+		t.Fatalf("stored assumptions = %#v", entry.Assumptions)
+	}
+	if entry.FinalOption != "defer" {
+		t.Fatalf("the operator check changed the decision: %#v", entry)
+	}
+	if len(entry.AssumptionNotes) != 1 {
+		t.Fatalf("notes = %v, want the reason recorded", entry.AssumptionNotes)
+	}
+}
+
+func TestDecisionAssumeRejectsBadInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "missing status",
+			args:    []string{"assume", "dec-2", "A1"},
+			wantErr: "--status is required",
+		},
+		{
+			name:    "unreportable status",
+			args:    []string{"assume", "dec-2", "A1", "--status", "stale"},
+			wantErr: "not reportable",
+		},
+		{
+			name:    "undeclared assumption",
+			args:    []string{"assume", "dec-2", "A9", "--status", "supported"},
+			wantErr: "not declared on this decision",
+		},
+		{
+			name:    "decision without assumptions",
+			args:    []string{"assume", "dec-1", "A1", "--status", "supported"},
+			wantErr: "declares no assumptions",
+		},
+		{
+			name:    "unknown decision",
+			args:    []string{"assume", "dec-99", "A1", "--status", "supported"},
+			wantErr: "is not in",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetDecisionCLIFlags()
+			workspace := buildDecisionCLIFixture(t)
+			args := append(append([]string(nil), tt.args...), "-w", workspace)
+			_, err := runDecisionCLI(t, args...)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("decision assume = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
 }
