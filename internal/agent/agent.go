@@ -677,6 +677,11 @@ type VerificationSpec struct {
 	WorksetRequireTerminal  bool                  `json:"require_all_terminal,omitempty" yaml:"require-all-terminal,omitempty"`
 	WorksetRequireVerified  bool                  `json:"require_all_verified,omitempty" yaml:"require-all-verified,omitempty"`
 	WorksetAcceptedStatuses []string              `json:"accepted_statuses,omitempty" yaml:"accepted-statuses,omitempty"`
+	// AssumptionRefs names the decision assumptions this verification checks.
+	// It makes the verification a status source for them: passing supports
+	// them, failing contradicts them
+	// (docs/hufu-decision-aware-runtime-spec.md §18.1).
+	AssumptionRefs []string `json:"assumption_refs,omitempty" yaml:"assumption-refs,omitempty"`
 }
 
 type JSONAssertion struct {

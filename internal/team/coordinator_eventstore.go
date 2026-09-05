@@ -1179,6 +1179,16 @@ func (c *Coordinator) commitTaskTransitionFromCurrent(ctx context.Context, taskI
 	if item == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
 	}
+	if next == TaskDone {
+		if discipline := c.disciplineFor(taskID); discipline != nil {
+			discipline.mu.Lock()
+			stopped := discipline.stopped
+			discipline.mu.Unlock()
+			if stopped {
+				return fmt.Errorf("commit task transition: decision discipline stopped task %s; successful terminalization is forbidden", taskID)
+			}
+		}
+	}
 	return c.CommitTaskTransition(ctx, taskID, item.Status, next, detail, output, metadata)
 }
 

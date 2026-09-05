@@ -93,7 +93,9 @@ func RecordAssumptionTransition(
 		transition.From = AssumptionUnknown
 	}
 	if err := appendDecisionEvent(ctx, journal, AssumptionStatusEvent(transition.To), decisionEvent{
-		DecisionID: transition.DecisionID,
+		DecisionID:   transition.DecisionID,
+		AssumptionID: transition.AssumptionID, From: transition.From, To: transition.To,
+		Source: transition.Source, EvidenceRefs: transition.EvidenceRefs, At: transition.At,
 		Reason: fmt.Sprintf("assumption %s: %s -> %s (source: %s)",
 			transition.AssumptionID, transition.From, transition.To, transition.Source),
 	}); err != nil {

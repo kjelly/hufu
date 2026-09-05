@@ -4056,7 +4056,22 @@ func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, a
 	return c.verifyTaskDeliverableWithSpecAndResult(parentCtx, agentDef, task, steps, nil)
 }
 
-func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult, taskResult *TaskResult) (*VerificationResult, error) {
+func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult, taskResult *TaskResult) (verification *VerificationResult, returnErr error) {
+	// A verification the task declared as checking specific assumptions is the
+	// second assumption status source (spec §18.1): its own pass or fail
+	// decides their status, independently of what the worker says about its own
+	// work. Recorded on the way out so it covers every return path.
+	if task.VerifySpec != nil && len(task.VerifySpec.AssumptionRefs) > 0 {
+		defer func() {
+			passed := returnErr == nil && verification != nil && verification.ExitCode == 0
+			checks := AssumptionChecksFromVerification(task.VerifySpec, passed)
+			todoID := disciplineTodoIDFrom(parentCtx, task)
+			if _, err := c.ApplyAssumptionChecks(parentCtx, todoID, checks, AssumptionSourceVerification); err != nil {
+				log.Printf("warning: recording verification assumption checks for task %s failed: %v", todoID, err)
+			}
+		}()
+	}
+
 	spec := task.VerifySpec
 	if spec == nil && task.Verify != "" {
 		spec = &agent.VerificationSpec{

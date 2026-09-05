@@ -2,6 +2,7 @@ package team
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // The cross-run decision index
@@ -60,6 +63,15 @@ type DecisionIndexEntry struct {
 	StaleReason string    `json:"stale_reason,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`
 
+	// Assumptions carries the decision's typed assumptions and their current
+	// status, so an operator can check one after the run that formed the
+	// decision has exited (spec §18.1 source 3).
+	Assumptions []DecisionAssumption `json:"assumptions,omitempty"`
+
+	// AssumptionNotes records why an operator changed an assumption's status,
+	// so a transition is explainable and not just observable.
+	AssumptionNotes []string `json:"assumption_notes,omitempty"`
+
 	// Outcome is set by resolution. Its presence is what makes a decision
 	// resolved; the decision record itself is never edited (spec §35).
 	Outcome *DecisionOutcomeRecord `json:"outcome,omitempty"`
@@ -74,7 +86,95 @@ func (e DecisionIndexEntry) Resolved() bool { return e.Outcome != nil }
 
 // DecisionIndex is an append-only index file scoped to one workspace.
 type DecisionIndex struct {
-	path string
+	path    string
+	journal decisionJournal
+}
+
+// RebuildFromJournal reconstructs the derived index from finalized decision
+// events and their later lifecycle events. Existing outcomes are retained as
+// a separate projection because resolution is intentionally not part of the
+// decision record.
+func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decisionJournal) error {
+	if i == nil || journal == nil {
+		return fmt.Errorf("decision index rebuild: canonical event journal is unavailable")
+	}
+	previous, err := i.List()
+	if err != nil {
+		return err
+	}
+	outcomes := make(map[string]*DecisionOutcomeRecord, len(previous))
+	for _, entry := range previous {
+		if entry.Outcome != nil {
+			copyOutcome := *entry.Outcome
+			outcomes[entry.DecisionID] = &copyOutcome
+		}
+	}
+	events, err := journal.ReadEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("decision index rebuild: reading events: %w", err)
+	}
+	ids := map[string]struct{}{}
+	for _, event := range events {
+		if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
+			continue
+		}
+		var payload decisionEvent
+		if json.Unmarshal(event.Payload, &payload) == nil && payload.Record != nil && payload.DecisionID != "" {
+			ids[payload.DecisionID] = struct{}{}
+		}
+	}
+	var rebuilt []DecisionIndexEntry
+	for id := range ids {
+		state, projectErr := projectDecision(ctx, journal, id)
+		if projectErr != nil || state.Record == nil {
+			continue
+		}
+		entry := IndexEntryFor(*state.Record, state.Packet.Question, false, ArtifactRef{})
+		if state.Record.Stale {
+			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
+		}
+		entry.Outcome = outcomes[id]
+		rebuilt = append(rebuilt, entry)
+	}
+	sort.Slice(rebuilt, func(a, b int) bool { return rebuilt[a].DecisionID < rebuilt[b].DecisionID })
+	var data []byte
+	for _, entry := range rebuilt {
+		line, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			return fmt.Errorf("decision index rebuild: encoding %s: %w", entry.DecisionID, marshalErr)
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
+	if err := AtomicWriteFile(i.path, data, 0o644); err != nil {
+		return fmt.Errorf("decision index rebuild: %w", err)
+	}
+	return nil
+}
+
+// SetJournal binds the canonical event journal used for lifecycle changes.
+// The index remains a derived projection; callers must configure this before
+// recording assumption checks.
+func (i *DecisionIndex) SetJournal(journal decisionJournal) {
+	if i != nil {
+		i.journal = journal
+	}
+}
+
+// SetEventJournal binds an EventJournal without exposing the internal adapter
+// used by the decision reducer.
+func (i *DecisionIndex) SetEventJournal(journal EventJournal) {
+	if i != nil && journal != nil {
+		i.journal = journal
+	}
+}
+
+// BindDecisionIndexEventStore connects the index projection to the workspace
+// canonical event store for operator lifecycle commands.
+func BindDecisionIndexEventStore(i *DecisionIndex, store *EventStore) {
+	if i != nil && store != nil {
+		i.journal = eventStoreJournal{store: store}
+	}
 }
 
 // DecisionIndexPath returns the index file's location for a workspace.
@@ -272,6 +372,7 @@ func IndexEntryFor(record DecisionRecord, question string, forecastRequired bool
 		Probability:             record.Probability,
 		ForecastRequired:        forecastRequired,
 		FalsificationConditions: record.FalsificationConditions,
+		Assumptions:             record.Assumptions,
 		RecordDigest:            recordRef.SHA256,
 		RecordPath:              recordRef.Path,
 		Stale:                   record.Stale,
@@ -334,4 +435,111 @@ func WorkspaceArtifacts(workspace string) ([]ArtifactRef, error) {
 	}
 	sort.Slice(artifacts, func(a, b int) bool { return artifacts[a].SHA256 < artifacts[b].SHA256 })
 	return artifacts, nil
+}
+
+// CheckAssumption records an operator's assumption check, the third status
+// source (spec §18.1). It appends a superseding row; the DecisionRecord the row
+// points at is never edited.
+//
+// An operator may only report supported or contradicted, exactly like the other
+// two sources: `unknown` is the absence of a check and `stale` is the runtime's
+// own conclusion.
+func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note string) (DecisionIndexEntry, DecisionAssumption, error) {
+	if strings.TrimSpace(decisionID) == "" || strings.TrimSpace(assumptionID) == "" {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision and assumption IDs cannot be blank")
+	}
+	entry, found, err := i.Get(decisionID)
+	if err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
+	if !found {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
+	}
+	if entry.Stale {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is stale and cannot accept assumption checks", decisionID)
+	}
+	if !ValidCheckStatus(status) {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf(
+			"%q is not a reportable assumption status (want supported or contradicted)", status)
+	}
+	if len(entry.Assumptions) == 0 {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q declares no assumptions", decisionID)
+	}
+	if previous := assumptionStatusBefore(entry.Assumptions, assumptionID); previous == status {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("assumption %q already has status %q", assumptionID, status)
+	}
+
+	updated, assumption, err := ApplyAssumptionTransition(entry.Assumptions, AssumptionTransition{
+		DecisionID:   decisionID,
+		AssumptionID: assumptionID,
+		To:           status,
+		Source:       AssumptionSourceOperator,
+		At:           time.Now().UTC(),
+	})
+	if err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
+	if i.journal == nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision index: canonical event journal is unavailable")
+	}
+	transition := AssumptionTransition{DecisionID: decisionID, AssumptionID: assumptionID,
+		From: assumptionStatusBefore(entry.Assumptions, assumptionID), To: status,
+		Source: AssumptionSourceOperator, At: time.Now().UTC()}
+	if err := appendDecisionEvent(context.Background(), i.journal, AssumptionStatusEvent(status), decisionEvent{
+		DecisionID: decisionID, AssumptionID: transition.AssumptionID, From: transition.From,
+		To: transition.To, Source: transition.Source, Note: note, At: transition.At,
+		Reason: fmt.Sprintf("operator assumption check: %s", strings.TrimSpace(note)),
+	}); err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
+	entry.Assumptions = updated
+	entry.AssumptionNotes = appendAssumptionNote(entry.AssumptionNotes, assumptionID, status, note)
+	entry.IndexedAt = time.Time{}
+	if err := i.Append(entry); err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
+	if status == AssumptionContradicted && assumption.Critical {
+		reason := fmt.Sprintf("%s: critical assumption %s contradicted", ReasonAssumptionInvalidated, assumptionID)
+		if err := appendDecisionEvent(context.Background(), i.journal, agent.EventDecisionInvalidated, decisionEvent{
+			DecisionID: decisionID, Reason: reason,
+		}); err != nil {
+			return DecisionIndexEntry{}, DecisionAssumption{}, err
+		}
+		if err := RequestReplan(context.Background(), i.journal, decisionID, CheckpointDecision{
+			Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated, Detail: reason,
+		}); err != nil {
+			return DecisionIndexEntry{}, DecisionAssumption{}, err
+		}
+		entry.Stale = true
+		entry.StaleReason = reason
+		entry.IndexedAt = time.Time{}
+		if err := i.Append(entry); err != nil {
+			return DecisionIndexEntry{}, DecisionAssumption{}, err
+		}
+	}
+	return entry, assumption, nil
+}
+
+func assumptionStatusBefore(assumptions []DecisionAssumption, id string) string {
+	for _, assumption := range assumptions {
+		if assumption.ID == id {
+			return assumption.EffectiveStatus()
+		}
+	}
+	return AssumptionUnknown
+}
+
+// CriticalAssumptionContradicted returns the ID of a contradicted critical
+// assumption on this decision, or an empty string.
+func (e DecisionIndexEntry) CriticalAssumptionContradicted() string {
+	return CriticalContradiction(e.Assumptions)
+}
+
+// appendAssumptionNote records one operator transition in a readable line.
+func appendAssumptionNote(notes []string, assumptionID, status, note string) []string {
+	line := fmt.Sprintf("%s: %s -> %s", time.Now().UTC().Format(time.RFC3339), assumptionID, status)
+	if trimmed := strings.TrimSpace(note); trimmed != "" {
+		line += " (" + trimmed + ")"
+	}
+	return append(notes, line)
 }

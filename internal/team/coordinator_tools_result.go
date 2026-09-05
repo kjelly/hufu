@@ -44,6 +44,7 @@ type SubmitResultInput struct {
 	RetryHint          string                `json:"retry_hint,omitempty"`
 	ReceiptIDs         []string              `json:"receipt_ids,omitempty"`
 	MemoryUses         []MemoryUseRef        `json:"memory_uses,omitempty"`
+	AssumptionChecks   []AssumptionCheck     `json:"assumption_checks,omitempty"`
 	Facts              map[string]any        `json:"facts,omitempty"`
 	Confidence         float64               `json:"confidence"`
 }
@@ -76,6 +77,7 @@ func (input SubmitResultInput) taskResult() TaskResult {
 		RetryHint:          input.RetryHint,
 		ReceiptIDs:         input.ReceiptIDs,
 		MemoryUses:         input.MemoryUses,
+		AssumptionChecks:   input.AssumptionChecks,
 		Facts:              input.Facts,
 		Confidence:         input.Confidence,
 	}
@@ -259,6 +261,20 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 						"evaluated_at": map[string]any{"type": "string"},
 					},
 					"additionalProperties": false,
+				},
+			},
+			"assumption_checks": map[string]any{
+				"type":        "array",
+				"description": "Decision assumptions this task actually checked. Only report an assumption the task was given, only when you checked it, and only as supported or contradicted. Omit anything you did not verify; saying nothing is the correct answer for an unchecked assumption.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"assumption_id": map[string]any{"type": "string"},
+						"status":        map[string]any{"type": "string", "enum": []string{"supported", "contradicted"}},
+						"evidence":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"note":          map[string]any{"type": "string"},
+					},
+					"required": []string{"assumption_id", "status"}, "additionalProperties": false,
 				},
 			},
 			"findings": map[string]any{
@@ -484,6 +500,13 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 		if err := contract.validateFinalizableResult(&res); err != nil {
 			return rollback("submit_result contract violation: " + err.Error()), nil
+		}
+		// A reported assumption check is one of the three sources allowed to
+		// change an assumption's status (spec §18.1). Validate it while the
+		// occurrence is reserved: a check naming an assumption the decision
+		// never declared is a contract violation, not a warning.
+		if _, err := t.coordinator.ApplyAssumptionChecks(ctx, t.todoID, res.AssumptionChecks, AssumptionSourceTaskResult); err != nil {
+			return rollback("invalid assumption check: " + err.Error()), nil
 		}
 		if _, isCoordinatorSink := sink.(coordinatorTaskResultSink); isCoordinatorSink {
 			// The coordinator sink is represented by this transaction; invoking it

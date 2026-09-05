@@ -35,6 +35,9 @@ var (
 	decisionResolveBy       string
 	decisionResolveNotes    string
 	decisionResolveForecast float64
+
+	decisionAssumeStatus string
+	decisionAssumeNote   string
 )
 
 // decisionExitError carries a fixed process exit code across the cobra
@@ -105,6 +108,25 @@ A decision can be resolved once. The decision record itself is never edited.`,
 	RunE: runDecisionResolve,
 }
 
+var decisionAssumeCmd = &cobra.Command{
+	Use:   "assume <decision-id> <assumption-id>",
+	Short: "Record that a decision's assumption was checked",
+	Long: `hufu decision assume records an operator's check of a decision assumption.
+
+    hufu decision assume dec-1 A1 --status contradicted --note "traffic doubled in week 2"
+
+This is the third of the three sources allowed to change an assumption's status;
+the runtime never infers one. Only supported and contradicted are reportable:
+'unknown' is the absence of a check, and 'stale' is the runtime's own conclusion
+that an earlier check no longer applies.
+
+A contradicted critical assumption is what invalidates a decision. Recording one
+does not edit the decision: what was decided, and on what evidence, stays as it
+was formed.`,
+	Args: cobra.ExactArgs(2),
+	RunE: runDecisionAssume,
+}
+
 func init() {
 	decisionCmd.PersistentFlags().StringVarP(&decisionWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	decisionCmd.PersistentFlags().BoolVar(&decisionJSON, "json", false, "Write JSON to stdout; all diagnostics go to stderr")
@@ -121,6 +143,10 @@ func init() {
 	decisionResolveCmd.Flags().StringVar(&decisionResolveNotes, "notes", "", "Free-text notes about the outcome")
 	decisionResolveCmd.Flags().Float64Var(&decisionResolveForecast, "forecast", 0, "Override the forecast this outcome resolves against (default: the decision's own probability)")
 	decisionCmd.AddCommand(decisionResolveCmd)
+
+	decisionAssumeCmd.Flags().StringVar(&decisionAssumeStatus, "status", "", "Observed status: supported or contradicted (required)")
+	decisionAssumeCmd.Flags().StringVar(&decisionAssumeNote, "note", "", "Why the status changed")
+	decisionCmd.AddCommand(decisionAssumeCmd)
 }
 
 func getDecisionWorkspace() string {
@@ -363,4 +389,43 @@ func shortOrDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func runDecisionAssume(cmd *cobra.Command, args []string) error {
+	decisionID, assumptionID := args[0], args[1]
+	if strings.TrimSpace(decisionAssumeStatus) == "" {
+		return &decisionExitError{code: 2, msg: "hufu decision assume: --status is required"}
+	}
+	if !team.ValidCheckStatus(decisionAssumeStatus) {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf(
+			"hufu decision assume: --status %q is not reportable; use supported or contradicted",
+			decisionAssumeStatus)}
+	}
+
+	index, err := openDecisionIndex()
+	if err != nil {
+		return err
+	}
+	store, err := team.OpenEventStore(getDecisionWorkspace())
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision assume: opening canonical event store: %v", err)}
+	}
+	defer func() { _ = store.Close() }()
+	team.BindDecisionIndexEventStore(index, store)
+	entry, assumption, err := index.CheckAssumption(decisionID, assumptionID, decisionAssumeStatus, decisionAssumeNote)
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision assume: %v", err)}
+	}
+
+	if decisionJSON {
+		return writeDecisionJSON(cmd, entry)
+	}
+	out := cmd.OutOrStdout()
+	_, _ = fmt.Fprintf(out, "Recorded assumption %s as %s for decision %s\n",
+		assumptionID, assumption.EffectiveStatus(), decisionID)
+	if assumption.Critical && assumption.EffectiveStatus() == team.AssumptionContradicted {
+		_, _ = fmt.Fprintf(out, "This is a critical assumption: decision %s now rests on a premise that does not hold.\n", decisionID)
+	}
+	_, _ = fmt.Fprintf(out, "The decision record was not modified.\n")
+	return nil
 }

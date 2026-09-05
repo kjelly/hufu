@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -30,6 +31,15 @@ type decisionEvent struct {
 	Round        int    `json:"round,omitempty"`
 	JudgeID      string `json:"judge_id,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// Assumption transition fields are structured canonical evidence; Reason is
+	// retained for human-readable event summaries and backward compatibility.
+	AssumptionID string        `json:"assumption_id,omitempty"`
+	From         string        `json:"from,omitempty"`
+	To           string        `json:"to,omitempty"`
+	Source       string        `json:"source,omitempty"`
+	EvidenceRefs []ArtifactRef `json:"evidence_refs,omitempty"`
+	Note         string        `json:"note,omitempty"`
+	At           time.Time     `json:"at,omitzero"`
 
 	Packet      *DecisionEvidencePacket `json:"packet,omitempty"`
 	Opinion     *DecisionOpinion        `json:"opinion,omitempty"`
@@ -212,6 +222,24 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 			if payload.Record != nil {
 				record := *payload.Record
 				state.Record = &record
+			}
+		case agent.EventAssumptionSupported, agent.EventAssumptionContradicted, agent.EventAssumptionStale:
+			if state.Record == nil || payload.AssumptionID == "" {
+				continue
+			}
+			assumptions, _, transitionErr := ApplyAssumptionTransition(state.Record.Assumptions, AssumptionTransition{
+				AssumptionID: payload.AssumptionID, To: payload.To, Source: payload.Source,
+				EvidenceRefs: payload.EvidenceRefs, At: payload.At,
+			})
+			if transitionErr == nil {
+				state.Record.Assumptions = assumptions
+			}
+		case agent.EventDecisionInvalidated:
+			if state.Record != nil {
+				state.Record.Stale = true
+				if state.Record.StaleReason == "" {
+					state.Record.StaleReason = payload.Reason
+				}
 			}
 		}
 	}
