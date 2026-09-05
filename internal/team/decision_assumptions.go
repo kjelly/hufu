@@ -101,6 +101,9 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 		if !declared {
 			return 0, fmt.Errorf("assumption %q is not declared on this decision", id)
 		}
+		if stale && checkpointErr != "" && assumptionStatusBefore(assumptions, id) != check.Status {
+			return 0, fmt.Errorf("decision %s is stale; only exact same-status projection recovery is allowed", discipline.decisionID)
+		}
 		for _, digest := range check.Evidence {
 			if strings.TrimSpace(digest) == "" {
 				return 0, fmt.Errorf("assumption %s has a blank evidence reference", id)
