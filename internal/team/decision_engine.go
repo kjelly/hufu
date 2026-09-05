@@ -42,6 +42,13 @@ type DecisionServices struct {
 	Store   ArtifactStore
 	Budget  BudgetManager
 
+	// Premortems, Challengers and Revisions back the Phase 2 quality stages.
+	// A nil runner disables its stage unless the profile requires it, in which
+	// case the decision fails closed rather than quietly skipping the gate.
+	Premortems  PremortemRunner
+	Challengers ChallengeRunner
+	Revisions   RevisionRunner
+
 	// Now and NewID exist so tests get deterministic records. Both default to
 	// wall-clock time and a counter-based ID when unset.
 	Now   func() time.Time
@@ -70,6 +77,20 @@ type DecisionRequest struct {
 	Role           string
 	ProjectContext string
 	Memory         string
+
+	// Contract carries the request-scoped objective and success criteria.
+	// Structured decisions require one (spec §11).
+	Contract *RequestContract
+
+	// Provenance describes non-artifact evidence sources for independence
+	// grouping. Artifact provenance is derived from the packet (spec §28).
+	Provenance []EvidenceProvenance
+
+	// FinalizationOverride and FinalizationReason apply only under coordinator
+	// or judge finalization. Choosing against the aggregate requires a reason,
+	// which is persisted (spec §26).
+	FinalizationOverride string
+	FinalizationReason   string
 
 	// DecisionID lets a caller resume a specific decision. Empty means new.
 	DecisionID string
@@ -149,14 +170,30 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		}
 	}
 
-	packet, err := e.sealEvidence(ctx, req, state)
-	if err != nil {
+	// Gates run before JUDGE. Adding a "do nothing" option after judges have
+	// scored a two-option list does not change what they considered.
+	if err := e.checkPreJudgeGates(req); err != nil {
 		return nil, err
 	}
 
 	policy, degradations, err := e.admitBudget(ctx, req, state)
 	if err != nil {
 		return nil, err
+	}
+
+	premortem, err := e.runPremortem(ctx, req, policy, state)
+	if err != nil {
+		return nil, err
+	}
+
+	packet, err := e.sealEvidence(ctx, req, state)
+	if err != nil {
+		return nil, err
+	}
+	// Re-project so a fresh seal's stale-hash bookkeeping is visible to the
+	// stages that reuse durable results.
+	if state.Packet.Hash != packet.Hash {
+		state.Packet = packet
 	}
 
 	weights, err := normalizedWeights(packet.Criteria)
@@ -180,7 +217,55 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		return nil, err
 	}
 
-	record := e.buildRecord(req, policy, packet, opinions, aggregate, append(state.Degradations, degradations...))
+	challenges, err := e.runChallenges(ctx, req, policy, packet, aggregate, opinions, state)
+	if err != nil {
+		return nil, err
+	}
+
+	revisions, round2, err := e.runRevisions(ctx, req, policy, packet, weights, aggregate, challenges, opinions, state)
+	if err != nil {
+		return nil, err
+	}
+
+	aggregates := []DecisionAggregate{aggregate}
+	finalAggregate := aggregate
+	if round2 != nil {
+		aggregates = append(aggregates, *round2)
+		finalAggregate = *round2
+	}
+
+	if gate := CheckPremortem(policy.Premortem, premortem); gate != nil {
+		return nil, gate
+	}
+
+	record := e.buildRecord(req, policy, packet, opinions, aggregates, finalAggregate, append(state.Degradations, degradations...))
+	record.Challenges = challenges
+	record.Revisions = revisions
+	record.Premortem = premortem
+	record.FalsificationConditions = PremortemFalsifications(premortem, challenges)
+
+	finalOption, overridden, err := FinalOptionFor(policy, finalAggregate, req.FinalizationOverride, req.FinalizationReason)
+	if err != nil {
+		return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
+	}
+	record.FinalOption = finalOption
+	record.Probability = finalAggregate.MeanProbability[finalOption]
+	if overridden {
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationOverride, decisionEvent{
+			DecisionID: req.DecisionID, EvidenceHash: packet.Hash,
+			Reason: fmt.Sprintf("%s chosen over aggregate %s: %s", finalOption, finalAggregate.PreferredOption, req.FinalizationReason),
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := e.applyProvenance(ctx, req, policy, packet, &record); err != nil {
+		return nil, err
+	}
+	if gate := CheckForecast(policy.Forecast, record); gate != nil {
+		return nil, gate
+	}
+
 	if _, err := persistDecisionRecord(ctx, e.services.Store, record); err != nil {
 		return nil, err
 	}
@@ -377,7 +462,8 @@ func (e *decisionEngine) buildRecord(
 	policy DecisionPolicy,
 	packet DecisionEvidencePacket,
 	opinions []DecisionOpinion,
-	aggregate DecisionAggregate,
+	aggregates []DecisionAggregate,
+	finalAggregate DecisionAggregate,
 	degradations []DecisionDegradation,
 ) DecisionRecord {
 	record := DecisionRecord{
@@ -390,10 +476,10 @@ func (e *decisionEngine) buildRecord(
 		Options:            packet.Options,
 		Assumptions:        packet.Assumptions,
 		Opinions:           opinions,
-		Aggregates:         []DecisionAggregate{aggregate},
-		FinalOption:        aggregate.PreferredOption,
+		Aggregates:         aggregates,
+		FinalOption:        finalAggregate.PreferredOption,
 		FinalizationMode:   policy.EffectiveFinalization(),
-		Probability:        aggregate.MeanProbability[aggregate.PreferredOption],
+		Probability:        finalAggregate.MeanProbability[finalAggregate.PreferredOption],
 		NoGoOptionID:       packet.NoGoOption(),
 		Degradations:       degradations,
 		StopPolicySnapshot: policy.Discipline.Stop,
@@ -403,6 +489,24 @@ func (e *decisionEngine) buildRecord(
 	record.KeyAssumptions = collectKeyAssumptions(opinions)
 	record.Normalize()
 	return record
+}
+
+// checkPreJudgeGates runs every gate that must block before judgment starts.
+// The request contract gate only applies when a contract was supplied: a team
+// that has not adopted contracts keeps its old behavior (spec §11, §17, §19).
+func (e *decisionEngine) checkPreJudgeGates(req DecisionRequest) error {
+	if req.Contract != nil {
+		if gate := CheckRequestContract(req.Contract); gate != nil {
+			return gate
+		}
+	}
+	if gate := CheckAlternatives(req.Policy.Discipline.Alternatives, req.Options); gate != nil {
+		return gate
+	}
+	if gate := CheckOutsideView(req.Policy.OutsideView, req.BaseRates); gate != nil {
+		return gate
+	}
+	return nil
 }
 
 // collectKeyAssumptions merges the judges' declared key assumptions, keeping

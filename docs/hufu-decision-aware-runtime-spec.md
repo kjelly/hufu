@@ -1968,6 +1968,8 @@ Phase 0
   internal/team/decision_types.go        DecisionRecord / Opinion / Aggregate / Option /
                                          Assumption / Challenge / Revision / Premortem /
                                          RequestContract 等 runtime 型別 + config 型別別名
+                                         （RequestContract 與其他 runtime 型別同檔，
+                                          不另開 request_contract.go）
   internal/team/decision_config.go       profile 解析（precedence chain）與 task profile 驗證
   internal/team/decision_reason.go       reason code / event type 別名再匯出
 
@@ -1986,12 +1988,13 @@ Phase 1
   internal/team/decision_store.go        事件持久化與 resume 投影
 
 Phase 2
-  internal/team/decision_gates.go        alternatives / outside-view / forecast gates
-  internal/team/decision_challenge.go
-  internal/team/decision_revision.go
-  internal/team/decision_premortem.go
+  internal/team/decision_gates.go        alternatives / outside-view / premortem /
+                                         forecast / request-contract gates、finalization
+  internal/team/decision_challenge.go    challenge 與 premortem 的提示、匿名化、驗證
+  internal/team/decision_revision.go     單輪獨立修訂與 round 2 投影
   internal/team/decision_provenance.go   union-find 分組與警示
-  internal/team/request_contract.go
+  internal/team/decision_engine_stages.go  premortem / challenge / revision /
+                                         provenance 的階段編排與 resume
 
 Phase 3
   internal/team/stop_policy.go

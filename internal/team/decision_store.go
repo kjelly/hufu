@@ -34,8 +34,16 @@ type decisionEvent struct {
 	Packet      *DecisionEvidencePacket `json:"packet,omitempty"`
 	Opinion     *DecisionOpinion        `json:"opinion,omitempty"`
 	Aggregate   *DecisionAggregate      `json:"aggregate,omitempty"`
+	Challenge   *DecisionChallenge      `json:"challenge,omitempty"`
+	Revision    *DecisionRevision       `json:"revision,omitempty"`
+	Premortem   *PremortemResult        `json:"premortem,omitempty"`
 	Record      *DecisionRecord         `json:"record,omitempty"`
 	Degradation *DecisionDegradation    `json:"degradation,omitempty"`
+
+	// JudgeAliases records the anonymization mapping a challenger was NOT
+	// given, so the run stays auditable without ever revealing identity to the
+	// challenger itself (spec §23).
+	JudgeAliases map[string]string `json:"judge_aliases,omitempty"`
 }
 
 // decisionState is the projection rebuilt from the event log.
@@ -45,6 +53,9 @@ type decisionState struct {
 	Packet       DecisionEvidencePacket
 	Opinions     []DecisionOpinion
 	Aggregates   map[int]DecisionAggregate
+	Challenges   []DecisionChallenge
+	Revisions    []DecisionRevision
+	Premortem    *PremortemResult
 	Degradations []DecisionDegradation
 	Record       *DecisionRecord
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
@@ -78,6 +89,32 @@ func (s decisionState) JudgesWithValidOpinion(round int) map[string]bool {
 		}
 	}
 	return seen
+}
+
+// ChallengesForHash returns the durable challenges formed on the current
+// evidence, so a resume never re-runs a challenger that already answered.
+func (s decisionState) ChallengesForHash() []DecisionChallenge {
+	var out []DecisionChallenge
+	for _, challenge := range s.Challenges {
+		if challenge.EvidenceHash == s.Packet.Hash {
+			out = append(out, challenge)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// RevisionsForHash returns the durable revisions formed on the current
+// evidence, keyed lookup left to the caller.
+func (s decisionState) RevisionsForHash() []DecisionRevision {
+	var out []DecisionRevision
+	for _, revision := range s.Revisions {
+		if revision.EvidenceHash == s.Packet.Hash {
+			out = append(out, revision)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].JudgeID < out[j].JudgeID })
+	return out
 }
 
 // decisionJournal is the persistence surface the engine needs. EventJournal
@@ -147,6 +184,19 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		case agent.EventDecisionAggregateComputed:
 			if payload.Aggregate != nil {
 				state.Aggregates[payload.Aggregate.Round] = *payload.Aggregate
+			}
+		case agent.EventDecisionChallengeSubmitted:
+			if payload.Challenge != nil {
+				state.Challenges = append(state.Challenges, *payload.Challenge)
+			}
+		case agent.EventDecisionRevisionSubmitted:
+			if payload.Revision != nil {
+				state.Revisions = append(state.Revisions, *payload.Revision)
+			}
+		case agent.EventDecisionPremortemSubmitted:
+			if payload.Premortem != nil {
+				premortem := *payload.Premortem
+				state.Premortem = &premortem
 			}
 		case agent.EventDecisionBudgetDegraded:
 			if payload.Degradation != nil {

@@ -130,13 +130,82 @@ func scoredOpinion(migrate, wait float64, preferred string, probability float64)
 	}
 }
 
+// stubChallenger and friends stand in for the Phase 2 stage runners. They
+// record the prompt they were given so isolation and ordering can be asserted.
+type stubChallenger struct {
+	mu      sync.Mutex
+	prompts []string
+	respond func(challengerID string) (DecisionChallenge, error)
+}
+
+func (c *stubChallenger) RunChallenge(_ context.Context, req ChallengeRequest) (DecisionChallenge, error) {
+	c.mu.Lock()
+	c.prompts = append(c.prompts, req.Prompt)
+	c.mu.Unlock()
+	if c.respond != nil {
+		return c.respond(req.ChallengerID)
+	}
+	return DecisionChallenge{TargetOption: "migrate", StrongestCountercase: "load may spike", Severity: 0.4}, nil
+}
+
+func (c *stubChallenger) lastPrompt() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.prompts) == 0 {
+		return ""
+	}
+	return c.prompts[len(c.prompts)-1]
+}
+
+type stubPremortem struct {
+	respond func() (PremortemResult, error)
+}
+
+func (p *stubPremortem) RunPremortem(context.Context, PremortemRequest) (PremortemResult, error) {
+	if p.respond != nil {
+		return p.respond()
+	}
+	return PremortemResult{FailureModes: []FailureMode{{
+		ID: "F1", Description: "rollout stalls", Likelihood: 0.3, Impact: 0.7,
+		EarlyWarningSignals: []string{"ingest lag exceeds 5m"},
+	}}}, nil
+}
+
+type stubReviser struct {
+	mu      sync.Mutex
+	prompts map[string]string
+	respond func(judgeID string) (DecisionRevision, error)
+}
+
+func (r *stubReviser) RunRevision(_ context.Context, req RevisionRequest) (DecisionRevision, error) {
+	r.mu.Lock()
+	if r.prompts == nil {
+		r.prompts = map[string]string{}
+	}
+	r.prompts[req.JudgeID] = req.Prompt
+	r.mu.Unlock()
+	if r.respond != nil {
+		return r.respond(req.JudgeID)
+	}
+	return DecisionRevision{Changed: false}, nil
+}
+
 func newTestEngine(journal *memoryJournal, runner JudgeRunner, budget BudgetManager) DecisionEngine {
+	return newTestEngineWithStages(journal, runner, budget, DecisionServices{})
+}
+
+// newTestEngineWithStages builds an engine with optional Phase 2 stage runners.
+func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget BudgetManager, stages DecisionServices) DecisionEngine {
 	counter := 0
 	return NewDecisionEngine(DecisionServices{
-		Judges:  runner,
-		Journal: journal,
-		Budget:  budget,
-		Now:     func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
+		Judges:      runner,
+		Journal:     journal,
+		Budget:      budget,
+		Premortems:  stages.Premortems,
+		Challengers: stages.Challengers,
+		Revisions:   stages.Revisions,
+		Store:       stages.Store,
+		Now:         func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string {
 			counter++
 			return fmt.Sprintf("%s-%d", prefix, counter)

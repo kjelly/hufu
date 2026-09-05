@@ -103,7 +103,10 @@ func TestDecisionBudgetExplicitDegradationLadder(t *testing.T) {
 
 	// Enough for the floor (3 judges * 1 round + 1 challenger), not for the
 	// configured 5 judges * 2 rounds + 2 challengers, so the whole ladder runs.
-	engine := newTestEngine(journal, runner, budgetWith(4*defaultJudgeTokenEstimate, 0))
+	engine := newTestEngineWithStages(journal, runner, budgetWith(4*defaultJudgeTokenEstimate, 0), DecisionServices{
+		Challengers: &stubChallenger{},
+		Revisions:   &stubReviser{},
+	})
 
 	record, err := engine.Run(context.Background(), engineRequest(policy))
 	if err != nil {
