@@ -38,6 +38,8 @@ var (
 
 	decisionAssumeStatus string
 	decisionAssumeNote   string
+
+	decisionStatsRunID string
 )
 
 // decisionExitError carries a fixed process exit code across the cobra
@@ -127,6 +129,27 @@ was formed.`,
 	RunE: runDecisionAssume,
 }
 
+var decisionStatsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "Project decision activity from the durable event log and index",
+	Long: `hufu decision stats reports the decision metrics from §40 of the spec.
+
+Every counter is a projection over state the runtime already persisted, so a
+metric can never drift from the events that produced it. Nothing is stored
+separately and nothing is counted twice.
+
+Without --run the report covers what the cross-run index knows: how many
+decisions exist, under which profiles, how well-sourced they were, and how many
+have been resolved. With --run it also projects that run's event log, which is
+where gate failures, rejected opinions, degradations, kill criteria and replans
+are recorded.
+
+The report also states how close the resolved sample is to opening Phase 5,
+which is the one entry condition code cannot satisfy.`,
+	Args: cobra.NoArgs,
+	RunE: runDecisionStats,
+}
+
 func init() {
 	decisionCmd.PersistentFlags().StringVarP(&decisionWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	decisionCmd.PersistentFlags().BoolVar(&decisionJSON, "json", false, "Write JSON to stdout; all diagnostics go to stderr")
@@ -147,6 +170,9 @@ func init() {
 	decisionAssumeCmd.Flags().StringVar(&decisionAssumeStatus, "status", "", "Observed status: supported or contradicted (required)")
 	decisionAssumeCmd.Flags().StringVar(&decisionAssumeNote, "note", "", "Why the status changed")
 	decisionCmd.AddCommand(decisionAssumeCmd)
+
+	decisionStatsCmd.Flags().StringVar(&decisionStatsRunID, "run", "", "Also project this run's event log (default: index-derived metrics only)")
+	decisionCmd.AddCommand(decisionStatsCmd)
 }
 
 func getDecisionWorkspace() string {
@@ -427,5 +453,76 @@ func runDecisionAssume(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(out, "This is a critical assumption: decision %s now rests on a premise that does not hold.\n", decisionID)
 	}
 	_, _ = fmt.Fprintf(out, "The decision record was not modified.\n")
+	return nil
+}
+
+func runDecisionStats(cmd *cobra.Command, args []string) error {
+	index, err := openDecisionIndex()
+	if err != nil {
+		return err
+	}
+	entries, err := index.List()
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision stats: %v", err)}
+	}
+
+	var events []team.RunEvent
+	if strings.TrimSpace(decisionStatsRunID) != "" {
+		store, storeErr := team.OpenEventStore(getDecisionWorkspace())
+		if storeErr != nil {
+			return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision stats: %v", storeErr)}
+		}
+		read, readErr := store.ReadEvents()
+		if readErr != nil {
+			return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision stats: %v", readErr)}
+		}
+		for _, event := range read {
+			if event.RunID == decisionStatsRunID {
+				events = append(events, event)
+			}
+		}
+	}
+
+	metrics := team.ComputeDecisionMetrics(events, entries)
+	if decisionJSON {
+		return writeDecisionJSON(cmd, map[string]any{
+			"metrics":      metrics,
+			"phase5_entry": metrics.Phase5Entry(),
+		})
+	}
+
+	out := cmd.OutOrStdout()
+	_, _ = fmt.Fprintf(out, "Decisions formed:      %d\n", metrics.DecisionCount)
+	for _, profile := range metrics.SortedProfiles() {
+		_, _ = fmt.Fprintf(out, "  %-18s %d\n", profile, metrics.DecisionProfileCount[profile])
+	}
+	_, _ = fmt.Fprintf(out, "Independent groups:    %d\n", metrics.IndependentEvidenceGroupCount)
+	_, _ = fmt.Fprintf(out, "Stale decisions:       %d\n", metrics.DecisionStaleCount)
+
+	if len(events) > 0 {
+		_, _ = fmt.Fprintf(out, "\nFrom run %s:\n", decisionStatsRunID)
+		_, _ = fmt.Fprintf(out, "  Outside-view blocks:   %d\n", metrics.OutsideViewGateFailures)
+		_, _ = fmt.Fprintf(out, "  No-go option missing:  %d\n", metrics.NoGoOptionMissing)
+		_, _ = fmt.Fprintf(out, "  Premortem failure modes: %d\n", metrics.PremortemFailureModes)
+		_, _ = fmt.Fprintf(out, "  Opinions rejected:     %d\n", metrics.DecisionOpinionRejectedCount)
+		_, _ = fmt.Fprintf(out, "  Budget degradations:   %d\n", metrics.DecisionBudgetDegradedCount)
+		_, _ = fmt.Fprintf(out, "  Shared-origin warnings: %d\n", metrics.SharedOriginWarnings)
+		_, _ = fmt.Fprintf(out, "  Mean dispersion:       %.4f\n", metrics.MeanDispersion())
+		_, _ = fmt.Fprintf(out, "  Revision rate:         %.4f\n", metrics.DecisionRevisionRate)
+		_, _ = fmt.Fprintf(out, "  Assumption invalidations: %d\n", metrics.AssumptionInvalidations)
+		_, _ = fmt.Fprintf(out, "  Kill criteria fired:   %d\n", metrics.KillCriteriaTriggered)
+		_, _ = fmt.Fprintf(out, "  Replans requested:     %d\n", metrics.ReplanCount)
+		_, _ = fmt.Fprintf(out, "  Commit gate blocks:    %d\n", metrics.CommitGateBlocked)
+	}
+
+	entry := metrics.Phase5Entry()
+	_, _ = fmt.Fprintf(out, "\nOutcome sample:        %d resolved (%d verified)\n", entry.Resolved, entry.Verified)
+	if entry.Open {
+		_, _ = fmt.Fprintf(out, "Phase 5 entry condition is met (>= %d resolved, >= %d verified).\n",
+			entry.ResolvedRequired, entry.VerifiedRequired)
+	} else {
+		_, _ = fmt.Fprintf(out, "Phase 5 needs %d resolved and %d verified; calibration stays closed until then.\n",
+			entry.ResolvedRequired, entry.VerifiedRequired)
+	}
 	return nil
 }

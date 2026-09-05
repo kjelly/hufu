@@ -2003,7 +2003,14 @@ reconcile → complete / partial / not_started / unknown
 
 ## 40. 可觀測性
 
-建議指標：
+**實作**：`internal/team/decision_metrics.go`（`ComputeDecisionMetrics`），
+CLI 入口 `hufu decision stats [--run <id>] [--json]`。
+
+每個計數都是對 runtime **已經持久化**的狀態所做的投影——append-only event log
+與跨 run 索引。沒有另外儲存、沒有重複計數，因此指標不可能與產生它的事件漂移；
+這與 §29 讓 StopPolicy 讀取預算帳本而非自建計數是同一條原則。
+
+指標：
 
 ```text
 decision_count
@@ -2029,6 +2036,12 @@ assumption_invalidations
 commit_gate_blocked
 reconcile_required_count
 ```
+
+`capability_routing_fallbacks` 與 `capability_invalidations` 屬 Phase 4，
+`reconcile_required_count` 需要 crash 復原路徑的輸入，三者皆不在 V1。
+
+`hufu decision stats` 另外回報**距離 Phase 5 進入條件還差多少**
+（§49.2 的 30 筆已結案 / 20 筆已驗證），因為那是唯一無法用程式碼滿足的條件。
 
 追蹤鏈：
 
@@ -2129,6 +2142,7 @@ Phase 2
   internal/team/decision_revision.go     單輪獨立修訂與 round 2 投影
   internal/team/decision_provenance.go   union-find 分組與警示
   internal/team/decision_assumptions.go  §18.1 三個假設狀態來源的套用與驗證
+  internal/team/decision_metrics.go      §40 指標投影與 Phase 5 進入條件評估
   internal/team/decision_engine_stages.go  premortem / challenge / revision /
                                          provenance 的階段編排與 resume
 

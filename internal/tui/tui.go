@@ -66,6 +66,7 @@ type TeamInfo struct {
 	SSHSessions    int
 	IsChat         bool
 	PTYEnabled     bool
+	Decisions      []team.DecisionIndexEntry
 	HufuBinary     string
 }
 
@@ -2348,6 +2349,22 @@ func (m Model) infoPanelView() string {
 	if info.GuardModel != "" {
 		b.WriteString(boldStyle.Render("Guard:   "))
 		b.WriteString(info.GuardModel)
+		b.WriteString("\n")
+	}
+
+	if len(info.Decisions) > 0 {
+		b.WriteString(boldStyle.Render("Decisions: "))
+		var decisionDisplay []string
+		for _, decision := range info.Decisions {
+			status := "active"
+			if decision.Stale {
+				status = "stale"
+			} else if decision.Outcome != nil {
+				status = decision.Outcome.ResolvedOutcome
+			}
+			decisionDisplay = append(decisionDisplay, fmt.Sprintf("%s (%s)", decision.DecisionID, status))
+		}
+		b.WriteString(strings.Join(decisionDisplay, ", "))
 		b.WriteString("\n")
 	}
 

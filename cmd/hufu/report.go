@@ -103,6 +103,7 @@ type reportData struct {
 	MemoryLearning        team.MemoryLearningReport
 	DeprecatedMemory      []team.DeprecatedMemoryToolUsage
 	ContextRouting        team.ContextManifestSummary
+	Decisions             []team.DecisionIndexEntry
 	RuntimeWorksets       *team.RuntimeWorksetProjection
 	RuntimeWorksetError   string
 	CanonicalRunError     string
@@ -179,6 +180,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.MemoryLearning = tc.coordinator.MemoryLearningReport()
 		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
 		d.ContextRouting = tc.coordinator.ContextManifestReport()
+		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 	}
 	if tc.session != nil {
 		canonical, err := team.LoadCanonicalRunFinishedSnapshot(tc.session.Workspace, "")
@@ -492,6 +494,23 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	fmt.Fprintf(&b, "- **Evidence identity:** `%s`\n\n", reportSafeMetadata(data.EvidenceIdentity, 160))
 	if data.CanonicalRunError != "" {
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
+	}
+	if len(data.Decisions) > 0 {
+		b.WriteString("## Decision State\n\n")
+		b.WriteString("| Decision | Profile | Status | Assumptions | Evidence |\n")
+		b.WriteString("|---|---|---|---:|---|\n")
+		for _, decision := range data.Decisions {
+			status := "active"
+			if decision.Stale {
+				status = "stale"
+			} else if decision.Outcome != nil {
+				status = decision.Outcome.ResolvedOutcome
+			}
+			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %d | `%s` |\n",
+				reportSafeMetadata(decision.DecisionID, 120), reportSafeMetadata(decision.Profile, 80),
+				reportSafeMetadata(status, 80), len(decision.Assumptions), reportSafeMetadata(decision.EvidenceHash, 120))
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString(renderReportAuditSection(data))
 	if len(data.ModelProfiles) > 0 {

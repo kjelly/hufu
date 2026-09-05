@@ -45,6 +45,18 @@ func TestView_HelpContent(t *testing.T) {
 	}
 }
 
+func TestView_InfoIncludesDecisionStateProjection(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "t", Decisions: []team.DecisionIndexEntry{{
+		DecisionID: "dec-1", Stale: true,
+	}}})
+	m.width = 100
+	m.height = 30
+	m.inInfo = true
+	if !containsView(m.View(), "dec-1 (stale)") {
+		t.Fatalf("info view missing decision projection:\n%s", m.View())
+	}
+}
+
 // ── L2: Info panel ───────────────────────────────────────────────────────────
 
 func TestView_InfoPanelContent(t *testing.T) {

@@ -38,6 +38,18 @@ func TestGenerateRequestedReportsWritesOnlyAutoReportTeams(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDIncludesDecisionStateProjection(t *testing.T) {
+	report := buildReportMD(&reportData{Decisions: []team.DecisionIndexEntry{{
+		DecisionID: "dec-1", Profile: "standard", EvidenceHash: "sha256:abc",
+		Assumptions: []team.DecisionAssumption{{ID: "A1", Status: team.AssumptionSupported}},
+	}}}, "demo", "")
+	for _, want := range []string{"Decision State", "dec-1", "standard", "sha256:abc", "| 1 |"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing decision projection %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), DeprecatedMemory: []team.DeprecatedMemoryToolUsage{{Tool: "stm_write", Calls: 2, Success: 1, FailClosed: 1, Denied: 3}}}, "demo", "")
 	for _, want := range []string{"## Deprecated Memory Compatibility Usage", "`stm_write`", "| 2 | 1 | 1 | 3 |", "Only content-free lifecycle counts"} {

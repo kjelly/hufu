@@ -63,6 +63,12 @@ type DecisionIndexEntry struct {
 	StaleReason string    `json:"stale_reason,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`
 
+	// SourceCount and IndependenceGroupCount carry the evidence independence
+	// view forward, so cross-run observability does not have to re-open every
+	// run's event log to answer how well-sourced a decision was (§28.2).
+	SourceCount            int `json:"source_count,omitempty"`
+	IndependenceGroupCount int `json:"independence_group_count,omitempty"`
+
 	// Assumptions carries the decision's typed assumptions and their current
 	// status, so an operator can check one after the run that formed the
 	// decision has exited (spec §18.1 source 3).
@@ -373,6 +379,8 @@ func IndexEntryFor(record DecisionRecord, question string, forecastRequired bool
 		ForecastRequired:        forecastRequired,
 		FalsificationConditions: record.FalsificationConditions,
 		Assumptions:             record.Assumptions,
+		SourceCount:             record.SourceCount,
+		IndependenceGroupCount:  record.IndependenceGroupCount,
 		RecordDigest:            recordRef.SHA256,
 		RecordPath:              recordRef.Path,
 		Stale:                   record.Stale,

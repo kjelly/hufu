@@ -365,3 +365,64 @@ func TestDecisionAssumeRejectsBadInput(t *testing.T) {
 		})
 	}
 }
+
+// Metrics are a projection over durable state, so a workspace with no
+// decisions reports zeroes rather than failing.
+func TestDecisionStatsOnEmptyWorkspace(t *testing.T) {
+	resetDecisionCLIFlags()
+	out, err := runDecisionCLI(t, "stats", "-w", t.TempDir())
+	if err != nil {
+		t.Fatalf("decision stats = %v", err)
+	}
+	if !strings.Contains(out, "Decisions formed:      0") {
+		t.Fatalf("output = %q, want a zeroed report", out)
+	}
+	if !strings.Contains(out, "Phase 5 needs") {
+		t.Fatalf("output did not report the Phase 5 entry condition:\n%s", out)
+	}
+}
+
+func TestDecisionStatsReportsIndexMetrics(t *testing.T) {
+	resetDecisionCLIFlags()
+	workspace := buildDecisionCLIFixture(t)
+
+	// Resolve one decision so the outcome sample is non-trivial.
+	if _, err := runDecisionCLI(t, "resolve", "dec-1", "-w", workspace,
+		"--outcome", "succeeded", "--evidence", "deadbeef"); err != nil {
+		t.Fatal(err)
+	}
+
+	resetDecisionCLIFlags()
+	out, err := runDecisionCLI(t, "stats", "-w", workspace)
+	if err != nil {
+		t.Fatalf("decision stats = %v", err)
+	}
+	for _, want := range []string{"Decisions formed:      2", "high-stakes", "standard", "1 resolved (1 verified)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDecisionStatsJSON(t *testing.T) {
+	resetDecisionCLIFlags()
+	workspace := buildDecisionCLIFixture(t)
+
+	out, err := runDecisionCLI(t, "stats", "-w", workspace, "--json")
+	if err != nil {
+		t.Fatalf("decision stats --json = %v", err)
+	}
+	var payload struct {
+		Metrics     team.DecisionMetrics   `json:"metrics"`
+		Phase5Entry team.Phase5EntryStatus `json:"phase5_entry"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("output is not a single JSON object: %v\n%s", err, out)
+	}
+	if payload.Metrics.DecisionCount != 2 {
+		t.Fatalf("DecisionCount = %d, want 2", payload.Metrics.DecisionCount)
+	}
+	if payload.Phase5Entry.ResolvedRequired != team.Phase5ResolvedRequired {
+		t.Fatalf("phase5 thresholds not reported: %#v", payload.Phase5Entry)
+	}
+}

@@ -177,6 +177,17 @@ func (c *Coordinator) decisionIndex() (*DecisionIndex, error) {
 	return index, nil
 }
 
+// DecisionIndexEntries returns the latest derived decision state for display.
+// The index is presentation state only; lifecycle mutations still use the
+// canonical event journal.
+func (c *Coordinator) DecisionIndexEntries() ([]DecisionIndexEntry, error) {
+	index, err := c.decisionIndex()
+	if err != nil || index == nil {
+		return nil, err
+	}
+	return index.List()
+}
+
 // decisionArtifactStore returns the workspace's content-addressed store so a
 // DecisionRecord is persisted as evidence, not only as an event body.
 func (c *Coordinator) decisionArtifactStore() ArtifactStore {

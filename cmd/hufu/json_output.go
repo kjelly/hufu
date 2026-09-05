@@ -39,6 +39,7 @@ type jsonRunTeam struct {
 	MemoryLearning   team.MemoryLearningReport        `json:"memory_learning,omitempty"`
 	DeprecatedMemory []team.DeprecatedMemoryToolUsage `json:"deprecated_memory_tools,omitempty"`
 	ContextRouting   team.ContextManifestSummary      `json:"context_routing"`
+	Decisions        []team.DecisionIndexEntry        `json:"decisions,omitempty"`
 }
 
 type jsonRunTask struct {
@@ -86,6 +87,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)
 		}
 		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport(), DeprecatedMemory: tc.coordinator.DeprecatedMemoryToolReport(), ContextRouting: tc.coordinator.ContextManifestReport()}
+		jt.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 		var items []*team.TodoItem
 		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
 			items = tracker.TodoList().Items()
