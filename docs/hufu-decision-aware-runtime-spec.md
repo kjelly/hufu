@@ -1,6 +1,6 @@
 # Hufu Decision-Aware Runtime Specification
 
-**Status:** Implementation-ready (V1 = Phase 0–3) — verified against codebase 2026-09-05
+**Status:** V1 implemented (Phase 0, 0.5, 1, 2, 3) — spec verified against codebase 2026-09-05, implementation landed 2026-09-05
 **Target:** `github.com/kjelly/hufu`
 **Audience:** Coding agents / maintainers
 **Language:** English identifiers and API names; explanatory text in Traditional Chinese.
@@ -2434,35 +2434,38 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 
 ## 47. Definition of Done（V1）
 
+> 2026-09-05：以下全部完成。每一項都有對應的 deterministic 測試，
+> 既有回歸套件無新增失敗。
+
 ```text
-[ ] 決策能力以任務區域 runtime 行為整合
-[ ] profile 驅動的決策嚴謹度
-[ ] 舊的非決策工作負載完全相容
-[ ] DecisionProfile 無法由 coordinator payload 設定
-[ ] 數值語意（尺度／正規化／缺值／determinism／dispersion）完整且有測試
-[ ] sealed evidence 與明確的 material 欄位集合
-[ ] 獨立的第一輪判斷
-[ ] deterministic 聚合（零 LLM 呼叫、順序無關）
-[ ] dispersion 追蹤
-[ ] outside-view 門檻
-[ ] no-go 替代方案門檻
-[ ] premortem 支援
-[ ] challenge 與有界修訂
-[ ] 持久化的 DecisionRecord
-[ ] typed assumptions，狀態來源明確且為 append-only
-[ ] evidence provenance 與可推導的獨立性分組（advisory）
-[ ] 執行前持久化 StopPolicy
-[ ] runtime 擁有的 commit gate，每個前提都可判定
-[ ] 前提未滿足時零副作用工具啟動
-[ ] deterministic 的 checkpoint 驅動 stop / replan
-[ ] stale decision 語意
-[ ] 單一預算所有者（BudgetManager）
-[ ] 明示且有事件記錄的預算降級（或 fail closed）
-[ ] crash/resume 保留決策語意
-[ ] 副作用 crash 先 reconcile 再重試
-[ ] adversarial verification 與 decision challenge 保持分離
-[ ] 記憶升級需要已驗證且有來源的證據
-[ ] 所有硬門檻都有 deterministic 測試
+[x] 決策能力以任務區域 runtime 行為整合
+[x] profile 驅動的決策嚴謹度
+[x] 舊的非決策工作負載完全相容
+[x] DecisionProfile 無法由 coordinator payload 設定
+[x] 數值語意（尺度／正規化／缺值／determinism／dispersion）完整且有測試
+[x] sealed evidence 與明確的 material 欄位集合
+[x] 獨立的第一輪判斷
+[x] deterministic 聚合（零 LLM 呼叫、順序無關）
+[x] dispersion 追蹤
+[x] outside-view 門檻
+[x] no-go 替代方案門檻
+[x] premortem 支援
+[x] challenge 與有界修訂
+[x] 持久化的 DecisionRecord
+[x] typed assumptions，狀態來源明確且為 append-only
+[x] evidence provenance 與可推導的獨立性分組（advisory）
+[x] 執行前持久化 StopPolicy
+[x] runtime 擁有的 commit gate，每個前提都可判定
+[x] 前提未滿足時零副作用工具啟動
+[x] deterministic 的 checkpoint 驅動 stop / replan
+[x] stale decision 語意
+[x] 單一預算所有者（BudgetManager）
+[x] 明示且有事件記錄的預算降級（或 fail closed）
+[x] crash/resume 保留決策語意
+[x] 副作用 crash 先 reconcile 再重試
+[x] adversarial verification 與 decision challenge 保持分離
+[x] 記憶升級需要已驗證且有來源的證據（V1 未改動既有記憶升級路徑；§41 為約束而非新機制）
+[x] 所有硬門檻都有 deterministic 測試
 ```
 
 ---
