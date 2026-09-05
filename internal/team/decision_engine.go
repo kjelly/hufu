@@ -290,6 +290,7 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	}
 	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalized, decisionEvent{
 		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Record: &record,
+		Question: req.Question, ForecastRequired: policy.Forecast.Required, RecordRef: recordRef,
 	}); err != nil {
 		return nil, err
 	}

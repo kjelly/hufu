@@ -41,15 +41,18 @@ type decisionEvent struct {
 	Note         string        `json:"note,omitempty"`
 	At           time.Time     `json:"at,omitzero"`
 
-	Packet      *DecisionEvidencePacket `json:"packet,omitempty"`
-	Opinion     *DecisionOpinion        `json:"opinion,omitempty"`
-	Aggregate   *DecisionAggregate      `json:"aggregate,omitempty"`
-	Challenge   *DecisionChallenge      `json:"challenge,omitempty"`
-	Revision    *DecisionRevision       `json:"revision,omitempty"`
-	Premortem   *PremortemResult        `json:"premortem,omitempty"`
-	Options     []DecisionOption        `json:"options,omitempty"`
-	Record      *DecisionRecord         `json:"record,omitempty"`
-	Degradation *DecisionDegradation    `json:"degradation,omitempty"`
+	Packet           *DecisionEvidencePacket `json:"packet,omitempty"`
+	Opinion          *DecisionOpinion        `json:"opinion,omitempty"`
+	Aggregate        *DecisionAggregate      `json:"aggregate,omitempty"`
+	Challenge        *DecisionChallenge      `json:"challenge,omitempty"`
+	Revision         *DecisionRevision       `json:"revision,omitempty"`
+	Premortem        *PremortemResult        `json:"premortem,omitempty"`
+	Options          []DecisionOption        `json:"options,omitempty"`
+	Record           *DecisionRecord         `json:"record,omitempty"`
+	Question         string                  `json:"question,omitempty"`
+	ForecastRequired bool                    `json:"forecast_required,omitempty"`
+	RecordRef        ArtifactRef             `json:"record_ref,omitempty"`
+	Degradation      *DecisionDegradation    `json:"degradation,omitempty"`
 
 	// JudgeAliases records the anonymization mapping a challenger was NOT
 	// given, so the run stays auditable without ever revealing identity to the

@@ -110,6 +110,10 @@ type SessionData struct {
 	RecoveryReason              string                     `json:"recovery_reason,omitempty"`
 	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
+	// DecisionProjections is a disposable presentation projection rebuilt from
+	// the canonical decision events when needed. It is persisted so a resumed
+	// session can surface assumption invalidation before the index is opened.
+	DecisionProjections []DecisionIndexEntry `json:"decision_projections,omitempty"`
 	// CompactionReferences are event-store attestations only. The canonical
 	// state store holds the referenced history and summary contents.
 	CompactionReferences           []CompactionReference           `json:"compaction_references,omitempty"`

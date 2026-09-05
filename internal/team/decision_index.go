@@ -120,6 +120,7 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 		return fmt.Errorf("decision index rebuild: reading events: %w", err)
 	}
 	ids := map[string]struct{}{}
+	metadata := make(map[string]decisionEvent)
 	for _, event := range events {
 		if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
 			continue
@@ -127,6 +128,7 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 		var payload decisionEvent
 		if json.Unmarshal(event.Payload, &payload) == nil && payload.Record != nil && payload.DecisionID != "" {
 			ids[payload.DecisionID] = struct{}{}
+			metadata[payload.DecisionID] = payload
 		}
 	}
 	var rebuilt []DecisionIndexEntry
@@ -135,7 +137,12 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 		if projectErr != nil || state.Record == nil {
 			continue
 		}
-		entry := IndexEntryFor(*state.Record, state.Packet.Question, false, ArtifactRef{})
+		finalized := metadata[id]
+		question := finalized.Question
+		if question == "" {
+			question = state.Packet.Question
+		}
+		entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
 		if state.Record.Stale {
 			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
 		}
@@ -521,7 +528,32 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 	if err := i.Append(entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
+	if err := persistDecisionIndexSessionProjection(i.path, entry); err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
 	return entry, assumption, nil
+}
+
+// persistDecisionIndexSessionProjection keeps the restart-facing session
+// projection aligned with operator changes. Missing session.json is normal for
+// a workspace addressed before its first coordinator run.
+func persistDecisionIndexSessionProjection(indexPath string, entry DecisionIndexEntry) error {
+	workspace := filepath.Dir(filepath.Dir(filepath.Dir(indexPath)))
+	session, err := loadSessionQuiet(workspace)
+	if err != nil {
+		return fmt.Errorf("load session for decision projection: %w", err)
+	}
+	if session == nil {
+		return nil
+	}
+	for n := range session.DecisionProjections {
+		if session.DecisionProjections[n].DecisionID == entry.DecisionID {
+			session.DecisionProjections[n] = entry
+			return SaveSession(workspace, session)
+		}
+	}
+	session.DecisionProjections = append(session.DecisionProjections, entry)
+	return SaveSession(workspace, session)
 }
 
 func assumptionStatusBefore(assumptions []DecisionAssumption, id string) string {

@@ -55,6 +55,21 @@ type journalRecord struct {
 	// description-based identity is not authoritative evidence.
 	TypedResult      *TaskResult                `json:"typed_result,omitempty"`
 	ContextManifests []ContextInjectionManifest `json:"context_manifests,omitempty"`
+	DecisionID       string                     `json:"decision_id,omitempty"`
+	Assumptions      []DecisionAssumption       `json:"assumptions,omitempty"`
+	DecisionStale    bool                       `json:"decision_stale,omitempty"`
+}
+
+func (c *Coordinator) recordDecisionAssumptionProjection(entry DecisionIndexEntry) error {
+	if c == nil || c.journal == nil {
+		return nil
+	}
+	assumptions := append([]DecisionAssumption(nil), entry.Assumptions...)
+	return c.journal.append(journalRecord{
+		Op: "decision_assumptions", TaskID: entry.TaskID, RunID: entry.RunID,
+		DecisionID: entry.DecisionID, Assumptions: assumptions, DecisionStale: entry.Stale,
+		TS: time.Now().Format(time.RFC3339),
+	})
 }
 
 type taskJournal struct {

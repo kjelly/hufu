@@ -194,9 +194,51 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			discipline.mu.Unlock()
 			return applied, fmt.Errorf("projecting assumption state: %w", err)
 		}
+		if err := c.persistDecisionAssumptionProjection(discipline); err != nil {
+			discipline.mu.Lock()
+			discipline.checkpointErr = err.Error()
+			discipline.mu.Unlock()
+			return applied, fmt.Errorf("persisting assumption state projections: %w", err)
+		}
 		applied++
 	}
 	return applied, nil
+}
+
+func (c *Coordinator) persistDecisionAssumptionProjection(discipline *taskDiscipline) error {
+	if discipline == nil {
+		return nil
+	}
+	index, err := c.decisionIndex()
+	if err != nil || index == nil {
+		return err
+	}
+	entry, found, err := index.Get(discipline.decisionID)
+	if err != nil || !found {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("decision index has no entry for decision %s", discipline.decisionID)
+	}
+	if err := c.recordDecisionAssumptionProjection(entry); err != nil {
+		return err
+	}
+	if c.session == nil || c.session.Workspace == "" {
+		return nil
+	}
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		for n := range sd.DecisionProjections {
+			if sd.DecisionProjections[n].DecisionID == entry.DecisionID {
+				sd.DecisionProjections[n] = entry
+				return nil
+			}
+		}
+		sd.DecisionProjections = append(sd.DecisionProjections, entry)
+		return nil
+	}); err != nil {
+		return err
+	}
+	return c.persistSession("persist decision assumption projection")
 }
 
 func (c *Coordinator) projectAssumptionIndex(discipline *taskDiscipline) error {
