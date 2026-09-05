@@ -25,6 +25,7 @@ type StatusEvent struct {
 	ToolResult  string
 	Step        int
 	Todos       []*TodoItem
+	Decisions   []DecisionIndexEntry
 	SkillName   string
 	Model       string
 	Duration    time.Duration

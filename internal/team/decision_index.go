@@ -531,6 +531,9 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 	if err := persistDecisionIndexSessionProjection(i.path, entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
+	if err := recordDecisionIndexTaskProjection(i.path, entry); err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
 	return entry, assumption, nil
 }
 

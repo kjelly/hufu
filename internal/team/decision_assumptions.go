@@ -49,6 +49,8 @@ func ValidCheckStatus(status string) bool {
 // A check naming an assumption the decision never declared is rejected: a
 // reporter may report on the assumptions the decision rests on, not invent new
 // ones after the fact.
+//
+//nolint:gocyclo // lifecycle validation and recovery must remain one atomic boundary.
 func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, checks []AssumptionCheck, source string) (int, error) {
 	if c == nil || len(checks) == 0 {
 		return 0, nil
@@ -149,6 +151,9 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 				if err := c.projectAssumptionIndex(discipline); err != nil {
 					return applied, fmt.Errorf("projecting retried assumption state: %w", err)
 				}
+				if err := c.persistDecisionAssumptionProjection(discipline); err != nil {
+					return applied, fmt.Errorf("persisting retried assumption state projections: %w", err)
+				}
 				discipline.mu.Lock()
 				discipline.checkpointErr = ""
 				discipline.mu.Unlock()
@@ -199,6 +204,11 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			discipline.checkpointErr = err.Error()
 			discipline.mu.Unlock()
 			return applied, fmt.Errorf("persisting assumption state projections: %w", err)
+		}
+		if entries, indexErr := c.DecisionIndexEntries(); indexErr != nil {
+			return applied, fmt.Errorf("reading assumption state projection: %w", indexErr)
+		} else if c.reportStatus != nil {
+			c.reportStatus(StatusEvent{Type: "decision_state", TodoID: discipline.todoID, Decisions: entries})
 		}
 		applied++
 	}

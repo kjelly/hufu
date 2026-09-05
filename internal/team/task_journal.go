@@ -72,6 +72,20 @@ func (c *Coordinator) recordDecisionAssumptionProjection(entry DecisionIndexEntr
 	})
 }
 
+func recordDecisionIndexTaskProjection(indexPath string, entry DecisionIndexEntry) error {
+	workspace := filepath.Dir(filepath.Dir(filepath.Dir(indexPath)))
+	journal, err := openTaskJournal(workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.Close() }()
+	return journal.append(journalRecord{
+		Op: "decision_assumptions", TaskID: entry.TaskID, RunID: entry.RunID,
+		DecisionID: entry.DecisionID, Assumptions: append([]DecisionAssumption(nil), entry.Assumptions...),
+		DecisionStale: entry.Stale, TS: time.Now().Format(time.RFC3339),
+	})
+}
+
 type taskJournal struct {
 	mu   sync.Mutex
 	f    *os.File

@@ -72,6 +72,8 @@ type TeamInfo struct {
 
 type TeamInfoMsg struct{ Info TeamInfo }
 
+type DecisionStateMsg struct{ Decisions []team.DecisionIndexEntry }
+
 type SSHSessionsMsg struct{ Count int }
 
 // TerminalSessionMsg maps a task to the PTY session created by its terminal
@@ -398,6 +400,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamInfoMsg:
 		m.teamInfo = msg.Info
+
+	case DecisionStateMsg:
+		m.teamInfo.Decisions = append([]team.DecisionIndexEntry(nil), msg.Decisions...)
 
 	case SSHSessionsMsg:
 		m.teamInfo.SSHSessions = msg.Count
