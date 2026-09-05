@@ -34,6 +34,11 @@ type DecisionEvidencePacket struct {
 	RequestContractRef string    `json:"request_contract_ref,omitempty"`
 	CreatedAt          time.Time `json:"created_at,omitzero"`
 
+	// CanonicalVersion records which encoder produced Hash, so a later hash
+	// mismatch can be attributed to changed evidence or to an encoder upgrade
+	// rather than being ambiguous (see CanonicalFormVersion).
+	CanonicalVersion int `json:"canonical_version,omitempty"`
+
 	// Sealed marks the packet as closed to further mutation. Judges may only
 	// receive a sealed packet.
 	Sealed bool `json:"sealed,omitempty"`
@@ -42,6 +47,10 @@ type DecisionEvidencePacket struct {
 // canonicalMaterial builds the hash input from the material fields only.
 func (p DecisionEvidencePacket) canonicalMaterial() ([]byte, error) {
 	root := canonicalObject{}
+	// The encoder version is part of the hashed form, so digests produced by
+	// two different encoders can never collide and be read as the same
+	// evidence.
+	root.set("canonical_version", CanonicalFormVersion)
 	root.setString("question", p.Question)
 
 	if len(p.Options) > 0 {
@@ -178,7 +187,25 @@ func (p DecisionEvidencePacket) Seal() (DecisionEvidencePacket, error) {
 	sealed := p
 	sealed.Hash = hash
 	sealed.Sealed = true
+	sealed.CanonicalVersion = CanonicalFormVersion
 	return sealed, nil
+}
+
+// EffectiveCanonicalVersion returns the encoder version that produced this
+// packet's hash. A packet persisted before versioning existed reports 1, which
+// is what that encoder was.
+func (p DecisionEvidencePacket) EffectiveCanonicalVersion() int {
+	if p.CanonicalVersion == 0 {
+		return 1
+	}
+	return p.CanonicalVersion
+}
+
+// CanonicalFormOutdated reports whether this packet's hash was produced by an
+// encoder older than this build's. It is the check that separates "the
+// evidence changed" from "the encoder changed" when a hash no longer matches.
+func (p DecisionEvidencePacket) CanonicalFormOutdated() bool {
+	return p.Hash != "" && p.EffectiveCanonicalVersion() != CanonicalFormVersion
 }
 
 // Validate checks the packet is usable as sealed evidence.

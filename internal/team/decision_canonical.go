@@ -11,6 +11,24 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// CanonicalFormVersion identifies the encoder that produced a hash.
+//
+// The digest changes whenever this file's rules change, which is correct: a
+// different byte form is a different hash. What the digest alone cannot say is
+// *why* it changed — evidence that really moved, or an encoder upgrade. Both
+// look like "the evidence changed" to every comparison in the runtime, so a
+// release that touches the encoder would otherwise appear to invalidate every
+// decision ever recorded.
+//
+// The version is stamped on the packet and folded into the hash input. In the
+// hash so two encoders can never produce the same digest for the same evidence
+// and be mistaken for one another; on the packet so a reader can explain the
+// difference instead of only observing it.
+//
+// Bump this whenever the canonical byte form changes, including when a field
+// joins or leaves the material set (§15.2).
+const CanonicalFormVersion = 1
+
 // Canonical encoding for decision evidence
 // (docs/hufu-decision-aware-runtime-spec.md §15.3).
 //

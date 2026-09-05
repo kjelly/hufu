@@ -19,6 +19,7 @@ const (
 	ReasonDecisionOpinionInvalid            = "decision_opinion_invalid"
 	ReasonDecisionInsufficientValidOpinions = "decision_insufficient_valid_opinions"
 	ReasonDecisionEvidenceNotSealed         = "decision_evidence_not_sealed"
+	ReasonDecisionCanonicalFormChanged      = "decision_canonical_form_changed"
 	ReasonDecisionStale                     = "decision_stale"
 
 	ReasonCommitGateMissingRecovery      = "commit_gate_missing_recovery"
@@ -85,6 +86,7 @@ var DecisionReasonCodes = []string{
 	ReasonDecisionOpinionInvalid,
 	ReasonDecisionInsufficientValidOpinions,
 	ReasonDecisionEvidenceNotSealed,
+	ReasonDecisionCanonicalFormChanged,
 	ReasonDecisionStale,
 	ReasonCommitGateMissingRecovery,
 	ReasonCommitGateMissingReconcile,

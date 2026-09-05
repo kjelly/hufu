@@ -18,6 +18,7 @@ const (
 	ReasonDecisionOpinionInvalid            = agent.ReasonDecisionOpinionInvalid
 	ReasonDecisionInsufficientValidOpinions = agent.ReasonDecisionInsufficientValidOpinions
 	ReasonDecisionEvidenceNotSealed         = agent.ReasonDecisionEvidenceNotSealed
+	ReasonDecisionCanonicalFormChanged      = agent.ReasonDecisionCanonicalFormChanged
 	ReasonDecisionStale                     = agent.ReasonDecisionStale
 
 	ReasonCommitGateMissingRecovery      = agent.ReasonCommitGateMissingRecovery

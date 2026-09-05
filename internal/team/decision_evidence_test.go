@@ -152,7 +152,8 @@ func TestCanonicalMaterialGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"criteria":[{"id":"cost","normalized_weight":0.250000},{"id":"risk","normalized_weight":0.750000}],` +
+	want := `{"canonical_version":1,` +
+		`"criteria":[{"id":"cost","normalized_weight":0.250000},{"id":"risk","normalized_weight":0.750000}],` +
 		`"facts":{"a":"x","b":2},` +
 		`"options":[{"id":"a","kind":"execute","origin":"declared","title":"Ship it"},` +
 		`{"id":"b","kind":"defer","origin":"declared"}],` +
@@ -235,5 +236,72 @@ func TestPacketOptionHelpers(t *testing.T) {
 	packet.Options = []DecisionOption{{ID: "a", Kind: OptionExecute}}
 	if got := packet.NoGoOption(); got != "" {
 		t.Fatalf("NoGoOption = %q, want empty when no alternative exists", got)
+	}
+}
+
+// The encoder version is stamped on a sealed packet so a later hash mismatch
+// can be attributed rather than merely observed.
+func TestSealStampsTheCanonicalFormVersion(t *testing.T) {
+	sealed := mustSeal(t, evidenceFixture())
+	if sealed.CanonicalVersion != CanonicalFormVersion {
+		t.Fatalf("CanonicalVersion = %d, want %d", sealed.CanonicalVersion, CanonicalFormVersion)
+	}
+	if sealed.CanonicalFormOutdated() {
+		t.Fatal("a freshly sealed packet reported an outdated canonical form")
+	}
+}
+
+// A packet persisted before versioning existed reports v1, which is what that
+// encoder was; it must not be treated as an unknown or outdated form.
+func TestUnversionedPacketReadsAsVersionOne(t *testing.T) {
+	legacy := DecisionEvidencePacket{Hash: "abc", CanonicalVersion: 0}
+	if got := legacy.EffectiveCanonicalVersion(); got != 1 {
+		t.Fatalf("EffectiveCanonicalVersion = %d, want 1", got)
+	}
+	if legacy.CanonicalFormOutdated() {
+		t.Fatal("an unversioned packet was reported outdated against v1")
+	}
+
+	// An empty packet has no hash to attribute, so it is not outdated either.
+	if (DecisionEvidencePacket{}).CanonicalFormOutdated() {
+		t.Fatal("a packet with no hash was reported outdated")
+	}
+}
+
+// This is the distinction the version exists for: the same evidence under a
+// newer encoder must be explained as an encoder change, not as evidence that
+// moved.
+func TestEvidenceChangeReasonDistinguishesEncoderUpgrades(t *testing.T) {
+	sealed := mustSeal(t, evidenceFixture())
+
+	upgraded := sealed
+	upgraded.CanonicalVersion = CanonicalFormVersion + 1
+	upgraded.Hash = "newhash"
+	reason := evidenceChangeReason(sealed, upgraded)
+	if !strings.Contains(reason, "material evidence changed") {
+		t.Fatalf("reason = %q, want a material-change explanation for a current-version packet", reason)
+	}
+
+	// A previous packet from an older encoder is attributed to the upgrade.
+	older := sealed
+	older.CanonicalVersion = CanonicalFormVersion + 1 // pretend this build is older
+	reason = evidenceChangeReason(older, sealed)
+	if !strings.Contains(reason, ReasonDecisionCanonicalFormChanged) {
+		t.Fatalf("reason = %q, want %s", reason, ReasonDecisionCanonicalFormChanged)
+	}
+	if !strings.Contains(reason, "may be unchanged") {
+		t.Fatalf("reason = %q, want it to say the evidence itself may not have moved", reason)
+	}
+}
+
+// The version is inside the hash input, so two encoders can never produce the
+// same digest for the same evidence and be mistaken for one another.
+func TestCanonicalVersionParticipatesInTheHash(t *testing.T) {
+	canonical, err := evidenceFixture().canonicalMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(canonical), `"canonical_version":1`) {
+		t.Fatalf("canonical form does not carry the encoder version:\n%s", canonical)
 	}
 }

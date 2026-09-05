@@ -892,6 +892,34 @@ ReplanPolicy，**不**改變 evidence hash——否則每次假設查核都會�
 
 此編碼必須有 golden-file 測試，確保跨版本穩定。
 
+### 15.3.1 編碼器版本
+
+編碼規則改變時 hash 必然改變，這是對的。問題在於**單看 hash 無法分辨原因**：
+是證據真的動了，還是編碼器升級了？對 runtime 的每一處比對來說兩者長得一樣，
+因此一次動到編碼器的發行會看起來像是讓所有既存決策一夜之間全部失效。
+
+```go
+const CanonicalFormVersion = 1
+```
+
+- **納入雜湊輸入**（`canonical_version` 鍵）：兩個不同編碼器對同一份證據
+  永遠不可能產生相同 digest，也就不可能被誤認為同一件事；
+- **同時存在封包上**（`DecisionEvidencePacket.CanonicalVersion`）：
+  讀的人能**解釋**差異，而不只是觀察到差異。
+
+material 欄位集合（§15.2）增刪欄位時，必須一併 bump 這個版本。
+
+hash 不符時的歸因：
+
+```text
+先前封包的 CanonicalVersion != 目前版本
+  → decision_canonical_form_changed（證據本身可能未變）
+否則
+  → material evidence changed
+```
+
+未帶版本的舊封包讀為 v1——那正是該編碼器的版本，不是未知值。
+
 ### 15.4 Material 變動的後果
 
 ```text

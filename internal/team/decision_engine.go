@@ -335,7 +335,7 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 	if state.Packet.Hash != "" {
 		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, decisionEvent{
 			DecisionID: req.DecisionID, EvidenceHash: sealed.Hash,
-			Reason: fmt.Sprintf("material evidence changed; %s superseded", state.Packet.Hash),
+			Reason: evidenceChangeReason(state.Packet, sealed),
 		}); err != nil {
 			return DecisionEvidencePacket{}, err
 		}
@@ -516,6 +516,19 @@ func (e *decisionEngine) buildRecord(
 	record.KeyAssumptions = collectKeyAssumptions(opinions)
 	record.Normalize()
 	return record
+}
+
+// evidenceChangeReason explains why a sealed hash no longer matches. Without
+// this an encoder upgrade is indistinguishable from evidence that genuinely
+// moved, and a release touching the canonical form would look like it
+// invalidated every decision on record.
+func evidenceChangeReason(previous, sealed DecisionEvidencePacket) string {
+	if previous.CanonicalFormOutdated() {
+		return fmt.Sprintf("%s: hash %s was produced by canonical form v%d, this build uses v%d; the evidence itself may be unchanged",
+			ReasonDecisionCanonicalFormChanged, previous.Hash,
+			previous.EffectiveCanonicalVersion(), CanonicalFormVersion)
+	}
+	return fmt.Sprintf("material evidence changed; %s superseded", previous.Hash)
 }
 
 // checkPreJudgeGates runs every gate that must block before judgment starts.
