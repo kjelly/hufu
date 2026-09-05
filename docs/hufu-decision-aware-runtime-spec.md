@@ -2549,10 +2549,56 @@ authorization eligibility → eligible candidates → capability ranking
 **進入條件**
 
 ```text
-存在跨 run 的決策索引與明確的結案入口
-至少 N 筆已解析的決策（N 由維護者依實際使用量決定）
-已明確定義「已驗證結果」的判定方式
+[x] 存在跨 run 的決策索引與明確的結案入口
+[x] 已明確定義「已驗證結果」的判定方式
+[ ] 至少 N 筆已解析的決策（N 由維護者依實際使用量決定）
 ```
+
+> 2026-09-05：前兩項已實作（見下方 §49.3）。第三項只能隨實際使用累積，
+> 無法用程式碼滿足；在維護者確認樣本量足夠之前，Phase 5 本體仍不得開始。
+
+### 49.3 已實作的 Phase 5 前置（不是 Phase 5 本體）
+
+**跨 run 決策索引**：`internal/team/decision_index.go`。
+每個 workspace 一份 append-only 的 `logs/decisions/index.jsonl`，
+列出任何 run 形成過的決策。它是**投影**，不是事實來源——canonical 仍是
+run 內的 `DecisionRecord` artifact 與 event log；索引只負責「去哪裡找」
+以及「是否已結案」。後寫的列覆蓋先寫的，讀取時投影為每個決策一列；
+尾端被截斷的行會被跳過，一次 crash 最多損失最後一次寫入，
+不會讓先前所有決策失去定址能力。
+
+決策 finalize 時由 `DecisionEngine` 寫入索引；**被門檻擋下的決策不入索引**
+（它根本沒被做出來，也就無從結案）。
+
+**結案入口**：`cmd/hufu/decisioncmd.go`。
+
+```text
+hufu decision list [--all]        列出待結案（或全部）決策
+hufu decision show <id>           顯示單一決策與其結果
+hufu decision resolve <id> --outcome <o> [--evidence <sha256>]...
+                                  記錄實際結果
+```
+
+`--outcome` ∈ `succeeded | failed | mixed | superseded | unresolved`。
+它描述**發生了什麼**，不是決策好壞——壞結果不必然證明當時的判斷不合理。
+結案**永不修改** `DecisionRecord`：結果是獨立的
+`DecisionOutcomeRecord`，且每個決策只能結案一次。
+
+**「已驗證結果」的判定**（`VerifyOutcomeEvidence`，
+`internal/team/decision_outcome.go`）：
+
+```text
+Verified = true  ⟺  outcome 引用了至少一個 artifact digest
+                    且其引用的每一個 digest 都能在 workspace 的
+                    content-addressed artifact store 中解析
+```
+
+- 完全沒引用證據 → 記錄下來，`Verified = false`（不是拒絕：
+  知道發生了什麼但沒有證據，仍值得保存，只要下游不把它當成已證實）。
+- 引用的 digest 有任一個解析不到 → `Verified = false`，並列出解析不到的 digest。
+- `--resolved-by` 是 provenance，**不是** justification：操作者的宣稱
+  無論多有把握都不會讓結果變成 verified。這與 §41「自述的專長不是已驗證的專長」
+  是同一條規則。
 
 **保留的設計要點**
 

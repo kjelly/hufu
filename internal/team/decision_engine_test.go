@@ -205,6 +205,7 @@ func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget 
 		Challengers: stages.Challengers,
 		Revisions:   stages.Revisions,
 		Store:       stages.Store,
+		Index:       stages.Index,
 		Now:         func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string {
 			counter++

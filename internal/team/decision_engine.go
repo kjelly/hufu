@@ -49,6 +49,11 @@ type DecisionServices struct {
 	Challengers ChallengeRunner
 	Revisions   RevisionRunner
 
+	// Index is the cross-run decision index. A finalized decision is listed in
+	// it so `hufu decision resolve` can find it after the process exits; the
+	// index is a projection, never the source of truth (spec §49.2).
+	Index *DecisionIndex
+
 	// Now and NewID exist so tests get deterministic records. Both default to
 	// wall-clock time and a counter-based ID when unset.
 	Now   func() time.Time
@@ -266,13 +271,22 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		return nil, gate
 	}
 
-	if _, err := persistDecisionRecord(ctx, e.services.Store, record); err != nil {
+	recordRef, err := persistDecisionRecord(ctx, e.services.Store, record)
+	if err != nil {
 		return nil, err
 	}
 	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalized, decisionEvent{
 		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Record: &record,
 	}); err != nil {
 		return nil, err
+	}
+	// Listing the decision is the last step: a decision that failed a gate is
+	// not addressable for resolution, because it was never made.
+	if e.services.Index != nil {
+		entry := IndexEntryFor(record, req.Question, policy.Forecast.Required, recordRef)
+		if err := e.services.Index.Append(entry); err != nil {
+			return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
+		}
 	}
 	return &record, nil
 }
