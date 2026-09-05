@@ -4068,6 +4068,9 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 			todoID := disciplineTodoIDFrom(parentCtx, task)
 			if _, err := c.ApplyAssumptionChecks(parentCtx, todoID, checks, AssumptionSourceVerification); err != nil {
 				log.Printf("warning: recording verification assumption checks for task %s failed: %v", todoID, err)
+				if returnErr == nil {
+					returnErr = fmt.Errorf("recording verification assumption checks: %w", err)
+				}
 			}
 		}()
 	}

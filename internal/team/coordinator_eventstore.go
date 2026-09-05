@@ -740,6 +740,16 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if current.Status != expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
 	}
+	if next == TaskDone {
+		if discipline := c.disciplineFor(taskID); discipline != nil {
+			discipline.mu.Lock()
+			stopped := discipline.stopped
+			discipline.mu.Unlock()
+			if stopped {
+				return fmt.Errorf("commit task transition: decision discipline stopped task %s; successful terminalization is forbidden", taskID)
+			}
+		}
+	}
 	if eventTypeForTaskStatus(next) == "" || !c.hasDurableEventJournal() {
 		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
 			return err
@@ -1178,16 +1188,6 @@ func (c *Coordinator) commitTaskTransitionFromCurrent(ctx context.Context, taskI
 	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if item == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
-	}
-	if next == TaskDone {
-		if discipline := c.disciplineFor(taskID); discipline != nil {
-			discipline.mu.Lock()
-			stopped := discipline.stopped
-			discipline.mu.Unlock()
-			if stopped {
-				return fmt.Errorf("commit task transition: decision discipline stopped task %s; successful terminalization is forbidden", taskID)
-			}
-		}
 	}
 	return c.CommitTaskTransition(ctx, taskID, item.Status, next, detail, output, metadata)
 }

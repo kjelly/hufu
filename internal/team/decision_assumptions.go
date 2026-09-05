@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Assumption status sources (docs/hufu-decision-aware-runtime-spec.md §18.1).
@@ -153,6 +154,9 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			discipline.stopped = true
 		}
 		discipline.mu.Unlock()
+		if err := c.projectAssumptionIndex(discipline); err != nil {
+			return applied, fmt.Errorf("projecting assumption state: %w", err)
+		}
 		if critical != "" && !alreadyStopped {
 			c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
 				Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated,
@@ -162,6 +166,29 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 		applied++
 	}
 	return applied, nil
+}
+
+func (c *Coordinator) projectAssumptionIndex(discipline *taskDiscipline) error {
+	index, err := c.decisionIndex()
+	if err != nil || index == nil {
+		return err
+	}
+	entry, found, err := index.Get(discipline.decisionID)
+	if err != nil || !found {
+		return err
+	}
+	discipline.mu.Lock()
+	entry.Assumptions = append([]DecisionAssumption(nil), discipline.assumptions...)
+	stale := discipline.staleMarked
+	discipline.mu.Unlock()
+	if stale {
+		entry.Stale = true
+		if entry.StaleReason == "" {
+			entry.StaleReason = ReasonAssumptionInvalidated
+		}
+	}
+	entry.IndexedAt = time.Time{}
+	return index.Append(entry)
 }
 
 func (c *Coordinator) validateAssumptionEvidence(ctx context.Context, checks []AssumptionCheck) error {
