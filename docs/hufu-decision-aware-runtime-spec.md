@@ -1,6 +1,6 @@
 # Hufu Decision-Aware Runtime Specification
 
-**Status:** V1 implemented (Phase 0, 0.5, 1, 2, 3) — spec verified against codebase 2026-09-05, implementation landed 2026-09-05
+**Status:** Phase 0, 0.5, 1, 2, 3 implemented as a subsystem; Phase 3.5 (dispatch integration) outstanding — spec verified against codebase 2026-09-05
 **Target:** `github.com/kjelly/hufu`
 **Audience:** Coding agents / maintainers
 **Language:** English identifiers and API names; explanatory text in Traditional Chinese.
@@ -195,11 +195,12 @@ DisciplinePolicy
 ## 5. V1 範圍
 
 ```text
-V1 = Phase 0  Typed schema and compatibility foundation
+V1 = Phase 0   Typed schema and compatibility foundation
    + Phase 0.5 Budget ownership extraction
-   + Phase 1  Minimal decision engine
-   + Phase 2  Decision quality gates
-   + Phase 3  Execution discipline
+   + Phase 1   Minimal decision engine
+   + Phase 2   Decision quality gates
+   + Phase 3   Execution discipline
+   + Phase 3.5 Dispatch integration
 
 Deferred (見 §49):
      Phase 4  Capability-aware routing
@@ -323,13 +324,23 @@ off | light | standard | high-stakes
 優先序（高者勝）：
 
 ```text
-CLI / request override
+CLI / request override      --decision-profile <name>
     >
-Task contract override (configuration-only)
+Task contract override      TaskDef.DecisionProfile（configuration-only）
     >
-Team default
+Team default                decision.default-profile
     >
-Runtime built-in default (= off)
+Runtime built-in default    off
+```
+
+最上層必須真的存在，否則優先序只有三層。CLI flag 定義：
+
+```text
+--decision-profile <name>   套用於本次 run 的所有 task。
+                            值必須是 team 已定義的 profile 或保留字 off，
+                            否則 run 在開始前失敗（decision_profile_unknown）。
+                            它只能「指定」profile，不能繞過 §9 的保護——
+                            coordinator 仍然無法選擇 profile。
 ```
 
 **相容性**：未宣告 `decision` 區段的舊 `team.yaml`，其 effective profile 為
@@ -508,6 +519,12 @@ decision:
 
 > `required-independent-groups: 0` 是**刻意**的 V1 值，理由見 §28。
 > `on-capability-invalidated` 已移除：capability 判定屬 Phase 4（§49）。
+
+> **這些數值是未經驗證的起始值，不是建議值。**
+> `independent-judgments`、`challenge.trigger.dispersion-above`（2.0 / 1.5）、
+> `max-attempts`、以及 §34 的 `defaultJudgeTokenEstimate`（2000）都是在沒有
+> 任何真實 run 資料的情況下選定的。它們的作用是讓 profile 可用，不是宣稱
+> 這是對的參數。累積足夠的實際決策之後應回頭校準，並在此記錄依據。
 
 ---
 
@@ -2355,6 +2372,73 @@ crash / recovery
 
 ---
 
+### Phase 3.5 — Dispatch integration
+
+**目標**：把決策子系統接到實際執行路徑。在此之前，`decision-profile` 只是
+一個會通過驗證但不產生任何行為的設定。
+
+**前置**：Phase 3 完成。
+
+**為什麼需要這個 phase**：Phase 0–3 的 Must Implement 清單描述的是子系統，
+沒有任何一項要求「接到 coordinator 的 dispatch path」。實作照做之後，
+`grep` 顯示 `NewDecisionEngine`、`ResolveDecisionProfile`、`armDiscipline`
+的 production 呼叫點都是 0，四個 stage runner 也只有 interface 沒有實作。
+子系統測試齊全，但通電沒有。本 phase 補上這一段。
+
+**必須實作**
+
+- `--decision-profile` CLI flag，並貫穿到 run 範圍的 override（§8）；
+- team 載入時呼叫 `ValidateTaskDecisionProfiles`，未知 profile 在 run 開始前失敗；
+- 四個 stage runner 的 production 實作。它們建構在既有的 judge sidecar
+  （`AgentPool().JudgeSidecar()` + `Sidecar.ExecuteProfile`）之上：
+  sidecar 沒有工具，因此「決策 worker 預設為只讀」（§38.1）由構造保證，
+  不需要額外的執行期強制；
+- dispatch path：解析 profile → 建 `DecisionEngine` → 形成決策 →
+  arm discipline → 執行 → disarm；
+- 把 `DecisionIndex` 傳入 `DecisionServices`，使實際 run 的決策可被
+  `hufu decision resolve` 定址；
+- 補完 `CheckpointState` 在實際掛載中未填的欄位：
+  `Attempt`、`NoProgressStreak`、`MaterialEvidenceChanged`、`SideEffectState`；
+- 假設狀態的來源（§18.1）：至少接上 verify 結果這一條路徑；
+- checkpoint 回傳 stop / replan 時的實際作用：
+  `RequestReplan`、`MarkDecisionStale` 必須真的被呼叫。
+
+**已知缺陷（本 phase 必須修掉）**
+
+```text
+internal/team/decision_discipline.go  attempt: task.MaxRetries * 0
+  → 恆為 0，attempts kill criterion 永遠不會觸發
+```
+
+**硬性 invariant**
+
+1. `decision-profile` 未設定或為 `off` 的 task，行為與接線前逐位元相同。
+2. 決策形成失敗時，任務依既有失敗路徑處理，不得靜默當成成功。
+3. 決策 worker 不得取得工具。
+4. arm 過的 discipline 必須在任務結束（含失敗與 panic 路徑）被 disarm。
+5. 未 arm 的任務，兩個 tool hook 仍為 no-op。
+
+**驗收測試**
+
+```text
+未設 profile 的 task → 零決策事件、零 judge 派工、行為不變
+--decision-profile 未定義的名稱 → run 開始前失敗
+task 的 decision-profile 未定義 → team 載入失敗
+設了 profile 的 task → 產生 DecisionRecord、寫入索引、可被 decision show 讀到
+決策 worker 的工具集為空
+commit gate 在實際 dispatch 中擋下缺前提的副作用任務 → 零 tool process start
+checkpoint 在實際 dispatch 中填入 attempt / no-progress / side-effect state
+attempts kill criterion 在真實重試下會觸發（迴歸上述缺陷）
+task 結束後 discipline 已 disarm
+```
+
+**完成條件**
+
+在 team.yaml 設定 `decision-profile: standard` 後，一次真實 run 會形成、
+持久化並列出一筆決策，且 `hufu decision list` 能看到它。
+
+---
+
 ## 44. Phase barrier
 
 Coding agent 在 Phase N 完成前不得開始 Phase N+1。
@@ -2434,35 +2518,43 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 
 ## 47. Definition of Done（V1）
 
-> 2026-09-05：以下全部完成。每一項都有對應的 deterministic 測試，
-> 既有回歸套件無新增失敗。
+> **2026-09-05 更正**：先前這裡把全部項目標記為完成，那是錯的。
+> Phase 0–3 交付的是一個測試完整但**尚未接上執行路徑**的子系統：
+> `NewDecisionEngine`、`ResolveDecisionProfile`、`armDiscipline` 的
+> production 呼叫點都是 0。設定 `decision-profile` 會通過驗證，然後什麼
+> 都不會發生。因此下列項目分為兩種狀態：
+>
+> ```text
+> [x] 子系統與端到端都完成
+> [~] 子系統完成且有 deterministic 測試，端到端待 Phase 3.5 接線
+> ```
 
 ```text
-[x] 決策能力以任務區域 runtime 行為整合
-[x] profile 驅動的決策嚴謹度
+[~] 決策能力以任務區域 runtime 行為整合
+[~] profile 驅動的決策嚴謹度
 [x] 舊的非決策工作負載完全相容
 [x] DecisionProfile 無法由 coordinator payload 設定
 [x] 數值語意（尺度／正規化／缺值／determinism／dispersion）完整且有測試
 [x] sealed evidence 與明確的 material 欄位集合
-[x] 獨立的第一輪判斷
+[~] 獨立的第一輪判斷
 [x] deterministic 聚合（零 LLM 呼叫、順序無關）
 [x] dispersion 追蹤
-[x] outside-view 門檻
-[x] no-go 替代方案門檻
-[x] premortem 支援
-[x] challenge 與有界修訂
+[~] outside-view 門檻
+[~] no-go 替代方案門檻
+[~] premortem 支援
+[~] challenge 與有界修訂
 [x] 持久化的 DecisionRecord
-[x] typed assumptions，狀態來源明確且為 append-only
+[~] typed assumptions，狀態來源明確且為 append-only
 [x] evidence provenance 與可推導的獨立性分組（advisory）
-[x] 執行前持久化 StopPolicy
-[x] runtime 擁有的 commit gate，每個前提都可判定
-[x] 前提未滿足時零副作用工具啟動
-[x] deterministic 的 checkpoint 驅動 stop / replan
-[x] stale decision 語意
+[~] 執行前持久化 StopPolicy
+[~] runtime 擁有的 commit gate，每個前提都可判定
+[~] 前提未滿足時零副作用工具啟動
+[~] deterministic 的 checkpoint 驅動 stop / replan
+[~] stale decision 語意
 [x] 單一預算所有者（BudgetManager）
 [x] 明示且有事件記錄的預算降級（或 fail closed）
 [x] crash/resume 保留決策語意
-[x] 副作用 crash 先 reconcile 再重試
+[~] 副作用 crash 先 reconcile 再重試
 [x] adversarial verification 與 decision challenge 保持分離
 [x] 記憶升級需要已驗證且有來源的證據（V1 未改動既有記憶升級路徑；§41 為約束而非新機制）
 [x] 所有硬門檻都有 deterministic 測試
@@ -2551,8 +2643,14 @@ authorization eligibility → eligible candidates → capability ranking
 ```text
 [x] 存在跨 run 的決策索引與明確的結案入口
 [x] 已明確定義「已驗證結果」的判定方式
-[ ] 至少 N 筆已解析的決策（N 由維護者依實際使用量決定）
+[ ] 至少 30 筆已結案決策，其中 >= 20 筆 Verified == true
 ```
+
+> N = 30（其中 20 筆已驗證）。低於這個量時，Brier score 的信賴區間會比它
+> 要用來偵測的差異還寬，算出來的校準數字看似精確、實則無意義；20 筆已驗證
+> 是為了讓「已驗證/未驗證」兩組能分開看，而不是被未驗證的自述稀釋。
+> 這是啟用**記錄與報表**的門檻；adaptive judge weighting 不在此門檻內，
+> 它需要另一次明確決定（§41、§49.2 V1 行為）。
 
 > 2026-09-05：前兩項已實作（見下方 §49.3）。第三項只能隨實際使用累積，
 > 無法用程式碼滿足；在維護者確認樣本量足夠之前，Phase 5 本體仍不得開始。
