@@ -280,13 +280,15 @@ func (c *Coordinator) markDecisionStale(ctx context.Context, journal decisionJou
 		discipline.mu.Unlock()
 		return nil
 	}
-	discipline.staleMarked = true
 	discipline.mu.Unlock()
 
 	record := DecisionRecord{ID: discipline.decisionID, EvidenceHash: discipline.evidenceHash}
 	if _, err := MarkDecisionStale(ctx, journal, record, fmt.Sprintf("%s: %s", decision.Reason, decision.Detail)); err != nil {
 		return fmt.Errorf("marking decision %s stale: %w", discipline.decisionID, err)
 	}
+	discipline.mu.Lock()
+	discipline.staleMarked = true
+	discipline.mu.Unlock()
 	return nil
 }
 
