@@ -558,13 +558,13 @@ type Coordinator struct {
 	validateModelsErr  error
 
 	// Unattended / budget controls for no-human-watching operation.
-	unattended                    bool
-	autoApprove                   bool
-	maxWallClock                  time.Duration // 0 = unlimited
-	tokenBudget                   int64         // 0 = unlimited; cumulative LLM tokens
-	tokensUsed                    atomic.Int64
-	tokenBudgetMu                 sync.Mutex
-	tokenReservations             int64
+	unattended  bool
+	autoApprove bool
+	// budgetLedger is the single owner of this run's resource counters
+	// (spec §29, Phase 0.5). It is embedded so every existing reference keeps
+	// resolving to the same storage; tokenBudgetRoot still decides which
+	// coordinator's ledger is authoritative for a run.
+	budgetLedger
 	tokenBudgetOwner              *Coordinator
 	acceptanceCmd                 string // optional shell command run at finish
 	acceptanceSpec                *AcceptanceSpec
@@ -703,14 +703,7 @@ func (c *Coordinator) SetBudget(maxWallClockSeconds, maxTotalTokens int64) {
 	if owner == nil {
 		return
 	}
-	owner.tokenBudgetMu.Lock()
-	defer owner.tokenBudgetMu.Unlock()
-	if maxWallClockSeconds > 0 {
-		owner.maxWallClock = time.Duration(maxWallClockSeconds) * time.Second
-	}
-	if maxTotalTokens > 0 {
-		owner.tokenBudget = maxTotalTokens
-	}
+	owner.budgetLedger.setLimits(maxWallClockSeconds, maxTotalTokens)
 }
 
 // SetAcceptance sets an optional shell command run when the coordinator
@@ -978,7 +971,7 @@ func (c *Coordinator) tokenBudgetRoot() *Coordinator {
 // TokensUsed returns the cumulative LLM token count observed so far.
 func (c *Coordinator) TokensUsed() int64 {
 	if root := c.tokenBudgetRoot(); root != nil {
-		return root.tokensUsed.Load()
+		return root.budgetLedger.TokensUsed()
 	}
 	return 0
 }
@@ -1004,9 +997,7 @@ func (c *Coordinator) addStepTokens(steps []fantasy.StepResult) int64 {
 		}
 		total += int64(est / 4)
 	}
-	if total > 0 {
-		owner.tokensUsed.Add(total)
-	}
+	owner.budgetLedger.addTokens(total)
 	return total
 }
 
@@ -1017,23 +1008,7 @@ func (c *Coordinator) budgetExceeded() (bool, string) {
 	if owner == nil {
 		return false, ""
 	}
-	owner.tokenBudgetMu.Lock()
-	maxWallClock := owner.maxWallClock
-	tokenBudget := owner.tokenBudget
-	reservations := owner.tokenReservations
-	used := owner.tokensUsed.Load()
-	owner.tokenBudgetMu.Unlock()
-	if maxWallClock > 0 {
-		if elapsed := time.Since(owner.sessionTime); elapsed > maxWallClock {
-			return true, fmt.Sprintf("wall-clock budget exceeded (%s > %s)", elapsed.Round(time.Second), maxWallClock)
-		}
-	}
-	if tokenBudget > 0 {
-		if used+reservations >= tokenBudget {
-			return true, fmt.Sprintf("token budget exceeded (%d >= %d)", used+reservations, tokenBudget)
-		}
-	}
-	return false, ""
+	return owner.budgetLedger.Exceeded(time.Since(owner.sessionTime))
 }
 
 type taskTiming struct {

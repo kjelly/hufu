@@ -2073,15 +2073,25 @@ typed schema 宣稱支援的未知欄位 → 不得靜默忽略
 
 ```go
 type BudgetManager interface {
-    Snapshot(runID, taskID string, attempt int) BudgetSnapshot
-    Exceeded(runID, taskID string, attempt int) (bool, string)
-    Remaining(runID string) BudgetSnapshot
+    TokensUsed() int64
+    Reserved() int64
+    Limits() BudgetLimits
+    Exceeded(elapsed time.Duration) (bool, string)
+    Snapshot(elapsed time.Duration) BudgetSnapshot
 }
 ```
 
+> 介面已依實際 scoping 修正。既有帳本是 **run 範圍**（由
+> `tokenBudgetRoot()` 決定唯一擁有者），不是 task 範圍，因此不接受
+> `runID`／`taskID`／`attempt` 參數——那會是純粹的雜訊。`elapsed` 由呼叫端傳入，
+> 因為帳本擁有的是「計數器」，session 的起始時間仍屬 `Coordinator.sessionTime`。
+
 - 將 `Coordinator.budgetExceeded()`（`internal/team/coordinator.go:1009`）的
   計數與判定移入 `internal/team/budget_manager.go`；
-- `Coordinator` 改為持有 `BudgetManager` 並委派；
+- `budgetLedger` 以**內嵌（embedded）**方式放進 `Coordinator`，使既有的
+  `owner.tokensUsed`／`owner.tokenBudget` 等引用（含測試中的讀取）
+  透過欄位提升解析到同一份儲存；
+- `Coordinator` 的 budget 方法改為薄委派；
 - 沿用既有 `BudgetSnapshot`（`internal/team/diagnosis.go:47`），
   **不得**變更其 JSON 欄位或既有的 `[REDACTED]` 相容處理。
 
@@ -2096,9 +2106,15 @@ type BudgetManager interface {
 **驗收測試**
 
 1. 既有 budget 相關測試（含 `coordinator_terminal_test.go` 的
-   `budget_exceeded` 事件斷言）不修改即通過。
-2. 新增測試：同一輸入下 `BudgetManager.Exceeded` 與抽取前的判定一致。
+   `budget_exceeded` 事件斷言）不做**行為**修改即通過。
+   唯一允許的例外是 composite literal 的路徑調整：
+   `Coordinator{maxWallClock: x}` → `Coordinator{budgetLedger: budgetLedger{maxWallClock: x}}`
+   （Go 不允許在 composite literal 中設定提升欄位）。此類調整不得改變任何斷言。
+2. 新增測試：同一輸入下 `BudgetManager.Exceeded` 與抽取前的判定一致，
+   **包含訊息字串**（其他層會把它呈現給使用者）。
 3. `BudgetSnapshot` 的序列化與遷移測試不變。
+4. 單一擁有者測試：掃描套件內非測試 `.go` 檔，斷言 `tokensUsed.Add(`／
+   `tokensUsed.Store(`／`tokenReservations` 的寫入只出現在 `budget_manager.go`。
 
 **完成條件**：既有測試零修改通過，且 `grep` 顯示 token/duration 計數只在
 `budget_manager.go` 內被更新。

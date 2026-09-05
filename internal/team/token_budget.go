@@ -1,7 +1,5 @@
 package team
 
-import "fmt"
-
 // tokenStepReservation is held from PrepareStep until the corresponding
 // provider stream reports its usage. Reservations keep concurrently admitted
 // model steps from all observing the same remaining budget and starting more
@@ -21,18 +19,7 @@ func (c *Coordinator) reserveTokenStep(amount int64) (tokenStepReservation, erro
 	if owner == nil || amount <= 0 {
 		return tokenStepReservation{}, nil
 	}
-
-	owner.tokenBudgetMu.Lock()
-	defer owner.tokenBudgetMu.Unlock()
-	if owner.tokenBudget <= 0 {
-		return tokenStepReservation{}, nil
-	}
-	used := owner.tokensUsed.Load()
-	if used+owner.tokenReservations+amount > owner.tokenBudget {
-		return tokenStepReservation{}, fmt.Errorf("token budget admission refused (%d requested, %d used, %d reserved, limit %d)", amount, used, owner.tokenReservations, owner.tokenBudget)
-	}
-	owner.tokenReservations += amount
-	return tokenStepReservation{amount: amount}, nil
+	return owner.reserve(amount)
 }
 
 // commitTokenStep releases the admission reservation and charges exactly the
@@ -51,23 +38,7 @@ func (c *Coordinator) commitTokenStep(reservation *tokenStepReservation, total i
 		reservation.settled = true
 		return true
 	}
-	owner.tokenBudgetMu.Lock()
-	defer owner.tokenBudgetMu.Unlock()
-	if reservation.settled {
-		return false
-	}
-	if reservation.amount > 0 {
-		owner.tokenReservations -= reservation.amount
-		if owner.tokenReservations < 0 {
-			owner.tokenReservations = 0
-		}
-	}
-	reservation.amount = 0
-	reservation.settled = true
-	if total > 0 {
-		owner.tokensUsed.Add(total)
-	}
-	return true
+	return owner.commit(reservation, total)
 }
 
 func (c *Coordinator) releaseTokenStep(reservation *tokenStepReservation) {

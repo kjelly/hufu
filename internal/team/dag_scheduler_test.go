@@ -274,7 +274,7 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 		reportStatus:    func(StatusEvent) {},
 		maxConcurrent:   1,
 		sessionTime:     time.Now(),
-		maxWallClock:    20 * time.Millisecond,
+		budgetLedger:    budgetLedger{maxWallClock: 20 * time.Millisecond},
 		taskResultCache: make(map[string][]cachedTaskEntry),
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
