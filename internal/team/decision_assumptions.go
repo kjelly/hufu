@@ -155,10 +155,15 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 		}
 		discipline.mu.Unlock()
 		if critical != "" && !alreadyStopped {
-			c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
+			if err := c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
 				Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated,
 				Detail: fmt.Sprintf("critical assumption %s was contradicted", critical),
-			})
+			}); err != nil {
+				discipline.mu.Lock()
+				discipline.checkpointErr = err.Error()
+				discipline.mu.Unlock()
+				return applied, fmt.Errorf("persisting assumption invalidation: %w", err)
+			}
 		}
 		if err := c.projectAssumptionIndex(discipline); err != nil {
 			return applied, fmt.Errorf("projecting assumption state: %w", err)

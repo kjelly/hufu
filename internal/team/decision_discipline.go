@@ -30,13 +30,14 @@ type taskDiscipline struct {
 	assumptions  []DecisionAssumption
 	startedAt    time.Time
 
-	mu          sync.Mutex
-	toolCalls   int
-	failures    int
-	attempt     int
-	commitDone  bool
-	stopped     bool
-	staleMarked bool
+	mu            sync.Mutex
+	toolCalls     int
+	failures      int
+	attempt       int
+	commitDone    bool
+	stopped       bool
+	staleMarked   bool
+	checkpointErr string
 }
 
 // armDiscipline registers a task's stop and commit contract before execution.
@@ -224,7 +225,12 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 	discipline.stopped = true
 	discipline.mu.Unlock()
 
-	c.actOnCheckpoint(ctx, discipline, decision)
+	if err := c.actOnCheckpoint(ctx, discipline, decision); err != nil {
+		log.Printf("error: checkpoint persistence failed for task %s: %v", todoID, err)
+		discipline.mu.Lock()
+		discipline.checkpointErr = err.Error()
+		discipline.mu.Unlock()
+	}
 	return decision
 }
 
@@ -234,48 +240,54 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 // abandoned survives in the log rather than only in a status message, and a
 // decision invalidated by its own assumptions is marked stale — which appends
 // a superseding row and never edits what was decided (spec §31, §35).
-func (c *Coordinator) actOnCheckpoint(ctx context.Context, discipline *taskDiscipline, decision CheckpointDecision) {
+func (c *Coordinator) actOnCheckpoint(ctx context.Context, discipline *taskDiscipline, decision CheckpointDecision) error {
 	journal := c.decisionJournalOrNil()
 	if journal == nil || discipline.decisionID == "" {
-		return
+		return fmt.Errorf("checkpoint journal is unavailable")
 	}
 
 	if decision.Action == CheckpointReplan {
 		if err := RequestReplan(ctx, journal, discipline.decisionID, decision); err != nil {
-			log.Printf("warning: recording replan for decision %s failed: %v", discipline.decisionID, err)
+			return fmt.Errorf("recording replan for decision %s: %w", discipline.decisionID, err)
 		}
 	} else {
-		_ = appendDecisionEvent(ctx, journal, agent.EventKillCriterionTriggered, decisionEvent{
+		if err := appendDecisionEvent(ctx, journal, agent.EventKillCriterionTriggered, decisionEvent{
 			DecisionID:   discipline.decisionID,
 			EvidenceHash: discipline.evidenceHash,
 			Reason:       fmt.Sprintf("%s: %s", decision.Reason, decision.Detail),
-		})
+		}); err != nil {
+			return err
+		}
 	}
 
 	// The decision's own inputs turned out not to hold, so the decision itself
 	// is superseded, not merely this attempt.
 	switch decision.Reason {
 	case ReasonAssumptionInvalidated, ReasonDecisionStale:
-		c.markDecisionStale(ctx, journal, discipline, decision)
+		if err := c.markDecisionStale(ctx, journal, discipline, decision); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // markDecisionStale supersedes the governing decision once. Marking is
 // idempotent: a second checkpoint hitting the same condition does not append a
 // second invalidation.
-func (c *Coordinator) markDecisionStale(ctx context.Context, journal decisionJournal, discipline *taskDiscipline, decision CheckpointDecision) {
+func (c *Coordinator) markDecisionStale(ctx context.Context, journal decisionJournal, discipline *taskDiscipline, decision CheckpointDecision) error {
 	discipline.mu.Lock()
 	if discipline.staleMarked {
 		discipline.mu.Unlock()
-		return
+		return nil
 	}
 	discipline.staleMarked = true
 	discipline.mu.Unlock()
 
 	record := DecisionRecord{ID: discipline.decisionID, EvidenceHash: discipline.evidenceHash}
 	if _, err := MarkDecisionStale(ctx, journal, record, fmt.Sprintf("%s: %s", decision.Reason, decision.Detail)); err != nil {
-		log.Printf("warning: marking decision %s stale failed: %v", discipline.decisionID, err)
+		return fmt.Errorf("marking decision %s stale: %w", discipline.decisionID, err)
 	}
+	return nil
 }
 
 // checkpointDenial renders a stopped task's tool denial. An already-stopped
@@ -289,6 +301,9 @@ func (c *Coordinator) checkpointDenial(todoID string) string {
 	defer discipline.mu.Unlock()
 	if !discipline.stopped {
 		return ""
+	}
+	if discipline.checkpointErr != "" {
+		return fmt.Sprintf("%s: checkpoint persistence failed; task is blocked pending recovery: %s", ReasonReconcileRequired, discipline.checkpointErr)
 	}
 	return fmt.Sprintf("%s: execution stopped at a checkpoint; no further tool calls are permitted for this task",
 		ReasonKillCriterionReached)
