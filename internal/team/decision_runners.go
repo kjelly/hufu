@@ -81,6 +81,54 @@ func decodeStage(response string, target any) error {
 	return nil
 }
 
+// decodeReferenceEvidence is deliberately separate from the shared judge
+// decoder. Reference producers may return one raw JSON document or one whole
+// fenced JSON document, but never prose surrounding it or multiple documents.
+func decodeReferenceEvidence(response string, target any) error {
+	if len([]byte(response)) > ReferenceEvidenceProducerMaxRawBytes {
+		return fmt.Errorf("reference evidence response exceeds %d bytes", ReferenceEvidenceProducerMaxRawBytes)
+	}
+	payload, err := referenceEvidencePayload(response)
+	if err != nil {
+		return err
+	}
+	if err := decodeReferenceJSON([]byte(payload), target, ReferenceEvidenceProducerMaxRawBytes, "reference evidence response"); err != nil {
+		return fmt.Errorf("response was not the required JSON object: %w", err)
+	}
+	return nil
+}
+
+func referenceEvidencePayload(response string) (string, error) {
+	trimmed := strings.TrimSpace(response)
+	if trimmed == "" {
+		return "", fmt.Errorf("reference evidence response is empty")
+	}
+	if !strings.Contains(trimmed, "```") {
+		return trimmed, nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 3 {
+		return "", fmt.Errorf("reference evidence response must contain one complete JSON fence")
+	}
+	opening := strings.TrimSpace(lines[0])
+	if opening != "```" && opening != "```json" {
+		return "", fmt.Errorf("reference evidence response contains prose or an unsupported fence")
+	}
+	if strings.TrimSpace(lines[len(lines)-1]) != "```" {
+		return "", fmt.Errorf("reference evidence response must contain one complete JSON fence")
+	}
+	body := strings.Join(lines[1:len(lines)-1], "\n")
+	if strings.Contains(body, "```") {
+		return "", fmt.Errorf("reference evidence response contains multiple fences")
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "", fmt.Errorf("reference evidence response fence is empty")
+	}
+	return body, nil
+}
+
 // judgeResponse is the wire shape of one judge's answer. It is decoded into a
 // DecisionOpinion rather than unmarshalled directly so a judge cannot set
 // runtime-owned fields such as Valid or EvidenceHash.
@@ -125,6 +173,35 @@ func (r *coordinatorDecisionRunners) RunJudge(ctx context.Context, req JudgeRequ
 		})
 	}
 	return opinion, nil
+}
+
+func (r *coordinatorDecisionRunners) RunReferenceEvidence(ctx context.Context, req ReferenceEvidenceRequest) (ReferenceEvidenceDraft, error) {
+	if err := req.Validate(); err != nil {
+		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence request: %w", err)
+	}
+	requestBytes, err := json.Marshal(req)
+	if err != nil {
+		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence request: %w", err)
+	}
+	prompt := referenceEvidencePrompt(string(requestBytes))
+	response, err := r.ask(ctx, "decision-reference-evidence", prompt)
+	if err != nil {
+		return ReferenceEvidenceDraft{}, err
+	}
+	var decoded ReferenceEvidenceDraft
+	if err := decodeReferenceEvidence(response, &decoded); err != nil {
+		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence: %w", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence: %w", err)
+	}
+	return decoded, nil
+}
+
+func referenceEvidencePrompt(requestJSON string) string {
+	return "Return exactly one JSON object matching ReferenceEvidenceDraft: " +
+		`{"schema_version":1,"entries":[{"reference_class":"...","metric":"...","sample_size":1,"distribution":{"mean":0,"median":0,"p10":0,"p90":0},"limitations":[],"source":{"id":"...","source_id":"...","source_type":"...","name":"...","title":"...","publisher":"...","citation":"...","description":"...","url":"...","uri":"...","locator":"...","declared_parent_source_ids":[]}}]}. ` +
+		"Evidence only: do not select options, recommend, score, or return ArtifactRef, path, media type, digest, or filesystem fields. The runtime will publish artifacts and assign identity. Request: " + requestJSON
 }
 
 // optionProposalResponse is the wire shape of the proposal stage's answer.

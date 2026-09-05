@@ -60,6 +60,12 @@ func (c *Coordinator) prepareTaskDecision(ctx context.Context, task TaskDef, tod
 	if !resolution.Enabled() {
 		return noop, nil
 	}
+	if !c.decisionConfig().RequestContract.Enabled {
+		return noop, fmt.Errorf("decision request contract is required when profile %q is enabled", resolution.Profile)
+	}
+	if err := ValidateTaskDecisionEvidence(task); err != nil {
+		return noop, fmt.Errorf("decision task evidence: %w", err)
+	}
 	policy, ok := DecisionPolicyFor(c.decisionConfig(), resolution.Profile)
 	if !ok {
 		return noop, fmt.Errorf("%s: decision profile %q resolved but has no policy",
@@ -120,20 +126,21 @@ func (c *Coordinator) formTaskDecision(
 		}
 		requestContractArtifact = envelope.artifact
 		requestContract = ptrRequestContract(envelope.envelope.RequestContract())
-		requestContractRef = envelope.artifact.SHA256
+		requestContractRef = envelope.artifact.ID
 		requestContractRevision = envelope.envelope.Revision
 	}
 
 	engine := NewDecisionEngine(DecisionServices{
-		Judges:      runners,
-		Challengers: runners,
-		Premortems:  runners,
-		Revisions:   runners,
-		Proposer:    runners,
-		Journal:     c.EventJournal(),
-		Store:       c.decisionArtifactStore(),
-		Budget:      c.Budget(),
-		Index:       index,
+		Judges:            runners,
+		Challengers:       runners,
+		Premortems:        runners,
+		Revisions:         runners,
+		Proposer:          runners,
+		ReferenceEvidence: runners,
+		Journal:           c.EventJournal(),
+		Store:             c.decisionArtifactStore(),
+		Budget:            c.Budget(),
+		Index:             index,
 	})
 
 	record, err := engine.Run(ctx, DecisionRequest{
@@ -143,10 +150,14 @@ func (c *Coordinator) formTaskDecision(
 		Policy:         policy,
 		Question:       decisionQuestionFor(task),
 		Options:        task.DecisionOptions,
+		Facts:          cloneDecisionFacts(task.DecisionFacts),
+		Artifacts:      append([]ArtifactRef(nil), task.DecisionArtifacts...),
+		BaseRates:      cloneBaseRateEvidence(task.DecisionBaseRates),
 		Assumptions:    task.DecisionAssumptions,
+		Provenance:     cloneEvidenceProvenance(task.DecisionProvenance),
 		Role:           "You are an independent reviewer on this team.",
 		ProjectContext: c.decisionProjectContext(),
-		Contract:       requestContract, RequestContractRef: requestContractRef,
+		Contract:       requestContract, RequireRequestContract: true, RequestContractRef: requestContractRef,
 		RequestContractRevision: requestContractRevision, RequestContractArtifact: requestContractArtifact,
 	})
 	if err != nil {
@@ -187,7 +198,7 @@ func (c *Coordinator) requestContractFor(ctx context.Context, cfg agent.RequestC
 		return cachedRequestContract{}, err
 	}
 	c.requestContract = &envelope
-	c.requestContractRef = artifact.SHA256
+	c.requestContractRef = artifact.ID
 	c.requestContractArtifact = artifact
 	c.requestContractRevision = revision
 	c.requestContractInput = input

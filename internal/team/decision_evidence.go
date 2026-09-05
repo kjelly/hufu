@@ -30,6 +30,7 @@ type DecisionEvidencePacket struct {
 	Artifacts   []ArtifactRef        `json:"artifacts,omitempty"`
 	BaseRates   []BaseRateEvidence   `json:"base_rates,omitempty"`
 	Assumptions []DecisionAssumption `json:"assumptions,omitempty"`
+	Provenance  []EvidenceProvenance `json:"provenance,omitempty"`
 
 	RequestContractRef string    `json:"request_contract_ref,omitempty"`
 	CreatedAt          time.Time `json:"created_at,omitzero"`

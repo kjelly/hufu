@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -198,16 +199,17 @@ func newTestEngine(journal *memoryJournal, runner JudgeRunner, budget BudgetMana
 func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget BudgetManager, stages DecisionServices) DecisionEngine {
 	counter := 0
 	return NewDecisionEngine(DecisionServices{
-		Judges:      runner,
-		Journal:     journal,
-		Budget:      budget,
-		Premortems:  stages.Premortems,
-		Challengers: stages.Challengers,
-		Revisions:   stages.Revisions,
-		Proposer:    stages.Proposer,
-		Store:       stages.Store,
-		Index:       stages.Index,
-		Now:         func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
+		Judges:            runner,
+		Journal:           journal,
+		Budget:            budget,
+		Premortems:        stages.Premortems,
+		Challengers:       stages.Challengers,
+		Revisions:         stages.Revisions,
+		Proposer:          stages.Proposer,
+		ReferenceEvidence: stages.ReferenceEvidence,
+		Store:             stages.Store,
+		Index:             stages.Index,
+		Now:               func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string {
 			counter++
 			return fmt.Sprintf("%s-%d", prefix, counter)
@@ -266,6 +268,51 @@ func TestDecisionEngineRunProducesDurableRecord(t *testing.T) {
 		if journal.count(want) == 0 {
 			t.Errorf("event %s was never emitted; log = %v", want, journal.typesOf())
 		}
+	}
+}
+
+func TestDecisionEvidenceResolutionDoesNotMutateCallerRequest(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := store.Put(context.Background(), PutArtifactRequest{
+		Kind: "evidence", Role: "evidence", Path: "evidence/source.txt", Content: []byte("source"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := engineRequest(enginePolicy(1))
+	req.Assumptions = []DecisionAssumption{{
+		ID: "A1", Statement: "source is available", EvidenceRefs: []ArtifactRef{artifact.ArtifactRef},
+	}}
+	original := cloneDecisionAssumptions(req.Assumptions)
+	admitted := cloneDecisionRequest(req)
+	engine := NewDecisionEngine(DecisionServices{Store: store})
+	if err := engine.(*decisionEngine).resolveDecisionEvidence(context.Background(), &admitted); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(req.Assumptions, original) {
+		t.Fatalf("resolution changed caller request: got %#v want %#v", req.Assumptions, original)
+	}
+}
+
+func TestDecisionEngineRequiredRequestContractFailsBeforeJudge(t *testing.T) {
+	journal := &memoryJournal{}
+	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
+		t.Fatal("judge was called without a required request contract")
+		return DecisionOpinion{}, nil
+	})
+	engine := newTestEngine(journal, runner, nil)
+	req := engineRequest(enginePolicy(1))
+	req.RequireRequestContract = true
+	_, err := engine.Run(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), ReasonDecisionMissingObjective) {
+		t.Fatalf("Run = %v, want %s", err, ReasonDecisionMissingObjective)
+	}
+	if len(runner.dispatched()) != 0 {
+		t.Fatalf("judge calls = %v, want none", runner.dispatched())
 	}
 }
 

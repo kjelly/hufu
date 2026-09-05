@@ -158,7 +158,8 @@ type DecisionCriterion struct {
 
 // OutsideViewPolicy gates JUDGE on base-rate evidence (spec §17).
 type OutsideViewPolicy struct {
-	Required bool `yaml:"required,omitempty"`
+	Required          bool `yaml:"required,omitempty"`
+	ReferenceEvidence bool `yaml:"reference-evidence,omitempty"`
 }
 
 // AggregationPolicy selects the deterministic aggregator (spec §21).

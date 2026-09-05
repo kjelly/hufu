@@ -46,6 +46,8 @@ const (
 	EventDecisionEvidenceSealed       = "decision_evidence_sealed"
 	EventDecisionEvidenceChanged      = "decision_evidence_changed"
 	EventDecisionReferenceCompleted   = "decision_reference_completed"
+	EventDecisionReferenceStarted     = "decision_reference_started"
+	EventDecisionReferenceFailed      = "decision_reference_failed"
 	EventDecisionOpinionSubmitted     = "decision_opinion_submitted"
 	EventDecisionOpinionRejected      = "decision_opinion_rejected"
 	EventDecisionJudgeOverallIgnored  = "decision_judge_overall_ignored"
@@ -109,7 +111,9 @@ var DecisionEventTypes = []string{
 	EventDecisionOptionsProposed,
 	EventDecisionEvidenceSealed,
 	EventDecisionEvidenceChanged,
+	EventDecisionReferenceStarted,
 	EventDecisionReferenceCompleted,
+	EventDecisionReferenceFailed,
 	EventDecisionOpinionSubmitted,
 	EventDecisionOpinionRejected,
 	EventDecisionJudgeOverallIgnored,

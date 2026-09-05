@@ -30,6 +30,27 @@ func spreadRunner() *recordingRunner {
 	})
 }
 
+func evidenceTestStore(t *testing.T) (*FileArtifactStore, []ArtifactRef) {
+	t.Helper()
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]ArtifactRef, 0, 2)
+	for _, id := range []string{"art-1", "art-2"} {
+		put, putErr := store.Put(context.Background(), PutArtifactRequest{
+			ID: id, Kind: "reference", Role: "evidence", Path: "references/" + id + ".json",
+			MediaType: "application/json", Content: []byte(`{"shared":true}`),
+		})
+		if putErr != nil {
+			t.Fatal(putErr)
+		}
+		refs = append(refs, put.ArtifactRef)
+	}
+	return store, refs
+}
+
 // Gates block before JUDGE: no judge is dispatched at all (spec §19, §17).
 func TestPreJudgeGatesBlockBeforeDispatch(t *testing.T) {
 	tests := []struct {
@@ -84,13 +105,26 @@ func TestPreJudgeGatesBlockBeforeDispatch(t *testing.T) {
 
 // Supplying the required evidence lets the same decision proceed.
 func TestOutsideViewSatisfiedProceeds(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Put(context.Background(), PutArtifactRequest{
+		Kind: "reference", Role: "evidence", Path: "references/base-rate.json",
+		MediaType: "application/json", Content: []byte(`{"source":"test"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	journal := &memoryJournal{}
 	policy := enginePolicy(3)
 	policy.OutsideView.Required = true
 	req := engineRequest(policy)
 	req.BaseRates = []BaseRateEvidence{usableBaseRate()}
+	req.BaseRates[0].Source = source.ArtifactRef
 
-	engine := newTestEngine(journal, spreadRunner(), nil)
+	engine := newTestEngineWithStages(journal, spreadRunner(), nil, DecisionServices{Store: store})
 	record, err := engine.Run(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Run = %v", err)
@@ -366,15 +400,13 @@ func TestRequiredForecastBlocksWithoutProbability(t *testing.T) {
 // Independence counts land on the record and shared origins warn (spec §28.2).
 func TestRecordCarriesIndependenceCounts(t *testing.T) {
 	journal := &memoryJournal{}
+	store, refs := evidenceTestStore(t)
 	policy := enginePolicy(2)
 	req := engineRequest(policy)
-	req.Artifacts = []ArtifactRef{
-		{ID: "art-1", SHA256: "h1", MediaType: "application/json"},
-		{ID: "art-2", SHA256: "h1", MediaType: "application/json"},
-	}
+	req.Artifacts = refs
 	req.Policy.Discipline.Evidence.WarnSharedOrigin = true
 
-	engine := newTestEngine(journal, spreadRunner(), nil)
+	engine := newTestEngineWithStages(journal, spreadRunner(), nil, DecisionServices{Store: store})
 	record, err := engine.Run(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Run = %v", err)
@@ -393,15 +425,16 @@ func TestRecordCarriesIndependenceCounts(t *testing.T) {
 
 // V1 keeps the independence requirement advisory unless a team opts in.
 func TestIndependenceRequirementIsOptIn(t *testing.T) {
+	store, refs := evidenceTestStore(t)
 	req := engineRequest(enginePolicy(2))
-	req.Artifacts = []ArtifactRef{{ID: "art-1", SHA256: "h1"}, {ID: "art-2", SHA256: "h1"}}
+	req.Artifacts = refs
 
-	if _, err := newTestEngine(&memoryJournal{}, spreadRunner(), nil).Run(context.Background(), req); err != nil {
+	if _, err := newTestEngineWithStages(&memoryJournal{}, spreadRunner(), nil, DecisionServices{Store: store}).Run(context.Background(), req); err != nil {
 		t.Fatalf("advisory default blocked the decision: %v", err)
 	}
 
 	req.Policy.Discipline.Evidence.RequiredIndependentGroups = 2
-	_, err := newTestEngine(&memoryJournal{}, spreadRunner(), nil).Run(context.Background(), req)
+	_, err := newTestEngineWithStages(&memoryJournal{}, spreadRunner(), nil, DecisionServices{Store: store}).Run(context.Background(), req)
 	if err == nil || !strings.Contains(err.Error(), "independent groups") {
 		t.Fatalf("Run = %v, want the opted-in requirement to block", err)
 	}

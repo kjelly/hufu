@@ -28,6 +28,10 @@ func dispatchCoordinator(t *testing.T, cfg DecisionConfig) *Coordinator {
 func dispatchConfig() DecisionConfig {
 	return DecisionConfig{
 		DefaultProfile: agent.DecisionProfileOff,
+		RequestContract: agent.RequestContractConfig{
+			Enabled: true, Objective: "complete the requested migration",
+			SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "success", Statement: "the migration is complete"}},
+		},
 		Profiles: map[string]DecisionPolicy{
 			"standard": {
 				IndependentJudgments: 2,

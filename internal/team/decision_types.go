@@ -107,11 +107,11 @@ func (o DecisionOption) EffectiveOrigin() DecisionOptionOrigin {
 
 // DecisionOption is one candidate course of action (spec §19).
 type DecisionOption struct {
-	ID          string               `json:"id"`
-	Kind        DecisionOptionKind   `json:"kind"`
-	Origin      DecisionOptionOrigin `json:"origin,omitempty"`
-	Title       string               `json:"title,omitempty"`
-	Description string               `json:"description,omitempty"`
+	ID          string               `json:"id" yaml:"id"`
+	Kind        DecisionOptionKind   `json:"kind" yaml:"kind"`
+	Origin      DecisionOptionOrigin `json:"origin,omitempty" yaml:"origin,omitempty"`
+	Title       string               `json:"title,omitempty" yaml:"title,omitempty"`
+	Description string               `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 // Assumption lifecycle states (spec §18).
@@ -126,12 +126,12 @@ const (
 // the three sources in spec §18.1 may change Status; the runtime never infers
 // it.
 type DecisionAssumption struct {
-	ID           string        `json:"id"`
-	Statement    string        `json:"statement"`
-	Status       string        `json:"status,omitempty"`
-	EvidenceRefs []ArtifactRef `json:"evidence_refs,omitempty"`
-	Critical     bool          `json:"critical,omitempty"`
-	CheckedAt    time.Time     `json:"checked_at,omitzero"`
+	ID           string        `json:"id" yaml:"id"`
+	Statement    string        `json:"statement" yaml:"statement"`
+	Status       string        `json:"status,omitempty" yaml:"status,omitempty"`
+	EvidenceRefs []ArtifactRef `json:"evidence_refs,omitempty" yaml:"evidence-refs,omitempty"`
+	Critical     bool          `json:"critical,omitempty" yaml:"critical,omitempty"`
+	CheckedAt    time.Time     `json:"checked_at,omitzero" yaml:"checked-at,omitempty"`
 }
 
 // EffectiveStatus returns the assumption status, defaulting to unknown.
@@ -165,31 +165,31 @@ const (
 // grouping; DeclaredParentSourceIDs is model-declared and is recorded but
 // never trusted for grouping in V1 (spec §28.1).
 type EvidenceProvenance struct {
-	SourceID                string    `json:"source_id"`
-	SourceType              string    `json:"source_type,omitempty"`
-	ParentSourceIDs         []string  `json:"parent_source_ids,omitempty"`
-	DeclaredParentSourceIDs []string  `json:"declared_parent_source_ids,omitempty"`
-	IndependenceGroup       string    `json:"independence_group,omitempty"`
-	RetrievedAt             time.Time `json:"retrieved_at,omitzero"`
-	ContentHash             string    `json:"content_hash,omitempty"`
+	SourceID                string    `json:"source_id" yaml:"source-id"`
+	SourceType              string    `json:"source_type,omitempty" yaml:"source-type,omitempty"`
+	ParentSourceIDs         []string  `json:"parent_source_ids,omitempty" yaml:"parent-source-ids,omitempty"`
+	DeclaredParentSourceIDs []string  `json:"declared_parent_source_ids,omitempty" yaml:"declared-parent-source-ids,omitempty"`
+	IndependenceGroup       string    `json:"independence_group,omitempty" yaml:"independence-group,omitempty"`
+	RetrievedAt             time.Time `json:"retrieved_at,omitzero" yaml:"retrieved-at,omitempty"`
+	ContentHash             string    `json:"content_hash,omitempty" yaml:"content-hash,omitempty"`
 }
 
 // DistributionSummary is the numeric shape of a reference class (spec §17).
 type DistributionSummary struct {
-	Mean   float64 `json:"mean"`
-	Median float64 `json:"median"`
-	P10    float64 `json:"p10"`
-	P90    float64 `json:"p90"`
+	Mean   float64 `json:"mean" yaml:"mean"`
+	Median float64 `json:"median" yaml:"median"`
+	P10    float64 `json:"p10" yaml:"p10"`
+	P90    float64 `json:"p90" yaml:"p90"`
 }
 
 // BaseRateEvidence is the typed outside-view contract (spec §17).
 type BaseRateEvidence struct {
-	ReferenceClass string              `json:"reference_class"`
-	Metric         string              `json:"metric"`
-	SampleSize     int                 `json:"sample_size"`
-	Distribution   DistributionSummary `json:"distribution"`
-	Source         ArtifactRef         `json:"source,omitzero"`
-	Limitations    []string            `json:"limitations,omitempty"`
+	ReferenceClass string              `json:"reference_class" yaml:"reference-class"`
+	Metric         string              `json:"metric" yaml:"metric"`
+	SampleSize     int                 `json:"sample_size" yaml:"sample-size"`
+	Distribution   DistributionSummary `json:"distribution" yaml:"distribution"`
+	Source         ArtifactRef         `json:"source,omitzero" yaml:"source"`
+	Limitations    []string            `json:"limitations,omitempty" yaml:"limitations,omitempty"`
 }
 
 // OptionScore is one judge's score for one option. Overall is runtime-computed
@@ -331,12 +331,14 @@ type RequestContract struct {
 // DecisionRecord is the durable artifact a decision produces. It never stores
 // only the winning option (spec §27).
 type DecisionRecord struct {
-	SchemaVersion int    `json:"schema_version"`
-	ID            string `json:"id"`
-	RunID         string `json:"run_id,omitempty"`
-	TaskID        string `json:"task_id,omitempty"`
-	Profile       string `json:"profile,omitempty"`
-	EvidenceHash  string `json:"evidence_hash,omitempty"`
+	SchemaVersion              int          `json:"schema_version"`
+	ID                         string       `json:"id"`
+	RunID                      string       `json:"run_id,omitempty"`
+	TaskID                     string       `json:"task_id,omitempty"`
+	Profile                    string       `json:"profile,omitempty"`
+	EvidenceHash               string       `json:"evidence_hash,omitempty"`
+	EvidenceArtifactRef        *ArtifactRef `json:"evidence_artifact_ref,omitempty"`
+	ReferenceEvidenceResultRef *ArtifactRef `json:"reference_evidence_result_ref,omitempty"`
 
 	RequestContractRef      string `json:"request_contract_ref,omitempty"`
 	RequestContractRevision uint64 `json:"request_contract_revision,omitempty"`

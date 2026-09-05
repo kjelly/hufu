@@ -175,6 +175,20 @@ type TaskDef struct {
 	DecisionOptions []DecisionOption `json:"-" yaml:"decision-options,omitempty"`
 	// DecisionAssumptions are the typed assumptions the decision rests on.
 	DecisionAssumptions []DecisionAssumption `json:"-" yaml:"decision-assumptions,omitempty"`
+	// DecisionFacts are static, configuration-owned facts supplied to the
+	// sealed decision packet. They are deliberately absent from model task
+	// JSON so a coordinator cannot inject or replace decision evidence.
+	DecisionFacts map[string]any `json:"-" yaml:"decision-facts,omitempty"`
+	// DecisionArtifacts are static artifact evidence declarations. The runtime
+	// resolves each opaque reference through the workspace artifact store
+	// before any judge is dispatched.
+	DecisionArtifacts []ArtifactRef `json:"-" yaml:"decision-artifacts,omitempty"`
+	// DecisionBaseRates are static outside-view declarations. Their sources are
+	// resolved and integrity-checked by the decision engine before JUDGE.
+	DecisionBaseRates []BaseRateEvidence `json:"-" yaml:"decision-base-rates,omitempty"`
+	// DecisionProvenance records advisory source lineage for independence
+	// reporting. Parent declarations are never trusted for grouping.
+	DecisionProvenance []EvidenceProvenance `json:"-" yaml:"decision-provenance,omitempty"`
 }
 
 // FactRef names one substitution: {Name} in the consuming task's Goal and

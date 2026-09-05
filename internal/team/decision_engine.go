@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,22 @@ type JudgeRunner interface {
 	RunJudge(ctx context.Context, req JudgeRequest) (DecisionOpinion, error)
 }
 
+type ReferenceEvidenceRequest struct {
+	SchemaVersion    int    `json:"schema_version"`
+	InvocationID     string `json:"invocation_id"`
+	InputHash        string `json:"input_hash"`
+	DecisionID       string `json:"decision_id"`
+	RunID            string `json:"run_id,omitempty"`
+	TaskID           string `json:"task_id,omitempty"`
+	Question         string `json:"question"`
+	ContractRef      string `json:"contract_ref,omitempty"`
+	ContractRevision uint64 `json:"contract_revision,omitempty"`
+}
+
+type ReferenceEvidenceRunner interface {
+	RunReferenceEvidence(context.Context, ReferenceEvidenceRequest) (ReferenceEvidenceDraft, error)
+}
+
 // DecisionServices are the runtime collaborators the engine needs. They map to
 // interfaces this repo already has; the draft spec's AgentRuntime type does not
 // exist (spec §4.2).
@@ -53,7 +70,8 @@ type DecisionServices struct {
 
 	// Proposer backs the option proposal stage. It is only consulted when the
 	// task declared no options and the profile enables proposal (spec §19.1).
-	Proposer OptionProposer
+	Proposer          OptionProposer
+	ReferenceEvidence ReferenceEvidenceRunner
 
 	// Index is the cross-run decision index. A finalized decision is listed in
 	// it so `hufu decision resolve` can find it after the process exits; the
@@ -80,10 +98,13 @@ type DecisionRequest struct {
 	Artifacts   []ArtifactRef
 	BaseRates   []BaseRateEvidence
 	Assumptions []DecisionAssumption
+	Provenance  []EvidenceProvenance
 
-	RequestContractRef      string
-	RequestContractRevision uint64
-	RequestContractArtifact ArtifactRef
+	RequestContractRef         string
+	RequestContractRevision    uint64
+	RequestContractArtifact    ArtifactRef
+	EvidenceArtifactRef        ArtifactRef
+	ReferenceEvidenceResultRef ArtifactRef
 
 	// Role, ProjectContext and Memory are the non-evidence context sources a
 	// judge may receive under strict isolation (spec §16).
@@ -93,11 +114,8 @@ type DecisionRequest struct {
 
 	// Contract carries the request-scoped objective and success criteria.
 	// Structured decisions require one (spec §11).
-	Contract *RequestContract
-
-	// Provenance describes non-artifact evidence sources for independence
-	// grouping. Artifact provenance is derived from the packet (spec §28).
-	Provenance []EvidenceProvenance
+	Contract               *RequestContract
+	RequireRequestContract bool
 
 	// FinalizationOverride and FinalizationReason apply only under coordinator
 	// or judge finalization. Choosing against the aggregate requires a reason,
@@ -146,6 +164,7 @@ func (e *decisionEngine) newID(prefix string) string {
 // Run forms a decision from scratch, or continues one whose ID is already
 // known and whose events are already durable.
 func (e *decisionEngine) Run(ctx context.Context, req DecisionRequest) (*DecisionRecord, error) {
+	req = cloneDecisionRequest(req)
 	if err := req.Policy.Validate(); err != nil {
 		return nil, fmt.Errorf("decision policy: %w", err)
 	}
@@ -154,6 +173,28 @@ func (e *decisionEngine) Run(ctx context.Context, req DecisionRequest) (*Decisio
 	}
 	e.pending[req.DecisionID] = req
 	return e.run(ctx, req)
+}
+
+// cloneDecisionRequest establishes the engine's mutable admission boundary.
+// Resolution normalizes artifact references in place, so borrowed nested
+// slices must never point back into a TaskDef or another caller-owned request.
+func cloneDecisionRequest(req DecisionRequest) DecisionRequest {
+	clone := req
+	clone.Options = append([]DecisionOption(nil), req.Options...)
+	clone.Facts = cloneDecisionFacts(req.Facts)
+	clone.Artifacts = append([]ArtifactRef(nil), req.Artifacts...)
+	clone.BaseRates = cloneBaseRateEvidence(req.BaseRates)
+	clone.Assumptions = cloneDecisionAssumptions(req.Assumptions)
+	clone.Provenance = cloneEvidenceProvenance(req.Provenance)
+	if req.Contract != nil {
+		contract := *req.Contract
+		contract.SuccessCriteria = append([]SuccessCriterion(nil), req.Contract.SuccessCriteria...)
+		contract.Constraints = append([]Constraint(nil), req.Contract.Constraints...)
+		contract.Assumptions = cloneDecisionAssumptions(req.Contract.Assumptions)
+		clone.Contract = &contract
+	}
+	clone.Policy.Criteria = append([]DecisionCriterion(nil), req.Policy.Criteria...)
+	return clone
 }
 
 // Resume continues a decision from its durable event log.
@@ -173,6 +214,12 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	// A finalized decision is never recomputed (spec §35).
 	if state.Record != nil {
 		return state.Record, nil
+	}
+	if req.EvidenceArtifactRef.ID == "" {
+		req.EvidenceArtifactRef = state.EvidenceArtifact
+	}
+	if err := validateReferenceRecoveryState(state); err != nil {
+		return nil, err
 	}
 	var contractErr error
 	req, contractErr = e.prepareRequestContract(ctx, req, state)
@@ -209,6 +256,13 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		return nil, err
 	}
 	req.Options = options
+	req, err = e.attachReferenceEvidence(ctx, req, state)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.resolveDecisionEvidence(ctx, &req); err != nil {
+		return nil, err
+	}
 
 	// Gates run before JUDGE. Adding a "do nothing" option after judges have
 	// scored a two-option list does not change what they considered.
@@ -221,7 +275,7 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		return nil, err
 	}
 
-	packet, err := e.sealEvidence(ctx, req, state)
+	packet, packetArtifact, err := e.sealEvidence(ctx, req, state)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +330,12 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	record := e.buildRecord(req, policy, packet, opinions, aggregates, finalAggregate, append(state.Degradations, degradations...))
 	record.RequestContractRef = req.RequestContractRef
 	record.RequestContractRevision = req.RequestContractRevision
+	if packetArtifact.ID != "" {
+		record.EvidenceArtifactRef = &packetArtifact
+	}
+	if req.ReferenceEvidenceResultRef.ID != "" {
+		record.ReferenceEvidenceResultRef = &req.ReferenceEvidenceResultRef
+	}
 	record.Challenges = challenges
 	record.Revisions = revisions
 	record.Premortem = premortem
@@ -324,12 +384,353 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	return &record, nil
 }
 
+func validateReferenceRecoveryState(state decisionState) error {
+	if state.ReferenceFailure != nil || (state.ReferenceInvocation != nil && state.ReferenceResult == nil) {
+		detail := "reference evidence invocation has no safely reusable completed result"
+		if state.ReferenceFailure != nil {
+			detail = state.ReferenceFailure.Reason
+		}
+		return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: detail}
+	}
+	return nil
+}
+
+func (e *decisionEngine) attachReferenceEvidence(ctx context.Context, req DecisionRequest, state decisionState) (DecisionRequest, error) {
+	if len(req.BaseRates) == 0 && req.Policy.OutsideView.Required && req.Policy.OutsideView.ReferenceEvidence {
+		rates, artifacts, provenance, resultRef, err := e.runReferenceEvidence(ctx, req, state)
+		if err != nil {
+			return req, err
+		}
+		req.BaseRates = rates
+		req.Artifacts = append(req.Artifacts, artifacts...)
+		req.Provenance = append(req.Provenance, provenance...)
+		req.ReferenceEvidenceResultRef = resultRef
+		return req, nil
+	}
+	if state.ReferenceResult != nil {
+		req.BaseRates = cloneBaseRateEvidence(state.ReferenceResult.BaseRates)
+		req.Artifacts = append(req.Artifacts, state.ReferenceResult.Artifacts...)
+		req.Provenance = append(req.Provenance, state.ReferenceResult.Provenance...)
+		if state.ReferenceResult.ResultArtifactRef != nil {
+			req.ReferenceEvidenceResultRef = *state.ReferenceResult.ResultArtifactRef
+		}
+	}
+	return req, nil
+}
+
+func (e *decisionEngine) resolveDecisionEvidence(ctx context.Context, req *DecisionRequest) error {
+	if req == nil {
+		return fmt.Errorf("%s: decision request is nil", ReasonDecisionOutsideViewMissing)
+	}
+	if _, err := canonicalEncode(req.Facts); err != nil {
+		return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("facts are not canonicalizable: %v", err)}
+	}
+	if !decisionRequestDeclaresEvidence(*req) {
+		return nil
+	}
+	if e.services.Store == nil {
+		return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "decision evidence requires an artifact store"}
+	}
+	resolve := func(ref ArtifactRef) (ArtifactRef, error) {
+		resolved, err := e.services.Store.Resolve(ctx, ref)
+		if err != nil {
+			return ArtifactRef{}, err
+		}
+		return resolved, nil
+	}
+	for i, ref := range req.Artifacts {
+		resolved, err := resolve(ref)
+		if err != nil {
+			return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("artifacts[%d] cannot be resolved: %v", i, err)}
+		}
+		req.Artifacts[i] = resolved
+	}
+	for i := range req.BaseRates {
+		resolved, err := resolve(req.BaseRates[i].Source)
+		if err != nil {
+			return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("base_rates[%d] source cannot be resolved: %v", i, err)}
+		}
+		req.BaseRates[i].Source = resolved
+	}
+	for i := range req.Assumptions {
+		for j, ref := range req.Assumptions[i].EvidenceRefs {
+			resolved, err := resolve(ref)
+			if err != nil {
+				return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("assumptions[%d].evidence_refs[%d] cannot be resolved: %v", i, j, err)}
+			}
+			req.Assumptions[i].EvidenceRefs[j] = resolved
+		}
+	}
+	return nil
+}
+
+func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionRequest, state decisionState) ([]BaseRateEvidence, []ArtifactRef, []EvidenceProvenance, ArtifactRef, error) {
+	if state.ReferenceResult != nil {
+		if state.ReferenceInvocation == nil || state.ReferenceResult.InvocationID != state.ReferenceInvocation.InvocationID || state.ReferenceResult.InputHash != state.ReferenceInvocation.InputHash {
+			return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "reference evidence result identity is invalid"}
+		}
+		expected := ReferenceEvidenceRequest{
+			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: state.ReferenceInvocation.InvocationID,
+			DecisionID: req.DecisionID, RunID: req.RunID, TaskID: req.TaskID, Question: req.Question,
+			ContractRef: req.RequestContractRef, ContractRevision: req.RequestContractRevision,
+		}
+		expectedHash, err := expected.ComputeInputHash()
+		if err != nil || expectedHash != state.ReferenceInvocation.InputHash {
+			return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "reference evidence request changed after invocation started"}
+		}
+		if err := validateReferenceEvidenceResultArtifact(ctx, e.services.Store, *state.ReferenceResult); err != nil {
+			return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: err.Error()}
+		}
+		return cloneBaseRateEvidence(state.ReferenceResult.BaseRates), append([]ArtifactRef(nil), state.ReferenceResult.Artifacts...), cloneEvidenceProvenance(state.ReferenceResult.Provenance), *state.ReferenceResult.ResultArtifactRef, nil
+	}
+	if state.ReferenceInvocation != nil || state.ReferenceFailure != nil {
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "reference evidence invocation is incomplete and cannot be replayed safely"}
+	}
+	if e.services.ReferenceEvidence == nil || e.services.Store == nil {
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "reference evidence requires a producer and artifact store"}
+	}
+
+	request := ReferenceEvidenceRequest{
+		SchemaVersion:    ReferenceEvidenceSchemaVersion,
+		InvocationID:     e.newID("reference"),
+		DecisionID:       req.DecisionID,
+		RunID:            req.RunID,
+		TaskID:           req.TaskID,
+		Question:         req.Question,
+		ContractRef:      req.RequestContractRef,
+		ContractRevision: req.RequestContractRevision,
+	}
+	inputHash, err := request.ComputeInputHash()
+	if err != nil {
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: err.Error()}
+	}
+	request.InputHash = inputHash
+	if err := request.Validate(); err != nil {
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: err.Error()}
+	}
+	invocation := ReferenceEvidenceInvocation{
+		SchemaVersion: request.SchemaVersion, InvocationID: request.InvocationID,
+		InputHash: request.InputHash, DecisionID: request.DecisionID, RunID: request.RunID,
+		TaskID: request.TaskID, Question: request.Question, ContractRef: request.ContractRef,
+		ContractRevision: request.ContractRevision, StartedAt: e.now(),
+	}
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceStarted, decisionEvent{
+		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceInvocation: &invocation,
+	}); err != nil {
+		return nil, nil, nil, ArtifactRef{}, err
+	}
+
+	draft, producerErr := e.services.ReferenceEvidence.RunReferenceEvidence(ctx, request)
+	if producerErr != nil {
+		failure := &ReferenceEvidenceFailure{
+			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
+			InputHash: request.InputHash, Reason: "reference evidence producer failed", FailedAt: e.now(),
+		}
+		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
+			DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
+		}); appendErr != nil {
+			return nil, nil, nil, ArtifactRef{}, appendErr
+		}
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: producerErr.Error()}
+	}
+	if err := draft.Validate(); err != nil {
+		failure := &ReferenceEvidenceFailure{
+			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
+			InputHash: request.InputHash, Reason: "reference evidence draft failed validation", FailedAt: e.now(),
+		}
+		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
+			DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
+		}); appendErr != nil {
+			return nil, nil, nil, ArtifactRef{}, appendErr
+		}
+		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: err.Error()}
+	}
+
+	rates := make([]BaseRateEvidence, 0, len(draft.Entries))
+	artifacts := make([]ArtifactRef, 0, len(draft.Entries))
+	provenance := make([]EvidenceProvenance, 0, len(draft.Entries)*2)
+	for i, entry := range draft.Entries {
+		artifact := ReferenceEvidenceArtifact{
+			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
+			DecisionID: request.DecisionID, RunID: request.RunID, TaskID: request.TaskID,
+			Entry: entry, PublishedAt: e.now(),
+		}
+		content, encodeErr := referenceEvidenceEntryBytes(artifact)
+		if encodeErr != nil {
+			return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, encodeErr)
+		}
+		put, putErr := e.services.Store.Put(ctx, PutArtifactRequest{
+			Kind: "reference_evidence", Role: "decision_reference",
+			Path:        fmt.Sprintf("decisions/reference-evidence/%s/%d.json", request.InvocationID, i),
+			Description: fmt.Sprintf("validated reference evidence %s entry %d", request.DecisionID, i),
+			MediaType:   ReferenceEvidenceMediaType, Content: content,
+			RunID: request.RunID, TaskID: request.TaskID,
+		})
+		if putErr != nil {
+			return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, putErr)
+		}
+		ref, resolveErr := e.services.Store.Resolve(ctx, put.ArtifactRef)
+		if resolveErr != nil {
+			return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, resolveErr)
+		}
+		declaredID, idErr := referenceDeclaredSourceID(entry.Source)
+		if idErr != nil {
+			return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, idErr)
+		}
+		rates = append(rates, BaseRateEvidence{
+			ReferenceClass: entry.ReferenceClass, Metric: entry.Metric, SampleSize: entry.SampleSize,
+			Distribution: entry.Distribution, Source: ref, Limitations: append([]string(nil), entry.Limitations...),
+		})
+		artifacts = append(artifacts, ref)
+		provenance = append(provenance,
+			EvidenceProvenance{SourceID: ref.ID, SourceType: EvidenceSourceArtifact, IndependenceGroup: ref.SHA256, ContentHash: ref.SHA256, RetrievedAt: e.now()},
+			EvidenceProvenance{SourceID: declaredID, SourceType: EvidenceSourceDeclared, DeclaredParentSourceIDs: append([]string(nil), entry.Source.DeclaredParentSourceIDs...), RetrievedAt: e.now()},
+		)
+	}
+	result := &ReferenceEvidenceResult{
+		SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID, InputHash: request.InputHash,
+		BaseRates: rates, Artifacts: artifacts, Provenance: provenance, CompletedAt: e.now(),
+	}
+	resultBytes, err := referenceEvidenceResultBytes(*result)
+	if err != nil {
+		return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, err)
+	}
+	put, err := e.services.Store.Put(ctx, PutArtifactRequest{
+		Kind: "reference_evidence_result", Role: "decision_reference_result",
+		Path:        fmt.Sprintf("decisions/reference-evidence/%s/result.json", request.InvocationID),
+		Description: fmt.Sprintf("validated reference evidence result %s", req.DecisionID),
+		MediaType:   ReferenceEvidenceResultMediaType, Content: resultBytes, RunID: request.RunID, TaskID: request.TaskID,
+	})
+	if err != nil {
+		return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, err)
+	}
+	resultRef, err := e.services.Store.Resolve(ctx, put.ArtifactRef)
+	if err != nil {
+		return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, err)
+	}
+	result.ResultArtifactRef = &resultRef
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceCompleted, decisionEvent{
+		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceResult: result,
+	}); err != nil {
+		return nil, nil, nil, ArtifactRef{}, err
+	}
+	return rates, artifacts, provenance, resultRef, nil
+}
+
+func validateReferenceEvidenceResultArtifact(ctx context.Context, store ArtifactStore, result ReferenceEvidenceResult) error {
+	if err := validateReferenceEvidenceResult(result); err != nil {
+		return err
+	}
+	if store == nil || result.ResultArtifactRef == nil || result.ResultArtifactRef.ID == "" {
+		return fmt.Errorf("reference evidence result has no CAS envelope reference")
+	}
+	ref, err := store.Resolve(ctx, *result.ResultArtifactRef)
+	if err != nil {
+		return fmt.Errorf("resolve reference evidence result: %w", err)
+	}
+	if ref.MediaType != ReferenceEvidenceResultMediaType || ref.Kind != "reference_evidence_result" || ref.Role != "decision_reference_result" {
+		return fmt.Errorf("reference evidence result CAS metadata is invalid")
+	}
+	reader, err := store.Open(ctx, ref.ID)
+	if err != nil {
+		return fmt.Errorf("open reference evidence result: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	stored, err := decodeReferenceEvidenceResult(reader)
+	if err != nil {
+		return err
+	}
+	stored.ResultArtifactRef = nil
+	expected := result
+	expected.ResultArtifactRef = nil
+	if !reflect.DeepEqual(stored, expected) {
+		return fmt.Errorf("reference evidence result CAS envelope does not match completion event")
+	}
+	for i, artifact := range result.Artifacts {
+		if err := validateReferenceEvidenceEntryArtifact(ctx, store, artifact, result.InvocationID, result.BaseRates[i]); err != nil {
+			return fmt.Errorf("reference evidence entry %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateReferenceEvidenceEntryArtifact(ctx context.Context, store ArtifactStore, ref ArtifactRef, invocationID string, rate BaseRateEvidence) error {
+	if store == nil {
+		return fmt.Errorf("artifact store is unavailable")
+	}
+	resolved, err := store.Resolve(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("resolve artifact: %w", err)
+	}
+	if resolved.MediaType != ReferenceEvidenceMediaType || resolved.Kind != "reference_evidence" || resolved.Role != "decision_reference" {
+		return fmt.Errorf("artifact metadata is invalid")
+	}
+	reader, err := store.Open(ctx, resolved.ID)
+	if err != nil {
+		return fmt.Errorf("open artifact: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	artifact, err := decodeReferenceEvidenceEntry(reader)
+	if err != nil {
+		return err
+	}
+	if artifact.InvocationID != invocationID {
+		return fmt.Errorf("artifact invocation identity does not match result")
+	}
+	if artifact.Entry.ReferenceClass != rate.ReferenceClass || artifact.Entry.Metric != rate.Metric ||
+		artifact.Entry.SampleSize != rate.SampleSize || !reflect.DeepEqual(artifact.Entry.Distribution, rate.Distribution) ||
+		!reflect.DeepEqual(artifact.Entry.Limitations, rate.Limitations) {
+		return fmt.Errorf("artifact entry does not match result base rate")
+	}
+	return nil
+}
+
+func validateReferenceEvidenceResult(result ReferenceEvidenceResult) error {
+	if result.SchemaVersion != ReferenceEvidenceSchemaVersion {
+		return fmt.Errorf("unsupported reference evidence result schema version %d", result.SchemaVersion)
+	}
+	if result.InvocationID == "" || result.InputHash == "" {
+		return fmt.Errorf("reference evidence result identity is incomplete")
+	}
+	if result.ResultArtifactRef == nil || result.ResultArtifactRef.ID == "" {
+		return fmt.Errorf("reference evidence result has no CAS envelope reference")
+	}
+	if len(result.BaseRates) < ReferenceEvidenceMinEntries || len(result.BaseRates) > ReferenceEvidenceMaxEntries || len(result.BaseRates) != len(result.Artifacts) {
+		return fmt.Errorf("reference evidence result has inconsistent entry and artifact counts")
+	}
+	for i, rate := range result.BaseRates {
+		if err := validateBaseRate(rate); err != nil {
+			return fmt.Errorf("reference evidence result base_rates[%d]: %w", i, err)
+		}
+		if rate.Source.ID == "" || result.Artifacts[i].ID != rate.Source.ID {
+			return fmt.Errorf("reference evidence result entry %d is not bound to its artifact", i)
+		}
+	}
+	return nil
+}
+
+func (e *decisionEngine) referencePublicationFailure(ctx context.Context, req DecisionRequest, request ReferenceEvidenceRequest, cause error) error {
+	failure := &ReferenceEvidenceFailure{
+		SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
+		InputHash: request.InputHash, Reason: "reference evidence publication failed", FailedAt: e.now(),
+	}
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
+		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
+	}); err != nil {
+		return err
+	}
+	return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: cause.Error()}
+}
+
 func (e *decisionEngine) prepareRequestContract(ctx context.Context, req DecisionRequest, state decisionState) (DecisionRequest, error) {
 	if state.Invalidated {
 		return req, fmt.Errorf("%s: decision %s has been invalidated", ReasonDecisionStale, req.DecisionID)
 	}
 	if state.Profile != "" && state.ContractRef == "" && req.Contract != nil {
 		return req, fmt.Errorf("decision request contract binding is unavailable for unfinished decision %s", req.DecisionID)
+	}
+	if req.RequireRequestContract && req.Contract == nil && state.ContractRef == "" {
+		return req, CheckRequestContract(nil)
 	}
 	if req.Contract == nil && state.ContractRef != "" {
 		req.RequestContractRef = state.ContractRef
@@ -381,7 +782,11 @@ func (e *decisionEngine) loadContractArtifact(ctx context.Context, ref string) (
 	if e.services.Store == nil {
 		return RequestContractEnvelope{}, fmt.Errorf("decision request contract artifact store is unavailable")
 	}
-	reader, err := e.services.Store.Open(ctx, ref)
+	resolved, err := e.services.Store.Resolve(ctx, ArtifactRef{ID: ref})
+	if err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("resolve request contract artifact: %w", err)
+	}
+	reader, err := e.services.Store.Open(ctx, resolved.ID)
 	if err != nil {
 		return RequestContractEnvelope{}, fmt.Errorf("open request contract artifact: %w", err)
 	}
@@ -403,7 +808,7 @@ func (e *decisionEngine) loadContractArtifact(ctx context.Context, ref string) (
 // sealEvidence seals the packet, or reuses the already-sealed one when its
 // material content is unchanged. A material change supersedes the old hash and
 // makes the earlier opinions stale rather than editing them (spec §15.4).
-func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, state decisionState) (DecisionEvidencePacket, error) {
+func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, state decisionState) (DecisionEvidencePacket, ArtifactRef, error) {
 	packet := DecisionEvidencePacket{
 		ID:                 req.DecisionID + "-evidence",
 		Question:           req.Question,
@@ -413,35 +818,102 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 		Artifacts:          req.Artifacts,
 		BaseRates:          req.BaseRates,
 		Assumptions:        req.Assumptions,
+		Provenance:         req.Provenance,
 		RequestContractRef: req.RequestContractRef,
 		CreatedAt:          e.now(),
 	}
 	if err := packet.Validate(); err != nil {
-		return DecisionEvidencePacket{}, fmt.Errorf("decision %s evidence: %w", req.DecisionID, err)
+		return DecisionEvidencePacket{}, ArtifactRef{}, fmt.Errorf("decision %s evidence: %w", req.DecisionID, err)
 	}
 	sealed, err := packet.Seal()
 	if err != nil {
-		return DecisionEvidencePacket{}, err
+		return DecisionEvidencePacket{}, ArtifactRef{}, err
 	}
 	if state.Packet.Hash == sealed.Hash {
 		// Already sealed on identical material; keep the durable packet so
 		// CreatedAt and ID stay exactly what the log recorded.
-		return state.Packet, nil
+		if req.EvidenceArtifactRef.ID != "" {
+			return state.Packet, req.EvidenceArtifactRef, nil
+		}
+		if e.services.Store == nil {
+			return state.Packet, ArtifactRef{}, nil
+		}
+		artifact, err := persistDecisionEvidence(ctx, e.services.Store, req, state.Packet)
+		if err != nil {
+			return DecisionEvidencePacket{}, ArtifactRef{}, err
+		}
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
+			DecisionID: req.DecisionID, EvidenceHash: state.Packet.Hash, Packet: &state.Packet, EvidenceArtifact: artifact,
+		}); err != nil {
+			return DecisionEvidencePacket{}, ArtifactRef{}, err
+		}
+		return state.Packet, artifact, nil
+	}
+	if e.services.Store == nil {
+		if decisionRequestDeclaresEvidence(req) {
+			return DecisionEvidencePacket{}, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "decision evidence artifact store is unavailable"}
+		}
+		if state.Packet.Hash != "" {
+			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, decisionEvent{
+				DecisionID: req.DecisionID, EvidenceHash: sealed.Hash,
+				Reason: evidenceChangeReason(state.Packet, sealed),
+			}); err != nil {
+				return DecisionEvidencePacket{}, ArtifactRef{}, err
+			}
+		}
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
+			DecisionID: req.DecisionID, EvidenceHash: sealed.Hash, Packet: &sealed,
+		}); err != nil {
+			return DecisionEvidencePacket{}, ArtifactRef{}, err
+		}
+		return sealed, ArtifactRef{}, nil
+	}
+	put, err := persistDecisionEvidence(ctx, e.services.Store, req, sealed)
+	if err != nil {
+		return DecisionEvidencePacket{}, ArtifactRef{}, err
 	}
 	if state.Packet.Hash != "" {
 		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, decisionEvent{
 			DecisionID: req.DecisionID, EvidenceHash: sealed.Hash,
 			Reason: evidenceChangeReason(state.Packet, sealed),
 		}); err != nil {
-			return DecisionEvidencePacket{}, err
+			return DecisionEvidencePacket{}, ArtifactRef{}, err
 		}
 	}
 	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: sealed.Hash, Packet: &sealed,
+		DecisionID: req.DecisionID, EvidenceHash: sealed.Hash, Packet: &sealed, EvidenceArtifact: put,
 	}); err != nil {
-		return DecisionEvidencePacket{}, err
+		return DecisionEvidencePacket{}, ArtifactRef{}, err
 	}
-	return sealed, nil
+	return sealed, put, nil
+}
+
+func decisionRequestDeclaresEvidence(req DecisionRequest) bool {
+	if len(req.Facts) > 0 || len(req.Artifacts) > 0 || len(req.BaseRates) > 0 || len(req.Provenance) > 0 {
+		return true
+	}
+	for _, assumption := range req.Assumptions {
+		if len(assumption.EvidenceRefs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func persistDecisionEvidence(ctx context.Context, store ArtifactStore, req DecisionRequest, packet DecisionEvidencePacket) (ArtifactRef, error) {
+	data, err := json.Marshal(packet)
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("encode decision evidence artifact: %w", err)
+	}
+	put, err := store.Put(ctx, PutArtifactRequest{
+		Kind: "decision_evidence", Role: "decision", Path: "decisions/evidence/" + packet.ID + ".json",
+		Description: "sealed decision evidence " + packet.ID, MediaType: "application/json", Content: data,
+		RunID: req.RunID, TaskID: req.TaskID,
+	})
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("persisting decision evidence: %w", err)
+	}
+	return put.ArtifactRef, nil
 }
 
 // collectOpinions dispatches only the judges whose opinion is not already

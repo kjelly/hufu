@@ -137,6 +137,11 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
 	clone.Action = cloneActionPtr(td.Action)
 	clone.FanOut = cloneFanOutSpec(td.FanOut)
+	clone.DecisionFacts = cloneDecisionFacts(td.DecisionFacts)
+	clone.DecisionArtifacts = append([]ArtifactRef(nil), td.DecisionArtifacts...)
+	clone.DecisionBaseRates = cloneBaseRateEvidence(td.DecisionBaseRates)
+	clone.DecisionAssumptions = cloneDecisionAssumptions(td.DecisionAssumptions)
+	clone.DecisionProvenance = cloneEvidenceProvenance(td.DecisionProvenance)
 	if td.ContextFiles != nil {
 		clone.ContextFiles = make([]string, len(td.ContextFiles))
 		copy(clone.ContextFiles, td.ContextFiles)
@@ -157,6 +162,70 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	}
 	clone.VerifySpec = cloneVerificationSpecPtr(td.VerifySpec)
 	clone.RecoveryHypothesis = cloneRecoveryHypothesis(td.RecoveryHypothesis)
+	return clone
+}
+
+func cloneDecisionFacts(facts map[string]any) map[string]any {
+	if facts == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(facts))
+	for key, value := range facts {
+		clone[key] = cloneDecisionValue(value)
+	}
+	return clone
+}
+
+func cloneDecisionValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneDecisionFacts(value)
+	case []any:
+		clone := make([]any, len(value))
+		for i, item := range value {
+			clone[i] = cloneDecisionValue(item)
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
+func cloneBaseRateEvidence(rates []BaseRateEvidence) []BaseRateEvidence {
+	if rates == nil {
+		return nil
+	}
+	clone := make([]BaseRateEvidence, len(rates))
+	copy(clone, rates)
+	for i := range clone {
+		clone[i].Source = rates[i].Source
+		clone[i].Limitations = append([]string(nil), rates[i].Limitations...)
+	}
+	return clone
+}
+
+func cloneDecisionAssumptions(assumptions []DecisionAssumption) []DecisionAssumption {
+	if assumptions == nil {
+		return nil
+	}
+	clone := make([]DecisionAssumption, len(assumptions))
+	copy(clone, assumptions)
+	for i := range clone {
+		clone[i].EvidenceRefs = append([]ArtifactRef(nil), assumptions[i].EvidenceRefs...)
+	}
+	return clone
+}
+
+func cloneEvidenceProvenance(provenance []EvidenceProvenance) []EvidenceProvenance {
+	if provenance == nil {
+		return nil
+	}
+	clone := make([]EvidenceProvenance, len(provenance))
+	copy(clone, provenance)
+	for i := range clone {
+		clone[i].ParentSourceIDs = append([]string(nil), provenance[i].ParentSourceIDs...)
+		clone[i].DeclaredParentSourceIDs = append([]string(nil), provenance[i].DeclaredParentSourceIDs...)
+	}
 	return clone
 }
 

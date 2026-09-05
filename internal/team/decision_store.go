@@ -42,21 +42,25 @@ type decisionEvent struct {
 	Note         string        `json:"note,omitempty"`
 	At           time.Time     `json:"at,omitzero"`
 
-	Packet           *DecisionEvidencePacket `json:"packet,omitempty"`
-	Opinion          *DecisionOpinion        `json:"opinion,omitempty"`
-	Aggregate        *DecisionAggregate      `json:"aggregate,omitempty"`
-	Challenge        *DecisionChallenge      `json:"challenge,omitempty"`
-	Revision         *DecisionRevision       `json:"revision,omitempty"`
-	Premortem        *PremortemResult        `json:"premortem,omitempty"`
-	Options          []DecisionOption        `json:"options,omitempty"`
-	Record           *DecisionRecord         `json:"record,omitempty"`
-	Question         string                  `json:"question,omitempty"`
-	ForecastRequired bool                    `json:"forecast_required,omitempty"`
-	RecordRef        ArtifactRef             `json:"record_ref,omitempty"`
-	ContractRef      string                  `json:"contract_ref,omitempty"`
-	ContractRevision uint64                  `json:"contract_revision,omitempty"`
-	ContractArtifact ArtifactRef             `json:"contract_artifact,omitempty"`
-	Degradation      *DecisionDegradation    `json:"degradation,omitempty"`
+	Packet              *DecisionEvidencePacket      `json:"packet,omitempty"`
+	Opinion             *DecisionOpinion             `json:"opinion,omitempty"`
+	Aggregate           *DecisionAggregate           `json:"aggregate,omitempty"`
+	Challenge           *DecisionChallenge           `json:"challenge,omitempty"`
+	Revision            *DecisionRevision            `json:"revision,omitempty"`
+	Premortem           *PremortemResult             `json:"premortem,omitempty"`
+	Options             []DecisionOption             `json:"options,omitempty"`
+	Record              *DecisionRecord              `json:"record,omitempty"`
+	Question            string                       `json:"question,omitempty"`
+	ForecastRequired    bool                         `json:"forecast_required,omitempty"`
+	RecordRef           ArtifactRef                  `json:"record_ref,omitempty"`
+	EvidenceArtifact    ArtifactRef                  `json:"evidence_artifact,omitempty"`
+	ContractRef         string                       `json:"contract_ref,omitempty"`
+	ContractRevision    uint64                       `json:"contract_revision,omitempty"`
+	ContractArtifact    ArtifactRef                  `json:"contract_artifact,omitempty"`
+	Degradation         *DecisionDegradation         `json:"degradation,omitempty"`
+	ReferenceInvocation *ReferenceEvidenceInvocation `json:"reference_invocation,omitempty"`
+	ReferenceResult     *ReferenceEvidenceResult     `json:"reference_result,omitempty"`
+	ReferenceFailure    *ReferenceEvidenceFailure    `json:"reference_failure,omitempty"`
 
 	// JudgeAliases records the anonymization mapping a challenger was NOT
 	// given, so the run stays auditable without ever revealing identity to the
@@ -66,22 +70,27 @@ type decisionEvent struct {
 
 // decisionState is the projection rebuilt from the event log.
 type decisionState struct {
-	DecisionID       string
-	TaskID           string
-	Profile          string
-	Packet           DecisionEvidencePacket
-	ProposedOptions  []DecisionOption
-	Opinions         []DecisionOpinion
-	Aggregates       map[int]DecisionAggregate
-	Challenges       []DecisionChallenge
-	Revisions        []DecisionRevision
-	Premortem        *PremortemResult
-	Degradations     []DecisionDegradation
-	Record           *DecisionRecord
-	ContractRef      string
-	ContractRevision uint64
-	ContractArtifact ArtifactRef
-	Invalidated      bool
+	DecisionID                 string
+	TaskID                     string
+	Profile                    string
+	Packet                     DecisionEvidencePacket
+	ProposedOptions            []DecisionOption
+	Opinions                   []DecisionOpinion
+	Aggregates                 map[int]DecisionAggregate
+	Challenges                 []DecisionChallenge
+	Revisions                  []DecisionRevision
+	Premortem                  *PremortemResult
+	Degradations               []DecisionDegradation
+	Record                     *DecisionRecord
+	ContractRef                string
+	ContractRevision           uint64
+	ContractArtifact           ArtifactRef
+	EvidenceArtifact           ArtifactRef
+	ReferenceInvocation        *ReferenceEvidenceInvocation
+	ReferenceResult            *ReferenceEvidenceResult
+	ReferenceEvidenceResultRef ArtifactRef
+	ReferenceFailure           *ReferenceEvidenceFailure
+	Invalidated                bool
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
 	// formed on them are durable but must not be aggregated (spec §15.4).
 	StaleHashes map[string]bool
@@ -181,8 +190,12 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		if len(event.Payload) == 0 {
 			continue
 		}
+		isReferenceEvent := event.Type == agent.EventDecisionReferenceStarted || event.Type == agent.EventDecisionReferenceCompleted || event.Type == agent.EventDecisionReferenceFailed
 		var payload decisionEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			if isReferenceEvent {
+				return state, fmt.Errorf("projecting %s event: decode payload: %w", event.Type, err)
+			}
 			// Foreign event types share the log; skip anything that is not a
 			// decision payload rather than failing the whole projection.
 			continue
@@ -190,79 +203,199 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		if payload.DecisionID != decisionID {
 			continue
 		}
-		switch event.Type {
-		case agent.EventDecisionStarted:
-			state.TaskID = payload.TaskID
-			state.Profile = payload.Profile
-		case agent.EventRequestContractCommitted:
-			state.TaskID = payload.TaskID
-			state.ContractRef = payload.ContractRef
-			state.ContractRevision = payload.ContractRevision
-			state.ContractArtifact = payload.ContractArtifact
-		case agent.EventDecisionOptionsProposed:
-			if len(payload.Options) > 0 {
-				state.ProposedOptions = payload.Options
-			}
-		case agent.EventDecisionEvidenceSealed:
-			if payload.Packet == nil {
-				continue
-			}
-			if state.Packet.Hash != "" && state.Packet.Hash != payload.Packet.Hash {
-				state.StaleHashes[state.Packet.Hash] = true
-			}
-			state.Packet = *payload.Packet
-		case agent.EventDecisionOpinionSubmitted, agent.EventDecisionOpinionRejected:
-			if payload.Opinion != nil {
-				state.Opinions = append(state.Opinions, *payload.Opinion)
-			}
-		case agent.EventDecisionAggregateComputed:
-			if payload.Aggregate != nil {
-				state.Aggregates[payload.Aggregate.Round] = *payload.Aggregate
-			}
-		case agent.EventDecisionChallengeSubmitted:
-			if payload.Challenge != nil {
-				state.Challenges = append(state.Challenges, *payload.Challenge)
-			}
-		case agent.EventDecisionRevisionSubmitted:
-			if payload.Revision != nil {
-				state.Revisions = append(state.Revisions, *payload.Revision)
-			}
-		case agent.EventDecisionPremortemSubmitted:
-			if payload.Premortem != nil {
-				premortem := *payload.Premortem
-				state.Premortem = &premortem
-			}
-		case agent.EventDecisionBudgetDegraded:
-			if payload.Degradation != nil {
-				state.Degradations = append(state.Degradations, *payload.Degradation)
-			}
-		case agent.EventDecisionFinalized:
-			if payload.Record != nil {
-				record := *payload.Record
-				state.Record = &record
-			}
-		case agent.EventAssumptionSupported, agent.EventAssumptionContradicted, agent.EventAssumptionStale:
-			if state.Record == nil || payload.AssumptionID == "" {
-				continue
-			}
-			assumptions, _, transitionErr := ApplyAssumptionTransition(state.Record.Assumptions, AssumptionTransition{
-				AssumptionID: payload.AssumptionID, To: payload.To, Source: payload.Source,
-				EvidenceRefs: payload.EvidenceRefs, At: payload.At,
-			})
-			if transitionErr == nil {
-				state.Record.Assumptions = assumptions
-			}
-		case agent.EventDecisionInvalidated:
-			state.Invalidated = true
-			if state.Record != nil {
-				state.Record.Stale = true
-				if state.Record.StaleReason == "" {
-					state.Record.StaleReason = payload.Reason
-				}
-			}
+		if err := applyDecisionEvent(&state, event.Type, payload); err != nil {
+			return state, fmt.Errorf("projecting %s event: %w", event.Type, err)
 		}
 	}
 	return state, nil
+}
+
+func applyDecisionEvent(state *decisionState, eventType string, payload decisionEvent) error {
+	switch eventType {
+	case agent.EventDecisionStarted:
+		state.TaskID, state.Profile = payload.TaskID, payload.Profile
+	case agent.EventRequestContractCommitted:
+		state.TaskID, state.ContractRef = payload.TaskID, payload.ContractRef
+		state.ContractRevision, state.ContractArtifact = payload.ContractRevision, payload.ContractArtifact
+	case agent.EventDecisionOptionsProposed:
+		if len(payload.Options) > 0 {
+			state.ProposedOptions = payload.Options
+		}
+	case agent.EventDecisionEvidenceSealed:
+		if payload.Packet == nil {
+			return nil
+		}
+		if state.Packet.Hash != "" && state.Packet.Hash != payload.Packet.Hash {
+			state.StaleHashes[state.Packet.Hash] = true
+		}
+		state.Packet, state.EvidenceArtifact = *payload.Packet, payload.EvidenceArtifact
+	case agent.EventDecisionReferenceStarted, agent.EventDecisionReferenceCompleted, agent.EventDecisionReferenceFailed:
+		return state.applyReferenceEvent(eventType, payload)
+	case agent.EventDecisionOpinionSubmitted, agent.EventDecisionOpinionRejected:
+		if payload.Opinion != nil {
+			state.Opinions = append(state.Opinions, *payload.Opinion)
+		}
+	case agent.EventDecisionAggregateComputed:
+		if payload.Aggregate != nil {
+			state.Aggregates[payload.Aggregate.Round] = *payload.Aggregate
+		}
+	case agent.EventDecisionChallengeSubmitted:
+		if payload.Challenge != nil {
+			state.Challenges = append(state.Challenges, *payload.Challenge)
+		}
+	case agent.EventDecisionRevisionSubmitted:
+		if payload.Revision != nil {
+			state.Revisions = append(state.Revisions, *payload.Revision)
+		}
+	case agent.EventDecisionPremortemSubmitted:
+		if payload.Premortem != nil {
+			premortem := *payload.Premortem
+			state.Premortem = &premortem
+		}
+	case agent.EventDecisionBudgetDegraded:
+		if payload.Degradation != nil {
+			state.Degradations = append(state.Degradations, *payload.Degradation)
+		}
+	case agent.EventDecisionFinalized:
+		if payload.Record != nil {
+			record := *payload.Record
+			state.Record = &record
+		}
+	case agent.EventAssumptionSupported, agent.EventAssumptionContradicted, agent.EventAssumptionStale:
+		if state.Record == nil || payload.AssumptionID == "" {
+			return nil
+		}
+		assumptions, _, transitionErr := ApplyAssumptionTransition(state.Record.Assumptions, AssumptionTransition{
+			AssumptionID: payload.AssumptionID, To: payload.To, Source: payload.Source,
+			EvidenceRefs: payload.EvidenceRefs, At: payload.At,
+		})
+		if transitionErr == nil {
+			state.Record.Assumptions = assumptions
+		}
+	case agent.EventDecisionInvalidated:
+		state.Invalidated = true
+		if state.Record != nil {
+			state.Record.Stale = true
+			if state.Record.StaleReason == "" {
+				state.Record.StaleReason = payload.Reason
+			}
+		}
+	}
+	return nil
+}
+
+func (state *decisionState) applyReferenceEvent(eventType string, payload decisionEvent) error {
+	if state == nil {
+		return fmt.Errorf("reference event state is nil")
+	}
+	switch eventType {
+	case agent.EventDecisionReferenceStarted:
+		if payload.ReferenceInvocation == nil {
+			return fmt.Errorf("reference start has no invocation")
+		}
+		if payload.ReferenceResult != nil || payload.ReferenceFailure != nil {
+			return fmt.Errorf("reference start contains terminal data")
+		}
+		if state.ReferenceInvocation != nil || state.ReferenceResult != nil || state.ReferenceFailure != nil {
+			return fmt.Errorf("reference invocation was already started or terminated")
+		}
+		invocation := *payload.ReferenceInvocation
+		if err := validateReferenceInvocation(invocation); err != nil {
+			return err
+		}
+		if invocation.DecisionID != state.DecisionID || payload.DecisionID != state.DecisionID {
+			return fmt.Errorf("reference start decision identity does not match")
+		}
+		if payload.TaskID != "" && invocation.TaskID != payload.TaskID {
+			return fmt.Errorf("reference start task identity does not match")
+		}
+		state.ReferenceInvocation = &invocation
+	case agent.EventDecisionReferenceCompleted:
+		if payload.ReferenceResult == nil {
+			return fmt.Errorf("reference completion has no result")
+		}
+		if payload.ReferenceInvocation != nil || payload.ReferenceFailure != nil {
+			return fmt.Errorf("reference completion contains contradictory terminal data")
+		}
+		if state.ReferenceInvocation == nil {
+			return fmt.Errorf("reference completion precedes start")
+		}
+		if state.ReferenceResult != nil || state.ReferenceFailure != nil {
+			return fmt.Errorf("reference invocation already has a terminal event")
+		}
+		result := *payload.ReferenceResult
+		if err := validateReferenceEvidenceResult(result); err != nil {
+			return err
+		}
+		if result.InvocationID != state.ReferenceInvocation.InvocationID || result.InputHash != state.ReferenceInvocation.InputHash {
+			return fmt.Errorf("reference completion identity does not match invocation")
+		}
+		if payload.DecisionID != state.DecisionID {
+			return fmt.Errorf("reference completion decision identity does not match")
+		}
+		result.BaseRates = cloneBaseRateEvidence(result.BaseRates)
+		result.Artifacts = append([]ArtifactRef(nil), result.Artifacts...)
+		result.Provenance = cloneEvidenceProvenance(result.Provenance)
+		if result.ResultArtifactRef != nil {
+			ref := *result.ResultArtifactRef
+			result.ResultArtifactRef = &ref
+		}
+		state.ReferenceResult = &result
+		state.ReferenceEvidenceResultRef = *result.ResultArtifactRef
+	case agent.EventDecisionReferenceFailed:
+		if payload.ReferenceFailure == nil {
+			return fmt.Errorf("reference failure has no failure record")
+		}
+		if payload.ReferenceInvocation != nil || payload.ReferenceResult != nil {
+			return fmt.Errorf("reference failure contains contradictory terminal data")
+		}
+		if state.ReferenceInvocation == nil {
+			return fmt.Errorf("reference failure precedes start")
+		}
+		if state.ReferenceResult != nil || state.ReferenceFailure != nil {
+			return fmt.Errorf("reference invocation already has a terminal event")
+		}
+		failure := *payload.ReferenceFailure
+		if err := validateReferenceEvidenceFailure(failure); err != nil {
+			return err
+		}
+		if failure.InvocationID != state.ReferenceInvocation.InvocationID || failure.InputHash != state.ReferenceInvocation.InputHash {
+			return fmt.Errorf("reference failure identity does not match invocation")
+		}
+		if payload.DecisionID != state.DecisionID {
+			return fmt.Errorf("reference failure decision identity does not match")
+		}
+		state.ReferenceFailure = &failure
+	default:
+		return fmt.Errorf("unsupported reference event type %q", eventType)
+	}
+	return nil
+}
+
+func validateReferenceInvocation(invocation ReferenceEvidenceInvocation) error {
+	if invocation.SchemaVersion != ReferenceEvidenceSchemaVersion {
+		return fmt.Errorf("unsupported reference invocation schema version %d", invocation.SchemaVersion)
+	}
+	if invocation.InvocationID == "" || invocation.InputHash == "" || invocation.DecisionID == "" {
+		return fmt.Errorf("reference invocation identity is incomplete")
+	}
+	if invocation.Question == "" {
+		return fmt.Errorf("reference invocation question is empty")
+	}
+	return nil
+}
+
+func validateReferenceEvidenceFailure(failure ReferenceEvidenceFailure) error {
+	if failure.SchemaVersion != ReferenceEvidenceSchemaVersion {
+		return fmt.Errorf("unsupported reference failure schema version %d", failure.SchemaVersion)
+	}
+	if failure.InvocationID == "" || failure.InputHash == "" {
+		return fmt.Errorf("reference failure identity is incomplete")
+	}
+	if failure.Reason == "" {
+		return fmt.Errorf("reference failure reason is empty")
+	}
+	return nil
 }
 
 // persistDecisionRecord writes the finished record to the artifact store so the

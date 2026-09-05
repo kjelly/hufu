@@ -43,7 +43,9 @@ const (
 	EventDecisionOptionsProposed      = agent.EventDecisionOptionsProposed
 	EventDecisionEvidenceSealed       = agent.EventDecisionEvidenceSealed
 	EventDecisionEvidenceChanged      = agent.EventDecisionEvidenceChanged
+	EventDecisionReferenceStarted     = agent.EventDecisionReferenceStarted
 	EventDecisionReferenceCompleted   = agent.EventDecisionReferenceCompleted
+	EventDecisionReferenceFailed      = agent.EventDecisionReferenceFailed
 	EventDecisionOpinionSubmitted     = agent.EventDecisionOpinionSubmitted
 	EventDecisionOpinionRejected      = agent.EventDecisionOpinionRejected
 	EventDecisionJudgeOverallIgnored  = agent.EventDecisionJudgeOverallIgnored

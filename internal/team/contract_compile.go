@@ -15,18 +15,23 @@ import (
 // to a dispatched task. Coordinator and worker prose may describe the goal,
 // but execution, output, and evidence behavior originate here.
 type EffectiveTaskContract struct {
-	ID         string            `json:"id"`
-	Revision   int               `json:"revision"`
-	Hash       string            `json:"hash"`
-	Agent      string            `json:"agent"`
-	Execution  ExecutionContract `json:"execution"`
-	OutputMode string            `json:"output_mode"`
-	SideEffect SideEffectClass   `json:"side_effect,omitempty"`
-	Recovery   RecoveryPolicy    `json:"recovery,omitempty"`
-	MaxRetries int               `json:"max_retries,omitempty"`
-	Action     *Action           `json:"action,omitempty"`
-	FanOut     *FanOutSpec       `json:"fan_out,omitempty"`
-	Optional   bool              `json:"optional,omitempty"`
+	ID                  string               `json:"id"`
+	Revision            int                  `json:"revision"`
+	Hash                string               `json:"hash"`
+	Agent               string               `json:"agent"`
+	Execution           ExecutionContract    `json:"execution"`
+	OutputMode          string               `json:"output_mode"`
+	SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
+	Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
+	MaxRetries          int                  `json:"max_retries,omitempty"`
+	Action              *Action              `json:"action,omitempty"`
+	FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
+	Optional            bool                 `json:"optional,omitempty"`
+	DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
+	DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
+	DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
+	DecisionAssumptions []DecisionAssumption `json:"decision_assumptions,omitempty"`
+	DecisionProvenance  []EvidenceProvenance `json:"decision_provenance,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -71,7 +76,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		if contractID == "" {
 			contractID = name
 		}
-		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
+		hash, err := effectiveContractHash(contractID, name, contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash initial task contract %q: %w", contractID, err)
 		}
@@ -85,11 +90,12 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
 		applyStaticVerificationContract(&bound[i], contract)
+		applyStaticDecisionEvidenceContract(&bound[i], contract)
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -140,7 +146,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		if contractID == "" {
 			contractID = strings.ToLower(strings.TrimSpace(contract.Agent)) + ":" + contract.WhenGoalContains
 		}
-		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
+		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
 		}
@@ -154,11 +160,12 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
 		applyStaticVerificationContract(&bound[i], contract)
+		applyStaticDecisionEvidenceContract(&bound[i], contract)
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -187,6 +194,17 @@ func applyStaticVerificationContract(bound *TaskDef, contract TaskDef) {
 	bound.VerifySpec = cloneVerificationSpecPtr(contract.VerifySpec)
 	bound.Kind = contract.Kind
 	bound.Advances = append([]string(nil), contract.Advances...)
+}
+
+func applyStaticDecisionEvidenceContract(bound *TaskDef, contract TaskDef) {
+	if bound == nil {
+		return
+	}
+	bound.DecisionFacts = cloneDecisionFacts(contract.DecisionFacts)
+	bound.DecisionArtifacts = append([]ArtifactRef(nil), contract.DecisionArtifacts...)
+	bound.DecisionBaseRates = cloneBaseRateEvidence(contract.DecisionBaseRates)
+	bound.DecisionAssumptions = cloneDecisionAssumptions(contract.DecisionAssumptions)
+	bound.DecisionProvenance = cloneEvidenceProvenance(contract.DecisionProvenance)
 }
 
 func cloneFanOutSpec(src *FanOutSpec) *FanOutSpec {
@@ -228,20 +246,33 @@ func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
 	return leftErr == nil && rightErr == nil && string(left) == string(right)
 }
 
-func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, sideEffect SideEffectClass, recovery RecoveryPolicy, maxRetries int, action *Action, fanOut *FanOutSpec, optional bool) (string, error) {
+func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, sideEffect SideEffectClass, recovery RecoveryPolicy, maxRetries int, action *Action, fanOut *FanOutSpec, optional bool, evidence ...TaskDef) (string, error) {
 	payload := struct {
-		ID         string            `json:"id"`
-		Revision   int               `json:"revision"`
-		Agent      string            `json:"agent"`
-		Execution  ExecutionContract `json:"execution"`
-		OutputMode string            `json:"output_mode"`
-		SideEffect SideEffectClass   `json:"side_effect,omitempty"`
-		Recovery   RecoveryPolicy    `json:"recovery,omitempty"`
-		MaxRetries int               `json:"max_retries,omitempty"`
-		Action     *Action           `json:"action,omitempty"`
-		FanOut     *FanOutSpec       `json:"fan_out,omitempty"`
-		Optional   bool              `json:"optional,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional}
+		ID                  string               `json:"id"`
+		Revision            int                  `json:"revision"`
+		Agent               string               `json:"agent"`
+		Execution           ExecutionContract    `json:"execution"`
+		OutputMode          string               `json:"output_mode"`
+		SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
+		Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
+		MaxRetries          int                  `json:"max_retries,omitempty"`
+		Action              *Action              `json:"action,omitempty"`
+		FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
+		Optional            bool                 `json:"optional,omitempty"`
+		DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
+		DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
+		DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
+		DecisionAssumptions []DecisionAssumption `json:"decision_assumptions,omitempty"`
+		DecisionProvenance  []EvidenceProvenance `json:"decision_provenance,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, nil, nil, nil, nil, nil}
+	if len(evidence) > 0 {
+		declared := evidence[0]
+		payload.DecisionFacts = cloneDecisionFacts(declared.DecisionFacts)
+		payload.DecisionArtifacts = append([]ArtifactRef(nil), declared.DecisionArtifacts...)
+		payload.DecisionBaseRates = cloneBaseRateEvidence(declared.DecisionBaseRates)
+		payload.DecisionAssumptions = cloneDecisionAssumptions(declared.DecisionAssumptions)
+		payload.DecisionProvenance = cloneEvidenceProvenance(declared.DecisionProvenance)
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", err

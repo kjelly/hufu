@@ -31,6 +31,7 @@ type ArtifactStore interface {
 	Put(context.Context, PutArtifactRequest) (ArtifactPutResult, error)
 	Verify(context.Context, ArtifactRef) error
 	Open(context.Context, string) (io.ReadCloser, error)
+	Resolve(context.Context, ArtifactRef) (ArtifactRef, error)
 	ListByTask(context.Context, string) ([]ArtifactRef, error)
 }
 
@@ -229,11 +230,36 @@ func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, erro
 // artifact ID. Non-zero claims supplied by a caller are checked against the
 // store metadata before the canonical bytes are verified.
 func (s *FileArtifactStore) Resolve(ctx context.Context, supplied ArtifactRef) (ArtifactRef, error) {
-	if s == nil || !validArtifactID(supplied.ID) {
-		return ArtifactRef{}, fmt.Errorf("artifact reference has no id")
+	if s == nil {
+		return ArtifactRef{}, fmt.Errorf("artifact store is nil")
+	}
+	if strings.TrimSpace(supplied.ID) == "" {
+		if strings.TrimSpace(supplied.SHA256) == "" {
+			return ArtifactRef{}, fmt.Errorf("artifact reference has no id or digest")
+		}
+		entries, err := os.ReadDir(filepath.Join(s.root, "meta"))
+		if err != nil {
+			return ArtifactRef{}, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			candidate, readErr := s.Get(ctx, strings.TrimSuffix(entry.Name(), ".json"))
+			if readErr == nil && candidate.SHA256 == supplied.SHA256 {
+				supplied.ID = candidate.ID
+				break
+			}
+		}
+	}
+	if !validArtifactID(supplied.ID) {
+		return ArtifactRef{}, fmt.Errorf("artifact reference has no valid id")
 	}
 	canonical, err := s.Get(ctx, supplied.ID)
 	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if err := s.authorizeReferencePath(canonical.Path); err != nil {
 		return ArtifactRef{}, err
 	}
 	if supplied.SHA256 != "" && supplied.SHA256 != canonical.SHA256 {
@@ -252,6 +278,38 @@ func (s *FileArtifactStore) Resolve(ctx context.Context, supplied ArtifactRef) (
 		return ArtifactRef{}, err
 	}
 	return canonical, nil
+}
+
+// authorizeReferencePath keeps artifact metadata inside the store's source
+// workspace. CAS data is local, but a foreign absolute path or an escaping
+// relative path is not an authorized evidence source.
+func (s *FileArtifactStore) authorizeReferencePath(path string) error {
+	if s == nil || strings.TrimSpace(s.sourceDir) == "" {
+		return fmt.Errorf("artifact reference workspace is unavailable")
+	}
+	root, err := filepath.Abs(s.sourceDir)
+	if err != nil {
+		return fmt.Errorf("resolve artifact workspace: %w", err)
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		root = resolved
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return fmt.Errorf("resolve artifact metadata path: %w", err)
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(candidate); evalErr == nil {
+		candidate = resolved
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("artifact metadata path %q is outside workspace", path)
+	}
+	return nil
 }
 
 func validArtifactID(id string) bool {

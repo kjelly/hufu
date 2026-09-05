@@ -222,7 +222,7 @@ func (c *Coordinator) boundedWorkflowBashCommand(task TaskDef) string {
 		if contract.ID != task.ContractID || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(task.Agent)) {
 			continue
 		}
-		expectedHash, err := effectiveContractHash(task.ContractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional)
+		expectedHash, err := effectiveContractHash(task.ContractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
 		if err != nil || task.ContractHash != expectedHash || !slices.Contains(contract.Execution.TemplateToolGrants, "bash") {
 			return ""
 		}

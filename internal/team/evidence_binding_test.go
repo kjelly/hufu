@@ -13,8 +13,11 @@ type bindingTestStore struct{}
 func (bindingTestStore) Put(context.Context, PutArtifactRequest) (ArtifactPutResult, error) {
 	return ArtifactPutResult{}, nil
 }
-func (bindingTestStore) Verify(context.Context, ArtifactRef) error                 { return nil }
-func (bindingTestStore) Open(context.Context, string) (io.ReadCloser, error)       { return nil, nil }
+func (bindingTestStore) Verify(context.Context, ArtifactRef) error           { return nil }
+func (bindingTestStore) Open(context.Context, string) (io.ReadCloser, error) { return nil, nil }
+func (bindingTestStore) Resolve(_ context.Context, ref ArtifactRef) (ArtifactRef, error) {
+	return ref, nil
+}
 func (bindingTestStore) ListByTask(context.Context, string) ([]ArtifactRef, error) { return nil, nil }
 
 func TestEvidenceManifestRejectsConflictingTaskAttemptAndTranscriptBinding(t *testing.T) {

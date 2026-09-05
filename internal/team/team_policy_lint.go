@@ -29,6 +29,11 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	for index, task := range session.ContractTasks {
+		if err := ValidateTaskDecisionEvidence(task); err != nil {
+			findings = append(findings, errorFinding(fmt.Sprintf("tasks[%d].decision-evidence", index), FindingDecisionEvidenceInvalid, err.Error()))
+		}
+	}
 	findings = append(findings, validateDelegationReferences(session)...)
 	findings = append(findings, validateToolPolicy(session.Config.ToolsAllowed, session.Config.ToolsDenied)...)
 	seenDefs := make(map[*agent.AgentDef]bool)

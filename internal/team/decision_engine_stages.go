@@ -196,7 +196,10 @@ func (e *decisionEngine) applyProvenance(
 	packet DecisionEvidencePacket,
 	record *DecisionRecord,
 ) error {
-	sources := append(ProvenanceFromArtifacts(packet.Artifacts), req.Provenance...)
+	// Request-declared provenance is retained in the sealed packet for audit,
+	// but cannot affect runtime grouping. Only provenance derived from verified
+	// artifact content is trusted for independence calculations.
+	sources := ProvenanceFromArtifacts(packet.Artifacts)
 	if len(sources) == 0 {
 		return nil
 	}
