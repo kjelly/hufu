@@ -4057,6 +4057,9 @@ func (c *Coordinator) verifyTaskDeliverableWithSpec(parentCtx context.Context, a
 }
 
 func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult, taskResult *TaskResult) (verification *VerificationResult, returnErr error) {
+	if err := ValidateVerificationAssumptionRefs(task.VerifySpec); err != nil {
+		return nil, err
+	}
 	// A verification the task declared as checking specific assumptions is the
 	// second assumption status source (spec §18.1): its own pass or fail
 	// decides their status, independently of what the worker says about its own

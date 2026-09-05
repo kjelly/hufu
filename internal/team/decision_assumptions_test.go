@@ -138,10 +138,23 @@ func TestApplyAssumptionChecksWithoutADecisionIsANoOp(t *testing.T) {
 	}
 }
 
+func TestApplyAssumptionChecksFailsClosedWithoutJournal(t *testing.T) {
+	c, _ := armedAssumptionCoordinator(t)
+	c.eventJournal = nil
+	if _, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{{
+		AssumptionID: "A1", Status: AssumptionSupported,
+	}}, AssumptionSourceTaskResult); err == nil {
+		t.Fatal("assumption check succeeded without a canonical journal")
+	}
+}
+
 // A declared verification is an assumption source independent of what the
 // worker says about its own work (spec §18.1 source 2).
 func TestAssumptionChecksFromVerification(t *testing.T) {
 	spec := &VerificationSpec{Type: agent.VerifyCommandExit, AssumptionRefs: []string{"A1", " A2 ", "  "}}
+	if err := ValidateVerificationAssumptionRefs(spec); err == nil {
+		t.Fatal("blank verification assumption reference was accepted")
+	}
 
 	passed := AssumptionChecksFromVerification(spec, true)
 	if len(passed) != 2 {

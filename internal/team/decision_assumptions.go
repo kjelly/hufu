@@ -71,7 +71,7 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 	}
 	journal := c.decisionJournalOrNil()
 	if journal == nil {
-		return 0, nil
+		return 0, fmt.Errorf("assumption transition cannot be persisted: canonical event journal is unavailable")
 	}
 
 	// Validate the entire batch before persisting anything. A malformed later
@@ -286,6 +286,28 @@ func AssumptionChecksFromVerification(spec *VerificationSpec, passed bool) []Ass
 		}
 	}
 	return checks
+}
+
+// ValidateVerificationAssumptionRefs rejects malformed verification
+// contracts before the verifier can run. Empty references are not silently
+// discarded because that would make the declared contract differ from the
+// lifecycle evidence it claims to produce.
+func ValidateVerificationAssumptionRefs(spec *VerificationSpec) error {
+	if spec == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(spec.AssumptionRefs))
+	for _, ref := range spec.AssumptionRefs {
+		id := strings.TrimSpace(ref)
+		if id == "" {
+			return fmt.Errorf("verification assumption reference cannot be blank")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("verification assumption %s is declared more than once", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 // verificationLabel describes a verification outcome for an event reason.
