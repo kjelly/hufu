@@ -1975,11 +1975,15 @@ Phase 0.5
   internal/team/budget_manager.go        BudgetManager（自 Coordinator 抽出的計數所有權）
 
 Phase 1
-  internal/team/decision_evidence.go     packet、canonical 編碼、SHA-256 封存
+  internal/team/decision_numeric.go      §14 數值語意：尺度驗證、權重正規化、
+                                         四捨五入、mean/median/σ/MAD
+  internal/team/decision_canonical.go    §15.3 canonical 編碼器
+  internal/team/decision_evidence.go     packet、material 欄位集合、SHA-256 封存
   internal/team/decision_isolation.go    judge context 組裝與隔離斷言用的快照
   internal/team/decision_engine.go       階段編排（Run / Resume）
-  internal/team/decision_aggregate.go    deterministic 聚合與 dispersion
-  internal/team/decision_store.go        持久化與 resume 投影
+  internal/team/decision_aggregate.go    opinion 驗證、deterministic 聚合與 dispersion
+  internal/team/decision_budget.go       §34 預算准入與降級階梯
+  internal/team/decision_store.go        事件持久化與 resume 投影
 
 Phase 2
   internal/team/decision_gates.go        alternatives / outside-view / forecast gates
@@ -2203,8 +2207,11 @@ outside-view 硬門檻、premortem、challenge、revision、
 
 Resume
 - 2/3 意見後 crash → 只 dispatch 第 3 位；
-- 已持久化的意見不被靜默重新產生；
-- evidence hash 改變 → 舊意見標記 stale。
+- 已持久化的**有效**意見不被靜默重新產生；
+- 被拒絕的意見保留供稽核，但**不**算已完成工作：該 judge 在後續 run 仍會被
+  重新派工（run 內的一次性 repair 上限仍防止湊人數）；
+- evidence hash 改變 → 舊意見標記 stale；
+- 已 finalize 的決策不重算。
 
 預算
 - profile 要 5 位 judge 但預算不足且 `budget-degradation: forbidden` → fail closed；
