@@ -295,3 +295,61 @@ func TestKillCriterionDoesNotMarkTheDecisionStale(t *testing.T) {
 		t.Fatal("a budget stop marked the decision stale; the plan was not invalidated")
 	}
 }
+
+// A task resuming after an interrupted mutation whose outcome could not be
+// classified must stop rather than run on over state nobody can account for
+// (spec §38.3, DoD "side-effect crash reconciles before retry").
+func TestCheckpointStopsOnUnknownSideEffectState(t *testing.T) {
+	c := dispatchCoordinator(t, dispatchConfig())
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "deployer", Desc: "create the bridge"}})
+	todoID := items[0].ID
+	c.taskTracker.TodoList().SetRecoveryState(todoID, RecoveryStateUnknown)
+
+	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{CheckpointEvery: 1}, ReplanPolicy{})
+	if err := c.armDiscipline(context.Background(), todoID, TaskDef{ID: "t1"}, policy, &DecisionRecord{ID: "dec-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.disciplineFor(todoID).sideEffectState; got != RecoveryStateUnknown {
+		t.Fatalf("armed sideEffectState = %q, want %q", got, RecoveryStateUnknown)
+	}
+
+	decision := c.recordToolCall(context.Background(), todoID, false)
+	if decision.Action != CheckpointStop || decision.Reason != ReasonReconcileUnknownState {
+		t.Fatalf("decision = %#v, want a stop on %s", decision, ReasonReconcileUnknownState)
+	}
+	if denial := c.checkpointDenial(todoID); denial == "" {
+		t.Fatal("a task stopped on unknown side-effect state still permits tool calls")
+	}
+}
+
+// A classified outcome is not a reason to stop: complete, partial and
+// not-started are all accountable states.
+func TestCheckpointContinuesOnClassifiedSideEffectState(t *testing.T) {
+	for _, state := range []string{"", RecoveryStateComplete, RecoveryStatePartial, RecoveryStateNotStarted} {
+		c := dispatchCoordinator(t, dispatchConfig())
+		items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "deployer", Desc: "create the bridge"}})
+		todoID := items[0].ID
+		if state != "" {
+			c.taskTracker.TodoList().SetRecoveryState(todoID, state)
+		}
+
+		policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{CheckpointEvery: 1}, ReplanPolicy{})
+		if err := c.armDiscipline(context.Background(), todoID, TaskDef{ID: "t1"}, policy, &DecisionRecord{ID: "dec-1"}); err != nil {
+			t.Fatal(err)
+		}
+		if decision := c.recordToolCall(context.Background(), todoID, false); decision.Action != CheckpointContinue {
+			t.Fatalf("state %q = %#v, want continue", state, decision)
+		}
+	}
+}
+
+func TestTaskRecoveryStateDefaultsToEmpty(t *testing.T) {
+	c := dispatchCoordinator(t, dispatchConfig())
+	if got := c.taskRecoveryState("unknown-todo"); got != "" {
+		t.Fatalf("taskRecoveryState = %q, want empty", got)
+	}
+	var nilCoordinator *Coordinator
+	if got := nilCoordinator.taskRecoveryState("x"); got != "" {
+		t.Fatalf("taskRecoveryState on nil = %q, want empty", got)
+	}
+}

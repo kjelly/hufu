@@ -2547,8 +2547,13 @@ Attempt           ✅ 由 TodoItem.Retries + 1 提供
 NoProgressStreak  ✅ 由既有的 noProgressCounters().Turns 提供
 ConsecutiveFailures / ToolCalls / TokensUsed / Elapsed  ✅
 MaterialEvidenceChanged  ❌ 單一任務執行期間 sealed evidence 不會變；
-                            它的觸發點在跨任務的證據更新，需要假設/verify 路徑
-SideEffectState          ❌ 只在 crash 復原時有值；正常執行期間為空是正確的
+                            它的觸發點在跨任務的證據更新，由假設／verify 路徑
+                            （§18.1）承擔，該路徑已實作
+SideEffectState          ✅ arm 時由 TodoItem.RecoveryState 帶入。
+                            正常執行期間為空是正確的（沒有存疑的變更）；
+                            中斷後恢復的任務若無法分類其結果，checkpoint 會
+                            以 reconcile_unknown_state 停止，而不是在無人能
+                            交代的狀態上繼續執行
 ```
 
 **已知缺陷（本 phase 必須修掉）**
@@ -2678,9 +2683,8 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 > [~] 子系統完成且有 deterministic 測試，但缺少 production 輸入
 > ```
 >
-> 2026-09-05 後續：Phase 3.5 已接線，§18.1 的三個假設狀態來源亦已實作。
-> 唯一剩下的 [~] 是 `SideEffectState`，它只在 crash 復原路徑有值——
-> 正常執行期間為空是正確的，不是缺口。
+> 2026-09-05 後續：Phase 3.5 已接線，§18.1 的三個假設狀態來源、§40 的指標
+> 投影、以及未分類副作用狀態的 checkpoint 停止皆已實作。V1 的 DoD 全數完成。
 
 ```text
 [x] 決策能力以任務區域 runtime 行為整合
@@ -2707,7 +2711,7 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 [x] 單一預算所有者（BudgetManager）
 [x] 明示且有事件記錄的預算降級（或 fail closed）
 [x] crash/resume 保留決策語意
-[~] 副作用 crash 先 reconcile 再重試（SideEffectState 僅在復原路徑有值）
+[x] 副作用 crash 先 reconcile 再重試（未分類狀態於 checkpoint 停止）
 [x] adversarial verification 與 decision challenge 保持分離
 [x] 記憶升級需要已驗證且有來源的證據（V1 未改動既有記憶升級路徑；§41 為約束而非新機制）
 [x] 所有硬門檻都有 deterministic 測試
@@ -2793,17 +2797,36 @@ authorization eligibility → eligible candidates → capability ranking
 
 **進入條件**
 
+進入條件分兩類，性質不同，不可混為一談：
+
+**實作前置（程式碼可滿足，已全部完成）**
+
 ```text
-[x] 存在跨 run 的決策索引與明確的結案入口
-[x] 已明確定義「已驗證結果」的判定方式
-[ ] 至少 30 筆已結案決策，其中 >= 20 筆 Verified == true
+[x] 存在跨 run 的決策索引與明確的結案入口   §49.3
+[x] 已明確定義「已驗證結果」的判定方式       VerifyOutcomeEvidence
+[x] 條件本身可被量測與回報                   Phase5Entry / hufu decision stats
 ```
 
-> N = 30（其中 20 筆已驗證）。低於這個量時，Brier score 的信賴區間會比它
-> 要用來偵測的差異還寬，算出來的校準數字看似精確、實則無意義；20 筆已驗證
+**資料前置（程式碼無法滿足，只能靠實際使用累積）**
+
+```text
+至少 30 筆已結案決策，其中 >= 20 筆 Verified == true
+```
+
+這一行**不是待實作項目**，而是一個關於世界的事實：它要求真的有 30 個決策
+被做出來並結案。沒有任何程式碼能讓「已經發生過 30 次決策」成立，而偽造樣本
+會讓後續算出的每一個校準數字都是假的。
+
+可以做、也已經做了的是**量測它**：`DecisionMetrics.Phase5Entry()` 依這兩個
+門檻評估目前樣本，`hufu decision stats` 每次都會回報還差多少。門檻成立那天，
+Phase 5 就能開始；在那之前，依 §49 本節的規定，Phase 5 不得開始——
+此處的「未完成」正是規格要求的狀態，不是缺口。
+
+> N = 30（其中 20 筆已驗證）的依據：低於這個量時，Brier score 的信賴區間會比
+> 它要用來偵測的差異還寬，算出來的校準數字看似精確、實則無意義；20 筆已驗證
 > 是為了讓「已驗證/未驗證」兩組能分開看，而不是被未驗證的自述稀釋。
 > 這是啟用**記錄與報表**的門檻；adaptive judge weighting 不在此門檻內，
-> 它需要另一次明確決定（§41、§49.2 V1 行為）。
+> 它需要另一次明確決定（§41、本節 V1 行為）。
 
 > 2026-09-05：前兩項已實作（見下方 §49.3）。第三項只能隨實際使用累積，
 > 無法用程式碼滿足；在維護者確認樣本量足夠之前，Phase 5 本體仍不得開始。

@@ -30,14 +30,18 @@ type taskDiscipline struct {
 	assumptions  []DecisionAssumption
 	startedAt    time.Time
 
-	mu            sync.Mutex
-	toolCalls     int
-	failures      int
-	attempt       int
-	commitDone    bool
-	stopped       bool
-	staleMarked   bool
-	checkpointErr string
+	mu        sync.Mutex
+	toolCalls int
+	failures  int
+	attempt   int
+	// sideEffectState carries the reconcile classification from an
+	// interrupted earlier attempt. Empty during normal execution is correct:
+	// there is no mutation in doubt (spec §29.1, §38.3).
+	sideEffectState string
+	commitDone      bool
+	stopped         bool
+	staleMarked     bool
+	checkpointErr   string
 }
 
 // armDiscipline registers a task's stop and commit contract before execution.
@@ -58,6 +62,9 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 		commit:    policy.Discipline.Commit,
 		startedAt: c.disciplineNow(),
 		attempt:   c.taskAttempt(todoID),
+		// A task resuming after an interrupted mutation must not run on over a
+		// side effect nobody can account for; the checkpoint stops on unknown.
+		sideEffectState: c.taskRecoveryState(todoID),
 	}
 	if record != nil {
 		discipline.decisionID = record.ID
@@ -104,6 +111,20 @@ func (c *Coordinator) disciplineFor(todoID string) *taskDiscipline {
 }
 
 func (c *Coordinator) disciplineNow() time.Time { return time.Now() }
+
+// taskRecoveryState returns the reconcile classification recorded for a task,
+// or an empty string when nothing was interrupted.
+func (c *Coordinator) taskRecoveryState(todoID string) string {
+	if c == nil || c.taskTracker == nil || todoID == "" {
+		return ""
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID {
+			return item.RecoveryState
+		}
+	}
+	return ""
+}
 
 // taskAttempt returns the task's current execution attempt, 1-based. Retries
 // records DAG resets, so Retries+1 is the attempt count once a retry exists
@@ -199,6 +220,9 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 	// existing detector already maintains; a checkpoint reads it rather than
 	// keeping a second count of the same thing.
 	state.NoProgressStreak = c.noProgressCounters().Turns
+	// An interrupted mutation whose outcome could not be classified must stop
+	// the task rather than let it continue over unknown state (spec §38.3).
+	state.SideEffectState = discipline.sideEffectState
 	stop := discipline.stop
 	replan := discipline.replan
 	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)
