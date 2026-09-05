@@ -494,10 +494,6 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 	}
 	entry.Assumptions = updated
 	entry.AssumptionNotes = appendAssumptionNote(entry.AssumptionNotes, assumptionID, status, note)
-	entry.IndexedAt = time.Time{}
-	if err := i.Append(entry); err != nil {
-		return DecisionIndexEntry{}, DecisionAssumption{}, err
-	}
 	if status == AssumptionContradicted && assumption.Critical {
 		reason := fmt.Sprintf("%s: critical assumption %s contradicted", ReasonAssumptionInvalidated, assumptionID)
 		if err := appendDecisionEvent(context.Background(), i.journal, agent.EventDecisionInvalidated, decisionEvent{
@@ -512,10 +508,10 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 		}
 		entry.Stale = true
 		entry.StaleReason = reason
-		entry.IndexedAt = time.Time{}
-		if err := i.Append(entry); err != nil {
-			return DecisionIndexEntry{}, DecisionAssumption{}, err
-		}
+	}
+	entry.IndexedAt = time.Time{}
+	if err := i.Append(entry); err != nil {
+		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
 	return entry, assumption, nil
 }
