@@ -126,6 +126,7 @@ type teamConfigYAML struct {
 	Capabilities      agent.CapabilityConfig                `yaml:"capabilities"`
 	Verification      agent.VerificationConfig              `yaml:"verification"`
 	Retry             agent.RetryConfig                     `yaml:"retry"`
+	Decision          agent.DecisionConfig                  `yaml:"decision"`
 	ActionProviders   map[string]agent.ActionProviderConfig `yaml:"action-providers"`
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
@@ -1149,6 +1150,17 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.Verification = yc.Verification
 		cfg.Retry = yc.Retry
 	}
+	// Decision profiles are independent of the optional phase workflow: a team
+	// may configure decision rigor without adopting the runtime workflow. An
+	// absent block leaves cfg.Decision zero, which resolves every task to the
+	// reserved "off" profile (spec §8).
+	if yc.Decision.DefaultProfile != "" || len(yc.Decision.Profiles) > 0 {
+		if err := yc.Decision.Validate(); err != nil {
+			return cfg, fmt.Errorf("invalid team config: %w", err)
+		}
+		cfg.Decision = yc.Decision
+	}
+
 	// Action providers are independent of whether the optional phase workflow
 	// is enabled. Keeping this outside the workflow block ensures configured
 	// providers are available to static validation and runtime action tasks in

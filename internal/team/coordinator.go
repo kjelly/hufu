@@ -162,6 +162,12 @@ type TaskDef struct {
 	// This exists so a coordinator never has to retype data-derived literals
 	// into many near-identical dispatches. See expandFanOutTasks.
 	FanOut *FanOutSpec `json:"fan_out,omitempty" yaml:"fan_out,omitempty"`
+	// DecisionProfile selects the decision rigor profile for this task. It is
+	// configuration-only: the `json:"-"` tag keeps it out of the coordinator's
+	// task payload so an LLM can never lower configured rigor, exactly as
+	// Phase and Action are protected
+	// (docs/hufu-decision-aware-runtime-spec.md §9).
+	DecisionProfile string `json:"-" yaml:"decision-profile,omitempty"`
 }
 
 // FactRef names one substitution: {Name} in the consuming task's Goal and

@@ -366,6 +366,11 @@ type TeamConfig struct {
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.
 	Compaction CompactionPolicy
+	// Decision configures the decision-aware runtime's rigor profiles. An
+	// absent block resolves every task to the reserved "off" profile, which
+	// preserves pre-decision behavior exactly
+	// (docs/hufu-decision-aware-runtime-spec.md §8, §10).
+	Decision DecisionConfig
 }
 
 // CompactionPolicy is the team-level safety policy for coordinator history and
