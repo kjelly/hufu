@@ -2079,6 +2079,8 @@ Phase 1
   internal/team/decision_store.go        事件持久化與 resume 投影
 
 Phase 2
+  internal/team/decision_options.go      §19.1 選項提案、slug 正規化、
+                                         必要替代方案的 runtime 注入
   internal/team/decision_gates.go        alternatives / outside-view / premortem /
                                          forecast / request-contract gates、finalization
   internal/team/decision_challenge.go    challenge 與 premortem 的提示、匿名化、驗證
