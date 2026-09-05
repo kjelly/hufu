@@ -54,7 +54,7 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 		replan:    policy.Discipline.Replan,
 		commit:    policy.Discipline.Commit,
 		startedAt: c.disciplineNow(),
-		attempt:   task.MaxRetries * 0,
+		attempt:   c.taskAttempt(todoID),
 	}
 	if record != nil {
 		discipline.decisionID = record.ID
@@ -100,11 +100,21 @@ func (c *Coordinator) disciplineFor(todoID string) *taskDiscipline {
 	return c.disciplines[todoID]
 }
 
-func (c *Coordinator) disciplineNow() time.Time {
-	if c != nil && !c.sessionTime.IsZero() {
-		return time.Now()
+func (c *Coordinator) disciplineNow() time.Time { return time.Now() }
+
+// taskAttempt returns the task's current execution attempt, 1-based. Retries
+// records DAG resets, so Retries+1 is the attempt count once a retry exists
+// (the same convention anti_thrashing.go uses).
+func (c *Coordinator) taskAttempt(todoID string) int {
+	if c == nil || c.taskTracker == nil || todoID == "" {
+		return 1
 	}
-	return time.Now()
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item != nil && item.ID == todoID {
+			return item.Retries + 1
+		}
+	}
+	return 1
 }
 
 // decisionJournalOrNil returns the run's event journal when one is available.
@@ -182,6 +192,10 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 		ConsecutiveFailures: discipline.failures,
 		Elapsed:             time.Since(discipline.startedAt),
 	}
+	// Turns without criterion progress is the run-wide stall signal the
+	// existing detector already maintains; a checkpoint reads it rather than
+	// keeping a second count of the same thing.
+	state.NoProgressStreak = c.noProgressCounters().Turns
 	stop := discipline.stop
 	replan := discipline.replan
 	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)

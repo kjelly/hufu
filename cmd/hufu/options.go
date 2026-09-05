@@ -29,10 +29,14 @@ type runOptions struct {
 	routeMode           string
 
 	// Workspace / session lifecycle
-	workspace     string
-	newSession    bool
-	tempWorkspace bool
-	showHistory   bool
+	workspace string
+	// decisionProfile is the run-scoped --decision-profile override, the top
+	// layer of the decision profile precedence chain
+	// (docs/hufu-decision-aware-runtime-spec.md §8).
+	decisionProfile string
+	newSession      bool
+	tempWorkspace   bool
+	showHistory     bool
 
 	// Memory
 	memoryEnabled bool

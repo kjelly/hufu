@@ -168,6 +168,13 @@ type TaskDef struct {
 	// Phase and Action are protected
 	// (docs/hufu-decision-aware-runtime-spec.md §9).
 	DecisionProfile string `json:"-" yaml:"decision-profile,omitempty"`
+	// DecisionOptions are the alternatives a decision task weighs. They are
+	// configuration-only for the same reason DecisionProfile is: if the model
+	// under scrutiny also chose what counts as an alternative, the no-go gate
+	// would check nothing (spec §19).
+	DecisionOptions []DecisionOption `json:"-" yaml:"decision-options,omitempty"`
+	// DecisionAssumptions are the typed assumptions the decision rests on.
+	DecisionAssumptions []DecisionAssumption `json:"-" yaml:"decision-assumptions,omitempty"`
 }
 
 // FactRef names one substitution: {Name} in the consuming task's Goal and
@@ -568,8 +575,11 @@ type Coordinator struct {
 	// disciplines holds the armed execution contract per task. An empty map is
 	// the normal state: only tasks under a decision profile arm one, so both
 	// discipline hooks are no-ops for every other task (spec §29-§32).
-	disciplineMu                  sync.Mutex
-	disciplines                   map[string]*taskDiscipline
+	disciplineMu sync.Mutex
+	disciplines  map[string]*taskDiscipline
+	// decisionProfileOverride is the run-scoped --decision-profile value, the
+	// top layer of the precedence chain (spec §8).
+	decisionProfileOverride       string
 	tokenBudgetOwner              *Coordinator
 	acceptanceCmd                 string // optional shell command run at finish
 	acceptanceSpec                *AcceptanceSpec

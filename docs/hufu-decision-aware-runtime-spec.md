@@ -2403,6 +2403,24 @@ crash / recovery
 - checkpoint 回傳 stop / replan 時的實際作用：
   `RequestReplan`、`MarkDecisionStale` 必須真的被呼叫。
 
+**選項從哪裡來（本 phase 的範圍決定）**
+
+`DecisionOptions` 由**任務契約宣告**（`decision-options:`，`json:"-"`），
+不由模型提案。理由：若受審視的同一個判斷同時決定「什麼算是替代方案」，
+no-go 門檻就什麼都沒檢查到。自動提案階段是後續工作，不在本 phase；
+在它存在之前，宣告 profile 但未宣告 options 的任務會被視為設定錯誤而失敗。
+
+**本 phase 未接上的 checkpoint 輸入（明確記錄，非遺漏）**
+
+```text
+Attempt           ✅ 由 TodoItem.Retries + 1 提供
+NoProgressStreak  ✅ 由既有的 noProgressCounters().Turns 提供
+ConsecutiveFailures / ToolCalls / TokensUsed / Elapsed  ✅
+MaterialEvidenceChanged  ❌ 單一任務執行期間 sealed evidence 不會變；
+                            它的觸發點在跨任務的證據更新，需要假設/verify 路徑
+SideEffectState          ❌ 只在 crash 復原時有值；正常執行期間為空是正確的
+```
+
 **已知缺陷（本 phase 必須修掉）**
 
 ```text
@@ -2434,8 +2452,9 @@ task 結束後 discipline 已 disarm
 
 **完成條件**
 
-在 team.yaml 設定 `decision-profile: standard` 後，一次真實 run 會形成、
-持久化並列出一筆決策，且 `hufu decision list` 能看到它。
+在 team.yaml 設定 `decision-profile: standard` 且任務宣告 `decision-options`
+之後，一次真實 run 會形成、持久化並列出一筆決策，且 `hufu decision list`
+能看到它。
 
 ---
 

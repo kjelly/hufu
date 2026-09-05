@@ -74,6 +74,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")
 	rootCmd.PersistentFlags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	rootCmd.PersistentFlags().StringVar(&opts.decisionProfile, "decision-profile", "", "Decision rigor profile for this run: a profile the team defines, or 'off' (default: the team's decision.default-profile)")
 	rootCmd.Flags().BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	rootCmd.Flags().BoolVarP(&opts.tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
 	rootCmd.Flags().StringVar(&opts.agentTeamName, "agent-team", "", "Agent team name to load")

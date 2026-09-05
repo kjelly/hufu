@@ -47,6 +47,14 @@ func applyUnattendedAndBudget(coordinator *team.Coordinator, session *team.TeamS
 		budgetTokens = session.Config.MaxTotalTokens
 	}
 	coordinator.SetBudget(budgetSeconds, budgetTokens)
+
+	// The run-scoped decision profile is validated here, before any task runs:
+	// an unknown profile must fail the run rather than be discovered mid-flight
+	// (spec §8, §9).
+	coordinator.SetDecisionProfile(opts.decisionProfile)
+	if err := coordinator.ValidateDecisionProfiles(session.ContractTasks); err != nil {
+		return err
+	}
 	// NewCoordinator has already validated and installed the acceptance
 	// contract from TeamConfig. Do not call the legacy setter again: an empty
 	// legacy value is an explicit empty contract in outcome mode and would

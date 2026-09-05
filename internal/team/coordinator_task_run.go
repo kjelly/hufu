@@ -271,6 +271,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	task.Recovery = resolvedRecovery
 	task.ReconcileTool = resolvedReconcileTool
 
+	// Decision formation and execution discipline run against the *resolved*
+	// side effect, so the commit gate sees the class the task will actually
+	// execute with. Both are no-ops for a task with no decision profile, which
+	// is the default (spec §8, Phase 3.5).
+	disarmDecision, decisionErr := c.prepareTaskDecision(parentCtx, task, todoID)
+	if decisionErr != nil {
+		c.PersistFailure(task.Agent, taskDesc, todoID, c.FailureDetail(decisionErr, "error"))
+		return "", decisionErr
+	}
+	defer disarmDecision()
+
 	if len(agentDef.MCPTools) > 0 {
 		defer func() {
 			_ = c.mcpManager.UnloadAgentMCPServer(agentName)
