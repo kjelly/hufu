@@ -133,13 +133,14 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			// A same-status retry is normally a duplicate. The exception is a
 			// prior invalidation whose durable follow-up failed; retry that
 			// follow-up instead of permanently locking the decision out.
-			if checkpointErr != "" && CriticalContradiction(current) != "" {
-				critical := CriticalContradiction(current)
-				if err := c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
-					Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated,
-					Detail: fmt.Sprintf("critical assumption %s was contradicted", critical),
-				}); err != nil {
-					return applied, fmt.Errorf("retrying assumption invalidation: %w", err)
+			if checkpointErr != "" {
+				if critical := CriticalContradiction(current); critical != "" {
+					if err := c.actOnCheckpoint(ctx, discipline, CheckpointDecision{
+						Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated,
+						Detail: fmt.Sprintf("critical assumption %s was contradicted", critical),
+					}); err != nil {
+						return applied, fmt.Errorf("retrying assumption invalidation: %w", err)
+					}
 				}
 				if err := c.projectAssumptionIndex(discipline); err != nil {
 					return applied, fmt.Errorf("projecting retried assumption state: %w", err)
@@ -184,6 +185,9 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 			}
 		}
 		if err := c.projectAssumptionIndex(discipline); err != nil {
+			discipline.mu.Lock()
+			discipline.checkpointErr = err.Error()
+			discipline.mu.Unlock()
 			return applied, fmt.Errorf("projecting assumption state: %w", err)
 		}
 		applied++
