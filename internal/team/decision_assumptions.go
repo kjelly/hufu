@@ -63,9 +63,10 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 	}
 	discipline.mu.Lock()
 	stale := discipline.staleMarked
+	checkpointErr := discipline.checkpointErr
 	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)
 	discipline.mu.Unlock()
-	if stale {
+	if stale && checkpointErr == "" {
 		return 0, fmt.Errorf("decision %s is stale and cannot accept assumption checks", discipline.decisionID)
 	}
 	journal := c.decisionJournalOrNil()
