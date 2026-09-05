@@ -26,6 +26,7 @@ const decisionActor = "decision-runtime"
 // every call site.
 type decisionEvent struct {
 	DecisionID   string `json:"decision_id"`
+	TaskID       string `json:"task_id,omitempty"`
 	Profile      string `json:"profile,omitempty"`
 	EvidenceHash string `json:"evidence_hash,omitempty"`
 	Round        int    `json:"round,omitempty"`
@@ -52,6 +53,9 @@ type decisionEvent struct {
 	Question         string                  `json:"question,omitempty"`
 	ForecastRequired bool                    `json:"forecast_required,omitempty"`
 	RecordRef        ArtifactRef             `json:"record_ref,omitempty"`
+	ContractRef      string                  `json:"contract_ref,omitempty"`
+	ContractRevision uint64                  `json:"contract_revision,omitempty"`
+	ContractArtifact ArtifactRef             `json:"contract_artifact,omitempty"`
 	Degradation      *DecisionDegradation    `json:"degradation,omitempty"`
 
 	// JudgeAliases records the anonymization mapping a challenger was NOT
@@ -62,17 +66,22 @@ type decisionEvent struct {
 
 // decisionState is the projection rebuilt from the event log.
 type decisionState struct {
-	DecisionID      string
-	Profile         string
-	Packet          DecisionEvidencePacket
-	ProposedOptions []DecisionOption
-	Opinions        []DecisionOpinion
-	Aggregates      map[int]DecisionAggregate
-	Challenges      []DecisionChallenge
-	Revisions       []DecisionRevision
-	Premortem       *PremortemResult
-	Degradations    []DecisionDegradation
-	Record          *DecisionRecord
+	DecisionID       string
+	TaskID           string
+	Profile          string
+	Packet           DecisionEvidencePacket
+	ProposedOptions  []DecisionOption
+	Opinions         []DecisionOpinion
+	Aggregates       map[int]DecisionAggregate
+	Challenges       []DecisionChallenge
+	Revisions        []DecisionRevision
+	Premortem        *PremortemResult
+	Degradations     []DecisionDegradation
+	Record           *DecisionRecord
+	ContractRef      string
+	ContractRevision uint64
+	ContractArtifact ArtifactRef
+	Invalidated      bool
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
 	// formed on them are durable but must not be aggregated (spec §15.4).
 	StaleHashes map[string]bool
@@ -183,7 +192,13 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		}
 		switch event.Type {
 		case agent.EventDecisionStarted:
+			state.TaskID = payload.TaskID
 			state.Profile = payload.Profile
+		case agent.EventRequestContractCommitted:
+			state.TaskID = payload.TaskID
+			state.ContractRef = payload.ContractRef
+			state.ContractRevision = payload.ContractRevision
+			state.ContractArtifact = payload.ContractArtifact
 		case agent.EventDecisionOptionsProposed:
 			if len(payload.Options) > 0 {
 				state.ProposedOptions = payload.Options
@@ -238,6 +253,7 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 				state.Record.Assumptions = assumptions
 			}
 		case agent.EventDecisionInvalidated:
+			state.Invalidated = true
 			if state.Record != nil {
 				state.Record.Stale = true
 				if state.Record.StaleReason == "" {

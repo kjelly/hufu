@@ -114,6 +114,10 @@ type SessionData struct {
 	// the canonical decision events when needed. It is persisted so a resumed
 	// session can surface assumption invalidation before the index is opened.
 	DecisionProjections []DecisionIndexEntry `json:"decision_projections,omitempty"`
+	// RequestContractProjections are disposable session projections rebuilt
+	// from request_contract_committed events. The artifact and event journal
+	// remain canonical.
+	RequestContractProjections []RequestContractProjection `json:"request_contract_projections,omitempty"`
 	// CompactionReferences are event-store attestations only. The canonical
 	// state store holds the referenced history and summary contents.
 	CompactionReferences           []CompactionReference           `json:"compaction_references,omitempty"`

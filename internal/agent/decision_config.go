@@ -90,8 +90,36 @@ const maxDecisionRounds = 2
 
 // DecisionConfig is the team-level decision configuration (spec §10).
 type DecisionConfig struct {
-	DefaultProfile string                    `yaml:"default-profile,omitempty"`
-	Profiles       map[string]DecisionPolicy `yaml:"profiles,omitempty"`
+	DefaultProfile  string                    `yaml:"default-profile,omitempty"`
+	Profiles        map[string]DecisionPolicy `yaml:"profiles,omitempty"`
+	RequestContract RequestContractConfig     `yaml:"request-contract,omitempty"`
+}
+
+// RequestContractConfig contains explicit request-level intent. It is kept
+// separate from DecisionCriterion because scoring weights are not acceptance
+// criteria (spec §11).
+type RequestContractConfig struct {
+	Enabled         bool                        `yaml:"enabled,omitempty"`
+	Objective       string                      `yaml:"objective,omitempty"`
+	SuccessCriteria []RequestSuccessCriterion   `yaml:"success-criteria,omitempty"`
+	Constraints     []RequestConstraint         `yaml:"constraints,omitempty"`
+	Assumptions     []RequestContractAssumption `yaml:"assumptions,omitempty"`
+}
+
+type RequestSuccessCriterion struct {
+	ID        string `yaml:"id"`
+	Statement string `yaml:"statement"`
+}
+
+type RequestConstraint struct {
+	ID        string `yaml:"id"`
+	Statement string `yaml:"statement"`
+}
+
+type RequestContractAssumption struct {
+	ID        string `yaml:"id"`
+	Statement string `yaml:"statement"`
+	Critical  bool   `yaml:"critical,omitempty"`
 }
 
 // DecisionPolicy is one named rigor profile (spec §12).
@@ -318,6 +346,9 @@ var knownKillKinds = map[string]bool{
 // Validate checks the whole decision configuration. Every rule here is a config
 // load-time failure, never a silent default (spec §12).
 func (c DecisionConfig) Validate() error {
+	if err := c.RequestContract.Validate(); err != nil {
+		return fmt.Errorf("decision.request-contract: %w", err)
+	}
 	if c.DefaultProfile != "" && c.DefaultProfile != DecisionProfileOff {
 		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
 			return fmt.Errorf("%s: decision.default-profile %q is not defined", ReasonDecisionProfileUnknown, c.DefaultProfile)
@@ -335,6 +366,49 @@ func (c DecisionConfig) Validate() error {
 		if err := c.Profiles[name].Validate(); err != nil {
 			return fmt.Errorf("decision.profiles.%s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func (c RequestContractConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Objective) == "" {
+		return fmt.Errorf("enabled request contract requires an objective")
+	}
+	if len(c.SuccessCriteria) == 0 {
+		return fmt.Errorf("enabled request contract requires success criteria")
+	}
+	seen := make(map[string]struct{}, len(c.SuccessCriteria))
+	for _, criterion := range c.SuccessCriteria {
+		if strings.TrimSpace(criterion.ID) == "" || strings.TrimSpace(criterion.Statement) == "" {
+			return fmt.Errorf("success criteria require non-empty id and statement")
+		}
+		if _, exists := seen[criterion.ID]; exists {
+			return fmt.Errorf("success criterion %q is duplicated", criterion.ID)
+		}
+		seen[criterion.ID] = struct{}{}
+	}
+	seen = make(map[string]struct{}, len(c.Constraints))
+	for _, constraint := range c.Constraints {
+		if strings.TrimSpace(constraint.ID) == "" || strings.TrimSpace(constraint.Statement) == "" {
+			return fmt.Errorf("constraints require non-empty id and statement")
+		}
+		if _, exists := seen[constraint.ID]; exists {
+			return fmt.Errorf("constraint %q is duplicated", constraint.ID)
+		}
+		seen[constraint.ID] = struct{}{}
+	}
+	seen = make(map[string]struct{}, len(c.Assumptions))
+	for _, assumption := range c.Assumptions {
+		if strings.TrimSpace(assumption.ID) == "" || strings.TrimSpace(assumption.Statement) == "" {
+			return fmt.Errorf("assumptions require non-empty id and statement")
+		}
+		if _, exists := seen[assumption.ID]; exists {
+			return fmt.Errorf("assumption %q is duplicated", assumption.ID)
+		}
+		seen[assumption.ID] = struct{}{}
 	}
 	return nil
 }

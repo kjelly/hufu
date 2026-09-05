@@ -1917,6 +1917,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if c.initialPrompt == "" {
 		c.initialPrompt = userPrompt
 	}
+	c.advanceRequestContractRevision("")
 
 	// Validate configured model names once per coordinator. This is advisory:
 	// we warn on mismatches but keep running so a stale provider list does not
@@ -2065,6 +2066,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	// ordinary (empty-prompt) continuation turn.
 	wasWrapUp := c.IsWrapUp()
 	c.resetRoundState()
+	c.advanceRequestContractRevision(additionalPrompt)
 	if err := c.startProviderExecutionBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err

@@ -338,7 +338,8 @@ type DecisionRecord struct {
 	Profile       string `json:"profile,omitempty"`
 	EvidenceHash  string `json:"evidence_hash,omitempty"`
 
-	RequestContractRef string `json:"request_contract_ref,omitempty"`
+	RequestContractRef      string `json:"request_contract_ref,omitempty"`
+	RequestContractRevision uint64 `json:"request_contract_revision,omitempty"`
 
 	Options     []DecisionOption     `json:"options,omitempty"`
 	Assumptions []DecisionAssumption `json:"assumptions,omitempty"`

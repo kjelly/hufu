@@ -2,7 +2,9 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -79,7 +81,9 @@ type DecisionRequest struct {
 	BaseRates   []BaseRateEvidence
 	Assumptions []DecisionAssumption
 
-	RequestContractRef string
+	RequestContractRef      string
+	RequestContractRevision uint64
+	RequestContractArtifact ArtifactRef
 
 	// Role, ProjectContext and Memory are the non-evidence context sources a
 	// judge may receive under strict isolation (spec §16).
@@ -170,10 +174,23 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	if state.Record != nil {
 		return state.Record, nil
 	}
+	var contractErr error
+	req, contractErr = e.prepareRequestContract(ctx, req, state)
+	if contractErr != nil {
+		return nil, contractErr
+	}
 
+	if req.Contract != nil && state.Profile == "" {
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventRequestContractCommitted, decisionEvent{
+			DecisionID: req.DecisionID, TaskID: req.TaskID, ContractRef: req.RequestContractRef,
+			ContractRevision: req.RequestContractRevision, ContractArtifact: req.RequestContractArtifact,
+		}); err != nil {
+			return nil, err
+		}
+	}
 	if state.Profile == "" {
 		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionStarted, decisionEvent{
-			DecisionID: req.DecisionID, Profile: req.Profile,
+			DecisionID: req.DecisionID, TaskID: req.TaskID, Profile: req.Profile,
 		}); err != nil {
 			return nil, err
 		}
@@ -257,6 +274,8 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	}
 
 	record := e.buildRecord(req, policy, packet, opinions, aggregates, finalAggregate, append(state.Degradations, degradations...))
+	record.RequestContractRef = req.RequestContractRef
+	record.RequestContractRevision = req.RequestContractRevision
 	record.Challenges = challenges
 	record.Revisions = revisions
 	record.Premortem = premortem
@@ -303,6 +322,82 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		}
 	}
 	return &record, nil
+}
+
+func (e *decisionEngine) prepareRequestContract(ctx context.Context, req DecisionRequest, state decisionState) (DecisionRequest, error) {
+	if state.Invalidated {
+		return req, fmt.Errorf("%s: decision %s has been invalidated", ReasonDecisionStale, req.DecisionID)
+	}
+	if state.Profile != "" && state.ContractRef == "" && req.Contract != nil {
+		return req, fmt.Errorf("decision request contract binding is unavailable for unfinished decision %s", req.DecisionID)
+	}
+	if req.Contract == nil && state.ContractRef != "" {
+		req.RequestContractRef = state.ContractRef
+		req.RequestContractRevision = state.ContractRevision
+		envelope, err := e.loadContractArtifact(ctx, req.RequestContractRef)
+		if err != nil {
+			return req, err
+		}
+		contract := envelope.RequestContract()
+		req.Contract = &contract
+	}
+	if req.Contract == nil {
+		return req, nil
+	}
+	if err := CheckRequestContract(req.Contract); err != nil {
+		return req, err
+	}
+	if strings.TrimSpace(req.RequestContractRef) == "" || req.RequestContractRevision == 0 {
+		return req, fmt.Errorf("decision request contract binding is incomplete")
+	}
+	if err := e.validateContractArtifact(ctx, req); err != nil {
+		return req, err
+	}
+	if state.ContractRef == "" || (state.ContractRef == req.RequestContractRef && state.ContractRevision == req.RequestContractRevision) {
+		return req, nil
+	}
+	reason := "request contract revision superseded"
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionInvalidated, decisionEvent{DecisionID: req.DecisionID, Reason: reason}); err != nil {
+		return req, err
+	}
+	return req, fmt.Errorf("%s: %s", ReasonDecisionStale, reason)
+}
+
+func (e *decisionEngine) validateContractArtifact(ctx context.Context, req DecisionRequest) error {
+	if e.services.Store == nil {
+		return fmt.Errorf("decision request contract artifact store is unavailable")
+	}
+	envelope, err := e.loadContractArtifact(ctx, req.RequestContractRef)
+	if err != nil {
+		return err
+	}
+	if envelope.ID != req.Contract.ID || envelope.Revision != req.RequestContractRevision {
+		return fmt.Errorf("request contract artifact binding mismatch")
+	}
+	return nil
+}
+
+func (e *decisionEngine) loadContractArtifact(ctx context.Context, ref string) (RequestContractEnvelope, error) {
+	if e.services.Store == nil {
+		return RequestContractEnvelope{}, fmt.Errorf("decision request contract artifact store is unavailable")
+	}
+	reader, err := e.services.Store.Open(ctx, ref)
+	if err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("open request contract artifact: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("read request contract artifact: %w", err)
+	}
+	var envelope RequestContractEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("decode request contract artifact: %w", err)
+	}
+	if err := envelope.Validate(); err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("validate request contract artifact: %w", err)
+	}
+	return envelope, nil
 }
 
 // sealEvidence seals the packet, or reuses the already-sealed one when its

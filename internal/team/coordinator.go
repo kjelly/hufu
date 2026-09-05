@@ -349,6 +349,12 @@ type Coordinator struct {
 	compactionBranchID                string
 	compactionRecoveryErr             error
 	initialPrompt                     string
+	requestContractMu                 sync.Mutex
+	requestContract                   *RequestContractEnvelope
+	requestContractRef                string
+	requestContractArtifact           ArtifactRef
+	requestContractRevision           uint64
+	requestContractInput              string
 	coordinatorProtocolRepairsAttempt atomic.Int32
 	coordinatorProtocolRepairsSuccess atomic.Int32
 	coordinatorPolicyRepairsAttempt   atomic.Int32

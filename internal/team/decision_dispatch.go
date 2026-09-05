@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // Dispatch integration (docs/hufu-decision-aware-runtime-spec.md Phase 3.5).
@@ -106,6 +108,21 @@ func (c *Coordinator) formTaskDecision(
 	if err != nil {
 		return nil, err
 	}
+	var requestContract *RequestContract
+	var requestContractRef string
+	var requestContractRevision uint64
+	var requestContractArtifact ArtifactRef
+	contractConfig := c.decisionConfig().RequestContract
+	if contractConfig.Enabled {
+		envelope, contractErr := c.requestContractFor(ctx, contractConfig)
+		if contractErr != nil {
+			return nil, contractErr
+		}
+		requestContractArtifact = envelope.artifact
+		requestContract = ptrRequestContract(envelope.envelope.RequestContract())
+		requestContractRef = envelope.artifact.SHA256
+		requestContractRevision = envelope.envelope.Revision
+	}
 
 	engine := NewDecisionEngine(DecisionServices{
 		Judges:      runners,
@@ -129,6 +146,8 @@ func (c *Coordinator) formTaskDecision(
 		Assumptions:    task.DecisionAssumptions,
 		Role:           "You are an independent reviewer on this team.",
 		ProjectContext: c.decisionProjectContext(),
+		Contract:       requestContract, RequestContractRef: requestContractRef,
+		RequestContractRevision: requestContractRevision, RequestContractArtifact: requestContractArtifact,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("task %s decision: %w", taskLabel(task, todoID), err)
@@ -136,6 +155,59 @@ func (c *Coordinator) formTaskDecision(
 	c.report(c.newEvent("decision").withTodoID(todoID).withMessage(
 		fmt.Sprintf("decision %s chose %q under profile %s", record.ID, record.FinalOption, profile)))
 	return record, nil
+}
+
+func ptrRequestContract(contract RequestContract) *RequestContract { return &contract }
+
+type cachedRequestContract struct {
+	envelope RequestContractEnvelope
+	artifact ArtifactRef
+}
+
+func (c *Coordinator) requestContractFor(ctx context.Context, cfg agent.RequestContractConfig) (cachedRequestContract, error) {
+	c.requestContractMu.Lock()
+	defer c.requestContractMu.Unlock()
+	input := c.requestContractInput
+	if input == "" {
+		input = strings.TrimSpace(c.initialPrompt)
+	}
+	if c.requestContract != nil && c.requestContractInput == input {
+		return cachedRequestContract{envelope: *c.requestContract, artifact: c.requestContractArtifact}, nil
+	}
+	revision := c.requestContractRevision + 1
+	if revision == 0 {
+		revision = 1
+	}
+	envelope, data, err := BuildRequestContract(input, input, cfg, revision, c.disciplineNow())
+	if err != nil {
+		return cachedRequestContract{}, fmt.Errorf("build request contract: %w", err)
+	}
+	artifact, err := PersistRequestContract(ctx, c.decisionArtifactStore(), envelope, data)
+	if err != nil {
+		return cachedRequestContract{}, err
+	}
+	c.requestContract = &envelope
+	c.requestContractRef = artifact.SHA256
+	c.requestContractArtifact = artifact
+	c.requestContractRevision = revision
+	c.requestContractInput = input
+	return cachedRequestContract{envelope: envelope, artifact: artifact}, nil
+}
+
+func (c *Coordinator) advanceRequestContractRevision(prompt string) {
+	if c == nil || !c.decisionConfig().RequestContract.Enabled {
+		return
+	}
+	input := strings.TrimSpace(c.initialPrompt)
+	if strings.TrimSpace(prompt) != "" {
+		input = strings.TrimSpace(input + "\n" + strings.TrimSpace(prompt))
+	}
+	c.requestContractMu.Lock()
+	if c.requestContractInput != input {
+		c.requestContract = nil
+		c.requestContractInput = input
+	}
+	c.requestContractMu.Unlock()
 }
 
 // decisionQuestionFor renders the task's goal as the decision's question.

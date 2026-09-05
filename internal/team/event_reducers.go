@@ -251,6 +251,22 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.PlanReviews = append(session.PlanReviews, payload.Review)
 				}
 			}
+		case "request_contract_committed":
+			var payload decisionEvent
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.DecisionID != "" && payload.ContractRef != "" && payload.ContractRevision > 0 {
+				projection := RequestContractProjection{DecisionID: payload.DecisionID, TaskID: payload.TaskID, ContractRef: payload.ContractRef, ContractRevision: payload.ContractRevision, ContractArtifact: payload.ContractArtifact}
+				updated := false
+				for i := range session.RequestContractProjections {
+					if session.RequestContractProjections[i].DecisionID == projection.DecisionID {
+						session.RequestContractProjections[i] = projection
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					session.RequestContractProjections = append(session.RequestContractProjections, projection)
+				}
+			}
 		}
 	}
 	replay := reduceToTodoList(events)
