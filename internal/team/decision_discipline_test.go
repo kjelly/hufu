@@ -233,3 +233,65 @@ func TestDisarmDiscipline(t *testing.T) {
 		t.Fatalf("disarmed gate still denies: %q", denial)
 	}
 }
+
+// A checkpoint that decides to replan because the decision's own assumptions
+// failed must also supersede the decision, once (spec §31, §35).
+func TestCheckpointReplanMarksTheDecisionStale(t *testing.T) {
+	c := disciplineCoordinator(t)
+	journal := c.eventJournal.(*memoryJournal)
+
+	policy := disciplinePolicy(CommitGatePolicy{},
+		StopPolicy{CheckpointEvery: 1},
+		ReplanPolicy{OnCriticalAssumptionContradicted: agent.ReplanReplan})
+	record := &DecisionRecord{
+		ID: "dec-1", EvidenceHash: "hash-1",
+		Assumptions: []DecisionAssumption{{ID: "A1", Critical: true, Status: AssumptionContradicted}},
+	}
+	if err := c.armDiscipline(context.Background(), "todo-1", TaskDef{ID: "t1"}, policy, record); err != nil {
+		t.Fatal(err)
+	}
+
+	if decision := c.recordToolCall(context.Background(), "todo-1", false); decision.Action != CheckpointReplan {
+		t.Fatalf("decision = %#v, want replan", decision)
+	}
+	if journal.count(agent.EventReplanRequested) != 1 {
+		t.Fatalf("replan events = %d, want 1", journal.count(agent.EventReplanRequested))
+	}
+	if journal.count(agent.EventDecisionInvalidated) != 1 {
+		t.Fatalf("invalidation events = %d, want the decision superseded once",
+			journal.count(agent.EventDecisionInvalidated))
+	}
+
+	// A second checkpoint on the same condition must not append a second
+	// invalidation: the decision is already superseded.
+	c.recordToolCall(context.Background(), "todo-1", false)
+	if journal.count(agent.EventDecisionInvalidated) != 1 {
+		t.Fatalf("invalidation events = %d, want marking to be idempotent",
+			journal.count(agent.EventDecisionInvalidated))
+	}
+}
+
+// A kill criterion is not an invalidated decision: the plan was fine, the
+// budget ran out. It must not mark the decision stale.
+func TestKillCriterionDoesNotMarkTheDecisionStale(t *testing.T) {
+	c := disciplineCoordinator(t)
+	journal := c.eventJournal.(*memoryJournal)
+
+	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{
+		CheckpointEvery: 1,
+		KillCriteria:    []KillCriterion{{ID: "calls", Kind: agent.KillKindToolCalls, Threshold: 1}},
+	}, ReplanPolicy{})
+	if err := c.armDiscipline(context.Background(), "todo-1", TaskDef{ID: "t1"}, policy, &DecisionRecord{ID: "dec-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if decision := c.recordToolCall(context.Background(), "todo-1", false); decision.Action != CheckpointStop {
+		t.Fatalf("decision = %#v, want stop", decision)
+	}
+	if journal.count(agent.EventKillCriterionTriggered) != 1 {
+		t.Fatalf("kill events = %d, want 1", journal.count(agent.EventKillCriterionTriggered))
+	}
+	if journal.count(agent.EventDecisionInvalidated) != 0 {
+		t.Fatal("a budget stop marked the decision stale; the plan was not invalidated")
+	}
+}

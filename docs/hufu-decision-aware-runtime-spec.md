@@ -1,6 +1,6 @@
 # Hufu Decision-Aware Runtime Specification
 
-**Status:** Phase 0, 0.5, 1, 2, 3 implemented as a subsystem; Phase 3.5 (dispatch integration) outstanding — spec verified against codebase 2026-09-05
+**Status:** Phase 0 through 3.5 implemented and wired to the dispatch path — spec verified against codebase 2026-09-05
 **Target:** `github.com/kjelly/hufu`
 **Audience:** Coding agents / maintainers
 **Language:** English identifiers and API names; explanatory text in Traditional Chinese.
@@ -2399,9 +2399,21 @@ crash / recovery
   `hufu decision resolve` 定址；
 - 補完 `CheckpointState` 在實際掛載中未填的欄位：
   `Attempt`、`NoProgressStreak`、`MaterialEvidenceChanged`、`SideEffectState`；
-- 假設狀態的來源（§18.1）：至少接上 verify 結果這一條路徑；
 - checkpoint 回傳 stop / replan 時的實際作用：
   `RequestReplan`、`MarkDecisionStale` 必須真的被呼叫。
+
+**明確延後的項目（維護者決定）**
+
+假設狀態的來源（§18.1）**不在本 phase**。三個來源都需要各自的契約：
+`submit_result` 要新增一個指名 assumption ID 的欄位、verify 結果要能結構化地
+指名 assumption、操作者要有一個 CLI 入口。這三個都是新的對外介面，
+規模與 Phase 3.5 的接線工作相當，硬塞進來只會讓兩件事都做不乾淨。
+
+在它完成之前的實際效果：`DecisionAssumption` 可以在任務契約中宣告、
+會進入 sealed evidence 與 `DecisionRecord`、判斷者看得到它們，
+但狀態永遠停在 `unknown`。因此 `assumption_invalid` kill criterion 與
+`on-critical-assumption-contradicted` 這條 replan 路徑在 production
+不會觸發——它們的邏輯與測試都完整，只是沒有輸入。
 
 **選項從哪裡來（本 phase 的範圍決定）**
 
@@ -2545,35 +2557,39 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 >
 > ```text
 > [x] 子系統與端到端都完成
-> [~] 子系統完成且有 deterministic 測試，端到端待 Phase 3.5 接線
+> [~] 子系統完成且有 deterministic 測試，但缺少 production 輸入
 > ```
+>
+> 2026-09-05 後續：Phase 3.5 已接線，多數項目轉為 [x]。剩下兩個 [~]
+> 的共同原因是**沒有輸入**，不是沒有實作：假設狀態的三個來源未接線
+> （見 Phase 3.5 延後項），而 `SideEffectState` 只在 crash 復原路徑有值。
 
 ```text
-[~] 決策能力以任務區域 runtime 行為整合
-[~] profile 驅動的決策嚴謹度
+[x] 決策能力以任務區域 runtime 行為整合
+[x] profile 驅動的決策嚴謹度
 [x] 舊的非決策工作負載完全相容
 [x] DecisionProfile 無法由 coordinator payload 設定
 [x] 數值語意（尺度／正規化／缺值／determinism／dispersion）完整且有測試
 [x] sealed evidence 與明確的 material 欄位集合
-[~] 獨立的第一輪判斷
+[x] 獨立的第一輪判斷
 [x] deterministic 聚合（零 LLM 呼叫、順序無關）
 [x] dispersion 追蹤
-[~] outside-view 門檻
-[~] no-go 替代方案門檻
-[~] premortem 支援
-[~] challenge 與有界修訂
+[x] outside-view 門檻
+[x] no-go 替代方案門檻
+[x] premortem 支援
+[x] challenge 與有界修訂
 [x] 持久化的 DecisionRecord
-[~] typed assumptions，狀態來源明確且為 append-only
+[~] typed assumptions，狀態來源明確且為 append-only（來源未接線，見 Phase 3.5 延後項）
 [x] evidence provenance 與可推導的獨立性分組（advisory）
-[~] 執行前持久化 StopPolicy
-[~] runtime 擁有的 commit gate，每個前提都可判定
-[~] 前提未滿足時零副作用工具啟動
-[~] deterministic 的 checkpoint 驅動 stop / replan
-[~] stale decision 語意
+[x] 執行前持久化 StopPolicy
+[x] runtime 擁有的 commit gate，每個前提都可判定
+[x] 前提未滿足時零副作用工具啟動
+[x] deterministic 的 checkpoint 驅動 stop / replan
+[x] stale decision 語意
 [x] 單一預算所有者（BudgetManager）
 [x] 明示且有事件記錄的預算降級（或 fail closed）
 [x] crash/resume 保留決策語意
-[~] 副作用 crash 先 reconcile 再重試
+[~] 副作用 crash 先 reconcile 再重試（SideEffectState 僅在復原路徑有值）
 [x] adversarial verification 與 decision challenge 保持分離
 [x] 記憶升級需要已驗證且有來源的證據（V1 未改動既有記憶升級路徑；§41 為約束而非新機制）
 [x] 所有硬門檻都有 deterministic 測試
