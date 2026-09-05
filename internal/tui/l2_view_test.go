@@ -57,6 +57,15 @@ func TestView_InfoIncludesDecisionStateProjection(t *testing.T) {
 	}
 }
 
+func TestUpdate_DecisionStateRefreshPreservesTeamInfo(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "t", DefaultModel: "model"})
+	updated, _ := m.Update(DecisionStateMsg{Decisions: []team.DecisionIndexEntry{{DecisionID: "dec-1", Stale: true}}})
+	got := updated.(Model)
+	if got.teamInfo.TeamName != "t" || got.teamInfo.DefaultModel != "model" || len(got.teamInfo.Decisions) != 1 {
+		t.Fatalf("team info after decision refresh = %#v", got.teamInfo)
+	}
+}
+
 // ── L2: Info panel ───────────────────────────────────────────────────────────
 
 func TestView_InfoPanelContent(t *testing.T) {

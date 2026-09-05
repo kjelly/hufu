@@ -1363,13 +1363,13 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.Todos != nil {
 				p.Send(tuipkg.TasksUpdatedMsg{Items: event.Todos})
 			}
-
-		case "decision_state":
-			p.Send(tuipkg.DecisionStateMsg{Decisions: event.Decisions})
 			if event.SSHSessions > 0 {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(fmt.Sprintf("SSH: %d active", event.SSHSessions))})
 				p.Send(tuipkg.SSHSessionsMsg{Count: event.SSHSessions})
 			}
+
+		case "decision_state":
+			p.Send(tuipkg.DecisionStateMsg{Decisions: event.Decisions})
 
 		case "plan_approved":
 			if event.Message != "" {
