@@ -127,6 +127,42 @@ func (r *coordinatorDecisionRunners) RunJudge(ctx context.Context, req JudgeRequ
 	return opinion, nil
 }
 
+// optionProposalResponse is the wire shape of the proposal stage's answer.
+type optionProposalResponse struct {
+	Options []struct {
+		ID          string `json:"id"`
+		Kind        string `json:"kind"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	} `json:"options"`
+}
+
+// ProposeOptions implements OptionProposer. It only carries the proposer's
+// text across; ID slugging, kind validation, capping and the runtime injection
+// that keeps the no-go gate meaningful all happen in NormalizeProposedOptions
+// and EnsureRequiredAlternatives (spec §19.1).
+func (r *coordinatorDecisionRunners) ProposeOptions(ctx context.Context, req OptionProposalRequest) ([]DecisionOption, error) {
+	response, err := r.ask(ctx, "decision-options", req.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	var decoded optionProposalResponse
+	if err := decodeStage(response, &decoded); err != nil {
+		return nil, fmt.Errorf("option proposal: %w", err)
+	}
+
+	options := make([]DecisionOption, 0, len(decoded.Options))
+	for _, option := range decoded.Options {
+		options = append(options, DecisionOption{
+			ID:          option.ID,
+			Kind:        DecisionOptionKind(strings.TrimSpace(option.Kind)),
+			Title:       option.Title,
+			Description: option.Description,
+		})
+	}
+	return options, nil
+}
+
 // challengeResponse is the wire shape of a challenger's answer.
 type challengeResponse struct {
 	TargetOption         string   `json:"target_option"`

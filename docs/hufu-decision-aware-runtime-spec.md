@@ -592,6 +592,8 @@ type DecisionPolicy struct {
 
     Finalization FinalizationPolicy `yaml:"finalization,omitempty"`
 
+    OptionProposal OptionProposalPolicy `yaml:"option-proposal,omitempty"`
+
     Discipline DisciplinePolicy `yaml:"discipline,omitempty"`
 
     MaxRounds         int    `yaml:"max-rounds,omitempty"`
@@ -642,6 +644,11 @@ type ForecastPolicy struct {
     Required bool `yaml:"required,omitempty"`
 }
 
+type OptionProposalPolicy struct {
+    Enabled    bool `yaml:"enabled,omitempty"`
+    MaxOptions int  `yaml:"max-options,omitempty"`
+}
+
 type FinalizationPolicy struct {
     Mode string `yaml:"mode,omitempty"` // aggregate (default) | coordinator | judge
     // JudgeID is required when Mode == "judge".
@@ -667,6 +674,7 @@ criteria[].weight          > 0 且為有限值
 sum(criteria[].weight)     > 0
 criteria[].direction       ∈ {"", higher-is-better, lower-is-better}
 budget-degradation         ∈ {"", forbidden, explicit}（預設 forbidden）
+option-proposal.max-options >= 0，且啟用時必須 >= alternatives.min-options
 finalization.mode          ∈ {"", aggregate, coordinator, judge}（預設 aggregate）
 finalization.mode == judge ⇒ judge-id 非空
 forecast.required == true  ⇒ 最終 record 必須含合法機率（見 §14）
@@ -848,7 +856,7 @@ MUST NOT 看到 coordinator 的偏好
 
 ```text
 Question                    trim + Unicode NFC 正規化後的字串
-Options[]                   依 ID 升冪；每項取 {ID, Kind, Title, Description}
+Options[]                   依 ID 升冪；每項取 {ID, Kind, Origin, Title, Description}
 Criteria[]                  依 ID 升冪；每項取 {ID, Statement, NormalizedWeight, Direction}
 Facts                       鍵名升冪；值以 canonical JSON 編碼
 Artifacts[]                 依 SHA256 升冪；每項僅取 {SHA256, MediaType, Role}
@@ -1090,6 +1098,66 @@ len(Options) < min-options
 
 緊急情況可明確覆寫，但覆寫理由必須持久化
 （`decision_alternatives_override` 事件，含理由字串與操作者身分）。
+
+### 19.1 選項提案（option proposal）
+
+手寫 options 是可用但不好用的：每個決策任務都要在 YAML 裡列出三個以上的
+選項。提案階段讓 runtime 在任務只宣告目標時自動產生候選選項。
+
+**核心風險**：如果「受審視的判斷」同時決定「什麼算是替代方案」，
+no-go 門檻就什麼都沒檢查到——提案者只要不提「不做」，門檻就永遠通過。
+
+**解法不是要求提案者記得，而是由 runtime 保證。** 提案完成後，
+runtime 依 `AlternativesPolicy` **deterministic 地補齊**缺少的必要選項：
+
+```text
+require-no-action-option: true 且提案沒有 defer/abandon
+  → runtime 注入一個 defer 選項
+require-information-option: true 且提案沒有 request_information
+  → runtime 注入一個 request_information 選項
+```
+
+這比「提案缺了就擋下」更強：擋下只會造成重試迴圈，而注入讓「不做」
+真的出現在判斷桌上、真的被每位 judge 評分、也真的可能勝出。門檻的實質
+問題從「提案者有沒有記得」變成「判斷發生時，不作為是否在選項中」——
+後者才是原本要保障的性質。
+
+**每個選項必須帶來源（provenance）**：
+
+```go
+type DecisionOptionOrigin string
+
+const (
+    OptionOriginDeclared DecisionOptionOrigin = "declared" // 任務契約宣告
+    OptionOriginProposed DecisionOptionOrigin = "proposed" // 提案階段產生
+    OptionOriginRuntime  DecisionOptionOrigin = "runtime"  // runtime 依門檻補齊
+)
+```
+
+沒有來源標記的話，之後讀 `DecisionRecord` 的人會看到「考慮了 3 個選項」
+而以為那三個都是有人想過的。`Origin` 進入 sealed evidence 的 material
+欄位集合（§15.2），因為它會改變一位 judge 該如何看待這個選項。
+
+**優先序**：任務宣告了 options 就直接使用，提案階段不執行。提案只在
+任務沒有宣告任何 option 時運行。設定是明確的，不做隱式魔法。
+
+**提案階段的隔離**：提案者只看到目標與宣告的 project context，
+看不到任何偏好、任何 judge、任何先前決策。
+
+**Resume**：提案結果以 `decision_options_proposed` 事件持久化，
+resume 時重用而**不重新提案**。options 是 material 欄位，重新提案會產生
+不同的 evidence hash，讓整輪判斷失效（§15.4）。
+
+**設定**：
+
+```yaml
+option-proposal:
+  enabled: true
+  max-options: 5        # 上限，含 runtime 補齊的選項；0 = 用內建上限
+```
+
+未啟用且任務未宣告 options → 設定錯誤（`decision_missing_alternative`），
+與提案前的行為相同。
 
 ---
 
@@ -2417,10 +2485,10 @@ crash / recovery
 
 **選項從哪裡來（本 phase 的範圍決定）**
 
-`DecisionOptions` 由**任務契約宣告**（`decision-options:`，`json:"-"`），
-不由模型提案。理由：若受審視的同一個判斷同時決定「什麼算是替代方案」，
-no-go 門檻就什麼都沒檢查到。自動提案階段是後續工作，不在本 phase；
-在它存在之前，宣告 profile 但未宣告 options 的任務會被視為設定錯誤而失敗。
+`DecisionOptions` 由**任務契約宣告**（`decision-options:`，`json:"-"`）。
+自動提案階段見 §19.1，於本 phase 之後加入：它保留了同一個安全性質，
+但改用「runtime 依門檻 deterministic 補齊必要選項 + 每個選項帶來源標記」
+而不是靠提案者自律。宣告的 options 仍然優先，提案只在未宣告時運行。
 
 **本 phase 未接上的 checkpoint 輸入（明確記錄，非遺漏）**
 

@@ -39,6 +39,7 @@ const (
 // Runtime event type names (spec §36).
 const (
 	EventDecisionStarted              = agent.EventDecisionStarted
+	EventDecisionOptionsProposed      = agent.EventDecisionOptionsProposed
 	EventDecisionEvidenceSealed       = agent.EventDecisionEvidenceSealed
 	EventDecisionEvidenceChanged      = agent.EventDecisionEvidenceChanged
 	EventDecisionReferenceCompleted   = agent.EventDecisionReferenceCompleted

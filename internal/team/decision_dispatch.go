@@ -88,8 +88,10 @@ func (c *Coordinator) formTaskDecision(
 	profile string,
 	policy DecisionPolicy,
 ) (*DecisionRecord, error) {
-	if len(task.DecisionOptions) == 0 {
-		return nil, fmt.Errorf("%s: task %s selects decision profile %q but declares no decision-options",
+	// A task may declare its options, or let the profile's proposal stage
+	// produce them. Declaring neither is a configuration error (spec §19.1).
+	if len(task.DecisionOptions) == 0 && !policy.OptionProposal.Enabled {
+		return nil, fmt.Errorf("%s: task %s selects decision profile %q, which declares no decision-options and does not enable option-proposal",
 			ReasonDecisionMissingAlternative, taskLabel(task, todoID), profile)
 	}
 
@@ -110,6 +112,7 @@ func (c *Coordinator) formTaskDecision(
 		Challengers: runners,
 		Premortems:  runners,
 		Revisions:   runners,
+		Proposer:    runners,
 		Journal:     c.EventJournal(),
 		Store:       c.decisionArtifactStore(),
 		Budget:      c.Budget(),

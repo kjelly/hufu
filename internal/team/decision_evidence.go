@@ -52,6 +52,9 @@ func (p DecisionEvidencePacket) canonicalMaterial() ([]byte, error) {
 			item := canonicalObject{}
 			item.setString("id", option.ID)
 			item.setString("kind", string(option.Kind))
+			// Origin is material: whether an option was thought of or injected
+			// to satisfy a gate changes how a judge should read it (§19.1).
+			item.setString("origin", string(option.EffectiveOrigin()))
 			item.setString("title", option.Title)
 			item.setString("description", option.Description)
 			encoded = append(encoded, item)

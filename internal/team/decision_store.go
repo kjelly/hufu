@@ -37,6 +37,7 @@ type decisionEvent struct {
 	Challenge   *DecisionChallenge      `json:"challenge,omitempty"`
 	Revision    *DecisionRevision       `json:"revision,omitempty"`
 	Premortem   *PremortemResult        `json:"premortem,omitempty"`
+	Options     []DecisionOption        `json:"options,omitempty"`
 	Record      *DecisionRecord         `json:"record,omitempty"`
 	Degradation *DecisionDegradation    `json:"degradation,omitempty"`
 
@@ -48,16 +49,17 @@ type decisionEvent struct {
 
 // decisionState is the projection rebuilt from the event log.
 type decisionState struct {
-	DecisionID   string
-	Profile      string
-	Packet       DecisionEvidencePacket
-	Opinions     []DecisionOpinion
-	Aggregates   map[int]DecisionAggregate
-	Challenges   []DecisionChallenge
-	Revisions    []DecisionRevision
-	Premortem    *PremortemResult
-	Degradations []DecisionDegradation
-	Record       *DecisionRecord
+	DecisionID      string
+	Profile         string
+	Packet          DecisionEvidencePacket
+	ProposedOptions []DecisionOption
+	Opinions        []DecisionOpinion
+	Aggregates      map[int]DecisionAggregate
+	Challenges      []DecisionChallenge
+	Revisions       []DecisionRevision
+	Premortem       *PremortemResult
+	Degradations    []DecisionDegradation
+	Record          *DecisionRecord
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
 	// formed on them are durable but must not be aggregated (spec §15.4).
 	StaleHashes map[string]bool
@@ -169,6 +171,10 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		switch event.Type {
 		case agent.EventDecisionStarted:
 			state.Profile = payload.Profile
+		case agent.EventDecisionOptionsProposed:
+			if len(payload.Options) > 0 {
+				state.ProposedOptions = payload.Options
+			}
 		case agent.EventDecisionEvidenceSealed:
 			if payload.Packet == nil {
 				continue

@@ -49,6 +49,10 @@ type DecisionServices struct {
 	Challengers ChallengeRunner
 	Revisions   RevisionRunner
 
+	// Proposer backs the option proposal stage. It is only consulted when the
+	// task declared no options and the profile enables proposal (spec §19.1).
+	Proposer OptionProposer
+
 	// Index is the cross-run decision index. A finalized decision is listed in
 	// it so `hufu decision resolve` can find it after the process exits; the
 	// index is a projection, never the source of truth (spec §49.2).
@@ -175,14 +179,23 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		}
 	}
 
-	// Gates run before JUDGE. Adding a "do nothing" option after judges have
-	// scored a two-option list does not change what they considered.
-	if err := e.checkPreJudgeGates(req); err != nil {
+	policy, degradations, err := e.admitBudget(ctx, req, state)
+	if err != nil {
 		return nil, err
 	}
 
-	policy, degradations, err := e.admitBudget(ctx, req, state)
+	// Options are settled before any gate runs: the alternatives gate has to
+	// judge the set that judges will actually see, including anything the
+	// runtime injected to satisfy the policy (spec §19.1).
+	options, err := e.proposeOptions(ctx, req, policy, state)
 	if err != nil {
+		return nil, err
+	}
+	req.Options = options
+
+	// Gates run before JUDGE. Adding a "do nothing" option after judges have
+	// scored a two-option list does not change what they considered.
+	if err := e.checkPreJudgeGates(req); err != nil {
 		return nil, err
 	}
 

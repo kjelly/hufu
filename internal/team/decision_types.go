@@ -38,6 +38,7 @@ type (
 	PremortemPolicy            = agent.PremortemPolicy
 	ForecastPolicy             = agent.ForecastPolicy
 	FinalizationPolicy         = agent.FinalizationPolicy
+	OptionProposalPolicy       = agent.OptionProposalPolicy
 )
 
 // DecisionOptionKind classifies an option so the runtime can check that
@@ -71,12 +72,46 @@ func (k DecisionOptionKind) Valid() bool {
 	return false
 }
 
+// DecisionOptionOrigin records where an option came from. Without it, a reader
+// of a DecisionRecord sees "three options were considered" and assumes someone
+// thought of all three (spec §19.1).
+type DecisionOptionOrigin string
+
+const (
+	// OptionOriginDeclared is an option the task contract declared.
+	OptionOriginDeclared DecisionOptionOrigin = "declared"
+	// OptionOriginProposed is an option the proposal stage produced.
+	OptionOriginProposed DecisionOptionOrigin = "proposed"
+	// OptionOriginRuntime is an option the runtime injected because a policy
+	// required it and neither the contract nor the proposal supplied one.
+	OptionOriginRuntime DecisionOptionOrigin = "runtime"
+)
+
+// ValidOptionOrigin reports whether value is a declared origin. An empty
+// origin is treated as declared, which is what pre-proposal records are.
+func ValidOptionOrigin(value DecisionOptionOrigin) bool {
+	switch value {
+	case "", OptionOriginDeclared, OptionOriginProposed, OptionOriginRuntime:
+		return true
+	}
+	return false
+}
+
+// EffectiveOrigin returns the option's provenance, defaulting to declared.
+func (o DecisionOption) EffectiveOrigin() DecisionOptionOrigin {
+	if o.Origin == "" {
+		return OptionOriginDeclared
+	}
+	return o.Origin
+}
+
 // DecisionOption is one candidate course of action (spec §19).
 type DecisionOption struct {
-	ID          string             `json:"id"`
-	Kind        DecisionOptionKind `json:"kind"`
-	Title       string             `json:"title,omitempty"`
-	Description string             `json:"description,omitempty"`
+	ID          string               `json:"id"`
+	Kind        DecisionOptionKind   `json:"kind"`
+	Origin      DecisionOptionOrigin `json:"origin,omitempty"`
+	Title       string               `json:"title,omitempty"`
+	Description string               `json:"description,omitempty"`
 }
 
 // Assumption lifecycle states (spec §18).

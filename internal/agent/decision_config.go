@@ -111,6 +111,8 @@ type DecisionPolicy struct {
 	Forecast     ForecastPolicy     `yaml:"forecast,omitempty"`
 	Finalization FinalizationPolicy `yaml:"finalization,omitempty"`
 
+	OptionProposal OptionProposalPolicy `yaml:"option-proposal,omitempty"`
+
 	Discipline DisciplinePolicy `yaml:"discipline,omitempty"`
 
 	MaxRounds         int    `yaml:"max-rounds,omitempty"`
@@ -165,6 +167,30 @@ type PremortemPolicy struct {
 // ForecastPolicy requires a resolvable probability on the final record (§40).
 type ForecastPolicy struct {
 	Required bool `yaml:"required,omitempty"`
+}
+
+// OptionProposalPolicy lets the runtime propose alternatives when a task
+// declares none, so a decision task does not have to hand-write its options
+// (spec §19.1). The gate it must not weaken is the no-go requirement; that is
+// preserved by runtime injection plus per-option provenance, not by trusting
+// the proposer.
+type OptionProposalPolicy struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+	// MaxOptions caps the option set including any the runtime injects.
+	// Zero uses defaultMaxProposedOptions.
+	MaxOptions int `yaml:"max-options,omitempty"`
+}
+
+// defaultMaxProposedOptions bounds a proposed option set. More options means
+// every judge scores every one of them, so the cost is multiplicative.
+const defaultMaxProposedOptions = 5
+
+// EffectiveMaxOptions returns the option cap, defaulted.
+func (p OptionProposalPolicy) EffectiveMaxOptions() int {
+	if p.MaxOptions <= 0 {
+		return defaultMaxProposedOptions
+	}
+	return p.MaxOptions
 }
 
 // FinalizationPolicy selects who picks the final option (spec §26).
@@ -362,6 +388,17 @@ func (p DecisionPolicy) Validate() error {
 	}
 	if err := validateCriteria(p.Criteria); err != nil {
 		return err
+	}
+	if p.OptionProposal.MaxOptions < 0 {
+		return fmt.Errorf("option-proposal.max-options must not be negative, got %d", p.OptionProposal.MaxOptions)
+	}
+	// A cap below the alternatives floor could never produce a usable option
+	// set: the runtime would have to inject past its own limit.
+	if p.OptionProposal.Enabled {
+		if cap := p.OptionProposal.EffectiveMaxOptions(); cap < p.Discipline.Alternatives.MinOptions {
+			return fmt.Errorf("option-proposal.max-options (%d) is below discipline.alternatives.min-options (%d)",
+				cap, p.Discipline.Alternatives.MinOptions)
+		}
 	}
 	switch p.Finalization.Mode {
 	case "", FinalizationAggregate, FinalizationCoordinator:

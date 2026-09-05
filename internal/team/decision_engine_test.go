@@ -204,6 +204,7 @@ func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget 
 		Premortems:  stages.Premortems,
 		Challengers: stages.Challengers,
 		Revisions:   stages.Revisions,
+		Proposer:    stages.Proposer,
 		Store:       stages.Store,
 		Index:       stages.Index,
 		Now:         func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },

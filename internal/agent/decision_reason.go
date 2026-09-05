@@ -41,6 +41,7 @@ const (
 // convention used by internal/team's event store.
 const (
 	EventDecisionStarted              = "decision_started"
+	EventDecisionOptionsProposed      = "decision_options_proposed"
 	EventDecisionEvidenceSealed       = "decision_evidence_sealed"
 	EventDecisionEvidenceChanged      = "decision_evidence_changed"
 	EventDecisionReferenceCompleted   = "decision_reference_completed"
@@ -101,6 +102,7 @@ var DecisionReasonCodes = []string{
 // DecisionEventTypes lists every canonical decision event type.
 var DecisionEventTypes = []string{
 	EventDecisionStarted,
+	EventDecisionOptionsProposed,
 	EventDecisionEvidenceSealed,
 	EventDecisionEvidenceChanged,
 	EventDecisionReferenceCompleted,

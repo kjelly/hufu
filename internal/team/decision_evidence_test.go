@@ -79,6 +79,9 @@ func TestMaterialChangesAlterTheHash(t *testing.T) {
 		{"base rate sample", func(p *DecisionEvidencePacket) { p.BaseRates[0].SampleSize = 31 }},
 		{"assumption statement", func(p *DecisionEvidencePacket) { p.Assumptions[0].Statement = "traffic doubles" }},
 		{"assumption criticality", func(p *DecisionEvidencePacket) { p.Assumptions[0].Critical = false }},
+		// An option the runtime injected to satisfy a gate is not the same
+		// evidence as one somebody proposed (spec §19.1).
+		{"option origin", func(p *DecisionEvidencePacket) { p.Options[0].Origin = OptionOriginRuntime }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,7 +154,8 @@ func TestCanonicalMaterialGolden(t *testing.T) {
 	}
 	want := `{"criteria":[{"id":"cost","normalized_weight":0.250000},{"id":"risk","normalized_weight":0.750000}],` +
 		`"facts":{"a":"x","b":2},` +
-		`"options":[{"id":"a","kind":"execute","title":"Ship it"},{"id":"b","kind":"defer"}],` +
+		`"options":[{"id":"a","kind":"execute","origin":"declared","title":"Ship it"},` +
+		`{"id":"b","kind":"defer","origin":"declared"}],` +
 		`"question":"Ship?"}`
 	if string(canonical) != want {
 		t.Fatalf("canonical form:\n got %s\nwant %s", canonical, want)
