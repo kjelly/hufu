@@ -217,6 +217,14 @@ func (t *ownedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}()
 	req = req.WithContext(request.ctx)
+	// Both boundary implementations mark the requests they own. The
+	// out-of-process proxy stamps this in its rewrite hook; without it here an
+	// upstream could not tell an owned in-process invocation from an
+	// unmediated one.
+	if req.Header.Get(protocolVersionHeader) == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(protocolVersionHeader, ProtocolVersion)
+	}
 
 	resp, err := t.roundTrip(req)
 	if err != nil {

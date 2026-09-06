@@ -30,8 +30,12 @@ import (
 
 const (
 	ProtocolVersion = "hufu-provider-proxy/v1"
-	ChildArg        = "--hufu-provider-proxy-child"
-	capabilityPath  = "/.hufu-provider/"
+	// protocolVersionHeader marks a request as carried by a Hufu-owned
+	// provider boundary. Both the out-of-process proxy and the in-process
+	// owned transport set it.
+	protocolVersionHeader = "X-Hufu-Provider-Proxy-Version"
+	ChildArg              = "--hufu-provider-proxy-child"
+	capabilityPath        = "/.hufu-provider/"
 )
 
 type Config struct {
@@ -286,7 +290,7 @@ func RunChild(in io.Reader, out io.Writer) int {
 	proxy.Rewrite = func(req *httputil.ProxyRequest) {
 		stripCapabilityPath(req.Out, privatePath)
 		req.SetURL(u)
-		req.Out.Header.Set("X-Hufu-Provider-Proxy-Version", ProtocolVersion)
+		req.Out.Header.Set(protocolVersionHeader, ProtocolVersion)
 		if req.Out.Header.Get("Authorization") == "" && control.Config.APIKey != "" {
 			req.Out.Header.Set("Authorization", "Bearer "+control.Config.APIKey)
 		}
