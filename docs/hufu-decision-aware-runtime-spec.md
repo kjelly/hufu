@@ -2684,7 +2684,29 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 > ```
 >
 > 2026-09-05 後續：Phase 3.5 已接線，§18.1 的三個假設狀態來源、§40 的指標
-> 投影、以及未分類副作用狀態的 checkpoint 停止皆已實作。V1 的 DoD 全數完成。
+> 投影、以及未分類副作用狀態的 checkpoint 停止皆已實作。
+>
+> **2026-09-06 更正（第二次）**：上一行「V1 的 DoD 全數完成」在當時仍然不正確。
+> 端到端測試在本次補上之後立刻證明：八個決策 stage 的 auxiliary purpose
+> 只有 `decision-reference-evidence` 註冊在 §context purpose registry 中，
+> 其餘七個（judge／options／challenge／premortem／revision／兩種 finalization）
+> 都會在呼叫 sidecar 之前被 `unsupported context invocation purpose` 拒絕。
+> 也就是說：**在 production 路徑上，任何決策都無法派出第一個 judge**，
+> 而子系統的 264 個單元測試全數通過。這正是 §45 所警告的「子系統完整但
+> 沒有通電」，只是這一次它藏在一層更深的地方。
+>
+> 缺陷已修復（purpose 常數與註冊表共用同一份清單，
+> `TestEveryDecisionStagePurposeIsRegistered` 防止再次漂移），
+> 並補上 §46 的端到端證明。下列項目的狀態以**具名測試**為依據，
+> 不以「子系統有測試」為依據：
+>
+> ```text
+> [x] 有 production 路徑，且有具名的端到端或整合測試
+> ```
+>
+> §46 每一列的具名覆蓋由 `TestDecisionV1MatrixIsFullyAttributed` 維護；
+> 該測試會驗證它引用的每一個測試確實存在，因此一列失去覆蓋時會失敗，
+> 而不是安靜地消失。
 
 ```text
 [x] 決策能力以任務區域 runtime 行為整合
@@ -2715,6 +2737,21 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 [x] adversarial verification 與 decision challenge 保持分離
 [x] 記憶升級需要已驗證且有來源的證據（V1 未改動既有記憶升級路徑；§41 為約束而非新機制）
 [x] 所有硬門檻都有 deterministic 測試
+[x] 八個決策 stage 的 auxiliary purpose 全數註冊且不得降級
+     （`TestEveryDecisionStagePurposeIsRegistered`）
+[x] 自帶 fixture 的端到端證明：載入 team → 解析 profile → preflight →
+     封存證據 → 獨立判斷 → 聚合 → challenge／revision → finalization → 索引
+     （`TestDecisionV1StandardProfileFormsCompleteRecord` 等，見 §46 對照表）
+```
+
+**V1 端到端證明的所在位置**
+
+```text
+internal/team/decision_v1_fixture_test.go   light / standard / high-stakes fixture（寫入磁碟後以 LoadTeam 載入）
+internal/team/decision_fake_judge_test.go   deterministic fake judge sidecar（依 prompt 標記分派八個 stage）
+internal/team/decision_v1_e2e_test.go       完整鏈路、隔離、門檻阻擋、determinism、off profile 相容
+internal/team/decision_v1_matrix_test.go    §46 A–S 對照表與其具名覆蓋
+internal/team/commitment_boundary_test.go   commit gate 的真實工具邊界（零 tool process）
 ```
 
 ---

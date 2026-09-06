@@ -29,17 +29,31 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"plan_reviewer":               {Trigger: ContextTriggerPlanReview, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"judge":                       {Trigger: ContextTriggerJudge, FallbackAllowed: true, FallbackOutcome: "deterministic_judge"},
 	"decision-reference-evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
-	"skeptic":                     {Trigger: ContextTriggerSkeptic, FallbackAllowed: true, FallbackOutcome: "deterministic_skeptic"},
-	"reflection":                  {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "no_reflection"},
-	"result_repair":               {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
-	"final_summary_repair":        {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary"},
-	"protocol_repair":             {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
-	"sidecar_task":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "sidecar_unavailable"},
-	"compactor":                   {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted"},
-	"team_selection":              {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: true, FallbackOutcome: "keyword_fallback"},
-	"fix_analysis":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_analysis"},
-	"promotion_draft":             {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "draft_unavailable"},
-	"skill_learning":              {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_heuristic"},
+	// Every decision stage runs on the judge sidecar and none of them may
+	// degrade: silently producing a decision with fewer judges, no challenge,
+	// or no finalization is exactly what spec §34 forbids, so they fail
+	// closed. They share the sidecar-task trigger rather than the judge
+	// trigger, which is the result-judging path and demands candidate
+	// identities a decision stage does not have.
+	// TestEveryDecisionStagePurposeIsRegistered keeps this list complete.
+	"decision-judge":                    {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-options":                  {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-challenge":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-premortem":                {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-revision":                 {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-finalization-coordinator": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"decision-finalization-judge":       {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"skeptic":                           {Trigger: ContextTriggerSkeptic, FallbackAllowed: true, FallbackOutcome: "deterministic_skeptic"},
+	"reflection":                        {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "no_reflection"},
+	"result_repair":                     {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
+	"final_summary_repair":              {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary"},
+	"protocol_repair":                   {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
+	"sidecar_task":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "sidecar_unavailable"},
+	"compactor":                         {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted"},
+	"team_selection":                    {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: true, FallbackOutcome: "keyword_fallback"},
+	"fix_analysis":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_analysis"},
+	"promotion_draft":                   {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "draft_unavailable"},
+	"skill_learning":                    {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_heuristic"},
 	// Classifier is a compatibility name for legacy sidecar Execute callers.
 	// It remains explicit so the audit can drive each caller toward a narrower
 	// purpose without creating an ambient default path.

@@ -29,6 +29,34 @@ const (
 	decisionStageTimeout = 90 * time.Second
 )
 
+// Decision stage purposes. Every auxiliary invocation names a purpose from a
+// closed registry (context_purpose.go); an unregistered name is rejected
+// before the sidecar is called. They are constants shared by the runner and
+// the registry so the two cannot drift — an unregistered stage purpose is not
+// a degraded decision, it is a decision that cannot dispatch at all.
+const (
+	decisionPurposeJudge                   = "decision-judge"
+	decisionPurposeReferenceEvidence       = "decision-reference-evidence"
+	decisionPurposeOptions                 = "decision-options"
+	decisionPurposeChallenge               = "decision-challenge"
+	decisionPurposePremortem               = "decision-premortem"
+	decisionPurposeRevision                = "decision-revision"
+	decisionPurposeFinalizationCoordinator = "decision-finalization-coordinator"
+	decisionPurposeFinalizationJudge       = "decision-finalization-judge"
+)
+
+// decisionStagePurposes is every purpose a decision stage may dispatch under.
+var decisionStagePurposes = []string{
+	decisionPurposeJudge,
+	decisionPurposeReferenceEvidence,
+	decisionPurposeOptions,
+	decisionPurposeChallenge,
+	decisionPurposePremortem,
+	decisionPurposeRevision,
+	decisionPurposeFinalizationCoordinator,
+	decisionPurposeFinalizationJudge,
+}
+
 // coordinatorDecisionRunners implements every stage runner over one
 // coordinator's judge sidecar.
 type coordinatorDecisionRunners struct {
@@ -148,7 +176,7 @@ type judgeResponse struct {
 
 // RunJudge implements JudgeRunner.
 func (r *coordinatorDecisionRunners) RunJudge(ctx context.Context, req JudgeRequest) (DecisionOpinion, error) {
-	response, err := r.ask(ctx, "decision-judge", req.Context.Prompt)
+	response, err := r.ask(ctx, decisionPurposeJudge, req.Context.Prompt)
 	if err != nil {
 		return DecisionOpinion{}, err
 	}
@@ -184,7 +212,7 @@ func (r *coordinatorDecisionRunners) RunReferenceEvidence(ctx context.Context, r
 		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence request: %w", err)
 	}
 	prompt := referenceEvidencePrompt(string(requestBytes))
-	response, err := r.ask(ctx, "decision-reference-evidence", prompt)
+	response, err := r.ask(ctx, decisionPurposeReferenceEvidence, prompt)
 	if err != nil {
 		return ReferenceEvidenceDraft{}, err
 	}
@@ -219,7 +247,7 @@ type optionProposalResponse struct {
 // that keeps the no-go gate meaningful all happen in NormalizeProposedOptions
 // and EnsureRequiredAlternatives (spec §19.1).
 func (r *coordinatorDecisionRunners) ProposeOptions(ctx context.Context, req OptionProposalRequest) ([]DecisionOption, error) {
-	response, err := r.ask(ctx, "decision-options", req.Prompt)
+	response, err := r.ask(ctx, decisionPurposeOptions, req.Prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +280,7 @@ type challengeResponse struct {
 
 // RunChallenge implements ChallengeRunner.
 func (r *coordinatorDecisionRunners) RunChallenge(ctx context.Context, req ChallengeRequest) (DecisionChallenge, error) {
-	response, err := r.ask(ctx, "decision-challenge", req.Prompt)
+	response, err := r.ask(ctx, decisionPurposeChallenge, req.Prompt)
 	if err != nil {
 		return DecisionChallenge{}, err
 	}
@@ -285,7 +313,7 @@ type premortemResponse struct {
 
 // RunPremortem implements PremortemRunner.
 func (r *coordinatorDecisionRunners) RunPremortem(ctx context.Context, req PremortemRequest) (PremortemResult, error) {
-	response, err := r.ask(ctx, "decision-premortem", req.Prompt)
+	response, err := r.ask(ctx, decisionPurposePremortem, req.Prompt)
 	if err != nil {
 		return PremortemResult{}, err
 	}
@@ -322,7 +350,7 @@ type revisionResponse struct {
 
 // RunRevision implements RevisionRunner.
 func (r *coordinatorDecisionRunners) RunRevision(ctx context.Context, req RevisionRequest) (DecisionRevision, error) {
-	response, err := r.ask(ctx, "decision-revision", req.Prompt)
+	response, err := r.ask(ctx, decisionPurposeRevision, req.Prompt)
 	if err != nil {
 		return DecisionRevision{}, err
 	}
@@ -351,7 +379,7 @@ func (r *coordinatorDecisionRunners) RunCoordinatorFinalization(ctx context.Cont
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
-	response, err := r.ask(ctx, "decision-finalization-coordinator", prompt)
+	response, err := r.ask(ctx, decisionPurposeFinalizationCoordinator, prompt)
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
@@ -363,7 +391,7 @@ func (r *coordinatorDecisionRunners) RunJudgeFinalization(ctx context.Context, r
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
-	response, err := r.ask(ctx, "decision-finalization-judge", prompt)
+	response, err := r.ask(ctx, decisionPurposeFinalizationJudge, prompt)
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
