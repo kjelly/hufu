@@ -148,7 +148,13 @@ func conversationEvidenceChecked(messages []fantasy.Message, scope contextstore.
 			if text, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && strings.TrimSpace(text.Text) != "" {
 				kind, priority, mustKeep := contextstore.ContextProgress, contextstore.PriorityNormal, false
 				if msg.Role == fantasy.MessageRoleUser {
-					kind, priority, mustKeep = contextstore.ContextRequirement, contextstore.PriorityCritical, mi == 0
+					// High, not critical: the compactor treats every critical
+					// item as required evidence that can never be dropped, so
+					// marking each user turn critical made any user-heavy
+					// history exceed the budget and refuse to compact at all.
+					// The anchoring turn and open questions stay must-keep;
+					// the rest are merely preferred during selection.
+					kind, priority, mustKeep = contextstore.ContextRequirement, contextstore.PriorityHigh, mi == 0
 				}
 				if msg.Role == fantasy.MessageRoleUser && strings.Contains(text.Text, "?") {
 					kind, mustKeep = contextstore.ContextOpenQuestion, true

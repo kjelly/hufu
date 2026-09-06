@@ -901,7 +901,7 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	items := c.taskTracker.TodoList().Items()
 	var interrupted []*TodoItem
 	for _, it := range items {
-		if isInterruptedStatus(it.Status) {
+		if isInterruptedStatus(it.Status) && (it.Status != TaskPaused || !it.CheckpointPause) {
 			interrupted = append(interrupted, it)
 		}
 	}
@@ -1197,6 +1197,12 @@ func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskI
 	// retain the current attempt and append it through the event-first task
 	// boundary before replacing the in-memory projection.
 	projected := cloneTodoItem(item)
+	projected.OccurrenceRevision = item.OccurrenceRevision + 1
+	if projected.OccurrenceRevision <= 0 {
+		projected.OccurrenceRevision = 1
+	}
+	projected.DispatchID = ""
+	projected.CheckpointPause = false
 	projected.Status = TaskPending
 	projected.Detail = detail
 	projected.Output = ""
@@ -1219,15 +1225,7 @@ func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskI
 			return err
 		}
 	}
-	items := c.taskTracker.TodoList().Items()
-	for i, current := range items {
-		if current != nil && current.ID == taskID {
-			items[i] = projected
-			break
-		}
-	}
-	c.taskTracker.TodoList().Restore(items)
-	return nil
+	return c.taskTracker.TodoList().TryApplyProjectedItem(projected)
 }
 
 func taskDefFromTodoItem(it *TodoItem) TaskDef {

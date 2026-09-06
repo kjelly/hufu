@@ -455,6 +455,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			Constraints         string                     `json:"constraints"`
 			Status              string                     `json:"status"`
 			Detail              string                     `json:"detail"`
+			CheckpointPause     *bool                      `json:"checkpoint_pause"`
+			OccurrenceRevision  int                        `json:"occurrence_revision"`
+			DispatchID          string                     `json:"dispatch_id"`
 			MaxRetries          int                        `json:"max_retries"`
 			Retries             int                        `json:"retries"`
 			Output              string                     `json:"output"`
@@ -560,6 +563,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				Goal:                payload.Goal,
 				Constraints:         payload.Constraints,
 				Status:              TaskPending,
+				CheckpointPause:     pointerValueOrZero(payload.CheckpointPause),
+				OccurrenceRevision:  payload.OccurrenceRevision,
+				DispatchID:          payload.DispatchID,
 				MaxRetries:          payload.MaxRetries,
 				Retries:             payload.Retries,
 				Agent:               payload.Agent,
@@ -649,6 +655,14 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.Agent != "" {
 			item.Agent = payload.Agent
+		}
+		if payload.CheckpointPause != nil {
+			item.CheckpointPause = *payload.CheckpointPause
+		}
+		if payload.OccurrenceRevision > 0 {
+			item.OccurrenceRevision = payload.OccurrenceRevision
+			// An empty dispatch ID deliberately closes the previous worker lease.
+			item.DispatchID = payload.DispatchID
 		}
 		if payload.Model != "" {
 			item.Model = payload.Model
