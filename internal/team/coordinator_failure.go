@@ -126,7 +126,7 @@ func (c *Coordinator) PersistFailureWithClass(agentName, taskDesc, todoID, detai
 // after a task was admitted must leave the canonical todo terminal with the
 // original diagnostic, even when the failing path occurred before the normal
 // worker retry loop could persist its decision.
-func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error) {
+func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error, occurrence ...submitResultRuntimeIdentity) {
 	if c == nil || err == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || todoID == "" {
 		return
 	}
@@ -134,9 +134,22 @@ func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error)
 	if item == nil || isTerminalTaskStatus(item.Status) {
 		return
 	}
+	// A late worker error belongs only to the dispatch that produced it. A
+	// checkpoint may have paused or reset the task while that worker unwound;
+	// terminalizing by Todo ID alone would overwrite the new lifecycle state.
+	if len(occurrence) > 0 && validSubmitResultIdentity(occurrence[0]) &&
+		(item.OccurrenceRevision != occurrence[0].OccurrenceRevision || item.DispatchID != occurrence[0].DispatchID) {
+		return
+	}
 	if isBudgetAdmissionError(err) {
 		detail := c.FailureDetail(err, FailureSourceBudgetExceeded)
 		c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, todoID, detail, RetryNone, FailureExecution, TaskError)
+		return
+	}
+	// Scheduler-side failures are only unresolved while a worker is actually
+	// executing. Pending/paused projections are deliberate lifecycle outcomes,
+	// not an invitation for a late callback to manufacture an error.
+	if item.Status != TaskInProgress && item.Status != TaskVerifying {
 		return
 	}
 	status := TaskError

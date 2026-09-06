@@ -354,9 +354,15 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 
 	response, err := t.inner.Run(ctx, call)
 
-	// A checkpoint is evaluated after the call completes. It is deterministic
-	// and makes zero LLM calls; a stop takes effect on the next call.
-	t.coordinator.recordToolCall(ctx, disciplineTodoID, err != nil || response.IsError)
+	// A checkpoint is evaluated after the call completes. Its non-continue
+	// outcome is a dispatch-control signal: returning it as an error stops this
+	// old worker before its normal retry/failure path can overwrite the durable
+	// checkpoint lifecycle transition.
+	if outcome := t.coordinator.recordToolCall(ctx, disciplineTodoID, err != nil || response.IsError); outcome.Action == checkpointPersistenceFailed {
+		return fantasy.NewTextErrorResponse(outcome.Detail), checkpointPersistenceError{cause: outcome.Detail}
+	} else if outcome.Action != CheckpointContinue {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("%s; this dispatch has stopped", outcome.Detail)), checkpointControlError{outcome: outcome}
+	}
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
 		// A rejected delegation is deliberately returned as an error response so
 		// the model sees the violation.  The coordinator owns the pending bit;

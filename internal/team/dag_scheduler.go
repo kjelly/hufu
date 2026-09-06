@@ -225,6 +225,20 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		s.launchReady(ctx)
 		return
 	}
+	if outcome, checkpointStopped := asCheckpointControlError(res.err); checkpointStopped {
+		s.results[idx] = res
+		current := todoItemByID(c.taskTracker.TodoList().Items(), res.todoID)
+		if current == nil {
+			s.states[idx] = TaskError
+			return
+		}
+		s.states[idx] = current.Status
+		if outcome.Action == CheckpointReplan || outcome.Action == CheckpointEscalate {
+			s.states[idx] = TaskPending
+			s.launchReady(ctx)
+		}
+		return
+	}
 	if res.err != nil {
 		// The scheduler's result is local coordination state. Reconcile every
 		// non-stale error with the canonical todo before applying DAG routing so
@@ -422,8 +436,21 @@ func (s *dagScheduler) resetTask(ctx context.Context, i int, detail string) erro
 		s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, ReconcileOnly, FailurePolicy, TaskBlocked)
 		return nil
 	}
-	if err := s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail); err != nil {
+	override := ""
+	if s.tasks[i].Model != "" && s.tasks[i].Model != s.todoItems[i].Model {
+		override = s.tasks[i].Model
+	}
+	var err error
+	if override == "" {
+		err = s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail)
+	} else {
+		err = s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail, override)
+	}
+	if err != nil {
 		return err
+	}
+	if override != "" {
+		s.todoItems[i].Model = override
 	}
 	s.states[i] = TaskPending
 	return nil

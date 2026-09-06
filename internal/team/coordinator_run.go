@@ -625,6 +625,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
 	roundCancel()
 	c.unregisterTerminalRound(todoID)
+	if _, checkpointStopped := asCheckpointControlError(err); checkpointStopped {
+		return &DirectAgentResult{AgentName: resolvedName, Error: err, Steps: len(steps)}, nil
+	}
 	duration, modelTime, toolTime := timing.snapshot()
 	directArtifactScope, _ := artifactAccessScopeFromContext(taskCtx)
 	directReceipt := ExecutionReceipt{

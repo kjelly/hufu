@@ -372,13 +372,19 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.CommitTaskTransition(parentCtx, todoID, expectedStatus, TaskInProgress, "", "", nil); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
 	}
+	var activeOccurrence submitResultRuntimeIdentity
+	var activeOccurrenceOK bool
 	// Every path after admission must leave canonical lifecycle state terminal
 	// when it returns an error. The normal retry loop already persists its
 	// classified decision; this postcondition covers deterministic pre-model
 	// failures such as tool, context, and artifact preflight errors.
 	defer func() {
 		if returnErr != nil {
-			c.terminalizeTaskErrorIfUnresolved(todoID, returnErr)
+			if activeOccurrenceOK {
+				c.terminalizeTaskErrorIfUnresolved(todoID, returnErr, activeOccurrence)
+			} else {
+				c.terminalizeTaskErrorIfUnresolved(todoID, returnErr)
+			}
 		}
 	}()
 	c.reconcileTaskStatusProjection()
@@ -619,6 +625,10 @@ retryLoop:
 		attemptsMade = attempt
 		c.setCurrentTaskAttempt(todoID, attempt)
 		attemptIdentity, attemptIdentityOK := c.activeTaskResultOccurrence(todoID)
+		if attemptIdentityOK {
+			activeOccurrence = attemptIdentity
+			activeOccurrenceOK = true
+		}
 		// Per-attempt tool call evidence — reset at the start of each
 		// attempt to prevent stale data from a prior attempt or task.
 		attemptEvidence := &toolCallEvidence{}
@@ -836,6 +846,7 @@ retryLoop:
 		var output string
 		var steps []fantasy.StepResult
 		var err error
+		checkpointStopped := false
 		// attemptTokens is assigned inside the closure below and read after it
 		// returns, so its growth-based snapshot (see attempt_budget.go) can
 		// feed the no-progress budget without re-summing steps and
@@ -991,6 +1002,11 @@ retryLoop:
 					ag = attemptResult.agent
 				}
 			}
+			if _, stopped := asCheckpointControlError(err); stopped {
+				closeTranscript()
+				checkpointStopped = true
+				return
+			}
 			if err == nil && !task.Execution.RequiresResult && len(steps) > 0 &&
 				(strings.TrimSpace(output) == "" || (c.allowsFreeTextWorkerResult(task) && freeTextResultNeedsSummary(task, output))) {
 				// The agent worked but did not produce an acceptable final message.
@@ -1018,6 +1034,9 @@ retryLoop:
 				}
 			}
 		}()
+		if checkpointStopped {
+			return "", err
+		}
 		transcriptRef := ""
 		var transcriptArtifact *ArtifactRef
 		if transcript != nil {
@@ -1233,6 +1252,14 @@ retryLoop:
 								repairCtx = context.WithValue(repairCtx, todoIDKey{}, todoID)
 								repairCtx = context.WithValue(repairCtx, modelKey{}, resolvedModel)
 								repairCtx = context.WithValue(repairCtx, tools.AgentNameKey, agentName)
+								// The protocol_incomplete transition above revoked the
+								// worker's dispatch lease. Repair is the same attempt
+								// continuing under a fresh lease, so re-activate one before
+								// binding the identity submit_result is validated against;
+								// the resumed repair path does the same thing.
+								if !c.activeTaskResultOccurrenceExists(todoID) {
+									c.setCurrentTaskAttempt(todoID, attempt)
+								}
 								if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 									repairCtx = withSubmitResultRuntimeIdentity(repairCtx, identity)
 								}

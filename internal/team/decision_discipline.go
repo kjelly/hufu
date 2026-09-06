@@ -2,8 +2,10 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,31 @@ type taskDiscipline struct {
 	stopped         bool
 	staleMarked     bool
 	checkpointErr   string
+}
+
+// checkpointControlError is a runtime control signal, not a worker failure.
+// It stops the dispatch that observed the checkpoint so its ordinary retry or
+// failure path cannot overwrite the durable checkpoint projection.
+type checkpointControlError struct{ outcome CheckpointOutcome }
+
+const checkpointPersistenceFailed = "checkpoint_persistence_failed"
+
+type checkpointPersistenceError struct{ cause string }
+
+func (e checkpointPersistenceError) Error() string {
+	return "checkpoint lifecycle persistence failed: " + e.cause
+}
+
+func (e checkpointControlError) Error() string {
+	return fmt.Sprintf("checkpoint %s: %s", e.outcome.Action, e.outcome.Detail)
+}
+
+func asCheckpointControlError(err error) (CheckpointOutcome, bool) {
+	var control checkpointControlError
+	if !errors.As(err, &control) {
+		return CheckpointOutcome{}, false
+	}
+	return control.outcome, true
 }
 
 // armDiscipline registers a task's stop and commit contract before execution.
@@ -247,23 +274,48 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 		state.CriticalAssumptionContradicted = true
 		state.ContradictedAssumptionID = contradicted
 	}
+	state.MaterialEvidenceChanged = c.materialEvidenceChanged(ctx, discipline.decisionID, discipline.evidenceHash)
 
 	decision := EvaluateCheckpoint(stop, replan, state)
+	decision.State = state
+	decision.DecisionID = discipline.decisionID
+	decision.TaskID = todoID
+	decision.Attempt = discipline.attempt
+	decision.IdempotencyKey = decisionStageEventKey(discipline.decisionID, "checkpoint", fmt.Sprint(discipline.attempt), fmt.Sprint(toolCalls), decision.Action, decision.Reason)
 	if decision.Action == CheckpointContinue {
 		return decision
 	}
-
-	discipline.mu.Lock()
-	discipline.stopped = true
-	discipline.mu.Unlock()
 
 	if err := c.actOnCheckpoint(ctx, discipline, decision); err != nil {
 		log.Printf("error: checkpoint persistence failed for task %s: %v", todoID, err)
 		discipline.mu.Lock()
 		discipline.checkpointErr = err.Error()
 		discipline.mu.Unlock()
+		return CheckpointDecision{Action: checkpointPersistenceFailed, Detail: err.Error()}
 	}
+	discipline.mu.Lock()
+	discipline.stopped = true
+	discipline.mu.Unlock()
 	return decision
+}
+
+// materialEvidenceChanged reads the decision journal's current sealed packet,
+// which is the authoritative evidence identity for an armed execution. The
+// TaskDef is intentionally not consulted: it is mutable scheduler input and
+// cannot prove whether the decision evidence changed after dispatch.
+func (c *Coordinator) materialEvidenceChanged(ctx context.Context, decisionID, armedHash string) bool {
+	if strings.TrimSpace(decisionID) == "" || strings.TrimSpace(armedHash) == "" {
+		return false
+	}
+	journal := c.decisionJournalOrNil()
+	if journal == nil {
+		return false
+	}
+	state, err := projectDecision(ctx, journal, decisionID)
+	if err != nil || strings.TrimSpace(state.Packet.Hash) == "" {
+		return false
+	}
+	return state.Packet.Hash != armedHash
 }
 
 // actOnCheckpoint gives a checkpoint verdict its durable consequences.
@@ -301,7 +353,75 @@ func (c *Coordinator) actOnCheckpoint(ctx context.Context, discipline *taskDisci
 			return err
 		}
 	}
+	if err := c.projectCheckpointOutcome(discipline, decision); err != nil {
+		return err
+	}
+	if decision.Action == CheckpointRequestInformation || decision.Action == CheckpointNeedsHuman {
+		c.report(c.newEvent("needs_human").withTodoID(discipline.todoID).withMessage(decision.Detail))
+	}
+	c.report(c.newEvent("checkpoint").withTodoID(discipline.todoID).withMessage(fmt.Sprintf("checkpoint %s: %s", decision.Action, decision.Detail)).withData(map[string]any{
+		"checkpoint": decision,
+	}))
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
 	return nil
+}
+
+// projectCheckpointOutcome is the canonical Todo projection for a durable
+// checkpoint verdict.  The decision event is written first by
+// actOnCheckpoint; TodoList's onChange checkpoint then persists session state.
+// It deliberately does not synthesize a worker result, so an invalidating
+// checkpoint cannot appear as a successful task completion.
+func (c *Coordinator) projectCheckpointOutcome(discipline *taskDiscipline, decision CheckpointDecision) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	detail := fmt.Sprintf("checkpoint %s: %s", decision.Action, decision.Detail)
+	switch decision.Action {
+	case CheckpointReplan:
+		// Reset is the scheduler's controlled next occurrence.  A new attempt
+		// will pass normal decision admission, so the stale decision is never
+		// reused as authorization for the retry.
+		return c.CommitTaskResetForRetry(context.Background(), discipline.todoID, detail)
+	case CheckpointRequestInformation, CheckpointNeedsHuman:
+		if decision.Request != "" {
+			detail += ": " + decision.Request
+		}
+		return c.commitTaskTransitionFromCurrent(context.Background(), discipline.todoID, TaskPaused, detail, "", map[string]interface{}{
+			"checkpoint_pause":  true,
+			"checkpoint_action": decision.Action,
+			"checkpoint_reason": decision.Reason,
+		})
+	case CheckpointStop:
+		return c.commitTaskTransitionFromCurrent(context.Background(), discipline.todoID, TaskBlocked, detail, "", map[string]interface{}{
+			"checkpoint_action":    decision.Action,
+			"checkpoint_reason":    decision.Reason,
+			"checkpoint_criterion": decision.Criterion,
+		})
+	case CheckpointEscalate:
+		// Escalation is only meaningful where the task opted into the existing
+		// retry escalation mechanism and a further model exists.  Budget is an
+		// admission gate, never a reason to silently fall back to the old model.
+		if exceeded, reason := c.budgetExceeded(); exceeded {
+			return c.commitTaskTransitionFromCurrent(context.Background(), discipline.todoID, TaskBlocked, detail+"; escalation denied: "+reason, "", map[string]interface{}{
+				"checkpoint_action": decision.Action, "checkpoint_reason": decision.Reason,
+			})
+		}
+		task := discipline.task
+		if current := todoItemByID(c.taskTracker.TodoList().Items(), discipline.todoID); current != nil {
+			task.Model = current.Model
+		}
+		next := c.escalateTaskModelForRetry(task)
+		if next == "" {
+			return c.commitTaskTransitionFromCurrent(context.Background(), discipline.todoID, TaskBlocked, detail+"; escalation is not authorized", "", map[string]interface{}{
+				"checkpoint_action": decision.Action, "checkpoint_reason": decision.Reason,
+			})
+		}
+		return c.CommitTaskResetForRetry(context.Background(), discipline.todoID, detail+"; admitted for escalated retry", next)
+	default:
+		return fmt.Errorf("unsupported checkpoint action %q", decision.Action)
+	}
 }
 
 // markDecisionStale supersedes the governing decision once. Marking is

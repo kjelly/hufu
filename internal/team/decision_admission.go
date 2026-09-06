@@ -318,6 +318,20 @@ func (c *Coordinator) validateTaskOccurrenceAdmission(ctx context.Context, task 
 	return DecisionAdmission{}, false, nil
 }
 
+// occurrenceGoalText mirrors the legacy fallback in taskDefFromTodoItem:
+// projections written before the goal field carried the task text in Desc
+// alone. Both must agree, or every pre-goal occurrence would be rejected here
+// as a retarget and become unresumable.
+func occurrenceGoalText(item *TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	if item.Goal != "" {
+		return item.Goal
+	}
+	return item.Desc
+}
+
 // validateTaskDefAgainstOccurrence is an independent consistency check for
 // callers that still carry a scheduler TaskDef. Admission and digesting use
 // the Todo-owned projection above; this check only proves that the scheduler
@@ -347,7 +361,7 @@ func validateTaskDefAgainstOccurrence(input any, item *TodoItem) error {
 	if task.Agent != "" && !strings.EqualFold(task.Agent, item.Agent) {
 		return fmt.Errorf("task %s immutable agent does not match Todo occurrence", item.ID)
 	}
-	if task.Goal != "" && task.Goal != item.Goal {
+	if task.Goal != "" && task.Goal != occurrenceGoalText(item) {
 		return fmt.Errorf("task %s immutable goal does not match Todo occurrence", item.ID)
 	}
 	if task.Constraints != "" && task.Constraints != item.Constraints {

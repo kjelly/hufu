@@ -2187,6 +2187,12 @@ func (c *Coordinator) activeTaskResultOccurrence(todoID string) (submitResultRun
 	return controller.identity, controller.opened
 }
 
+// activeTaskResultOccurrenceExists returns true if the task has an active occurrence controller.
+func (c *Coordinator) activeTaskResultOccurrenceExists(todoID string) bool {
+	_, ok := c.activeTaskResultOccurrence(todoID)
+	return ok
+}
+
 func sameTaskResultOccurrence(a, b submitResultRuntimeIdentity) bool {
 	return a.RunID == b.RunID && a.TaskID == b.TaskID && a.Attempt == b.Attempt &&
 		strings.EqualFold(a.Agent, b.Agent) && a.OccurrenceRevision == b.OccurrenceRevision && a.DispatchID == b.DispatchID

@@ -22,42 +22,61 @@ import (
 // CheckpointState is the observed state at one checkpoint. Every field is a
 // fact the runtime already has: nothing here requires a judgment call.
 type CheckpointState struct {
-	Attempt             int
-	ToolCalls           int
-	ConsecutiveFailures int
-	NoProgressStreak    int
-	TokensUsed          int64
-	Elapsed             time.Duration
+	Attempt             int           `json:"attempt"`
+	ToolCalls           int           `json:"tool_calls"`
+	ConsecutiveFailures int           `json:"consecutive_failures"`
+	NoProgressStreak    int           `json:"no_progress_streak"`
+	TokensUsed          int64         `json:"tokens_used"`
+	Elapsed             time.Duration `json:"elapsed"`
 
 	// CriticalAssumptionContradicted is set when an assumption marked critical
 	// has reached the contradicted state through a recorded transition.
-	CriticalAssumptionContradicted bool
-	ContradictedAssumptionID       string
+	CriticalAssumptionContradicted bool   `json:"critical_assumption_contradicted"`
+	ContradictedAssumptionID       string `json:"contradicted_assumption_id,omitempty"`
 
 	// MaterialEvidenceChanged is set when the governing decision's sealed
 	// evidence hash no longer matches the one execution was authorized under.
-	MaterialEvidenceChanged bool
+	MaterialEvidenceChanged bool `json:"material_evidence_changed"`
 
 	// SideEffectState is the reconcile classification when a mutation's
 	// outcome is in doubt: complete, partial, not_started or unknown.
-	SideEffectState string
+	SideEffectState string `json:"side_effect_state,omitempty"`
 }
 
-// CheckpointDecision is what the runtime does next.
-type CheckpointDecision struct {
-	Action string
-	Reason string
+// CheckpointOutcome is the typed result of a deterministic checkpoint. It is
+// deliberately richer than the old decision-only value so the scheduler can
+// apply the lifecycle consequence without re-evaluating policy.
+type CheckpointOutcome struct {
+	Action string `json:"action"`
+	Reason string `json:"reason"`
 	// Criterion names the kill criterion that fired, when one did.
-	Criterion string
-	Detail    string
+	Criterion string          `json:"criterion,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	Request   string          `json:"request,omitempty"`
+	State     CheckpointState `json:"state"`
+
+	DecisionID     string `json:"decision_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	BranchID       string `json:"branch_id,omitempty"`
+	Attempt        int    `json:"attempt,omitempty"`
+	ToolCallID     string `json:"tool_call_id,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
+
+// CheckpointDecision remains an alias for callers from the earlier decision
+// stages. There is one runtime type and therefore one lifecycle contract.
+type CheckpointDecision = CheckpointOutcome
 
 // Checkpoint actions. They reuse the replan vocabulary so a configured replan
 // action can be returned directly.
 const (
-	CheckpointContinue = agent.ReplanContinue
-	CheckpointStop     = agent.ReplanStop
-	CheckpointReplan   = agent.ReplanReplan
+	CheckpointContinue           = agent.ReplanContinue
+	CheckpointStop               = agent.ReplanStop
+	CheckpointReplan             = agent.ReplanReplan
+	CheckpointRequestInformation = agent.ReplanRequestInformation
+	CheckpointNeedsHuman         = agent.ReplanNeedsHuman
+	CheckpointEscalate           = agent.ReplanEscalate
 )
 
 // ValidateStopPolicyBeforeExecute enforces that stop conditions were declared
