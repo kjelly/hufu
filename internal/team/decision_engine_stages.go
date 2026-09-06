@@ -122,6 +122,19 @@ func (e *decisionEngine) runFinalization(
 	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationResult, event); err != nil {
 		return DecisionFinalizationResult{}, ArtifactRef{}, err
 	}
+	// A finalizer that departs from the aggregate's leading option owes the
+	// reason, and the departure is recorded as its own event so an auditor
+	// does not have to recompute the aggregate to notice one (spec §26).
+	if result.Outcome == FinalizationOutcomeOverride {
+		override := finalizationResultEvent(req, packet, result, ref)
+		override.Reason = fmt.Sprintf("finalizer %s selected %q over the aggregate's %q: %s",
+			result.Identity, result.OptionID, aggregate.PreferredOption, result.Reason)
+		override.IdempotencyKey = decisionStageEventKey(req.DecisionID, "finalization_override",
+			packet.Hash, result.Identity, result.OptionID)
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationOverride, override); err != nil {
+			return DecisionFinalizationResult{}, ArtifactRef{}, err
+		}
+	}
 	return result, ref, nil
 }
 

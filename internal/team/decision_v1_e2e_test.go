@@ -375,9 +375,75 @@ func TestDecisionV1OffProfileIsInert(t *testing.T) {
 	if e.coordinator.disciplineFor(item.ID) != nil {
 		t.Fatal("off-profile task armed an execution discipline")
 	}
-	for _, event := range []string{string(agent.EventDecisionStarted), string(agent.EventDecisionFinalized)} {
-		if e.journal.count(event) != 0 {
-			t.Fatalf("off-profile task wrote %s events", event)
+
+	// Not one decision lifecycle event. The list is exhaustive on purpose: an
+	// earlier version of this test checked only started and finalized, which
+	// would have missed any new stage that began emitting for off tasks.
+	for _, event := range decisionLifecycleEvents() {
+		if got := e.journal.count(event); got != 0 {
+			t.Fatalf("off-profile task wrote %d %s events: %v", got, event, e.journal.typesOf())
 		}
+	}
+
+	// The one decision event an off task does write is its admission marker,
+	// recording that it was admitted as off. That is not decision bookkeeping
+	// that could be dropped for compatibility: the marker binds the task's
+	// immutable inputs to a digest, and creation rejects a task that changed
+	// after it was admitted. Removing it for off tasks would take that tamper
+	// detection away from every legacy run, which is why spec §43's original
+	// "zero decision events" acceptance no longer holds literally.
+	if got := e.journal.count(string(agent.EventDecisionAdmitted)); got != 1 {
+		t.Fatalf("off-profile admission markers = %d, want exactly 1: %v", got, e.journal.typesOf())
+	}
+	admission, found, err := loadDecisionAdmission(context.Background(), e.journal, item.ID, 1)
+	if err != nil || !found {
+		t.Fatalf("off-profile admission marker: found=%t err=%v", found, err)
+	}
+	if admission.Enabled {
+		t.Fatalf("off-profile admission = %#v, want enabled=false", admission)
+	}
+	if admission.Profile != DecisionProfileOff {
+		t.Fatalf("off-profile admission profile = %q, want %q", admission.Profile, DecisionProfileOff)
+	}
+	if strings.TrimSpace(admission.TaskInputDigest) == "" {
+		t.Fatal("the admission marker carries no task input digest, so it detects no tampering")
+	}
+}
+
+// decisionLifecycleEvents is every decision event that represents work having
+// happened, as opposed to the admission marker that records what a task was
+// admitted as. An off task must produce none of them.
+func decisionLifecycleEvents() []string {
+	return []string{
+		agent.EventDecisionStarted,
+		agent.EventDecisionOptionsProposed,
+		agent.EventDecisionEvidenceSealed,
+		agent.EventDecisionEvidenceChanged,
+		agent.EventDecisionReferenceStarted,
+		agent.EventDecisionReferenceCompleted,
+		agent.EventDecisionReferenceFailed,
+		agent.EventDecisionOpinionSubmitted,
+		agent.EventDecisionOpinionRejected,
+		agent.EventDecisionJudgeOverallIgnored,
+		agent.EventDecisionAggregateComputed,
+		agent.EventDecisionChallengeSubmitted,
+		agent.EventDecisionChallengeSkipped,
+		agent.EventDecisionPremortemSubmitted,
+		agent.EventDecisionRevisionSubmitted,
+		agent.EventDecisionFinalizationResult,
+		agent.EventDecisionFinalizationOverride,
+		agent.EventDecisionFinalized,
+		agent.EventDecisionAlternativesOverride,
+		agent.EventDecisionBudgetDegraded,
+		agent.EventDecisionEvidenceSharedOrigin,
+		agent.EventDecisionInvalidated,
+		agent.EventDecisionRunEnvelopeAnchored,
+		agent.EventRequestContractCommitted,
+		agent.EventAssumptionDeclared,
+		agent.EventAssumptionSupported,
+		agent.EventAssumptionContradicted,
+		agent.EventAssumptionStale,
+		agent.EventReplanRequested,
+		agent.EventReplanCompleted,
 	}
 }

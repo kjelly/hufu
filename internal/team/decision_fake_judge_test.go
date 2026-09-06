@@ -72,6 +72,10 @@ type fakeJudge struct {
 	dispersion float64
 	// judgeSeq counts judge calls so dispersion can vary them.
 	judgeSeq int
+	// finalizeAs makes the finalizer pick a specific option. Leaving it empty
+	// finalizes on the option the judges preferred; setting it to a different
+	// one is how a test produces an override.
+	finalizeAs string
 }
 
 func newFakeJudge(preferred string) *fakeJudge {
@@ -122,9 +126,14 @@ func (f *fakeJudge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.judgeSeq++
 	}
 	preferred, dispersion := f.preferred, f.dispersion
+	overriding := false
+	if stage == stageFinalization && strings.TrimSpace(f.finalizeAs) != "" {
+		overriding = f.finalizeAs != preferred
+		preferred = f.finalizeAs
+	}
 	f.mu.Unlock()
 
-	body := fakeJudgeStageResponse(stage, preferred, dispersion, seq, parsePromptOptionIDs(prompt.String()))
+	body := fakeJudgeStageResponse(stage, preferred, dispersion, seq, parsePromptOptionIDs(prompt.String()), overriding)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = fmt.Fprintf(w,
 		`{"id":"fake-judge","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}`,
@@ -196,7 +205,7 @@ func scoreEveryOption(optionIDs []string, preferred string, top float64) string 
 	return strings.Join(parts, ",")
 }
 
-func fakeJudgeStageResponse(stage fakeJudgeStage, preferred string, dispersion float64, seq int, optionIDs []string) string {
+func fakeJudgeStageResponse(stage fakeJudgeStage, preferred string, dispersion float64, seq int, optionIDs []string, overriding bool) string {
 	switch stage {
 	case stageOptions:
 		return fmt.Sprintf(`{"options":[
@@ -239,7 +248,13 @@ func fakeJudgeStageResponse(stage fakeJudgeStage, preferred string, dispersion f
 "url":"https://example.invalid/rollouts","uri":"https://example.invalid/rollouts",
 "locator":"table-3","declared_parent_source_ids":[]}}]}`
 	case stageFinalization:
-		return fmt.Sprintf(`{"option_id":%q,"reason":"the aggregate and the challenge agree"}`, preferred)
+		// A reason is required when diverging from the aggregate and rejected
+		// when not: supplying one anyway would claim an override that did not
+		// happen.
+		if overriding {
+			return fmt.Sprintf(`{"option_id":%q,"reason":"the rollback rehearsal the challenge asked for is missing"}`, preferred)
+		}
+		return fmt.Sprintf(`{"option_id":%q}`, preferred)
 	default:
 		return `{}`
 	}

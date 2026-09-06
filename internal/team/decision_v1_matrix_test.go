@@ -2,11 +2,14 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // The unified test matrix, spec §46 rows A–S (plan Stage 7.3).
@@ -315,5 +318,251 @@ func TestDecisionV1InvalidatingCheckpointBlocksSuccess(t *testing.T) {
 	discipline.mu.Unlock()
 	if !stopped {
 		t.Fatal("the discipline did not record the stop that forbids success")
+	}
+}
+
+// Every lifecycle event the specification declares must actually be emitted by
+// some production path. A constant with no caller is a lifecycle stage that
+// cannot be observed, which is indistinguishable from one that never runs.
+func TestDeclaredDecisionEventsAreEmittedBySomeProductionPath(t *testing.T) {
+	sources := map[string]string{}
+	entries, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob sources: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "_test.go") {
+			continue
+		}
+		content, err := os.ReadFile(entry)
+		if err != nil {
+			t.Fatalf("read %s: %v", entry, err)
+		}
+		sources[entry] = string(content)
+	}
+
+	// Names reserved for behavior V1 does not implement. Each is listed with
+	// why, so an unexplained gap cannot hide behind this map. Emitting one of
+	// these would mean building the feature it records — in the case below,
+	// an operator bypass of a safety gate, which is not something to add in
+	// order to satisfy an event name.
+	reservedUnimplemented := map[string]string{
+		agent.EventDecisionAlternativesOverride: "spec §19 reserves it for an operator emergency override of the " +
+			"alternatives gate; V1 implements no such bypass, so nothing can legitimately emit it",
+	}
+
+	for _, event := range decisionLifecycleEvents() {
+		constName := decisionEventConstantName(event)
+		if constName == "" {
+			t.Fatalf("event %q has no constant name mapping in this test", event)
+		}
+		found := false
+		for name, content := range sources {
+			if name == "decision_reason.go" {
+				continue
+			}
+			if strings.Contains(content, constName) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if why, ok := reservedUnimplemented[event]; ok {
+				t.Logf("event %s is reserved and not emitted: %s", event, why)
+				continue
+			}
+			t.Fatalf("event %s (%s) is declared but no production file references it", event, constName)
+		}
+		if why, ok := reservedUnimplemented[event]; ok {
+			t.Fatalf("event %s is listed as reserved (%s) but production code now references it; "+
+				"remove it from the reserved list", event, why)
+		}
+	}
+}
+
+// decisionEventConstantName maps an event's wire name to the Go constant that
+// production code would reference.
+func decisionEventConstantName(event string) string {
+	switch event {
+	case agent.EventDecisionStarted:
+		return "EventDecisionStarted"
+	case agent.EventDecisionOptionsProposed:
+		return "EventDecisionOptionsProposed"
+	case agent.EventDecisionEvidenceSealed:
+		return "EventDecisionEvidenceSealed"
+	case agent.EventDecisionEvidenceChanged:
+		return "EventDecisionEvidenceChanged"
+	case agent.EventDecisionReferenceStarted:
+		return "EventDecisionReferenceStarted"
+	case agent.EventDecisionReferenceCompleted:
+		return "EventDecisionReferenceCompleted"
+	case agent.EventDecisionReferenceFailed:
+		return "EventDecisionReferenceFailed"
+	case agent.EventDecisionOpinionSubmitted:
+		return "EventDecisionOpinionSubmitted"
+	case agent.EventDecisionOpinionRejected:
+		return "EventDecisionOpinionRejected"
+	case agent.EventDecisionJudgeOverallIgnored:
+		return "EventDecisionJudgeOverallIgnored"
+	case agent.EventDecisionAggregateComputed:
+		return "EventDecisionAggregateComputed"
+	case agent.EventDecisionChallengeSubmitted:
+		return "EventDecisionChallengeSubmitted"
+	case agent.EventDecisionChallengeSkipped:
+		return "EventDecisionChallengeSkipped"
+	case agent.EventDecisionPremortemSubmitted:
+		return "EventDecisionPremortemSubmitted"
+	case agent.EventDecisionRevisionSubmitted:
+		return "EventDecisionRevisionSubmitted"
+	case agent.EventDecisionFinalizationResult:
+		return "EventDecisionFinalizationResult"
+	case agent.EventDecisionFinalizationOverride:
+		return "EventDecisionFinalizationOverride"
+	case agent.EventDecisionFinalized:
+		return "EventDecisionFinalized"
+	case agent.EventDecisionAlternativesOverride:
+		return "EventDecisionAlternativesOverride"
+	case agent.EventDecisionBudgetDegraded:
+		return "EventDecisionBudgetDegraded"
+	case agent.EventDecisionEvidenceSharedOrigin:
+		return "EventDecisionEvidenceSharedOrigin"
+	case agent.EventDecisionInvalidated:
+		return "EventDecisionInvalidated"
+	case agent.EventDecisionRunEnvelopeAnchored:
+		return "EventDecisionRunEnvelopeAnchored"
+	case agent.EventRequestContractCommitted:
+		return "EventRequestContractCommitted"
+	case agent.EventAssumptionDeclared:
+		return "EventAssumptionDeclared"
+	case agent.EventAssumptionSupported:
+		return "EventAssumptionSupported"
+	case agent.EventAssumptionContradicted:
+		return "EventAssumptionContradicted"
+	case agent.EventAssumptionStale:
+		return "EventAssumptionStale"
+	case agent.EventReplanRequested:
+		return "EventReplanRequested"
+	case agent.EventReplanCompleted:
+		return "EventReplanCompleted"
+	default:
+		return ""
+	}
+}
+
+// An assumption is declared when the evidence it belongs to is sealed, so
+// every later status change is a transition from a recorded beginning.
+func TestDecisionV1SealingDeclaresItsAssumptions(t *testing.T) {
+	e := newDecisionE2E(t)
+	e.formDecision(t, fixtureProfileStandard)
+
+	if got := e.journal.count(agent.EventAssumptionDeclared); got != 1 {
+		t.Fatalf("assumption_declared events = %d, want one per declared assumption: %v",
+			got, e.journal.typesOf())
+	}
+	// The declaration must precede any status change for the same assumption.
+	types := e.journal.typesOf()
+	declaredAt, sealedAt := -1, -1
+	for i, event := range types {
+		if event == agent.EventDecisionEvidenceSealed && sealedAt < 0 {
+			sealedAt = i
+		}
+		if event == agent.EventAssumptionDeclared && declaredAt < 0 {
+			declaredAt = i
+		}
+	}
+	if sealedAt < 0 || declaredAt < 0 || declaredAt < sealedAt {
+		t.Fatalf("assumption was declared at %d, sealing at %d; declaration must follow the seal it belongs to: %v",
+			declaredAt, sealedAt, types)
+	}
+}
+
+// A finalizer that departs from the aggregate records the departure as its own
+// event, so an auditor does not have to recompute the aggregate to find one.
+func TestFinalizationOverrideIsItsOwnEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		optionID     string
+		wantOverride int
+	}{
+		{name: "agreeing finalization", optionID: "execute", wantOverride: 0},
+		{name: "override", optionID: "reduce", wantOverride: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newDecisionE2E(t)
+			// The finalizer answers with a different option than the judges
+			// scored highest, which is what makes the outcome an override.
+			e.judge.finalizeAs = tc.optionID
+			e.formDecision(t, fixtureProfileCoordinator)
+
+			if got := e.journal.count(agent.EventDecisionFinalizationOverride); got != tc.wantOverride {
+				t.Fatalf("finalization_override events = %d, want %d: %v",
+					got, tc.wantOverride, e.journal.typesOf())
+			}
+			// The result event is always written, override or not.
+			if got := e.journal.count(agent.EventDecisionFinalizationResult); got == 0 {
+				t.Fatalf("no finalization result event: %v", e.journal.typesOf())
+			}
+		})
+	}
+}
+
+// A replan that produced its replacement attempt records the completion, not
+// only the request. Recording only the request leaves a reader unable to tell
+// an abandoned plan from one that got its replacement.
+func TestReplanRecordsRequestAndCompletion(t *testing.T) {
+	c := boundaryCoordinator(t, deployerAgent())
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "deployer", Desc: "mutate", Goal: "mutate",
+	}})[0]
+	journal := c.eventJournal.(*memoryJournal)
+
+	task := mutatingTask()
+	task.Agent = "deployer"
+	policy := disciplinePolicy(CommitGatePolicy{},
+		StopPolicy{CheckpointEvery: 1},
+		ReplanPolicy{OnCriticalAssumptionContradicted: CheckpointReplan})
+	record := &DecisionRecord{ID: "dec-1", EvidenceHash: "hash-1", Assumptions: []DecisionAssumption{{
+		ID: "a1", Statement: "the service accepts the change", Critical: true, Status: AssumptionContradicted,
+	}}}
+	if err := c.armDiscipline(context.Background(), item.ID, task, policy, record); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+
+	decision := c.recordToolCall(context.Background(), item.ID, false)
+	if decision.Action != CheckpointReplan {
+		t.Fatalf("checkpoint = %#v, want a replan", decision)
+	}
+	if got := journal.count(agent.EventReplanRequested); got != 1 {
+		t.Fatalf("replan_requested = %d, want 1: %v", got, journal.typesOf())
+	}
+	if got := journal.count(agent.EventReplanCompleted); got != 1 {
+		t.Fatalf("replan_completed = %d, want 1: %v", got, journal.typesOf())
+	}
+}
+
+// A discipline that could not persist its armed contract must not stay armed.
+// The caller receives an error and no cleanup function, so a published
+// discipline would gate the tools of whatever ran under that todo next.
+func TestArmDisciplineLeavesNothingArmedWhenPersistenceFails(t *testing.T) {
+	c := boundaryCoordinator(t, deployerAgent())
+	c.SetEventJournal(failingJournal{err: errors.New("journal unavailable")})
+
+	task := mutatingTask()
+	task.Agent = "deployer"
+	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{CheckpointEvery: 1}, ReplanPolicy{})
+
+	err := c.armDiscipline(context.Background(), "todo-1", task, policy, &DecisionRecord{ID: "dec-1"})
+	if err == nil {
+		t.Fatal("arming succeeded with a journal that cannot append")
+	}
+	if c.disciplineFor("todo-1") != nil {
+		t.Fatal("a failed arm left an armed discipline behind")
+	}
+	// The hooks it would have activated stay no-ops.
+	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
+		t.Fatalf("a failed arm still gated a tool: %q", denial)
+	}
+	if denial := c.checkpointDenial("todo-1"); denial != "" {
+		t.Fatalf("a failed arm still denied a tool: %q", denial)
 	}
 }

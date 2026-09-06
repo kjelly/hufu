@@ -41,22 +41,27 @@ const (
 // Runtime event type names (spec §36). They follow the existing snake_case
 // convention used by internal/team's event store.
 const (
-	EventDecisionStarted              = "decision_started"
-	EventDecisionOptionsProposed      = "decision_options_proposed"
-	EventDecisionEvidenceSealed       = "decision_evidence_sealed"
-	EventDecisionEvidenceChanged      = "decision_evidence_changed"
-	EventDecisionReferenceCompleted   = "decision_reference_completed"
-	EventDecisionReferenceStarted     = "decision_reference_started"
-	EventDecisionReferenceFailed      = "decision_reference_failed"
-	EventDecisionOpinionSubmitted     = "decision_opinion_submitted"
-	EventDecisionOpinionRejected      = "decision_opinion_rejected"
-	EventDecisionJudgeOverallIgnored  = "decision_judge_overall_ignored"
-	EventDecisionAggregateComputed    = "decision_aggregate_computed"
-	EventDecisionChallengeSubmitted   = "decision_challenge_submitted"
-	EventDecisionChallengeSkipped     = "decision_challenge_skipped"
-	EventDecisionPremortemSubmitted   = "decision_premortem_submitted"
-	EventDecisionRevisionSubmitted    = "decision_revision_submitted"
-	EventDecisionFinalizationResult   = "decision_finalization_result"
+	EventDecisionStarted             = "decision_started"
+	EventDecisionOptionsProposed     = "decision_options_proposed"
+	EventDecisionEvidenceSealed      = "decision_evidence_sealed"
+	EventDecisionEvidenceChanged     = "decision_evidence_changed"
+	EventDecisionReferenceCompleted  = "decision_reference_completed"
+	EventDecisionReferenceStarted    = "decision_reference_started"
+	EventDecisionReferenceFailed     = "decision_reference_failed"
+	EventDecisionOpinionSubmitted    = "decision_opinion_submitted"
+	EventDecisionOpinionRejected     = "decision_opinion_rejected"
+	EventDecisionJudgeOverallIgnored = "decision_judge_overall_ignored"
+	EventDecisionAggregateComputed   = "decision_aggregate_computed"
+	EventDecisionChallengeSubmitted  = "decision_challenge_submitted"
+	EventDecisionChallengeSkipped    = "decision_challenge_skipped"
+	EventDecisionPremortemSubmitted  = "decision_premortem_submitted"
+	EventDecisionRevisionSubmitted   = "decision_revision_submitted"
+	EventDecisionFinalizationResult  = "decision_finalization_result"
+	// EventDecisionFinalizationOverride records a finalizer choosing an option
+	// the aggregate did not lead with. Spec §26 requires it as its own event:
+	// an override is the one finalization outcome a reader must be able to
+	// find without reconstructing the aggregate to compare against.
+	EventDecisionFinalizationOverride = "decision_finalization_override"
 	EventDecisionFinalized            = "decision_finalized"
 	EventDecisionAlternativesOverride = "decision_alternatives_override"
 	EventDecisionBudgetDegraded       = "decision_budget_degraded"
@@ -65,7 +70,6 @@ const (
 	EventDecisionAdmitted             = "decision_admitted"
 	EventDecisionRunEnvelopeAnchored  = "decision_run_envelope_anchored"
 	EventRequestContractCommitted     = "request_contract_committed"
-	EventDecisionContractBound        = "decision_contract_bound"
 
 	EventAssumptionDeclared     = "assumption_declared"
 	EventAssumptionSupported    = "assumption_supported"
@@ -133,7 +137,6 @@ var DecisionEventTypes = []string{
 	EventDecisionAdmitted,
 	EventDecisionRunEnvelopeAnchored,
 	EventRequestContractCommitted,
-	EventDecisionContractBound,
 	EventAssumptionDeclared,
 	EventAssumptionSupported,
 	EventAssumptionContradicted,

@@ -19,6 +19,9 @@ const (
 	fixtureProfileLight      = "light"
 	fixtureProfileStandard   = "standard"
 	fixtureProfileHighStakes = "high-stakes"
+	// fixtureProfileCoordinator finalizes through a coordinator rather than
+	// the aggregate, which is the only way an override can occur.
+	fixtureProfileCoordinator = "coordinator-final"
 )
 
 // decisionFixtureTeamYAML declares all three rigor profiles over one team.
@@ -97,6 +100,20 @@ decision:
           require-reconcile: true
         replan:
           on-critical-assumption-contradicted: replan
+    coordinator-final:
+      # Identical to standard except that a finalizer, not the aggregate,
+      # picks the option. It exists so the override path has a profile.
+      independent-judgments: 3
+      context-isolation: strict
+      score-scale: 0-10
+      aggregation:
+        method: mean-score
+      max-rounds: 1
+      finalization:
+        mode: coordinator
+      discipline:
+        stop:
+          checkpoint-every: 2
     high-stakes:
       independent-judgments: 3
       context-isolation: strict
@@ -193,7 +210,7 @@ func TestDecisionV1FixtureLoadsAllProfiles(t *testing.T) {
 		t.Fatalf("LoadTeam: %v", err)
 	}
 	config := session.Config.Decision
-	for _, profile := range []string{fixtureProfileLight, fixtureProfileStandard, fixtureProfileHighStakes} {
+	for _, profile := range []string{fixtureProfileLight, fixtureProfileStandard, fixtureProfileCoordinator, fixtureProfileHighStakes} {
 		policy, ok := DecisionPolicyFor(config, profile)
 		if !ok {
 			t.Fatalf("profile %q did not resolve", profile)

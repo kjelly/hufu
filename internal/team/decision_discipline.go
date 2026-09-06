@@ -107,15 +107,12 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 		discipline.assumptions = append([]DecisionAssumption(nil), record.Assumptions...)
 	}
 
-	c.disciplineMu.Lock()
-	if c.disciplines == nil {
-		c.disciplines = map[string]*taskDiscipline{}
-	}
-	c.disciplines[todoID] = discipline
-	c.disciplineMu.Unlock()
-
 	// The stop contract is persisted before EXECUTE so the criteria a run was
-	// stopped under can be read back exactly as they were armed.
+	// stopped under can be read back exactly as they were armed. Persistence
+	// comes before publishing the discipline: a failure here returns an error
+	// whose caller has no cleanup to run, so an already-published discipline
+	// would stay armed for a task that never started, and would then gate the
+	// tools of whatever ran under that todo next.
 	journal, err := c.decisionJournalFor()
 	if err != nil {
 		return err
@@ -135,6 +132,13 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 			return err
 		}
 	}
+
+	c.disciplineMu.Lock()
+	if c.disciplines == nil {
+		c.disciplines = map[string]*taskDiscipline{}
+	}
+	c.disciplines[todoID] = discipline
+	c.disciplineMu.Unlock()
 	return nil
 }
 
@@ -510,7 +514,13 @@ func (c *Coordinator) projectCheckpointOutcome(discipline *taskDiscipline, decis
 		// Reset is the scheduler's controlled next occurrence.  A new attempt
 		// will pass normal decision admission, so the stale decision is never
 		// reused as authorization for the retry.
-		return c.CommitTaskResetForRetry(context.Background(), discipline.todoID, detail)
+		if err := c.CommitTaskResetForRetry(context.Background(), discipline.todoID, detail); err != nil {
+			return err
+		}
+		// The replan is complete once the controlled next attempt is scheduled.
+		// Recording only the request would leave a reader unable to tell an
+		// abandoned plan from one that never got its replacement.
+		return c.completeReplan(discipline, decision)
 	case CheckpointRequestInformation, CheckpointNeedsHuman:
 		if decision.Request != "" {
 			detail += ": " + decision.Request
@@ -549,6 +559,25 @@ func (c *Coordinator) projectCheckpointOutcome(discipline *taskDiscipline, decis
 	default:
 		return fmt.Errorf("unsupported checkpoint action %q", decision.Action)
 	}
+}
+
+// completeReplan records that a requested replan produced its replacement
+// attempt. It is best-effort against the journal being unavailable: the
+// lifecycle transition it reports has already been committed durably, and
+// failing the checkpoint here would undo nothing.
+func (c *Coordinator) completeReplan(discipline *taskDiscipline, decision CheckpointDecision) error {
+	journal := c.decisionJournalOrNil()
+	if journal == nil || discipline.decisionID == "" {
+		return nil
+	}
+	return appendDecisionEvent(context.Background(), journal, agent.EventReplanCompleted, decisionEvent{
+		DecisionID:   discipline.decisionID,
+		EvidenceHash: discipline.evidenceHash,
+		Reason: fmt.Sprintf("%s: %s; task %s scheduled a controlled next attempt",
+			decision.Reason, decision.Detail, discipline.todoID),
+		IdempotencyKey: decisionStageEventKey(discipline.decisionID, "replan_completed",
+			fmt.Sprint(discipline.attempt), decision.Reason),
+	})
 }
 
 // markDecisionStale supersedes the governing decision once. Marking is

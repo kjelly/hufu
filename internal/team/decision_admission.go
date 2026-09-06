@@ -507,6 +507,12 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 		a.RunID = "admission:" + taskID
 	}
 	if !a.Enabled {
+		// The marker is written even for an off task, and even for a team with
+		// no decision configuration at all. It is no longer only decision
+		// bookkeeping: since occurrence admission it also binds the task's
+		// immutable inputs to a digest, which is what makes creation reject a
+		// task that changed after it was admitted. Skipping it for off tasks
+		// would remove that tamper detection from every legacy run.
 		return appendDecisionAdmission(ctx, journal, a)
 	}
 	if !c.decisionConfig().RequestContract.Enabled {

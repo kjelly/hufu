@@ -1141,6 +1141,12 @@ len(Options) < min-options
 緊急情況可明確覆寫，但覆寫理由必須持久化
 （`decision_alternatives_override` 事件，含理由字串與操作者身分）。
 
+> **2026-09-07 狀態**：V1 **未實作**這個緊急覆寫。事件名稱保留，但沒有任何
+> production 路徑會發出它——要發出它就必須先實作一條繞過 alternatives 門檻的
+> 路徑，那不是為了讓事件名稱有人使用而該加的東西。
+> `TestDeclaredDecisionEventsAreEmittedBySomeProductionPath` 明確把它列為
+> 保留未實作，其餘每一個宣告的生命週期事件都必須有 production 發出點。
+
 ### 19.1 選項提案（option proposal）
 
 手寫 options 是可用但不好用的：每個決策任務都要在 YAML 裡列出三個以上的
@@ -2573,8 +2579,22 @@ internal/team/decision_discipline.go  attempt: task.MaxRetries * 0
 
 **驗收測試**
 
+> **2026-09-07 更正**：「零決策事件」在 Stage 3 引入 occurrence admission 之後
+> 不再成立，而且**不應該**成立。`decision_admitted` 已不只是決策簿記：它同時
+> 把任務的不可變輸入綁定到一個 digest，`validateTaskCreationAdmission` 靠它
+> 拒絕「admit 之後才被竄改」的任務。對 off task 略過這個 marker，等於把這層
+> 竄改偵測從所有既有 run 上拿掉——那比事件日誌多一列糟得多。
+>
+> 因此相容性承諾的精確形式是：off task 產生**零決策生命週期事件**
+> （started／sealed／opinion／aggregate／challenge／revision／finalization／
+> assumption／replan 全部為 0）、零 judge 派工、不 arm discipline、執行行為不變；
+> 它唯一寫入的決策事件是記錄 `enabled=false` 的 admission marker。
+> 由 `TestDecisionV1OffProfileIsInert` 逐一斷言，該測試列出全部生命週期事件名稱，
+> 而不是只檢查其中兩個。
+
 ```text
-未設 profile 的 task → 零決策事件、零 judge 派工、行為不變
+未設 profile 的 task → 零決策生命週期事件、零 judge 派工、行為不變
+                       （admission marker 除外，見上方更正）
 --decision-profile 未定義的名稱 → run 開始前失敗
 task 的 decision-profile 未定義 → team 載入失敗
 設了 profile 的 task → 產生 DecisionRecord、寫入索引、可被 decision show 讀到
@@ -2742,6 +2762,15 @@ S  降級          forbidden → fail closed；explicit → 依固定順序降�
 [x] 自帶 fixture 的端到端證明：載入 team → 解析 profile → preflight →
      封存證據 → 獨立判斷 → 聚合 → challenge／revision → finalization → 索引
      （`TestDecisionV1StandardProfileFormsCompleteRecord` 等，見 §46 對照表）
+[x] §36 宣告的每一個生命週期事件都有 production 發出點
+     （`TestDeclaredDecisionEventsAreEmittedBySomeProductionPath`）；
+     2026-09-07 補上 `decision_finalization_override`、`assumption_declared`、
+     `replan_completed`，並移除從未被發出也無人消費的 `decision_contract_bound`
+     （contract 綁定由 `request_contract_committed` 與 admission marker 記錄）
+[x] arm 失敗時不留下已 armed 的 discipline
+     （`TestArmDisciplineLeavesNothingArmedWhenPersistenceFails`）
+[x] §44 item 9 的單檔 800 行上限，涵蓋本功能新增的每個檔案
+     （`TestDecisionRuntimeFilesRespectTheSizeLimit`）
 ```
 
 **V1 端到端證明的所在位置**

@@ -1,6 +1,8 @@
 package team
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -133,5 +135,37 @@ func TestOutcomeRecordingDoesNotFeedBackIntoJudgment(t *testing.T) {
 	}
 	if first.PreferredOption != "a" {
 		t.Fatalf("aggregate preferred %q, want the higher-scored option", first.PreferredOption)
+	}
+}
+
+// Every file the decision-aware runtime added stays under the phase barrier's
+// size limit (spec §44 item 9). The limit is a structural pass condition, not
+// a style preference: a file nobody can read in one sitting is where the
+// unregistered stage purposes and the unemitted lifecycle events hid.
+//
+// It is scoped to this feature's own files. Older files in this package
+// exceed the limit and are not this change's to rewrite.
+func TestDecisionRuntimeFilesRespectTheSizeLimit(t *testing.T) {
+	const limit = 800
+	entries, err := filepath.Glob("decision*.go")
+	if err != nil {
+		t.Fatalf("glob decision files: %v", err)
+	}
+	extra, err := filepath.Glob("tool_recovery*.go")
+	if err != nil {
+		t.Fatalf("glob tool recovery files: %v", err)
+	}
+	entries = append(entries, extra...)
+	if len(entries) < 10 {
+		t.Fatalf("found only %d decision files; the glob is wrong", len(entries))
+	}
+	for _, entry := range entries {
+		content, err := os.ReadFile(entry)
+		if err != nil {
+			t.Fatalf("read %s: %v", entry, err)
+		}
+		if lines := strings.Count(string(content), "\n"); lines > limit {
+			t.Errorf("%s is %d lines, over the %d-line limit; split it by responsibility", entry, lines, limit)
+		}
 	}
 }
