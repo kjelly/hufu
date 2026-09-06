@@ -334,6 +334,14 @@ func TestTaskSelectedModelUsesWireModelAndBoundAdmissionProfile(t *testing.T) {
 		Config: agent.TeamConfig{Name: "selected-model-lifecycle"},
 		Agents: map[string]*agent.AgentDef{"worker": def},
 	}
+	// Profile telemetry fails closed without a durable store, so a
+	// provider-bound invocation fixture must supply one.
+	const runID = "run-selected-model-lifecycle"
+	store, err := NewEventStore(workspace, runID, "session-selected-model-lifecycle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	c := &Coordinator{
 		providerManager:     providerManager,
 		modelProfileRuntime: NewModelProfileRuntime(providerManager, false),
@@ -341,6 +349,8 @@ func TestTaskSelectedModelUsesWireModelAndBoundAdmissionProfile(t *testing.T) {
 		session:             session,
 		taskTracker:         NewTaskTracker(),
 		projectDir:          workspace,
+		eventStore:          store,
+		executionRunID:      runID,
 		reportStatus:        func(StatusEvent) {},
 		coreTools:           nil,
 	}

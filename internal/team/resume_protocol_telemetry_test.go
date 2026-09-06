@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,13 +135,35 @@ func newResumedProtocolTelemetryCoordinator(t *testing.T) (*Coordinator, *TodoIt
 		reportStatus:            provider.recordStatus,
 		providerBoundaryStarted: true,
 	}
-	item := &TodoItem{
-		ID: "1", Agent: "worker", Desc: "resume result-only repair",
-		Status:    TaskProtocolIncomplete,
-		Output:    "checkpointed evidence contains api_token=resume-secret",
-		Execution: ExecutionContract{RequiresResult: true},
+	// The task is created through the durable admission boundary, then driven
+	// to protocol_incomplete the way an interrupted run leaves it. A restored
+	// item without an admission marker is a shape the runtime never produces
+	// and would be refused before any repair could be observed.
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	resolvedModel := c.resolveAgentModel(worker, "")
+	spec := TodoSpec{
+		Agent: "worker", Desc: "resume result-only repair", Goal: "resume result-only repair",
+		Model:         resolvedModel,
+		ModelTopology: initialTaskModelTopology(worker, resolvedModel),
+		Source:        TaskSourceCoordinator,
+		Execution:     ExecutionContract{RequiresResult: true},
 	}
-	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
+	if err != nil {
+		t.Fatalf("taskOccurrenceProjectionFromSpec: %v", err)
+	}
+	if _, err := c.admitTaskOccurrence(context.Background(), projection, ids[0], 1); err != nil {
+		t.Fatalf("admitTaskOccurrence: %v", err)
+	}
+	items, err := c.CommitTaskCreationResolved(context.Background(), []TodoSpec{spec}, ids)
+	if err != nil {
+		t.Fatalf("CommitTaskCreationResolved: %v", err)
+	}
+	item := items[0]
+	if err := c.CommitTaskTransition(context.Background(), item.ID, TaskPending, TaskProtocolIncomplete,
+		"worker omitted result", "checkpointed evidence contains api_token=resume-secret", nil); err != nil {
+		t.Fatalf("CommitTaskTransition: %v", err)
+	}
 	return c, item, provider, store
 }
 

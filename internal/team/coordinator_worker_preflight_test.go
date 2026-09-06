@@ -119,7 +119,7 @@ func TestExecuteTaskWorkerUsesResolvedToolsAfterCoordinatorPreflight(t *testing.
 		executionRunID: runID,
 		reportStatus:   func(StatusEvent) {},
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review the bounded workset", Execution: ExecutionContract{RequiresResult: true}}})[0]
+	item := addAdmittedPreflightTask(t, c, "review the bounded workset")
 	task := TaskDef{Agent: "reviewer", Goal: "review the bounded workset", Execution: ExecutionContract{RequiresResult: true}}
 
 	resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), worker, WorkerToolResolutionRequest{
@@ -280,8 +280,38 @@ func newProtocolRepairProviderCoordinator(t *testing.T) (*Coordinator, *TodoItem
 		executionRunID: runID,
 		reportStatus:   func(StatusEvent) {},
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "repair the bounded result", Execution: ExecutionContract{RequiresResult: true}}})[0]
+	item := addAdmittedPreflightTask(t, c, "repair the bounded result")
 	return c, item, capture
+}
+
+// addAdmittedPreflightTask creates the task through the same durable boundary
+// production uses. A coordinator with an event journal refuses to execute a
+// markerless occurrence, so a fixture that added the Todo directly would be
+// testing a task shape the runtime can never produce.
+func addAdmittedPreflightTask(t *testing.T, c *Coordinator, goal string) *TodoItem {
+	t.Helper()
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	reviewer := c.session.Agents["reviewer"]
+	resolvedModel := c.resolveAgentModel(reviewer, "")
+	spec := TodoSpec{
+		Agent: "reviewer", Desc: goal, Goal: goal,
+		Model:         resolvedModel,
+		ModelTopology: initialTaskModelTopology(reviewer, resolvedModel),
+		Source:        TaskSourceCoordinator,
+		Execution:     ExecutionContract{RequiresResult: true},
+	}
+	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
+	if err != nil {
+		t.Fatalf("taskOccurrenceProjectionFromSpec: %v", err)
+	}
+	if _, err := c.admitTaskOccurrence(context.Background(), projection, ids[0], 1); err != nil {
+		t.Fatalf("admitTaskOccurrence: %v", err)
+	}
+	items, err := c.CommitTaskCreationResolved(context.Background(), []TodoSpec{spec}, ids)
+	if err != nil {
+		t.Fatalf("CommitTaskCreationResolved: %v", err)
+	}
+	return items[0]
 }
 
 func oversizedCoordinatorPreflightContext(t *testing.T, modelID string) context.Context {

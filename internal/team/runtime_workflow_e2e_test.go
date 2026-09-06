@@ -15,6 +15,8 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -115,7 +117,17 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		session:         session,
 		projectDir:      tmpDir,
 		providerManager: pm,
-		coreTools:       agent.BuildAllAgentTools(tmpDir, tools.WithAllowedPaths([]string{tmpDir})),
+		// Every provider invocation commits a provider-bound profile
+		// projection, so the runtime that produces one must be present. The
+		// resolver is a fake: real introspection would issue its own requests
+		// to the scripted provider below and desynchronize the fixture.
+		modelProfileRuntime: &ModelProfileRuntime{
+			manager: pm,
+			resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+				return auxiliaryProfileIntrospector{}
+			}, modelprofile.ProfileCacheOptions{}),
+		},
+		coreTools:             agent.BuildAllAgentTools(tmpDir, tools.WithAllowedPaths([]string{tmpDir})),
 		taskTracker:           NewTaskTracker(),
 		providerBoundaryStart: func(context.Context, string) error { return nil },
 	}
@@ -140,12 +152,35 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	finalizeRun := c.beginExecutionRun()
 
 	runID := c.executionRunID
+	ctx0 := context.Background()
 
-	todos := c.taskTracker.TodoList().AddBatch([]TodoSpec{
-		{Agent: "preparer", Desc: "test"},
-		{Agent: "executor", Desc: "test2"},
-		{Agent: "executor", Desc: "test3"},
-	})
+	// A coordinator with an event journal refuses a markerless occurrence, so
+	// the tasks are created through the same durable admission boundary the
+	// runtime uses rather than added to the projection directly.
+	specs := []TodoSpec{
+		{Agent: "preparer", Desc: "test", Goal: "test", Source: TaskSourceCoordinator},
+		{Agent: "executor", Desc: "test2", Goal: "test2", Source: TaskSourceCoordinator},
+		{Agent: "executor", Desc: "test3", Goal: "test3", Source: TaskSourceCoordinator},
+	}
+	for i := range specs {
+		def := session.Agents[specs[i].Agent]
+		specs[i].Model = c.resolveAgentModel(def, "")
+		specs[i].ModelTopology = initialTaskModelTopology(def, specs[i].Model)
+	}
+	todoIDs := c.taskTracker.TodoList().ReserveIDs(len(specs))
+	for i, spec := range specs {
+		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, todoIDs[i])
+		if projectionErr != nil {
+			t.Fatalf("taskOccurrenceProjectionFromSpec: %v", projectionErr)
+		}
+		if _, err := c.admitTaskOccurrence(ctx0, projection, todoIDs[i], 1); err != nil {
+			t.Fatalf("admitTaskOccurrence: %v", err)
+		}
+	}
+	todos, err := c.CommitTaskCreationResolved(ctx0, specs, todoIDs)
+	if err != nil {
+		t.Fatalf("CommitTaskCreationResolved: %v", err)
+	}
 
 	// Execute tool calls manually by executing tasks against the mock provider
 	ctx := context.Background()

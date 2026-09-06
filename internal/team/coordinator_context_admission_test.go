@@ -289,7 +289,10 @@ func TestWorkerPrepareUsesCanonicalCompactionInputAndFailsClosedOnMandatoryCaps(
 
 	workspace := t.TempDir()
 	compactionPolicy := agent.DefaultCompactionPolicy()
-	compactionPolicy.VerifiedHistoryTargetTokens = 7000
+	// The compacted evidence shares the 8192-token window with the system
+	// prompt, tools, and the request itself, so the target must leave room for
+	// that envelope. 7000 could never be admitted.
+	compactionPolicy.VerifiedHistoryTargetTokens = 4000
 	workerTool := fantasy.NewAgentTool("worker_inspect", "worker-only tool", func(context.Context, map[string]any, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("unused"), nil
 	})
@@ -314,6 +317,27 @@ func TestWorkerPrepareUsesCanonicalCompactionInputAndFailsClosedOnMandatoryCaps(
 		Name: "worker", Role: "worker", System: worker.workerSystem,
 		Generation: agent.GenerationParams{Model: modelID, ContextWindow: 8192, MaxTokens: "128"},
 	}
+	// Production installs the invocation binder and projection prompt compiler
+	// when it builds the sidecar. A bare fixture sidecar has neither, and the
+	// transient projection compaction below requires both.
+	sc.SetInvocationBinder(func(ctx context.Context, boundModelID string) (context.Context, agent.ProviderAdmissionContext, error) {
+		admission := agent.ProviderAdmissionContext{
+			ModelID: boundModelID, ProviderIdentity: "local", ProviderBaseURL: server.URL,
+			Bound: true, ContextWindow: 8192, MaxOutputTokens: 128,
+			SafetyMarginTokens: 32, ContextWindowSource: "test",
+		}
+		// The prompt compiler reads the coordinator-side binding, so the binder
+		// must publish both projections exactly as production's does.
+		boundCtx := withProviderBoundInvocationContext(ctx, providerBoundInvocationContext{
+			ModelID: boundModelID, AdmissionContext: admission,
+			ModelContext: ModelContextSpec{
+				ModelID: boundModelID, ContextWindow: 8192,
+				MaxOutputTokens: 128, SafetyMarginTokens: 32,
+			},
+		})
+		return boundCtx, admission, nil
+	})
+	sc.SetProjectionPromptPreparer(c.prepareAuxiliaryProjectionPrompt)
 	descriptor := c.newContextWindowRequestDescriptor(modelID, def, worker.workerTools, "worker", "worker")
 	ctx := withContextWindowRequestDescriptor(t.Context(), descriptor)
 	ctx = context.WithValue(ctx, modelKey{}, modelID)
