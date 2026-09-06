@@ -138,6 +138,11 @@ type StructuredExecutionRequest struct {
 	UpstreamOutputs map[string]map[string]StructuredOutputValue
 	SelectModel     func(ExecutionStep, int) string
 	PublishArtifact StructuredArtifactPublisher
+	// AdmitStep is the commitment boundary for a structured step. It is a
+	// callback rather than a direct commit-gate call so this file stays free
+	// of coordinator state; a non-nil error means the step's process must not
+	// start (docs/hufu-decision-aware-runtime-spec.md §30).
+	AdmitStep func(ExecutionStep) error
 }
 
 // StructuredExecutionResult contains the final lifecycle state, frozen
@@ -431,6 +436,13 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 	}
 	if err := e.validateMutationInputs(step); err != nil {
 		return e.recordPreflightFailure(step, repairAttempt, err), err
+	}
+	// Admission runs before input resolution so a blocked step performs no
+	// work at all, not merely no mutation.
+	if e.request.AdmitStep != nil {
+		if err := e.request.AdmitStep(step); err != nil {
+			return e.recordPreflightFailure(step, repairAttempt, err), err
+		}
 	}
 	resolvedInput, resolvedRefs, err := e.resolveStepInput(step)
 	if err != nil {

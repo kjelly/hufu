@@ -169,11 +169,11 @@ func TestResumeInterruptedDecisionTaskRetainsAdmissionBeforeFirstDecisionEvent(t
 	journal := &memoryJournal{}
 	const runID = "run-resume-decision-admission"
 	first := &Coordinator{
-		sessionTime:  time.Now(),
-		eventJournal: journal,
-		taskTracker:  NewTaskTracker(),
+		sessionTime:    time.Now(),
+		eventJournal:   journal,
+		taskTracker:    NewTaskTracker(),
 		executionRunID: runID,
-		reportStatus: func(StatusEvent) {},
+		reportStatus:   func(StatusEvent) {},
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 			WorkspaceDir: workspace,
 			Decision:     dispatchConfig(),
@@ -272,7 +272,7 @@ func TestPrepareTaskDecisionIsInertWithoutAProfile(t *testing.T) {
 	if len(journal.typesOf()) != 0 {
 		t.Fatalf("events = %v, want none", journal.typesOf())
 	}
-	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash"); denial != "" {
+	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
 		t.Fatalf("commit gate denied an unarmed task: %q", denial)
 	}
 }

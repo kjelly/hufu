@@ -27,7 +27,7 @@ func disciplinePolicy(commit CommitGatePolicy, stop StopPolicy, replan ReplanPol
 // adopted decision profiles.
 func TestDisciplineHooksAreNoOpsWhenUnarmed(t *testing.T) {
 	c := disciplineCoordinator(t)
-	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash"); denial != "" {
+	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
 		t.Fatalf("unarmed commit gate denied a tool: %q", denial)
 	}
 	if denial := c.checkpointDenial("todo-1"); denial != "" {
@@ -284,7 +284,7 @@ func TestCommitGateDeniesBeforeToolStart(t *testing.T) {
 	if err := c.armDiscipline(context.Background(), "todo-1", task, policy, record); err != nil {
 		t.Fatal(err)
 	}
-	denial := c.commitGateDenial(context.Background(), "todo-1", "bash")
+	denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`)
 	if denial == "" {
 		t.Fatal("commit gate allowed a mutation with no reconcile path")
 	}
@@ -296,8 +296,8 @@ func TestCommitGateDeniesBeforeToolStart(t *testing.T) {
 	}
 }
 
-// A satisfied gate allows the tool and is not re-evaluated per call: the
-// prerequisites are properties of the task contract.
+// A satisfied gate allows the tool and is not re-evaluated per call for that
+// same tool.
 func TestCommitGateAllowsSatisfiedTask(t *testing.T) {
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
@@ -311,7 +311,7 @@ func TestCommitGateAllowsSatisfiedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if denial := c.commitGateDenial(context.Background(), "todo-1", "bash"); denial != "" {
+		if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
 			t.Fatalf("call %d denied: %q", i, denial)
 		}
 	}
@@ -320,7 +320,8 @@ func TestCommitGateAllowsSatisfiedTask(t *testing.T) {
 	}
 }
 
-// A read-only task is outside the gate's scope entirely.
+// A task whose side-effect class is not guarded is outside the gate's scope
+// entirely, even when it invokes a mutating tool.
 func TestCommitGateIgnoresNonMutatingTasks(t *testing.T) {
 	c := disciplineCoordinator(t)
 	task := TaskDef{ID: "t1", SideEffect: SideEffectNone}
@@ -329,7 +330,7 @@ func TestCommitGateIgnoresNonMutatingTasks(t *testing.T) {
 	if err := c.armDiscipline(context.Background(), "todo-1", task, policy, nil); err != nil {
 		t.Fatal(err)
 	}
-	if denial := c.commitGateDenial(context.Background(), "todo-1", "view"); denial != "" {
+	if denial := c.commitGateDenial(context.Background(), "todo-1", "write", `{"file_path":"out.txt"}`); denial != "" {
 		t.Fatalf("read-only task denied: %q", denial)
 	}
 }
@@ -438,11 +439,11 @@ func TestDisarmDiscipline(t *testing.T) {
 	if err := c.armDiscipline(context.Background(), "todo-1", task, policy, nil); err != nil {
 		t.Fatal(err)
 	}
-	if c.commitGateDenial(context.Background(), "todo-1", "bash") == "" {
+	if c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`) == "" {
 		t.Fatal("armed gate did not deny")
 	}
 	c.disarmDiscipline("todo-1")
-	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash"); denial != "" {
+	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
 		t.Fatalf("disarmed gate still denies: %q", denial)
 	}
 }

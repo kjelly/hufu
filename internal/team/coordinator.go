@@ -146,6 +146,12 @@ type TaskDef struct {
 	Recovery RecoveryPolicy `json:"recovery,omitempty" yaml:"recovery,omitempty"`
 	// ReconcileTool specifies an optional read-only probe command to verify state during crash recovery.
 	ReconcileTool string `json:"reconcile_tool,omitempty"`
+	// ToolRecovery declares the per-tool recovery contract the commit gate
+	// reads for the exact tool a worker invokes. It is configuration-only for
+	// the same reason DecisionProfile is: a coordinator that could declare
+	// "this tool has a compensating operation" would satisfy require-rollback
+	// by assertion, and the gate would check nothing (spec §30.1).
+	ToolRecovery map[string]ToolRecoverySpec `json:"-" yaml:"tool-recovery,omitempty"`
 	// Execution encapsulates execution contract semantics (kind, requires_result, requires_verification, allows_replay).
 	Execution           ExecutionContract `json:"execution,omitempty" yaml:"execution,omitempty"`
 	Kind                TaskKind          `json:"kind,omitempty" yaml:"kind,omitempty"`

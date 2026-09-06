@@ -75,7 +75,11 @@ func (r *RepairController) Decide(req RepairRequest) RepairDecision {
 	if task.Recovery == RecoveryManual || task.Recovery == RecoveryNever {
 		return RepairDecision{Action: RepairBlock, Reason: "task recovery requires human intervention"}
 	}
-	if task.SideEffect == SideEffectExternalWrite || task.SideEffect == SideEffectInfraMutation || task.SideEffect == SideEffectCredential {
+	// nonReplayableSideEffect is the single definition of "a crash cannot
+	// simply run this again". Listing the classes here separately let
+	// side_effect: unknown fall through to a plain retry, which is exactly the
+	// auto-replay over unaccountable state this branch exists to prevent.
+	if nonReplayableSideEffect(task.SideEffect) {
 		if (task.Recovery == RecoveryReconcile || task.ReconcileTool != "") && req.RecoveryState != RecoveryStateNotStarted {
 			return RepairDecision{Action: RepairReconcile, Reason: "external side effect requires reconcile before replay"}
 		}

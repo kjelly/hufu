@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,10 +41,14 @@ type taskDiscipline struct {
 	// interrupted earlier attempt. Empty during normal execution is correct:
 	// there is no mutation in doubt (spec §29.1, §38.3).
 	sideEffectState string
-	commitDone      bool
-	stopped         bool
-	staleMarked     bool
-	checkpointErr   string
+	// commitAllowed latches the gate verdict per tool, not per task. The
+	// require-rollback prerequisite is a property of the invoked tool, so a
+	// task that cleared the gate with one mutating tool has proved nothing
+	// about the next one.
+	commitAllowed map[string]bool
+	stopped       bool
+	staleMarked   bool
+	checkpointErr string
 }
 
 // checkpointControlError is a runtime control signal, not a worker failure.
@@ -78,6 +83,9 @@ func asCheckpointControlError(err error) (CheckpointOutcome, bool) {
 func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task TaskDef, policy DecisionPolicy, record *DecisionRecord) error {
 	stop := policy.Discipline.Stop
 	if err := ValidateStopPolicyBeforeExecute(stop); err != nil {
+		return err
+	}
+	if err := c.validateTaskToolRecovery(task); err != nil {
 		return err
 	}
 
@@ -125,6 +133,45 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 				todoID, len(stop.KillCriteria), stop.CheckpointEvery),
 		}); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateTaskToolRecovery rejects a rollback path the worker could not take.
+// A compensate tool naming something the agent cannot invoke would satisfy
+// require-rollback while leaving the mutation just as irreversible, so the
+// contract is checked before execution rather than discovered after one.
+func (c *Coordinator) validateTaskToolRecovery(task TaskDef) error {
+	def, _, err := c.AgentPool().ResolveAgentName(task.Agent)
+	if err != nil {
+		// An unresolvable agent is rejected by admission; do not turn that
+		// into a second, more confusing error here.
+		return nil
+	}
+	declared := map[string]struct{}{}
+	for name := range task.ToolRecovery {
+		declared[normalizedToolName(name)] = struct{}{}
+	}
+	if def != nil {
+		for name := range def.ToolRecovery {
+			declared[normalizedToolName(name)] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		spec := resolveToolRecovery(def, task, name)
+		if spec.CompensateTool == "" || agentCanInvoke(def, spec.CompensateTool) {
+			continue
+		}
+		return &GateResult{
+			Reason: ReasonCommitGateMissingRecovery,
+			Detail: fmt.Sprintf("tool %q declares compensate tool %q, which agent %q cannot invoke",
+				name, spec.CompensateTool, task.Agent),
 		}
 	}
 	return nil
@@ -189,30 +236,43 @@ func (c *Coordinator) decisionJournalOrNil() decisionJournal {
 
 // commitGateDenial evaluates the commit gate before a side-effecting tool
 // starts. It returns a denial message, or an empty string when the tool may
-// run. The gate is evaluated once per armed task: the prerequisites are
-// properties of the task contract, not of an individual call.
-func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName string) string {
+// run.
+//
+// The gate is evaluated at the true mutation boundary. A read-only
+// observation commits nothing and is never gated; gating the first call of
+// any kind would have let a task clear the gate with `ls` and then mutate
+// freely. Each mutating tool is evaluated with its own recovery contract, so
+// clearing the gate for one tool authorizes only that tool (spec §30).
+func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName, toolInput string) string {
 	discipline := c.disciplineFor(todoID)
 	if discipline == nil {
 		return ""
 	}
-	discipline.mu.Lock()
-	if discipline.commitDone {
-		discipline.mu.Unlock()
+	if isReadOnlyToolCall(toolName, toolInput) {
 		return ""
 	}
+	tool := normalizedToolName(toolName)
+	discipline.mu.Lock()
+	allowed := discipline.commitAllowed[tool]
 	discipline.mu.Unlock()
+	if allowed {
+		return ""
+	}
 
 	decision := EvaluateCommitGate(CommitGateInput{
-		Task:   discipline.task,
-		Policy: discipline.commit,
+		Task:         discipline.task,
+		Policy:       discipline.commit,
+		ToolRecovery: c.toolRecoveryFor(discipline.task, toolName),
 	})
 	if !decision.Applicable {
 		return ""
 	}
 	if decision.Allowed {
 		discipline.mu.Lock()
-		discipline.commitDone = true
+		if discipline.commitAllowed == nil {
+			discipline.commitAllowed = map[string]bool{}
+		}
+		discipline.commitAllowed[tool] = true
 		discipline.mu.Unlock()
 		return ""
 	}
@@ -222,10 +282,71 @@ func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName str
 			DecisionID:     discipline.decisionID,
 			EvidenceHash:   discipline.evidenceHash,
 			Reason:         decision.Reason,
-			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "commit_gate_blocked", decision.Reason),
+			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "commit_gate_blocked", tool, decision.Reason),
 		})
 	}
 	return fmt.Sprintf("policy_blocked: tool %q was not started. %s", toolName, decision.Error())
+}
+
+// commitGateActionDenial is the commit gate for execution paths that do not
+// run through the fantasy tool boundary: static runtime actions and
+// structured steps. They reach real providers and change real state, so the
+// prerequisites that guard a worker's mutation guard theirs too.
+//
+// Unlike a worker tool call there is no per-call read-only classifier here.
+// The caller decides what constitutes its mutation boundary — a declared
+// mutate effect, or an action whose task class is guarded — and the task's
+// side-effect class still decides whether the gate applies at all.
+func (c *Coordinator) commitGateActionDenial(ctx context.Context, todoID string, task TaskDef, name string) string {
+	discipline := c.disciplineFor(todoID)
+	if discipline == nil {
+		return ""
+	}
+	key := normalizedToolName(name)
+	discipline.mu.Lock()
+	allowed := discipline.commitAllowed[key]
+	discipline.mu.Unlock()
+	if allowed {
+		return ""
+	}
+
+	decision := EvaluateCommitGate(CommitGateInput{
+		Task:         discipline.task,
+		Policy:       discipline.commit,
+		ToolRecovery: c.toolRecoveryFor(task, name),
+	})
+	if !decision.Applicable {
+		return ""
+	}
+	if decision.Allowed {
+		discipline.mu.Lock()
+		if discipline.commitAllowed == nil {
+			discipline.commitAllowed = map[string]bool{}
+		}
+		discipline.commitAllowed[key] = true
+		discipline.mu.Unlock()
+		return ""
+	}
+
+	if journal := c.decisionJournalOrNil(); journal != nil {
+		_ = appendDecisionEvent(ctx, journal, agent.EventCommitGateBlocked, decisionEvent{
+			DecisionID:     discipline.decisionID,
+			EvidenceHash:   discipline.evidenceHash,
+			Reason:         decision.Reason,
+			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "commit_gate_blocked", key, decision.Reason),
+		})
+	}
+	return fmt.Sprintf("policy_blocked: %q was not started. %s", name, decision.Error())
+}
+
+// toolRecoveryFor resolves the invoked tool's recovery contract against the
+// task's agent definition.
+func (c *Coordinator) toolRecoveryFor(task TaskDef, toolName string) ToolRecoverySpec {
+	var def *agent.AgentDef
+	if c != nil {
+		def, _, _ = c.AgentPool().ResolveAgentName(task.Agent)
+	}
+	return resolveToolRecovery(def, task, toolName)
 }
 
 // recordToolCall counts a completed tool call and evaluates a checkpoint when
@@ -255,9 +376,6 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 	// existing detector already maintains; a checkpoint reads it rather than
 	// keeping a second count of the same thing.
 	state.NoProgressStreak = c.noProgressCounters().Turns
-	// An interrupted mutation whose outcome could not be classified must stop
-	// the task rather than let it continue over unknown state (spec §38.3).
-	state.SideEffectState = discipline.sideEffectState
 	stop := discipline.stop
 	replan := discipline.replan
 	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)
@@ -269,6 +387,15 @@ func (c *Coordinator) recordToolCall(ctx context.Context, todoID string, failed 
 
 	if budget := c.Budget(); budget != nil {
 		state.TokensUsed = budget.TokensUsed()
+	}
+	// The reconcile classification is read at the checkpoint, not frozen when
+	// the task was armed: a reconciliation that lands mid-execution must be
+	// what this checkpoint judges. An interrupted mutation whose outcome could
+	// not be classified stops the task rather than letting it continue over
+	// unknown state (spec §38.3).
+	state.SideEffectState = discipline.sideEffectState
+	if current := c.taskRecoveryState(todoID); current != "" {
+		state.SideEffectState = current
 	}
 	if contradicted := CriticalContradiction(assumptions); contradicted != "" {
 		state.CriticalAssumptionContradicted = true

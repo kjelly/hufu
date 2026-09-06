@@ -158,6 +158,10 @@ type AgentDef struct {
 	// ReconcileTool is an optional read-only probe command used during crash
 	// recovery to classify whether an interrupted task completed.
 	ReconcileTool string
+	// ToolRecovery declares, per tool this agent may invoke, whether that
+	// tool's operation can be undone or reconciled. The commit gate reads it
+	// for the exact tool a worker is about to run; see tool_recovery.go.
+	ToolRecovery map[string]ToolRecoveryDecl
 	// MemoryID is the stable worker identity for per-worker memory. When
 	// empty, the runtime falls back to the normalized agent Name. Renaming
 	// an agent while preserving MemoryID keeps its memory continuity.

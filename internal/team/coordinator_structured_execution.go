@@ -79,7 +79,24 @@ func (c *Coordinator) runStructuredTask(ctx context.Context, todoID string, atte
 		SelectModel: func(step ExecutionStep, repairAttempt int) string {
 			return c.selectStructuredStepModel(task, step, repairAttempt, agentDef)
 		},
+		AdmitStep: c.structuredStepCommitGate(todoID, task),
 	}, runner)
+}
+
+// structuredStepCommitGate applies the same commit gate a worker's tool calls
+// pass through to a structured step. A declared mutation is the step's own
+// statement that it commits state, so it is the mutation boundary here; a
+// produce/validate step observes and is not gated.
+func (c *Coordinator) structuredStepCommitGate(todoID string, task TaskDef) func(ExecutionStep) error {
+	return func(step ExecutionStep) error {
+		if step.Effect != ExecutionEffectMutate {
+			return nil
+		}
+		if denial := c.commitGateActionDenial(context.Background(), todoID, task, step.Tool); denial != "" {
+			return fmt.Errorf("structured step %q: %s", step.ID, denial)
+		}
+		return nil
+	}
 }
 
 func (c *Coordinator) structuredArtifactPublisher(taskID string, attempt int, agent string) StructuredArtifactPublisher {

@@ -342,7 +342,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// The commit gate runs before the tool process starts, so a task missing a
 	// required prerequisite performs zero mutations rather than being caught
 	// after one.
-	if denial := t.coordinator.commitGateDenial(ctx, disciplineTodoID, t.Info().Name); denial != "" {
+	if denial := t.coordinator.commitGateDenial(ctx, disciplineTodoID, t.Info().Name, effectiveInput); denial != "" {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind: "policy_denied", ReasonCode: "commit_gate_blocked",
 			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,

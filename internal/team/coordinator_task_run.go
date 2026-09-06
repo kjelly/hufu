@@ -2002,12 +2002,41 @@ func (c *Coordinator) allocateRuntimeActionWorkspace(todoID string, startedAt ti
 	return "", "", fmt.Errorf("allocate unique action staging directory")
 }
 
+// runtimeActionGateName is the name a static action is gated under. The
+// capability selects the provider that performs the mutation, so it is the
+// unit an operator declares recovery for; the type disambiguates providers
+// that expose more than one operation.
+func runtimeActionGateName(action *Action) string {
+	if action == nil {
+		return ""
+	}
+	capability := strings.TrimSpace(action.Capability)
+	actionType := strings.TrimSpace(action.Type)
+	switch {
+	case capability != "" && actionType != "":
+		return capability + ":" + actionType
+	case capability != "":
+		return capability
+	default:
+		return actionType
+	}
+}
+
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
 	startedAt := time.Now().UTC()
 	actionID, actionRoot, err := c.allocateRuntimeActionWorkspace(todoID, startedAt)
 	if err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, "", "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
+	}
+	// A static action reaches a real provider and changes real state, so it
+	// passes the same commit gate a worker's mutating tool call does. It runs
+	// before the started event and before any provider work: a blocked action
+	// must leave no trace of having begun.
+	if denial := c.commitGateActionDenial(ctx, todoID, task, runtimeActionGateName(task.Action)); denial != "" {
+		blocked := errors.New(denial)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", blocked)
+		return "", blocked
 	}
 	attempt := c.currentTaskAttempt(todoID) + 1
 	c.setCurrentTaskAttempt(todoID, attempt)

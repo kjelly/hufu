@@ -37,36 +37,37 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name            string                         `yaml:"name"`
-	Description     string                         `yaml:"description"`
-	Role            string                         `yaml:"role"`
-	Preset          string                         `yaml:"preset"`
-	Tools           any                            `yaml:"tools"`  // string, []string, or {allowed: [...], denied: [...]}
-	Skills          any                            `yaml:"skills"` // string or []string (YAML list)
-	Guard           []string                       `yaml:"guard"`
-	Model           string                         `yaml:"model"`
-	ExtraModels     []string                       `yaml:"extra-models"`
-	Temperature     string                         `yaml:"temperature"`
-	MaxTokens       string                         `yaml:"max-tokens"`
-	TopP            string                         `yaml:"top-p"`
-	TopK            string                         `yaml:"top-k"`
-	ReasoningEffort string                         `yaml:"reasoning-effort"`
-	Timeout         int64                          `yaml:"timeout"`
-	MaxRetries      any                            `yaml:"max-retries"` // int or string
-	MaxSteps        int                            `yaml:"max-steps"`
-	ProviderURL     string                         `yaml:"provider-url"`
-	AllowedPaths    any                            `yaml:"allowed-paths"` // string or []string
-	RestrictedPath  string                         `yaml:"restricted-path"`
-	NoNet           bool                           `yaml:"no-net"`
-	ForceMCP        bool                           `yaml:"force-mcp"`
-	Shell           string                         `yaml:"shell"`
-	MCPTools        map[string]agent.MCPToolConfig `yaml:"mcp-tools"`
-	Requirements    agent.ContractRequirements     `yaml:"requires"`
-	SideEffect      string                         `yaml:"side_effect"`
-	Recovery        string                         `yaml:"recovery"`
-	ReconcileTool   string                         `yaml:"reconcile-tool"`
-	MemoryID        string                         `yaml:"memory-id"`
-	Memory          rawWorkerMemoryPolicy          `yaml:"memory"`
+	Name            string                            `yaml:"name"`
+	Description     string                            `yaml:"description"`
+	Role            string                            `yaml:"role"`
+	Preset          string                            `yaml:"preset"`
+	Tools           any                               `yaml:"tools"`  // string, []string, or {allowed: [...], denied: [...]}
+	Skills          any                               `yaml:"skills"` // string or []string (YAML list)
+	Guard           []string                          `yaml:"guard"`
+	Model           string                            `yaml:"model"`
+	ExtraModels     []string                          `yaml:"extra-models"`
+	Temperature     string                            `yaml:"temperature"`
+	MaxTokens       string                            `yaml:"max-tokens"`
+	TopP            string                            `yaml:"top-p"`
+	TopK            string                            `yaml:"top-k"`
+	ReasoningEffort string                            `yaml:"reasoning-effort"`
+	Timeout         int64                             `yaml:"timeout"`
+	MaxRetries      any                               `yaml:"max-retries"` // int or string
+	MaxSteps        int                               `yaml:"max-steps"`
+	ProviderURL     string                            `yaml:"provider-url"`
+	AllowedPaths    any                               `yaml:"allowed-paths"` // string or []string
+	RestrictedPath  string                            `yaml:"restricted-path"`
+	NoNet           bool                              `yaml:"no-net"`
+	ForceMCP        bool                              `yaml:"force-mcp"`
+	Shell           string                            `yaml:"shell"`
+	MCPTools        map[string]agent.MCPToolConfig    `yaml:"mcp-tools"`
+	Requirements    agent.ContractRequirements        `yaml:"requires"`
+	SideEffect      string                            `yaml:"side_effect"`
+	Recovery        string                            `yaml:"recovery"`
+	ReconcileTool   string                            `yaml:"reconcile-tool"`
+	ToolRecovery    map[string]agent.ToolRecoveryDecl `yaml:"tool-recovery"`
+	MemoryID        string                            `yaml:"memory-id"`
+	Memory          rawWorkerMemoryPolicy             `yaml:"memory"`
 }
 
 type teamConfigYAML struct {
@@ -609,6 +610,9 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 	toolsList := parseAllowedTools(fm.Tools)
 	deniedList := parseDeniedTools(fm.Tools)
 	sideEffect := fm.SideEffect
+	if err := agent.ValidateToolRecovery(fm.ToolRecovery); err != nil {
+		return nil, fmt.Errorf("agent file %s: %w", path, err)
+	}
 
 	if presetName := strings.TrimSpace(fm.Preset); presetName != "" {
 		p, ok := preset.Lookup(presetName)
@@ -668,6 +672,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		SideEffect:    sideEffect,
 		Recovery:      fm.Recovery,
 		ReconcileTool: fm.ReconcileTool,
+		ToolRecovery:  fm.ToolRecovery,
 		MemoryID:      fm.MemoryID,
 	}
 	if fm.Memory.isSet() {
