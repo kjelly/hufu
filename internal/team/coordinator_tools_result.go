@@ -384,6 +384,7 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 	return info
 }
 
+//nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
@@ -508,6 +509,13 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		if _, err := t.coordinator.ApplyAssumptionChecks(ctx, t.todoID, res.AssumptionChecks, AssumptionSourceTaskResult); err != nil {
 			return rollback("invalid assumption check: " + err.Error()), nil
 		}
+		// A reported check can invalidate the governing decision.  That is a
+		// lifecycle outcome, not merely a later tool denial: reject this same
+		// submit_result while its occurrence is still reserved so no result cache,
+		// TaskDone projection, or success event can be published.
+		if denial := t.coordinator.checkpointDenial(t.todoID); denial != "" {
+			return rollback("submit_result rejected by checkpoint: " + denial), nil
+		}
 		if _, isCoordinatorSink := sink.(coordinatorTaskResultSink); isCoordinatorSink {
 			// The coordinator sink is represented by this transaction; invoking it
 			// again would attempt a second reservation while this gate is held.
@@ -631,14 +639,20 @@ func normalizedStringEntries(raw json.RawMessage) ([]json.RawMessage, bool) {
 }
 
 type submitResultRuntimeIdentity struct {
-	RunID   string
-	TaskID  string
-	Attempt int
-	Agent   string
+	RunID              string
+	TaskID             string
+	Attempt            int
+	Agent              string
+	OccurrenceRevision int
+	DispatchID         string
 }
 
 func (c *Coordinator) stageSubmittedArtifacts(identity submitResultRuntimeIdentity, refs []ArtifactRef) {
-	if c == nil || len(refs) == 0 || !validSubmitResultIdentity(identity) {
+	if c == nil || len(refs) == 0 {
+		return
+	}
+	identity = c.completeOccurrenceLease(identity)
+	if !validSubmitResultIdentity(identity) {
 		return
 	}
 	controller := c.occurrenceController(identity.TaskID)

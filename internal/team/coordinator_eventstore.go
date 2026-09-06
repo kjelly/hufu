@@ -740,6 +740,13 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if current.Status != expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
 	}
+	resetForResume, _ := metadata["reset_for_resume"].(bool)
+	if resetForResume && next != TaskPending {
+		return fmt.Errorf("commit task transition: task %s resume reset must target pending", taskID)
+	}
+	if !resetForResume && !CanTransition(current.Status, next) {
+		return fmt.Errorf("commit task transition: invalid %s -> %s for task %s", current.Status, next, taskID)
+	}
 	if next == TaskDone {
 		if discipline := c.disciplineFor(taskID); discipline != nil {
 			discipline.mu.Lock()
@@ -750,24 +757,38 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 			}
 		}
 	}
-	if eventTypeForTaskStatus(next) == "" || !c.hasDurableEventJournal() {
-		if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
-			return err
-		}
-		if planFirst, ok := metadata["plan_first"].(bool); ok {
-			planID, _ := metadata["plan_id"].(string)
-			return c.taskTracker.TodoList().SetPlanLifecycle(taskID, planFirst, planID)
-		}
-		return nil
-	}
-
 	projected := *current
-	projected.Status = next
-	if detail != "" {
-		projected.Detail = detail
+	// Every lifecycle projection invalidates the prior worker lease. A retry,
+	// checkpoint pause, or terminal decision must not be overwritten by a late
+	// result from the worker that observed the old projection.
+	projected.OccurrenceRevision = current.OccurrenceRevision + 1
+	if projected.OccurrenceRevision <= 0 {
+		projected.OccurrenceRevision = 1
 	}
-	if output != "" {
-		projected.Output = output
+	projected.DispatchID = ""
+	if resetForResume {
+		projected.Status = TaskPending
+		projected.Detail = detail
+		projected.Output = ""
+		projected.VerifyResult = nil
+		projected.RuntimeError = nil
+		projected.FailureEvent = nil
+		projected.RecoveryState = RecoveryStateNotStarted
+		projected.LastOperation = ""
+		projected.Progress = ProgressUnknown
+		projected.ProgressCriteria = nil
+		projected.StartedAt = time.Time{}
+		projected.EndedAt = time.Time{}
+		projected.ModelTime = 0
+		projected.ToolTime = 0
+	} else {
+		projected.Status = next
+		if detail != "" {
+			projected.Detail = detail
+		}
+		if output != "" {
+			projected.Output = output
+		}
 	}
 	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
 		projected.FailureEvent = fe
@@ -784,22 +805,50 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		projected.PlanID = planID
 		planLifecycleChanged = true
 	}
-	if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
-		return err
+	if checkpointPause, ok := metadata["checkpoint_pause"].(bool); ok {
+		projected.CheckpointPause = checkpointPause
 	}
+	// Lifecycle timestamps are part of the projection, not a side effect of the
+	// TodoList setter this boundary replaced. Stamping them here keeps task
+	// duration reporting identical for every transition path.
+	stampTaskLifecycleTimes(&projected)
+	if eventTypeForTaskStatus(next) == "" {
+		return fmt.Errorf("commit task transition: unsupported task status %s", next)
+	}
+	if c.hasDurableEventJournal() {
+		if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
+			return err
+		}
+	}
+	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
+		return fmt.Errorf("apply task transition after durable append: %w", err)
+	}
+	c.revokeTaskOccurrence(taskID)
 	if planLifecycleChanged {
 		if err := c.taskTracker.TodoList().SetPlanLifecycle(taskID, projected.PlanFirst, projected.PlanID); err != nil {
 			return fmt.Errorf("apply task plan lifecycle after durable append: %w", err)
 		}
 	}
-	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
-		if err := c.taskTracker.TodoList().TryUpdateStatusAndFailure(taskID, next, detail, output, fe); err != nil {
-			return fmt.Errorf("apply task transition after durable append: %w", err)
-		}
-	} else if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(taskID, next, detail, output); err != nil {
-		return fmt.Errorf("apply task transition after durable append: %w", err)
-	}
 	return nil
+}
+
+// stampTaskLifecycleTimes applies the start/end timestamps a status transition
+// implies. It mirrors TodoList.TryUpdateStatusAndOutput so a projected
+// transition and a direct one agree on when a task started and ended.
+func stampTaskLifecycleTimes(projected *TodoItem) {
+	if projected == nil {
+		return
+	}
+	switch projected.Status {
+	case TaskInProgress:
+		if projected.StartedAt.IsZero() {
+			projected.StartedAt = time.Now()
+		}
+	case TaskDone, TaskError, TaskBlocked, TaskSkipped:
+		if projected.EndedAt.IsZero() {
+			projected.EndedAt = time.Now()
+		}
+	}
 }
 
 // commitTaskPlanLifecycle persists the plan-first lifecycle metadata through
@@ -879,7 +928,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 // complete, reset projection payload (with incremented retries and cleared
 // output/timing/runtime errors) before mutating TodoList; if the append fails,
 // the task status, retry count, and checkpoint remain untouched.
-func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string, detail string) error {
+func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string, detail string, modelOverride ...string) error {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task reset for retry: task tracker is unavailable")
 	}
@@ -887,22 +936,18 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 	if current == nil {
 		return fmt.Errorf("commit task reset for retry: task %s not found", taskID)
 	}
-	if !c.hasDurableEventJournal() {
-		c.taskTracker.TodoList().ResetForRetry(taskID, detail)
-		return nil
+	if len(modelOverride) > 1 {
+		return fmt.Errorf("commit task reset for retry: at most one model override is allowed")
 	}
-	// A retry is a new occurrence. Freeze its effective admission before the
-	// retry projection becomes durable; interrupted resume deliberately uses a
-	// different path and retains the existing attempt/admission.
-	occurrence, err := taskOccurrenceProjectionForRetry(current)
-	if err != nil {
-		return fmt.Errorf("commit task reset for retry projection: %w", err)
-	}
-	if _, err := c.admitTaskOccurrence(ctx, occurrence, taskID, current.Retries+2); err != nil {
-		return fmt.Errorf("commit task reset for retry admission: %w", err)
-	}
-
 	projected := *current
+	// A retry is a new lifecycle occurrence. Clear its active worker lease
+	// before the reset becomes visible so a late prior-attempt callback cannot
+	// project a result into the admitted retry.
+	projected.OccurrenceRevision = current.OccurrenceRevision + 1
+	if projected.OccurrenceRevision <= 0 {
+		projected.OccurrenceRevision = 1
+	}
+	projected.DispatchID = ""
 	projected.Status = TaskPending
 	projected.Detail = detail
 	projected.Output = ""
@@ -917,7 +962,30 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 	projected.EndedAt = time.Time{}
 	projected.ModelTime = 0
 	projected.ToolTime = 0
+	projected.TypedResult = nil
+	projected.CheckpointPause = false
 	projected.Retries = current.Retries + 1
+	if len(modelOverride) == 1 && modelOverride[0] != "" {
+		projected.Model = modelOverride[0]
+	}
+
+	// A retry is a new occurrence. Freeze the exact projected occurrence before
+	// its reset event becomes durable; interrupted resume deliberately uses a
+	// different path and retains the existing attempt/admission.
+	occurrence, err := taskOccurrenceProjectionForRetry(&projected)
+	if err != nil {
+		return fmt.Errorf("commit task reset for retry projection: %w", err)
+	}
+	if !c.hasDurableEventJournal() {
+		if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
+			return err
+		}
+		c.revokeTaskOccurrence(taskID)
+		return nil
+	}
+	if _, err := c.admitTaskOccurrence(ctx, occurrence, taskID, projected.Retries+1); err != nil {
+		return fmt.Errorf("commit task reset for retry admission: %w", err)
+	}
 
 	payload := c.taskTransitionPayloadWithCoordinator(&projected)
 	payload["reset_for_retry"] = true
@@ -947,7 +1015,10 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", projected.ID, projected.Status, projected.Retries)] = true
 	c.eventOnceMu.Unlock()
 
-	c.taskTracker.TodoList().ResetForRetry(taskID, detail)
+	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
+		return fmt.Errorf("apply task reset for retry after durable append: %w", err)
+	}
+	c.revokeTaskOccurrence(taskID)
 	return nil
 }
 
@@ -1281,6 +1352,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"contract_revision":     item.ContractRevision,
 		"status":                string(item.Status),
 		"detail":                item.Detail,
+		"checkpoint_pause":      item.CheckpointPause,
+		"occurrence_revision":   item.OccurrenceRevision,
+		"dispatch_id":           item.DispatchID,
 		"max_retries":           item.MaxRetries,
 		"retries":               item.Retries,
 		"agent":                 item.Agent,

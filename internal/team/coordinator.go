@@ -2133,6 +2133,10 @@ func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
 			return
 		}
 		c.openTaskOccurrence(identity)
+		identity, ok = c.activeTaskResultOccurrence(todoID)
+		if !ok {
+			return
+		}
 	}
 	if res.TaskID != "" && res.TaskID != identity.TaskID ||
 		res.Attempt > 0 && res.Attempt != identity.Attempt ||
@@ -2141,14 +2145,20 @@ func (c *Coordinator) storeSubmittedTaskResult(todoID string, res *TaskResult) {
 	}
 	controller := c.occurrenceController(todoID)
 	controller.mu.Lock()
+	var stored *TaskResult
 	if controller.result == nil && !controller.reserved {
-		controller.result = cloneTaskResult(res)
-		controller.result.TaskID = identity.TaskID
-		controller.result.Attempt = identity.Attempt
-		controller.result.Agent = identity.Agent
-		c.publishTaskResultProjection(todoID, controller.result)
+		stored = cloneTaskResult(res)
+		stored.TaskID = identity.TaskID
+		stored.Attempt = identity.Attempt
+		stored.Agent = identity.Agent
+		controller.result = stored
 	}
 	controller.mu.Unlock()
+	if stored != nil {
+		if err := c.publishTaskResultProjection(identity, stored); err != nil {
+			c.clearPublishedTaskResult(identity, stored)
+		}
+	}
 }
 
 func (c *Coordinator) storeTrustedTaskResultSeed(todoID string, res *TaskResult) {
@@ -2178,7 +2188,8 @@ func (c *Coordinator) activeTaskResultOccurrence(todoID string) (submitResultRun
 }
 
 func sameTaskResultOccurrence(a, b submitResultRuntimeIdentity) bool {
-	return a.RunID == b.RunID && a.TaskID == b.TaskID && a.Attempt == b.Attempt && strings.EqualFold(a.Agent, b.Agent)
+	return a.RunID == b.RunID && a.TaskID == b.TaskID && a.Attempt == b.Attempt &&
+		strings.EqualFold(a.Agent, b.Agent) && a.OccurrenceRevision == b.OccurrenceRevision && a.DispatchID == b.DispatchID
 }
 
 // openSubmittedTaskResult atomically closes the prior occurrence and opens a
@@ -2196,8 +2207,8 @@ func (c *Coordinator) storeSubmittedTaskResultForOccurrence(identity submitResul
 	}
 	controller := c.occurrenceController(identity.TaskID)
 	controller.mu.Lock()
-	defer controller.mu.Unlock()
 	if !controller.opened || !sameTaskResultOccurrence(controller.identity, identity) || controller.result != nil || controller.reserved {
+		controller.mu.Unlock()
 		return false
 	}
 	stored := cloneTaskResult(res)
@@ -2205,7 +2216,11 @@ func (c *Coordinator) storeSubmittedTaskResultForOccurrence(identity submitResul
 	stored.Attempt = identity.Attempt
 	stored.Agent = identity.Agent
 	controller.result = stored
-	c.publishTaskResultProjection(identity.TaskID, stored)
+	controller.mu.Unlock()
+	if err := c.publishTaskResultProjection(identity, stored); err != nil {
+		c.clearPublishedTaskResult(identity, stored)
+		return false
+	}
 	return true
 }
 
@@ -2228,15 +2243,26 @@ func (c *Coordinator) deriveTrustedTaskResultOccurrence(todoID string, res *Task
 		attempt = 1
 	}
 	agentName := strings.TrimSpace(res.Agent)
-	if agentName == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+	revision := 1
+	dispatchID := ""
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		for _, item := range c.taskTracker.TodoList().Items() {
 			if item != nil && item.ID == todoID {
-				agentName = strings.TrimSpace(item.Agent)
+				if agentName == "" {
+					agentName = strings.TrimSpace(item.Agent)
+				}
+				if item.OccurrenceRevision > 0 {
+					revision = item.OccurrenceRevision
+				}
+				dispatchID = strings.TrimSpace(item.DispatchID)
 				break
 			}
 		}
 	}
-	return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName}, runID != "" && agentName != ""
+	if dispatchID == "" {
+		dispatchID = newTaskDispatchID()
+	}
+	return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName, OccurrenceRevision: revision, DispatchID: dispatchID}, runID != "" && agentName != ""
 }
 
 // clearSubmittedTaskResult removes the currently latched result. Retry setup

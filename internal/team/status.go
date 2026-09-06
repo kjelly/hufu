@@ -233,7 +233,16 @@ type TodoItem struct {
 	Status           TaskStatus
 	Detail           string
 	Output           string // Full task output
-	Model            string
+	// CheckpointPause marks a deliberate scheduler pause. It is durable
+	// lifecycle metadata so crash recovery does not mistake an operator-facing
+	// checkpoint pause for an interrupted worker that may be replayed.
+	CheckpointPause bool `json:"checkpoint_pause,omitempty"`
+	// OccurrenceRevision changes whenever the durable lifecycle projection is
+	// advanced. DispatchID identifies the currently admitted worker lease and
+	// is intentionally different for every dispatch, including resume.
+	OccurrenceRevision int    `json:"occurrence_revision,omitempty"`
+	DispatchID         string `json:"dispatch_id,omitempty"`
+	Model              string
 	// ModelTopology is the immutable ordered model topology for this durable
 	// task occurrence. The first model is the primary; remaining models are
 	// explicit initial fanout leaves.
@@ -1057,6 +1066,9 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Status:              item.Status,
 		Detail:              item.Detail,
 		Output:              item.Output,
+		CheckpointPause:     item.CheckpointPause,
+		OccurrenceRevision:  item.OccurrenceRevision,
+		DispatchID:          item.DispatchID,
 		Model:               item.Model,
 		ModelTopology:       cloneModelTopology(item.ModelTopology),
 		Sidecar:             item.Sidecar,
@@ -1118,6 +1130,95 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		MemoryManifests:     memoryManifests,
 		ContextManifests:    contextManifests,
 	}
+}
+
+// TryApplyProjectedItem installs one task projection atomically and fires the
+// checkpoint callback only after the projection is installed. The event-first
+// coordinator boundaries use this for reset projections whose lifecycle state
+// is intentionally outside CanTransition (retry and same-occurrence resume).
+func (tl *TodoList) TryApplyProjectedItem(projected *TodoItem) error {
+	if projected == nil || projected.ID == "" {
+		return fmt.Errorf("projected task is invalid")
+	}
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item != nil && item.ID == projected.ID {
+			// The projection is copied into the live item rather than replacing
+			// the slot. Callers across the coordinator and its tests hold
+			// *TodoItem aliases obtained at creation; swapping the pointer would
+			// silently detach every one of them from the lifecycle.
+			*item = *cloneTodoItem(projected)
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", projected.ID)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+// TrySetTypedResultForDispatch installs a result only when the Todo still owns
+// the exact dispatch lease that produced it. The callback is intentionally
+// invoked after the Todo mutex is released.
+func (tl *TodoList) TrySetTypedResultForDispatch(id string, revision int, dispatchID string, result *TaskResult) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item == nil || item.ID != id {
+			continue
+		}
+		if item.OccurrenceRevision != revision || item.DispatchID != dispatchID {
+			tl.mu.Unlock()
+			return fmt.Errorf("task %s dispatch lease is stale", id)
+		}
+		item.TypedResult = cloneTaskResult(result)
+		updated = true
+		break
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
+// TrySetDispatchLease installs a fresh worker lease. It is used by dispatch
+// activation after the occurrence event and admission are durable. The typed
+// result is cleared in the same critical section: a new lease owns no result
+// yet, and leaving the prior attempt's result projected would let it be read
+// back as if it belonged to the dispatch that replaced it.
+func (tl *TodoList) TrySetDispatchLease(id string, revision int, dispatchID string) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item != nil && item.ID == id {
+			item.OccurrenceRevision = revision
+			item.DispatchID = dispatchID
+			item.TypedResult = nil
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
 }
 
 // restoreTodoOccurrenceContract restores only the immutable execution

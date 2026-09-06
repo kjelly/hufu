@@ -7,19 +7,31 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var (
 	errTaskResultStale     = errors.New("task result provenance does not match active runtime occurrence")
 	errTaskResultDuplicate = errors.New("task result already submitted for active runtime occurrence")
+	taskDispatchSeq        atomic.Uint64
 )
 
 // taskOccurrenceController is the coordinator-owned transaction boundary for
-// one todo. Its mutex is held from reservation through commit or rollback, so
-// opening a retry cannot interleave with a delayed submission.
+// one todo. mu protects the result reservation; projectionMu serializes the
+// two-phase projection commit with lifecycle lease closure. Neither mutex is
+// held while a TodoList checkpoint callback runs.
 type taskOccurrenceController struct {
-	mu sync.Mutex
+	mu           sync.Mutex
+	projectionMu sync.Mutex
 
+	identity submitResultRuntimeIdentity
+	opened   bool
+	reserved bool
+	result   *TaskResult
+	pending  []ArtifactRef
+}
+
+type taskOccurrenceControllerSnapshot struct {
 	identity submitResultRuntimeIdentity
 	opened   bool
 	reserved bool
@@ -166,27 +178,117 @@ func (c *Coordinator) occurrenceController(todoID string) *taskOccurrenceControl
 }
 
 func (c *Coordinator) openTaskOccurrence(identity submitResultRuntimeIdentity) {
-	if c == nil || !validSubmitResultIdentity(identity) {
+	if c == nil || strings.TrimSpace(identity.TaskID) == "" {
 		return
 	}
-	controller := c.occurrenceController(identity.TaskID)
+	if identity.OccurrenceRevision <= 0 {
+		identity.OccurrenceRevision = 1
+	}
+	if strings.TrimSpace(identity.DispatchID) == "" {
+		identity.DispatchID = newTaskDispatchID()
+	}
+	if !validSubmitResultIdentity(identity) {
+		return
+	}
+	// Compatibility callers (notably trusted coordinator-side seeds) may open
+	// an occurrence directly. They must still receive the same Todo lease as a
+	// dispatched worker; otherwise a later strict result projection would be
+	// rejected after the controller has already latched the result.
+	_ = c.activateTaskDispatch(identity)
+}
+
+func newTaskDispatchID() string {
+	return fmt.Sprintf("dispatch-%d", taskDispatchSeq.Add(1))
+}
+
+func (controller *taskOccurrenceController) snapshot() taskOccurrenceControllerSnapshot {
+	if controller == nil {
+		return taskOccurrenceControllerSnapshot{}
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	return taskOccurrenceControllerSnapshot{
+		identity: controller.identity,
+		opened:   controller.opened,
+		reserved: controller.reserved,
+		result:   cloneTaskResult(controller.result),
+		pending:  append([]ArtifactRef(nil), controller.pending...),
+	}
+}
+
+func (controller *taskOccurrenceController) restore(snapshot taskOccurrenceControllerSnapshot) {
 	if controller == nil {
 		return
 	}
 	controller.mu.Lock()
-	defer controller.mu.Unlock()
+	controller.identity = snapshot.identity
+	controller.opened = snapshot.opened
+	controller.reserved = snapshot.reserved
+	controller.result = cloneTaskResult(snapshot.result)
+	controller.pending = append([]ArtifactRef(nil), snapshot.pending...)
+	controller.mu.Unlock()
+}
+
+// activateTaskDispatch installs a fresh dispatch lease after the caller has
+// completed the durable occurrence/admission boundary. It is deliberately a
+// separate phase from result reservation so a retry or resume cannot expose a
+// worker lease before its lifecycle event and admission are durable.
+func (c *Coordinator) activateTaskDispatch(identity submitResultRuntimeIdentity) error {
+	if c == nil || !validSubmitResultIdentity(identity) {
+		return errTaskResultStale
+	}
+	controller := c.occurrenceController(identity.TaskID)
+	if controller == nil {
+		return errTaskResultStale
+	}
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
+	return c.activateTaskDispatchLocked(identity, controller)
+}
+
+func (c *Coordinator) activateTaskDispatchLocked(identity submitResultRuntimeIdentity, controller *taskOccurrenceController) error {
+	if c == nil || controller == nil || !validSubmitResultIdentity(identity) {
+		return errTaskResultStale
+	}
+	previous := controller.snapshot()
+	controller.mu.Lock()
 	controller.identity = identity
 	controller.opened = true
 	controller.reserved = false
 	controller.result = nil
 	controller.pending = nil
-	c.clearTaskResultProjection(identity.TaskID)
+	controller.mu.Unlock()
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		if err := c.taskTracker.TodoList().TrySetDispatchLease(identity.TaskID, identity.OccurrenceRevision, identity.DispatchID); err != nil {
+			controller.restore(previous)
+			return err
+		}
+	}
+	c.clearTaskResultCache(identity.TaskID)
+	return nil
+}
+
+// completeOccurrenceLease fills in the lease half of an identity that was
+// built without one. It adopts the active occurrence only when the entire
+// worker-visible half already matches, so a delayed prior attempt can never
+// inherit the lease of the occurrence that replaced it.
+func (c *Coordinator) completeOccurrenceLease(identity submitResultRuntimeIdentity) submitResultRuntimeIdentity {
+	if identity.OccurrenceRevision > 0 && strings.TrimSpace(identity.DispatchID) != "" {
+		return identity
+	}
+	active, ok := c.activeTaskResultOccurrence(identity.TaskID)
+	if !ok || identity.RunID != active.RunID || identity.TaskID != active.TaskID ||
+		identity.Attempt != active.Attempt || !strings.EqualFold(identity.Agent, active.Agent) {
+		return identity
+	}
+	return active
 }
 
 func validSubmitResultIdentity(identity submitResultRuntimeIdentity) bool {
 	return strings.TrimSpace(identity.RunID) != "" &&
 		strings.TrimSpace(identity.TaskID) != "" &&
-		identity.Attempt > 0 && strings.TrimSpace(identity.Agent) != ""
+		identity.Attempt > 0 && strings.TrimSpace(identity.Agent) != "" &&
+		identity.OccurrenceRevision > 0 && strings.TrimSpace(identity.DispatchID) != ""
 }
 
 func (c *Coordinator) beginTaskResultSubmission(identity submitResultRuntimeIdentity) (*taskResultOccurrenceTransaction, error) {
@@ -207,11 +309,17 @@ func (c *Coordinator) beginTaskResultSubmission(identity submitResultRuntimeIden
 		return nil, errTaskResultDuplicate
 	}
 	controller.reserved = true
+	controller.mu.Unlock()
 	return &taskResultOccurrenceTransaction{coordinator: c, controller: controller, identity: identity}, nil
 }
 
 func (tx *taskResultOccurrenceTransaction) addMaterialized(refs []ArtifactRef) {
 	if tx == nil || tx.controller == nil {
+		return
+	}
+	tx.controller.mu.Lock()
+	defer tx.controller.mu.Unlock()
+	if tx.finished || !tx.controller.reserved {
 		return
 	}
 	tx.controller.pending = append([]ArtifactRef(nil), refs...)
@@ -220,6 +328,11 @@ func (tx *taskResultOccurrenceTransaction) addMaterialized(refs []ArtifactRef) {
 func (tx *taskResultOccurrenceTransaction) consumePending(refs []ArtifactRef) error {
 	if tx == nil || tx.controller == nil || len(refs) == 0 {
 		return fmt.Errorf("no materialized submit_result artifacts are pending")
+	}
+	tx.controller.mu.Lock()
+	defer tx.controller.mu.Unlock()
+	if tx.finished || !tx.controller.reserved || !sameTaskResultOccurrence(tx.controller.identity, tx.identity) {
+		return fmt.Errorf("task result occurrence is stale")
 	}
 	pending := tx.controller.pending
 	if len(pending) != len(refs) {
@@ -244,20 +357,29 @@ func (tx *taskResultOccurrenceTransaction) consumePending(refs []ArtifactRef) er
 }
 
 func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
-	if tx == nil || tx.controller == nil || tx.finished || !tx.controller.reserved {
+	if tx == nil || tx.controller == nil || tx.finished {
 		return errTaskResultStale
 	}
 	if result == nil {
 		return fmt.Errorf("task result is nil")
 	}
 	copyResult := cloneTaskResult(result)
+	tx.controller.mu.Lock()
+	if tx.finished || !tx.controller.reserved || !sameTaskResultOccurrence(tx.controller.identity, tx.identity) {
+		tx.controller.mu.Unlock()
+		return errTaskResultStale
+	}
 	copyResult.TaskID = tx.identity.TaskID
 	copyResult.Attempt = tx.identity.Attempt
 	copyResult.Agent = tx.identity.Agent
 	tx.controller.result = copyResult
 	tx.controller.reserved = false
 	tx.controller.pending = nil
-	tx.coordinator.publishTaskResultProjection(tx.identity.TaskID, copyResult)
+	tx.controller.mu.Unlock()
+	if err := tx.coordinator.publishTaskResultProjection(tx.identity, copyResult); err != nil {
+		tx.coordinator.clearPublishedTaskResult(tx.identity, copyResult)
+		return err
+	}
 	return nil
 }
 
@@ -276,12 +398,15 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	if controller == nil {
 		return "", errTaskResultStale
 	}
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
 	controller.mu.Lock()
-	defer controller.mu.Unlock()
 	if !controller.opened || !sameTaskResultOccurrence(controller.identity, identity) || controller.reserved || controller.result == nil {
+		controller.mu.Unlock()
 		return "", errTaskResultStale
 	}
 	finalized := cloneTaskResult(controller.result)
+	controller.mu.Unlock()
 	output, err := finalizeVerbatimTaskResult(transcript, finalized)
 	if err != nil {
 		return "", err
@@ -292,8 +417,16 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	finalized.TaskID = identity.TaskID
 	finalized.Attempt = identity.Attempt
 	finalized.Agent = identity.Agent
+	controller.mu.Lock()
+	if !controller.opened || !sameTaskResultOccurrence(controller.identity, identity) || controller.result == nil {
+		controller.mu.Unlock()
+		return "", errTaskResultStale
+	}
 	controller.result = finalized
-	c.publishTaskResultProjection(identity.TaskID, finalized)
+	controller.mu.Unlock()
+	if err := c.publishTaskResultProjectionLocked(identity, finalized, controller); err != nil {
+		return "", err
+	}
 	return output, nil
 }
 
@@ -301,6 +434,7 @@ func (tx *taskResultOccurrenceTransaction) rollback() error {
 	if tx == nil || tx.controller == nil || tx.finished {
 		return nil
 	}
+	tx.controller.mu.Lock()
 	tx.controller.pending = nil
 	tx.controller.reserved = false
 	tx.finished = true
@@ -312,24 +446,84 @@ func (tx *taskResultOccurrenceTransaction) finish() {
 	if tx == nil || tx.controller == nil || tx.finished {
 		return
 	}
+	tx.controller.mu.Lock()
 	tx.controller.pending = nil
 	tx.finished = true
 	tx.controller.mu.Unlock()
 }
 
-func (c *Coordinator) publishTaskResultProjection(todoID string, result *TaskResult) {
-	if c == nil || result == nil {
-		return
+func (c *Coordinator) publishTaskResultProjection(identity submitResultRuntimeIdentity, result *TaskResult) error {
+	if c == nil || result == nil || !validSubmitResultIdentity(identity) {
+		return errTaskResultStale
+	}
+	controller := c.occurrenceController(identity.TaskID)
+	if controller == nil {
+		return errTaskResultStale
+	}
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
+	return c.publishTaskResultProjectionLocked(identity, result, controller)
+}
+
+// publishTaskResultProjectionLocked is the non-reentrant half of result
+// projection for callers that already own controller.projectionMu.
+func (c *Coordinator) publishTaskResultProjectionLocked(identity submitResultRuntimeIdentity, result *TaskResult, controller *taskOccurrenceController) error {
+	if c == nil || result == nil || controller == nil || !validSubmitResultIdentity(identity) {
+		return errTaskResultStale
+	}
+	controller.mu.Lock()
+	valid := controller.opened && sameTaskResultOccurrence(controller.identity, identity) && controller.result != nil
+	controller.mu.Unlock()
+	if !valid {
+		return errTaskResultStale
+	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		if err := c.taskTracker.TodoList().TrySetTypedResultForDispatch(identity.TaskID, identity.OccurrenceRevision, identity.DispatchID, result); err != nil {
+			return err
+		}
 	}
 	c.taskResultsMu.Lock()
 	if c.taskResults == nil {
 		c.taskResults = make(map[string]*TaskResult)
 	}
-	c.taskResults[todoID] = cloneTaskResult(result)
+	c.taskResults[identity.TaskID] = cloneTaskResult(result)
 	c.taskResultsMu.Unlock()
-	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		_ = c.taskTracker.TodoList().SetTypedResult(todoID, result)
+	return nil
+}
+
+// revokeTaskOccurrence closes a prior worker lease after its replacement Todo
+// projection is installed, preventing a stale controller result from being
+// observed or published into the new lifecycle revision.
+func (c *Coordinator) revokeTaskOccurrence(todoID string) {
+	controller := c.occurrenceController(todoID)
+	if controller == nil {
+		return
 	}
+	controller.projectionMu.Lock()
+	controller.mu.Lock()
+	controller.opened = false
+	controller.reserved = false
+	controller.result = nil
+	controller.pending = nil
+	controller.identity = submitResultRuntimeIdentity{}
+	controller.mu.Unlock()
+	controller.projectionMu.Unlock()
+	c.clearTaskResultCache(todoID)
+}
+
+// clearPublishedTaskResult restores the first-result latch when its Todo
+// projection was rejected. Keeping an unprojected result authoritative would
+// let a later terminal transition claim success without canonical evidence.
+func (c *Coordinator) clearPublishedTaskResult(identity submitResultRuntimeIdentity, result *TaskResult) {
+	controller := c.occurrenceController(identity.TaskID)
+	if controller == nil {
+		return
+	}
+	controller.mu.Lock()
+	if controller.opened && sameTaskResultOccurrence(controller.identity, identity) && controller.result == result {
+		controller.result = nil
+	}
+	controller.mu.Unlock()
 }
 
 func (c *Coordinator) clearTaskResultProjection(todoID string) {
@@ -341,9 +535,21 @@ func (c *Coordinator) clearTaskResultProjection(todoID string) {
 		delete(c.taskResults, todoID)
 	}
 	c.taskResultsMu.Unlock()
+	c.clearTaskResultCache(todoID)
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		_ = c.taskTracker.TodoList().SetTypedResult(todoID, nil)
 	}
+}
+
+func (c *Coordinator) clearTaskResultCache(todoID string) {
+	if c == nil || todoID == "" {
+		return
+	}
+	c.taskResultsMu.Lock()
+	if c.taskResults != nil {
+		delete(c.taskResults, todoID)
+	}
+	c.taskResultsMu.Unlock()
 }
 
 // submitResultRuntimeIdentityKey is deliberately private: only the
@@ -355,11 +561,12 @@ func withSubmitResultRuntimeIdentity(ctx context.Context, identity submitResultR
 	return context.WithValue(ctx, submitResultRuntimeIdentityKey{}, identity)
 }
 
-func submitResultRuntimeIdentityFromContext(ctx context.Context, _ *Coordinator, taskID string) (submitResultRuntimeIdentity, error) {
+func submitResultRuntimeIdentityFromContext(ctx context.Context, coordinator *Coordinator, taskID string) (submitResultRuntimeIdentity, error) {
 	if ctx == nil {
 		return submitResultRuntimeIdentity{}, fmt.Errorf("submit_result runtime identity is missing")
 	}
 	if identity, ok := ctx.Value(submitResultRuntimeIdentityKey{}).(submitResultRuntimeIdentity); ok {
+		identity = coordinator.completeOccurrenceLease(identity)
 		if identity.TaskID != taskID || !validSubmitResultIdentity(identity) {
 			return submitResultRuntimeIdentity{}, fmt.Errorf("submit_result runtime identity is invalid")
 		}
