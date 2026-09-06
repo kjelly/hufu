@@ -417,63 +417,84 @@ func effectiveEventBranchID(event RunEvent) string {
 	return event.BranchID
 }
 
-// FilterEventsForBranch returns only events in targetBranch's lineage.
-func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) []RunEvent {
-	if len(events) == 0 {
-		return nil
-	}
+// projectEventsForBranch returns the exact visible lineage for targetBranchID.
+// Each branch contributes its own events after the recursively projected
+// parent prefix. A fork point is valid only when it is present in that parent
+// prefix, which prevents references to sibling, descendant, or post-cutoff
+// events from widening visibility.
+func projectEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) ([]RunEvent, error) {
 	if st == nil {
 		st = NewSessionTree()
 	}
 	if targetBranchID == "" {
 		targetBranchID = "main"
 	}
-
-	// Build event ID to index map for fast lookup
-	eventIndexMap := make(map[string]int, len(events))
-	for i, e := range events {
-		eventIndexMap[e.ID] = i
+	if st.Branches == nil {
+		return nil, fmt.Errorf("session tree has no branches")
 	}
 
-	inLineage := make(map[string]bool)
-	maxIdxMap := make(map[string]int)
+	return projectBranchLineage(events, st, targetBranchID, make(map[string]bool))
+}
 
-	curBranchID := targetBranchID
-	for curBranchID != "" {
-		b := st.GetBranch(curBranchID)
-		if b == nil {
-			break
+func projectBranchLineage(events []RunEvent, st *SessionTree, branchID string, visiting map[string]bool) ([]RunEvent, error) {
+	if visiting[branchID] {
+		return nil, fmt.Errorf("session tree branch lineage contains a cycle at %q", branchID)
+	}
+	branch, ok := st.Branches[branchID]
+	if !ok || branch == nil {
+		return nil, fmt.Errorf("session tree branch %q is missing", branchID)
+	}
+	if strings.TrimSpace(branch.ID) != branchID {
+		return nil, fmt.Errorf("session tree branch key %q does not match branch ID %q", branchID, branch.ID)
+	}
+	visiting[branchID] = true
+	defer delete(visiting, branchID)
+
+	var lineage []RunEvent
+	parentID := strings.TrimSpace(branch.ParentID)
+	if parentID == "" {
+		if strings.TrimSpace(branch.ForkEventID) != "" {
+			return nil, fmt.Errorf("branch %q has fork event %q but no parent", branchID, branch.ForkEventID)
 		}
-		inLineage[b.ID] = true
-
-		if b.ParentID != "" && b.ForkEventID != "" {
-			if forkIdx, ok := eventIndexMap[b.ForkEventID]; ok {
-				// Parent branch is restricted to events up to forkIdx
-				if existingMax, ok := maxIdxMap[b.ParentID]; !ok || forkIdx < existingMax {
-					maxIdxMap[b.ParentID] = forkIdx
+	} else {
+		parentLineage, err := projectBranchLineage(events, st, parentID, visiting)
+		if err != nil {
+			return nil, err
+		}
+		if forkEventID := strings.TrimSpace(branch.ForkEventID); forkEventID != "" {
+			forkIndex := -1
+			for index, event := range parentLineage {
+				if event.ID == forkEventID {
+					forkIndex = index
+					break
 				}
 			}
+			if forkIndex < 0 {
+				return nil, fmt.Errorf("branch %q fork event %q is not in parent %q visible lineage", branchID, forkEventID, parentID)
+			}
+			lineage = append(lineage, parentLineage[:forkIndex+1]...)
 		}
-
-		curBranchID = b.ParentID
+		// An empty fork is an explicitly empty inherited prefix. Do not fall
+		// back to unrestricted parent history.
 	}
 
-	var filtered []RunEvent
-	for i, e := range events {
-		bid := effectiveEventBranchID(e)
-
-		if !inLineage[bid] {
-			continue
+	for _, event := range events {
+		if effectiveEventBranchID(event) == branchID {
+			lineage = append(lineage, event)
 		}
-
-		if maxIdx, restricted := maxIdxMap[bid]; restricted && i > maxIdx {
-			continue
-		}
-
-		filtered = append(filtered, e)
 	}
+	return lineage, nil
+}
 
-	return filtered
+// FilterEventsForBranch preserves the historical no-error API. Invalid or
+// incomplete lineage metadata fails closed rather than exposing unrestricted
+// parent history to compatibility callers.
+func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) []RunEvent {
+	lineage, err := projectEventsForBranch(events, st, targetBranchID)
+	if err != nil {
+		return nil
+	}
+	return lineage
 }
 
 func isVerifySuccess(vr *VerificationResult) bool {

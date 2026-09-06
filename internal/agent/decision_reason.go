@@ -62,6 +62,8 @@ const (
 	EventDecisionBudgetDegraded       = "decision_budget_degraded"
 	EventDecisionEvidenceSharedOrigin = "decision_evidence_shared_origin"
 	EventDecisionInvalidated          = "decision_invalidated"
+	EventDecisionAdmitted             = "decision_admitted"
+	EventDecisionRunEnvelopeAnchored  = "decision_run_envelope_anchored"
 	EventRequestContractCommitted     = "request_contract_committed"
 	EventDecisionContractBound        = "decision_contract_bound"
 
@@ -128,6 +130,8 @@ var DecisionEventTypes = []string{
 	EventDecisionBudgetDegraded,
 	EventDecisionEvidenceSharedOrigin,
 	EventDecisionInvalidated,
+	EventDecisionAdmitted,
+	EventDecisionRunEnvelopeAnchored,
 	EventRequestContractCommitted,
 	EventDecisionContractBound,
 	EventAssumptionDeclared,

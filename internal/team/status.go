@@ -228,51 +228,77 @@ type TodoItem struct {
 	ContractRevision int     `json:"contract_revision,omitempty"`
 	Agent            string
 	Desc             string
+	Goal             string `json:"goal,omitempty"`
+	Constraints      string `json:"constraints,omitempty"`
 	Status           TaskStatus
 	Detail           string
 	Output           string // Full task output
 	Model            string
-	Skills           []string
-	InjectedSkills   []string
-	LoadedSkills     []string
-	StartedAt        time.Time
-	EndedAt          time.Time
-	ModelTime        time.Duration
-	ToolTime         time.Duration
-	Source           string
-	ParentID         string
-	DependsOn        []string                 // IDs of tasks that must complete before this one starts
-	Verify           string                   // Command to run to verify the task
-	VerifyMode       string                   // success, expected_failure, or observation
-	VerifySpec       *VerificationSpec        `json:"verify_spec,omitempty"`
-	WorksetBinding   *WorksetBinding          `json:"workset_binding,omitempty"`
-	WorksetReceipt   *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
-	VerifyResult     *VerificationResult
+	// ModelTopology is the immutable ordered model topology for this durable
+	// task occurrence. The first model is the primary; remaining models are
+	// explicit initial fanout leaves.
+	ModelTopology  []string `json:"model_topology,omitempty"`
+	Sidecar        bool     `json:"sidecar,omitempty"`
+	Summarize      bool     `json:"summarize,omitempty"`
+	OutputMode     string   `json:"output_mode,omitempty"`
+	ContextFiles   []string `json:"context_files,omitempty"`
+	Requires       []string `json:"requires,omitempty"`
+	Skills         []string
+	InjectedSkills []string
+	LoadedSkills   []string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	ModelTime      time.Duration
+	ToolTime       time.Duration
+	Source         string
+	ParentID       string
+	DependsOn      []string                 // IDs of tasks that must complete before this one starts
+	Verify         string                   // Command to run to verify the task
+	VerifyMode     string                   // success, expected_failure, or observation
+	VerifySpec     *VerificationSpec        `json:"verify_spec,omitempty"`
+	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
+	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
+	VerifyResult   *VerificationResult
 	// RuntimeError preserves a structured runtime/provider failure so phase
 	// aggregation does not degrade it into an unclassified worker error.
-	RuntimeError        *ExecutionError            `json:"runtime_error,omitempty"`
-	ExecutionReceipt    *ExecutionReceipt          `json:"execution_receipt,omitempty"`
-	ExecutionReceipts   []ExecutionReceipt         `json:"execution_receipts,omitempty"`
-	FailureEvent        *FailureEventPayload       `json:"failure_event,omitempty"`
-	MaxRetries          int                        // Maximum number of retries for this task
-	Retries             int                        // Current number of retries
-	OnFailure           string                     // ID of the task to jump back to if this task fails (creates a loop)
-	SideEffect          SideEffectClass            `json:"side_effect,omitempty"`
-	Recovery            RecoveryPolicy             `json:"recovery,omitempty"`
-	ReconcileTool       string                     `json:"reconcile_tool,omitempty"`
-	RecoveryState       string                     `json:"recovery_state,omitempty"`
-	TypedResult         *TaskResult                `json:"typed_result,omitempty"`
-	Resolution          *TaskResolution            `json:"resolution,omitempty"`
-	Kind                TaskKind                   `json:"kind,omitempty"`
-	Advances            []string                   `json:"advances,omitempty"`
-	ExpectedStateChange string                     `json:"expected_state_change,omitempty"`
-	Progress            TaskProgress               `json:"progress,omitempty"`
-	ProgressCriteria    []string                   `json:"progress_criteria,omitempty"`
-	FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints,omitempty"`
-	RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis,omitempty"`
-	DiagnosticHints     []string                   `json:"diagnostic_hints,omitempty"`
-	LastOperation       string                     `json:"last_operation,omitempty"`
-	Execution           ExecutionContract          `json:"execution,omitempty"`
+	RuntimeError        *ExecutionError      `json:"runtime_error,omitempty"`
+	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
+	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
+	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
+	MaxRetries          int                  // Maximum number of retries for this task
+	Retries             int                  // Current number of retries
+	OnFailure           string               // ID of the task to jump back to if this task fails (creates a loop)
+	Escalate            bool                 `json:"escalate,omitempty"`
+	AdversarialVerify   int                  `json:"adversarial_verify,omitempty"`
+	SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
+	Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
+	ReconcileTool       string               `json:"reconcile_tool,omitempty"`
+	RecoveryState       string               `json:"recovery_state,omitempty"`
+	TypedResult         *TaskResult          `json:"typed_result,omitempty"`
+	Resolution          *TaskResolution      `json:"resolution,omitempty"`
+	Kind                TaskKind             `json:"kind,omitempty"`
+	Advances            []string             `json:"advances,omitempty"`
+	ExpectedStateChange string               `json:"expected_state_change,omitempty"`
+	Progress            TaskProgress         `json:"progress,omitempty"`
+	ProgressCriteria    []string             `json:"progress_criteria,omitempty"`
+	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
+	RecoveryHypothesis  *RecoveryHypothesis  `json:"recovery_hypothesis,omitempty"`
+	DiagnosticHints     []string             `json:"diagnostic_hints,omitempty"`
+	LastOperation       string               `json:"last_operation,omitempty"`
+	Execution           ExecutionContract    `json:"execution,omitempty"`
+	Optional            bool                 `json:"optional,omitempty"`
+	ResourceClaims      []string             `json:"resource_claims,omitempty"`
+	Resources           []ResourceClaim      `json:"resources,omitempty"`
+	// Decision admission is immutable task-contract state. It is persisted on
+	// the todo before execution so crash recovery cannot silently downgrade a
+	// configured decision task to the off-profile path.
+	DecisionProfile     string                     `json:"decision_profile,omitempty"`
+	DecisionOptions     []DecisionOption           `json:"decision_options,omitempty"`
+	DecisionAssumptions []DecisionAssumption       `json:"decision_assumptions,omitempty"`
+	DecisionFacts       map[string]any             `json:"decision_facts,omitempty"`
+	DecisionArtifacts   []ArtifactRef              `json:"decision_artifacts,omitempty"`
+	DecisionBaseRates   []BaseRateEvidence         `json:"decision_base_rates,omitempty"`
+	DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance,omitempty"`
 	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
 	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
 }
@@ -309,7 +335,15 @@ type TodoSpec struct {
 	ContractRevision    int
 	Agent               string
 	Desc                string
+	Goal                string
+	Constraints         string
 	Model               string
+	ModelTopology       []string
+	Sidecar             bool
+	Summarize           bool
+	OutputMode          string
+	ContextFiles        []string
+	Requires            []string
 	Source              string
 	ParentID            string
 	Verify              string
@@ -319,6 +353,8 @@ type TodoSpec struct {
 	WorksetReceipt      *WorksetExpansionReceipt
 	MaxRetries          int
 	OnFailure           string
+	Escalate            bool
+	AdversarialVerify   int
 	DependsOn           []string
 	SideEffect          SideEffectClass
 	Recovery            RecoveryPolicy
@@ -328,6 +364,16 @@ type TodoSpec struct {
 	ExpectedStateChange string
 	RecoveryHypothesis  *RecoveryHypothesis
 	Execution           ExecutionContract
+	Optional            bool
+	ResourceClaims      []string
+	Resources           []ResourceClaim
+	DecisionProfile     string
+	DecisionOptions     []DecisionOption
+	DecisionAssumptions []DecisionAssumption
+	DecisionFacts       map[string]any
+	DecisionArtifacts   []ArtifactRef
+	DecisionBaseRates   []BaseRateEvidence
+	DecisionProvenance  []EvidenceProvenance
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -346,7 +392,15 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		ContractRevision:    item.ContractRevision,
 		Agent:               item.Agent,
 		Desc:                item.Desc,
+		Goal:                item.Goal,
+		Constraints:         item.Constraints,
 		Model:               item.Model,
+		ModelTopology:       cloneModelTopology(item.ModelTopology),
+		Sidecar:             item.Sidecar,
+		Summarize:           item.Summarize,
+		OutputMode:          item.OutputMode,
+		ContextFiles:        append([]string(nil), item.ContextFiles...),
+		Requires:            append([]string(nil), item.Requires...),
 		Status:              TaskPending,
 		Source:              item.Source,
 		ParentID:            item.ParentID,
@@ -357,6 +411,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
 		MaxRetries:          item.MaxRetries,
 		OnFailure:           item.OnFailure,
+		Escalate:            item.Escalate,
+		AdversarialVerify:   item.AdversarialVerify,
 		DependsOn:           append([]string(nil), item.DependsOn...),
 		SideEffect:          item.SideEffect,
 		Recovery:            item.Recovery,
@@ -366,7 +422,17 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		ExpectedStateChange: item.ExpectedStateChange,
 		Progress:            ProgressUnknown,
 		RecoveryHypothesis:  item.RecoveryHypothesis,
-		Execution:           item.Execution,
+		Execution:           cloneExecutionContract(item.Execution),
+		Optional:            item.Optional,
+		ResourceClaims:      append([]string(nil), item.ResourceClaims...),
+		Resources:           append([]ResourceClaim(nil), item.Resources...),
+		DecisionProfile:     item.DecisionProfile,
+		DecisionOptions:     append([]DecisionOption(nil), item.DecisionOptions...),
+		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
+		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts),
+		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
+		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
+		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
 	}
 }
 
@@ -985,11 +1051,19 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ContractHash:        item.ContractHash,
 		ContractRevision:    item.ContractRevision,
 		Agent:               item.Agent,
+		Goal:                item.Goal,
+		Constraints:         item.Constraints,
 		Desc:                item.Desc,
 		Status:              item.Status,
 		Detail:              item.Detail,
 		Output:              item.Output,
 		Model:               item.Model,
+		ModelTopology:       cloneModelTopology(item.ModelTopology),
+		Sidecar:             item.Sidecar,
+		Summarize:           item.Summarize,
+		OutputMode:          item.OutputMode,
+		ContextFiles:        append([]string(nil), item.ContextFiles...),
+		Requires:            append([]string(nil), item.Requires...),
 		Skills:              skills,
 		InjectedSkills:      injectedSkills,
 		LoadedSkills:        loadedSkills,
@@ -1013,6 +1087,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		MaxRetries:          item.MaxRetries,
 		Retries:             item.Retries,
 		OnFailure:           item.OnFailure,
+		Escalate:            item.Escalate,
+		AdversarialVerify:   item.AdversarialVerify,
 		SideEffect:          item.SideEffect,
 		Recovery:            item.Recovery,
 		ReconcileTool:       item.ReconcileTool,
@@ -1028,10 +1104,76 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
 		DiagnosticHints:     diagnosticHints,
 		LastOperation:       item.LastOperation,
-		Execution:           item.Execution,
+		Execution:           cloneExecutionContract(item.Execution),
+		Optional:            item.Optional,
+		ResourceClaims:      append([]string(nil), item.ResourceClaims...),
+		Resources:           append([]ResourceClaim(nil), item.Resources...),
+		DecisionProfile:     item.DecisionProfile,
+		DecisionOptions:     append([]DecisionOption(nil), item.DecisionOptions...),
+		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
+		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts),
+		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
+		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
+		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
 		MemoryManifests:     memoryManifests,
 		ContextManifests:    contextManifests,
 	}
+}
+
+// restoreTodoOccurrenceContract restores only the immutable execution
+// contract from src. Lifecycle state (including plan approval, status,
+// retries, receipts, verification, and output) remains owned by dst.
+func restoreTodoOccurrenceContract(dst, src *TodoItem) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.Phase = src.Phase
+	dst.Action = cloneActionPtr(src.Action)
+	dst.PlanTaskID = src.PlanTaskID
+	dst.ContractID = src.ContractID
+	dst.ContractHash = src.ContractHash
+	dst.ContractRevision = src.ContractRevision
+	dst.Agent = src.Agent
+	dst.Desc = src.Desc
+	dst.Goal = src.Goal
+	dst.Constraints = src.Constraints
+	dst.Model = src.Model
+	dst.ModelTopology = cloneModelTopology(src.ModelTopology)
+	dst.Sidecar = src.Sidecar
+	dst.Summarize = src.Summarize
+	dst.OutputMode = src.OutputMode
+	dst.ContextFiles = append([]string(nil), src.ContextFiles...)
+	dst.Requires = append([]string(nil), src.Requires...)
+	dst.Source = src.Source
+	dst.ParentID = src.ParentID
+	dst.DependsOn = append([]string(nil), src.DependsOn...)
+	dst.Verify = src.Verify
+	dst.VerifyMode = src.VerifyMode
+	dst.VerifySpec = cloneVerificationSpecPtr(src.VerifySpec)
+	dst.WorksetBinding = cloneWorksetBinding(src.WorksetBinding)
+	dst.WorksetReceipt = cloneWorksetReceipt(src.WorksetReceipt)
+	dst.MaxRetries = src.MaxRetries
+	dst.OnFailure = src.OnFailure
+	dst.Escalate = src.Escalate
+	dst.AdversarialVerify = src.AdversarialVerify
+	dst.SideEffect = src.SideEffect
+	dst.Recovery = src.Recovery
+	dst.ReconcileTool = src.ReconcileTool
+	dst.Kind = src.Kind
+	dst.Advances = append([]string(nil), src.Advances...)
+	dst.ExpectedStateChange = src.ExpectedStateChange
+	dst.Execution = cloneExecutionContract(src.Execution)
+	dst.Optional = src.Optional
+	dst.ResourceClaims = append([]string(nil), src.ResourceClaims...)
+	dst.Resources = append([]ResourceClaim(nil), src.Resources...)
+	dst.RecoveryHypothesis = cloneRecoveryHypothesis(src.RecoveryHypothesis)
+	dst.DecisionProfile = src.DecisionProfile
+	dst.DecisionOptions = append([]DecisionOption(nil), src.DecisionOptions...)
+	dst.DecisionAssumptions = cloneDecisionAssumptions(src.DecisionAssumptions)
+	dst.DecisionFacts = cloneDecisionFacts(src.DecisionFacts)
+	dst.DecisionArtifacts = append([]ArtifactRef(nil), src.DecisionArtifacts...)
+	dst.DecisionBaseRates = cloneBaseRateEvidence(src.DecisionBaseRates)
+	dst.DecisionProvenance = cloneEvidenceProvenance(src.DecisionProvenance)
 }
 
 func (tl *TodoList) SetContextManifest(id string, manifest *ContextInjectionManifest) error {
@@ -1393,64 +1535,9 @@ func (tl *TodoList) Children(parentID string) []*TodoItem {
 	var result []*TodoItem
 	for _, item := range tl.items {
 		if item.ParentID == parentID {
-			var skills []string
-			if len(item.Skills) > 0 {
-				skills = make([]string, len(item.Skills))
-				copy(skills, item.Skills)
-			}
-			var injectedSkills []string
-			if len(item.InjectedSkills) > 0 {
-				injectedSkills = make([]string, len(item.InjectedSkills))
-				copy(injectedSkills, item.InjectedSkills)
-			}
-			var loadedSkills []string
-			if len(item.LoadedSkills) > 0 {
-				loadedSkills = make([]string, len(item.LoadedSkills))
-				copy(loadedSkills, item.LoadedSkills)
-			}
-			var dependsOn []string
-			if len(item.DependsOn) > 0 {
-				dependsOn = make([]string, len(item.DependsOn))
-				copy(dependsOn, item.DependsOn)
-			}
-			result = append(result, &TodoItem{
-				ID:                  item.ID,
-				PlanFirst:           item.PlanFirst,
-				PlanID:              item.PlanID,
-				Agent:               item.Agent,
-				Desc:                item.Desc,
-				Status:              item.Status,
-				Detail:              item.Detail,
-				Model:               item.Model,
-				Skills:              skills,
-				InjectedSkills:      injectedSkills,
-				LoadedSkills:        loadedSkills,
-				StartedAt:           item.StartedAt,
-				EndedAt:             item.EndedAt,
-				ModelTime:           item.ModelTime,
-				ToolTime:            item.ToolTime,
-				Source:              item.Source,
-				ParentID:            item.ParentID,
-				DependsOn:           dependsOn,
-				Verify:              item.Verify,
-				VerifyMode:          item.VerifyMode,
-				MaxRetries:          item.MaxRetries,
-				Retries:             item.Retries,
-				OnFailure:           item.OnFailure,
-				SideEffect:          item.SideEffect,
-				Recovery:            item.Recovery,
-				ReconcileTool:       item.ReconcileTool,
-				RecoveryState:       item.RecoveryState,
-				Kind:                item.Kind,
-				Advances:            append([]string(nil), item.Advances...),
-				ExpectedStateChange: item.ExpectedStateChange,
-				Progress:            item.Progress,
-				ProgressCriteria:    append([]string(nil), item.ProgressCriteria...),
-				FailureFingerprints: append([]FailureFingerprint(nil), item.FailureFingerprints...),
-				RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
-				LastOperation:       item.LastOperation,
-				Execution:           item.Execution,
-			})
+			// Children is another Todo projection boundary. Reuse the canonical
+			// clone so new contract fields cannot be silently omitted here.
+			result = append(result, cloneTodoItem(item))
 		}
 	}
 	return result

@@ -364,13 +364,13 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 	}
 
 	tracker := NewTaskTracker()
-	task := TaskDef{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}}
-	item := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: task.ID, Phase: task.Phase, ContractID: task.ID, Action: task.Action, Agent: task.Agent, Desc: task.Goal}})[0]
 	events, err := NewEventStore(session.Workspace, "run-action", "session-action")
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := &Coordinator{session: session, taskTracker: tracker, phaseWorkflow: w, eventStore: events, executionRunID: "run-action"}
+	c.SetEventJournal(eventStoreJournal{store: events})
+	task, item := createAdmittedTestTask(t, c, TaskDef{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}})
 	if _, err := c.executeTask(context.Background(), task, item.ID); err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}

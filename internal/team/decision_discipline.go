@@ -81,9 +81,19 @@ func (c *Coordinator) armDiscipline(ctx context.Context, todoID string, task Tas
 
 	// The stop contract is persisted before EXECUTE so the criteria a run was
 	// stopped under can be read back exactly as they were armed.
-	if journal := c.decisionJournalOrNil(); journal != nil && discipline.decisionID != "" {
+	journal, err := c.decisionJournalFor()
+	if err != nil {
+		return err
+	}
+	if journal != nil && discipline.decisionID != "" {
+		profile := ""
+		if record != nil {
+			profile = record.Profile
+		}
 		if err := appendDecisionEvent(ctx, journal, agent.EventDecisionStarted, decisionEvent{
-			DecisionID: discipline.decisionID,
+			DecisionID:     discipline.decisionID,
+			Profile:        profile,
+			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "execution_armed"),
 			Reason: fmt.Sprintf("execution armed for task %s with %d kill criteria, checkpoint every %d tool calls",
 				todoID, len(stop.KillCriteria), stop.CheckpointEvery),
 		}); err != nil {
@@ -143,11 +153,8 @@ func (c *Coordinator) taskAttempt(todoID string) int {
 
 // decisionJournalOrNil returns the run's event journal when one is available.
 func (c *Coordinator) decisionJournalOrNil() decisionJournal {
-	if c == nil {
-		return nil
-	}
-	journal := c.EventJournal()
-	if journal == nil {
+	journal, err := c.decisionJournalFor()
+	if err != nil {
 		return nil
 	}
 	return journal
@@ -185,9 +192,10 @@ func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName str
 
 	if journal := c.decisionJournalOrNil(); journal != nil {
 		_ = appendDecisionEvent(ctx, journal, agent.EventCommitGateBlocked, decisionEvent{
-			DecisionID:   discipline.decisionID,
-			EvidenceHash: discipline.evidenceHash,
-			Reason:       decision.Reason,
+			DecisionID:     discipline.decisionID,
+			EvidenceHash:   discipline.evidenceHash,
+			Reason:         decision.Reason,
+			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "commit_gate_blocked", decision.Reason),
 		})
 	}
 	return fmt.Sprintf("policy_blocked: tool %q was not started. %s", toolName, decision.Error())
@@ -276,9 +284,10 @@ func (c *Coordinator) actOnCheckpoint(ctx context.Context, discipline *taskDisci
 		}
 	} else {
 		if err := appendDecisionEvent(ctx, journal, agent.EventKillCriterionTriggered, decisionEvent{
-			DecisionID:   discipline.decisionID,
-			EvidenceHash: discipline.evidenceHash,
-			Reason:       fmt.Sprintf("%s: %s", decision.Reason, decision.Detail),
+			DecisionID:     discipline.decisionID,
+			EvidenceHash:   discipline.evidenceHash,
+			Reason:         fmt.Sprintf("%s: %s", decision.Reason, decision.Detail),
+			IdempotencyKey: decisionStageEventKey(discipline.decisionID, "kill_criterion_triggered", decision.Criterion, decision.Reason, decision.Detail),
 		}); err != nil {
 			return err
 		}

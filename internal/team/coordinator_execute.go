@@ -319,13 +319,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
 		}
-		// Side-effect classification precedence (§11.2):
-		//   1. task-level explicit (TaskDef.SideEffect)
-		//   2. agent-level default (agent .md frontmatter)
-		//   3. tool-inferred heuristic (InferSideEffectClass)
-		// An empty class at all tiers falls back to SideEffectNone (→ retry),
-		// preserving pre-recovery behavior for read-only agents.
-		sideEffect, recovery, reconcileTool := c.PolicyEngine().ResolveRecoveryPolicy(agentDef, t)
+		// Freeze the effective identity and execution policy once. The exact
+		// TaskDef is then used for both admission and task_created, preventing a
+		// resumed task from hashing a different model/agent/recovery contract than
+		// the projection it will execute.
+		t = c.canonicalizeTaskOccurrence(t, agentDef, resolvedModel)
+		if agentDef != nil {
+			t.ModelTopology = initialTaskModelTopology(agentDef, resolvedModel)
+		}
+		tasks[i] = t
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:          t.ID,
 			PlanFirst:           t.PlanFirst,
@@ -337,7 +339,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			ContractRevision:    t.ContractRevision,
 			Agent:               strings.ToLower(t.Agent),
 			Desc:                desc,
+			Goal:                t.Goal,
+			Constraints:         t.Constraints,
 			Model:               resolvedModel,
+			ModelTopology:       cloneModelTopology(t.ModelTopology),
+			Sidecar:             t.Sidecar,
+			Summarize:           t.Summarize,
+			OutputMode:          t.OutputMode,
+			ContextFiles:        append([]string(nil), t.ContextFiles...),
+			Requires:            append([]string(nil), t.Requires...),
 			Source:              TaskSourceCoordinator,
 			ParentID:            "",
 			Verify:              t.Verify,
@@ -346,14 +356,26 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			WorksetBinding:      cloneWorksetBinding(t.WorksetBinding),
 			WorksetReceipt:      cloneWorksetReceipt(t.WorksetReceipt),
 			MaxRetries:          t.MaxRetries,
-			SideEffect:          sideEffect,
-			Recovery:            recovery,
-			ReconcileTool:       reconcileTool,
+			Escalate:            t.Escalate,
+			AdversarialVerify:   t.AdversarialVerify,
+			SideEffect:          t.SideEffect,
+			Recovery:            t.Recovery,
+			ReconcileTool:       t.ReconcileTool,
 			Kind:                t.Kind,
 			Advances:            append([]string(nil), t.Advances...),
 			ExpectedStateChange: t.ExpectedStateChange,
 			RecoveryHypothesis:  t.RecoveryHypothesis,
-			Execution:           t.Execution,
+			Execution:           cloneExecutionContract(t.Execution),
+			Optional:            t.Optional,
+			ResourceClaims:      append([]string(nil), t.ResourceClaims...),
+			Resources:           append([]ResourceClaim(nil), t.Resources...),
+			DecisionProfile:     t.DecisionProfile,
+			DecisionOptions:     append([]DecisionOption(nil), t.DecisionOptions...),
+			DecisionAssumptions: cloneDecisionAssumptions(t.DecisionAssumptions),
+			DecisionFacts:       cloneDecisionFacts(t.DecisionFacts),
+			DecisionArtifacts:   append([]ArtifactRef(nil), t.DecisionArtifacts...),
+			DecisionBaseRates:   cloneBaseRateEvidence(t.DecisionBaseRates),
+			DecisionProvenance:  cloneEvidenceProvenance(t.DecisionProvenance),
 		}
 	}
 	// The successful exact initial-policy validation above is the sole point at
@@ -393,6 +415,28 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if t.WorksetBinding != nil && !firstReceipt[t.WorksetBinding.WorksetID] {
 			todoBatch[i].WorksetReceipt = cloneWorksetReceipt(worksetReceipts[t.WorksetBinding.WorksetID])
 			firstReceipt[t.WorksetBinding.WorksetID] = true
+		}
+	}
+	// Freeze decision admission before task_created makes an occurrence
+	// recoverable. A failure leaves no executable task projection behind.
+	if c.hasDurableEventJournal() {
+		for i := range todoBatch {
+			// IDs, finalized DAG edges, parent, and workset receipts are all
+			// bound before this projection is admitted. CommitTaskCreation uses
+			// the same Todo projection for task_created.
+			projection, projectionErr := taskOccurrenceProjectionFromSpec(todoBatch[i], ids[i])
+			if projectionErr != nil {
+				if advancedPhase && c.sessionData != nil {
+					c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+				}
+				return "", projectionErr
+			}
+			if _, err := c.admitTaskOccurrence(ctx, projection, ids[i], 1); err != nil {
+				if advancedPhase && c.sessionData != nil {
+					c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+				}
+				return "", err
+			}
 		}
 	}
 	todoItems, err := c.CommitTaskCreationResolved(ctx, todoBatch, ids)
@@ -462,7 +506,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 
-	results, err := newDAGScheduler(c, tasks, todoItems, duplicateIndices).run(ctx)
+	// The step-confirm callback is intentionally allowed to inspect the
+	// proposed tasks, but it is a mutable boundary. Re-read every occurrence
+	// from the Todo projection immediately before DAG construction and fail
+	// closed if the callback changed any executable semantics.
+	schedulerTasks, err := c.reconstructSchedulerTaskDefs(tasks, todoItems, duplicateIndices)
+	if err != nil {
+		return "", err
+	}
+	results, err := newDAGScheduler(c, schedulerTasks, todoItems, duplicateIndices).run(ctx)
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 			_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)

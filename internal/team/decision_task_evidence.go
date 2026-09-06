@@ -9,8 +9,12 @@ import (
 // declarations on a static task contract. It checks shape only; artifact
 // existence, integrity, and workspace authorization belong to the runtime
 // preflight because those facts can change after team configuration loads.
-func ValidateTaskDecisionEvidence(task TaskDef) error {
-	for key, value := range task.DecisionFacts {
+func ValidateTaskDecisionEvidence(input any) error {
+	facts, artifacts, rates, assumptions, provenance, err := decisionEvidenceForInput(input)
+	if err != nil {
+		return err
+	}
+	for key, value := range facts {
 		if canonicalString(key) == "" {
 			return fmt.Errorf("decision-facts contains an empty key")
 		}
@@ -18,16 +22,16 @@ func ValidateTaskDecisionEvidence(task TaskDef) error {
 			return fmt.Errorf("decision-facts[%q] is not canonicalizable: %w", key, err)
 		}
 	}
-	for index, ref := range task.DecisionArtifacts {
+	for index, ref := range artifacts {
 		if err := validateDeclaredArtifactRef(ref); err != nil {
 			return fmt.Errorf("decision-artifacts[%d]: %w", index, err)
 		}
 	}
-	if err := validateDecisionBaseRates(task.DecisionBaseRates); err != nil {
+	if err := validateDecisionBaseRates(rates); err != nil {
 		return err
 	}
-	seenAssumptions := make(map[string]bool, len(task.DecisionAssumptions))
-	for index, assumption := range task.DecisionAssumptions {
+	seenAssumptions := make(map[string]bool, len(assumptions))
+	for index, assumption := range assumptions {
 		id := canonicalString(assumption.ID)
 		if id == "" || canonicalString(assumption.Statement) == "" {
 			return fmt.Errorf("decision-assumptions[%d] requires a non-empty id and statement", index)
@@ -45,7 +49,7 @@ func ValidateTaskDecisionEvidence(task TaskDef) error {
 			}
 		}
 	}
-	for index, provenance := range task.DecisionProvenance {
+	for index, provenance := range provenance {
 		if canonicalString(provenance.SourceID) == "" {
 			return fmt.Errorf("decision-provenance[%d] requires source-id", index)
 		}
@@ -54,6 +58,27 @@ func ValidateTaskDecisionEvidence(task TaskDef) error {
 		}
 	}
 	return nil
+}
+
+func decisionEvidenceForInput(input any) (map[string]any, []ArtifactRef, []BaseRateEvidence, []DecisionAssumption, []EvidenceProvenance, error) {
+	switch value := input.(type) {
+	case TaskDef:
+		return value.DecisionFacts, value.DecisionArtifacts, value.DecisionBaseRates, value.DecisionAssumptions, value.DecisionProvenance, nil
+	case TaskOccurrenceProjection:
+		return value.DecisionFacts, value.DecisionArtifacts, value.DecisionBaseRates, value.DecisionAssumptions, value.DecisionProvenance, nil
+	case *TaskOccurrenceProjection:
+		if value == nil {
+			return nil, nil, nil, nil, nil, fmt.Errorf("decision evidence input is nil")
+		}
+		return value.DecisionFacts, value.DecisionArtifacts, value.DecisionBaseRates, value.DecisionAssumptions, value.DecisionProvenance, nil
+	case *TodoItem:
+		if value == nil {
+			return nil, nil, nil, nil, nil, fmt.Errorf("decision evidence input is nil")
+		}
+		return value.DecisionFacts, value.DecisionArtifacts, value.DecisionBaseRates, value.DecisionAssumptions, value.DecisionProvenance, nil
+	default:
+		return nil, nil, nil, nil, nil, fmt.Errorf("unsupported decision evidence input %T", input)
+	}
 }
 
 func validateDecisionBaseRates(rates []BaseRateEvidence) error {

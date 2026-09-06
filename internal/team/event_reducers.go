@@ -312,6 +312,11 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	var taskOrder []string
 	result := newTodoReplayResult()
 	receiptObservations := make(map[string]*WorksetExpansionReceipt)
+	// Only task_created establishes a durable occurrence contract. Older
+	// snapshot-only histories begin with lifecycle events such as
+	// task_completed; those events must retain their latest snapshot semantics
+	// until a canonical creation occurrence is present.
+	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
 		if e.Type == "criterion_re_evaluated" && e.TaskID != "" {
@@ -419,6 +424,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			if taskID != "" {
 				if _, exists := taskMap[taskID]; exists {
 					delete(taskMap, taskID)
+					delete(frozenContracts, taskID)
 					for i, id := range taskOrder {
 						if id == taskID {
 							taskOrder = append(taskOrder[:i], taskOrder[i+1:]...)
@@ -445,6 +451,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ContractRevision    int                        `json:"contract_revision"`
 			Description         string                     `json:"description"`
 			Desc                string                     `json:"desc"`
+			Goal                string                     `json:"goal"`
+			Constraints         string                     `json:"constraints"`
 			Status              string                     `json:"status"`
 			Detail              string                     `json:"detail"`
 			MaxRetries          int                        `json:"max_retries"`
@@ -453,6 +461,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			Summary             string                     `json:"summary"`
 			Agent               string                     `json:"agent"`
 			Model               string                     `json:"model"`
+			ModelTopology       []string                   `json:"model_topology"`
+			Sidecar             bool                       `json:"sidecar"`
+			Summarize           bool                       `json:"summarize"`
+			OutputMode          string                     `json:"output_mode"`
+			ContextFiles        []string                   `json:"context_files"`
+			Requires            []string                   `json:"requires"`
 			Skills              []string                   `json:"skills"`
 			InjectedSkills      []string                   `json:"injected_skills"`
 			LoadedSkills        []string                   `json:"loaded_skills"`
@@ -460,6 +474,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ParentID            string                     `json:"parent_id"`
 			DependsOn           []string                   `json:"depends_on"`
 			OnFailure           string                     `json:"on_failure"`
+			Escalate            bool                       `json:"escalate"`
+			AdversarialVerify   int                        `json:"adversarial_verify"`
 			Verify              string                     `json:"verify"`
 			VerifyMode          string                     `json:"verify_mode"`
 			VerifySpec          *VerificationSpec          `json:"verify_spec"`
@@ -476,6 +492,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ProgressCriteria    []string                   `json:"progress_criteria"`
 			FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints"`
 			Execution           ExecutionContract          `json:"execution"`
+			Optional            bool                       `json:"optional"`
+			ResourceClaims      []string                   `json:"resource_claims"`
+			Resources           []ResourceClaim            `json:"resources"`
 			RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis"`
 			SideEffect          SideEffectClass            `json:"side_effect"`
 			Recovery            RecoveryPolicy             `json:"recovery"`
@@ -485,6 +504,13 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			Resolution          *TaskResolution            `json:"resolution"`
 			DiagnosticHints     []string                   `json:"diagnostic_hints"`
 			LastOperation       string                     `json:"last_operation"`
+			DecisionProfile     string                     `json:"decision_profile"`
+			DecisionOptions     []DecisionOption           `json:"decision_options"`
+			DecisionAssumptions []DecisionAssumption       `json:"decision_assumptions"`
+			DecisionFacts       map[string]any             `json:"decision_facts"`
+			DecisionArtifacts   []ArtifactRef              `json:"decision_artifacts"`
+			DecisionBaseRates   []BaseRateEvidence         `json:"decision_base_rates"`
+			DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance"`
 			MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests"`
 			ContextManifests    []ContextInjectionManifest `json:"context_manifests"`
 			ResetForRetry       bool                       `json:"reset_for_retry"`
@@ -514,6 +540,10 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 
 		item, exists := taskMap[taskID]
+		var priorContract *TodoItem
+		if exists && frozenContracts[taskID] {
+			priorContract = cloneTodoItem(item)
+		}
 		failureEvent, hasFailureEvent := mergeFailureEventJSON(nil, e.Payload)
 		if !exists {
 			item = &TodoItem{
@@ -527,11 +557,19 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				ContractHash:        payload.ContractHash,
 				ContractRevision:    payload.ContractRevision,
 				Desc:                desc,
+				Goal:                payload.Goal,
+				Constraints:         payload.Constraints,
 				Status:              TaskPending,
 				MaxRetries:          payload.MaxRetries,
 				Retries:             payload.Retries,
 				Agent:               payload.Agent,
 				Model:               payload.Model,
+				ModelTopology:       cloneModelTopology(payload.ModelTopology),
+				Sidecar:             payload.Sidecar,
+				Summarize:           payload.Summarize,
+				OutputMode:          payload.OutputMode,
+				ContextFiles:        append([]string(nil), payload.ContextFiles...),
+				Requires:            append([]string(nil), payload.Requires...),
 				Skills:              append([]string(nil), payload.Skills...),
 				InjectedSkills:      append([]string(nil), payload.InjectedSkills...),
 				LoadedSkills:        append([]string(nil), payload.LoadedSkills...),
@@ -539,13 +577,18 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				ParentID:            payload.ParentID,
 				DependsOn:           payload.DependsOn,
 				OnFailure:           payload.OnFailure,
+				Escalate:            payload.Escalate,
+				AdversarialVerify:   payload.AdversarialVerify,
 				Kind:                payload.Kind,
 				Advances:            append([]string(nil), payload.Advances...),
 				ExpectedStateChange: payload.ExpectedStateChange,
 				Progress:            payload.Progress,
 				ProgressCriteria:    append([]string(nil), payload.ProgressCriteria...),
 				FailureFingerprints: append([]FailureFingerprint(nil), payload.FailureFingerprints...),
-				Execution:           payload.Execution,
+				Execution:           cloneExecutionContract(payload.Execution),
+				Optional:            payload.Optional,
+				ResourceClaims:      append([]string(nil), payload.ResourceClaims...),
+				Resources:           append([]ResourceClaim(nil), payload.Resources...),
 				RecoveryHypothesis:  cloneRecoveryHypothesis(payload.RecoveryHypothesis),
 				SideEffect:          payload.SideEffect,
 				Recovery:            payload.Recovery,
@@ -555,6 +598,13 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				Resolution:          payload.Resolution,
 				DiagnosticHints:     append([]string(nil), payload.DiagnosticHints...),
 				LastOperation:       payload.LastOperation,
+				DecisionProfile:     payload.DecisionProfile,
+				DecisionOptions:     append([]DecisionOption(nil), payload.DecisionOptions...),
+				DecisionAssumptions: cloneDecisionAssumptions(payload.DecisionAssumptions),
+				DecisionFacts:       cloneDecisionFacts(payload.DecisionFacts),
+				DecisionArtifacts:   append([]ArtifactRef(nil), payload.DecisionArtifacts...),
+				DecisionBaseRates:   cloneBaseRateEvidence(payload.DecisionBaseRates),
+				DecisionProvenance:  cloneEvidenceProvenance(payload.DecisionProvenance),
 				TypedResult:         payload.TypedResult,
 				WorksetBinding:      cloneWorksetBinding(payload.WorksetBinding),
 				WorksetReceipt:      cloneWorksetReceipt(payload.WorksetReceipt),
@@ -566,6 +616,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 
 		if desc != "" {
 			item.Desc = desc
+		}
+		if payload.Goal != "" {
+			item.Goal = payload.Goal
+		}
+		if payload.Constraints != "" {
+			item.Constraints = payload.Constraints
 		}
 		if payload.Phase != "" && e.Type != "task_failed" && e.Type != "task_blocked" && e.Type != "task_protocol_incomplete" && e.Type != "task_cancelled" {
 			item.Phase = payload.Phase
@@ -596,6 +652,11 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.Model != "" {
 			item.Model = payload.Model
+		}
+		// Creation establishes the topology. Later lifecycle events carry the
+		// same field for projection parity, but may not overwrite it.
+		if len(item.ModelTopology) == 0 && payload.ModelTopology != nil {
+			item.ModelTopology = cloneModelTopology(payload.ModelTopology)
 		}
 		if len(payload.Skills) > 0 {
 			item.Skills = append([]string(nil), payload.Skills...)
@@ -664,7 +725,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 		}
 		if payload.Execution.Kind != "" || payload.Execution.AllowsReplay != nil || payload.Execution.RequiresResult || payload.Execution.RequiresVerification {
-			item.Execution = payload.Execution
+			item.Execution = cloneExecutionContract(payload.Execution)
 		}
 		if payload.SideEffect != "" {
 			item.SideEffect = payload.SideEffect
@@ -689,6 +750,27 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.LastOperation != "" {
 			item.LastOperation = payload.LastOperation
+		}
+		if payload.DecisionProfile != "" {
+			item.DecisionProfile = payload.DecisionProfile
+		}
+		if payload.DecisionOptions != nil {
+			item.DecisionOptions = append([]DecisionOption(nil), payload.DecisionOptions...)
+		}
+		if payload.DecisionAssumptions != nil {
+			item.DecisionAssumptions = cloneDecisionAssumptions(payload.DecisionAssumptions)
+		}
+		if payload.DecisionFacts != nil {
+			item.DecisionFacts = cloneDecisionFacts(payload.DecisionFacts)
+		}
+		if payload.DecisionArtifacts != nil {
+			item.DecisionArtifacts = append([]ArtifactRef(nil), payload.DecisionArtifacts...)
+		}
+		if payload.DecisionBaseRates != nil {
+			item.DecisionBaseRates = cloneBaseRateEvidence(payload.DecisionBaseRates)
+		}
+		if payload.DecisionProvenance != nil {
+			item.DecisionProvenance = cloneEvidenceProvenance(payload.DecisionProvenance)
 		}
 		if payload.RecoveryHypothesis != nil {
 			item.RecoveryHypothesis = cloneRecoveryHypothesis(payload.RecoveryHypothesis)
@@ -742,6 +824,15 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if len(payload.ContextManifests) > 0 {
 			item.ContextManifests = mergeContextInjectionManifests(item.ContextManifests, payload.ContextManifests)
+		}
+		if priorContract != nil {
+			// A lifecycle event is allowed to carry the complete projection for
+			// parity, but it is not allowed to redefine an already-created
+			// occurrence. PlanFirst/PlanID remain lifecycle-owned below.
+			restoreTodoOccurrenceContract(item, priorContract)
+		}
+		if e.Type == "task_created" {
+			frozenContracts[taskID] = true
 		}
 
 		switch e.Type {

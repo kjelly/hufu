@@ -39,6 +39,7 @@ const (
 	EventContextWindowCompactionCommitted        EventType = "context_window_compaction_committed"
 	EventContextWindowDownshift                  EventType = "context_window_downshift"
 	EventModelProfileResolved                    EventType = "model_profile_resolved"
+	EventDecisionAdmitted                        EventType = "decision_admitted"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -61,7 +62,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
-		EventModelProfileResolved:
+		EventModelProfileResolved, EventDecisionAdmitted:
 		return true
 	default:
 		return false

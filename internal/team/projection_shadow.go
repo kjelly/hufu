@@ -169,6 +169,7 @@ func normalizeContextManifests(manifests []ContextInjectionManifest) []ContextIn
 type canonicalTaskShadow struct {
 	ID                  string                     `json:"id"`
 	Phase               string                     `json:"phase,omitempty"`
+	Action              *Action                    `json:"action,omitempty"`
 	PlanTaskID          string                     `json:"plan_task_id,omitempty"`
 	PlanFirst           bool                       `json:"plan_first,omitzero"`
 	PlanID              string                     `json:"plan_id,omitempty"`
@@ -177,10 +178,18 @@ type canonicalTaskShadow struct {
 	ContractRevision    int                        `json:"contract_revision,omitempty"`
 	Agent               string                     `json:"agent"`
 	Desc                string                     `json:"desc"`
+	Goal                string                     `json:"goal,omitempty"`
+	Constraints         string                     `json:"constraints,omitempty"`
 	Status              string                     `json:"status"`
 	Detail              string                     `json:"detail,omitempty"`
 	Output              string                     `json:"output,omitempty"`
 	Model               string                     `json:"model,omitempty"`
+	ModelTopology       []string                   `json:"model_topology,omitempty"`
+	Sidecar             bool                       `json:"sidecar,omitempty"`
+	Summarize           bool                       `json:"summarize,omitempty"`
+	OutputMode          string                     `json:"output_mode,omitempty"`
+	ContextFiles        []string                   `json:"context_files,omitempty"`
+	Requires            []string                   `json:"requires,omitempty"`
 	Skills              []string                   `json:"skills,omitempty"`
 	InjectedSkills      []string                   `json:"injected_skills,omitempty"`
 	LoadedSkills        []string                   `json:"loaded_skills,omitempty"`
@@ -190,6 +199,8 @@ type canonicalTaskShadow struct {
 	MaxRetries          int                        `json:"max_retries,omitempty"`
 	Retries             int                        `json:"retries,omitempty"`
 	OnFailure           string                     `json:"on_failure,omitempty"`
+	Escalate            bool                       `json:"escalate,omitempty"`
+	AdversarialVerify   int                        `json:"adversarial_verify,omitempty"`
 	Verify              string                     `json:"verify,omitempty"`
 	VerifyMode          string                     `json:"verify_mode,omitempty"`
 	VerifySpec          *VerificationSpec          `json:"verify_spec,omitempty"`
@@ -202,6 +213,7 @@ type canonicalTaskShadow struct {
 	SideEffect          string                     `json:"side_effect,omitempty"`
 	Recovery            string                     `json:"recovery,omitempty"`
 	ReconcileTool       string                     `json:"reconcile_tool,omitempty"`
+	RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis,omitempty"`
 	RecoveryState       string                     `json:"recovery_state,omitempty"`
 	TypedResult         *TaskResult                `json:"typed_result,omitempty"`
 	Resolution          *TaskResolution            `json:"resolution,omitempty"`
@@ -211,6 +223,16 @@ type canonicalTaskShadow struct {
 	Progress            string                     `json:"progress,omitempty"`
 	ProgressCriteria    []string                   `json:"progress_criteria,omitempty"`
 	Execution           ExecutionContract          `json:"execution,omitempty"`
+	Optional            bool                       `json:"optional,omitempty"`
+	ResourceClaims      []string                   `json:"resource_claims,omitempty"`
+	Resources           []ResourceClaim            `json:"resources,omitempty"`
+	DecisionProfile     string                     `json:"decision_profile,omitempty"`
+	DecisionOptions     []DecisionOption           `json:"decision_options,omitempty"`
+	DecisionAssumptions []DecisionAssumption       `json:"decision_assumptions,omitempty"`
+	DecisionFacts       map[string]any             `json:"decision_facts,omitempty"`
+	DecisionArtifacts   []ArtifactRef              `json:"decision_artifacts,omitempty"`
+	DecisionBaseRates   []BaseRateEvidence         `json:"decision_base_rates,omitempty"`
+	DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance,omitempty"`
 	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
 	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
 }
@@ -222,6 +244,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 	return canonicalTaskShadow{
 		ID:                  item.ID,
 		Phase:               string(item.Phase),
+		Action:              cloneActionPtr(item.Action),
 		PlanTaskID:          item.PlanTaskID,
 		PlanFirst:           item.PlanFirst,
 		PlanID:              item.PlanID,
@@ -230,10 +253,18 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ContractRevision:    item.ContractRevision,
 		Agent:               strings.ToLower(strings.TrimSpace(item.Agent)),
 		Desc:                item.Desc,
+		Goal:                item.Goal,
+		Constraints:         item.Constraints,
 		Status:              string(item.Status),
 		Detail:              item.Detail,
 		Output:              item.Output,
 		Model:               strings.TrimSpace(item.Model),
+		ModelTopology:       normalizeStringSlice(item.ModelTopology),
+		Sidecar:             item.Sidecar,
+		Summarize:           item.Summarize,
+		OutputMode:          item.OutputMode,
+		ContextFiles:        normalizeStringSlice(item.ContextFiles),
+		Requires:            normalizeStringSlice(item.Requires),
 		Skills:              normalizeStringSlice(item.Skills),
 		InjectedSkills:      normalizeStringSlice(item.InjectedSkills),
 		LoadedSkills:        normalizeStringSlice(item.LoadedSkills),
@@ -243,6 +274,8 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		MaxRetries:          item.MaxRetries,
 		Retries:             item.Retries,
 		OnFailure:           item.OnFailure,
+		Escalate:            item.Escalate,
+		AdversarialVerify:   item.AdversarialVerify,
 		Verify:              item.Verify,
 		VerifyMode:          item.VerifyMode,
 		VerifySpec:          cloneVerificationSpecPtr(item.VerifySpec),
@@ -255,6 +288,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		SideEffect:          string(item.SideEffect),
 		Recovery:            string(item.Recovery),
 		ReconcileTool:       item.ReconcileTool,
+		RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
 		RecoveryState:       item.RecoveryState,
 		TypedResult:         item.TypedResult,
 		Resolution:          item.Resolution,
@@ -263,7 +297,17 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ExpectedStateChange: item.ExpectedStateChange,
 		Progress:            string(item.Progress),
 		ProgressCriteria:    normalizeStringSlice(item.ProgressCriteria),
-		Execution:           item.Execution,
+		Execution:           cloneExecutionContract(item.Execution),
+		Optional:            item.Optional,
+		ResourceClaims:      normalizeStringSlice(item.ResourceClaims),
+		Resources:           append([]ResourceClaim(nil), item.Resources...),
+		DecisionProfile:     item.DecisionProfile,
+		DecisionOptions:     append([]DecisionOption(nil), item.DecisionOptions...),
+		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
+		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts),
+		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
+		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
+		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
 		MemoryManifests:     normalizeMemoryManifests(item.MemoryManifests),
 		ContextManifests:    normalizeContextManifests(item.ContextManifests),
 	}

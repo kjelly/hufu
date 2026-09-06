@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -471,11 +472,20 @@ func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.
 	}
 	defer func() { _ = store.Close() }()
 	syncCalls := 0
+	terminalTransitionAttempted := false
 	store.syncFile = func() error {
 		syncCalls++
-		// Task creation and the diagnostic packet are committed before the
-		// canonical terminal transition.
-		if syncCalls == 3 {
+		data, readErr := os.ReadFile(store.path)
+		if readErr != nil {
+			return readErr
+		}
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		var event RunEvent
+		if unmarshalErr := json.Unmarshal([]byte(lines[len(lines)-1]), &event); unmarshalErr != nil {
+			return unmarshalErr
+		}
+		if event.Type == string(EventTaskCancelled) {
+			terminalTransitionAttempted = true
 			return errors.New("injected terminal sync failure")
 		}
 		return nil
@@ -500,8 +510,8 @@ func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.
 	if items[0].FailureEvent != nil {
 		t.Fatalf("task failure event = %#v, want no terminalized failure evidence", items[0].FailureEvent)
 	}
-	if syncCalls != 3 {
-		t.Fatalf("sync calls = %d, want terminal append fault on third sync", syncCalls)
+	if !terminalTransitionAttempted {
+		t.Fatalf("terminal transition sync was not faulted (sync calls = %d)", syncCalls)
 	}
 	_ = store.Close()
 	reopened, reopenErr := OpenEventStore(c.session.Workspace)

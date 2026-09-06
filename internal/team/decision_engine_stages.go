@@ -53,9 +53,9 @@ func (e *decisionEngine) runPremortem(ctx context.Context, req DecisionRequest, 
 		return nil, nil
 	}
 	result.ID = e.newID("premortem")
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionPremortemSubmitted, decisionEvent{
-		DecisionID: req.DecisionID, Premortem: &result,
-	}); err != nil {
+	event := decisionEventFor(req, "premortem")
+	event.Premortem = &result
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionPremortemSubmitted, event); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -75,10 +75,13 @@ func (e *decisionEngine) runChallenges(
 ) ([]DecisionChallenge, error) {
 	shouldRun, skipReason := ChallengeShouldRun(policy.Challenge, aggregate)
 	if !shouldRun {
+		if state.ChallengeSkipReason != "" && state.ChallengeSkipEvidenceHash == packet.Hash {
+			return nil, nil
+		}
 		if policy.Challenge.Enabled && skipReason != "" {
-			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionChallengeSkipped, decisionEvent{
-				DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Reason: skipReason,
-			}); err != nil {
+			event := decisionEventFor(req, "challenge_skipped", packet.Hash)
+			event.EvidenceHash, event.Reason = packet.Hash, skipReason
+			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionChallengeSkipped, event); err != nil {
 				return nil, err
 			}
 		}
@@ -106,9 +109,9 @@ func (e *decisionEngine) runChallenges(
 			return nil, fmt.Errorf("decision %s challenge %s: %w", req.DecisionID, challengerID, err)
 		}
 		challenge.ID = e.newID("challenge")
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionChallengeSubmitted, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Challenge: &challenge, JudgeAliases: aliases,
-		}); err != nil {
+		event := decisionEventFor(req, "challenge", packet.Hash, challengerID)
+		event.EvidenceHash, event.Challenge, event.JudgeAliases = packet.Hash, &challenge, aliases
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionChallengeSubmitted, event); err != nil {
 			return nil, err
 		}
 		challenges = append(challenges, challenge)
@@ -131,6 +134,9 @@ func (e *decisionEngine) runRevisions(
 ) ([]DecisionRevision, *DecisionAggregate, error) {
 	if !policy.Revision.Enabled || policy.EffectiveMaxRounds() < 2 || len(challenges) == 0 {
 		return nil, nil, nil
+	}
+	if aggregate, ok := state.Aggregates[2]; ok && aggregate.EvidenceHash == packet.Hash {
+		return state.RevisionsForHash(), &aggregate, nil
 	}
 	if e.services.Revisions == nil {
 		return nil, nil, fmt.Errorf("decision %s: revision is enabled but no revision runner is configured", req.DecisionID)
@@ -161,9 +167,9 @@ func (e *decisionEngine) runRevisions(
 			return nil, nil, fmt.Errorf("decision %s revision %s: %w", req.DecisionID, original.JudgeID, err)
 		}
 		revision.ID = e.newID("revision")
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionRevisionSubmitted, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: packet.Hash, JudgeID: original.JudgeID, Round: 2, Revision: &revision,
-		}); err != nil {
+		event := decisionEventFor(req, "revision", packet.Hash, original.JudgeID, "2")
+		event.EvidenceHash, event.JudgeID, event.Round, event.Revision = packet.Hash, original.JudgeID, 2, &revision
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionRevisionSubmitted, event); err != nil {
 			return nil, nil, err
 		}
 		revisions = append(revisions, revision)
@@ -178,9 +184,9 @@ func (e *decisionEngine) runRevisions(
 		return nil, nil, fmt.Errorf("decision %s round 2: %w", req.DecisionID, err)
 	}
 	aggregate.ID = e.newID("aggregate")
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionAggregateComputed, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Round: 2, Aggregate: &aggregate,
-	}); err != nil {
+	event := decisionEventFor(req, "aggregate", packet.Hash, "2")
+	event.EvidenceHash, event.Round, event.Aggregate = packet.Hash, 2, &aggregate
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionAggregateComputed, event); err != nil {
 		return nil, nil, err
 	}
 	return revisions, &aggregate, nil
@@ -209,9 +215,9 @@ func (e *decisionEngine) applyProvenance(
 	record.SharedOriginWarnings = independence.SharedOriginWarnings
 
 	for _, warning := range independence.SharedOriginWarnings {
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSharedOrigin, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Reason: warning,
-		}); err != nil {
+		event := decisionEventFor(req, "shared_origin", packet.Hash, warning)
+		event.EvidenceHash, event.Reason = packet.Hash, warning
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSharedOrigin, event); err != nil {
 			return err
 		}
 	}

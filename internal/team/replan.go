@@ -92,16 +92,23 @@ func RecordAssumptionTransition(
 	if transition.From == "" {
 		transition.From = AssumptionUnknown
 	}
-	if err := appendDecisionEvent(ctx, journal, AssumptionStatusEvent(transition.To), decisionEvent{
+	event := decisionEvent{
 		DecisionID:   transition.DecisionID,
 		AssumptionID: transition.AssumptionID, From: transition.From, To: transition.To,
 		Source: transition.Source, EvidenceRefs: transition.EvidenceRefs, At: transition.At,
 		Reason: fmt.Sprintf("assumption %s: %s -> %s (source: %s)",
 			transition.AssumptionID, transition.From, transition.To, transition.Source),
-	}); err != nil {
+		IdempotencyKey: assumptionTransitionEventKey(transition),
+	}
+	if err := appendDecisionEvent(ctx, journal, AssumptionStatusEvent(transition.To), event); err != nil {
 		return nil, DecisionAssumption{}, err
 	}
 	return updated, assumption, nil
+}
+
+func assumptionTransitionEventKey(transition AssumptionTransition) string {
+	return decisionStageEventKey(transition.DecisionID, "assumption_transition",
+		transition.AssumptionID, transition.From, transition.To, transition.Source)
 }
 
 // CriticalContradiction returns the first critical assumption in ascending ID
@@ -140,6 +147,7 @@ func MarkDecisionStale(
 
 	if err := appendDecisionEvent(ctx, journal, agent.EventDecisionInvalidated, decisionEvent{
 		DecisionID: record.ID, EvidenceHash: record.EvidenceHash, Reason: reason,
+		IdempotencyKey: decisionStageEventKey(record.ID, "invalidated", reason),
 	}); err != nil {
 		return record, err
 	}
@@ -150,8 +158,9 @@ func MarkDecisionStale(
 // plan was abandoned survives in the log rather than only in a status message.
 func RequestReplan(ctx context.Context, journal decisionJournal, decisionID string, decision CheckpointDecision) error {
 	return appendDecisionEvent(ctx, journal, agent.EventReplanRequested, decisionEvent{
-		DecisionID: decisionID,
-		Reason:     fmt.Sprintf("%s: %s", decision.Reason, decision.Detail),
+		DecisionID:     decisionID,
+		Reason:         fmt.Sprintf("%s: %s", decision.Reason, decision.Detail),
+		IdempotencyKey: decisionStageEventKey(decisionID, "replan_requested", decision.Reason, decision.Detail),
 	})
 }
 

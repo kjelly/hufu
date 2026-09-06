@@ -161,6 +161,136 @@ type ExecutionContract struct {
 	ToolExpectedExitCodes [][]int `json:"tool_expected_exit_codes,omitempty" yaml:"tool-expected-exit-codes,omitempty"`
 }
 
+// cloneExecutionContract returns a deep copy of a contract so an executable
+// occurrence can own its immutable contract independently of the caller's
+// TaskDef, TodoSpec, projection, or reducer payload. Nil slices and pointers
+// remain nil to preserve exact contract comparison semantics.
+func cloneExecutionContract(contract ExecutionContract) ExecutionContract {
+	clone := contract
+	if contract.AllowsReplay != nil {
+		allowsReplay := *contract.AllowsReplay
+		clone.AllowsReplay = &allowsReplay
+	}
+	if contract.Steps != nil {
+		clone.Steps = make([]ExecutionStep, len(contract.Steps))
+		for i, step := range contract.Steps {
+			clone.Steps[i] = step
+			clone.Steps[i].Input = cloneExecutionInputMap(step.Input)
+			clone.Steps[i].DependsOn = cloneExecutionStrings(step.DependsOn)
+			clone.Steps[i].Outputs = cloneExecutionStepOutputs(step.Outputs)
+			clone.Steps[i].References = cloneExecutionStepReferences(step.References)
+			clone.Steps[i].Consumes = cloneExecutionStrings(step.Consumes)
+		}
+	}
+	clone.ToolSequence = cloneExecutionStrings(contract.ToolSequence)
+	clone.ToolInputSequence = cloneExecutionInputMaps(contract.ToolInputSequence)
+	clone.ToolInputCanonicalSequence = cloneExecutionBools(contract.ToolInputCanonicalSequence)
+	clone.ToolInputTransformSequence = cloneExecutionStrings(contract.ToolInputTransformSequence)
+	clone.TemplateToolGrants = cloneExecutionStrings(contract.TemplateToolGrants)
+	clone.ToolInputValueSequence = cloneExecutionStrings(contract.ToolInputValueSequence)
+	clone.ToolExpectedExitCodes = cloneExecutionExpectedExitCodes(contract.ToolExpectedExitCodes)
+	return clone
+}
+
+func cloneExecutionStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	clone := make([]string, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func cloneExecutionBools(values []bool) []bool {
+	if values == nil {
+		return nil
+	}
+	clone := make([]bool, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func cloneExecutionStepOutputs(values []ExecutionStepOutput) []ExecutionStepOutput {
+	if values == nil {
+		return nil
+	}
+	clone := make([]ExecutionStepOutput, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func cloneExecutionStepReferences(values []ExecutionStepReference) []ExecutionStepReference {
+	if values == nil {
+		return nil
+	}
+	clone := make([]ExecutionStepReference, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func cloneExecutionInputMaps(values []map[string]any) []map[string]any {
+	if values == nil {
+		return nil
+	}
+	clone := make([]map[string]any, len(values))
+	for i, value := range values {
+		clone[i] = cloneExecutionInputMap(value)
+	}
+	return clone
+}
+
+func cloneExecutionInputMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(value))
+	for key, nested := range value {
+		clone[key] = cloneExecutionInputValue(nested)
+	}
+	return clone
+}
+
+func cloneExecutionInputValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneExecutionInputMap(value)
+	case []any:
+		if value == nil {
+			return []any(nil)
+		}
+		clone := make([]any, len(value))
+		for i, nested := range value {
+			clone[i] = cloneExecutionInputValue(nested)
+		}
+		return clone
+	case []string:
+		return cloneExecutionStrings(value)
+	case []int:
+		if value == nil {
+			return []int(nil)
+		}
+		clone := make([]int, len(value))
+		copy(clone, value)
+		return clone
+	default:
+		return value
+	}
+}
+
+func cloneExecutionExpectedExitCodes(values [][]int) [][]int {
+	if values == nil {
+		return nil
+	}
+	clone := make([][]int, len(values))
+	for i, value := range values {
+		if value != nil {
+			clone[i] = make([]int, len(value))
+			copy(clone[i], value)
+		}
+	}
+	return clone
+}
+
 // UnmarshalJSON handles legacy "strict_result" / "strict-result" keys in JSON.
 func (c *ExecutionContract) UnmarshalJSON(data []byte) error {
 	type Alias ExecutionContract

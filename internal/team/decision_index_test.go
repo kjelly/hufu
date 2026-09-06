@@ -3,9 +3,13 @@ package team
 import (
 	"context"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func newIndex(t *testing.T) *DecisionIndex {
@@ -65,6 +69,124 @@ func TestDecisionIndexAppendAndProject(t *testing.T) {
 	}
 	if entries[0].SchemaVersion != DecisionIndexSchemaVersion || entries[0].IndexedAt.IsZero() {
 		t.Fatalf("entry was not stamped: %#v", entries[0])
+	}
+}
+
+func TestDecisionIndexConcurrentAppendPreservesEveryRow(t *testing.T) {
+	index := newIndex(t)
+	const count = 128
+	start := make(chan struct{})
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	wg.Add(count)
+	for i := 0; i < count; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			entry := indexEntry("concurrent-decision-"+strings.TrimSpace(time.Duration(i).String()), time.Unix(int64(i), 0).UTC())
+			if err := index.Append(entry); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	entries, err := index.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != count {
+		t.Fatalf("concurrent index entries = %d, want %d", len(entries), count)
+	}
+	data, err := os.ReadFile(index.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; lines != count {
+		t.Fatalf("concurrent index lines = %d, want %d", lines, count)
+	}
+}
+
+func TestDecisionIndexConcurrentIndependentOpenResolveIsMonotonic(t *testing.T) {
+	workspace := t.TempDir()
+	first, err := OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Append(indexEntry("monotonic", time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, index := range []*DecisionIndex{first, second} {
+		wg.Add(1)
+		go func(index *DecisionIndex) {
+			defer wg.Done()
+			_, err := index.Resolve("monotonic", DecisionOutcomeRecord{ResolvedOutcome: OutcomeSucceeded})
+			errs <- err
+		}(index)
+	}
+	wg.Wait()
+	close(errs)
+	successes := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else if !strings.Contains(err.Error(), "already resolved") {
+			t.Fatalf("unexpected concurrent resolve error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent resolve successes = %d, want exactly one", successes)
+	}
+	entries, err := first.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].Resolved() {
+		t.Fatalf("monotonic projection = %#v", entries)
+	}
+}
+
+func TestDecisionIndexCrossProcessResolve(t *testing.T) {
+	if os.Getenv("HUFU_DECISION_INDEX_HELPER") == "1" {
+		index, err := OpenDecisionIndex(os.Getenv("HUFU_DECISION_INDEX_WORKSPACE"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = index.Resolve("cross-process", DecisionOutcomeRecord{ResolvedOutcome: OutcomeSucceeded})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	workspace := t.TempDir()
+	index, err := OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Append(indexEntry("cross-process", time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDecisionIndexCrossProcessResolve$")
+	cmd.Env = append(os.Environ(), "HUFU_DECISION_INDEX_HELPER=1", "HUFU_DECISION_INDEX_WORKSPACE="+workspace)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cross-process resolver: %v\n%s", err, output)
+	}
+	entries, err := index.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].Resolved() {
+		t.Fatalf("cross-process projection = %#v", entries)
 	}
 }
 
@@ -273,5 +395,138 @@ func TestDecisionIndexPathIsWorkspaceScoped(t *testing.T) {
 	}
 	if _, err := OpenDecisionIndex("  "); err == nil {
 		t.Fatal("an empty workspace was accepted")
+	}
+}
+
+func appendFinalizedDecisionForTest(t *testing.T, journal decisionJournal, id, runID, taskID, profile string) DecisionRecord {
+	t.Helper()
+	record := DecisionRecord{ID: id, RunID: runID, TaskID: taskID, Profile: profile, FinalOption: profile}
+	if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionFinalized, decisionEvent{
+		DecisionID: id, RunID: runID, TaskID: taskID, Attempt: 1, Profile: profile,
+		Record: &record, Question: "Which branch?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func TestBranchScopedDecisionIndexProjectsVisibleFinalizedRecordsOnly(t *testing.T) {
+	workspace := t.TempDir()
+	index, err := OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := NewSessionTree()
+	left, err := tree.CreateBranch("left", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := tree.CreateBranch("right", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := &memoryJournal{}
+	tree.ActiveBranch = left.ID
+	leftJournal, err := newBranchScopedDecisionJournal(raw, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftRecord := appendFinalizedDecisionForTest(t, leftJournal, "shared", "run-left", "task-left", "left")
+	leftOnly := appendFinalizedDecisionForTest(t, leftJournal, "left-only", "run-left", "task-left-2", "left-only")
+	tree.ActiveBranch = right.ID
+	rightJournal, err := newBranchScopedDecisionJournal(raw, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightRecord := appendFinalizedDecisionForTest(t, rightJournal, "shared", "run-right", "task-right", "right")
+	if err := index.Append(IndexEntryFor(leftRecord, "Which branch?", false, ArtifactRef{})); err != nil {
+		t.Fatal(err)
+	}
+	leftOutcome := DecisionOutcomeRecord{DecisionID: leftOnly.ID, ResolvedOutcome: OutcomeSucceeded}
+	if err := ValidateOutcome(&leftOutcome); err != nil {
+		t.Fatal(err)
+	}
+	leftOnlyEntry := IndexEntryFor(leftOnly, "Which branch?", false, ArtifactRef{})
+	leftOnlyEntry.Outcome = &leftOutcome
+	if err := index.Append(leftOnlyEntry); err != nil {
+		t.Fatal(err)
+	}
+	rightEntry := IndexEntryFor(rightRecord, "Which branch?", false, ArtifactRef{})
+	rightOutcome := DecisionOutcomeRecord{DecisionID: rightRecord.ID, ResolvedOutcome: OutcomeFailed}
+	if err := ValidateOutcome(&rightOutcome); err != nil {
+		t.Fatal(err)
+	}
+	rightEntry.Outcome = &rightOutcome
+	if err := index.Append(rightEntry); err != nil {
+		t.Fatal(err)
+	}
+	orphan := indexEntry("orphan", time.Now().UTC())
+	if err := index.Append(orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	tree.ActiveBranch = left.ID
+	index.SetEventJournal(leftJournal)
+	leftEntries, err := index.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftEntries) != 2 {
+		t.Fatalf("left entries = %#v, want the two visible finalized records", leftEntries)
+	}
+	var shared, leftOnlyEntryGot DecisionIndexEntry
+	for _, entry := range leftEntries {
+		switch entry.DecisionID {
+		case "shared":
+			shared = entry
+		case "left-only":
+			leftOnlyEntryGot = entry
+		case "orphan":
+			t.Fatal("bound index exposed an index-only orphan")
+		}
+	}
+	if shared.Profile != "left" || shared.Outcome != nil {
+		t.Fatalf("left shared entry = %#v, want left record without right outcome", shared)
+	}
+	if leftOnlyEntryGot.Outcome == nil || leftOnlyEntryGot.Outcome.ResolvedOutcome != OutcomeSucceeded {
+		t.Fatalf("left-only outcome = %#v, want matching legacy metadata", leftOnlyEntryGot.Outcome)
+	}
+
+	tree.ActiveBranch = right.ID
+	index.SetEventJournal(rightJournal)
+	rightEntries, err := index.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rightEntries) != 1 || rightEntries[0].DecisionID != "shared" || rightEntries[0].Profile != "right" ||
+		rightEntries[0].Outcome == nil || rightEntries[0].Outcome.ResolvedOutcome != OutcomeFailed {
+		t.Fatalf("right entries = %#v, want right divergent record and outcome", rightEntries)
+	}
+}
+
+func TestCoordinatorDecisionIndexEntriesUseBoundBranchProjection(t *testing.T) {
+	workspace := t.TempDir()
+	if _, err := OpenDecisionIndex(workspace); err != nil {
+		t.Fatal(err)
+	}
+	tree := NewSessionTree()
+	branch, err := tree.CreateBranch("feature", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.ActiveBranch = branch.ID
+	journal, err := newBranchScopedDecisionJournal(&memoryJournal{}, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendFinalizedDecisionForTest(t, journal, "visible", "run-feature", "task-feature", "feature")
+	c := &Coordinator{eventJournal: journal, session: &TeamSession{Workspace: workspace}}
+	entries, err := c.DecisionIndexEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].DecisionID != "visible" {
+		t.Fatalf("coordinator entries = %#v, want visible branch record only", entries)
 	}
 }

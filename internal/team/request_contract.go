@@ -111,6 +111,37 @@ func PersistRequestContract(ctx context.Context, store ArtifactStore, envelope R
 	return result.ArtifactRef, nil
 }
 
+// loadRequestContract rehydrates the immutable contract selected by durable
+// admission. It deliberately does not consult current coordinator config.
+func loadRequestContract(ctx context.Context, store ArtifactStore, artifact ArtifactRef) (RequestContractEnvelope, error) {
+	if store == nil {
+		return RequestContractEnvelope{}, fmt.Errorf("request contract artifact store is unavailable")
+	}
+	resolved, err := store.Resolve(ctx, artifact)
+	if err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("resolve request contract artifact: %w", err)
+	}
+	if !sameArtifactIdentity(artifact, resolved) {
+		return RequestContractEnvelope{}, fmt.Errorf("request contract artifact identity does not match admission")
+	}
+	r, err := store.Open(ctx, resolved.ID)
+	if err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("open request contract artifact: %w", err)
+	}
+	var envelope RequestContractEnvelope
+	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
+		_ = r.Close()
+		return RequestContractEnvelope{}, fmt.Errorf("decode request contract artifact: %w", err)
+	}
+	if err := r.Close(); err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("close request contract artifact: %w", err)
+	}
+	if err := envelope.Validate(); err != nil {
+		return RequestContractEnvelope{}, fmt.Errorf("validate request contract artifact: %w", err)
+	}
+	return envelope, nil
+}
+
 func (e RequestContractEnvelope) Validate() error {
 	if e.SchemaVersion != RequestContractSchemaVersion {
 		return fmt.Errorf("unsupported request contract schema version %d", e.SchemaVersion)

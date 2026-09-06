@@ -151,23 +151,58 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextResponse(fmt.Sprintf("[CACHED RESULT] Task: '%s'\n\n%s", truncateTaskDesc(cachedDesc), cachedOutput)), nil
 	}
 
-	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{
-		{
-			Agent:     selected,
-			Desc:      taskDesc,
-			Model:     "",
-			Source:    TaskSourceSubagent,
-			ParentID:  parentID,
-			Execution: ExecutionContract{RequiresResult: true},
-		},
-	})
+	subSpec := TodoSpec{
+		Agent:       selected,
+		Desc:        taskDesc,
+		Goal:        args.Goal,
+		Constraints: args.Constraints,
+		Model:       "",
+		Source:      TaskSourceSubagent,
+		ParentID:    parentID,
+		Execution:   ExecutionContract{RequiresResult: true},
+	}
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fantasy.NewTextErrorResponse("sub-agent task tracker is unavailable"), nil
+	}
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	subTodoID := ids[0]
+	subTask := TaskDef{Agent: selected, Goal: args.Goal, Constraints: args.Constraints, Execution: cloneExecutionContract(subSpec.Execution)}
+	subAgentDef, _, err := c.AgentPool().ResolveAgentName(selected)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("resolve selected sub-agent %q: %v", selected, err)), nil
+	}
+	subTask = c.canonicalizeTaskOccurrence(subTask, subAgentDef, c.resolveAgentModel(subAgentDef, ""))
+	subTask.ModelTopology = []string{subTask.Model}
+	subSpec.Agent, subSpec.Model = subTask.Agent, subTask.Model
+	subSpec.ModelTopology = cloneModelTopology(subTask.ModelTopology)
+	subSpec.SideEffect, subSpec.Recovery, subSpec.ReconcileTool = subTask.SideEffect, subTask.Recovery, subTask.ReconcileTool
+	// request_agent is an executable durable occurrence. Freeze its effective
+	// decision contract before task_created or any child transition.
+	if c.hasDurableEventJournal() {
+		projection, projectionErr := taskOccurrenceProjectionFromSpec(subSpec, subTodoID)
+		if projectionErr != nil {
+			return fantasy.NewTextErrorResponse(projectionErr.Error()), nil
+		}
+		if _, err := c.admitTaskOccurrence(ctx, projection, subTodoID, 1); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
+	todoItems, err := c.CommitTaskCreationResolved(ctx, []TodoSpec{subSpec}, ids)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	// Sub-agent creation is another real task-creation boundary for the
 	// no-progress budget; it is not covered by coordinator ExecuteTasks.
 	c.recordNoProgressTasks(len(todoItems))
-	subTodoID := todoItems[0].ID
+	if len(todoItems) != 1 || todoItems[0] == nil {
+		return fantasy.NewTextErrorResponse("sub-agent task creation returned no task"), nil
+	}
+	disarmDecision, err := c.prepareTaskDecision(ctx, subTask, subTodoID)
+	if err != nil {
+		c.PersistFailureWithClass(selected, taskDesc, subTodoID, c.FailureDetail(err, "error"), RetryNone, FailurePolicy)
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	defer disarmDecision()
 
 	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskInProgress, "", "", nil); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -281,7 +316,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	}
 	agentDef := c.injectWorkerContext(ctx, canonical.Agent)
 	gatedTools := c.gatePolicyTools(resolvedTools.Tools)
-	subAgModelID := c.resolveAgentModel(agentDef, "")
+	subAgModelID := canonical.Task.Model
 	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, subAgModelID, agentDef)
 	if err != nil {
 		return "", fmt.Errorf("resolve sub-agent provider context: %w", err)
@@ -337,7 +372,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if invocation.AdmissionContext.IsBound() {
 		workerInput.ModelContext = invocation.ModelContext
 	} else {
-		workerInput.ModelContext = globalRegistry.GetSpec(c.resolveAgentModel(agentDef, "")).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
+		workerInput.ModelContext = globalRegistry.GetSpec(subAgModelID).WithEffectiveMaxOutputTokens(c.resolveAgentMaxOutputTokens(agentDef))
 	}
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()

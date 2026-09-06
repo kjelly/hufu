@@ -2,9 +2,12 @@ package team
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -26,7 +29,9 @@ const decisionActor = "decision-runtime"
 // every call site.
 type decisionEvent struct {
 	DecisionID   string `json:"decision_id"`
+	RunID        string `json:"run_id,omitempty"`
 	TaskID       string `json:"task_id,omitempty"`
+	Attempt      int    `json:"attempt,omitempty"`
 	Profile      string `json:"profile,omitempty"`
 	EvidenceHash string `json:"evidence_hash,omitempty"`
 	Round        int    `json:"round,omitempty"`
@@ -61,6 +66,13 @@ type decisionEvent struct {
 	ReferenceInvocation *ReferenceEvidenceInvocation `json:"reference_invocation,omitempty"`
 	ReferenceResult     *ReferenceEvidenceResult     `json:"reference_result,omitempty"`
 	ReferenceFailure    *ReferenceEvidenceFailure    `json:"reference_failure,omitempty"`
+	EnvelopeRef         ArtifactRef                  `json:"envelope_ref,omitempty"`
+	EnvelopeHash        string                       `json:"envelope_hash,omitempty"`
+
+	// IdempotencyKey is carried by the outer RunEvent, not the decision payload.
+	// It is intentionally excluded from JSON so replay identity cannot become
+	// part of the decision's immutable content.
+	IdempotencyKey string `json:"-"`
 
 	// JudgeAliases records the anonymization mapping a challenger was NOT
 	// given, so the run stays auditable without ever revealing identity to the
@@ -71,7 +83,9 @@ type decisionEvent struct {
 // decisionState is the projection rebuilt from the event log.
 type decisionState struct {
 	DecisionID                 string
+	RunID                      string
 	TaskID                     string
+	Attempt                    int
 	Profile                    string
 	Packet                     DecisionEvidencePacket
 	ProposedOptions            []DecisionOption
@@ -80,6 +94,8 @@ type decisionState struct {
 	Challenges                 []DecisionChallenge
 	Revisions                  []DecisionRevision
 	Premortem                  *PremortemResult
+	ChallengeSkipReason        string
+	ChallengeSkipEvidenceHash  string
 	Degradations               []DecisionDegradation
 	Record                     *DecisionRecord
 	ContractRef                string
@@ -90,10 +106,23 @@ type decisionState struct {
 	ReferenceResult            *ReferenceEvidenceResult
 	ReferenceEvidenceResultRef ArtifactRef
 	ReferenceFailure           *ReferenceEvidenceFailure
+	EnvelopeRef                ArtifactRef
 	Invalidated                bool
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
 	// formed on them are durable but must not be aggregated (spec §15.4).
 	StaleHashes map[string]bool
+}
+
+// decisionEventFor binds an event to the immutable task occurrence and gives
+// each durable stage a semantic, replay-stable idempotency key.
+func decisionEventFor(req DecisionRequest, stage string, parts ...string) decisionEvent {
+	return decisionEvent{
+		DecisionID:     req.DecisionID,
+		RunID:          req.RunID,
+		TaskID:         req.TaskID,
+		Attempt:        req.Attempt,
+		IdempotencyKey: decisionStageEventKey(req.DecisionID, stage, parts...),
+	}
 }
 
 // OpinionsForRound returns the opinions recorded for one round, in judge order.
@@ -159,15 +188,125 @@ type decisionJournal interface {
 
 // appendDecisionEvent writes one decision event.
 func appendDecisionEvent(ctx context.Context, journal decisionJournal, eventType string, payload decisionEvent) error {
+	_, err := appendDecisionEventResult(ctx, journal, eventType, payload)
+	return err
+}
+
+func appendDecisionEventResult(ctx context.Context, journal decisionJournal, eventType string, payload decisionEvent) (RunEvent, error) {
 	if journal == nil {
-		return fmt.Errorf("decision event journal is unavailable")
+		return RunEvent{}, fmt.Errorf("decision event journal is unavailable")
+	}
+	if err := enforceDecisionEventProvenance(ctx, journal, &payload); err != nil {
+		return RunEvent{}, fmt.Errorf("append %s event: %w", eventType, err)
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encoding %s payload: %w", eventType, err)
+		return RunEvent{}, fmt.Errorf("encoding %s payload: %w", eventType, err)
 	}
-	if _, err := journal.Append(ctx, RunEvent{Type: eventType, Actor: decisionActor, Payload: raw}); err != nil {
-		return fmt.Errorf("append %s event: %w", eventType, err)
+	key := payload.IdempotencyKey
+	if key == "" {
+		key = decisionEventKey(eventType, payload)
+	}
+	persisted, err := journal.Append(ctx, RunEvent{Type: eventType, Actor: decisionActor, IdempotencyKey: key, RunID: payload.RunID, TaskID: payload.TaskID, Attempt: payload.Attempt, Payload: raw})
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("append %s event: %w", eventType, err)
+	}
+	return persisted, nil
+}
+
+func decisionEventKey(eventType string, payload decisionEvent) string {
+	// These lifecycle events predate decisionEventFor at some call sites. Their
+	// fallback key must still identify the semantic transition, not the mutable
+	// payload timestamp or a generated artifact/record ID.
+	switch eventType {
+	case agent.EventDecisionBudgetDegraded:
+		if payload.Degradation != nil {
+			return decisionStageEventKey(payload.DecisionID, "budget_degraded",
+				payload.Degradation.Step, payload.Degradation.From, payload.Degradation.To)
+		}
+	case agent.EventDecisionStarted:
+		if payload.Profile == "" {
+			return decisionStageEventKey(payload.DecisionID, "execution_armed")
+		}
+	case agent.EventCommitGateBlocked:
+		return decisionStageEventKey(payload.DecisionID, "commit_gate_blocked", payload.Reason)
+	case agent.EventKillCriterionTriggered:
+		return decisionStageEventKey(payload.DecisionID, "kill_criterion_triggered", payload.Reason)
+	case agent.EventDecisionInvalidated:
+		return decisionStageEventKey(payload.DecisionID, "invalidated", payload.Reason)
+	case agent.EventReplanRequested:
+		return decisionStageEventKey(payload.DecisionID, "replan_requested", payload.Reason)
+	case agent.EventAssumptionSupported, agent.EventAssumptionContradicted, agent.EventAssumptionStale:
+		return decisionStageEventKey(payload.DecisionID, "assumption_transition",
+			payload.AssumptionID, payload.From, payload.To, payload.Source)
+	}
+
+	// Keep the generic compatibility path deterministic too. The selected fields
+	// are the event's semantic occurrence/stage identity; At and nested generated
+	// IDs are deliberately excluded.
+	identity := struct {
+		DecisionID   string
+		RunID        string
+		TaskID       string
+		Attempt      int
+		Profile      string
+		EvidenceHash string
+		Round        int
+		JudgeID      string
+		Reason       string
+		AssumptionID string
+		From         string
+		To           string
+		Source       string
+		Note         string
+		ContractRef  string
+		ContractRev  uint64
+	}{
+		DecisionID: payload.DecisionID, RunID: payload.RunID, TaskID: payload.TaskID,
+		Attempt: payload.Attempt, Profile: payload.Profile, EvidenceHash: payload.EvidenceHash,
+		Round: payload.Round, JudgeID: payload.JudgeID, Reason: payload.Reason,
+		AssumptionID: payload.AssumptionID, From: payload.From, To: payload.To,
+		Source: payload.Source, Note: payload.Note, ContractRef: payload.ContractRef,
+		ContractRev: payload.ContractRevision,
+	}
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return decisionStageEventKey(payload.DecisionID, eventType)
+	}
+	digest := sha256.Sum256(raw)
+	return decisionStageEventKey(payload.DecisionID, eventType, hex.EncodeToString(digest[:]))
+}
+
+// enforceDecisionEventProvenance is the single append-side guard for decision
+// lifecycle events. Once the immutable run envelope is anchored, no later
+// event may silently fall back to the current coordinator run identity. Older
+// pre-envelope records remain readable and writable for compatibility, but
+// cannot acquire a fabricated occurrence identity here.
+func enforceDecisionEventProvenance(ctx context.Context, journal decisionJournal, payload *decisionEvent) error {
+	if payload == nil || strings.TrimSpace(payload.DecisionID) == "" {
+		return fmt.Errorf("decision event requires a decision identity")
+	}
+	state, err := projectDecision(ctx, journal, payload.DecisionID)
+	if err != nil {
+		return err
+	}
+	if state.EnvelopeRef.ID == "" {
+		return nil
+	}
+	if payload.RunID != "" && payload.RunID != state.RunID {
+		return fmt.Errorf("decision event run identity conflicts with anchored occurrence")
+	}
+	if payload.TaskID != "" && payload.TaskID != state.TaskID {
+		return fmt.Errorf("decision event task identity conflicts with anchored occurrence")
+	}
+	if payload.Attempt != 0 && payload.Attempt != state.Attempt {
+		return fmt.Errorf("decision event attempt identity conflicts with anchored occurrence")
+	}
+	payload.RunID = state.RunID
+	payload.TaskID = state.TaskID
+	payload.Attempt = state.Attempt
+	if payload.RunID == "" || payload.TaskID == "" || payload.Attempt < 1 {
+		return &LegacyUnfinishedDecisionError{DecisionID: payload.DecisionID}
 	}
 	return nil
 }
@@ -179,6 +318,7 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		Aggregates:  map[int]DecisionAggregate{},
 		StaleHashes: map[string]bool{},
 	}
+	seenKeys := map[string]RunEvent{}
 	if journal == nil {
 		return state, fmt.Errorf("decision event journal is unavailable")
 	}
@@ -203,17 +343,38 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		if payload.DecisionID != decisionID {
 			continue
 		}
-		if err := applyDecisionEvent(&state, event.Type, payload); err != nil {
+		if key := event.IdempotencyKey; key != "" {
+			if _, seen := seenKeys[key]; seen {
+				continue
+			}
+			seenKeys[key] = event
+		}
+		if err := applyDecisionEvent(&state, event, payload); err != nil {
 			return state, fmt.Errorf("projecting %s event: %w", event.Type, err)
 		}
 	}
 	return state, nil
 }
 
-func applyDecisionEvent(state *decisionState, eventType string, payload decisionEvent) error {
+func applyDecisionEvent(state *decisionState, event RunEvent, payload decisionEvent) error {
+	if err := state.applyEventIdentity(event, payload); err != nil {
+		return err
+	}
+	eventType := event.Type
+	if eventType == agent.EventDecisionRunEnvelopeAnchored {
+		return state.applyEnvelopeAnchor(payload)
+	}
+	if eventType == agent.EventDecisionReferenceStarted || eventType == agent.EventDecisionReferenceCompleted || eventType == agent.EventDecisionReferenceFailed {
+		return state.applyReferenceEvent(eventType, payload)
+	}
 	switch eventType {
 	case agent.EventDecisionStarted:
-		state.TaskID, state.Profile = payload.TaskID, payload.Profile
+		if payload.TaskID != "" {
+			state.TaskID = payload.TaskID
+		}
+		if payload.Profile != "" {
+			state.Profile = payload.Profile
+		}
 	case agent.EventRequestContractCommitted:
 		state.TaskID, state.ContractRef = payload.TaskID, payload.ContractRef
 		state.ContractRevision, state.ContractArtifact = payload.ContractRevision, payload.ContractArtifact
@@ -229,8 +390,6 @@ func applyDecisionEvent(state *decisionState, eventType string, payload decision
 			state.StaleHashes[state.Packet.Hash] = true
 		}
 		state.Packet, state.EvidenceArtifact = *payload.Packet, payload.EvidenceArtifact
-	case agent.EventDecisionReferenceStarted, agent.EventDecisionReferenceCompleted, agent.EventDecisionReferenceFailed:
-		return state.applyReferenceEvent(eventType, payload)
 	case agent.EventDecisionOpinionSubmitted, agent.EventDecisionOpinionRejected:
 		if payload.Opinion != nil {
 			state.Opinions = append(state.Opinions, *payload.Opinion)
@@ -243,6 +402,9 @@ func applyDecisionEvent(state *decisionState, eventType string, payload decision
 		if payload.Challenge != nil {
 			state.Challenges = append(state.Challenges, *payload.Challenge)
 		}
+	case agent.EventDecisionChallengeSkipped:
+		state.ChallengeSkipReason = payload.Reason
+		state.ChallengeSkipEvidenceHash = payload.EvidenceHash
 	case agent.EventDecisionRevisionSubmitted:
 		if payload.Revision != nil {
 			state.Revisions = append(state.Revisions, *payload.Revision)
@@ -279,6 +441,82 @@ func applyDecisionEvent(state *decisionState, eventType string, payload decision
 			if state.Record.StaleReason == "" {
 				state.Record.StaleReason = payload.Reason
 			}
+		}
+	}
+	return nil
+}
+
+func (state *decisionState) applyEnvelopeAnchor(payload decisionEvent) error {
+	if payload.RunID == "" || payload.TaskID == "" || payload.Attempt < 1 || payload.EvidenceHash == "" ||
+		payload.EnvelopeRef.ID == "" || payload.EnvelopeRef.SHA256 == "" || payload.EnvelopeHash == "" {
+		return fmt.Errorf("decision run envelope anchor is incomplete")
+	}
+	if state.Packet.Hash == "" || payload.EvidenceHash != state.Packet.Hash {
+		return fmt.Errorf("decision run envelope anchor evidence identity does not match sealed evidence")
+	}
+	if payload.EnvelopeHash != payload.EnvelopeRef.SHA256 {
+		return fmt.Errorf("decision run envelope anchor hash does not match artifact reference")
+	}
+	if payload.EnvelopeRef.RunID != payload.RunID || payload.EnvelopeRef.TaskID != payload.TaskID || payload.EnvelopeRef.Attempt != payload.Attempt {
+		return fmt.Errorf("decision run envelope anchor artifact identity does not match")
+	}
+	if state.EnvelopeRef.ID != "" {
+		if state.EnvelopeRef.ID != payload.EnvelopeRef.ID || state.EnvelopeRef.SHA256 != payload.EnvelopeRef.SHA256 {
+			return fmt.Errorf("decision run envelope has conflicting anchors")
+		}
+		return nil
+	}
+	state.EnvelopeRef = payload.EnvelopeRef
+	return nil
+}
+
+func (state *decisionState) applyEventIdentity(event RunEvent, payload decisionEvent) error {
+	if payload.DecisionID == "" || payload.DecisionID != state.DecisionID {
+		return fmt.Errorf("decision event identity does not match decision projection")
+	}
+	if event.RunID != "" && payload.RunID != "" && event.RunID != payload.RunID {
+		return fmt.Errorf("decision event run identity does not match payload")
+	}
+	if event.TaskID != "" && payload.TaskID != "" && event.TaskID != payload.TaskID {
+		return fmt.Errorf("decision event task identity does not match payload")
+	}
+	if event.Attempt > 0 && payload.Attempt > 0 && event.Attempt != payload.Attempt {
+		return fmt.Errorf("decision event attempt identity does not match payload")
+	}
+	if payload.RunID != "" && state.RunID != "" && payload.RunID != state.RunID {
+		return fmt.Errorf("decision event run identity conflicts with prior event")
+	}
+	if event.RunID != "" && state.RunID != "" && event.RunID != state.RunID {
+		return fmt.Errorf("decision event outer run identity conflicts with prior event")
+	}
+	if payload.TaskID != "" && state.TaskID != "" && payload.TaskID != state.TaskID {
+		return fmt.Errorf("decision event task identity conflicts with prior event")
+	}
+	if event.TaskID != "" && state.TaskID != "" && event.TaskID != state.TaskID {
+		return fmt.Errorf("decision event outer task identity conflicts with prior event")
+	}
+	if payload.Attempt > 0 && state.Attempt > 0 && payload.Attempt != state.Attempt {
+		return fmt.Errorf("decision event attempt identity conflicts with prior event")
+	}
+	if event.Attempt > 0 && state.Attempt > 0 && event.Attempt != state.Attempt {
+		return fmt.Errorf("decision event outer attempt identity conflicts with prior event")
+	}
+	if state.RunID == "" {
+		state.RunID = payload.RunID
+		if state.RunID == "" {
+			state.RunID = event.RunID
+		}
+	}
+	if state.TaskID == "" {
+		state.TaskID = payload.TaskID
+		if state.TaskID == "" {
+			state.TaskID = event.TaskID
+		}
+	}
+	if state.Attempt == 0 {
+		state.Attempt = payload.Attempt
+		if state.Attempt == 0 {
+			state.Attempt = event.Attempt
 		}
 	}
 	return nil

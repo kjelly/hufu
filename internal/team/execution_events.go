@@ -213,6 +213,26 @@ func usageWithProgressTokens(steps []fantasy.StepResult, attemptTokens *attemptB
 	return usage
 }
 
+func hasInterruptedRecoveryRun(tracker *TaskTracker) bool {
+	if tracker == nil {
+		return false
+	}
+	for _, item := range tracker.TodoList().Items() {
+		if item == nil || !isInterruptedStatus(item.Status) {
+			continue
+		}
+		for n := len(item.ExecutionReceipts) - 1; n >= 0; n-- {
+			if item.ExecutionReceipts[n].Attempt == item.Retries+1 && strings.TrimSpace(item.ExecutionReceipts[n].RunID) != "" {
+				return true
+			}
+		}
+		if item.ExecutionReceipt != nil && item.ExecutionReceipt.Attempt == item.Retries+1 && strings.TrimSpace(item.ExecutionReceipt.RunID) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Context, lease *invocationLease) (context.Context, func()) {
 	owner := newInvocationOwnerWithLease(c, parent, lease)
 	handoff := false
@@ -269,7 +289,13 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.executionRunID = runID
 	c.executionTeamRevision = teamRevision
 	if c.taskTracker != nil {
-		c.taskTracker.TodoList().SetRunID(runID)
+		// The restored TodoList run identity belongs to interrupted task
+		// occurrences. Do not replace it before ResumeInterruptedTasks has had
+		// the opportunity to resolve and call DecisionEngine.Resume. Fresh and
+		// already-terminal task lists have no recovery identity to preserve.
+		if !hasInterruptedRecoveryRun(c.taskTracker) {
+			c.taskTracker.TodoList().SetRunID(runID)
+		}
 	}
 	c.executionEventsMu.Unlock()
 	c.terminalLifecycleMu.Lock()

@@ -41,10 +41,14 @@ const (
 // CLI/request-scoped override and wins outright; task is the configuration-only
 // TaskDef.DecisionProfile. An unknown name is an error, never a silent
 // fallback to a weaker profile (spec §8, §9).
-func ResolveDecisionProfile(cfg DecisionConfig, requestOverride string, task TaskDef) (DecisionProfileResolution, error) {
+func ResolveDecisionProfile(cfg DecisionConfig, requestOverride string, task any) (DecisionProfileResolution, error) {
+	taskProfile, err := decisionProfileForInput(task)
+	if err != nil {
+		return DecisionProfileResolution{}, err
+	}
 	candidates := []DecisionProfileResolution{
 		{Profile: strings.TrimSpace(requestOverride), Source: DecisionProfileSourceRequest},
-		{Profile: strings.TrimSpace(task.DecisionProfile), Source: DecisionProfileSourceTask},
+		{Profile: taskProfile, Source: DecisionProfileSourceTask},
 		{Profile: strings.TrimSpace(cfg.DefaultProfile), Source: DecisionProfileSourceTeam},
 	}
 	for _, candidate := range candidates {
@@ -59,6 +63,27 @@ func ResolveDecisionProfile(cfg DecisionConfig, requestOverride string, task Tas
 		return candidate, nil
 	}
 	return DecisionProfileResolution{Profile: DecisionProfileOff, Source: DecisionProfileSourceDefault}, nil
+}
+
+func decisionProfileForInput(input any) (string, error) {
+	switch value := input.(type) {
+	case TaskDef:
+		return strings.TrimSpace(value.DecisionProfile), nil
+	case TaskOccurrenceProjection:
+		return strings.TrimSpace(value.DecisionProfile), nil
+	case *TaskOccurrenceProjection:
+		if value == nil {
+			return "", fmt.Errorf("decision profile input is nil")
+		}
+		return strings.TrimSpace(value.DecisionProfile), nil
+	case *TodoItem:
+		if value == nil {
+			return "", fmt.Errorf("decision profile input is nil")
+		}
+		return strings.TrimSpace(value.DecisionProfile), nil
+	default:
+		return "", fmt.Errorf("unsupported decision profile input %T", input)
+	}
 }
 
 // DecisionPolicyFor returns the resolved policy for a profile name. The

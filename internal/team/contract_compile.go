@@ -80,7 +80,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash initial task contract %q: %w", contractID, err)
 		}
-		bound[i].Execution = contract.Execution
+		bound[i].Execution = cloneExecutionContract(contract.Execution)
 		bound[i].OutputMode = contract.OutputMode
 		bound[i].SideEffect = contract.SideEffect
 		bound[i].Recovery = contract.Recovery
@@ -95,7 +95,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -150,7 +150,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
 		}
-		bound[i].Execution = contract.Execution
+		bound[i].Execution = cloneExecutionContract(contract.Execution)
 		bound[i].OutputMode = contract.OutputMode
 		bound[i].SideEffect = contract.SideEffect
 		bound[i].Recovery = contract.Recovery
@@ -165,7 +165,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: contract.Execution, OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }

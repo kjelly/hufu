@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"golang.org/x/sys/unix"
 )
 
 // The cross-run decision index
@@ -92,8 +94,51 @@ func (e DecisionIndexEntry) Resolved() bool { return e.Outcome != nil }
 
 // DecisionIndex is an append-only index file scoped to one workspace.
 type DecisionIndex struct {
-	path    string
-	journal decisionJournal
+	path      string
+	lockPath  string
+	journal   decisionJournal
+	mu        *sync.Mutex
+	journalMu sync.RWMutex
+}
+
+var decisionIndexProcessLocks sync.Map // map[string]*sync.Mutex, keyed by stable lock path
+
+func decisionIndexLockFor(path string) *sync.Mutex {
+	if lock, ok := decisionIndexProcessLocks.Load(path); ok {
+		return lock.(*sync.Mutex)
+	}
+	created := &sync.Mutex{}
+	actual, _ := decisionIndexProcessLocks.LoadOrStore(path, created)
+	return actual.(*sync.Mutex)
+}
+
+func (i *DecisionIndex) withExclusiveLock(fn func() error) error {
+	if i == nil || i.mu == nil || strings.TrimSpace(i.lockPath) == "" {
+		return fmt.Errorf("decision index: workspace lock is unavailable")
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	lockFile, err := os.OpenFile(i.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("decision index: opening workspace lock %s: %w", i.lockPath, err)
+	}
+	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
+		_ = lockFile.Close()
+		return fmt.Errorf("decision index: acquiring workspace lock (fail closed): %w", err)
+	}
+	fnErr := fn()
+	unlockErr := unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+	closeErr := lockFile.Close()
+	if fnErr != nil {
+		return fnErr
+	}
+	if unlockErr != nil {
+		return fmt.Errorf("decision index: releasing workspace lock: %w", unlockErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("decision index: closing workspace lock: %w", closeErr)
+	}
+	return nil
 }
 
 // RebuildFromJournal reconstructs the derived index from finalized decision
@@ -104,65 +149,70 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 	if i == nil || journal == nil {
 		return fmt.Errorf("decision index rebuild: canonical event journal is unavailable")
 	}
-	previous, err := i.List()
-	if err != nil {
-		return err
-	}
-	outcomes := make(map[string]*DecisionOutcomeRecord, len(previous))
-	for _, entry := range previous {
-		if entry.Outcome != nil {
-			copyOutcome := *entry.Outcome
-			outcomes[entry.DecisionID] = &copyOutcome
+	return i.withExclusiveLock(func() error {
+		if _, branchScoped := branchScopedJournal(journal); branchScoped {
+			return fmt.Errorf("decision index rebuild: branch-scoped journal is read-only")
 		}
-	}
-	events, err := journal.ReadEvents(ctx)
-	if err != nil {
-		return fmt.Errorf("decision index rebuild: reading events: %w", err)
-	}
-	ids := map[string]struct{}{}
-	metadata := make(map[string]decisionEvent)
-	for _, event := range events {
-		if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
-			continue
+		previous, err := i.listFile()
+		if err != nil {
+			return err
 		}
-		var payload decisionEvent
-		if json.Unmarshal(event.Payload, &payload) == nil && payload.Record != nil && payload.DecisionID != "" {
-			ids[payload.DecisionID] = struct{}{}
-			metadata[payload.DecisionID] = payload
+		outcomes := make(map[string]*DecisionOutcomeRecord, len(previous))
+		for _, entry := range previous {
+			if entry.Outcome != nil {
+				copyOutcome := *entry.Outcome
+				outcomes[entry.DecisionID] = &copyOutcome
+			}
 		}
-	}
-	var rebuilt []DecisionIndexEntry
-	for id := range ids {
-		state, projectErr := projectDecision(ctx, journal, id)
-		if projectErr != nil || state.Record == nil {
-			continue
+		events, err := journal.ReadEvents(ctx)
+		if err != nil {
+			return fmt.Errorf("decision index rebuild: reading events: %w", err)
 		}
-		finalized := metadata[id]
-		question := finalized.Question
-		if question == "" {
-			question = state.Packet.Question
+		ids := map[string]struct{}{}
+		metadata := make(map[string]decisionEvent)
+		for _, event := range events {
+			if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
+				continue
+			}
+			var payload decisionEvent
+			if json.Unmarshal(event.Payload, &payload) == nil && payload.Record != nil && payload.DecisionID != "" {
+				ids[payload.DecisionID] = struct{}{}
+				metadata[payload.DecisionID] = payload
+			}
 		}
-		entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
-		if state.Record.Stale {
-			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
+		var rebuilt []DecisionIndexEntry
+		for id := range ids {
+			state, projectErr := projectDecision(ctx, journal, id)
+			if projectErr != nil || state.Record == nil {
+				continue
+			}
+			finalized := metadata[id]
+			question := finalized.Question
+			if question == "" {
+				question = state.Packet.Question
+			}
+			entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
+			if state.Record.Stale {
+				entry.Stale, entry.StaleReason = true, state.Record.StaleReason
+			}
+			entry.Outcome = outcomes[id]
+			rebuilt = append(rebuilt, entry)
 		}
-		entry.Outcome = outcomes[id]
-		rebuilt = append(rebuilt, entry)
-	}
-	sort.Slice(rebuilt, func(a, b int) bool { return rebuilt[a].DecisionID < rebuilt[b].DecisionID })
-	var data []byte
-	for _, entry := range rebuilt {
-		line, marshalErr := json.Marshal(entry)
-		if marshalErr != nil {
-			return fmt.Errorf("decision index rebuild: encoding %s: %w", entry.DecisionID, marshalErr)
+		sort.Slice(rebuilt, func(a, b int) bool { return rebuilt[a].DecisionID < rebuilt[b].DecisionID })
+		var data []byte
+		for _, entry := range rebuilt {
+			line, marshalErr := json.Marshal(entry)
+			if marshalErr != nil {
+				return fmt.Errorf("decision index rebuild: encoding %s: %w", entry.DecisionID, marshalErr)
+			}
+			data = append(data, line...)
+			data = append(data, '\n')
 		}
-		data = append(data, line...)
-		data = append(data, '\n')
-	}
-	if err := AtomicWriteFile(i.path, data, 0o644); err != nil {
-		return fmt.Errorf("decision index rebuild: %w", err)
-	}
-	return nil
+		if err := AtomicWriteFile(i.path, data, 0o644); err != nil {
+			return fmt.Errorf("decision index rebuild: %w", err)
+		}
+		return nil
+	})
 }
 
 // SetJournal binds the canonical event journal used for lifecycle changes.
@@ -170,7 +220,9 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 // recording assumption checks.
 func (i *DecisionIndex) SetJournal(journal decisionJournal) {
 	if i != nil {
+		i.journalMu.Lock()
 		i.journal = journal
+		i.journalMu.Unlock()
 	}
 }
 
@@ -178,7 +230,9 @@ func (i *DecisionIndex) SetJournal(journal decisionJournal) {
 // used by the decision reducer.
 func (i *DecisionIndex) SetEventJournal(journal EventJournal) {
 	if i != nil && journal != nil {
+		i.journalMu.Lock()
 		i.journal = journal
+		i.journalMu.Unlock()
 	}
 }
 
@@ -186,8 +240,19 @@ func (i *DecisionIndex) SetEventJournal(journal EventJournal) {
 // canonical event store for operator lifecycle commands.
 func BindDecisionIndexEventStore(i *DecisionIndex, store *EventStore) {
 	if i != nil && store != nil {
+		i.journalMu.Lock()
 		i.journal = eventStoreJournal{store: store}
+		i.journalMu.Unlock()
 	}
+}
+
+func (i *DecisionIndex) journalSnapshot() decisionJournal {
+	if i == nil {
+		return nil
+	}
+	i.journalMu.RLock()
+	defer i.journalMu.RUnlock()
+	return i.journal
 }
 
 // DecisionIndexPath returns the index file's location for a workspace.
@@ -204,7 +269,12 @@ func OpenDecisionIndex(workspace string) (*DecisionIndex, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("decision index: creating %s: %w", filepath.Dir(path), err)
 	}
-	return &DecisionIndex{path: path}, nil
+	lockPath := filepath.Join(filepath.Dir(path), ".lock")
+	index := &DecisionIndex{path: path, lockPath: lockPath, mu: decisionIndexLockFor(lockPath)}
+	if err := index.withExclusiveLock(func() error { return nil }); err != nil {
+		return nil, err
+	}
+	return index, nil
 }
 
 // Path returns the index file path.
@@ -226,6 +296,10 @@ func (i *DecisionIndex) Append(entry DecisionIndexEntry) error {
 		entry.IndexedAt = time.Now().UTC()
 	}
 
+	return i.withExclusiveLock(func() error { return i.appendEntryUnlocked(entry) })
+}
+
+func (i *DecisionIndex) appendEntryUnlocked(entry DecisionIndexEntry) error {
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("decision index: encoding entry: %w", err)
@@ -260,6 +334,20 @@ func (i *DecisionIndex) List() ([]DecisionIndexEntry, error) {
 	if i == nil {
 		return nil, fmt.Errorf("decision index is unavailable")
 	}
+	var entries []DecisionIndexEntry
+	err := i.withExclusiveLock(func() error {
+		var err error
+		if journal, branchScoped := branchScopedJournal(i.journalSnapshot()); branchScoped {
+			entries, err = i.listVisibleFromJournal(journal)
+		} else {
+			entries, err = i.listFile()
+		}
+		return err
+	})
+	return entries, err
+}
+
+func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
 	file, err := os.Open(i.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -307,6 +395,111 @@ func (i *DecisionIndex) List() ([]DecisionIndexEntry, error) {
 	return out, nil
 }
 
+func branchScopedJournal(journal decisionJournal) (*branchScopedDecisionJournal, bool) {
+	scoped, ok := journal.(*branchScopedDecisionJournal)
+	return scoped, ok && scoped != nil
+}
+
+// listVisibleFromJournal rebuilds the branch-local decision projection from
+// finalized canonical events. The global index is consulted only for
+// resolution metadata after a visible record has been established; it never
+// supplies visibility or decision content.
+func (i *DecisionIndex) listVisibleFromJournal(journal *branchScopedDecisionJournal) ([]DecisionIndexEntry, error) {
+	if journal == nil {
+		return nil, fmt.Errorf("decision index: branch-scoped journal is unavailable")
+	}
+	events, err := journal.ReadEvents(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("decision index: reading branch events: %w", err)
+	}
+	global, err := i.listFile()
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0)
+	metadata := make(map[string]decisionEvent)
+	seen := make(map[string]bool)
+	for _, event := range events {
+		if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
+			continue
+		}
+		var payload decisionEvent
+		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.DecisionID == "" || payload.Record == nil {
+			continue
+		}
+		if !seen[payload.DecisionID] {
+			ids = append(ids, payload.DecisionID)
+			seen[payload.DecisionID] = true
+		}
+		metadata[payload.DecisionID] = payload
+	}
+
+	entries := make([]DecisionIndexEntry, 0, len(ids))
+	for _, decisionID := range ids {
+		state, err := projectDecision(context.Background(), journal, decisionID)
+		if err != nil {
+			return nil, fmt.Errorf("decision index: projecting %s: %w", decisionID, err)
+		}
+		if state.Record == nil {
+			continue
+		}
+		finalized := metadata[decisionID]
+		question := finalized.Question
+		if question == "" {
+			question = state.Packet.Question
+		}
+		entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
+		if state.Record.Stale {
+			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
+		}
+		if outcome, ok := matchingDecisionOutcome(entry, global); ok {
+			entry.Outcome = outcome
+		}
+		entries = append(entries, entry)
+	}
+	sort.SliceStable(entries, func(a, b int) bool {
+		if !entries[a].CreatedAt.Equal(entries[b].CreatedAt) {
+			return entries[a].CreatedAt.Before(entries[b].CreatedAt)
+		}
+		return entries[a].DecisionID < entries[b].DecisionID
+	})
+	return entries, nil
+}
+
+func matchingDecisionOutcome(visible DecisionIndexEntry, global []DecisionIndexEntry) (*DecisionOutcomeRecord, bool) {
+	for _, candidate := range global {
+		if candidate.DecisionID != visible.DecisionID {
+			continue
+		}
+		identityMatched := false
+		if visible.RecordDigest != "" && candidate.RecordDigest != "" {
+			if visible.RecordDigest != candidate.RecordDigest {
+				continue
+			}
+			identityMatched = true
+		}
+		if visible.RunID != "" && candidate.RunID != "" {
+			if visible.RunID != candidate.RunID {
+				continue
+			}
+			identityMatched = true
+		}
+		if visible.TaskID != "" && candidate.TaskID != "" {
+			if visible.TaskID != candidate.TaskID {
+				continue
+			}
+			identityMatched = true
+		}
+		if !identityMatched || candidate.Outcome == nil {
+			continue
+		}
+		outcome := *candidate.Outcome
+		return &outcome, true
+	}
+	return nil, false
+}
+
 // Get returns one decision's current row.
 func (i *DecisionIndex) Get(decisionID string) (DecisionIndexEntry, bool, error) {
 	entries, err := i.List()
@@ -339,34 +532,42 @@ func (i *DecisionIndex) Pending() ([]DecisionIndexEntry, error) {
 // Resolve records an outcome for a decision. It appends a superseding row; the
 // DecisionRecord artifact the row points at is never touched (spec §35).
 func (i *DecisionIndex) Resolve(decisionID string, outcome DecisionOutcomeRecord) (DecisionIndexEntry, error) {
-	entry, found, err := i.Get(decisionID)
+	var updated DecisionIndexEntry
+	err := i.withExclusiveLock(func() error {
+		entries, err := i.listFile()
+		if err != nil {
+			return err
+		}
+		var found bool
+		for _, candidate := range entries {
+			if candidate.DecisionID == decisionID {
+				updated, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
+		}
+		if updated.Resolved() {
+			return fmt.Errorf("decision %q was already resolved as %q at %s",
+				decisionID, updated.Outcome.ResolvedOutcome, updated.Outcome.ResolvedAt.Format(time.RFC3339))
+		}
+		outcome.DecisionID = decisionID
+		if outcome.Forecast == 0 {
+			outcome.Forecast = updated.Probability
+		}
+		if err := ValidateOutcome(&outcome); err != nil {
+			return err
+		}
+		if outcome.ResolvedAt.IsZero() {
+			outcome.ResolvedAt = time.Now().UTC()
+		}
+		updated.Outcome = &outcome
+		updated.IndexedAt = time.Time{}
+		return i.appendEntryUnlocked(updated)
+	})
 	if err != nil {
-		return DecisionIndexEntry{}, err
-	}
-	if !found {
-		return DecisionIndexEntry{}, fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
-	}
-	if entry.Resolved() {
-		return entry, fmt.Errorf("decision %q was already resolved as %q at %s",
-			decisionID, entry.Outcome.ResolvedOutcome, entry.Outcome.ResolvedAt.Format(time.RFC3339))
-	}
-
-	outcome.DecisionID = decisionID
-	if outcome.Forecast == 0 {
-		outcome.Forecast = entry.Probability
-	}
-	if err := ValidateOutcome(&outcome); err != nil {
-		return DecisionIndexEntry{}, err
-	}
-	if outcome.ResolvedAt.IsZero() {
-		outcome.ResolvedAt = time.Now().UTC()
-	}
-
-	updated := entry
-	updated.Outcome = &outcome
-	updated.IndexedAt = time.Time{}
-	if err := i.Append(updated); err != nil {
-		return DecisionIndexEntry{}, err
+		return updated, err
 	}
 	return updated, nil
 }
@@ -460,12 +661,31 @@ func WorkspaceArtifacts(workspace string) ([]ArtifactRef, error) {
 // two sources: `unknown` is the absence of a check and `stale` is the runtime's
 // own conclusion.
 func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note string) (DecisionIndexEntry, DecisionAssumption, error) {
+	var entry DecisionIndexEntry
+	var assumption DecisionAssumption
+	err := i.withExclusiveLock(func() error {
+		var err error
+		entry, assumption, err = i.checkAssumptionUnlocked(decisionID, assumptionID, status, note)
+		return err
+	})
+	return entry, assumption, err
+}
+
+func (i *DecisionIndex) checkAssumptionUnlocked(decisionID, assumptionID, status, note string) (DecisionIndexEntry, DecisionAssumption, error) {
 	if strings.TrimSpace(decisionID) == "" || strings.TrimSpace(assumptionID) == "" {
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision and assumption IDs cannot be blank")
 	}
-	entry, found, err := i.Get(decisionID)
+	entries, err := i.listFile()
 	if err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
+	}
+	var entry DecisionIndexEntry
+	found := false
+	for _, candidate := range entries {
+		if candidate.DecisionID == decisionID {
+			entry, found = candidate, true
+			break
+		}
 	}
 	if !found {
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
@@ -484,26 +704,29 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("assumption %q already has status %q", assumptionID, status)
 	}
 
+	at := time.Now().UTC()
 	updated, assumption, err := ApplyAssumptionTransition(entry.Assumptions, AssumptionTransition{
 		DecisionID:   decisionID,
 		AssumptionID: assumptionID,
 		To:           status,
 		Source:       AssumptionSourceOperator,
-		At:           time.Now().UTC(),
+		At:           at,
 	})
 	if err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
-	if i.journal == nil {
+	journal := i.journalSnapshot()
+	if journal == nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision index: canonical event journal is unavailable")
 	}
 	transition := AssumptionTransition{DecisionID: decisionID, AssumptionID: assumptionID,
 		From: assumptionStatusBefore(entry.Assumptions, assumptionID), To: status,
-		Source: AssumptionSourceOperator, At: time.Now().UTC()}
-	if err := appendDecisionEvent(context.Background(), i.journal, AssumptionStatusEvent(status), decisionEvent{
+		Source: AssumptionSourceOperator, At: at}
+	if err := appendDecisionEvent(context.Background(), journal, AssumptionStatusEvent(status), decisionEvent{
 		DecisionID: decisionID, AssumptionID: transition.AssumptionID, From: transition.From,
 		To: transition.To, Source: transition.Source, Note: note, At: transition.At,
-		Reason: fmt.Sprintf("operator assumption check: %s", strings.TrimSpace(note)),
+		IdempotencyKey: assumptionTransitionEventKey(transition),
+		Reason:         fmt.Sprintf("operator assumption check: %s", strings.TrimSpace(note)),
 	}); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
@@ -511,12 +734,14 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 	entry.AssumptionNotes = appendAssumptionNote(entry.AssumptionNotes, assumptionID, status, note)
 	if status == AssumptionContradicted && assumption.Critical {
 		reason := fmt.Sprintf("%s: critical assumption %s contradicted", ReasonAssumptionInvalidated, assumptionID)
-		if err := appendDecisionEvent(context.Background(), i.journal, agent.EventDecisionInvalidated, decisionEvent{
-			DecisionID: decisionID, Reason: reason,
+		if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionInvalidated, decisionEvent{
+			DecisionID:     decisionID,
+			Reason:         reason,
+			IdempotencyKey: decisionStageEventKey(decisionID, "invalidated", reason),
 		}); err != nil {
 			return DecisionIndexEntry{}, DecisionAssumption{}, err
 		}
-		if err := RequestReplan(context.Background(), i.journal, decisionID, CheckpointDecision{
+		if err := RequestReplan(context.Background(), journal, decisionID, CheckpointDecision{
 			Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated, Detail: reason,
 		}); err != nil {
 			return DecisionIndexEntry{}, DecisionAssumption{}, err
@@ -525,7 +750,7 @@ func (i *DecisionIndex) CheckAssumption(decisionID, assumptionID, status, note s
 		entry.StaleReason = reason
 	}
 	entry.IndexedAt = time.Time{}
-	if err := i.Append(entry); err != nil {
+	if err := i.appendEntryUnlocked(entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
 	if err := persistDecisionIndexSessionProjection(i.path, entry); err != nil {

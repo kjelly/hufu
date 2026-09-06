@@ -58,6 +58,121 @@ func TestModelProfileTelemetryIsReportedAndDurableWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestModelProfileTelemetryConcurrentWithEventAppendMaintainsHashChain(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-profile-race", "session-profile-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{eventStore: store, executionRunID: "run-profile-race"}
+
+	const concurrentAppends = 32
+	start := make(chan struct{})
+	errs := make(chan error, concurrentAppends*2)
+	var wg sync.WaitGroup
+	wg.Add(concurrentAppends * 2)
+	for i := 0; i < concurrentAppends; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			err := c.commitModelProfileResolved(context.Background(), modelprofile.TelemetryProjection{
+				SchemaVersion: 1, ModelID: fmt.Sprintf("profile-model-%d", i), Provider: "ollama",
+				Effective: modelprofile.TelemetryValue[int]{Value: 8192, Source: modelprofile.SourceProviderRuntime},
+			})
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, err := store.AppendPersistedContext(context.Background(), RunEvent{
+				Type: "concurrent_event_append", Actor: "test", IdempotencyKey: fmt.Sprintf("concurrent-event-%d", i),
+				Payload: []byte(`{"index":1}`),
+			})
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	if err := store.VerifyHashChain(); err != nil {
+		t.Fatalf("VerifyHashChain: %v", err)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != concurrentAppends*2 {
+		t.Fatalf("event count = %d, want %d", len(events), concurrentAppends*2)
+	}
+	invocationIDs := make(map[string]struct{}, concurrentAppends)
+	for _, event := range events {
+		if event.Type != string(EventModelProfileResolved) {
+			continue
+		}
+		var projection modelprofile.TelemetryProjection
+		if err := json.Unmarshal(event.Payload, &projection); err != nil {
+			t.Fatal(err)
+		}
+		if projection.InvocationID == "" {
+			t.Fatal("concurrent profile append persisted an empty invocation ID")
+		}
+		if _, exists := invocationIDs[projection.InvocationID]; exists {
+			t.Fatalf("concurrent profile appends reused invocation ID %q", projection.InvocationID)
+		}
+		invocationIDs[projection.InvocationID] = struct{}{}
+	}
+	if len(invocationIDs) != concurrentAppends {
+		t.Fatalf("profile event count = %d, want %d", len(invocationIDs), concurrentAppends)
+	}
+}
+
+func TestModelProfileTelemetryLegacyInvocationIDsAreUnique(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-profile-legacy", "session-profile-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	c := &Coordinator{eventStore: store, executionRunID: "run-profile-legacy"}
+	const count = 128
+	for i := 0; i < count; i++ {
+		if err := c.commitModelProfileResolved(context.Background(), modelprofile.TelemetryProjection{
+			SchemaVersion: 1, ModelID: "legacy-model", Provider: "ollama",
+		}); err != nil {
+			t.Fatalf("legacy append %d: %v", i, err)
+		}
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]struct{}, count)
+	for _, event := range events {
+		var projection modelprofile.TelemetryProjection
+		if err := json.Unmarshal(event.Payload, &projection); err != nil {
+			t.Fatal(err)
+		}
+		if projection.InvocationID == "" || strings.HasSuffix(projection.InvocationID, "-1") {
+			t.Fatalf("legacy invocation ID = %q, want independent non-sequence identity", projection.InvocationID)
+		}
+		if _, exists := seen[projection.InvocationID]; exists {
+			t.Fatalf("legacy invocation ID %q was reused", projection.InvocationID)
+		}
+		seen[projection.InvocationID] = struct{}{}
+	}
+	if len(seen) != count {
+		t.Fatalf("legacy invocation IDs = %d, want %d", len(seen), count)
+	}
+}
+
 func TestProviderBoundInvocationEmitsModelProfileTelemetry(t *testing.T) {
 	const modelID = "qwen3:8b"
 	provider := newIPv4TestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

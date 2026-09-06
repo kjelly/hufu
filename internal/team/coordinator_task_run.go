@@ -230,12 +230,45 @@ func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
+	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
+	// Re-resolve the occurrence before any execution branch only when the Todo
+	// is durable. The scheduler's TaskDef is mutable by design for local
+	// coordination, and an ephemeral Todo is only a status carrier; replacing
+	// the supplied definition would erase its execution semantics.
+	modelOverlay := strings.TrimSpace(task.executionModelOverride)
+	if c.isDurableTaskOccurrence(todoID) {
+		if item := c.todoItemByID(todoID); item != nil {
+			task = taskDefFromTodoItem(item)
+			if leafExecution && modelOverlay != "" {
+				task.executionModelOverride = modelOverlay
+				task.Model = modelOverlay
+				task.ModelTopology = []string{modelOverlay}
+			}
+			if leafExecution && c.workerAgentOverride != nil {
+				task.Execution.RequiresResult = false
+			}
+		}
+	}
+	// The worker-agent override is a deterministic test seam whose agents may
+	// return plain text. Keep the fanout topology tests focused on parallel
+	// leaf execution; production workers still receive the normal required
+	// result contract.
+	if leafExecution && c.workerAgentOverride != nil {
+		task.Execution.RequiresResult = false
+	}
+	// The scheduler may hand us its mutable in-memory TaskDef (including a DAG
+	// escalation attempt), but the occurrence was re-resolved above.
 	// A checkpointed protocol-incomplete task has already run its worker. It
 	// may only re-enter through the result-only repair gate; never recreate the
 	// worker agent or replay its tools from this status.
 	if c != nil && c.taskTracker != nil && todoID != "" {
 		for _, item := range c.taskTracker.TodoList().Items() {
 			if item != nil && item.ID == todoID && item.Status == TaskProtocolIncomplete {
+				if _, _, err := c.validateTaskOccurrenceAdmission(parentCtx, task, todoID, c.taskAttempt(todoID)); err != nil {
+					detail := c.FailureDetail(err, FailureSourceError)
+					c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, item.Output)
+					return "", err
+				}
 				return c.resumeProtocolIncompleteTask(parentCtx, task, item)
 			}
 		}
@@ -243,13 +276,30 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
 	}
+	// Static runtime actions and structured steps are executable task
+	// occurrences too. Admit and arm their decision discipline before entering
+	// either handler, so neither path can bypass a configured decision profile.
 	if task.Action != nil {
 		if c == nil || c.phaseWorkflow == nil {
 			return "", fmt.Errorf("structured action %q has no runtime workflow", task.Action.Type)
 		}
+		if !leafExecution {
+			disarmDecision, err := c.prepareTaskDecision(parentCtx, task, todoID)
+			if err != nil {
+				return "", err
+			}
+			defer disarmDecision()
+		}
 		return c.executeRuntimeAction(parentCtx, task, todoID)
 	}
 	if len(task.Execution.Steps) > 0 {
+		if !leafExecution {
+			disarmDecision, err := c.prepareTaskDecision(parentCtx, task, todoID)
+			if err != nil {
+				return "", err
+			}
+			defer disarmDecision()
+		}
 		return c.executeStructuredCoordinatorTask(parentCtx, task, todoID)
 	}
 	taskDesc := task.Goal
@@ -275,30 +325,35 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// side effect, so the commit gate sees the class the task will actually
 	// execute with. Both are no-ops for a task with no decision profile, which
 	// is the default (spec §8, Phase 3.5).
-	disarmDecision, decisionErr := c.prepareTaskDecision(parentCtx, task, todoID)
-	if decisionErr != nil {
-		c.PersistFailure(task.Agent, taskDesc, todoID, c.FailureDetail(decisionErr, "error"))
-		return "", decisionErr
+	if !leafExecution {
+		disarmDecision, decisionErr := c.prepareTaskDecision(parentCtx, task, todoID)
+		if decisionErr != nil {
+			c.PersistFailure(task.Agent, taskDesc, todoID, c.FailureDetail(decisionErr, "error"))
+			return "", decisionErr
+		}
+		defer disarmDecision()
 	}
-	defer disarmDecision()
-
 	if len(agentDef.MCPTools) > 0 {
 		defer func() {
 			_ = c.mcpManager.UnloadAgentMCPServer(agentName)
 		}()
 	}
 
-	// Check if agent has extra-models configured
-	if len(agentDef.ExtraModels) > 0 {
+	// A Todo backed by the durable journal is an admitted occurrence. Its
+	// persisted model owns the execution topology, so live ExtraModels must not
+	// turn a retry or resume into a new fanout. Ephemeral tasks retain the
+	// configured multi-model behavior below.
+	if task.executionModelOverride == "" && c.shouldExecuteWithExtraModels(agentDef, todoID) {
 		return c.executeTaskWithExtraModels(parentCtx, agentName, agentDef, task, todoID)
 	}
 
 	// Model selection is a runtime capability service so workers, local
 	// providers, and tests share the same allowlist and precedence rules.
-	resolvedModel, err := c.ModelRuntime().ResolveTaskModel(agentDef, task)
+	resolvedModel, err := c.resolveTaskExecutionModel(agentDef, task, todoID)
 	if err != nil {
 		return "", err
 	}
+	_, frozenOccurrenceModel := c.frozenTaskOccurrenceModel(todoID)
 
 	agentTimeout := time.Duration(c.session.Config.Timeout) * time.Second
 	if agentDef.Timeout > 0 {
@@ -662,7 +717,13 @@ retryLoop:
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
-			if protocolFallbackModel != "" {
+			if frozenModel, frozen := c.frozenTaskOccurrenceModel(todoID); frozen {
+				// Retry escalation and protocol capability fallback are model
+				// selection, not a new admission. A frozen occurrence must stay
+				// on its persisted model; a changed model needs a new occurrence.
+				resolvedModel = frozenModel
+				protocolFallbackModel = ""
+			} else if protocolFallbackModel != "" {
 				resolvedModel = protocolFallbackModel
 				protocolFallbackModel = ""
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retrying result-contract failure with fallback model %s", resolvedModel)).withTodoID(todoID))
@@ -677,10 +738,15 @@ retryLoop:
 				}
 			}
 		}
-		attemptCtx, invocation, bindErr := c.resolveProviderBoundInvocationContext(parentCtx, resolvedModel, agentDef)
-		if bindErr != nil {
-			closeTranscript()
-			return "", fmt.Errorf("resolve worker provider context: %w", bindErr)
+		attemptCtx := parentCtx
+		invocation := providerBoundInvocationContext{ModelID: resolvedModel}
+		if c.workerAgentOverride == nil {
+			var bindErr error
+			attemptCtx, invocation, bindErr = c.resolveProviderBoundInvocationContext(parentCtx, resolvedModel, agentDef)
+			if bindErr != nil {
+				closeTranscript()
+				return "", fmt.Errorf("resolve worker provider context: %w", bindErr)
+			}
 		}
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
 		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt)
@@ -1586,9 +1652,11 @@ retryLoop:
 			protocolCapabilityRetryUsed = true
 			maxAttempts = max(maxAttempts, attempt+1)
 			conversationHistory = nil
-			if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-				if _, providerErr := c.ModelRuntime().ProviderFor(next); providerErr == nil {
-					protocolFallbackModel = next
+			if !frozenOccurrenceModel {
+				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
+					if _, providerErr := c.ModelRuntime().ProviderFor(next); providerErr == nil {
+						protocolFallbackModel = next
+					}
 				}
 			}
 			disposition = RetryWorker
@@ -2372,9 +2440,6 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			agentName = "worker"
 		}
 		resolvedModel := task.Model
-		if resolvedModel == "" && c.session != nil {
-			resolvedModel = c.session.Config.Generation.Model
-		}
 		if err := c.materializeCheckpointedProtocolRepair(item, agentName, item.TypedResult); err != nil {
 			return "", err
 		}
@@ -2390,9 +2455,6 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		agentName = "worker"
 	}
 	resolvedModel := task.Model
-	if resolvedModel == "" && c.session != nil {
-		resolvedModel = c.session.Config.Generation.Model
-	}
 
 	// If a successful repair was checkpointed before the status transition,
 	// finalize it locally. This avoids spending another repair turn and still
@@ -2426,7 +2488,12 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	task = canonical.Task
 	agentDef := canonical.Agent
 	agentName = strings.ToLower(agentDef.Name)
-	resolvedModel = c.resolveAgentModel(agentDef, task.Model)
+	resolvedModel, err = c.resolveTaskExecutionModel(agentDef, task, item.ID)
+	if err != nil {
+		detail := c.FailureDetail(err, FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+		return "", err
+	}
 	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.", task.Goal, output)
 	priorAttempts := 0
 	var repairHistory []RepairAttemptProvenance
@@ -4428,19 +4495,21 @@ func (c *Coordinator) validateTaskModel(task *TaskDef) error {
 func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *agent.AgentDef, overrideModel string, task TaskDef, todoID string) (fantasy.Agent, []string, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	resolvedTask := task
-	if overrideModel != "" {
+	durableOccurrence := c.isDurableTaskOccurrence(todoID)
+	if overrideModel != "" && !durableOccurrence {
 		resolvedTask.Model = overrideModel
 	}
-	modelID, err := c.ModelRuntime().ResolveTaskModel(def, resolvedTask)
+	modelID, err := c.resolveTaskExecutionModel(def, resolvedTask, todoID)
 	if err != nil {
 		return nil, nil, err
 	}
+	resolvedTask.Model = modelID
 	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, modelID, def)
 	if err != nil {
 		return nil, nil, err
 	}
 	agentDef := def
-	if overrideModel != "" {
+	if overrideModel != "" && !durableOccurrence {
 		overriddenDef := *def
 		overriddenDef.Generation.Model = overrideModel
 		agentDef = &overriddenDef

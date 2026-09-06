@@ -450,12 +450,40 @@ func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.
 	c.initEventStore()
 	defer c.EventStore().Close()
 	c.taskTracker.TodoList().onChange = func() { c.saveCheckpoint() }
-	item := &TodoItem{
-		ID: "1", Agent: "worker", Desc: "durable bound-zero repair failure",
-		Status: TaskProtocolIncomplete, Output: "checkpointed worker evidence",
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	task := TaskDef{
+		ID: ids[0], Agent: "worker", Goal: "durable bound-zero repair failure",
 		Execution: ExecutionContract{RequiresResult: true},
 	}
-	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+	resolvedModel := c.resolveAgentModel(agents["worker"], "")
+	task = c.canonicalizeTaskOccurrence(task, agents["worker"], resolvedModel)
+	task.ModelTopology = initialTaskModelTopology(agents["worker"], resolvedModel)
+	if _, err := c.admitTaskOccurrence(context.Background(), task, ids[0], 1); err != nil {
+		t.Fatalf("admitTaskOccurrence: %v", err)
+	}
+	items, err := c.CommitTaskCreationResolved(context.Background(), []TodoSpec{{
+		PlanTaskID:    task.ID,
+		Agent:         task.Agent,
+		Desc:          task.Goal,
+		Goal:          task.Goal,
+		Model:         task.Model,
+		ModelTopology: cloneModelTopology(task.ModelTopology),
+		Source:        TaskSourceCoordinator,
+		Execution:     task.Execution,
+		SideEffect:    task.SideEffect,
+		Recovery:      task.Recovery,
+		ReconcileTool: task.ReconcileTool,
+	}}, ids)
+	if err != nil {
+		t.Fatalf("CommitTaskCreationResolved: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("created items = %d, want 1", len(items))
+	}
+	item := items[0]
+	if err := c.CommitTaskTransition(context.Background(), item.ID, TaskPending, TaskProtocolIncomplete, "protocol incomplete", "checkpointed worker evidence", nil); err != nil {
+		t.Fatalf("CommitTaskTransition: %v", err)
+	}
 
 	if _, err := c.ResumeInterruptedTasks(context.Background()); err == nil {
 		t.Fatal("expected bound-zero provider preparation failure")
@@ -472,6 +500,28 @@ func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.
 	events, err := c.EventStore().ReadEvents()
 	if err != nil {
 		t.Fatal(err)
+	}
+	decisionAdmissionIndex := -1
+	taskCreatedIndex := -1
+	protocolIncompleteIndex := -1
+	for i, event := range events {
+		if event.TaskID != item.ID {
+			continue
+		}
+		switch event.Type {
+		case agent.EventDecisionAdmitted:
+			decisionAdmissionIndex = i
+		case string(EventTaskCreated):
+			taskCreatedIndex = i
+		case string(EventTaskProtocolIncomplete):
+			protocolIncompleteIndex = i
+		}
+	}
+	if decisionAdmissionIndex < 0 || taskCreatedIndex < 0 || protocolIncompleteIndex < 0 {
+		t.Fatalf("durable lifecycle sequence missing events: admission=%d created=%d protocol_incomplete=%d", decisionAdmissionIndex, taskCreatedIndex, protocolIncompleteIndex)
+	}
+	if decisionAdmissionIndex >= taskCreatedIndex || decisionAdmissionIndex >= protocolIncompleteIndex {
+		t.Fatalf("decision admission did not precede task lifecycle: admission=%d created=%d protocol_incomplete=%d", decisionAdmissionIndex, taskCreatedIndex, protocolIncompleteIndex)
 	}
 	var blockedPayload struct {
 		ExecutionReceipt *ExecutionReceipt `json:"execution_receipt"`

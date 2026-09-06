@@ -891,6 +891,16 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 		c.taskTracker.TodoList().ResetForRetry(taskID, detail)
 		return nil
 	}
+	// A retry is a new occurrence. Freeze its effective admission before the
+	// retry projection becomes durable; interrupted resume deliberately uses a
+	// different path and retains the existing attempt/admission.
+	occurrence, err := taskOccurrenceProjectionForRetry(current)
+	if err != nil {
+		return fmt.Errorf("commit task reset for retry projection: %w", err)
+	}
+	if _, err := c.admitTaskOccurrence(ctx, occurrence, taskID, current.Retries+2); err != nil {
+		return fmt.Errorf("commit task reset for retry admission: %w", err)
+	}
 
 	projected := *current
 	projected.Status = TaskPending
@@ -988,12 +998,16 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 	}
 	if !c.hasDurableEventJournal() {
 		tl.AddReserved(items)
+		c.markAdmittedTodoIDs(items)
 		return items, nil
 	}
 
 	appendCtx := context.WithoutCancel(ctx)
 	var created []*TodoItem
 	for _, item := range items {
+		if err := c.validateTaskCreationAdmission(appendCtx, item); err != nil {
+			return created, err
+		}
 		payload := c.taskTransitionPayloadWithCoordinator(item)
 		rawPayload, err := json.Marshal(payload)
 		if err != nil {
@@ -1022,6 +1036,7 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 		c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
 		c.eventOnceMu.Unlock()
 		created = append(created, item)
+		c.markAdmittedTodoIDs([]*TodoItem{item})
 		// Make the item visible immediately so a partial append failure (or a
 		// crash mid-loop) never leaves a durable event without a projection
 		// entry and checkpoint.
@@ -1269,6 +1284,14 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"max_retries":           item.MaxRetries,
 		"retries":               item.Retries,
 		"agent":                 item.Agent,
+		"goal":                  item.Goal,
+		"model_topology":        cloneModelTopology(item.ModelTopology),
+		"sidecar":               item.Sidecar,
+		"summarize":             item.Summarize,
+		"output_mode":           item.OutputMode,
+		"context_files":         item.ContextFiles,
+		"requires":              item.Requires,
+		"constraints":           item.Constraints,
 		"model":                 item.Model,
 		"skills":                item.Skills,
 		"injected_skills":       item.InjectedSkills,
@@ -1277,6 +1300,8 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"parent_id":             item.ParentID,
 		"depends_on":            item.DependsOn,
 		"on_failure":            item.OnFailure,
+		"escalate":              item.Escalate,
+		"adversarial_verify":    item.AdversarialVerify,
 		"kind":                  item.Kind,
 		"advances":              item.Advances,
 		"expected_state_change": item.ExpectedStateChange,
@@ -1284,6 +1309,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"progress_criteria":     item.ProgressCriteria,
 		"failure_fingerprints":  item.FailureFingerprints,
 		"execution":             item.Execution,
+		"optional":              item.Optional,
+		"resource_claims":       item.ResourceClaims,
+		"resources":             item.Resources,
 		"recovery_hypothesis":   item.RecoveryHypothesis,
 		"side_effect":           item.SideEffect,
 		"recovery":              item.Recovery,
@@ -1293,6 +1321,13 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"resolution":            item.Resolution,
 		"diagnostic_hints":      item.DiagnosticHints,
 		"last_operation":        item.LastOperation,
+		"decision_profile":      item.DecisionProfile,
+		"decision_options":      item.DecisionOptions,
+		"decision_assumptions":  item.DecisionAssumptions,
+		"decision_facts":        item.DecisionFacts,
+		"decision_artifacts":    item.DecisionArtifacts,
+		"decision_base_rates":   item.DecisionBaseRates,
+		"decision_provenance":   item.DecisionProvenance,
 		"attempt":               item.Retries + 1,
 	}
 	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete

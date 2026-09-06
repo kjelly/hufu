@@ -149,6 +149,182 @@ type ModelRuntime interface {
 	ProviderFor(string) (*agent.OpenAICompatibleProvider, error)
 }
 
+// resolveTaskExecutionModel returns the model owned by an executable task
+// occurrence. Durable task projections are authoritative after admission;
+// consulting ModelRuntime for them would let a changed agent/team config or
+// model-list silently retarget a resumed or retried occurrence. Ephemeral
+// callers retain the normal model-resolution path.
+func (c *Coordinator) resolveTaskExecutionModel(def *agent.AgentDef, task TaskDef, todoID string) (string, error) {
+	if strings.TrimSpace(task.executionModelOverride) != "" {
+		return task.executionModelOverride, nil
+	}
+	if model, frozen := c.frozenTaskOccurrenceModel(todoID); frozen {
+		return model, nil
+	}
+	return c.ModelRuntime().ResolveTaskModel(def, task)
+}
+
+// initialTaskModelTopology freezes the model leaves selected for a new task
+// occurrence. The primary is supplied after normal task-model precedence has
+// been applied; ExtraModels contributes only to this creation-time snapshot.
+func initialTaskModelTopology(def *agent.AgentDef, primary string) []string {
+	topology := []string{strings.TrimSpace(primary)}
+	if def == nil {
+		return topology
+	}
+	for _, model := range def.ExtraModels {
+		topology = append(topology, strings.TrimSpace(model))
+	}
+	return topology
+}
+
+func cloneModelTopology(topology []string) []string {
+	if len(topology) == 0 {
+		return nil
+	}
+	return append([]string(nil), topology...)
+}
+
+func (c *Coordinator) frozenTaskOccurrenceModel(todoID string) (string, bool) {
+	if c == nil || !c.isDurableTaskOccurrence(todoID) {
+		return "", false
+	}
+	item := c.todoItemByID(todoID)
+	if item == nil {
+		return "", false
+	}
+	return item.Model, true
+}
+
+// setRestoredTodoIDs records which Todo occurrences came from a persisted
+// projection. This provenance survives journal attachment failures without
+// treating newly-created in-memory tasks as durable.
+func (c *Coordinator) setRestoredTodoIDs(tasks []*TodoItem) {
+	if c == nil {
+		return
+	}
+	ids := make(map[string]struct{}, len(tasks))
+	prof := c.ExecutionProfile()
+	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+		for _, item := range tasks {
+			if item != nil && strings.TrimSpace(item.ID) != "" {
+				ids[item.ID] = struct{}{}
+			}
+		}
+	}
+	c.restoredTodoIDsMu.Lock()
+	c.restoredTodoIDs = ids
+	c.restoredTodoIDsMu.Unlock()
+}
+
+func (c *Coordinator) markAdmittedTodoIDs(tasks []*TodoItem) {
+	if c == nil {
+		return
+	}
+	c.admittedTodoIDsMu.Lock()
+	if c.admittedTodoIDs == nil {
+		c.admittedTodoIDs = make(map[string]struct{})
+	}
+	for _, item := range tasks {
+		if item != nil && strings.TrimSpace(item.ID) != "" {
+			c.admittedTodoIDs[item.ID] = struct{}{}
+		}
+	}
+	c.admittedTodoIDsMu.Unlock()
+}
+
+// isDurableTaskOccurrence reports whether todoID identifies a frozen task
+// occurrence, either restored from persisted state or admitted during this
+// run. A live journal is not part of this predicate: journal availability
+// controls whether transitions can be appended, while the Todo owns the
+// execution model for this occurrence.
+func (c *Coordinator) isDurableTaskOccurrence(todoID string) bool {
+	if c == nil || strings.TrimSpace(todoID) == "" {
+		return false
+	}
+	c.restoredTodoIDsMu.RLock()
+	_, restored := c.restoredTodoIDs[todoID]
+	c.restoredTodoIDsMu.RUnlock()
+	if restored {
+		return c.todoItemByID(todoID) != nil
+	}
+	c.admittedTodoIDsMu.RLock()
+	_, admitted := c.admittedTodoIDs[todoID]
+	c.admittedTodoIDsMu.RUnlock()
+	return admitted && c.todoItemByID(todoID) != nil
+}
+
+func (c *Coordinator) shouldExecuteWithExtraModels(def *agent.AgentDef, todoID string) bool {
+	if item := c.todoItemByID(todoID); item != nil {
+		// A recorded topology owns the durable fanout decision. A singleton
+		// topology is the explicit single-model case.
+		if len(item.ModelTopology) > 0 {
+			return len(item.ModelTopology) > 1
+		}
+		// Legacy restored tasks have no topology snapshot and must never consult
+		// live ExtraModels; an ephemeral AddBatch task retains the compatibility
+		// fanout behavior used by non-production/unit callers.
+		if c.isDurableTaskOccurrence(todoID) {
+			return false
+		}
+	}
+	// Ephemeral direct/unit callers retain the historical AgentDef fanout.
+	return def != nil && len(def.ExtraModels) > 0
+}
+
+func (c *Coordinator) restoredTodoIDsSnapshot() map[string]struct{} {
+	if c == nil {
+		return nil
+	}
+	c.restoredTodoIDsMu.RLock()
+	defer c.restoredTodoIDsMu.RUnlock()
+	ids := make(map[string]struct{}, len(c.restoredTodoIDs))
+	for id := range c.restoredTodoIDs {
+		ids[id] = struct{}{}
+	}
+	return ids
+}
+
+func (c *Coordinator) admittedTodoIDsSnapshot() map[string]struct{} {
+	if c == nil {
+		return nil
+	}
+	c.admittedTodoIDsMu.RLock()
+	defer c.admittedTodoIDsMu.RUnlock()
+	ids := make(map[string]struct{}, len(c.admittedTodoIDs))
+	for id := range c.admittedTodoIDs {
+		ids[id] = struct{}{}
+	}
+	return ids
+}
+
+func (c *Coordinator) decisionControlPlaneSnapshot() *decisionControlPlane {
+	if c == nil {
+		return nil
+	}
+	c.decisionControlPlaneMu.Lock()
+	defer c.decisionControlPlaneMu.Unlock()
+	return c.decisionControlPlane
+}
+
+func (c *Coordinator) decisionStoreSnapshot() ArtifactStore {
+	if c == nil {
+		return nil
+	}
+	c.decisionControlPlaneMu.Lock()
+	defer c.decisionControlPlaneMu.Unlock()
+	return c.decisionStore
+}
+
+func (c *Coordinator) decisionIndexProjectionSnapshot() *DecisionIndex {
+	if c == nil {
+		return nil
+	}
+	c.decisionControlPlaneMu.Lock()
+	defer c.decisionControlPlaneMu.Unlock()
+	return c.decisionIndexProjection
+}
+
 // RuntimeServices is the constructor-injected bundle for coordinator runtime
 // seams. It is intentionally a small struct rather than a DI framework: the
 // Coordinator still owns scheduling and policy, while deterministic tests can
@@ -424,11 +600,14 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	}
 	tools = r.c.filterDeniedWorkerToolsWithGrants(tools, r.c.taskToolGrants(def, task))
 	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
-	return r.finalizeTaskTools(ctx, def, task, tools, resultOnly, resultRequired, planRequired, effectiveSequence)
+	return r.finalizeTaskTools(ctx, def, task, req.TodoID, tools, resultOnly, resultRequired, planRequired, effectiveSequence)
 }
 
-func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, tools []fantasy.AgentTool, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
-	modelID := r.c.resolveAgentModel(def, task.Model)
+func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, tools []fantasy.AgentTool, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
+	modelID, err := r.c.resolveTaskExecutionModel(def, task, todoID)
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: resolve task model: %w", err)
+	}
 	filteredTools, err := r.c.filterWorkerToolsForModel(ctx, modelID, tools, resultOnly || resultRequired || planRequired, effectiveSequence)
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)

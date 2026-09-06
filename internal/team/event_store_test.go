@@ -55,6 +55,23 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-missing-sync", "session-missing-sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	store.syncFile = nil
+	if _, err := store.AppendPersistedContext(context.Background(), RunEvent{
+		Type: "sync_function_missing", Actor: "test", Payload: []byte(`{"ok":true}`),
+	}); err == nil || !strings.Contains(err.Error(), "sync function is unavailable") {
+		t.Fatalf("append error = %v, want missing sync function failure", err)
+	}
+	if store.stateValid || !store.degraded {
+		t.Fatalf("store state after missing sync function = valid=%v degraded=%v, want invalid/degraded", store.stateValid, store.degraded)
+	}
+}
+
 func configureEventStoreSyncFailure(t *testing.T, store *EventStore, occurrence int, failure error) {
 	t.Helper()
 	if store == nil || store.path == "" {

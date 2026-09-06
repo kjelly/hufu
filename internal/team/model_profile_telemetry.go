@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 
@@ -21,21 +22,23 @@ func (c *Coordinator) commitModelProfileResolved(ctx context.Context, projection
 	if c == nil {
 		return fmt.Errorf("persist model profile resolved: coordinator is unavailable")
 	}
-	if c.eventStore == nil {
+	store := c.EventStore()
+	if store == nil {
 		return fmt.Errorf("persist model profile resolved: event store is unavailable")
 	}
-	if c.eventStore.closed || c.eventStore.f == nil || c.eventStore.syncFile == nil || c.eventStore.degraded || !c.eventStore.stateValid {
-		return fmt.Errorf("persist model profile resolved: event store is unusable")
-	}
 	if projection.InvocationID == "" {
-		projection.InvocationID = fmt.Sprintf("legacy-profile-%d", c.eventStore.sequence+1)
+		invocationID, err := newLegacyModelProfileInvocationID()
+		if err != nil {
+			return fmt.Errorf("persist model profile resolved: %w", err)
+		}
+		projection.InvocationID = invocationID
 	}
 	payload, err := json.Marshal(projection)
 	if err != nil {
 		return fmt.Errorf("marshal model profile resolved: %w", err)
 	}
 	key := "model-profile-resolved:" + projection.InvocationID
-	if _, err := c.eventStore.AppendPersistedContext(ctx, RunEvent{
+	if _, err := store.AppendPersistedContext(ctx, RunEvent{
 		Type: string(EventModelProfileResolved), Actor: "coordinator",
 		IdempotencyKey: key, Payload: payload,
 	}); err != nil {
@@ -47,6 +50,14 @@ func (c *Coordinator) commitModelProfileResolved(ctx context.Context, projection
 	status.ModelProfile = &projection
 	c.report(status)
 	return nil
+}
+
+func newLegacyModelProfileInvocationID() (string, error) {
+	var entropy [16]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		return "", fmt.Errorf("generate legacy model profile invocation ID: %w", err)
+	}
+	return fmt.Sprintf("legacy-profile-%x", entropy[:]), nil
 }
 
 // LoadModelProfileTelemetry reads only model_profile_resolved events for the

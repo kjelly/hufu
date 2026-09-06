@@ -88,6 +88,7 @@ type DecisionServices struct {
 type DecisionRequest struct {
 	RunID   string
 	TaskID  string
+	Attempt int
 	Profile string
 	Policy  DecisionPolicy
 
@@ -100,9 +101,13 @@ type DecisionRequest struct {
 	Assumptions []DecisionAssumption
 	Provenance  []EvidenceProvenance
 
-	RequestContractRef         string
-	RequestContractRevision    uint64
-	RequestContractArtifact    ArtifactRef
+	RequestContractRef      string
+	RequestContractRevision uint64
+	RequestContractArtifact ArtifactRef
+	// AdmissionInputDigest binds a durable task-occurrence admission to this
+	// immutable request snapshot. It is empty only for legacy/non-coordinator
+	// engine callers that have no admission record.
+	AdmissionInputDigest       string
 	EvidenceArtifactRef        ArtifactRef
 	ReferenceEvidenceResultRef ArtifactRef
 
@@ -165,6 +170,12 @@ func (e *decisionEngine) newID(prefix string) string {
 // known and whose events are already durable.
 func (e *decisionEngine) Run(ctx context.Context, req DecisionRequest) (*DecisionRecord, error) {
 	req = cloneDecisionRequest(req)
+	if req.Attempt < 0 {
+		return nil, fmt.Errorf("decision attempt must not be negative")
+	}
+	if req.Attempt == 0 {
+		req.Attempt = 1
+	}
 	if err := req.Policy.Validate(); err != nil {
 		return nil, fmt.Errorf("decision policy: %w", err)
 	}
@@ -201,7 +212,24 @@ func cloneDecisionRequest(req DecisionRequest) DecisionRequest {
 func (e *decisionEngine) Resume(ctx context.Context, decisionID string) (*DecisionRecord, error) {
 	req, ok := e.pending[decisionID]
 	if !ok {
-		return nil, fmt.Errorf("decision %s is not known to this engine; resume requires its request", decisionID)
+		state, err := projectDecision(ctx, e.services.Journal, decisionID)
+		if err != nil {
+			return nil, err
+		}
+		// A legacy finalized record is already authoritative and remains
+		// readable even though pre-envelope sessions have no request snapshot.
+		if state.Record != nil {
+			return state.Record, nil
+		}
+		if state.EnvelopeRef.ID == "" {
+			return nil, &LegacyUnfinishedDecisionError{DecisionID: decisionID}
+		}
+		envelope, err := loadDecisionRunEnvelope(ctx, e.services.Store, state.EnvelopeRef)
+		if err != nil {
+			return nil, err
+		}
+		req = envelope.RequestSnapshot()
+		e.pending[decisionID] = req
 	}
 	return e.run(ctx, req)
 }
@@ -215,37 +243,35 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	if state.Record != nil {
 		return state.Record, nil
 	}
-	if req.EvidenceArtifactRef.ID == "" {
-		req.EvidenceArtifactRef = state.EvidenceArtifact
-	}
-	if err := validateReferenceRecoveryState(state); err != nil {
-		return nil, err
-	}
-	var contractErr error
-	req, contractErr = e.prepareRequestContract(ctx, req, state)
-	if contractErr != nil {
-		return nil, contractErr
-	}
-
-	if req.Contract != nil && state.Profile == "" {
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventRequestContractCommitted, decisionEvent{
-			DecisionID: req.DecisionID, TaskID: req.TaskID, ContractRef: req.RequestContractRef,
-			ContractRevision: req.RequestContractRevision, ContractArtifact: req.RequestContractArtifact,
-		}); err != nil {
+	anchored := state.EnvelopeRef.ID != ""
+	if anchored {
+		envelope, err := loadDecisionRunEnvelope(ctx, e.services.Store, state.EnvelopeRef)
+		if err != nil {
 			return nil, err
 		}
-	}
-	if state.Profile == "" {
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionStarted, decisionEvent{
-			DecisionID: req.DecisionID, TaskID: req.TaskID, Profile: req.Profile,
-		}); err != nil {
+		if err := validateDecisionRunRequestIdentity(req, envelope); err != nil {
 			return nil, err
 		}
+		req = envelope.RequestSnapshot()
+		// The envelope owns the immutable policy and identity. Do not let a
+		// caller's current team configuration alter an unfinished run.
+		e.pending[req.DecisionID] = req
 	}
-
-	policy, degradations, err := e.admitBudget(ctx, req, state)
+	req, err = e.prepareDecisionStart(ctx, req, &state)
 	if err != nil {
 		return nil, err
+	}
+
+	var policy DecisionPolicy
+	var degradations []DecisionDegradation
+	if anchored {
+		policy = req.Policy
+		degradations = append([]DecisionDegradation(nil), state.Degradations...)
+	} else {
+		policy, degradations, err = e.admitBudget(ctx, req, state)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Options are settled before any gate runs: the alternatives gate has to
@@ -284,6 +310,15 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	if state.Packet.Hash != packet.Hash {
 		state.Packet = packet
 	}
+	// The envelope is the durable admission boundary for judge execution. The
+	// artifact must reach the content-addressed store before its anchor event,
+	// and the anchor must reach the journal before the first judge dispatch.
+	// A nil store is retained as the legacy compatibility path used by older
+	// in-memory callers; such unfinished runs can only resume with their request
+	// supplied again.
+	if err := e.anchorDecisionRun(ctx, &req, &state, policy, packet, packetArtifact); err != nil {
+		return nil, err
+	}
 
 	weights, err := normalizedWeights(packet.Criteria)
 	if err != nil {
@@ -295,15 +330,18 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		return nil, err
 	}
 
-	aggregate, err := Aggregate(packet, opinions, policy.EffectiveAggregation(), 1)
-	if err != nil {
-		return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
-	}
-	aggregate.ID = e.newID("aggregate")
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionAggregateComputed, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Round: 1, Aggregate: &aggregate,
-	}); err != nil {
-		return nil, err
+	aggregate, aggregateExists := state.Aggregates[1]
+	if !aggregateExists || aggregate.EvidenceHash != packet.Hash {
+		aggregate, err = Aggregate(packet, opinions, policy.EffectiveAggregation(), 1)
+		if err != nil {
+			return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
+		}
+		aggregate.ID = e.newID("aggregate")
+		event := decisionEventFor(req, "aggregate", packet.Hash, "1")
+		event.EvidenceHash, event.Round, event.Aggregate = packet.Hash, 1, &aggregate
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionAggregateComputed, event); err != nil {
+			return nil, err
+		}
 	}
 
 	challenges, err := e.runChallenges(ctx, req, policy, packet, aggregate, opinions, state)
@@ -348,10 +386,10 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	record.FinalOption = finalOption
 	record.Probability = finalAggregate.MeanProbability[finalOption]
 	if overridden {
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationOverride, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: packet.Hash,
-			Reason: fmt.Sprintf("%s chosen over aggregate %s: %s", finalOption, finalAggregate.PreferredOption, req.FinalizationReason),
-		}); err != nil {
+		event := decisionEventFor(req, "finalization_override", packet.Hash)
+		event.EvidenceHash = packet.Hash
+		event.Reason = fmt.Sprintf("%s chosen over aggregate %s: %s", finalOption, finalAggregate.PreferredOption, req.FinalizationReason)
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationOverride, event); err != nil {
 			return nil, err
 		}
 	}
@@ -367,10 +405,10 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	if err != nil {
 		return nil, err
 	}
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalized, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, Record: &record,
-		Question: req.Question, ForecastRequired: policy.Forecast.Required, RecordRef: recordRef,
-	}); err != nil {
+	event := decisionEventFor(req, "finalized", packet.Hash)
+	event.EvidenceHash, event.Record = packet.Hash, &record
+	event.Question, event.ForecastRequired, event.RecordRef = req.Question, policy.Forecast.Required, recordRef
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalized, event); err != nil {
 		return nil, err
 	}
 	// Listing the decision is the last step: a decision that failed a gate is
@@ -382,6 +420,120 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		}
 	}
 	return &record, nil
+}
+
+func (e *decisionEngine) prepareDecisionStart(ctx context.Context, req DecisionRequest, state *decisionState) (DecisionRequest, error) {
+	if req.EvidenceArtifactRef.ID == "" {
+		req.EvidenceArtifactRef = state.EvidenceArtifact
+	}
+	if err := validateReferenceRecoveryState(*state); err != nil {
+		return req, err
+	}
+	var err error
+	req, err = e.prepareRequestContract(ctx, req, *state)
+	if err != nil {
+		return req, err
+	}
+	if req.Contract != nil && state.Profile == "" {
+		event := decisionEventFor(req, "request_contract", req.RequestContractRef, fmt.Sprint(req.RequestContractRevision))
+		event.ContractRef, event.ContractRevision, event.ContractArtifact = req.RequestContractRef, req.RequestContractRevision, req.RequestContractArtifact
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventRequestContractCommitted, event); err != nil {
+			return req, err
+		}
+	}
+	if state.Profile == "" {
+		event := decisionEventFor(req, "started")
+		event.Profile = req.Profile
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionStarted, event); err != nil {
+			return req, err
+		}
+	}
+	return req, nil
+}
+
+func (e *decisionEngine) anchorDecisionRun(ctx context.Context, req *DecisionRequest, state *decisionState, policy DecisionPolicy, packet DecisionEvidencePacket, packetArtifact ArtifactRef) error {
+	if state.EnvelopeRef.ID != "" {
+		return nil
+	}
+	if e.services.Store == nil {
+		return fmt.Errorf("decision %s: judge dispatch requires a durable artifact store and run envelope", req.DecisionID)
+	}
+	if packetArtifact.ID != "" {
+		req.EvidenceArtifactRef = packetArtifact
+	}
+	envelope := newDecisionRunEnvelope(*req, policy, packet, e.now())
+	if admission, found, err := loadDecisionAdmission(ctx, e.services.Journal, req.TaskID, req.Attempt); err != nil {
+		return fmt.Errorf("load decision admission before envelope anchor: %w", err)
+	} else if found {
+		if err := validateDecisionAdmissionEnvelope(admission, envelope); err != nil {
+			return err
+		}
+	}
+	envelopeRef, err := persistDecisionRunEnvelope(ctx, e.services.Store, envelope)
+	if err != nil {
+		return err
+	}
+	anchor, err := appendDecisionEventResult(ctx, e.services.Journal, agent.EventDecisionRunEnvelopeAnchored, decisionEvent{
+		DecisionID: req.DecisionID, RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt,
+		EvidenceHash: packet.Hash, EnvelopeRef: envelopeRef, EnvelopeHash: envelopeRef.SHA256,
+		IdempotencyKey: decisionRunEnvelopeEventKey(req.DecisionID, packet.Hash),
+	})
+	if err != nil {
+		return err
+	}
+	var authoritative decisionEvent
+	if err := json.Unmarshal(anchor.Payload, &authoritative); err != nil {
+		return fmt.Errorf("decode authoritative decision run envelope anchor: %w", err)
+	}
+	if err := validateDecisionEnvelopeAnchor(anchor, authoritative, *req, packet, envelopeRef); err != nil {
+		return err
+	}
+	state.EnvelopeRef = authoritative.EnvelopeRef
+	return nil
+}
+
+func validateDecisionRunRequestIdentity(req DecisionRequest, envelope DecisionRunEnvelope) error {
+	if req.DecisionID != "" && req.DecisionID != envelope.DecisionID {
+		return fmt.Errorf("decision run envelope decision identity mismatch: request %q, envelope %q", req.DecisionID, envelope.DecisionID)
+	}
+	if req.RunID != "" && req.RunID != envelope.RunID {
+		return fmt.Errorf("decision run envelope run identity mismatch: request %q, envelope %q", req.RunID, envelope.RunID)
+	}
+	if req.TaskID != "" && req.TaskID != envelope.TaskID {
+		return fmt.Errorf("decision run envelope task identity mismatch: request %q, envelope %q", req.TaskID, envelope.TaskID)
+	}
+	if req.Attempt > 0 && req.Attempt != envelope.Attempt {
+		return fmt.Errorf("decision run envelope attempt identity mismatch: request %d, envelope %d", req.Attempt, envelope.Attempt)
+	}
+	if req.Profile != "" && req.Profile != envelope.Profile {
+		return fmt.Errorf("decision run envelope profile mismatch: request %q, envelope %q", req.Profile, envelope.Profile)
+	}
+	if !reflect.DeepEqual(req.Policy, DecisionPolicy{}) && !reflect.DeepEqual(req.Policy, envelope.Policy) {
+		return fmt.Errorf("decision run envelope policy snapshot mismatch")
+	}
+	if strings.TrimSpace(req.Question) != "" && req.Question != envelope.Request.Question {
+		return fmt.Errorf("decision run envelope immutable question mismatch")
+	}
+	return nil
+}
+
+func validateDecisionEnvelopeAnchor(event RunEvent, payload decisionEvent, req DecisionRequest, packet DecisionEvidencePacket, expected ArtifactRef) error {
+	if event.RunID != req.RunID || event.TaskID != req.TaskID || event.Attempt != req.Attempt {
+		return fmt.Errorf("authoritative decision run envelope anchor identity does not match request")
+	}
+	if payload.DecisionID != req.DecisionID || payload.RunID != req.RunID || payload.TaskID != req.TaskID || payload.Attempt != req.Attempt {
+		return fmt.Errorf("authoritative decision run envelope anchor payload identity does not match request")
+	}
+	if payload.EvidenceHash != packet.Hash {
+		return fmt.Errorf("authoritative decision run envelope anchor evidence identity does not match sealed evidence")
+	}
+	if !sameArtifactIdentity(payload.EnvelopeRef, expected) || payload.EnvelopeHash != payload.EnvelopeRef.SHA256 {
+		return fmt.Errorf("authoritative decision run envelope anchor artifact identity does not match")
+	}
+	if payload.EnvelopeRef.RunID != req.RunID || payload.EnvelopeRef.TaskID != req.TaskID || payload.EnvelopeRef.Attempt != req.Attempt {
+		return fmt.Errorf("authoritative decision run envelope anchor artifact metadata does not match request")
+	}
+	return nil
 }
 
 func validateReferenceRecoveryState(state decisionState) error {
@@ -514,9 +666,9 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 		TaskID: request.TaskID, Question: request.Question, ContractRef: request.ContractRef,
 		ContractRevision: request.ContractRevision, StartedAt: e.now(),
 	}
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceStarted, decisionEvent{
-		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceInvocation: &invocation,
-	}); err != nil {
+	event := decisionEventFor(req, "reference_started", request.InputHash)
+	event.ReferenceInvocation = &invocation
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceStarted, event); err != nil {
 		return nil, nil, nil, ArtifactRef{}, err
 	}
 
@@ -526,9 +678,9 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
 			InputHash: request.InputHash, Reason: "reference evidence producer failed", FailedAt: e.now(),
 		}
-		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
-			DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
-		}); appendErr != nil {
+		event := decisionEventFor(req, "reference_failed", request.InputHash)
+		event.ReferenceFailure = failure
+		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, event); appendErr != nil {
 			return nil, nil, nil, ArtifactRef{}, appendErr
 		}
 		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: producerErr.Error()}
@@ -538,9 +690,9 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 			SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
 			InputHash: request.InputHash, Reason: "reference evidence draft failed validation", FailedAt: e.now(),
 		}
-		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
-			DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
-		}); appendErr != nil {
+		event := decisionEventFor(req, "reference_failed", request.InputHash)
+		event.ReferenceFailure = failure
+		if appendErr := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, event); appendErr != nil {
 			return nil, nil, nil, ArtifactRef{}, appendErr
 		}
 		return nil, nil, nil, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: err.Error()}
@@ -609,9 +761,9 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 		return nil, nil, nil, ArtifactRef{}, e.referencePublicationFailure(ctx, req, request, err)
 	}
 	result.ResultArtifactRef = &resultRef
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceCompleted, decisionEvent{
-		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceResult: result,
-	}); err != nil {
+	event = decisionEventFor(req, "reference_completed", request.InputHash)
+	event.ReferenceResult = result
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceCompleted, event); err != nil {
 		return nil, nil, nil, ArtifactRef{}, err
 	}
 	return rates, artifacts, provenance, resultRef, nil
@@ -714,9 +866,9 @@ func (e *decisionEngine) referencePublicationFailure(ctx context.Context, req De
 		SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID,
 		InputHash: request.InputHash, Reason: "reference evidence publication failed", FailedAt: e.now(),
 	}
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, decisionEvent{
-		DecisionID: req.DecisionID, TaskID: req.TaskID, ReferenceFailure: failure,
-	}); err != nil {
+	event := decisionEventFor(req, "reference_failed", request.InputHash)
+	event.ReferenceFailure = failure
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionReferenceFailed, event); err != nil {
 		return err
 	}
 	return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: cause.Error()}
@@ -758,7 +910,9 @@ func (e *decisionEngine) prepareRequestContract(ctx context.Context, req Decisio
 		return req, nil
 	}
 	reason := "request contract revision superseded"
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionInvalidated, decisionEvent{DecisionID: req.DecisionID, Reason: reason}); err != nil {
+	event := decisionEventFor(req, "invalidated", req.RequestContractRef)
+	event.Reason = reason
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionInvalidated, event); err != nil {
 		return req, err
 	}
 	return req, fmt.Errorf("%s: %s", ReasonDecisionStale, reason)
@@ -832,6 +986,12 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 	if state.Packet.Hash == sealed.Hash {
 		// Already sealed on identical material; keep the durable packet so
 		// CreatedAt and ID stay exactly what the log recorded.
+		if state.EvidenceArtifact.ID != "" {
+			if req.EvidenceArtifactRef.ID != "" && !sameArtifactIdentity(req.EvidenceArtifactRef, state.EvidenceArtifact) {
+				return DecisionEvidencePacket{}, ArtifactRef{}, fmt.Errorf("decision %s evidence artifact identity changed during resume", req.DecisionID)
+			}
+			return state.Packet, state.EvidenceArtifact, nil
+		}
 		if req.EvidenceArtifactRef.ID != "" {
 			return state.Packet, req.EvidenceArtifactRef, nil
 		}
@@ -842,9 +1002,9 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 		if err != nil {
 			return DecisionEvidencePacket{}, ArtifactRef{}, err
 		}
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: state.Packet.Hash, Packet: &state.Packet, EvidenceArtifact: artifact,
-		}); err != nil {
+		event := decisionEventFor(req, "evidence_sealed", state.Packet.Hash)
+		event.EvidenceHash, event.Packet, event.EvidenceArtifact = state.Packet.Hash, &state.Packet, artifact
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, event); err != nil {
 			return DecisionEvidencePacket{}, ArtifactRef{}, err
 		}
 		return state.Packet, artifact, nil
@@ -854,16 +1014,15 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 			return DecisionEvidencePacket{}, ArtifactRef{}, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "decision evidence artifact store is unavailable"}
 		}
 		if state.Packet.Hash != "" {
-			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, decisionEvent{
-				DecisionID: req.DecisionID, EvidenceHash: sealed.Hash,
-				Reason: evidenceChangeReason(state.Packet, sealed),
-			}); err != nil {
+			event := decisionEventFor(req, "evidence_changed", sealed.Hash)
+			event.EvidenceHash, event.Reason = sealed.Hash, evidenceChangeReason(state.Packet, sealed)
+			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, event); err != nil {
 				return DecisionEvidencePacket{}, ArtifactRef{}, err
 			}
 		}
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: sealed.Hash, Packet: &sealed,
-		}); err != nil {
+		event := decisionEventFor(req, "evidence_sealed", sealed.Hash)
+		event.EvidenceHash, event.Packet = sealed.Hash, &sealed
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, event); err != nil {
 			return DecisionEvidencePacket{}, ArtifactRef{}, err
 		}
 		return sealed, ArtifactRef{}, nil
@@ -873,16 +1032,15 @@ func (e *decisionEngine) sealEvidence(ctx context.Context, req DecisionRequest, 
 		return DecisionEvidencePacket{}, ArtifactRef{}, err
 	}
 	if state.Packet.Hash != "" {
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: sealed.Hash,
-			Reason: evidenceChangeReason(state.Packet, sealed),
-		}); err != nil {
+		event := decisionEventFor(req, "evidence_changed", sealed.Hash)
+		event.EvidenceHash, event.Reason = sealed.Hash, evidenceChangeReason(state.Packet, sealed)
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceChanged, event); err != nil {
 			return DecisionEvidencePacket{}, ArtifactRef{}, err
 		}
 	}
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: sealed.Hash, Packet: &sealed, EvidenceArtifact: put,
-	}); err != nil {
+	event := decisionEventFor(req, "evidence_sealed", sealed.Hash)
+	event.EvidenceHash, event.Packet, event.EvidenceArtifact = sealed.Hash, &sealed, put
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionEvidenceSealed, event); err != nil {
 		return DecisionEvidencePacket{}, ArtifactRef{}, err
 	}
 	return sealed, put, nil
@@ -908,7 +1066,7 @@ func persistDecisionEvidence(ctx context.Context, store ArtifactStore, req Decis
 	put, err := store.Put(ctx, PutArtifactRequest{
 		Kind: "decision_evidence", Role: "decision", Path: "decisions/evidence/" + packet.ID + ".json",
 		Description: "sealed decision evidence " + packet.ID, MediaType: "application/json", Content: data,
-		RunID: req.RunID, TaskID: req.TaskID,
+		RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt,
 	})
 	if err != nil {
 		return ArtifactRef{}, fmt.Errorf("persisting decision evidence: %w", err)
@@ -965,11 +1123,17 @@ func (e *decisionEngine) runJudgeWithRepair(
 	weights map[string]float64,
 	judgeID string,
 ) (DecisionOpinion, error) {
-	var lastErr error
+	var lastOperationalErr error
+	var lastValidationErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		hint := ""
-		if attempt > 0 && lastErr != nil {
-			hint = lastErr.Error()
+		if attempt > 0 {
+			switch {
+			case lastValidationErr != nil:
+				hint = lastValidationErr.Error()
+			case lastOperationalErr != nil:
+				hint = lastOperationalErr.Error()
+			}
 		}
 		judgeCtx, err := BuildJudgeContext(JudgeContextRequest{
 			JudgeID:        judgeID,
@@ -991,7 +1155,7 @@ func (e *decisionEngine) runJudgeWithRepair(
 			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, Context: judgeCtx, Packet: packet,
 		})
 		if err != nil {
-			lastErr = err
+			lastOperationalErr = err
 			continue
 		}
 		opinion.ID = e.newID("opinion")
@@ -1003,39 +1167,44 @@ func (e *decisionEngine) runJudgeWithRepair(
 
 		suppliedOverall := JudgeSuppliedOverall(opinion, weights)
 		if err := ValidateOpinion(&opinion, packet, weights); err != nil {
-			lastErr = err
+			lastValidationErr = err
 			continue
 		}
 		opinion.Valid = true
 		if suppliedOverall {
-			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionJudgeOverallIgnored, decisionEvent{
-				DecisionID: req.DecisionID, EvidenceHash: packet.Hash, JudgeID: judgeID, Round: 1,
-				Reason: "criteria are configured; the runtime owns the overall score",
-			}); err != nil {
+			event := decisionEventFor(req, "judge_overall_ignored", packet.Hash, judgeID, "1")
+			event.EvidenceHash, event.JudgeID, event.Round, event.Reason = packet.Hash, judgeID, 1, "criteria are configured; the runtime owns the overall score"
+			if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionJudgeOverallIgnored, event); err != nil {
 				return DecisionOpinion{}, err
 			}
 		}
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionOpinionSubmitted, decisionEvent{
-			DecisionID: req.DecisionID, EvidenceHash: packet.Hash, JudgeID: judgeID, Round: 1, Opinion: &opinion,
-		}); err != nil {
+		event := decisionEventFor(req, "opinion", packet.Hash, judgeID, "1")
+		event.EvidenceHash, event.JudgeID, event.Round, event.Opinion = packet.Hash, judgeID, 1, &opinion
+		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionOpinionSubmitted, event); err != nil {
 			return DecisionOpinion{}, err
 		}
 		return opinion, nil
 	}
 
-	reason := ReasonDecisionOpinionInvalid
-	detail := reason
-	if lastErr != nil {
-		detail = lastErr.Error()
+	if lastValidationErr == nil {
+		// A provider or execution failure leaves the judge incomplete. It is not
+		// a rejected opinion: no structured opinion exists to audit, and resume
+		// must be able to dispatch this judge again.
+		if lastOperationalErr != nil {
+			return DecisionOpinion{}, fmt.Errorf("decision %s judge %s execution: %w", req.DecisionID, judgeID, lastOperationalErr)
+		}
+		return DecisionOpinion{}, fmt.Errorf("decision %s judge %s did not produce an opinion", req.DecisionID, judgeID)
 	}
+
+	reason := ReasonDecisionOpinionInvalid
+	detail := lastValidationErr.Error()
 	rejected := DecisionOpinion{
 		ID: e.newID("opinion"), JudgeID: judgeID, Round: 1, EvidenceHash: packet.Hash,
 		Valid: false, RejectedReason: detail,
 	}
-	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionOpinionRejected, decisionEvent{
-		DecisionID: req.DecisionID, EvidenceHash: packet.Hash, JudgeID: judgeID, Round: 1,
-		Reason: reason, Opinion: &rejected,
-	}); err != nil {
+	event := decisionEventFor(req, "opinion_rejected", packet.Hash, judgeID, "1")
+	event.EvidenceHash, event.JudgeID, event.Round, event.Reason, event.Opinion = packet.Hash, judgeID, 1, reason, &rejected
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionOpinionRejected, event); err != nil {
 		return DecisionOpinion{}, err
 	}
 	return rejected, nil

@@ -259,6 +259,11 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 			return RunEvent{}, fmt.Errorf("recover degraded event store: %w", err)
 		}
 	}
+	if es.syncFile == nil {
+		err := fmt.Errorf("event store sync function is unavailable")
+		es.invalidateState(err)
+		return RunEvent{}, err
+	}
 	appendFile := es.f
 	if err := lockEventStoreFile(appendFile); err != nil {
 		return RunEvent{}, fmt.Errorf("acquire event store writer lock: %w", err)

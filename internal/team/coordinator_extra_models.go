@@ -17,6 +17,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // executeTaskWithExtraModels executes a task across multiple models when extra-models is configured.
@@ -29,21 +30,57 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	task TaskDef,
 	todoID string,
 ) (string, error) {
+	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
+	// occurrence once before any leaf starts; isolated leaves below receive
+	// private Todo state and therefore cannot race this transition or arm a
+	// second decision for the same occurrence.
+	if item := c.todoItemByID(todoID); item != nil {
+		expected := TaskPending
+		if item.Status == TaskPlanned {
+			expected = TaskPlanned
+		}
+		if err := c.CommitTaskTransition(parentCtx, todoID, expected, TaskInProgress, "", "", nil); err != nil {
+			return "", fmt.Errorf("mark fanout task started: %w", err)
+		}
+		c.setCurrentTaskAttempt(todoID, c.taskAttempt(todoID))
+		c.reconcileTaskStatusProjection()
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
 	taskDesc := task.Goal
-	// Limit concurrent models
-	models := agentDef.ExtraModels
-	if len(models) > maxConcurrentModels-1 { // -1 for main model
-		models = models[:maxConcurrentModels-1]
+	// A durable task owns this ordered topology. Only the ephemeral compatibility
+	// path derives it from AgentDef.ExtraModels; retries and resumes pass the
+	// recorded topology here and never re-expand live configuration.
+	models := cloneModelTopology(task.ModelTopology)
+	if len(models) == 0 {
+		primary := strings.TrimSpace(task.Model)
+		if primary == "" {
+			primary = strings.TrimSpace(agentDef.Generation.Model)
+		}
+		models = initialTaskModelTopology(agentDef, primary)
+	}
+	if len(models) < 2 {
+		return c.executeSingleAgentWithModel(parentCtx, agentName, cloneAgentDef(agentDef), task, todoID, "main")
+	}
+	// Pin the parent control plane before any leaf is created. The worker
+	// workspace below is deliberately disposable and must never become the
+	// source of decision artifacts, index rows, or branch visibility.
+	if _, err := c.pinDecisionControlPlane(); err != nil {
+		return "", err
+	}
+	// Limit concurrent models while preserving the creation-time order.
+	if len(models) > maxConcurrentModels {
+		models = models[:maxConcurrentModels]
 	}
 
-	totalModels := len(models) + 1 // +1 for main model
+	totalModels := len(models)
 	results := make(chan *agentResult, totalModels)
 
 	// Create a deep copy of agentDef with ExtraModels cleared for the main model
 	// to prevent infinite recursion and data races.
 	mainDef := cloneAgentDef(agentDef)
 	mainDef.ExtraModels = nil
-	mainModel := mainDef.Generation.Model
+	mainModel := models[0]
+	mainDef.Generation.Model = mainModel
 
 	go func() {
 		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main")
@@ -51,7 +88,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	}()
 
 	// Execute each extra model with its own deep copy
-	for index, extraModel := range models {
+	for index, extraModel := range models[1:] {
 		go func(model, slot string) {
 			extraDef := cloneAgentDef(agentDef)
 			extraDef.ExtraModels = nil
@@ -67,17 +104,38 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		result := <-results
 		allResults = append(allResults, result)
 	}
+	var leafErrors []string
+	for _, result := range allResults {
+		if result != nil && result.err != nil {
+			leafErrors = append(leafErrors, fmt.Sprintf("%s: %v", result.model, result.err))
+		}
+	}
+	if len(leafErrors) > 0 {
+		err := fmt.Errorf("fanout leaf execution failed: %s", strings.Join(leafErrors, "; "))
+		c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+		return "", err
+	}
 
 	// Judge the candidates when a judge model is configured; otherwise (or
 	// if the judge fails) fall back to the plain concatenation merge.
 	judged, err := c.judgeAgentResults(parentCtx, taskDesc, todoID, allResults)
 	if err == nil {
+		if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(judged, summaryMaxRunes), judged, nil); statusErr != nil {
+			return "", fmt.Errorf("mark fanout task done: %w", statusErr)
+		}
+		c.reconcileTaskStatusProjection()
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		return judged, nil
 	}
 	if !errors.Is(err, errNoJudgeModel) {
 		c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("judge failed, falling back to merge: %v", err)).withTodoID(todoID))
 	}
 	merged := c.mergeAgentResults(allResults)
+	if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(merged, summaryMaxRunes), merged, nil); statusErr != nil {
+		return "", fmt.Errorf("mark fanout task done: %w", statusErr)
+	}
+	c.reconcileTaskStatusProjection()
+	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	return merged, nil
 }
 
@@ -148,11 +206,59 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// Direct mutation of c.session.Workspace is unsafe because multiple goroutines
 	// execute this function concurrently for different models.
 	isolatedSession := cloneSession(c.session, subWS)
+	// cloneSession intentionally shallow-copies the read-only team definition,
+	// but this leaf must not resolve the parent's live agent definition: doing
+	// so would restore ExtraModels and recursively fan out. Replace every alias
+	// of the selected agent with the explicit single-model definition.
+	if isolatedSession != nil && isolatedSession.Agents != nil {
+		agents := make(map[string]*agent.AgentDef, len(isolatedSession.Agents))
+		for key, def := range isolatedSession.Agents {
+			agents[key] = def
+			if def != nil && (strings.EqualFold(def.Name, agentDef.Name) || strings.EqualFold(key, agentName) || strings.EqualFold(key, agentDef.FileAlias)) {
+				agents[key] = cloneAgentDef(agentDef)
+				agents[key].ExtraModels = nil
+			}
+		}
+		isolatedSession.Agents = agents
+	}
 	isolatedCoord := cloneCoordinator(c, isolatedSession)
+	// A leaf performs worker work only. Give it a private lifecycle projection
+	// and remove the event-journal transition sink; the parent owns the one
+	// durable task_created/status/decision lineage. Execution events and the
+	// leaf receipt are still produced and merged into the parent below.
+	if parentItem := c.todoItemByID(todoID); parentItem != nil {
+		leafItem := cloneTodoItem(parentItem)
+		leafItem.Status = TaskPending
+		leafItem.Detail = ""
+		leafItem.Output = ""
+		leafItem.TypedResult = nil
+		leafItem.ExecutionReceipt = nil
+		leafItem.ExecutionReceipts = nil
+		leafTracker := NewTaskTracker()
+		leafTracker.TodoList().SetRunID(c.contextRunID())
+		leafTracker.TodoList().AddReserved([]*TodoItem{leafItem})
+		isolatedCoord.taskTracker = leafTracker
+		isolatedCoord.eventJournal = nil
+	}
+	task.executionModelOverride = strings.TrimSpace(agentDef.Generation.Model)
+	// Every isolated leaf is explicitly singleton. The parent Todo retains the
+	// full topology because all leaves share its lifecycle record.
+	task.ModelTopology = []string{task.executionModelOverride}
 	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
 	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
 
-	result, err := isolatedCoord.executeTask(parentCtx, task, todoID)
+	leafCtx := context.WithValue(parentCtx, leafExecutionKey{}, true)
+	result, err := isolatedCoord.executeTask(leafCtx, task, todoID)
+	if leafItem := isolatedCoord.todoItemByID(todoID); leafItem != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for i := range leafItem.ExecutionReceipts {
+			receipt := leafItem.ExecutionReceipts[i]
+			if mergeErr := c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt); mergeErr != nil {
+				if err == nil {
+					err = fmt.Errorf("merge %s leaf receipt: %w", slot, mergeErr)
+				}
+			}
+		}
+	}
 
 	// Merge skill usage statistics from the isolated coordinator back into the main coordinator
 	c.skillUsageMu.Lock()
@@ -449,6 +555,8 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		reportStatus:                       orig.reportStatus,
 		sessionData:                        sessionDataClone,
 		taskTracker:                        orig.taskTracker,
+		restoredTodoIDs:                    orig.restoredTodoIDsSnapshot(),
+		admittedTodoIDs:                    orig.admittedTodoIDsSnapshot(),
 		skills:                             skillsClone,
 		conversationHistory:                conversationHistoryClone,
 		conversationHistorySourceCounts:    conversationHistorySourceCountsClone,
@@ -474,6 +582,10 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		workerMemorySvc:                    orig.workerMemorySvc,
 		sharedMemorySvc:                    orig.sharedMemorySvc,
 		eventStore:                         orig.eventStore,
+		eventJournal:                       orig.EventJournal(),
+		decisionControlPlane:               orig.decisionControlPlaneSnapshot(),
+		decisionStore:                      orig.decisionStoreSnapshot(),
+		decisionIndexProjection:            orig.decisionIndexProjectionSnapshot(),
 		executionRunID:                     orig.executionRunID,
 		executionTeamRevision:              orig.executionTeamRevision,
 		executionProfile:                   executionProfileCopy,
@@ -513,6 +625,8 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		sessionToolPermissions:             sessionToolPermissionsClone,
 		workerSummaries:                    workerSummariesClone,
 		stepConfirmFn:                      stepConfirmFnCopy,
+		workerAgentOverride:                orig.workerAgentOverride,
+		repairAgentOverride:                orig.repairAgentOverride,
 		contractWarnings:                   contractWarnings,
 		noProgressUsageOwner:               usageOwner,
 		noProgressUsageNamespace:           usageNamespace,

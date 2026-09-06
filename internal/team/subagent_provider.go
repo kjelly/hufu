@@ -95,7 +95,7 @@ func workerToolResolutionTaskProjection(task TaskDef) workerToolResolutionTaskPr
 		ContractID:     task.ContractID,
 		PlanFirst:      task.PlanFirst,
 		PlanID:         task.PlanID,
-		Execution:      task.Execution,
+		Execution:      cloneExecutionContract(task.Execution),
 		WorksetBinding: cloneWorksetBinding(task.WorksetBinding),
 	}
 }

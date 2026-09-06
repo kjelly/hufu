@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ type memoryJournal struct {
 	mu     sync.Mutex
 	events []RunEvent
 	seq    int
+	store  ArtifactStore
 }
 
 func (j *memoryJournal) Append(_ context.Context, event RunEvent) (RunEvent, error) {
@@ -198,6 +200,25 @@ func newTestEngine(journal *memoryJournal, runner JudgeRunner, budget BudgetMana
 // newTestEngineWithStages builds an engine with optional Phase 2 stage runners.
 func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget BudgetManager, stages DecisionServices) DecisionEngine {
 	counter := 0
+	store := stages.Store
+	if store == nil {
+		journal.mu.Lock()
+		store = journal.store
+		if store == nil {
+			workspace, err := os.MkdirTemp("", "hufu-decision-engine-")
+			if err != nil {
+				journal.mu.Unlock()
+				panic(err)
+			}
+			store, err = NewFileArtifactStore(workspace, workspace)
+			if err != nil {
+				journal.mu.Unlock()
+				panic(err)
+			}
+			journal.store = store
+		}
+		journal.mu.Unlock()
+	}
 	return NewDecisionEngine(DecisionServices{
 		Judges:            runner,
 		Journal:           journal,
@@ -207,7 +228,7 @@ func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget 
 		Revisions:         stages.Revisions,
 		Proposer:          stages.Proposer,
 		ReferenceEvidence: stages.ReferenceEvidence,
-		Store:             stages.Store,
+		Store:             store,
 		Index:             stages.Index,
 		Now:               func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string {

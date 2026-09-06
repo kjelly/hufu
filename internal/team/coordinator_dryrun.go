@@ -135,6 +135,8 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 
 func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
+	clone.Execution = cloneExecutionContract(td.Execution)
+	clone.ModelTopology = cloneModelTopology(td.ModelTopology)
 	clone.Action = cloneActionPtr(td.Action)
 	clone.FanOut = cloneFanOutSpec(td.FanOut)
 	clone.DecisionFacts = cloneDecisionFacts(td.DecisionFacts)

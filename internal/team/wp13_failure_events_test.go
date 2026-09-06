@@ -177,17 +177,14 @@ func TestWP13ProtocolIncompleteFailureEventAcrossSurfaces(t *testing.T) {
 		taskResultCache:        make(map[string][]cachedTaskEntry),
 		executionRunID:         "run-wp13-protocol",
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "process api_token=protocol-secret"}})[0]
+	task, item := createAdmittedTestTask(t, c, TaskDef{Agent: "worker", Goal: "process api_token=protocol-secret", Execution: ExecutionContract{RequiresResult: true}})
 	c.taskTracker.TodoList().onChange = func() { c.saveCheckpoint() }
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "worker output api_token=protocol-secret"}
 	// No submit_result call: this forces the protocol-incomplete transition and
 	// then lets the result-only repair path fail without another worker replay.
 	c.repairAgentOverride = &mockRepairAgent{}
 
-	_, err = c.executeTask(context.Background(), TaskDef{
-		Agent: "worker", Goal: item.Desc,
-		Execution: ExecutionContract{RequiresResult: true},
-	}, item.ID)
+	_, err = c.executeTask(context.Background(), task, item.ID)
 	if err == nil {
 		t.Fatal("expected omitted submit_result to fail")
 	}

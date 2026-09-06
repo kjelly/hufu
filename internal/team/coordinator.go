@@ -62,6 +62,11 @@ type taskTranscriptKey struct{}
 // exact task attempt that produced them.
 type executionAttemptKey struct{}
 
+// leafExecutionKey marks an isolated model-fanout worker. A leaf may execute
+// worker tools and emit receipts, but it must not form a decision or own the
+// parent Todo lifecycle.
+type leafExecutionKey struct{}
+
 // taskRequiresResultKey carries task.Execution.RequiresResult down through
 // executeTask → runAgentWithStatusAndHistory. That layer knows only the
 // agent/prompt/history, not the task's own contract, but the same-turn stall
@@ -88,16 +93,22 @@ type TaskDef struct {
 	Phase Phase `json:"-" yaml:"phase,omitempty"`
 	// Action is a static execute-phase contract. Its JSON omission prevents a
 	// coordinator from choosing a provider, action type, or payload at runtime.
-	Action           *Action `json:"-" yaml:"action,omitempty"`
-	ContractID       string  `json:"contract_id,omitempty"`
-	ContractHash     string  `json:"contract_hash,omitempty"`
-	ContractRevision int     `json:"contract_revision,omitempty"`
-	Agent            string  `json:"agent"`
-	Goal             string  `json:"goal"`
-	Constraints      string  `json:"constraints,omitempty"`
-	Model            string  `json:"model,omitempty"`
-	Sidecar          bool    `json:"sidecar,omitempty"`
-	Summarize        bool    `json:"summarize,omitempty"`
+	Action           *Action  `json:"-" yaml:"action,omitempty"`
+	ContractID       string   `json:"contract_id,omitempty"`
+	ContractHash     string   `json:"contract_hash,omitempty"`
+	ContractRevision int      `json:"contract_revision,omitempty"`
+	Agent            string   `json:"agent"`
+	Goal             string   `json:"goal"`
+	Constraints      string   `json:"constraints,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	ModelTopology    []string `json:"model_topology,omitempty"`
+	// executionModelOverride is set only by the bounded non-durable
+	// extra-model leaf path. It is intentionally not serialized or accepted
+	// from coordinator/task input; the leaf receives an explicit single-model
+	// agent/session and must not re-resolve the parent occurrence.
+	executionModelOverride string
+	Sidecar                bool `json:"sidecar,omitempty"`
+	Summarize              bool `json:"summarize,omitempty"`
 	// OutputMode controls how the worker's output is returned to the
 	// coordinator. "verbatim" captures tool activity in a runner-owned
 	// transcript artifact and returns only its manifest, keeping raw output out
@@ -346,8 +357,20 @@ type Coordinator struct {
 	// this lock their read-modify-write plus json.Marshal in SaveSession races.
 	// It is distinct from c.mu: c.mu also guards sub-service pointers and is
 	// reentered via SessionStore(), so it cannot be held across SaveSession.
-	sessionMu                          sync.RWMutex
-	taskTracker                        *TaskTracker
+	sessionMu   sync.RWMutex
+	taskTracker *TaskTracker
+	// restoredTodoIDs identifies task occurrences loaded from a persisted
+	// session/event projection. It is intentionally independent of the current
+	// journal attachment: a restored task keeps its canonical execution model
+	// even when the journal is unavailable during resume.
+	restoredTodoIDs   map[string]struct{}
+	restoredTodoIDsMu sync.RWMutex
+	// admittedTodoIDs identifies current-run task occurrences after their
+	// creation boundary commits. They share the same frozen model authority as
+	// restored occurrences, while remaining distinguishable so the initial
+	// non-durable extra-model fanout can still run once.
+	admittedTodoIDs                    map[string]struct{}
+	admittedTodoIDsMu                  sync.RWMutex
 	skills                             []*skill.SkillDef
 	conversationHistory                []fantasy.Message
 	conversationHistorySourceCounts    []int
@@ -464,35 +487,45 @@ type Coordinator struct {
 	eventStore             *EventStore     // append-only session event store
 	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
 	eventOnceMu            sync.Mutex
-	dualWriteFailures      atomic.Int64
-	memoryStore            *memory.MemoryStore
-	contextRepo            contextstore.Repository // canonical context store used by prompt assembly and maintenance
-	memoryRankingPolicy    MemoryRuntimeRankingPolicy
-	workerMemorySvc        WorkerMemoryService // WP-3 per-worker memory recall service.
-	sharedMemorySvc        SharedMemoryService // canonical shared persistent memory service.
-	asyncTasksWg           sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
-	skillsMu               sync.RWMutex
-	modelList              []config.ModelEntry
-	modelProfileRuntime    *ModelProfileRuntime
-	sidecarModel           string
-	sidecarInst            *sidecar.Sidecar
-	sidecarInitMu          sync.Mutex
-	sidecarInit            bool
-	guardModel             string
-	guardInst              *sidecar.Sidecar
-	guardInitMu            sync.Mutex
-	guardInit              bool
-	judgeModel             string
-	judgeInst              *sidecar.Sidecar
-	judgeInitMu            sync.Mutex
-	judgeInit              bool
-	planReviewerModel      string
-	cachedWorkerContext    string
-	workerCtxOnce          sync.Once
-	autoLoadedSkills       []*skill.SkillDef
-	autoLoadedSkillsMu     sync.RWMutex
-	forcedSkillNames       map[string]bool // set of skill names specified via --skill
-	maxConcurrent          int
+	decisionJournalMu      sync.Mutex
+	scopedDecisionJournal  EventJournal
+	// decisionControlPlane is pinned by the parent coordinator before an
+	// isolated extra-model leaf starts. It keeps decision artifacts, the
+	// cross-run index, and the branch-scoped journal in the parent control
+	// workspace even though the leaf owns a separate worker workspace.
+	decisionControlPlaneMu  sync.Mutex
+	decisionControlPlane    *decisionControlPlane
+	decisionStore           ArtifactStore
+	decisionIndexProjection *DecisionIndex
+	dualWriteFailures       atomic.Int64
+	memoryStore             *memory.MemoryStore
+	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
+	memoryRankingPolicy     MemoryRuntimeRankingPolicy
+	workerMemorySvc         WorkerMemoryService // WP-3 per-worker memory recall service.
+	sharedMemorySvc         SharedMemoryService // canonical shared persistent memory service.
+	asyncTasksWg            sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
+	skillsMu                sync.RWMutex
+	modelList               []config.ModelEntry
+	modelProfileRuntime     *ModelProfileRuntime
+	sidecarModel            string
+	sidecarInst             *sidecar.Sidecar
+	sidecarInitMu           sync.Mutex
+	sidecarInit             bool
+	guardModel              string
+	guardInst               *sidecar.Sidecar
+	guardInitMu             sync.Mutex
+	guardInit               bool
+	judgeModel              string
+	judgeInst               *sidecar.Sidecar
+	judgeInitMu             sync.Mutex
+	judgeInit               bool
+	planReviewerModel       string
+	cachedWorkerContext     string
+	workerCtxOnce           sync.Once
+	autoLoadedSkills        []*skill.SkillDef
+	autoLoadedSkillsMu      sync.RWMutex
+	forcedSkillNames        map[string]bool // set of skill names specified via --skill
+	maxConcurrent           int
 	// providerSemState holds a lazily-created concurrency-limiting channel per
 	// canonical effective provider key, sized from ProviderManager's execution
 	// policy. It is shared with isolated extra-model clones.
@@ -1135,6 +1168,8 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		think:                     think,
 		reportStatus:              func(event StatusEvent) {},
 		taskTracker:               NewTaskTracker(),
+		restoredTodoIDs:           make(map[string]struct{}),
+		admittedTodoIDs:           make(map[string]struct{}),
 		skills:                    session.Skills,
 		projectDir:                projectDir,
 		skillUsage:                make(map[string]*skillUsageState),

@@ -327,32 +327,45 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 	if originalCancellation != nil {
-		return nil, c.persistPreCancelledDirectAgent(ctx, resolvedName, task, directModel, originalCancellation)
+		return nil, c.persistPreCancelledDirectAgentWithDef(ctx, agentDef, resolvedName, task, directModel, originalCancellation)
 	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
-	needsProviderBoundary := directModel != ""
-	if needsProviderBoundary {
-		if err := c.startProviderExecutionBoundary(ctx); err != nil {
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil, fmt.Errorf("direct agent task tracker is unavailable")
+	}
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	todoID := ids[0]
+	directTask := TaskDef{Agent: resolvedName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
+	directTask = c.canonicalizeTaskOccurrence(directTask, agentDef, directModel)
+	directTask.ModelTopology = []string{directTask.Model}
+	directModel = directTask.Model
+	directSpec := TodoSpec{
+		Agent:         directTask.Agent,
+		Desc:          directTask.Goal,
+		Goal:          directTask.Goal,
+		Model:         directTask.Model,
+		ModelTopology: cloneModelTopology(directTask.ModelTopology),
+		Source:        TaskSourceCoordinator,
+		ParentID:      "",
+		Execution:     cloneExecutionContract(directTask.Execution),
+		SideEffect:    directTask.SideEffect,
+		Recovery:      directTask.Recovery,
+		ReconcileTool: directTask.ReconcileTool,
+	}
+	// Admission is the creation boundary: it precedes task_created, provider
+	// admission, sidecar matching, in_progress, and every worker-side effect.
+	if c.hasDurableEventJournal() {
+		projection, projectionErr := taskOccurrenceProjectionFromSpec(directSpec, todoID)
+		if projectionErr != nil {
+			c.finalizePublicInvocationFailure(projectionErr)
+			return nil, projectionErr
+		}
+		if _, err := c.admitTaskOccurrence(ctx, projection, todoID, 1); err != nil {
 			c.finalizePublicInvocationFailure(err)
 			return nil, err
 		}
 	}
-	ctx, directInvocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
-	if err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return nil, err
-	}
-	if c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0 {
-		c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
-	}
-	todoItems, err := c.CommitTaskCreation(ctx, []TodoSpec{{
-		Agent:     resolvedName,
-		Desc:      task,
-		Model:     directModel,
-		Source:    TaskSourceCoordinator,
-		ParentID:  "",
-		Execution: ExecutionContract{RequiresResult: true},
-	}})
+	todoItems, err := c.CommitTaskCreationResolved(ctx, []TodoSpec{directSpec}, ids)
 	if err != nil {
 		if len(todoItems) == 0 {
 			c.finalizePublicInvocationFailure(err)
@@ -362,7 +375,29 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// Direct-agent invocation creates a real task and must participate in the
 	// same run-scoped task budget as coordinator-created work.
 	c.recordNoProgressTasks(len(todoItems))
-	todoID := todoItems[0].ID
+	disarmDecision, err := c.prepareTaskDecision(ctx, directTask, todoID)
+	if err != nil {
+		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, "error"))
+		return nil, err
+	}
+	defer disarmDecision()
+	needsProviderBoundary := directModel != ""
+	if needsProviderBoundary {
+		if err := c.startProviderExecutionBoundary(ctx); err != nil {
+			c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, "error"))
+			c.finalizePublicInvocationFailure(err)
+			return nil, err
+		}
+	}
+	ctx, directInvocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
+	if err != nil {
+		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, "error"))
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
+	if c.autoSkillsEnabled && c.sidecarModel != "" && len(c.getSkills()) > 0 {
+		c.setAutoLoadedSkills(c.matchSkillsWithSidecar(ctx, task))
+	}
 	// Direct-agent dispatch is a complete run boundary. On any non-successful
 	// exit, reject run-bound memory candidates so failed knowledge never
 	// becomes prompt-visible; the success path finalizes the run through the
@@ -723,7 +758,44 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 // original cancellation after the task and its terminal projections commit;
 // a terminalization failure is joined to that cancellation and returned.
 func (c *Coordinator) persistPreCancelledDirectAgent(ctx context.Context, agentName, task, model string, cancellation error) error {
-	items, err := c.CommitTaskCreation(ctx, []TodoSpec{{Agent: agentName, Desc: task, Model: model, Source: TaskSourceCoordinator, ParentID: ""}})
+	var agentDef *agent.AgentDef
+	if c != nil && c.AgentPool() != nil {
+		agentDef, _, _ = c.AgentPool().ResolveAgentName(agentName)
+	}
+	return c.persistPreCancelledDirectAgentWithDef(ctx, agentDef, agentName, task, model, cancellation)
+}
+
+func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context, agentDef *agent.AgentDef, agentName, task, model string, cancellation error) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return errors.Join(cancellation, errors.New("persist pre-cancelled direct task: task tracker is unavailable"))
+	}
+	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	occurrence := TaskDef{Agent: agentName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
+	occurrence = c.canonicalizeTaskOccurrence(occurrence, agentDef, model)
+	occurrence.ModelTopology = []string{occurrence.Model}
+	spec := TodoSpec{
+		Agent:         occurrence.Agent,
+		Desc:          occurrence.Goal,
+		Goal:          occurrence.Goal,
+		Model:         occurrence.Model,
+		ModelTopology: cloneModelTopology(occurrence.ModelTopology),
+		Source:        TaskSourceCoordinator,
+		ParentID:      "",
+		Execution:     cloneExecutionContract(occurrence.Execution),
+		SideEffect:    occurrence.SideEffect,
+		Recovery:      occurrence.Recovery,
+		ReconcileTool: occurrence.ReconcileTool,
+	}
+	if c.hasDurableEventJournal() {
+		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, ids[0])
+		if projectionErr != nil {
+			return errors.Join(cancellation, fmt.Errorf("admit pre-cancelled direct task: %w", projectionErr))
+		}
+		if _, err := c.admitTaskOccurrence(ctx, projection, ids[0], 1); err != nil {
+			return errors.Join(cancellation, fmt.Errorf("admit pre-cancelled direct task: %w", err))
+		}
+	}
+	items, err := c.CommitTaskCreationResolved(ctx, []TodoSpec{spec}, ids)
 	if err != nil {
 		return errors.Join(cancellation, fmt.Errorf("persist pre-cancelled direct task: %w", err))
 	}

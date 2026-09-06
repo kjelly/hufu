@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,43 @@ func TestArmDisciplineRequiresKillCriteria(t *testing.T) {
 	}
 	if c.disciplineFor("todo-1") != nil {
 		t.Fatal("a discipline was armed despite failing validation")
+	}
+}
+
+func TestArmDisciplinePreservesDecisionProfileProjection(t *testing.T) {
+	c := disciplineCoordinator(t)
+	journal := c.eventJournal.(*memoryJournal)
+	if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionStarted, decisionEvent{
+		DecisionID: "dec-1", TaskID: "todo-1", Profile: "standard",
+	}); err != nil {
+		t.Fatalf("append initial decision event: %v", err)
+	}
+	if err := c.armDiscipline(context.Background(), "todo-1", TaskDef{ID: "t1"}, disciplinePolicy(CommitGatePolicy{}, StopPolicy{}, ReplanPolicy{}), &DecisionRecord{
+		ID: "dec-1", Profile: "standard",
+	}); err != nil {
+		t.Fatalf("armDiscipline: %v", err)
+	}
+
+	events, err := journal.ReadEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("decision events = %d, want 2", len(events))
+	}
+	var armed decisionEvent
+	if err := json.Unmarshal(events[1].Payload, &armed); err != nil {
+		t.Fatalf("decode execution-armed event: %v", err)
+	}
+	if armed.Profile != "standard" {
+		t.Fatalf("execution-armed profile = %q, want standard", armed.Profile)
+	}
+	state, err := projectDecision(context.Background(), journal, "dec-1")
+	if err != nil {
+		t.Fatalf("project decision: %v", err)
+	}
+	if state.Profile != "standard" {
+		t.Fatalf("projected profile = %q, want standard", state.Profile)
 	}
 }
 

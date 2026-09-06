@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -494,6 +495,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	c.sessionData = sd
 	c.sessionMu.Unlock()
 	if sd == nil {
+		c.setRestoredTodoIDs(nil)
 		return
 	}
 	// SessionData is the durable canonical object shared by checkpointing and
@@ -621,6 +623,7 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if c == nil {
 		return
 	}
+	c.setRestoredTodoIDs(tasks)
 	prof := c.ExecutionProfile()
 	if len(tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
@@ -941,6 +944,19 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
+		ensureAdmission := func() bool {
+			_, _, err := c.validateTaskOccurrenceAdmission(ctx, task, it.ID, it.Retries+1)
+			if err == nil {
+				return true
+			}
+			detail := fmt.Sprintf("task recovery blocked by decision admission validation: %v", err)
+			c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
+			c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+			if firstErr == nil {
+				firstErr = err
+			}
+			return false
+		}
 		resolveCanonicalAttempt := func() (*canonicalWorkerAttemptContext, bool) {
 			canonical, canonicalErr := c.canonicalWorkerAttemptContextForID(it.ID)
 			if canonicalErr == nil {
@@ -961,6 +977,16 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			return nil, false
 		}
 		if it.Status == TaskProtocolIncomplete {
+			if _, _, err := c.validateTaskOccurrenceAdmission(ctx, task, it.ID, it.Retries+1); err != nil {
+				detail := fmt.Sprintf("task recovery blocked by decision admission validation: %v", err)
+				c.PersistFailureWithClassAndStatusAndOutput(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked, it.Output)
+				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				if firstErr == nil {
+					firstErr = err
+				}
+				count++
+				continue
+			}
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
 				"policy":        string(pol),
 				"decision":      "protocol_result_only_repair",
@@ -986,7 +1012,10 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				continue
 			}
 			task = canonical.Task
-			if err := c.CommitTaskResetForRetry(ctx, it.ID, "resumed after interruption"); err != nil {
+			if !ensureAdmission() {
+				continue
+			}
+			if err := c.prepareInterruptedTaskForResume(ctx, it.ID, "resumed after interruption"); err != nil {
 				return count, err
 			}
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{
@@ -1089,7 +1118,10 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 					continue
 				}
 				task = canonical.Task
-				if err := c.CommitTaskResetForRetry(ctx, it.ID, "reconciliation allowed retry"); err != nil {
+				if !ensureAdmission() {
+					continue
+				}
+				if err := c.prepareInterruptedTaskForResume(ctx, it.ID, "reconciliation allowed retry"); err != nil {
 					return count, err
 				}
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -1143,21 +1175,89 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	return count, firstErr
 }
 
+// prepareInterruptedTaskForResume returns an interrupted task to the pending
+// execution boundary without incrementing Retries. Crash recovery is a
+// continuation of the same (run, task, attempt) occurrence; a retry reset would
+// manufacture a new attempt and detach any decision envelope already owned by
+// the interrupted occurrence.
+func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskID, detail string) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("prepare interrupted task resume: task tracker is unavailable")
+	}
+	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if item == nil {
+		return fmt.Errorf("prepare interrupted task resume: task %s not found", taskID)
+	}
+	if item.Status == TaskPending || item.Status == TaskPlanned {
+		return nil
+	}
+
+	// ResetForRetry is deliberately not used here: it increments Retries and
+	// therefore creates a new occurrence. Build the same reset projection, but
+	// retain the current attempt and append it through the event-first task
+	// boundary before replacing the in-memory projection.
+	projected := cloneTodoItem(item)
+	projected.Status = TaskPending
+	projected.Detail = detail
+	projected.Output = ""
+	projected.VerifyResult = nil
+	projected.RuntimeError = nil
+	projected.FailureEvent = nil
+	projected.RecoveryState = RecoveryStateNotStarted
+	projected.LastOperation = ""
+	projected.Progress = ProgressUnknown
+	projected.ProgressCriteria = nil
+	projected.StartedAt = time.Time{}
+	projected.EndedAt = time.Time{}
+	projected.ModelTime = 0
+	projected.ToolTime = 0
+	if c.hasDurableEventJournal() {
+		if err := c.appendTaskTransition(ctx, projected, map[string]interface{}{
+			"reset_for_resume": true,
+			"previous_status":  string(item.Status),
+		}); err != nil {
+			return err
+		}
+	}
+	items := c.taskTracker.TodoList().Items()
+	for i, current := range items {
+		if current != nil && current.ID == taskID {
+			items[i] = projected
+			break
+		}
+	}
+	c.taskTracker.TodoList().Restore(items)
+	return nil
+}
+
 func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	if it == nil {
 		return TaskDef{}
 	}
-	id := it.PlanTaskID
-	if id == "" {
-		id = it.ID
+	goal := it.Goal
+	if goal == "" {
+		// Events written before the goal field was added used Desc as the only
+		// task text. Keep those projections readable without treating them as
+		// equivalent to new admission-bound occurrences.
+		goal = it.Desc
 	}
+	id := it.PlanTaskID
 	return TaskDef{
 		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
-		Agent: it.Agent, Goal: it.Desc, Model: it.Model, Verify: it.Verify, VerifyMode: it.VerifyMode,
-		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), SideEffect: it.SideEffect,
-		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: it.Execution,
+		Agent: it.Agent, Goal: goal, Constraints: it.Constraints, Model: it.Model, ModelTopology: cloneModelTopology(it.ModelTopology),
+		Sidecar: it.Sidecar, Summarize: it.Summarize, OutputMode: it.OutputMode,
+		ContextFiles: append([]string(nil), it.ContextFiles...), Requires: append([]string(nil), it.Requires...),
+		Verify: it.Verify, VerifyMode: it.VerifyMode,
+		VerifySpec: cloneVerificationSpecPtr(it.VerifySpec), MaxRetries: it.MaxRetries, SideEffect: it.SideEffect,
+		Escalate: it.Escalate, AdversarialVerify: it.AdversarialVerify,
+		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: cloneExecutionContract(it.Execution),
+		Optional: it.Optional, ResourceClaims: append([]string(nil), it.ResourceClaims...), Resources: append([]ResourceClaim(nil), it.Resources...),
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),
 		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis), WorksetBinding: cloneWorksetBinding(it.WorksetBinding),
+		DecisionProfile: it.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), it.DecisionOptions...),
+		DecisionAssumptions: cloneDecisionAssumptions(it.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(it.DecisionFacts),
+		DecisionArtifacts: append([]ArtifactRef(nil), it.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(it.DecisionBaseRates),
+		DecisionProvenance: cloneEvidenceProvenance(it.DecisionProvenance),
 	}
 }
 

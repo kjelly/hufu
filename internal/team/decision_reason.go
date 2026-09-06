@@ -60,6 +60,7 @@ const (
 	EventDecisionBudgetDegraded       = agent.EventDecisionBudgetDegraded
 	EventDecisionEvidenceSharedOrigin = agent.EventDecisionEvidenceSharedOrigin
 	EventDecisionInvalidated          = agent.EventDecisionInvalidated
+	EventDecisionRunEnvelopeAnchored  = agent.EventDecisionRunEnvelopeAnchored
 
 	EventAssumptionDeclared     = agent.EventAssumptionDeclared
 	EventAssumptionSupported    = agent.EventAssumptionSupported

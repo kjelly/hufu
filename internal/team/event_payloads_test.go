@@ -282,13 +282,17 @@ func (a *failOnAttemptAgent) Stream(ctx context.Context, call fantasy.AgentStrea
 }
 
 type conditionalFailingJournal struct {
-	err    error
-	events []RunEvent
+	err         error
+	events      []RunEvent
+	startedRuns int
 }
 
 func (j *conditionalFailingJournal) Append(_ context.Context, event RunEvent) (RunEvent, error) {
-	if event.Type == string(EventTaskStarted) && event.Payload != nil && strings.Contains(string(event.Payload), "retry") {
-		return RunEvent{}, j.err
+	if event.Type == string(EventTaskStarted) {
+		j.startedRuns++
+		if j.startedRuns == 2 {
+			return RunEvent{}, j.err
+		}
 	}
 	event.ID = "evt-test"
 	event.Timestamp = "2026-01-01T00:00:00Z"
@@ -346,10 +350,9 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 	c.workerAgentOverride = worker
 	c.SetEventJournal(journal)
 
-	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "flaky task", MaxRetries: 2}})
-	todoID := items[0].ID
+	taskDef, item := createAdmittedTestTask(t, c, TaskDef{Agent: "worker", Goal: "flaky task", MaxRetries: 2, Recovery: RecoveryRetry})
+	todoID := item.ID
 
-	taskDef := TaskDef{Agent: "worker", Goal: "flaky task", MaxRetries: 2, Recovery: RecoveryRetry}
 	_, err := c.executeTask(context.Background(), taskDef, todoID)
 	if err == nil {
 		t.Fatal("expected executeTask to fail on retry journal append failure")

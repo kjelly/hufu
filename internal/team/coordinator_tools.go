@@ -888,7 +888,7 @@ func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 
 	switch args.Action {
 	case "create":
-		return t.handleCreate(callerName, args.Items)
+		return t.handleCreate(ctx, callerName, args.Items)
 	case "update":
 		return t.handleUpdate(callerName, args.ID, args.Status, args.Detail)
 	case "list":
@@ -970,20 +970,49 @@ func (t *reconcileTaskTool) Run(ctx context.Context, call fantasy.ToolCall) (fan
 	return fantasy.NewTextResponse(fmt.Sprintf("task %s marked as %s by task %s: %s", args.TaskID, args.Status, args.ResolvedBy, args.Reason)), nil
 }
 
-func (t *todoTool) handleCreate(callerName string, items []string) (fantasy.ToolResponse, error) {
+func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []string) (fantasy.ToolResponse, error) {
 	if len(items) == 0 {
 		return fantasy.NewTextErrorResponse("items is required for create action"), nil
 	}
 
 	resolvedModel := t.coordinator.resolveCurrentAgentModel(callerName)
 	parentID := t.coordinator.getSnapshotField(func(s *currentSnapshot) string { return s.TodoID })
-
-	batch := make([]TodoSpec, len(items))
-	for i, desc := range items {
-		batch[i] = TodoSpec{Agent: callerName, Desc: desc, Model: resolvedModel, Source: TaskSourceAgent, ParentID: parentID}
+	if t.coordinator.taskTracker == nil || t.coordinator.taskTracker.TodoList() == nil {
+		return fantasy.NewTextErrorResponse("todo task tracker is unavailable"), nil
 	}
-
-	added, err := t.coordinator.CommitTaskCreation(context.Background(), batch)
+	agentDef, _, err := t.coordinator.AgentPool().ResolveAgentName(callerName)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot resolve creating agent %q: %v", callerName, err)), nil
+	}
+	ids := t.coordinator.taskTracker.TodoList().ReserveIDs(len(items))
+	batch := make([]TodoSpec, len(items))
+	occurrences := make([]TaskDef, len(items))
+	for i, desc := range items {
+		occurrence := TaskDef{
+			Agent: callerName, Goal: desc, Model: resolvedModel,
+		}
+		occurrence = t.coordinator.canonicalizeTaskOccurrence(occurrence, agentDef, resolvedModel)
+		occurrence.ModelTopology = initialTaskModelTopology(agentDef, occurrence.Model)
+		occurrences[i] = occurrence
+		batch[i] = TodoSpec{
+			Agent: occurrence.Agent, Desc: desc, Goal: occurrence.Goal,
+			Model: occurrence.Model, ModelTopology: cloneModelTopology(occurrence.ModelTopology),
+			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
+			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
+		}
+	}
+	if t.coordinator.hasDurableEventJournal() {
+		for i := range batch {
+			projection, projectionErr := taskOccurrenceProjectionFromSpec(batch[i], ids[i])
+			if projectionErr != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to build todo occurrence: %v", projectionErr)), nil
+			}
+			if _, err := t.coordinator.admitTaskOccurrence(ctx, projection, ids[i], 1); err != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to admit todo items: %v", err)), nil
+			}
+		}
+	}
+	added, err := t.coordinator.CommitTaskCreationResolved(ctx, batch, ids)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create todo items: %v", err)), nil
 	}
