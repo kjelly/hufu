@@ -47,13 +47,27 @@ func TestView_HelpContent(t *testing.T) {
 
 func TestView_InfoIncludesDecisionStateProjection(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t", Decisions: []team.DecisionIndexEntry{{
-		DecisionID: "dec-1", Stale: true,
+		DecisionID: "dec-1", Stale: true, FinalizationMode: "coordinator", FinalizationIdentity: "coordinator", FinalizationOutcome: "override",
 	}}})
 	m.width = 100
 	m.height = 30
 	m.inInfo = true
-	if !containsView(m.View(), "dec-1 (stale)") {
+	if !containsView(m.View(), "dec-1 (stale; coordinator/coordinator/override)") {
 		t.Fatalf("info view missing decision projection:\n%s", m.View())
+	}
+}
+
+func TestView_InfoRedactsFinalizationProjection(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "t", Decisions: []team.DecisionIndexEntry{{
+		DecisionID: "dec-1", FinalizationMode: "api_key=stage4-tui-secret", FinalizationIdentity: "coordinator", FinalizationOutcome: "selected",
+	}}})
+	m.width, m.height, m.inInfo = 100, 30, true
+	view := m.View()
+	if strings.Contains(view, "stage4-tui-secret") {
+		t.Fatalf("TUI exposed finalization secret: %s", view)
+	}
+	if !containsView(view, "coordinator/selected") {
+		t.Fatalf("TUI lost finalization identity/outcome: %s", view)
 	}
 }
 

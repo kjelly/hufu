@@ -55,7 +55,6 @@ const (
 	EventDecisionPremortemSubmitted   = agent.EventDecisionPremortemSubmitted
 	EventDecisionRevisionSubmitted    = agent.EventDecisionRevisionSubmitted
 	EventDecisionFinalized            = agent.EventDecisionFinalized
-	EventDecisionFinalizationOverride = agent.EventDecisionFinalizationOverride
 	EventDecisionAlternativesOverride = agent.EventDecisionAlternativesOverride
 	EventDecisionBudgetDegraded       = agent.EventDecisionBudgetDegraded
 	EventDecisionEvidenceSharedOrigin = agent.EventDecisionEvidenceSharedOrigin

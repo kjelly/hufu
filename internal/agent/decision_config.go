@@ -478,8 +478,19 @@ func (p DecisionPolicy) Validate() error {
 	switch p.Finalization.Mode {
 	case "", FinalizationAggregate, FinalizationCoordinator:
 	case FinalizationJudge:
-		if strings.TrimSpace(p.Finalization.JudgeID) == "" {
+		judgeID := strings.TrimSpace(p.Finalization.JudgeID)
+		if judgeID == "" {
 			return fmt.Errorf("finalization.judge-id is required when finalization.mode is %q", FinalizationJudge)
+		}
+		member := false
+		for i := 1; i <= p.IndependentJudgments; i++ {
+			if judgeID == fmt.Sprintf("judge-%d", i) {
+				member = true
+				break
+			}
+		}
+		if !member {
+			return fmt.Errorf("finalization.judge-id %q is not one of the configured judges", judgeID)
 		}
 	default:
 		return fmt.Errorf("finalization.mode %q is not supported", p.Finalization.Mode)

@@ -242,6 +242,7 @@ func disableMouseCmd() tea.Cmd {
 
 // New creates a fresh model with the user's original prompt shown at the top.
 func New(prompt string, teamInfo TeamInfo) Model {
+	teamInfo.Decisions = team.RedactedDecisionIndexEntries(teamInfo.Decisions)
 	ti := textinput.New()
 	ti.Prompt = "> "
 	ti.Placeholder = "Type additional prompt..."
@@ -400,9 +401,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamInfoMsg:
 		m.teamInfo = msg.Info
+		m.teamInfo.Decisions = team.RedactedDecisionIndexEntries(m.teamInfo.Decisions)
 
 	case DecisionStateMsg:
-		m.teamInfo.Decisions = append([]team.DecisionIndexEntry(nil), msg.Decisions...)
+		m.teamInfo.Decisions = team.RedactedDecisionIndexEntries(msg.Decisions)
 
 	case SSHSessionsMsg:
 		m.teamInfo.SSHSessions = msg.Count
@@ -2360,14 +2362,33 @@ func (m Model) infoPanelView() string {
 	if len(info.Decisions) > 0 {
 		b.WriteString(boldStyle.Render("Decisions: "))
 		var decisionDisplay []string
-		for _, decision := range info.Decisions {
+		for _, rawDecision := range info.Decisions {
+			decision := rawDecision.Redacted()
 			status := "active"
 			if decision.Stale {
 				status = "stale"
 			} else if decision.Outcome != nil {
 				status = decision.Outcome.ResolvedOutcome
 			}
-			decisionDisplay = append(decisionDisplay, fmt.Sprintf("%s (%s)", decision.DecisionID, status))
+			if decision.FinalizationStale {
+				status += "; finalization stale"
+			}
+			finalizer := strings.Trim(strings.Join([]string{
+				decision.FinalizationMode,
+				decision.FinalizationIdentity,
+				decision.FinalizationOutcome,
+			}, "/"), "/")
+			if finalizer != "" {
+				status += "; " + finalizer
+			}
+			if len(decision.FinalizationWarnings) > 0 {
+				status += fmt.Sprintf("; %d finalization warning(s)", len(decision.FinalizationWarnings))
+			}
+			recordRef := decision.EffectiveRecordRef()
+			if recordRef.ID != "" {
+				status += "; record_ref=" + utils.RedactSecrets(recordRef.ID)
+			}
+			decisionDisplay = append(decisionDisplay, fmt.Sprintf("%s (%s)", utils.RedactSecrets(decision.DecisionID), status))
 		}
 		b.WriteString(strings.Join(decisionDisplay, ", "))
 		b.WriteString("\n")
@@ -2380,7 +2401,7 @@ func (m Model) infoPanelView() string {
 
 	b.WriteString("\n" + dimStyle.Render("esc close"))
 
-	content := b.String()
+	content := utils.RedactSecrets(b.String())
 	dialog := infoBoxStyle.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }

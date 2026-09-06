@@ -47,27 +47,31 @@ type decisionEvent struct {
 	Note         string        `json:"note,omitempty"`
 	At           time.Time     `json:"at,omitzero"`
 
-	Packet              *DecisionEvidencePacket      `json:"packet,omitempty"`
-	Opinion             *DecisionOpinion             `json:"opinion,omitempty"`
-	Aggregate           *DecisionAggregate           `json:"aggregate,omitempty"`
-	Challenge           *DecisionChallenge           `json:"challenge,omitempty"`
-	Revision            *DecisionRevision            `json:"revision,omitempty"`
-	Premortem           *PremortemResult             `json:"premortem,omitempty"`
-	Options             []DecisionOption             `json:"options,omitempty"`
-	Record              *DecisionRecord              `json:"record,omitempty"`
-	Question            string                       `json:"question,omitempty"`
-	ForecastRequired    bool                         `json:"forecast_required,omitempty"`
-	RecordRef           ArtifactRef                  `json:"record_ref,omitempty"`
-	EvidenceArtifact    ArtifactRef                  `json:"evidence_artifact,omitempty"`
-	ContractRef         string                       `json:"contract_ref,omitempty"`
-	ContractRevision    uint64                       `json:"contract_revision,omitempty"`
-	ContractArtifact    ArtifactRef                  `json:"contract_artifact,omitempty"`
-	Degradation         *DecisionDegradation         `json:"degradation,omitempty"`
-	ReferenceInvocation *ReferenceEvidenceInvocation `json:"reference_invocation,omitempty"`
-	ReferenceResult     *ReferenceEvidenceResult     `json:"reference_result,omitempty"`
-	ReferenceFailure    *ReferenceEvidenceFailure    `json:"reference_failure,omitempty"`
-	EnvelopeRef         ArtifactRef                  `json:"envelope_ref,omitempty"`
-	EnvelopeHash        string                       `json:"envelope_hash,omitempty"`
+	Packet                *DecisionEvidencePacket      `json:"packet,omitempty"`
+	Opinion               *DecisionOpinion             `json:"opinion,omitempty"`
+	Aggregate             *DecisionAggregate           `json:"aggregate,omitempty"`
+	Challenge             *DecisionChallenge           `json:"challenge,omitempty"`
+	Revision              *DecisionRevision            `json:"revision,omitempty"`
+	Premortem             *PremortemResult             `json:"premortem,omitempty"`
+	Options               []DecisionOption             `json:"options,omitempty"`
+	Record                *DecisionRecord              `json:"record,omitempty"`
+	Question              string                       `json:"question,omitempty"`
+	ForecastRequired      bool                         `json:"forecast_required,omitempty"`
+	RecordRef             ArtifactRef                  `json:"record_ref,omitempty"`
+	EvidenceArtifact      ArtifactRef                  `json:"evidence_artifact,omitempty"`
+	ContractRef           string                       `json:"contract_ref,omitempty"`
+	ContractRevision      uint64                       `json:"contract_revision,omitempty"`
+	ContractArtifact      ArtifactRef                  `json:"contract_artifact,omitempty"`
+	Degradation           *DecisionDegradation         `json:"degradation,omitempty"`
+	ReferenceInvocation   *ReferenceEvidenceInvocation `json:"reference_invocation,omitempty"`
+	ReferenceResult       *ReferenceEvidenceResult     `json:"reference_result,omitempty"`
+	ReferenceFailure      *ReferenceEvidenceFailure    `json:"reference_failure,omitempty"`
+	EnvelopeRef           ArtifactRef                  `json:"envelope_ref,omitempty"`
+	EnvelopeHash          string                       `json:"envelope_hash,omitempty"`
+	Finalization          *DecisionFinalizationResult  `json:"finalization,omitempty"`
+	FinalizationResultRef ArtifactRef                  `json:"finalization_result_ref,omitempty"`
+	FinalizationMode      string                       `json:"finalization_mode,omitempty"`
+	FinalizationJudgeID   string                       `json:"finalization_judge_id,omitempty"`
 
 	// IdempotencyKey is carried by the outer RunEvent, not the decision payload.
 	// It is intentionally excluded from JSON so replay identity cannot become
@@ -82,32 +86,40 @@ type decisionEvent struct {
 
 // decisionState is the projection rebuilt from the event log.
 type decisionState struct {
-	DecisionID                 string
-	RunID                      string
-	TaskID                     string
-	Attempt                    int
-	Profile                    string
-	Packet                     DecisionEvidencePacket
-	ProposedOptions            []DecisionOption
-	Opinions                   []DecisionOpinion
-	Aggregates                 map[int]DecisionAggregate
-	Challenges                 []DecisionChallenge
-	Revisions                  []DecisionRevision
-	Premortem                  *PremortemResult
-	ChallengeSkipReason        string
-	ChallengeSkipEvidenceHash  string
-	Degradations               []DecisionDegradation
-	Record                     *DecisionRecord
-	ContractRef                string
-	ContractRevision           uint64
-	ContractArtifact           ArtifactRef
-	EvidenceArtifact           ArtifactRef
-	ReferenceInvocation        *ReferenceEvidenceInvocation
-	ReferenceResult            *ReferenceEvidenceResult
-	ReferenceEvidenceResultRef ArtifactRef
-	ReferenceFailure           *ReferenceEvidenceFailure
-	EnvelopeRef                ArtifactRef
-	Invalidated                bool
+	DecisionID                   string
+	RunID                        string
+	TaskID                       string
+	Attempt                      int
+	Profile                      string
+	Packet                       DecisionEvidencePacket
+	ProposedOptions              []DecisionOption
+	Opinions                     []DecisionOpinion
+	Aggregates                   map[int]DecisionAggregate
+	Challenges                   []DecisionChallenge
+	Revisions                    []DecisionRevision
+	Premortem                    *PremortemResult
+	ChallengeSkipReason          string
+	ChallengeSkipEvidenceHash    string
+	Degradations                 []DecisionDegradation
+	Record                       *DecisionRecord
+	ContractRef                  string
+	ContractRevision             uint64
+	ContractArtifact             ArtifactRef
+	EvidenceArtifact             ArtifactRef
+	ReferenceInvocation          *ReferenceEvidenceInvocation
+	ReferenceResult              *ReferenceEvidenceResult
+	ReferenceEvidenceResultRef   ArtifactRef
+	ReferenceFailure             *ReferenceEvidenceFailure
+	EnvelopeRef                  ArtifactRef
+	Finalization                 *DecisionFinalizationResult
+	FinalizationResultRef        ArtifactRef
+	FinalizationMode             string
+	FinalizationJudgeID          string
+	FinalizedRecordRef           ArtifactRef
+	FinalizationQuestion         string
+	FinalizationForecastRequired bool
+	CanonicalRecord              *DecisionRecord
+	Invalidated                  bool
 	// StaleHashes are evidence hashes superseded by a later seal. Opinions
 	// formed on them are durable but must not be aggregated (spec §15.4).
 	StaleHashes map[string]bool
@@ -345,6 +357,15 @@ func projectDecision(ctx context.Context, journal decisionJournal, decisionID st
 		}
 		if key := event.IdempotencyKey; key != "" {
 			if _, seen := seenKeys[key]; seen {
+				// Event-store idempotency normally returns the original event, but
+				// replay may encounter duplicate log entries from an alternate
+				// journal. Re-apply finalization-result duplicates so an altered
+				// full artifact reference cannot be hidden by key deduplication.
+				if event.Type == agent.EventDecisionFinalizationResult {
+					if err := applyDecisionEvent(&state, event, payload); err != nil {
+						return state, fmt.Errorf("projecting %s event: %w", event.Type, err)
+					}
+				}
 				continue
 			}
 			seenKeys[key] = event
@@ -383,13 +404,7 @@ func applyDecisionEvent(state *decisionState, event RunEvent, payload decisionEv
 			state.ProposedOptions = payload.Options
 		}
 	case agent.EventDecisionEvidenceSealed:
-		if payload.Packet == nil {
-			return nil
-		}
-		if state.Packet.Hash != "" && state.Packet.Hash != payload.Packet.Hash {
-			state.StaleHashes[state.Packet.Hash] = true
-		}
-		state.Packet, state.EvidenceArtifact = *payload.Packet, payload.EvidenceArtifact
+		return state.applySealedEvidence(payload)
 	case agent.EventDecisionOpinionSubmitted, agent.EventDecisionOpinionRejected:
 		if payload.Opinion != nil {
 			state.Opinions = append(state.Opinions, *payload.Opinion)
@@ -419,31 +434,161 @@ func applyDecisionEvent(state *decisionState, event RunEvent, payload decisionEv
 			state.Degradations = append(state.Degradations, *payload.Degradation)
 		}
 	case agent.EventDecisionFinalized:
-		if payload.Record != nil {
-			record := *payload.Record
-			state.Record = &record
-		}
+		return state.applyFinalizedRecord(payload)
+	case agent.EventDecisionFinalizationResult:
+		return state.applyFinalizationResult(payload)
 	case agent.EventAssumptionSupported, agent.EventAssumptionContradicted, agent.EventAssumptionStale:
-		if state.Record == nil || payload.AssumptionID == "" {
-			return nil
-		}
-		assumptions, _, transitionErr := ApplyAssumptionTransition(state.Record.Assumptions, AssumptionTransition{
-			AssumptionID: payload.AssumptionID, To: payload.To, Source: payload.Source,
-			EvidenceRefs: payload.EvidenceRefs, At: payload.At,
-		})
-		if transitionErr == nil {
-			state.Record.Assumptions = assumptions
-		}
+		state.applyAssumptionTransition(payload)
 	case agent.EventDecisionInvalidated:
-		state.Invalidated = true
-		if state.Record != nil {
-			state.Record.Stale = true
-			if state.Record.StaleReason == "" {
-				state.Record.StaleReason = payload.Reason
-			}
-		}
+		state.applyInvalidation(payload)
 	}
 	return nil
+}
+
+func (state *decisionState) applySealedEvidence(payload decisionEvent) error {
+	if payload.Packet == nil {
+		return nil
+	}
+	if state.Packet.Hash != "" && state.Packet.Hash != payload.Packet.Hash {
+		state.StaleHashes[state.Packet.Hash] = true
+	}
+	state.Packet, state.EvidenceArtifact = *payload.Packet, payload.EvidenceArtifact
+	return nil
+}
+
+func (state *decisionState) applyFinalizedRecord(payload decisionEvent) error {
+	if payload.Record == nil {
+		return nil
+	}
+	record := *payload.Record
+	if err := record.ValidateSchemaVersion(); err != nil {
+		return err
+	}
+	switch record.SchemaVersion {
+	case 1:
+		// Explicit schema-v1 records are the only finalized records that may
+		// use the pre-result-event compatibility path.
+	case DecisionRecordSchemaVersion:
+		if state.Finalization == nil {
+			return fmt.Errorf("decision_finalized has no preceding finalization result")
+		}
+		if !finalizationResultRefValid(payload.RecordRef) {
+			return fmt.Errorf("decision_finalized has no canonical record artifact reference")
+		}
+		if record.FinalOption != state.Finalization.OptionID ||
+			record.FinalizationMode != state.Finalization.Mode ||
+			record.FinalizationIdentity != state.Finalization.Identity ||
+			record.FinalizationReason != state.Finalization.Reason ||
+			record.FinalizationOutcome != state.Finalization.Outcome ||
+			record.FinalizationStale != state.Finalization.Stale ||
+			!sameDecisionStrings(record.FinalizationWarnings, state.Finalization.Warnings) ||
+			!sameArtifactIdentity(derefArtifact(record.FinalizationResultRef), state.FinalizationResultRef) {
+			return fmt.Errorf("decision_finalized does not match its finalization result")
+		}
+	default:
+		return fmt.Errorf("decision_finalized has unsupported record schema version %d", record.SchemaVersion)
+	}
+	if state.Record != nil {
+		return fmt.Errorf("decision has more than one finalized record")
+	}
+	canonical := record
+	state.Record = &record
+	state.CanonicalRecord = &canonical
+	state.FinalizedRecordRef = payload.RecordRef
+	state.FinalizationQuestion = payload.Question
+	state.FinalizationForecastRequired = payload.ForecastRequired
+	return nil
+}
+
+func (state *decisionState) applyFinalizationResult(payload decisionEvent) error {
+	if payload.Finalization == nil {
+		return fmt.Errorf("decision finalization result is missing")
+	}
+	if payload.Finalization.DecisionID != state.DecisionID || payload.EvidenceHash != payload.Finalization.EvidenceHash {
+		return fmt.Errorf("decision finalization result does not match event identity")
+	}
+	if state.Packet.Hash == "" {
+		return fmt.Errorf("decision finalization result has no sealed evidence")
+	}
+	if err := ValidateFinalizationResult(*payload.Finalization, state.Packet, aggregateForFinalization(state), effectiveDecisionPolicyForState(state)); err != nil {
+		return err
+	}
+	if !finalizationResultRefValid(payload.FinalizationResultRef) {
+		return fmt.Errorf("decision finalization result artifact reference is incomplete")
+	}
+	if state.Finalization != nil {
+		if state.Finalization.OptionID != payload.Finalization.OptionID || state.Finalization.EvidenceHash != payload.Finalization.EvidenceHash ||
+			!sameArtifactRef(state.FinalizationResultRef, payload.FinalizationResultRef) {
+			return fmt.Errorf("decision finalization result conflicts with an earlier result")
+		}
+		return nil
+	}
+	result := *payload.Finalization
+	state.Finalization = &result
+	state.FinalizationResultRef = payload.FinalizationResultRef
+	return nil
+}
+
+func (state *decisionState) applyAssumptionTransition(payload decisionEvent) {
+	if state.Record == nil || payload.AssumptionID == "" {
+		return
+	}
+	assumptions, _, err := ApplyAssumptionTransition(state.Record.Assumptions, AssumptionTransition{
+		AssumptionID: payload.AssumptionID, To: payload.To, Source: payload.Source,
+		EvidenceRefs: payload.EvidenceRefs, At: payload.At,
+	})
+	if err == nil {
+		state.Record.Assumptions = assumptions
+	}
+}
+
+func (state *decisionState) applyInvalidation(payload decisionEvent) {
+	state.Invalidated = true
+	if state.Record != nil {
+		state.Record.Stale = true
+		if state.Record.StaleReason == "" {
+			state.Record.StaleReason = payload.Reason
+		}
+	}
+}
+
+func derefArtifact(ref *ArtifactRef) ArtifactRef {
+	if ref == nil {
+		return ArtifactRef{}
+	}
+	return *ref
+}
+
+func sameDecisionStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func aggregateForFinalization(state *decisionState) DecisionAggregate {
+	if state == nil || len(state.Aggregates) == 0 {
+		return DecisionAggregate{}
+	}
+	if aggregate, ok := state.Aggregates[2]; ok && aggregate.EvidenceHash == state.Packet.Hash {
+		return aggregate
+	}
+	return state.Aggregates[1]
+}
+
+func effectiveDecisionPolicyForState(state *decisionState) DecisionPolicy {
+	// The reducer validates all identity and evidence fields. Policy is loaded
+	// from the immutable run envelope by the engine; this zero-policy fallback
+	// keeps legacy event projection readable without inventing configuration.
+	if state == nil {
+		return DecisionPolicy{}
+	}
+	return DecisionPolicy{Finalization: FinalizationPolicy{Mode: state.FinalizationMode, JudgeID: state.FinalizationJudgeID}}
 }
 
 func (state *decisionState) applyEnvelopeAnchor(payload decisionEvent) error {
@@ -467,6 +612,8 @@ func (state *decisionState) applyEnvelopeAnchor(payload decisionEvent) error {
 		return nil
 	}
 	state.EnvelopeRef = payload.EnvelopeRef
+	state.FinalizationMode = payload.FinalizationMode
+	state.FinalizationJudgeID = payload.FinalizationJudgeID
 	return nil
 }
 

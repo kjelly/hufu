@@ -41,12 +41,17 @@ func TestGenerateRequestedReportsWritesOnlyAutoReportTeams(t *testing.T) {
 func TestBuildReportMDIncludesDecisionStateProjection(t *testing.T) {
 	report := buildReportMD(&reportData{Decisions: []team.DecisionIndexEntry{{
 		DecisionID: "dec-1", Profile: "standard", EvidenceHash: "sha256:abc",
-		Assumptions: []team.DecisionAssumption{{ID: "A1", Status: team.AssumptionSupported}},
+		FinalizationMode: "coordinator", FinalizationIdentity: "coordinator", FinalizationOutcome: "override",
+		FinalizationReason: "api_key=stage4-report-secret",
+		Assumptions:        []team.DecisionAssumption{{ID: "A1", Status: team.AssumptionSupported}},
 	}}}, "demo", "")
-	for _, want := range []string{"Decision State", "dec-1", "standard", "sha256:abc", "| 1 |"} {
+	for _, want := range []string{"Decision State", "dec-1", "standard", "sha256:abc", "coordinator/coordinator/override", "finalization reason", "| 1 |"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing decision projection %q:\n%s", want, report)
 		}
+	}
+	if strings.Contains(report, "stage4-report-secret") {
+		t.Fatalf("report exposed finalization secret: %s", report)
 	}
 }
 

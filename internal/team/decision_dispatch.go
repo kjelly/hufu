@@ -254,16 +254,18 @@ func (c *Coordinator) newDecisionEngine(todoID string) (DecisionEngine, error) {
 	}
 	runners := newDecisionRunners(c, todoID)
 	return NewDecisionEngine(DecisionServices{
-		Judges:            runners,
-		Challengers:       runners,
-		Premortems:        runners,
-		Revisions:         runners,
-		Proposer:          runners,
-		ReferenceEvidence: runners,
-		Journal:           journal,
-		Store:             c.decisionArtifactStore(),
-		Budget:            c.Budget(),
-		Index:             index,
+		Judges:               runners,
+		CoordinatorFinalizer: runners,
+		JudgeFinalizer:       runners,
+		Challengers:          runners,
+		Premortems:           runners,
+		Revisions:            runners,
+		Proposer:             runners,
+		ReferenceEvidence:    runners,
+		Journal:              journal,
+		Store:                c.decisionArtifactStore(),
+		Budget:               c.Budget(),
+		Index:                index,
 	}), nil
 }
 
@@ -477,7 +479,7 @@ func isDecisionLifecycleEvent(eventType string) bool {
 		agent.EventDecisionPremortemSubmitted,
 		agent.EventDecisionBudgetDegraded,
 		agent.EventDecisionEvidenceSharedOrigin,
-		agent.EventDecisionFinalizationOverride,
+		agent.EventDecisionFinalizationResult,
 		agent.EventDecisionFinalized,
 		agent.EventDecisionInvalidated,
 		agent.EventDecisionReferenceStarted,
@@ -578,6 +580,7 @@ func (c *Coordinator) decisionIndex() (*DecisionIndex, error) {
 	if err != nil {
 		return nil, err
 	}
+	store := c.decisionArtifactStore()
 	c.decisionControlPlaneMu.Lock()
 	defer c.decisionControlPlaneMu.Unlock()
 	control := c.decisionControlPlane
@@ -586,6 +589,7 @@ func (c *Coordinator) decisionIndex() (*DecisionIndex, error) {
 	}
 	if c.decisionIndexProjection != nil {
 		c.decisionIndexProjection.SetEventJournal(journal)
+		c.decisionIndexProjection.SetArtifactStore(store)
 		return c.decisionIndexProjection, nil
 	}
 	index, err := OpenDecisionIndex(c.session.Workspace)
@@ -593,6 +597,7 @@ func (c *Coordinator) decisionIndex() (*DecisionIndex, error) {
 		return nil, fmt.Errorf("decision index: %w", err)
 	}
 	index.SetJournal(journal)
+	index.SetArtifactStore(store)
 	c.decisionIndexProjection = index
 	return index, nil
 }

@@ -24,7 +24,12 @@ type PutArtifactRequest struct {
 	SourcePath                                   string
 	RunID, TaskID, Agent, Provider, ToolCallID   string
 	Attempt                                      int
-	CreatedAt                                    time.Time
+	// RetrievalURL and ParentSourceIDs may only be populated by a trusted
+	// runtime publisher. FileArtifactStore persists them as immutable metadata;
+	// decision provenance never trusts model declarations for these fields.
+	RetrievalURL    string
+	ParentSourceIDs []string
+	CreatedAt       time.Time
 }
 
 type ArtifactStore interface {
@@ -33,6 +38,45 @@ type ArtifactStore interface {
 	Open(context.Context, string) (io.ReadCloser, error)
 	Resolve(context.Context, ArtifactRef) (ArtifactRef, error)
 	ListByTask(context.Context, string) ([]ArtifactRef, error)
+}
+
+// sameArtifactRef compares the complete semantic identity of two artifact
+// references. CreatedAt is compared by instant, while preserving the
+// distinction between an explicitly absent timestamp and a present one.
+// ArtifactStore.Resolve intentionally remains sparse-claim compatible; callers
+// that bind a persisted reference to resolved metadata use this stricter
+// boundary check.
+func sameArtifactRef(left, right ArtifactRef) bool {
+	if left.ID != right.ID || left.Kind != right.Kind || left.Role != right.Role ||
+		left.Path != right.Path || left.Description != right.Description || left.Type != right.Type ||
+		left.SHA256 != right.SHA256 || left.Bytes != right.Bytes || left.ByteSize != right.ByteSize ||
+		left.MediaType != right.MediaType || left.RunID != right.RunID || left.TaskID != right.TaskID ||
+		left.Attempt != right.Attempt || left.Agent != right.Agent || left.Provider != right.Provider ||
+		left.ToolCallID != right.ToolCallID || left.CreatedAt.IsZero() != right.CreatedAt.IsZero() {
+		return false
+	}
+	return left.CreatedAt.IsZero() || left.CreatedAt.Equal(right.CreatedAt)
+}
+
+// ArtifactOriginMetadata is trusted only when returned by the artifact store
+// for an immutable artifact reference. Model-declared URLs and parents use a
+// different advisory provenance field and never enter this type.
+type ArtifactOriginMetadata struct {
+	RetrievalURL    string
+	ParentSourceIDs []string
+}
+
+// TrustedArtifactMetadataResolver is an optional extension implemented by
+// stores that retain trusted retrieval provenance. ArtifactStore remains small
+// and compatible with existing test doubles and alternate stores.
+type TrustedArtifactMetadataResolver interface {
+	TrustedArtifactMetadata(context.Context, ArtifactRef) (ArtifactOriginMetadata, error)
+}
+
+type immutableArtifactMetadata struct {
+	ArtifactRef
+	RetrievalURL    string   `json:"retrieval_url,omitempty"`
+	ParentSourceIDs []string `json:"parent_source_ids,omitempty"`
 }
 
 // ArtifactPutResult contains the immutable reference plus diagnostic creation
@@ -99,6 +143,10 @@ func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (Arti
 		Type: req.Kind, SHA256: digest, Bytes: int64(len(data)), ByteSize: int64(len(data)),
 		MediaType: req.MediaType, RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt,
 		Agent: req.Agent, Provider: req.Provider, ToolCallID: req.ToolCallID, CreatedAt: req.CreatedAt}
+	origin := ArtifactOriginMetadata{
+		RetrievalURL:    strings.TrimSpace(req.RetrievalURL),
+		ParentSourceIDs: normalizeArtifactParentSourceIDs(req.ParentSourceIDs),
+	}
 	if ref.CreatedAt.IsZero() {
 		ref.CreatedAt = time.Now().UTC()
 	}
@@ -109,11 +157,11 @@ func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (Arti
 		return result, err
 	}
 	metaPath := filepath.Join(s.root, "meta", id+".json")
-	encoded, err := json.Marshal(ref)
+	encoded, err := json.Marshal(immutableArtifactMetadata{ArtifactRef: ref, RetrievalURL: origin.RetrievalURL, ParentSourceIDs: origin.ParentSourceIDs})
 	if err != nil {
 		return result, fmt.Errorf("marshal artifact metadata: %w", err)
 	}
-	createdMetadata, err := s.createMetadata(metaPath, encoded, ref)
+	createdMetadata, err := s.createMetadata(metaPath, encoded, ref, origin)
 	result.CreatedMetadata = createdMetadata
 	if err != nil {
 		return result, err
@@ -125,8 +173,8 @@ func (s *FileArtifactStore) createData(path string, data []byte) (bool, error) {
 	return createOrVerifyArtifactFile(path, data)
 }
 
-func (s *FileArtifactStore) createMetadata(path string, encoded []byte, ref ArtifactRef) (bool, error) {
-	return createOrVerifyArtifactMetadata(path, encoded, ref)
+func (s *FileArtifactStore) createMetadata(path string, encoded []byte, ref ArtifactRef, origin ArtifactOriginMetadata) (bool, error) {
+	return createOrVerifyArtifactMetadata(path, encoded, ref, origin)
 }
 
 // createOrVerifyArtifactFile makes the O_EXCL result authoritative. A failed
@@ -157,7 +205,7 @@ func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
 	return false, nil
 }
 
-func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef) (bool, error) {
+func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef, origin ArtifactOriginMetadata) (bool, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err == nil {
 		if _, writeErr := f.Write(encoded); writeErr != nil {
@@ -176,11 +224,29 @@ func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef
 	if readErr != nil {
 		return false, fmt.Errorf("read existing artifact metadata %q: %w", ref.ID, readErr)
 	}
-	var old ArtifactRef
-	if json.Unmarshal(existing, &old) != nil || old.SHA256 != ref.SHA256 || old.ByteSize != ref.ByteSize {
+	var old immutableArtifactMetadata
+	if json.Unmarshal(existing, &old) != nil || old.SHA256 != ref.SHA256 || old.ByteSize != ref.ByteSize ||
+		old.RetrievalURL != origin.RetrievalURL || !slices.Equal(old.ParentSourceIDs, origin.ParentSourceIDs) {
 		return false, fmt.Errorf("artifact %q metadata conflicts", ref.ID)
 	}
 	return false, nil
+}
+
+// normalizeArtifactParentSourceIDs canonicalizes trusted parent edges without
+// deduplicating them. Repeated edges are meaningful audit data and must survive
+// persistence even though they do not change union-find grouping.
+func normalizeArtifactParentSourceIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			normalized = append(normalized, id)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func (s *FileArtifactStore) Verify(_ context.Context, ref ArtifactRef) error {
@@ -216,14 +282,36 @@ func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, erro
 	if err != nil {
 		return ArtifactRef{}, fmt.Errorf("read artifact metadata %q: %w", id, err)
 	}
-	var ref ArtifactRef
-	if err := json.Unmarshal(b, &ref); err != nil {
+	var metadata immutableArtifactMetadata
+	if err := json.Unmarshal(b, &metadata); err != nil {
 		return ArtifactRef{}, fmt.Errorf("decode artifact metadata %q: %w", id, err)
 	}
+	ref := metadata.ArtifactRef
 	if ref.ID != id {
 		return ArtifactRef{}, fmt.Errorf("artifact metadata %q has mismatched id %q", id, ref.ID)
 	}
 	return ref, nil
+}
+
+// TrustedArtifactMetadata returns immutable origin metadata stored alongside
+// the canonical artifact reference. Old metadata files intentionally resolve
+// to an empty origin, retaining compatibility without promoting declarations.
+func (s *FileArtifactStore) TrustedArtifactMetadata(_ context.Context, supplied ArtifactRef) (ArtifactOriginMetadata, error) {
+	if s == nil || !validArtifactID(supplied.ID) {
+		return ArtifactOriginMetadata{}, fmt.Errorf("artifact reference has no id")
+	}
+	b, err := os.ReadFile(filepath.Join(s.root, "meta", supplied.ID+".json"))
+	if err != nil {
+		return ArtifactOriginMetadata{}, fmt.Errorf("read artifact metadata %q: %w", supplied.ID, err)
+	}
+	var metadata immutableArtifactMetadata
+	if err := json.Unmarshal(b, &metadata); err != nil {
+		return ArtifactOriginMetadata{}, fmt.Errorf("decode artifact metadata %q: %w", supplied.ID, err)
+	}
+	if metadata.ID != supplied.ID {
+		return ArtifactOriginMetadata{}, fmt.Errorf("artifact metadata %q has mismatched id %q", supplied.ID, metadata.ID)
+	}
+	return ArtifactOriginMetadata{RetrievalURL: metadata.RetrievalURL, ParentSourceIDs: append([]string(nil), metadata.ParentSourceIDs...)}, nil
 }
 
 // Resolve returns the immutable, fully populated reference for an opaque

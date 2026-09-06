@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 	"golang.org/x/sys/unix"
 )
 
@@ -35,7 +36,7 @@ const (
 	decisionIndexFile = "index.jsonl"
 
 	// DecisionIndexSchemaVersion versions one index row.
-	DecisionIndexSchemaVersion = 1
+	DecisionIndexSchemaVersion = 2
 )
 
 // DecisionIndexEntry is one decision's cross-run row.
@@ -47,9 +48,16 @@ type DecisionIndexEntry struct {
 	Profile       string `json:"profile,omitempty"`
 	EvidenceHash  string `json:"evidence_hash,omitempty"`
 
-	Question    string  `json:"question,omitempty"`
-	FinalOption string  `json:"final_option,omitempty"`
-	Probability float64 `json:"probability,omitempty"`
+	Question              string       `json:"question,omitempty"`
+	FinalOption           string       `json:"final_option,omitempty"`
+	Probability           float64      `json:"probability,omitempty"`
+	FinalizationMode      string       `json:"finalization_mode,omitempty"`
+	FinalizationIdentity  string       `json:"finalization_identity,omitempty"`
+	FinalizationReason    string       `json:"finalization_reason,omitempty"`
+	FinalizationResultRef *ArtifactRef `json:"finalization_result_ref,omitempty"`
+	FinalizationStale     bool         `json:"finalization_stale,omitempty"`
+	FinalizationWarnings  []string     `json:"finalization_warnings,omitempty"`
+	FinalizationOutcome   string       `json:"finalization_outcome,omitempty"`
 
 	// ForecastRequired and FalsificationConditions record what would have to be
 	// observed for this decision to be judged wrong, so a later resolution has
@@ -57,9 +65,11 @@ type DecisionIndexEntry struct {
 	ForecastRequired        bool     `json:"forecast_required,omitempty"`
 	FalsificationConditions []string `json:"falsification_conditions,omitempty"`
 
-	// RecordDigest addresses the durable DecisionRecord artifact.
-	RecordDigest string `json:"record_digest,omitempty"`
-	RecordPath   string `json:"record_path,omitempty"`
+	// RecordRef addresses the durable DecisionRecord artifact. RecordDigest and
+	// RecordPath remain readable compatibility projections for schema-v1 rows.
+	RecordRef    ArtifactRef `json:"record_ref,omitempty"`
+	RecordDigest string      `json:"record_digest,omitempty"`
+	RecordPath   string      `json:"record_path,omitempty"`
 
 	Stale       bool      `json:"stale,omitempty"`
 	StaleReason string    `json:"stale_reason,omitempty"`
@@ -92,13 +102,64 @@ type DecisionIndexEntry struct {
 // Resolved reports whether an outcome has been recorded for this decision.
 func (e DecisionIndexEntry) Resolved() bool { return e.Outcome != nil }
 
+// ValidateSchemaVersion rejects rows written by a newer index implementation.
+// Schema v1 remains readable because its digest/path fields are retained as a
+// compatibility projection of the now-full RecordRef.
+func (e DecisionIndexEntry) ValidateSchemaVersion() error {
+	switch e.SchemaVersion {
+	case 1, DecisionIndexSchemaVersion:
+		return nil
+	default:
+		return fmt.Errorf("decision index entry %s has unsupported schema version %d", e.DecisionID, e.SchemaVersion)
+	}
+}
+
+// EffectiveRecordRef returns the full record reference when present and a
+// legacy digest/path compatibility reference otherwise.
+func (e DecisionIndexEntry) EffectiveRecordRef() ArtifactRef {
+	if strings.TrimSpace(e.RecordRef.ID) != "" || strings.TrimSpace(e.RecordRef.SHA256) != "" || strings.TrimSpace(e.RecordRef.Path) != "" {
+		return e.RecordRef
+	}
+	return ArtifactRef{SHA256: e.RecordDigest, Path: e.RecordPath}
+}
+
+// normalizeDecisionIndexEntry keeps the new full reference and the legacy
+// digest/path projection in lockstep. It is intentionally lossless for old
+// rows and rejects contradictory aliases before a row can be persisted or
+// projected.
+func normalizeDecisionIndexEntry(entry DecisionIndexEntry) (DecisionIndexEntry, error) {
+	if err := entry.ValidateSchemaVersion(); err != nil {
+		return DecisionIndexEntry{}, err
+	}
+	if entry.RecordRef.ID != "" || entry.RecordRef.SHA256 != "" || entry.RecordRef.Path != "" {
+		if entry.RecordDigest != "" && entry.RecordRef.SHA256 != entry.RecordDigest {
+			return DecisionIndexEntry{}, fmt.Errorf("decision index entry %s has conflicting record digest fields", entry.DecisionID)
+		}
+		if entry.RecordPath != "" && entry.RecordRef.Path != entry.RecordPath {
+			return DecisionIndexEntry{}, fmt.Errorf("decision index entry %s has conflicting record path fields", entry.DecisionID)
+		}
+		if entry.RecordDigest == "" {
+			entry.RecordDigest = entry.RecordRef.SHA256
+		}
+		if entry.RecordPath == "" {
+			entry.RecordPath = entry.RecordRef.Path
+		}
+		return entry, nil
+	}
+	if entry.RecordDigest != "" || entry.RecordPath != "" {
+		entry.RecordRef = ArtifactRef{SHA256: entry.RecordDigest, Path: entry.RecordPath}
+	}
+	return entry, nil
+}
+
 // DecisionIndex is an append-only index file scoped to one workspace.
 type DecisionIndex struct {
-	path      string
-	lockPath  string
-	journal   decisionJournal
-	mu        *sync.Mutex
-	journalMu sync.RWMutex
+	path          string
+	lockPath      string
+	journal       decisionJournal
+	artifactStore ArtifactStore
+	mu            *sync.Mutex
+	journalMu     sync.RWMutex
 }
 
 var decisionIndexProcessLocks sync.Map // map[string]*sync.Mutex, keyed by stable lock path
@@ -169,29 +230,39 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 			return fmt.Errorf("decision index rebuild: reading events: %w", err)
 		}
 		ids := map[string]struct{}{}
-		metadata := make(map[string]decisionEvent)
 		for _, event := range events {
-			if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
+			if event.Type != agent.EventDecisionFinalized {
 				continue
 			}
-			var payload decisionEvent
-			if json.Unmarshal(event.Payload, &payload) == nil && payload.Record != nil && payload.DecisionID != "" {
-				ids[payload.DecisionID] = struct{}{}
-				metadata[payload.DecisionID] = payload
+			if len(event.Payload) == 0 {
+				return fmt.Errorf("decision index rebuild: finalized event has empty payload")
 			}
+			var payload decisionEvent
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return fmt.Errorf("decision index rebuild: decode finalized event: %w", err)
+			}
+			if payload.Record == nil || payload.DecisionID == "" {
+				return fmt.Errorf("decision index rebuild: finalized event is incomplete")
+			}
+			ids[payload.DecisionID] = struct{}{}
 		}
 		var rebuilt []DecisionIndexEntry
 		for id := range ids {
 			state, projectErr := projectDecision(ctx, journal, id)
-			if projectErr != nil || state.Record == nil {
-				continue
+			if projectErr != nil {
+				return fmt.Errorf("decision index rebuild: projecting %s: %w", id, projectErr)
 			}
-			finalized := metadata[id]
-			question := finalized.Question
+			if state.Record == nil {
+				return fmt.Errorf("decision index rebuild: finalized decision %s has no record", id)
+			}
+			if err := validateFinalizedDecisionState(ctx, i.artifactStoreSnapshot(), state); err != nil {
+				return fmt.Errorf("decision index rebuild: validating %s: %w", id, err)
+			}
+			question := state.FinalizationQuestion
 			if question == "" {
 				question = state.Packet.Question
 			}
-			entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
+			entry := IndexEntryFor(*state.Record, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)
 			if state.Record.Stale {
 				entry.Stale, entry.StaleReason = true, state.Record.StaleReason
 			}
@@ -234,6 +305,25 @@ func (i *DecisionIndex) SetEventJournal(journal EventJournal) {
 		i.journal = journal
 		i.journalMu.Unlock()
 	}
+}
+
+// SetArtifactStore binds the canonical content-addressed store used to verify
+// finalized decision records and finalization results before projection.
+func (i *DecisionIndex) SetArtifactStore(store ArtifactStore) {
+	if i != nil {
+		i.journalMu.Lock()
+		i.artifactStore = store
+		i.journalMu.Unlock()
+	}
+}
+
+func (i *DecisionIndex) artifactStoreSnapshot() ArtifactStore {
+	if i == nil {
+		return nil
+	}
+	i.journalMu.RLock()
+	defer i.journalMu.RUnlock()
+	return i.artifactStore
 }
 
 // BindDecisionIndexEventStore connects the index projection to the workspace
@@ -292,14 +382,20 @@ func (i *DecisionIndex) Append(entry DecisionIndexEntry) error {
 	if entry.SchemaVersion == 0 {
 		entry.SchemaVersion = DecisionIndexSchemaVersion
 	}
+	var err error
+	if entry, err = normalizeDecisionIndexEntry(entry); err != nil {
+		return err
+	}
 	if entry.IndexedAt.IsZero() {
 		entry.IndexedAt = time.Now().UTC()
 	}
+	entry = entry.Redacted()
 
 	return i.withExclusiveLock(func() error { return i.appendEntryUnlocked(entry) })
 }
 
 func (i *DecisionIndex) appendEntryUnlocked(entry DecisionIndexEntry) error {
+	entry = entry.Redacted()
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("decision index: encoding entry: %w", err)
@@ -340,13 +436,93 @@ func (i *DecisionIndex) List() ([]DecisionIndexEntry, error) {
 		if journal, branchScoped := branchScopedJournal(i.journalSnapshot()); branchScoped {
 			entries, err = i.listVisibleFromJournal(journal)
 		} else {
-			entries, err = i.listFile()
+			entries, err = i.listFileValidated(context.Background())
 		}
 		return err
 	})
 	return entries, err
 }
 
+func (i *DecisionIndex) listFileValidated(ctx context.Context) ([]DecisionIndexEntry, error) {
+	entries, err := i.listFile()
+	if err != nil {
+		return nil, err
+	}
+	journal := i.journalSnapshot()
+	store := i.artifactStoreSnapshot()
+	if journal == nil {
+		for _, entry := range entries {
+			if entry.RecordDigest != "" || entry.FinalizationResultRef != nil {
+				return nil, fmt.Errorf("decision index: canonical event journal is unavailable for %s", entry.DecisionID)
+			}
+		}
+		return entries, nil
+	}
+	for _, entry := range entries {
+		state, projectErr := projectDecision(ctx, journal, entry.DecisionID)
+		if projectErr != nil {
+			return nil, fmt.Errorf("decision index: projecting %s: %w", entry.DecisionID, projectErr)
+		}
+		if state.Record == nil {
+			if entry.RecordDigest != "" || entry.FinalizationResultRef != nil {
+				return nil, fmt.Errorf("decision index: %s has no canonical finalized record", entry.DecisionID)
+			}
+			continue
+		}
+		if err := validateFinalizedDecisionState(ctx, store, state); err != nil {
+			return nil, fmt.Errorf("decision index: validating %s: %w", entry.DecisionID, err)
+		}
+		if err := validateDecisionIndexIdentity(entry, state); err != nil {
+			return nil, fmt.Errorf("decision index: %s identity: %w", entry.DecisionID, err)
+		}
+	}
+	return entries, nil
+}
+
+func validateDecisionIndexIdentity(entry DecisionIndexEntry, state decisionState) error {
+	if state.Record == nil {
+		return fmt.Errorf("canonical record is unavailable")
+	}
+	if entry.DecisionID != state.DecisionID || (entry.RunID != "" && entry.RunID != state.RunID) || (entry.TaskID != "" && entry.TaskID != state.TaskID) || (entry.EvidenceHash != "" && entry.EvidenceHash != state.Record.EvidenceHash) || (entry.FinalOption != "" && entry.FinalOption != state.Record.FinalOption) {
+		return fmt.Errorf("index row does not match canonical record")
+	}
+	entryRecordRef := entry.EffectiveRecordRef()
+	if state.FinalizedRecordRef.ID != "" {
+		if state.Record.SchemaVersion == DecisionRecordSchemaVersion {
+			if !sameArtifactRef(entryRecordRef, state.FinalizedRecordRef) {
+				return fmt.Errorf("index row does not match canonical record artifact")
+			}
+		} else if entryRecordRef.ID != "" {
+			if !sameArtifactRef(entryRecordRef, state.FinalizedRecordRef) {
+				return fmt.Errorf("index row does not match canonical record artifact")
+			}
+		} else if entryRecordRef.SHA256 != state.FinalizedRecordRef.SHA256 || entryRecordRef.Path != state.FinalizedRecordRef.Path {
+			return fmt.Errorf("index row does not match canonical record artifact")
+		}
+	} else if state.Record.SchemaVersion != 1 && (entryRecordRef.SHA256 != "" || entryRecordRef.Path != "") {
+		return fmt.Errorf("index row contains an unbound record artifact")
+	}
+	if entry.RecordRef.ID != "" && entry.RecordDigest != "" && entry.RecordRef.SHA256 != entry.RecordDigest {
+		return fmt.Errorf("index row has conflicting record digest compatibility fields")
+	}
+	if entry.RecordRef.Path != "" && entry.RecordPath != "" && entry.RecordRef.Path != entry.RecordPath {
+		return fmt.Errorf("index row has conflicting record path compatibility fields")
+	}
+	if state.FinalizationResultRef.ID != "" {
+		if entry.FinalizationResultRef == nil || !sameArtifactRef(*entry.FinalizationResultRef, state.FinalizationResultRef) {
+			return fmt.Errorf("index row does not match canonical finalization-result artifact")
+		}
+	} else if entry.FinalizationResultRef != nil {
+		return fmt.Errorf("index row contains an unbound finalization-result artifact")
+	}
+	if state.CanonicalRecord != nil {
+		canonical := state.CanonicalRecord
+		if entry.FinalizationMode != canonical.FinalizationMode || entry.FinalizationIdentity != canonical.FinalizationIdentity || entry.FinalizationReason != canonical.FinalizationReason || entry.FinalizationOutcome != canonical.FinalizationOutcome || entry.FinalizationStale != canonical.FinalizationStale || !sameDecisionStrings(entry.FinalizationWarnings, canonical.FinalizationWarnings) {
+			return fmt.Errorf("index row does not match canonical finalization result")
+		}
+	}
+	return nil
+}
 func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
 	file, err := os.Open(i.path)
 	if err != nil {
@@ -373,6 +549,14 @@ func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
 		if entry.DecisionID == "" {
 			continue
 		}
+		if err := entry.ValidateSchemaVersion(); err != nil {
+			return nil, err
+		}
+		entry, err = normalizeDecisionIndexEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		entry = entry.Redacted()
 		if _, seen := latest[entry.DecisionID]; !seen {
 			order = append(order, entry.DecisionID)
 		}
@@ -418,21 +602,25 @@ func (i *DecisionIndex) listVisibleFromJournal(journal *branchScopedDecisionJour
 	}
 
 	ids := make([]string, 0)
-	metadata := make(map[string]decisionEvent)
 	seen := make(map[string]bool)
 	for _, event := range events {
-		if event.Type != agent.EventDecisionFinalized || len(event.Payload) == 0 {
+		if event.Type != agent.EventDecisionFinalized {
 			continue
 		}
+		if len(event.Payload) == 0 {
+			return nil, fmt.Errorf("decision index: finalized event has empty payload")
+		}
 		var payload decisionEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.DecisionID == "" || payload.Record == nil {
-			continue
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("decision index: decode finalized event: %w", err)
+		}
+		if payload.DecisionID == "" || payload.Record == nil {
+			return nil, fmt.Errorf("decision index: finalized event is incomplete")
 		}
 		if !seen[payload.DecisionID] {
 			ids = append(ids, payload.DecisionID)
 			seen[payload.DecisionID] = true
 		}
-		metadata[payload.DecisionID] = payload
 	}
 
 	entries := make([]DecisionIndexEntry, 0, len(ids))
@@ -442,14 +630,16 @@ func (i *DecisionIndex) listVisibleFromJournal(journal *branchScopedDecisionJour
 			return nil, fmt.Errorf("decision index: projecting %s: %w", decisionID, err)
 		}
 		if state.Record == nil {
-			continue
+			return nil, fmt.Errorf("decision index: finalized decision %s has no record", decisionID)
 		}
-		finalized := metadata[decisionID]
-		question := finalized.Question
+		question := state.FinalizationQuestion
 		if question == "" {
 			question = state.Packet.Question
 		}
-		entry := IndexEntryFor(*state.Record, question, finalized.ForecastRequired, finalized.RecordRef)
+		if err := validateFinalizedDecisionState(context.Background(), i.artifactStoreSnapshot(), state); err != nil {
+			return nil, fmt.Errorf("decision index: validating %s: %w", decisionID, err)
+		}
+		entry := IndexEntryFor(*state.Record, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)
 		if state.Record.Stale {
 			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
 		}
@@ -473,11 +663,13 @@ func matchingDecisionOutcome(visible DecisionIndexEntry, global []DecisionIndexE
 			continue
 		}
 		identityMatched := false
-		if visible.RecordDigest != "" && candidate.RecordDigest != "" {
-			if visible.RecordDigest != candidate.RecordDigest {
+		if visible.RecordDigest != "" {
+			if candidate.RecordDigest == "" || visible.RecordDigest != candidate.RecordDigest {
 				continue
 			}
 			identityMatched = true
+		} else if candidate.RecordDigest != "" {
+			continue
 		}
 		if visible.RunID != "" && candidate.RunID != "" {
 			if visible.RunID != candidate.RunID {
@@ -534,7 +726,7 @@ func (i *DecisionIndex) Pending() ([]DecisionIndexEntry, error) {
 func (i *DecisionIndex) Resolve(decisionID string, outcome DecisionOutcomeRecord) (DecisionIndexEntry, error) {
 	var updated DecisionIndexEntry
 	err := i.withExclusiveLock(func() error {
-		entries, err := i.listFile()
+		entries, err := i.listFileValidated(context.Background())
 		if err != nil {
 			return err
 		}
@@ -574,7 +766,7 @@ func (i *DecisionIndex) Resolve(decisionID string, outcome DecisionOutcomeRecord
 
 // IndexEntryFor builds an index row from a finalized decision record.
 func IndexEntryFor(record DecisionRecord, question string, forecastRequired bool, recordRef ArtifactRef) DecisionIndexEntry {
-	return DecisionIndexEntry{
+	entry := DecisionIndexEntry{
 		SchemaVersion:           DecisionIndexSchemaVersion,
 		DecisionID:              record.ID,
 		RunID:                   record.RunID,
@@ -584,17 +776,141 @@ func IndexEntryFor(record DecisionRecord, question string, forecastRequired bool
 		Question:                question,
 		FinalOption:             record.FinalOption,
 		Probability:             record.Probability,
+		FinalizationMode:        record.FinalizationMode,
+		FinalizationIdentity:    record.FinalizationIdentity,
+		FinalizationReason:      record.FinalizationReason,
+		FinalizationStale:       record.FinalizationStale,
+		FinalizationWarnings:    append([]string(nil), record.FinalizationWarnings...),
+		FinalizationOutcome:     record.FinalizationOutcome,
 		ForecastRequired:        forecastRequired,
 		FalsificationConditions: record.FalsificationConditions,
 		Assumptions:             record.Assumptions,
 		SourceCount:             record.SourceCount,
 		IndependenceGroupCount:  record.IndependenceGroupCount,
+		RecordRef:               recordRef,
 		RecordDigest:            recordRef.SHA256,
 		RecordPath:              recordRef.Path,
 		Stale:                   record.Stale,
 		StaleReason:             record.StaleReason,
 		CreatedAt:               record.CreatedAt,
 	}
+	if record.FinalizationResultRef != nil {
+		ref := *record.FinalizationResultRef
+		entry.FinalizationResultRef = &ref
+	}
+	return entry.Redacted()
+}
+
+// Redacted returns a presentation-safe copy of an index projection. Canonical
+// finalization events retain the runtime decision trail; index, JSON, report,
+// and TUI consumers must never turn a free-text finalization reason into a
+// credential disclosure channel.
+func (e DecisionIndexEntry) Redacted() DecisionIndexEntry {
+	e.DecisionID = utils.RedactSecrets(e.DecisionID)
+	e.RunID = utils.RedactSecrets(e.RunID)
+	e.TaskID = utils.RedactSecrets(e.TaskID)
+	e.Profile = utils.RedactSecrets(e.Profile)
+	e.EvidenceHash = utils.RedactSecrets(e.EvidenceHash)
+	e.Question = utils.RedactSecrets(e.Question)
+	e.FinalOption = utils.RedactSecrets(e.FinalOption)
+	e.FinalizationMode = utils.RedactSecrets(e.FinalizationMode)
+	e.FinalizationIdentity = utils.RedactSecrets(e.FinalizationIdentity)
+	e.FinalizationReason = utils.RedactSecrets(e.FinalizationReason)
+	e.FinalizationWarnings = redactDecisionStrings(e.FinalizationWarnings)
+	e.FinalizationOutcome = utils.RedactSecrets(e.FinalizationOutcome)
+	if e.FinalizationResultRef != nil {
+		ref := redactArtifactRef(*e.FinalizationResultRef)
+		e.FinalizationResultRef = &ref
+	}
+	e.FalsificationConditions = redactDecisionStrings(e.FalsificationConditions)
+	e.RecordRef = redactArtifactRef(e.RecordRef)
+	e.RecordDigest = utils.RedactSecrets(e.RecordDigest)
+	e.RecordPath = utils.RedactSecrets(e.RecordPath)
+	e.StaleReason = utils.RedactSecrets(e.StaleReason)
+	e.Assumptions = redactDecisionAssumptions(e.Assumptions)
+	e.AssumptionNotes = redactDecisionStrings(e.AssumptionNotes)
+	if e.Outcome != nil {
+		outcome := redactDecisionOutcome(*e.Outcome)
+		e.Outcome = &outcome
+	}
+	return e
+}
+
+// RedactedDecisionIndexEntries makes a presentation-safe copy of a decision
+// projection slice without changing its canonical ordering.
+func RedactedDecisionIndexEntries(entries []DecisionIndexEntry) []DecisionIndexEntry {
+	redacted := make([]DecisionIndexEntry, len(entries))
+	for idx, entry := range entries {
+		redacted[idx] = entry.Redacted()
+	}
+	return redacted
+}
+
+func redactDecisionStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	redacted := make([]string, len(values))
+	for idx, value := range values {
+		redacted[idx] = utils.RedactSecrets(value)
+	}
+	return redacted
+}
+
+func redactArtifactRef(ref ArtifactRef) ArtifactRef {
+	ref.ID = utils.RedactSecrets(ref.ID)
+	ref.Kind = utils.RedactSecrets(ref.Kind)
+	ref.Role = utils.RedactSecrets(ref.Role)
+	ref.Path = utils.RedactSecrets(ref.Path)
+	ref.Description = utils.RedactSecrets(ref.Description)
+	ref.Type = utils.RedactSecrets(ref.Type)
+	ref.SHA256 = utils.RedactSecrets(ref.SHA256)
+	ref.MediaType = utils.RedactSecrets(ref.MediaType)
+	ref.RunID = utils.RedactSecrets(ref.RunID)
+	ref.TaskID = utils.RedactSecrets(ref.TaskID)
+	ref.Agent = utils.RedactSecrets(ref.Agent)
+	ref.Provider = utils.RedactSecrets(ref.Provider)
+	ref.ToolCallID = utils.RedactSecrets(ref.ToolCallID)
+	return ref
+}
+
+func redactArtifactRefs(refs []ArtifactRef) []ArtifactRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	redacted := make([]ArtifactRef, len(refs))
+	for idx, ref := range refs {
+		redacted[idx] = redactArtifactRef(ref)
+	}
+	return redacted
+}
+
+func redactDecisionAssumptions(values []DecisionAssumption) []DecisionAssumption {
+	if len(values) == 0 {
+		return nil
+	}
+	redacted := make([]DecisionAssumption, len(values))
+	for idx, assumption := range values {
+		assumption.ID = utils.RedactSecrets(assumption.ID)
+		assumption.Statement = utils.RedactSecrets(assumption.Statement)
+		assumption.Status = utils.RedactSecrets(assumption.Status)
+		assumption.EvidenceRefs = redactArtifactRefs(assumption.EvidenceRefs)
+		redacted[idx] = assumption
+	}
+	return redacted
+}
+
+func redactDecisionOutcome(outcome DecisionOutcomeRecord) DecisionOutcomeRecord {
+	outcome.DecisionID = utils.RedactSecrets(outcome.DecisionID)
+	outcome.ResolvedOutcome = utils.RedactSecrets(outcome.ResolvedOutcome)
+	outcome.SuccessCriteria = redactDecisionStrings(outcome.SuccessCriteria)
+	outcome.ObservedEvidence = redactArtifactRefs(outcome.ObservedEvidence)
+	outcome.Lessons = redactDecisionStrings(outcome.Lessons)
+	outcome.Notes = utils.RedactSecrets(outcome.Notes)
+	outcome.ResolvedBy = utils.RedactSecrets(outcome.ResolvedBy)
+	outcome.UnverifiedEvidence = redactDecisionStrings(outcome.UnverifiedEvidence)
+	outcome.VerificationSummary = utils.RedactSecrets(outcome.VerificationSummary)
+	return outcome
 }
 
 // fileArtifactResolver adapts an ArtifactStore to ArtifactResolver so outcome
@@ -675,7 +991,7 @@ func (i *DecisionIndex) checkAssumptionUnlocked(decisionID, assumptionID, status
 	if strings.TrimSpace(decisionID) == "" || strings.TrimSpace(assumptionID) == "" {
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision and assumption IDs cannot be blank")
 	}
-	entries, err := i.listFile()
+	entries, err := i.listFileValidated(context.Background())
 	if err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}

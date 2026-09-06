@@ -398,7 +398,7 @@ func TestDecisionEngineStage3EnvelopeCommitOrdering(t *testing.T) {
 
 func TestDecisionEngineStage3LegacyFinalizedResumeRemainsReadable(t *testing.T) {
 	journal := &memoryJournal{}
-	record := DecisionRecord{SchemaVersion: DecisionRecordSchemaVersion, ID: "legacy", RunID: "run-1", TaskID: "task-1", FinalOption: "wait"}
+	record := DecisionRecord{SchemaVersion: 1, ID: "legacy", RunID: "run-1", TaskID: "task-1", FinalOption: "wait"}
 	raw, err := marshalDecisionEvent(decisionEvent{DecisionID: "legacy", Record: &record})
 	if err != nil {
 		t.Fatal(err)
@@ -413,6 +413,159 @@ func TestDecisionEngineStage3LegacyFinalizedResumeRemainsReadable(t *testing.T) 
 	}
 	if got.ID != record.ID || got.FinalOption != record.FinalOption {
 		t.Fatalf("legacy record = %#v", got)
+	}
+}
+
+func TestDecisionEngineStage4FinalizationSchemaDiscriminator(t *testing.T) {
+	for _, recordSchema := range []int{1, DecisionRecordSchemaVersion} {
+		for _, eventSchema := range []int{eventStoreLegacySchemaVersion, eventStoreSchemaVersion} {
+			t.Run(fmt.Sprintf("record-v%d-event-v%d", recordSchema, eventSchema), func(t *testing.T) {
+				journal := &memoryJournal{}
+				record := DecisionRecord{
+					SchemaVersion: recordSchema,
+					ID:            "schema-discriminator",
+					RunID:         "run-1",
+					TaskID:        "task-1",
+					FinalOption:   "wait",
+				}
+				raw, err := marshalDecisionEvent(decisionEvent{
+					DecisionID: record.ID,
+					RunID:      record.RunID,
+					TaskID:     record.TaskID,
+					Attempt:    1,
+					Record:     &record,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := journal.Append(context.Background(), RunEvent{
+					SchemaVersion: eventSchema,
+					RunID:         record.RunID,
+					TaskID:        record.TaskID,
+					Attempt:       1,
+					Actor:         decisionActor,
+					Type:          agent.EventDecisionFinalized,
+					Payload:       raw,
+				}); err != nil {
+					t.Fatal(err)
+				}
+
+				got, err := NewDecisionEngine(DecisionServices{Journal: journal}).Resume(context.Background(), record.ID)
+				if recordSchema == 1 {
+					if err != nil {
+						t.Fatalf("schema-v1 finalized-only replay: %v", err)
+					}
+					if got.ID != record.ID || got.SchemaVersion != record.SchemaVersion {
+						t.Fatalf("replayed legacy record = %#v, want %#v", got, record)
+					}
+					return
+				}
+				if err == nil {
+					t.Fatalf("schema-v%d finalized-only replay succeeded: %#v", recordSchema, got)
+				}
+				if !strings.Contains(err.Error(), "no preceding finalization result") {
+					t.Fatalf("schema-v%d finalized-only replay error = %v, want missing-result diagnostic", recordSchema, err)
+				}
+			})
+		}
+	}
+}
+
+func stage4FinalizedReplayFixture(t *testing.T) (*memoryJournal, *FileArtifactStore, *DecisionRecord) {
+	t.Helper()
+	workspace := t.TempDir()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &memoryJournal{}
+	req := engineRequest(enginePolicy(1))
+	record, err := newTestEngineWithStages(journal, spreadRunner(), nil, DecisionServices{Store: store}).Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("create finalized replay fixture: %v", err)
+	}
+	if record.SchemaVersion != DecisionRecordSchemaVersion || record.FinalizationResultRef == nil {
+		t.Fatalf("fixture record = %#v, want schema-v%d with finalization result ref", record, DecisionRecordSchemaVersion)
+	}
+	if journal.count(agent.EventDecisionFinalizationResult) != 1 || journal.count(agent.EventDecisionFinalized) != 1 {
+		t.Fatalf("fixture finalization events = %v, want one result before one finalized event", journal.typesOf())
+	}
+	return journal, store, record
+}
+
+func mutateDecisionEventPayload(t *testing.T, journal *memoryJournal, eventType string, mutate func(*decisionEvent)) {
+	t.Helper()
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	for index := range journal.events {
+		if journal.events[index].Type != eventType {
+			continue
+		}
+		var payload decisionEvent
+		if err := json.Unmarshal(journal.events[index].Payload, &payload); err != nil {
+			t.Fatalf("decode %s fixture event: %v", eventType, err)
+		}
+		mutate(&payload)
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("encode %s fixture event: %v", eventType, err)
+		}
+		journal.events[index].Payload = encoded
+		return
+	}
+	t.Fatalf("fixture is missing %s event", eventType)
+}
+
+func TestDecisionEngineStage4V2FinalizedReplayRequiresMatchingResultAndArtifact(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*decisionEvent)
+		want   string
+	}{
+		{
+			name: "result mismatch",
+			mutate: func(payload *decisionEvent) {
+				payload.Record.FinalOption = "wait"
+			},
+			want: "does not match its finalization result",
+		},
+		{
+			name: "artifact mismatch",
+			mutate: func(payload *decisionEvent) {
+				payload.Record.FinalizationResultRef = &ArtifactRef{ID: "different-result", SHA256: "different-result"}
+			},
+			want: "does not match its finalization result",
+		},
+		{
+			name: "missing record artifact reference",
+			mutate: func(payload *decisionEvent) {
+				payload.Record.FinalizationResultRef = nil
+			},
+			want: "does not match its finalization result",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, store, record := stage4FinalizedReplayFixture(t)
+			mutateDecisionEventPayload(t, journal, agent.EventDecisionFinalized, tt.mutate)
+			if _, err := NewDecisionEngine(DecisionServices{Journal: journal, Store: store}).Resume(context.Background(), record.ID); err == nil {
+				t.Fatal("replay accepted mismatched finalization result/artifact")
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("replay error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecisionEngineStage4V2FinalizedReplayWithMatchingResultAndArtifact(t *testing.T) {
+	journal, store, record := stage4FinalizedReplayFixture(t)
+	got, err := NewDecisionEngine(DecisionServices{Journal: journal, Store: store}).Resume(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("matching v2 finalization replay: %v", err)
+	}
+	if got.ID != record.ID || got.SchemaVersion != DecisionRecordSchemaVersion || got.FinalizationResultRef == nil {
+		t.Fatalf("matching v2 replay = %#v, want original v%d record with result ref", got, DecisionRecordSchemaVersion)
 	}
 }
 

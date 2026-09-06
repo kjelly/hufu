@@ -160,10 +160,13 @@ func TestZeroDecisionRecordEncodesCompactly(t *testing.T) {
 
 func TestDecisionRecordSchemaVersion(t *testing.T) {
 	var r DecisionRecord
-	if err := r.ValidateSchemaVersion(); err != nil {
-		t.Fatalf("zero version rejected: %v", err)
+	if err := r.ValidateSchemaVersion(); err == nil {
+		t.Fatal("zero version accepted")
 	}
 	r.Normalize()
+	if err := r.ValidateSchemaVersion(); err != nil {
+		t.Fatalf("normalized schema rejected: %v", err)
+	}
 	if r.SchemaVersion != DecisionRecordSchemaVersion {
 		t.Fatalf("Normalize() left SchemaVersion = %d", r.SchemaVersion)
 	}

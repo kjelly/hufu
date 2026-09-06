@@ -2,13 +2,38 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+type jsonOutputEventJournal struct {
+	store *team.EventStore
+}
+
+func (j jsonOutputEventJournal) Append(ctx context.Context, event team.RunEvent) (team.RunEvent, error) {
+	return j.store.AppendPersistedContext(ctx, event)
+}
+
+func (j jsonOutputEventJournal) ReadEvents(ctx context.Context) ([]team.RunEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return j.store.ReadEvents()
+}
+
+func (j jsonOutputEventJournal) VerifyHashChain(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return j.store.VerifyHashChain()
+}
 
 func TestMultiTeamJSONOutputAggregation(t *testing.T) {
 	// Test 2 teams in both lexical orders:
@@ -143,6 +168,155 @@ func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
 	summary := out.Teams[0].ContextRouting
 	if summary.Requests != 1 || summary.ModelCalls != 1 || summary.Fallbacks != 0 || summary.Purposes["coordinator_start"] != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 12 || summary.OmittedTokens != 7 || summary.OmitReasons[string(team.ContextOmittedPhase)] != 1 {
 		t.Fatalf("context routing JSON = %#v", summary)
+	}
+}
+
+func TestJSONOutputProjectsFinalizationRedactionAndPreservesTypedScalars(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{
+		Dir:       t.TempDir(),
+		Workspace: workspace,
+		Config:    agent.TeamConfig{Name: "finalization-json"},
+	}
+	coordinator, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("NewCoordinator failed: %v", err)
+	}
+	eventStore, err := team.NewEventStore(workspace, "run-json", "session-json")
+	if err != nil {
+		t.Fatalf("NewEventStore failed: %v", err)
+	}
+	defer func() { _ = eventStore.Close() }()
+	record := team.DecisionRecord{
+		SchemaVersion:        1,
+		ID:                   "decision-json",
+		RunID:                "run-json",
+		TaskID:               "task-json",
+		Profile:              "standard",
+		FinalOption:          "ship",
+		Probability:          0.73,
+		FinalizationMode:     "coordinator",
+		FinalizationIdentity: "coordinator",
+		FinalizationOutcome:  "selected",
+		FinalizationReason:   "api_key=run-json-finalization-secret",
+		FinalizationWarnings: []string{
+			"api_key=run-json-finalization-warning",
+		},
+		CreatedAt: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC),
+	}
+	payload, err := json.Marshal(struct {
+		DecisionID       string               `json:"decision_id"`
+		RunID            string               `json:"run_id"`
+		TaskID           string               `json:"task_id"`
+		Attempt          int                  `json:"attempt"`
+		Profile          string               `json:"profile"`
+		Record           *team.DecisionRecord `json:"record"`
+		Question         string               `json:"question"`
+		ForecastRequired bool                 `json:"forecast_required"`
+	}{
+		DecisionID: "decision-json", RunID: "run-json", TaskID: "task-json", Attempt: 1,
+		Profile: "standard", Record: &record, Question: "Ship?", ForecastRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("marshal decision_finalized payload: %v", err)
+	}
+	if _, err := eventStore.AppendPersistedContext(context.Background(), team.RunEvent{
+		Type: agent.EventDecisionFinalized, Actor: "decision-runtime", RunID: "run-json", TaskID: "task-json", Attempt: 1,
+		IdempotencyKey: "decision-json-finalized", Payload: payload,
+	}); err != nil {
+		t.Fatalf("append decision_finalized event: %v", err)
+	}
+	coordinator.SetEventJournal(jsonOutputEventJournal{store: eventStore})
+
+	index, err := team.OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatalf("OpenDecisionIndex failed: %v", err)
+	}
+	if err := index.Append(team.DecisionIndexEntry{
+		SchemaVersion:        team.DecisionIndexSchemaVersion,
+		DecisionID:           "decision-json",
+		RunID:                "run-json",
+		TaskID:               "task-json",
+		Profile:              "standard",
+		Question:             "Ship?",
+		FinalOption:          "ship",
+		Probability:          0.73,
+		ForecastRequired:     true,
+		FinalizationMode:     "coordinator",
+		FinalizationIdentity: "coordinator",
+		FinalizationOutcome:  "selected",
+		FinalizationReason:   "api_key=run-json-finalization-secret",
+		FinalizationWarnings: []string{"api_key=run-json-finalization-warning"},
+		CreatedAt:            time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("seed decision index: %v", err)
+	}
+	coordinator.SetSessionData(&team.SessionData{CoordinatorContextManifests: []team.ContextInjectionManifest{{
+		SchemaVersion: 1, RequestID: "request-1", RunID: "run-1", Attempt: 1,
+		Agent: "coordinator", Phase: team.PhaseInit, Trigger: team.ContextTriggerCoordinatorStart,
+		Purpose: "coordinator_start", ModelCalled: true,
+		Items: []team.ContextManifestItem{{ID: "goal", Included: true, Tokens: 12}, {ID: "memory-1", Included: false, Reason: team.ContextOmittedPhase, Tokens: 7}},
+	}}})
+	coordinator.SetLastRunResult(&team.RunResult{Outcome: team.RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &team.AcceptanceResult{Passed: true}})
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"finalization": {teamName: "finalization", coordinator: coordinator}}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		GoalSatisfied json.RawMessage `json:"goal_satisfied"`
+		Teams         []struct {
+			Decisions      []json.RawMessage `json:"decisions"`
+			ContextRouting json.RawMessage   `json:"context_routing"`
+		} `json:"teams"`
+	}
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw.GoalSatisfied) != "true" {
+		t.Fatalf("goal_satisfied = %s, want JSON boolean true", raw.GoalSatisfied)
+	}
+	if len(raw.Teams) != 1 || len(raw.Teams[0].Decisions) != 1 {
+		t.Fatalf("run JSON projections = %#v", raw)
+	}
+	var decision map[string]json.RawMessage
+	if err := json.Unmarshal(raw.Teams[0].Decisions[0], &decision); err != nil {
+		t.Fatal(err)
+	}
+	if string(decision["probability"]) != "0.73" || string(decision["schema_version"]) != "2" {
+		t.Fatalf("decision scalar types/values = probability %s schema %s", decision["probability"], decision["schema_version"])
+	}
+	if string(decision["forecast_required"]) != "true" {
+		t.Fatalf("forecast_required = %s, want JSON boolean true", decision["forecast_required"])
+	}
+	if got := string(decision["finalization_reason"]); got != `"api_key=[REDACTED]"` {
+		t.Fatalf("finalization reason = %s, want redaction marker", got)
+	}
+	var warnings []string
+	if err := json.Unmarshal(decision["finalization_warnings"], &warnings); err != nil {
+		t.Fatalf("finalization warnings = %s: %v", decision["finalization_warnings"], err)
+	}
+	if len(warnings) != 1 || warnings[0] != "api_key=[REDACTED]" {
+		t.Fatalf("finalization warnings = %v, want redaction marker", warnings)
+	}
+	if strings.Contains(string(raw.Teams[0].Decisions[0]), "run-json-finalization-secret") || strings.Contains(string(raw.Teams[0].Decisions[0]), "run-json-finalization-warning") {
+		t.Fatalf("run JSON exposed finalization secret/warning: %s", raw.Teams[0].Decisions[0])
+	}
+
+	var contextRouting map[string]json.RawMessage
+	if err := json.Unmarshal(raw.Teams[0].ContextRouting, &contextRouting); err != nil {
+		t.Fatal(err)
+	}
+	if string(contextRouting["included_tokens"]) != "12" || string(contextRouting["omitted_tokens"]) != "7" {
+		t.Fatalf("context token scalars = included %s omitted %s", contextRouting["included_tokens"], contextRouting["omitted_tokens"])
 	}
 }
 

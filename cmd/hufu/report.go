@@ -181,6 +181,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
 		d.ContextRouting = tc.coordinator.ContextManifestReport()
 		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)
 	}
 	if tc.session != nil {
 		canonical, err := team.LoadCanonicalRunFinishedSnapshot(tc.session.Workspace, "")
@@ -497,18 +498,39 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 	if len(data.Decisions) > 0 {
 		b.WriteString("## Decision State\n\n")
-		b.WriteString("| Decision | Profile | Status | Assumptions | Evidence |\n")
-		b.WriteString("|---|---|---|---:|---|\n")
-		for _, decision := range data.Decisions {
+		b.WriteString("| Decision | Profile | Status | Finalizer | Finalizer stale | Record ref | Assumptions | Evidence |\n")
+		b.WriteString("|---|---|---|---|---|---|---:|---|\n")
+		for _, rawDecision := range data.Decisions {
+			decision := rawDecision.Redacted()
 			status := "active"
 			if decision.Stale {
 				status = "stale"
 			} else if decision.Outcome != nil {
 				status = decision.Outcome.ResolvedOutcome
 			}
-			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %d | `%s` |\n",
+			finalizer := decision.FinalizationMode
+			if decision.FinalizationIdentity != "" {
+				if finalizer != "" {
+					finalizer += "/"
+				}
+				finalizer += decision.FinalizationIdentity
+			}
+			if decision.FinalizationOutcome != "" {
+				if finalizer != "" {
+					finalizer += "/"
+				}
+				finalizer += decision.FinalizationOutcome
+			}
+			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | `%s` | %t | `%s` | %d | `%s` |\n",
 				reportSafeMetadata(decision.DecisionID, 120), reportSafeMetadata(decision.Profile, 80),
-				reportSafeMetadata(status, 80), len(decision.Assumptions), reportSafeMetadata(decision.EvidenceHash, 120))
+				reportSafeMetadata(status, 80), reportSafeMetadata(finalizer, 120), decision.FinalizationStale,
+				reportSafeMetadata(recordReferenceDisplay(decision), 300), len(decision.Assumptions), reportSafeMetadata(decision.EvidenceHash, 120))
+			if decision.FinalizationReason != "" {
+				fmt.Fprintf(&b, "- `%s` finalization reason: %s\n", reportSafeMetadata(decision.DecisionID, 120), reportSafeMetadata(decision.FinalizationReason, 300))
+			}
+			for _, warning := range decision.FinalizationWarnings {
+				fmt.Fprintf(&b, "- `%s` finalization warning: %s\n", reportSafeMetadata(decision.DecisionID, 120), reportSafeMetadata(warning, 300))
+			}
 		}
 		b.WriteString("\n")
 	}

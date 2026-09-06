@@ -40,6 +40,9 @@ func buildDecisionCLIFixture(t *testing.T) string {
 			DecisionID: "dec-1", RunID: "run-42", TaskID: "t1", Profile: "high-stakes",
 			EvidenceHash: "abc123", Question: "Should we migrate now?",
 			FinalOption: "migrate", Probability: 0.7, ForecastRequired: true,
+			FinalizationMode: "coordinator", FinalizationIdentity: "coordinator", FinalizationOutcome: "selected",
+			FinalizationReason:      "api_key=stage4-cli-secret",
+			FinalizationWarnings:    []string{"api_key=stage4-cli-warning"},
 			FalsificationConditions: []string{"ingest lag exceeds 5m"},
 			RecordPath:              "decisions/dec-1.json", CreatedAt: base,
 		},
@@ -119,6 +122,60 @@ func TestDecisionListJSON(t *testing.T) {
 	}
 	if !strings.HasSuffix(payload.Index, filepath.Join("logs", "decisions", "index.jsonl")) {
 		t.Fatalf("index path = %q", payload.Index)
+	}
+	entry := payload.Entries[0]
+	if entry.FinalizationMode != "coordinator" || entry.FinalizationIdentity != "coordinator" || entry.FinalizationOutcome != "selected" {
+		t.Fatalf("finalization JSON projection = %#v", entry)
+	}
+	if strings.Contains(out, "stage4-cli-secret") {
+		t.Fatalf("decision JSON exposed finalization secret: %s", out)
+	}
+	if strings.Contains(out, "stage4-cli-warning") || !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("decision JSON finalization warning redaction = %s", out)
+	}
+
+	resetDecisionCLIFlags()
+	show, err := runDecisionCLI(t, "show", "dec-1", "-w", workspace, "--json")
+	if err != nil {
+		t.Fatalf("decision show --json = %v", err)
+	}
+	var showEntry team.DecisionIndexEntry
+	if err := json.Unmarshal([]byte(show), &showEntry); err != nil {
+		t.Fatalf("show JSON is not a decision entry: %v\n%s", err, show)
+	}
+	if strings.Contains(show, "stage4-cli-secret") || strings.Contains(show, "stage4-cli-warning") || !strings.Contains(show, "[REDACTED]") {
+		t.Fatalf("decision show JSON exposed finalization secret/warning: %s", show)
+	}
+}
+
+func TestDecisionListAndShowProjectRedactedFinalization(t *testing.T) {
+	resetDecisionCLIFlags()
+	workspace := buildDecisionCLIFixture(t)
+	list, err := runDecisionCLI(t, "list", "-w", workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FINALIZER", "coordinator/coordinator/selected"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("list missing finalization projection %q:\n%s", want, list)
+		}
+	}
+	if strings.Contains(list, "stage4-cli-secret") {
+		t.Fatalf("list exposed finalization secret: %s", list)
+	}
+
+	resetDecisionCLIFlags()
+	show, err := runDecisionCLI(t, "show", "dec-1", "-w", workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Finalizer:  coordinator/coordinator/selected", "Reason:"} {
+		if !strings.Contains(show, want) {
+			t.Fatalf("show missing finalization projection %q:\n%s", want, show)
+		}
+	}
+	if strings.Contains(show, "stage4-cli-secret") {
+		t.Fatalf("show exposed finalization secret: %s", show)
 	}
 }
 

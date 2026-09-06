@@ -3,9 +3,127 @@ package team
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+// validateFinalizationPolicy runs before any model stage. Named judge
+// finalization is only valid for a judge identity the current policy actually
+// admitted; accepting a free-form identity would turn finalization into an
+// untracked authority.
+func validateFinalizationPolicy(policy DecisionPolicy, services DecisionServices) error {
+	switch policy.EffectiveFinalization() {
+	case agent.FinalizationAggregate:
+		return nil
+	case agent.FinalizationCoordinator:
+		if services.CoordinatorFinalizer == nil {
+			return fmt.Errorf("coordinator finalization requires a coordinator finalizer")
+		}
+	case agent.FinalizationJudge:
+		judgeID := strings.TrimSpace(policy.Finalization.JudgeID)
+		if !hasDecisionString(judgeIDs(policy.IndependentJudgments), judgeID) {
+			return fmt.Errorf("finalization judge %q is not a member of the admitted judge set", judgeID)
+		}
+		if services.JudgeFinalizer == nil {
+			return fmt.Errorf("judge finalization requires a named judge finalizer")
+		}
+	default:
+		return fmt.Errorf("unsupported finalization mode %q", policy.EffectiveFinalization())
+	}
+	return nil
+}
+
+func hasDecisionString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *decisionEngine) runFinalization(
+	ctx context.Context,
+	req DecisionRequest,
+	policy DecisionPolicy,
+	packet DecisionEvidencePacket,
+	aggregates []DecisionAggregate,
+	challenges []DecisionChallenge,
+	revisions []DecisionRevision,
+	state decisionState,
+) (DecisionFinalizationResult, ArtifactRef, error) {
+	aggregate := aggregates[len(aggregates)-1]
+	if state.Finalization != nil && state.Finalization.EvidenceHash == packet.Hash && state.Finalization.Mode == policy.EffectiveFinalization() {
+		if err := ValidateFinalizationResult(*state.Finalization, packet, aggregate, policy); err != nil {
+			return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("durable finalization result: %w", err)
+		}
+		if !finalizationResultRefValid(state.FinalizationResultRef) {
+			return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("durable finalization result has no artifact reference")
+		}
+		if err := validatePersistedFinalizationResult(ctx, e.services.Store, state.FinalizationResultRef, *state.Finalization); err != nil {
+			return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("durable finalization result: %w", err)
+		}
+		return *state.Finalization, state.FinalizationResultRef, nil
+	}
+
+	var wire FinalizationWireResult
+	var err error
+	mode := policy.EffectiveFinalization()
+	switch mode {
+	case agent.FinalizationAggregate:
+		wire = FinalizationWireResult{OptionID: aggregate.PreferredOption}
+	case agent.FinalizationCoordinator:
+		request, cloneErr := cloneFinalizationRequest(CoordinatorFinalizationRequest{
+			DecisionID: req.DecisionID, Packet: packet, Aggregates: aggregates, Challenges: challenges, Revisions: revisions,
+		})
+		if cloneErr != nil {
+			return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("clone coordinator finalization request: %w", cloneErr)
+		}
+		wire, err = e.services.CoordinatorFinalizer.RunCoordinatorFinalization(ctx, request)
+	case agent.FinalizationJudge:
+		judgeID := strings.TrimSpace(policy.Finalization.JudgeID)
+		request, cloneErr := cloneFinalizationRequest(JudgeFinalizationRequest{
+			DecisionID: req.DecisionID, JudgeID: judgeID, Packet: packet, Aggregates: aggregates, Challenges: challenges, Revisions: revisions,
+		})
+		if cloneErr != nil {
+			return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("clone named-judge finalization request: %w", cloneErr)
+		}
+		wire, err = e.services.JudgeFinalizer.RunJudgeFinalization(ctx, request)
+	}
+	if err != nil {
+		return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("decision %s %s finalization: %w", req.DecisionID, mode, err)
+	}
+	result := DecisionFinalizationResult{
+		SchemaVersion: DecisionFinalizationSchemaVersion,
+		DecisionID:    req.DecisionID, EvidenceHash: packet.Hash, Mode: mode,
+		Identity: FinalizationIdentityAggregate, OptionID: strings.TrimSpace(wire.OptionID), Reason: strings.TrimSpace(wire.Reason),
+		Outcome: FinalizationOutcomeSelected,
+	}
+	switch mode {
+	case agent.FinalizationCoordinator:
+		result.Identity = FinalizationIdentityCoordinator
+	case agent.FinalizationJudge:
+		result.Identity = strings.TrimSpace(policy.Finalization.JudgeID)
+	}
+	if result.OptionID != aggregate.PreferredOption {
+		result.Outcome = FinalizationOutcomeOverride
+	}
+	if err := ValidateFinalizationResult(result, packet, aggregate, policy); err != nil {
+		return DecisionFinalizationResult{}, ArtifactRef{}, fmt.Errorf("decision %s finalization result: %w", req.DecisionID, err)
+	}
+	result = redactedFinalizationResult(result)
+	ref, err := persistDecisionFinalizationResult(ctx, e.services.Store, result, req.RunID, req.TaskID, req.Attempt)
+	if err != nil {
+		return DecisionFinalizationResult{}, ArtifactRef{}, err
+	}
+	event := finalizationResultEvent(req, packet, result, ref)
+	event.IdempotencyKey = finalizationResultEventKey(req, packet)
+	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationResult, event); err != nil {
+		return DecisionFinalizationResult{}, ArtifactRef{}, err
+	}
+	return result, ref, nil
+}
 
 // Post-aggregate decision stages
 // (docs/hufu-decision-aware-runtime-spec.md §22-§26).
@@ -205,7 +323,7 @@ func (e *decisionEngine) applyProvenance(
 	// Request-declared provenance is retained in the sealed packet for audit,
 	// but cannot affect runtime grouping. Only provenance derived from verified
 	// artifact content is trusted for independence calculations.
-	sources := ProvenanceFromArtifacts(packet.Artifacts)
+	sources := cloneEvidenceProvenance(req.trustedProvenance)
 	if len(sources) == 0 {
 		return nil
 	}

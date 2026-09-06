@@ -220,17 +220,19 @@ func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget 
 		journal.mu.Unlock()
 	}
 	return NewDecisionEngine(DecisionServices{
-		Judges:            runner,
-		Journal:           journal,
-		Budget:            budget,
-		Premortems:        stages.Premortems,
-		Challengers:       stages.Challengers,
-		Revisions:         stages.Revisions,
-		Proposer:          stages.Proposer,
-		ReferenceEvidence: stages.ReferenceEvidence,
-		Store:             store,
-		Index:             stages.Index,
-		Now:               func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
+		Judges:               runner,
+		Journal:              journal,
+		Budget:               budget,
+		Premortems:           stages.Premortems,
+		Challengers:          stages.Challengers,
+		Revisions:            stages.Revisions,
+		Proposer:             stages.Proposer,
+		ReferenceEvidence:    stages.ReferenceEvidence,
+		CoordinatorFinalizer: stages.CoordinatorFinalizer,
+		JudgeFinalizer:       stages.JudgeFinalizer,
+		Store:                store,
+		Index:                stages.Index,
+		Now:                  func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC) },
 		NewID: func(prefix string) string {
 			counter++
 			return fmt.Sprintf("%s-%d", prefix, counter)

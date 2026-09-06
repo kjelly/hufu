@@ -114,10 +114,24 @@ func TestDecisionPolicyValidate(t *testing.T) {
 			wantErr: "finalization.judge-id is required",
 		},
 		{
-			name: "judge finalization with judge id",
+			name: "judge finalization with canonical judge id",
+			mutate: func(p *DecisionPolicy) {
+				p.Finalization = FinalizationPolicy{Mode: FinalizationJudge, JudgeID: "judge-1"}
+			},
+		},
+		{
+			name: "judge finalization with free-form judge id",
 			mutate: func(p *DecisionPolicy) {
 				p.Finalization = FinalizationPolicy{Mode: FinalizationJudge, JudgeID: "reviewer"}
 			},
+			wantErr: "is not one of the configured judges",
+		},
+		{
+			name: "judge finalization with out-of-range judge id",
+			mutate: func(p *DecisionPolicy) {
+				p.Finalization = FinalizationPolicy{Mode: FinalizationJudge, JudgeID: "judge-4"}
+			},
+			wantErr: "is not one of the configured judges",
 		},
 		{
 			name:    "unknown budget degradation",

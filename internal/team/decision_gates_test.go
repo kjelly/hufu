@@ -1,10 +1,9 @@
 package team
 
 import (
+	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestCheckAlternatives(t *testing.T) {
@@ -216,28 +215,6 @@ func TestCheckRequestContract(t *testing.T) {
 	}
 }
 
-func TestFinalOptionFor(t *testing.T) {
-	aggregate := DecisionAggregate{PreferredOption: "a"}
-
-	option, overridden, err := FinalOptionFor(DecisionPolicy{}, aggregate, "b", "because")
-	if err != nil || option != "a" || overridden {
-		t.Fatalf("aggregate mode = (%q, %v, %v), want the aggregate's own choice", option, overridden, err)
-	}
-
-	policy := DecisionPolicy{Finalization: FinalizationPolicy{Mode: agent.FinalizationCoordinator}}
-	if _, _, err := FinalOptionFor(policy, aggregate, "b", "  "); err == nil {
-		t.Fatal("override without a reason accepted")
-	}
-	option, overridden, err = FinalOptionFor(policy, aggregate, "b", "operations vetoed it")
-	if err != nil || option != "b" || !overridden {
-		t.Fatalf("coordinator override = (%q, %v, %v), want b flagged as an override", option, overridden, err)
-	}
-	option, overridden, err = FinalOptionFor(policy, aggregate, "a", "agreeing with the aggregate")
-	if err != nil || option != "a" || overridden {
-		t.Fatalf("agreeing choice = (%q, %v, %v), want no override flag", option, overridden, err)
-	}
-}
-
 // Three mirrors of one origin are one confirmation, not three (spec §28.1,
 // test matrix I).
 func TestGroupEvidenceMergesSharedOrigins(t *testing.T) {
@@ -321,11 +298,39 @@ func TestProvenanceFromArtifacts(t *testing.T) {
 		{SHA256: "h2"},
 		{},
 	})
-	if len(sources) != 3 {
-		t.Fatalf("derived %d sources, want 3 (an artifact with no identity is skipped)", len(sources))
+	if len(sources) != 1 {
+		t.Fatalf("derived %d sources, want only the runtime-identified artifact", len(sources))
 	}
 	grouped := GroupEvidence(sources, EvidenceIndependencePolicy{})
-	if grouped.IndependenceGroupCount != 2 {
-		t.Fatalf("same bytes at two paths formed %d groups, want 2 distinct origins", grouped.IndependenceGroupCount)
+	if grouped.IndependenceGroupCount != 1 {
+		t.Fatalf("runtime-identified artifact formed %d groups, want one", grouped.IndependenceGroupCount)
+	}
+}
+
+func TestTrustedProvenanceUsesOnlyResolvedRuntimeMetadata(t *testing.T) {
+	metadata := []RuntimeEvidenceMetadata{
+		{Artifact: ArtifactRef{ID: "artifact-a", SHA256: "same"}, Origin: ArtifactOriginMetadata{RetrievalURL: "https://news.example.com/a", ParentSourceIDs: []string{"root"}}},
+		{Artifact: ArtifactRef{ID: "artifact-b", SHA256: "same"}, Origin: ArtifactOriginMetadata{RetrievalURL: "https://blog.example.com/b"}},
+		// A digest without a runtime artifact identity is not trusted input.
+		{Artifact: ArtifactRef{SHA256: "forged"}, Origin: ArtifactOriginMetadata{RetrievalURL: "https://evil.invalid"}},
+	}
+	forward := TrustedProvenanceFromRuntimeMetadata(metadata)
+	reversed := TrustedProvenanceFromRuntimeMetadata([]RuntimeEvidenceMetadata{metadata[2], metadata[1], metadata[0]})
+	if !reflect.DeepEqual(forward, reversed) {
+		t.Fatalf("trusted provenance is order-dependent:\n%#v\n%#v", forward, reversed)
+	}
+	if len(forward) != 2 || forward[0].SourceID != "https://blog.example.com/b" || forward[1].SourceID != "https://news.example.com/a" {
+		t.Fatalf("trusted provenance = %#v", forward)
+	}
+	grouped := GroupEvidence(forward, EvidenceIndependencePolicy{WarnSharedOrigin: true})
+	if grouped.SourceCount != 2 || grouped.IndependenceGroupCount != 1 {
+		t.Fatalf("runtime content/domain grouping = %#v", grouped)
+	}
+	// Model declarations are deliberately advisory even when they claim the
+	// same parent relation the runtime did not record.
+	declared := append([]EvidenceProvenance(nil), forward...)
+	declared[1].DeclaredParentSourceIDs = []string{declared[0].SourceID}
+	if !reflect.DeepEqual(GroupEvidence(forward, EvidenceIndependencePolicy{}), GroupEvidence(declared, EvidenceIndependencePolicy{})) {
+		t.Fatal("declared parent changed trusted grouping")
 	}
 }

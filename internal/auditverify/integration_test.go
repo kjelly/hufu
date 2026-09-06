@@ -58,7 +58,7 @@ func buildCompletedRunFixture(t *testing.T) fixture {
 	mustAppend(team.RunEvent{Type: "run_started", Actor: "coordinator", RunID: runID, Payload: mustJSON(t, map[string]any{"goal": "do the thing"})})
 
 	mustAppend(team.RunEvent{Type: "task_created", Actor: "coordinator", RunID: runID, TaskID: taskID,
-		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "pending", Desc: "do the thing", Agent: "worker"})})
+		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "pending", Desc: "do the thing", Agent: "worker", Advances: []string{"build"}})})
 	mustAppend(team.RunEvent{Type: "task_started", Actor: "coordinator", RunID: runID, TaskID: taskID,
 		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "in_progress", Agent: "worker"})})
 

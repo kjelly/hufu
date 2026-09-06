@@ -345,3 +345,27 @@ func (r *coordinatorDecisionRunners) RunRevision(ctx context.Context, req Revisi
 	}
 	return revision, nil
 }
+
+func (r *coordinatorDecisionRunners) RunCoordinatorFinalization(ctx context.Context, req CoordinatorFinalizationRequest) (FinalizationWireResult, error) {
+	prompt, err := finalizationPrompt("coordinator", req.DecisionID, req.Packet, req.Aggregates, req.Challenges, req.Revisions, "")
+	if err != nil {
+		return FinalizationWireResult{}, err
+	}
+	response, err := r.ask(ctx, "decision-finalization-coordinator", prompt)
+	if err != nil {
+		return FinalizationWireResult{}, err
+	}
+	return decodeFinalizationWireResult(response)
+}
+
+func (r *coordinatorDecisionRunners) RunJudgeFinalization(ctx context.Context, req JudgeFinalizationRequest) (FinalizationWireResult, error) {
+	prompt, err := finalizationPrompt("named judge", req.DecisionID, req.Packet, req.Aggregates, req.Challenges, req.Revisions, req.JudgeID)
+	if err != nil {
+		return FinalizationWireResult{}, err
+	}
+	response, err := r.ask(ctx, "decision-finalization-judge", prompt)
+	if err != nil {
+		return FinalizationWireResult{}, err
+	}
+	return decodeFinalizationWireResult(response)
+}

@@ -56,8 +56,8 @@ const (
 	EventDecisionChallengeSkipped     = "decision_challenge_skipped"
 	EventDecisionPremortemSubmitted   = "decision_premortem_submitted"
 	EventDecisionRevisionSubmitted    = "decision_revision_submitted"
+	EventDecisionFinalizationResult   = "decision_finalization_result"
 	EventDecisionFinalized            = "decision_finalized"
-	EventDecisionFinalizationOverride = "decision_finalization_override"
 	EventDecisionAlternativesOverride = "decision_alternatives_override"
 	EventDecisionBudgetDegraded       = "decision_budget_degraded"
 	EventDecisionEvidenceSharedOrigin = "decision_evidence_shared_origin"
@@ -124,8 +124,8 @@ var DecisionEventTypes = []string{
 	EventDecisionChallengeSkipped,
 	EventDecisionPremortemSubmitted,
 	EventDecisionRevisionSubmitted,
+	EventDecisionFinalizationResult,
 	EventDecisionFinalized,
-	EventDecisionFinalizationOverride,
 	EventDecisionAlternativesOverride,
 	EventDecisionBudgetDegraded,
 	EventDecisionEvidenceSharedOrigin,

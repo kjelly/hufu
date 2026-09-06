@@ -257,6 +257,7 @@ func (c *Coordinator) pinDecisionControlPlane() (*decisionControlPlane, error) {
 		c.decisionIndexProjection = index
 	}
 	index.SetEventJournal(journal)
+	index.SetArtifactStore(store)
 	control = &decisionControlPlane{artifactStore: store, index: index, journal: journal}
 	c.decisionControlPlane = control
 	return control, nil

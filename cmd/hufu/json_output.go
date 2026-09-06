@@ -88,6 +88,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 		}
 		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport(), DeprecatedMemory: tc.coordinator.DeprecatedMemoryToolReport(), ContextRouting: tc.coordinator.ContextManifestReport()}
 		jt.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		jt.Decisions = team.RedactedDecisionIndexEntries(jt.Decisions)
 		var items []*team.TodoItem
 		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
 			items = tracker.TodoList().Items()
@@ -141,9 +142,9 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 		out.Skills = append(out.Skills, jsonRunSkill{Name: s.Name, Count: s.Count, Agents: s.Agents})
 	}
 
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(out)
 }
 
 func isHistoricalUnresolvedTask(teamName string, item *team.TodoItem, priorUnresolved map[string]map[string]time.Time) bool {

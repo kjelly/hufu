@@ -56,10 +56,12 @@ type ReferenceEvidenceRunner interface {
 // interfaces this repo already has; the draft spec's AgentRuntime type does not
 // exist (spec §4.2).
 type DecisionServices struct {
-	Judges  JudgeRunner
-	Journal EventJournal
-	Store   ArtifactStore
-	Budget  BudgetManager
+	Judges               JudgeRunner
+	CoordinatorFinalizer CoordinatorFinalizer
+	JudgeFinalizer       NamedJudgeFinalizer
+	Journal              EventJournal
+	Store                ArtifactStore
+	Budget               BudgetManager
 
 	// Premortems, Challengers and Revisions back the Phase 2 quality stages.
 	// A nil runner disables its stage unless the profile requires it, in which
@@ -100,6 +102,10 @@ type DecisionRequest struct {
 	BaseRates   []BaseRateEvidence
 	Assumptions []DecisionAssumption
 	Provenance  []EvidenceProvenance
+	// trustedProvenance is set only by resolveDecisionEvidence after the
+	// artifact store has resolved immutable metadata. Request-declared
+	// provenance is intentionally never promoted into this field.
+	trustedProvenance []EvidenceProvenance
 
 	RequestContractRef      string
 	RequestContractRevision uint64
@@ -121,12 +127,6 @@ type DecisionRequest struct {
 	// Structured decisions require one (spec §11).
 	Contract               *RequestContract
 	RequireRequestContract bool
-
-	// FinalizationOverride and FinalizationReason apply only under coordinator
-	// or judge finalization. Choosing against the aggregate requires a reason,
-	// which is persisted (spec §26).
-	FinalizationOverride string
-	FinalizationReason   string
 
 	// DecisionID lets a caller resume a specific decision. Empty means new.
 	DecisionID string
@@ -197,6 +197,7 @@ func cloneDecisionRequest(req DecisionRequest) DecisionRequest {
 	clone.BaseRates = cloneBaseRateEvidence(req.BaseRates)
 	clone.Assumptions = cloneDecisionAssumptions(req.Assumptions)
 	clone.Provenance = cloneEvidenceProvenance(req.Provenance)
+	clone.trustedProvenance = cloneEvidenceProvenance(req.trustedProvenance)
 	if req.Contract != nil {
 		contract := *req.Contract
 		contract.SuccessCriteria = append([]SuccessCriterion(nil), req.Contract.SuccessCriteria...)
@@ -219,6 +220,9 @@ func (e *decisionEngine) Resume(ctx context.Context, decisionID string) (*Decisi
 		// A legacy finalized record is already authoritative and remains
 		// readable even though pre-envelope sessions have no request snapshot.
 		if state.Record != nil {
+			if err := validateFinalizedDecisionState(ctx, e.services.Store, state); err != nil {
+				return nil, err
+			}
 			return state.Record, nil
 		}
 		if state.EnvelopeRef.ID == "" {
@@ -241,6 +245,9 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	}
 	// A finalized decision is never recomputed (spec §35).
 	if state.Record != nil {
+		if err := validateFinalizedDecisionState(ctx, e.services.Store, state); err != nil {
+			return nil, err
+		}
 		return state.Record, nil
 	}
 	anchored := state.EnvelopeRef.ID != ""
@@ -272,6 +279,12 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 		if err != nil {
 			return nil, err
 		}
+	}
+	// Finalization authority is part of policy admission. Reject an admitted
+	// policy that cannot be finalized before any option, reference, or model
+	// capable stage can observe or persist work for this decision.
+	if err := validateFinalizationPolicy(policy, e.services); err != nil {
+		return nil, fmt.Errorf("decision %s finalization preflight: %w", req.DecisionID, err)
 	}
 
 	// Options are settled before any gate runs: the alternatives gate has to
@@ -379,20 +392,18 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	record.Premortem = premortem
 	record.FalsificationConditions = PremortemFalsifications(premortem, challenges)
 
-	finalOption, overridden, err := FinalOptionFor(policy, finalAggregate, req.FinalizationOverride, req.FinalizationReason)
+	finalization, finalizationRef, err := e.runFinalization(ctx, req, policy, packet, aggregates, challenges, revisions, state)
 	if err != nil {
 		return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
 	}
-	record.FinalOption = finalOption
-	record.Probability = finalAggregate.MeanProbability[finalOption]
-	if overridden {
-		event := decisionEventFor(req, "finalization_override", packet.Hash)
-		event.EvidenceHash = packet.Hash
-		event.Reason = fmt.Sprintf("%s chosen over aggregate %s: %s", finalOption, finalAggregate.PreferredOption, req.FinalizationReason)
-		if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalizationOverride, event); err != nil {
-			return nil, err
-		}
-	}
+	record.FinalOption = finalization.OptionID
+	record.Probability = finalAggregate.MeanProbability[finalization.OptionID]
+	record.FinalizationIdentity = finalization.Identity
+	record.FinalizationReason = finalization.Reason
+	record.FinalizationResultRef = &finalizationRef
+	record.FinalizationStale = finalization.Stale
+	record.FinalizationWarnings = append([]string(nil), finalization.Warnings...)
+	record.FinalizationOutcome = finalization.Outcome
 
 	if err := e.applyProvenance(ctx, req, policy, packet, &record); err != nil {
 		return nil, err
@@ -411,9 +422,18 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	if err := appendDecisionEvent(ctx, e.services.Journal, agent.EventDecisionFinalized, event); err != nil {
 		return nil, err
 	}
+	finalizedState, err := projectDecision(ctx, e.services.Journal, req.DecisionID)
+	if err != nil {
+		return nil, fmt.Errorf("decision %s: reproject finalized state: %w", req.DecisionID, err)
+	}
+	if err := validateFinalizedDecisionState(ctx, e.services.Store, finalizedState); err != nil {
+		return nil, fmt.Errorf("decision %s: finalized state integrity: %w", req.DecisionID, err)
+	}
 	// Listing the decision is the last step: a decision that failed a gate is
 	// not addressable for resolution, because it was never made.
 	if e.services.Index != nil {
+		e.services.Index.SetEventJournal(e.services.Journal)
+		e.services.Index.SetArtifactStore(e.services.Store)
 		entry := IndexEntryFor(record, req.Question, policy.Forecast.Required, recordRef)
 		if err := e.services.Index.Append(entry); err != nil {
 			return nil, fmt.Errorf("decision %s: %w", req.DecisionID, err)
@@ -476,6 +496,7 @@ func (e *decisionEngine) anchorDecisionRun(ctx context.Context, req *DecisionReq
 	anchor, err := appendDecisionEventResult(ctx, e.services.Journal, agent.EventDecisionRunEnvelopeAnchored, decisionEvent{
 		DecisionID: req.DecisionID, RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt,
 		EvidenceHash: packet.Hash, EnvelopeRef: envelopeRef, EnvelopeHash: envelopeRef.SHA256,
+		FinalizationMode: policy.EffectiveFinalization(), FinalizationJudgeID: policy.Finalization.JudgeID,
 		IdempotencyKey: decisionRunEnvelopeEventKey(req.DecisionID, packet.Hash),
 	})
 	if err != nil {
@@ -583,36 +604,53 @@ func (e *decisionEngine) resolveDecisionEvidence(ctx context.Context, req *Decis
 	if e.services.Store == nil {
 		return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "decision evidence requires an artifact store"}
 	}
-	resolve := func(ref ArtifactRef) (ArtifactRef, error) {
+	resolve := func(ref ArtifactRef) (ArtifactRef, ArtifactOriginMetadata, error) {
 		resolved, err := e.services.Store.Resolve(ctx, ref)
 		if err != nil {
-			return ArtifactRef{}, err
+			return ArtifactRef{}, ArtifactOriginMetadata{}, err
 		}
-		return resolved, nil
+		var origin ArtifactOriginMetadata
+		if resolver, ok := e.services.Store.(TrustedArtifactMetadataResolver); ok {
+			origin, err = resolver.TrustedArtifactMetadata(ctx, resolved)
+			if err != nil {
+				return ArtifactRef{}, ArtifactOriginMetadata{}, err
+			}
+			origin.ParentSourceIDs = append([]string(nil), origin.ParentSourceIDs...)
+		}
+		return resolved, origin, nil
 	}
+	metadata := make([]RuntimeEvidenceMetadata, 0, len(req.Artifacts)+len(req.BaseRates))
 	for i, ref := range req.Artifacts {
-		resolved, err := resolve(ref)
+		resolved, origin, err := resolve(ref)
 		if err != nil {
 			return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("artifacts[%d] cannot be resolved: %v", i, err)}
 		}
 		req.Artifacts[i] = resolved
+		metadata = append(metadata, RuntimeEvidenceMetadata{Artifact: resolved, Origin: origin})
 	}
 	for i := range req.BaseRates {
-		resolved, err := resolve(req.BaseRates[i].Source)
+		resolved, origin, err := resolve(req.BaseRates[i].Source)
 		if err != nil {
 			return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("base_rates[%d] source cannot be resolved: %v", i, err)}
 		}
 		req.BaseRates[i].Source = resolved
+		metadata = append(metadata, RuntimeEvidenceMetadata{Artifact: resolved, Origin: origin})
 	}
 	for i := range req.Assumptions {
 		for j, ref := range req.Assumptions[i].EvidenceRefs {
-			resolved, err := resolve(ref)
+			resolved, origin, err := resolve(ref)
 			if err != nil {
 				return &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: fmt.Sprintf("assumptions[%d].evidence_refs[%d] cannot be resolved: %v", i, j, err)}
 			}
 			req.Assumptions[i].EvidenceRefs[j] = resolved
+			metadata = append(metadata, RuntimeEvidenceMetadata{Artifact: resolved, Origin: origin})
 		}
 	}
+	// Every resolved artifact is a possible trusted evidence origin. This must
+	// include direct artifacts, base-rate sources, and assumption evidence;
+	// limiting it to req.Artifacts silently drops the latter two classes from
+	// independence accounting.
+	req.trustedProvenance = TrustedProvenanceFromRuntimeMetadata(metadata)
 	return nil
 }
 

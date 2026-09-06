@@ -365,6 +365,7 @@ func buildTeamInfoForTUI(registry *team.TeamRegistry, loadedTeams map[string]*te
 		teamInfo.PTYEnabled = opts.enablePTYTerminal
 		teamInfo.HufuBinary, _ = os.Executable()
 		teamInfo.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		teamInfo.Decisions = team.RedactedDecisionIndexEntries(teamInfo.Decisions)
 		break
 	}
 	return teamInfo

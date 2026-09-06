@@ -286,7 +286,7 @@ func TestOperatorAssumptionCheckThroughTheIndex(t *testing.T) {
 
 func TestProjectDecisionReplaysAssumptionTransitionAndInvalidation(t *testing.T) {
 	j := &memoryJournal{}
-	record := &DecisionRecord{ID: "dec-replay", Assumptions: []DecisionAssumption{{ID: "A1", Critical: true}}}
+	record := &DecisionRecord{SchemaVersion: 1, ID: "dec-replay", Assumptions: []DecisionAssumption{{ID: "A1", Critical: true}}}
 	if err := appendDecisionEvent(context.Background(), j, agent.EventDecisionFinalized, decisionEvent{
 		DecisionID: record.ID, Record: record,
 	}); err != nil {
@@ -315,7 +315,7 @@ func TestProjectDecisionReplaysAssumptionTransitionAndInvalidation(t *testing.T)
 func TestDecisionIndexRebuildFromCanonicalJournal(t *testing.T) {
 	index := newIndex(t)
 	j := &memoryJournal{}
-	record := &DecisionRecord{ID: "dec-rebuild", RunID: "run-1", TaskID: "task-1",
+	record := &DecisionRecord{SchemaVersion: 1, ID: "dec-rebuild", RunID: "run-1", TaskID: "task-1",
 		Profile: "standard", FinalOption: "ship", Probability: 0.8,
 		Assumptions: []DecisionAssumption{{ID: "A1", Statement: "traffic stays flat", Critical: true}}}
 	if err := appendDecisionEvent(context.Background(), j, agent.EventDecisionEvidenceSealed, decisionEvent{

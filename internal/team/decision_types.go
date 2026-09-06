@@ -16,7 +16,7 @@ import (
 // DecisionRecordSchemaVersion versions the persisted DecisionRecord. Readers
 // must reject a record whose version they do not understand rather than
 // silently misinterpreting it.
-const DecisionRecordSchemaVersion = 1
+const DecisionRecordSchemaVersion = 2
 
 // Configuration type aliases (spec §12-§13).
 type (
@@ -352,9 +352,15 @@ type DecisionRecord struct {
 	Revisions  []DecisionRevision  `json:"revisions,omitempty"`
 	Premortem  *PremortemResult    `json:"premortem,omitempty"`
 
-	FinalOption      string  `json:"final_option,omitempty"`
-	FinalizationMode string  `json:"finalization_mode,omitempty"`
-	Probability      float64 `json:"probability,omitempty"`
+	FinalOption           string       `json:"final_option,omitempty"`
+	FinalizationMode      string       `json:"finalization_mode,omitempty"`
+	FinalizationIdentity  string       `json:"finalization_identity,omitempty"`
+	FinalizationReason    string       `json:"finalization_reason,omitempty"`
+	FinalizationResultRef *ArtifactRef `json:"finalization_result_ref,omitempty"`
+	FinalizationStale     bool         `json:"finalization_stale,omitempty"`
+	FinalizationWarnings  []string     `json:"finalization_warnings,omitempty"`
+	FinalizationOutcome   string       `json:"finalization_outcome,omitempty"`
+	Probability           float64      `json:"probability,omitempty"`
 
 	AlternativesChecked bool   `json:"alternatives_checked,omitempty"`
 	NoGoOptionID        string `json:"no_go_option_id,omitempty"`
@@ -380,15 +386,15 @@ type DecisionRecord struct {
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
-// ValidateSchemaVersion rejects a persisted record written by a newer build.
-// A zero version means the record predates in-memory versioning; it is
-// normalized on write and never silently reinterpreted on read (spec §35).
+// ValidateSchemaVersion accepts only the explicit legacy schema or the current
+// schema. Zero, negative, and future versions are never compatibility signals.
 func (r DecisionRecord) ValidateSchemaVersion() error {
-	if r.SchemaVersion > DecisionRecordSchemaVersion {
-		return fmt.Errorf("decision record %s has schema version %d, this build understands at most %d",
-			r.ID, r.SchemaVersion, DecisionRecordSchemaVersion)
+	switch r.SchemaVersion {
+	case 1, DecisionRecordSchemaVersion:
+		return nil
+	default:
+		return fmt.Errorf("decision record %s has unsupported schema version %d", r.ID, r.SchemaVersion)
 	}
-	return nil
 }
 
 // Normalize stamps the current schema version so a record never reaches the

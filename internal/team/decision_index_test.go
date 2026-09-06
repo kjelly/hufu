@@ -1,9 +1,13 @@
 package team
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -312,9 +316,36 @@ func TestDecisionIndexResolve(t *testing.T) {
 
 // Resolving records a separate outcome; it never edits what was decided.
 func TestResolveDoesNotTouchTheDecisionRecord(t *testing.T) {
+	journal, store, record := stage4FinalizedReplayFixture(t)
 	index := newIndex(t)
-	record := fullDecisionRecord()
-	if err := index.Append(IndexEntryFor(record, "Ship?", true, ArtifactRef{SHA256: "rec-digest"})); err != nil {
+	index.SetJournal(journal)
+	index.SetArtifactStore(store)
+	state, err := projectDecision(context.Background(), journal, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CanonicalRecord == nil || state.FinalizedRecordRef.ID == "" {
+		t.Fatalf("fixture state = %#v, want canonical v2 record and artifact reference", state)
+	}
+	question := state.FinalizationQuestion
+	if question == "" {
+		question = state.Packet.Question
+	}
+	canonicalRecord := *state.CanonicalRecord
+	finalizationResultRef := derefArtifact(canonicalRecord.FinalizationResultRef)
+	if err := index.Append(IndexEntryFor(canonicalRecord, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)); err != nil {
+		t.Fatal(err)
+	}
+	indexBefore, err := os.ReadFile(index.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordBytesBefore, err := os.ReadFile(filepath.Join(store.root, "data", state.FinalizedRecordRef.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordMetadataBefore, err := os.ReadFile(filepath.Join(store.root, "meta", state.FinalizedRecordRef.ID+".json"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := index.Resolve(record.ID, DecisionOutcomeRecord{ResolvedOutcome: OutcomeFailed}); err != nil {
@@ -325,11 +356,132 @@ func TestResolveDoesNotTouchTheDecisionRecord(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Get = %v, %v", found, err)
 	}
-	if entry.FinalOption != record.FinalOption || entry.EvidenceHash != record.EvidenceHash {
+	if entry.Outcome == nil || entry.Outcome.ResolvedOutcome != OutcomeFailed {
+		t.Fatalf("resolution outcome was not appended: %#v", entry)
+	}
+	if entry.FinalOption != canonicalRecord.FinalOption || entry.EvidenceHash != canonicalRecord.EvidenceHash {
 		t.Fatalf("resolution changed what was decided: %#v", entry)
 	}
-	if entry.RecordDigest != "rec-digest" {
-		t.Fatalf("RecordDigest = %q, want the record artifact still addressed", entry.RecordDigest)
+	if entry.RecordDigest != state.FinalizedRecordRef.SHA256 || entry.RecordPath != state.FinalizedRecordRef.Path {
+		t.Fatalf("record artifact identity changed: %#v", entry)
+	}
+	recordBytesAfter, err := os.ReadFile(filepath.Join(store.root, "data", state.FinalizedRecordRef.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(recordBytesAfter, recordBytesBefore) {
+		t.Fatal("resolution changed the canonical decision record bytes")
+	}
+	recordMetadataAfter, err := os.ReadFile(filepath.Join(store.root, "meta", state.FinalizedRecordRef.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(recordMetadataAfter, recordMetadataBefore) {
+		t.Fatal("resolution changed the canonical decision record metadata")
+	}
+	stateAfter, err := projectDecision(context.Background(), journal, record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateAfter.CanonicalRecord == nil || !reflect.DeepEqual(*stateAfter.CanonicalRecord, canonicalRecord) {
+		t.Fatalf("resolution changed the canonical final record: before=%#v after=%#v", canonicalRecord, stateAfter.CanonicalRecord)
+	}
+	if !sameArtifactIdentity(stateAfter.FinalizedRecordRef, state.FinalizedRecordRef) ||
+		!sameArtifactIdentity(derefArtifact(stateAfter.CanonicalRecord.FinalizationResultRef), finalizationResultRef) {
+		t.Fatalf("resolution changed final artifact identity: before record=%#v result=%#v after record=%#v result=%#v",
+			state.FinalizedRecordRef, finalizationResultRef, stateAfter.FinalizedRecordRef, derefArtifact(stateAfter.CanonicalRecord.FinalizationResultRef))
+	}
+	indexAfter, err := os.ReadFile(index.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(indexAfter, indexBefore) {
+		t.Fatal("resolution did not append after the original index row")
+	}
+	if lines := strings.Count(strings.TrimSpace(string(indexAfter)), "\n") + 1; lines != 2 {
+		t.Fatalf("index lines after resolution = %d, want original plus outcome", lines)
+	}
+}
+
+func TestDecisionIndexResolveRejectsCorruptOrMissingCanonicalV2State(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, store *FileArtifactStore, ref ArtifactRef)
+	}{
+		{
+			name: "corrupt record bytes",
+			mutate: func(t *testing.T, store *FileArtifactStore, ref ArtifactRef) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(store.root, "data", ref.ID), []byte(`{"id":"corrupt"}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "remove record metadata",
+			mutate: func(t *testing.T, store *FileArtifactStore, ref ArtifactRef) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(store.root, "meta", ref.ID+".json")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, store, record := stage4FinalizedReplayFixture(t)
+			index := newIndex(t)
+			index.SetJournal(journal)
+			index.SetArtifactStore(store)
+			state, err := projectDecision(context.Background(), journal, record.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.CanonicalRecord == nil || state.FinalizedRecordRef.ID == "" {
+				t.Fatalf("fixture state = %#v, want canonical v2 record and artifact reference", state)
+			}
+			question := state.FinalizationQuestion
+			if question == "" {
+				question = state.Packet.Question
+			}
+			if err := index.Append(IndexEntryFor(*state.CanonicalRecord, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)); err != nil {
+				t.Fatal(err)
+			}
+			indexBefore, err := os.ReadFile(index.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(t, store, state.FinalizedRecordRef)
+
+			if _, err := index.Resolve(record.ID, DecisionOutcomeRecord{ResolvedOutcome: OutcomeFailed}); err == nil {
+				t.Fatal("resolution accepted invalid canonical v2 state")
+			}
+			indexAfter, err := os.ReadFile(index.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(indexAfter, indexBefore) {
+				t.Fatal("failed resolution appended an outcome")
+			}
+		})
+	}
+}
+
+func TestDecisionIndexResolveSupportsSchemaV1FinalizedRecord(t *testing.T) {
+	journal := &memoryJournal{}
+	record := appendFinalizedDecisionForTest(t, journal, "legacy-resolve", "run-legacy", "task-legacy", "wait")
+	index := newIndex(t)
+	index.SetJournal(journal)
+	if err := index.Append(IndexEntryFor(record, "Which branch?", false, ArtifactRef{})); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := index.Resolve(record.ID, DecisionOutcomeRecord{ResolvedOutcome: OutcomeSucceeded})
+	if err != nil {
+		t.Fatalf("schema-v1 resolution: %v", err)
+	}
+	if updated.Outcome == nil || updated.Outcome.ResolvedOutcome != OutcomeSucceeded {
+		t.Fatalf("schema-v1 resolution = %#v", updated)
 	}
 }
 
@@ -346,6 +498,157 @@ func TestIndexEntryFor(t *testing.T) {
 	}
 	if entry.RecordDigest != "digest" || entry.RecordPath != "decisions/dec-1.json" {
 		t.Fatalf("record artifact not addressed: %#v", entry)
+	}
+}
+
+func TestDecisionIndexEntryRedactedDeeplySanitizesPresentationStrings(t *testing.T) {
+	entry := DecisionIndexEntry{
+		DecisionID:              "api_key=redacted-decision-id",
+		RunID:                   "api_key=redacted-run-id",
+		TaskID:                  "api_key=redacted-task-id",
+		Profile:                 "ordinary-profile",
+		EvidenceHash:            "api_key=redacted-evidence-hash",
+		Question:                "api_key=redacted-question",
+		FinalOption:             "api_key=redacted-option",
+		FinalizationMode:        "api_key=redacted-mode",
+		FinalizationIdentity:    "api_key=redacted-identity",
+		FinalizationReason:      "api_key=redacted-reason",
+		FinalizationWarnings:    []string{"api_key=redacted-warning"},
+		FinalizationOutcome:     "api_key=redacted-finalization-outcome",
+		FalsificationConditions: []string{"api_key=redacted-falsification"},
+		RecordDigest:            "api_key=redacted-record-digest",
+		RecordPath:              "api_key=redacted-record-path",
+		StaleReason:             "api_key=redacted-stale-reason",
+		AssumptionNotes:         []string{"api_key=redacted-assumption-note"},
+		RecordRef: ArtifactRef{
+			ID: "api_key=redacted-record-id", Kind: "api_key=redacted-record-kind",
+			Role: "api_key=redacted-record-role", Path: "api_key=redacted-record-ref-path",
+			Description: "api_key=redacted-record-description", Type: "api_key=redacted-record-type",
+			SHA256: "api_key=redacted-record-sha", MediaType: "api_key=redacted-record-media",
+			RunID: "api_key=redacted-record-run", TaskID: "api_key=redacted-record-task",
+			Agent: "api_key=redacted-record-agent", Provider: "api_key=redacted-record-provider",
+			ToolCallID: "api_key=redacted-record-tool",
+		},
+		FinalizationResultRef: &ArtifactRef{
+			ID: "api_key=redacted-finalization-result-id", Kind: "api_key=redacted-finalization-result-kind",
+			Role: "api_key=redacted-finalization-result-role", Path: "api_key=redacted-finalization-result-path",
+			Description: "api_key=redacted-finalization-result-description", Type: "api_key=redacted-finalization-result-type",
+			SHA256: "api_key=redacted-finalization-result-sha", MediaType: "api_key=redacted-finalization-result-media",
+			RunID: "api_key=redacted-finalization-result-run", TaskID: "api_key=redacted-finalization-result-task",
+			Agent: "api_key=redacted-finalization-result-agent", Provider: "api_key=redacted-finalization-result-provider",
+			ToolCallID: "api_key=redacted-finalization-result-tool",
+		},
+		Assumptions: []DecisionAssumption{{
+			ID: "api_key=redacted-assumption-id", Statement: "api_key=redacted-assumption-statement",
+			Status:       "api_key=redacted-assumption-status",
+			EvidenceRefs: []ArtifactRef{{ID: "api_key=redacted-assumption-ref"}},
+		}},
+		Outcome: &DecisionOutcomeRecord{
+			DecisionID: "api_key=redacted-outcome-id", ResolvedOutcome: "succeeded",
+			SuccessCriteria:  []string{"api_key=redacted-success-criteria"},
+			ObservedEvidence: []ArtifactRef{{Path: "api_key=redacted-observed-path"}},
+			Lessons:          []string{"api_key=redacted-lesson"}, Notes: "api_key=redacted-notes",
+			ResolvedBy:          "api_key=redacted-resolved-by",
+			UnverifiedEvidence:  []string{"api_key=redacted-unverified"},
+			VerificationSummary: "api_key=redacted-verification-summary",
+		},
+	}
+	redacted := entry.Redacted()
+	data, err := json.Marshal(redacted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{
+		"redacted-decision-id", "redacted-run-id", "redacted-task-id", "redacted-evidence-hash",
+		"redacted-question", "redacted-option", "redacted-mode", "redacted-identity", "redacted-reason",
+		"redacted-warning", "redacted-finalization-outcome", "redacted-falsification", "redacted-record-digest",
+		"redacted-record-path", "redacted-stale-reason", "redacted-assumption-note", "redacted-record-id",
+		"redacted-record-kind", "redacted-record-role", "redacted-record-ref-path", "redacted-record-description",
+		"redacted-record-type", "redacted-record-sha", "redacted-record-media", "redacted-record-run",
+		"redacted-record-task", "redacted-record-agent", "redacted-record-provider", "redacted-record-tool",
+		"redacted-finalization-result-id", "redacted-finalization-result-kind", "redacted-finalization-result-role",
+		"redacted-finalization-result-path", "redacted-finalization-result-description", "redacted-finalization-result-type",
+		"redacted-finalization-result-sha", "redacted-finalization-result-media", "redacted-finalization-result-run",
+		"redacted-finalization-result-task", "redacted-finalization-result-agent", "redacted-finalization-result-provider",
+		"redacted-finalization-result-tool",
+		"redacted-assumption-id", "redacted-assumption-statement", "redacted-assumption-status", "redacted-assumption-ref",
+		"redacted-outcome-id", "redacted-success-criteria", "redacted-observed-path", "redacted-lesson",
+		"redacted-notes", "redacted-resolved-by", "redacted-unverified", "redacted-verification-summary",
+	} {
+		if strings.Contains(string(data), secret) {
+			t.Errorf("redacted entry retained %q: %s", secret, data)
+		}
+	}
+	if !strings.Contains(string(data), "ordinary-profile") || !strings.Contains(string(data), "succeeded") {
+		t.Fatalf("redaction removed ordinary values: %s", data)
+	}
+	if entry.RecordRef.ID == "[REDACTED]" || entry.FinalizationResultRef == nil || entry.FinalizationResultRef.ID == "[REDACTED]" || entry.Outcome.Notes == "[REDACTED]" {
+		t.Fatal("Redacted mutated the source entry")
+	}
+	if redacted.FinalizationResultRef == nil {
+		t.Fatal("Redacted dropped the finalization result reference")
+	}
+	if redacted.FinalizationResultRef == entry.FinalizationResultRef {
+		t.Fatal("Redacted retained the finalization result reference alias")
+	}
+	if redacted.Outcome == entry.Outcome || &redacted.Assumptions[0] == &entry.Assumptions[0] ||
+		&redacted.Assumptions[0].EvidenceRefs[0] == &entry.Assumptions[0].EvidenceRefs[0] ||
+		&redacted.Outcome.ObservedEvidence[0] == &entry.Outcome.ObservedEvidence[0] {
+		t.Fatal("Redacted retained nested aliases")
+	}
+
+	redacted.RecordRef.ID = "mutated-record-ref"
+	redacted.FinalizationResultRef.ID = "mutated-finalization-result-ref"
+	redacted.Outcome.Notes = "mutated-outcome"
+	redacted.Outcome.ObservedEvidence[0].Path = "mutated-outcome-evidence"
+	redacted.Assumptions[0].EvidenceRefs[0].ID = "mutated-assumption-evidence"
+	if entry.RecordRef.ID != "api_key=redacted-record-id" ||
+		entry.FinalizationResultRef.ID != "api_key=redacted-finalization-result-id" ||
+		entry.Outcome.Notes != "api_key=redacted-notes" ||
+		entry.Outcome.ObservedEvidence[0].Path != "api_key=redacted-observed-path" ||
+		entry.Assumptions[0].EvidenceRefs[0].ID != "api_key=redacted-assumption-ref" {
+		t.Fatal("mutating redacted nested values changed the source entry")
+	}
+}
+
+func TestDecisionIndexAppendReloadRedactsNestedProjection(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry DecisionIndexEntry
+	}{
+		{name: "resolved outcome", entry: DecisionIndexEntry{
+			DecisionID: "append-reload", Profile: "ordinary-profile",
+			Outcome: &DecisionOutcomeRecord{ResolvedOutcome: "succeeded", Notes: "api_key=append-reload-notes", ObservedEvidence: []ArtifactRef{{Path: "api_key=append-reload-path"}}},
+		}},
+		{name: "finalization", entry: DecisionIndexEntry{
+			DecisionID: "append-finalization", Profile: "ordinary-profile",
+			FinalizationMode: "api_key=append-reload-mode", FinalizationWarnings: []string{"api_key=append-reload-warning"},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			index := newIndex(t)
+			if err := index.Append(tt.entry); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(index.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "append-reload-") {
+				t.Fatalf("index file retained sentinel: %s", data)
+			}
+			entries, err := index.List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Profile != "ordinary-profile" {
+				t.Fatalf("reloaded projection = %#v", entries)
+			}
+			if entries[0].Outcome != nil && entries[0].Outcome.ResolvedOutcome != "succeeded" {
+				t.Fatalf("ordinary outcome changed: %#v", entries[0].Outcome)
+			}
+		})
 	}
 }
 
@@ -400,7 +703,7 @@ func TestDecisionIndexPathIsWorkspaceScoped(t *testing.T) {
 
 func appendFinalizedDecisionForTest(t *testing.T, journal decisionJournal, id, runID, taskID, profile string) DecisionRecord {
 	t.Helper()
-	record := DecisionRecord{ID: id, RunID: runID, TaskID: taskID, Profile: profile, FinalOption: profile}
+	record := DecisionRecord{SchemaVersion: 1, ID: id, RunID: runID, TaskID: taskID, Profile: profile, FinalOption: profile}
 	if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionFinalized, decisionEvent{
 		DecisionID: id, RunID: runID, TaskID: taskID, Attempt: 1, Profile: profile,
 		Record: &record, Question: "Which branch?",

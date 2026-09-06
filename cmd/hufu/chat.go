@@ -183,6 +183,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		teamInfo.PTYEnabled = opts.enablePTYTerminal
 		teamInfo.HufuBinary, _ = os.Executable()
 		teamInfo.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		teamInfo.Decisions = team.RedactedDecisionIndexEntries(teamInfo.Decisions)
 		teamInfo.IsChat = true
 
 		segments := []team.PromptSegment{

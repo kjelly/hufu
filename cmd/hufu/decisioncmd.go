@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // hufu decision — the cross-run entry point for decisions
@@ -183,10 +184,21 @@ func getDecisionWorkspace() string {
 }
 
 func openDecisionIndex() (*team.DecisionIndex, error) {
-	index, err := team.OpenDecisionIndex(getDecisionWorkspace())
+	workspace := getDecisionWorkspace()
+	index, err := team.OpenDecisionIndex(workspace)
 	if err != nil {
 		return nil, &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision: %v", err)}
 	}
+	store, err := team.NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		return nil, &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision: artifact store: %v", err)}
+	}
+	events, err := team.OpenEventStore(workspace)
+	if err != nil {
+		return nil, &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision: event store: %v", err)}
+	}
+	team.BindDecisionIndexEventStore(index, events)
+	index.SetArtifactStore(store)
 	return index, nil
 }
 
@@ -208,6 +220,7 @@ func runDecisionList(cmd *cobra.Command, args []string) error {
 		}
 		entries = pending
 	}
+	entries = team.RedactedDecisionIndexEntries(entries)
 
 	if decisionJSON {
 		return writeDecisionJSON(cmd, map[string]any{
@@ -226,15 +239,22 @@ func runDecisionList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "DECISION\tRUN\tPROFILE\tCHOSE\tP\tSTATUS\tFORMED")
+	var display strings.Builder
+	w := tabwriter.NewWriter(&display, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "DECISION\tRUN\tPROFILE\tCHOSE\tP\tFINALIZER\tFINALIZER-STALE\tRECORD-REF\tSTATUS\tFORMED")
 	for _, entry := range entries {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\t%s\t%s\n",
 			entry.DecisionID, shortOrDash(entry.RunID), shortOrDash(entry.Profile),
 			shortOrDash(entry.FinalOption), formatProbability(entry.Probability),
+			shortOrDash(finalizationDisplay(entry)),
+			entry.FinalizationStale, shortOrDash(recordReferenceDisplay(entry)),
 			decisionStatus(entry), formatDecisionTime(entry.CreatedAt))
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(cmd.OutOrStdout(), utils.RedactSecrets(display.String()))
+	return err
 }
 
 func runDecisionShow(cmd *cobra.Command, args []string) error {
@@ -249,48 +269,64 @@ func runDecisionShow(cmd *cobra.Command, args []string) error {
 	if !found {
 		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision show: decision %q is not in %s", args[0], index.Path())}
 	}
+	entry = entry.Redacted()
 	if decisionJSON {
 		return writeDecisionJSON(cmd, entry)
 	}
 
-	out := cmd.OutOrStdout()
-	_, _ = fmt.Fprintf(out, "Decision:   %s\n", entry.DecisionID)
-	_, _ = fmt.Fprintf(out, "Run:        %s\n", shortOrDash(entry.RunID))
-	_, _ = fmt.Fprintf(out, "Task:       %s\n", shortOrDash(entry.TaskID))
-	_, _ = fmt.Fprintf(out, "Profile:    %s\n", shortOrDash(entry.Profile))
-	_, _ = fmt.Fprintf(out, "Question:   %s\n", shortOrDash(entry.Question))
-	_, _ = fmt.Fprintf(out, "Chose:      %s (p=%s)\n", shortOrDash(entry.FinalOption), formatProbability(entry.Probability))
-	_, _ = fmt.Fprintf(out, "Evidence:   %s\n", shortOrDash(entry.EvidenceHash))
-	_, _ = fmt.Fprintf(out, "Record:     %s\n", shortOrDash(entry.RecordPath))
-	_, _ = fmt.Fprintf(out, "Formed:     %s\n", formatDecisionTime(entry.CreatedAt))
-	_, _ = fmt.Fprintf(out, "Status:     %s\n", decisionStatus(entry))
+	var display strings.Builder
+	_, _ = fmt.Fprintf(&display, "Decision:   %s\n", entry.DecisionID)
+	_, _ = fmt.Fprintf(&display, "Run:        %s\n", shortOrDash(entry.RunID))
+	_, _ = fmt.Fprintf(&display, "Task:       %s\n", shortOrDash(entry.TaskID))
+	_, _ = fmt.Fprintf(&display, "Profile:    %s\n", shortOrDash(entry.Profile))
+	_, _ = fmt.Fprintf(&display, "Question:   %s\n", shortOrDash(entry.Question))
+	_, _ = fmt.Fprintf(&display, "Chose:      %s (p=%s)\n", shortOrDash(entry.FinalOption), formatProbability(entry.Probability))
+	_, _ = fmt.Fprintf(&display, "Finalizer:  %s\n", shortOrDash(finalizationDisplay(entry)))
+	_, _ = fmt.Fprintf(&display, "Finalizer stale: %t\n", entry.FinalizationStale)
+	if entry.FinalizationReason != "" {
+		_, _ = fmt.Fprintf(&display, "Reason:     %s\n", entry.FinalizationReason)
+	}
+	if entry.FinalizationResultRef != nil {
+		_, _ = fmt.Fprintf(&display, "Result:     %s\n", shortOrDash(entry.FinalizationResultRef.SHA256))
+	}
+	if entry.FinalizationStale {
+		_, _ = fmt.Fprintln(&display, "Finalizer stale: true")
+	}
+	for _, warning := range entry.FinalizationWarnings {
+		_, _ = fmt.Fprintf(&display, "Finalizer warning: %s\n", warning)
+	}
+	_, _ = fmt.Fprintf(&display, "Evidence:   %s\n", shortOrDash(entry.EvidenceHash))
+	_, _ = fmt.Fprintf(&display, "Record:     %s\n", shortOrDash(recordReferenceDisplay(entry)))
+	_, _ = fmt.Fprintf(&display, "Formed:     %s\n", formatDecisionTime(entry.CreatedAt))
+	_, _ = fmt.Fprintf(&display, "Status:     %s\n", decisionStatus(entry))
 	if entry.Stale {
-		_, _ = fmt.Fprintf(out, "Stale:      %s\n", shortOrDash(entry.StaleReason))
+		_, _ = fmt.Fprintf(&display, "Stale:      %s\n", shortOrDash(entry.StaleReason))
 	}
 	if len(entry.FalsificationConditions) > 0 {
-		_, _ = fmt.Fprintln(out, "\nWould have shown this decision was wrong:")
+		_, _ = fmt.Fprintln(&display, "\nWould have shown this decision was wrong:")
 		for _, condition := range entry.FalsificationConditions {
-			_, _ = fmt.Fprintf(out, "  - %s\n", condition)
+			_, _ = fmt.Fprintf(&display, "  - %s\n", condition)
 		}
 	}
 	if entry.Outcome != nil {
 		outcome := entry.Outcome
-		_, _ = fmt.Fprintf(out, "\nOutcome:    %s\n", outcome.ResolvedOutcome)
-		_, _ = fmt.Fprintf(out, "Verified:   %t (%s)\n", outcome.Verified, outcome.VerificationSummary)
-		_, _ = fmt.Fprintf(out, "Resolved:   %s by %s\n", formatDecisionTime(outcome.ResolvedAt), shortOrDash(outcome.ResolvedBy))
+		_, _ = fmt.Fprintf(&display, "\nOutcome:    %s\n", outcome.ResolvedOutcome)
+		_, _ = fmt.Fprintf(&display, "Verified:   %t (%s)\n", outcome.Verified, outcome.VerificationSummary)
+		_, _ = fmt.Fprintf(&display, "Resolved:   %s by %s\n", formatDecisionTime(outcome.ResolvedAt), shortOrDash(outcome.ResolvedBy))
 		if outcome.Notes != "" {
-			_, _ = fmt.Fprintf(out, "Notes:      %s\n", outcome.Notes)
+			_, _ = fmt.Fprintf(&display, "Notes:      %s\n", outcome.Notes)
 		}
 		for _, lesson := range outcome.Lessons {
-			_, _ = fmt.Fprintf(out, "  lesson: %s\n", lesson)
+			_, _ = fmt.Fprintf(&display, "  lesson: %s\n", lesson)
 		}
 		for _, ref := range outcome.ObservedEvidence {
-			_, _ = fmt.Fprintf(out, "  evidence: %s %s\n", ref.SHA256, ref.Path)
+			_, _ = fmt.Fprintf(&display, "  evidence: %s %s\n", ref.SHA256, ref.Path)
 		}
 		for _, digest := range outcome.UnverifiedEvidence {
-			_, _ = fmt.Fprintf(out, "  unresolved evidence: %s\n", digest)
+			_, _ = fmt.Fprintf(&display, "  unresolved evidence: %s\n", digest)
 		}
 	}
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), utils.RedactSecrets(display.String()))
 	return nil
 }
 
@@ -359,7 +395,7 @@ func runDecisionResolve(cmd *cobra.Command, args []string) error {
 	}
 
 	if decisionJSON {
-		return writeDecisionJSON(cmd, updated)
+		return writeDecisionJSON(cmd, updated.Redacted())
 	}
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintf(out, "Recorded outcome %q for decision %s\n", updated.Outcome.ResolvedOutcome, decisionID)
@@ -384,6 +420,7 @@ func writeDecisionJSON(cmd *cobra.Command, payload any) error {
 }
 
 func decisionStatus(entry team.DecisionIndexEntry) string {
+	entry = entry.Redacted()
 	switch {
 	case entry.Outcome != nil && entry.Outcome.Verified:
 		return entry.Outcome.ResolvedOutcome + " (verified)"
@@ -394,6 +431,37 @@ func decisionStatus(entry team.DecisionIndexEntry) string {
 	default:
 		return "unresolved"
 	}
+}
+
+func finalizationDisplay(entry team.DecisionIndexEntry) string {
+	entry = entry.Redacted()
+	parts := make([]string, 0, 3)
+	if entry.FinalizationMode != "" {
+		parts = append(parts, entry.FinalizationMode)
+	}
+	if entry.FinalizationIdentity != "" {
+		parts = append(parts, entry.FinalizationIdentity)
+	}
+	if entry.FinalizationOutcome != "" {
+		parts = append(parts, entry.FinalizationOutcome)
+	}
+	return strings.Join(parts, "/")
+}
+
+func recordReferenceDisplay(entry team.DecisionIndexEntry) string {
+	entry = entry.Redacted()
+	ref := entry.EffectiveRecordRef()
+	parts := make([]string, 0, 3)
+	if ref.ID != "" {
+		parts = append(parts, ref.ID)
+	}
+	if ref.SHA256 != "" {
+		parts = append(parts, ref.SHA256)
+	}
+	if ref.Path != "" {
+		parts = append(parts, ref.Path)
+	}
+	return strings.Join(parts, " ")
 }
 
 func formatProbability(p float64) string {
@@ -444,7 +512,7 @@ func runDecisionAssume(cmd *cobra.Command, args []string) error {
 	}
 
 	if decisionJSON {
-		return writeDecisionJSON(cmd, entry)
+		return writeDecisionJSON(cmd, entry.Redacted())
 	}
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintf(out, "Recorded assumption %s as %s for decision %s\n",

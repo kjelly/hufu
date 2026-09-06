@@ -3,8 +3,6 @@ package team
 import (
 	"fmt"
 	"strings"
-
-	"github.com/kjelly/hufu/internal/agent"
 )
 
 // Decision quality gates (docs/hufu-decision-aware-runtime-spec.md §17, §19,
@@ -206,19 +204,4 @@ func CheckRequestContract(contract *RequestContract) *GateResult {
 		}
 	}
 	return nil
-}
-
-// FinalOptionFor applies the configured finalization mode. Coordinator and
-// judge finalization receive structured objects, never raw conversation, and an
-// override away from the aggregate must carry a reason (spec §26).
-func FinalOptionFor(policy DecisionPolicy, aggregate DecisionAggregate, override string, reason string) (string, bool, error) {
-	mode := policy.EffectiveFinalization()
-	if mode == agent.FinalizationAggregate || strings.TrimSpace(override) == "" {
-		return aggregate.PreferredOption, false, nil
-	}
-	if strings.TrimSpace(reason) == "" {
-		return "", false, fmt.Errorf("finalization mode %q chose %q over the aggregate's %q without a recorded reason",
-			mode, override, aggregate.PreferredOption)
-	}
-	return override, override != aggregate.PreferredOption, nil
 }

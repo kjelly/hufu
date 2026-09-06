@@ -1369,7 +1369,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			}
 
 		case "decision_state":
-			p.Send(tuipkg.DecisionStateMsg{Decisions: event.Decisions})
+			p.Send(tuipkg.DecisionStateMsg{Decisions: team.RedactedDecisionIndexEntries(event.Decisions)})
 
 		case "plan_approved":
 			if event.Message != "" {

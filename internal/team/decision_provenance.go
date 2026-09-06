@@ -29,6 +29,59 @@ type EvidenceIndependence struct {
 	SharedOriginWarnings []string
 }
 
+// RuntimeEvidenceMetadata is populated only after an artifact or retrieval has
+// been resolved by the runtime. It deliberately has no model-declared parent
+// field: declarations remain auditable in EvidenceProvenance but never become
+// grouping authority.
+type RuntimeEvidenceMetadata struct {
+	Artifact ArtifactRef
+	Origin   ArtifactOriginMetadata
+}
+
+// TrustedProvenanceFromRuntimeMetadata derives the only provenance eligible
+// for independence grouping. The artifact must carry the opaque ID and digest
+// returned by ArtifactStore.Resolve; caller-provided paths and declarations are
+// not a substitute for this metadata.
+func TrustedProvenanceFromRuntimeMetadata(metadata []RuntimeEvidenceMetadata) []EvidenceProvenance {
+	byID := make(map[string]EvidenceProvenance, len(metadata))
+	for _, value := range metadata {
+		artifact := value.Artifact
+		if strings.TrimSpace(artifact.ID) == "" || strings.TrimSpace(artifact.SHA256) == "" {
+			continue
+		}
+		sourceID := artifact.ID
+		sourceType := EvidenceSourceArtifact
+		retrievalURL := strings.TrimSpace(value.Origin.RetrievalURL)
+		if parsed, err := url.Parse(retrievalURL); err == nil && parsed.Scheme != "" && parsed.Hostname() != "" {
+			sourceID = parsed.String()
+			sourceType = EvidenceSourceURL
+		}
+		parents := normalizeProvenanceIDs(value.Origin.ParentSourceIDs)
+		candidate := EvidenceProvenance{
+			SourceID: sourceID, SourceType: sourceType, ContentHash: artifact.SHA256,
+			ParentSourceIDs: parents,
+		}
+		if existing, ok := byID[sourceID]; ok {
+			// The same source can be referenced by several evidence roles. Keep
+			// every runtime edge while choosing scalar metadata deterministically.
+			existing.ParentSourceIDs = normalizeProvenanceIDs(append(existing.ParentSourceIDs, candidate.ParentSourceIDs...))
+			if canonicalProvenanceKey(candidate) < canonicalProvenanceKey(existing) {
+				existing.SourceType = candidate.SourceType
+				existing.ContentHash = candidate.ContentHash
+			}
+			byID[sourceID] = existing
+			continue
+		}
+		byID[sourceID] = candidate
+	}
+	out := make([]EvidenceProvenance, 0, len(byID))
+	for _, source := range byID {
+		out = append(out, source)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SourceID < out[j].SourceID })
+	return out
+}
+
 // unionFind assigns sources to groups deterministically.
 type unionFind struct{ parent map[string]string }
 
@@ -78,7 +131,34 @@ func GroupEvidence(sources []EvidenceProvenance, policy EvidenceIndependencePoli
 		return result
 	}
 
-	ordered := append([]EvidenceProvenance(nil), sources...)
+	byID := make(map[string]EvidenceProvenance, len(sources))
+	for _, source := range sources {
+		id := strings.TrimSpace(source.SourceID)
+		if id == "" {
+			continue
+		}
+		source.SourceID = id
+		// A duplicate source is still one source; stable canonical selection
+		// prevents input order from changing grouping or warning output.
+		if existing, ok := byID[id]; ok {
+			// Normalize deterministically but retain duplicate runtime edges.
+			existing.ParentSourceIDs = normalizeProvenanceIDs(append(existing.ParentSourceIDs, source.ParentSourceIDs...))
+			if canonicalProvenanceKey(source) < canonicalProvenanceKey(existing) {
+				existing.SourceType = source.SourceType
+				existing.ContentHash = source.ContentHash
+			}
+			byID[id] = existing
+		} else {
+			byID[id] = source
+		}
+	}
+	ordered := make([]EvidenceProvenance, 0, len(byID))
+	for _, source := range byID {
+		ordered = append(ordered, source)
+	}
+	if len(ordered) == 0 {
+		return result
+	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].SourceID < ordered[j].SourceID })
 
 	ids := make([]string, 0, len(ordered))
@@ -113,8 +193,7 @@ func GroupEvidence(sources []EvidenceProvenance, policy EvidenceIndependencePoli
 	// Rule 3: parent links the retrieval adapter recorded. DeclaredParentSourceIDs
 	// is intentionally not consulted.
 	for _, source := range ordered {
-		parents := append([]string(nil), source.ParentSourceIDs...)
-		sort.Strings(parents)
+		parents := normalizeProvenanceIDs(source.ParentSourceIDs)
 		for _, parent := range parents {
 			if parent == "" {
 				continue
@@ -151,6 +230,28 @@ func GroupEvidence(sources []EvidenceProvenance, policy EvidenceIndependencePoli
 	return result
 }
 
+func canonicalProvenanceKey(source EvidenceProvenance) string {
+	parents := normalizeProvenanceIDs(source.ParentSourceIDs)
+	return source.SourceType + "\x00" + source.ContentHash + "\x00" + strings.Join(parents, "\x00")
+}
+
+// normalizeProvenanceIDs trims and sorts edge IDs while intentionally retaining
+// duplicates. Sorting makes grouping/replay stable; dropping duplicates would
+// destroy provenance fidelity.
+func normalizeProvenanceIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			normalized = append(normalized, id)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
 // registrableDomain extracts eTLD+1 from a URL-shaped source ID. An unparsable
 // value groups by nothing rather than guessing.
 func registrableDomain(raw string) string {
@@ -168,23 +269,11 @@ func registrableDomain(raw string) string {
 // ProvenanceFromArtifacts derives provenance for the packet's artifacts. The
 // content digest is the identity: the same bytes at two paths are one source.
 func ProvenanceFromArtifacts(artifacts []ArtifactRef) []EvidenceProvenance {
-	out := make([]EvidenceProvenance, 0, len(artifacts))
+	metadata := make([]RuntimeEvidenceMetadata, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		id := artifact.ID
-		if id == "" {
-			id = artifact.Path
+		if strings.TrimSpace(artifact.ID) != "" && strings.TrimSpace(artifact.SHA256) != "" {
+			metadata = append(metadata, RuntimeEvidenceMetadata{Artifact: artifact})
 		}
-		if id == "" {
-			id = artifact.SHA256
-		}
-		if id == "" {
-			continue
-		}
-		out = append(out, EvidenceProvenance{
-			SourceID:    id,
-			SourceType:  EvidenceSourceArtifact,
-			ContentHash: artifact.SHA256,
-		})
 	}
-	return out
+	return TrustedProvenanceFromRuntimeMetadata(metadata)
 }
