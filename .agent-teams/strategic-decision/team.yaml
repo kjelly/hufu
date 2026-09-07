@@ -1,0 +1,309 @@
+name: strategic-decision
+description: >
+  Evidence-first decision team with outside view, isolated judgments,
+  deterministic aggregation, premortem, no-go alternatives, and
+  explicit dissent. Adapted from spec.md against Hufu's actual
+  decision-aware runtime schema (internal/agent/decision_config.go,
+  internal/team/parse.go) — see README.md in this directory for every
+  point where spec.md's proposed team.yaml did not match the real,
+  strict (KnownFields) parser and had to be corrected.
+
+max-rounds: 10
+max-steps: 20
+timeout: 600
+max-retries: 2
+max-concurrent: 5
+
+# REQUIRED, and not mentioned anywhere in spec.md: the whole decision engine
+# is driven by one non-tool-using "judge sidecar" model
+# (internal/team/decision_runners.go). Without judge-model, every task that
+# resolves to a non-off decision profile fails closed with "needs a judge
+# model and none is configured" (internal/team/decision_dispatch.go:178).
+# Point this at a model already configured for this environment (see
+# `hufu models` / your provider config) before running this team.
+judge-model: CHANGE_ME_TO_A_CONFIGURED_MODEL_ID
+
+# REQUIRED for the capability-routed REFERENCE stage (see
+# decision.profiles.*.outside-view.role below): reference.md and
+# reference-specialist.md don't declare their own model, so both fall back to
+# this team default. Same placeholder as judge-model — fill both in.
+model: CHANGE_ME_TO_A_CONFIGURED_MODEL_ID
+
+# Maintainer-declared capability evidence (plan.md Stage 8;
+# internal/agent/agent.go DeclaredCapability). This is the trust tier above a
+# worker's own self-declared capabilities (extracted from its system prompt) —
+# a human wrote this, the agent did not claim it about itself. See README.md
+# "Gap 1" for what this now genuinely changes at runtime.
+capability-registry:
+  reference:
+    - capability: evidence-research
+      confidence: 0.5
+  reference-specialist:
+    - capability: evidence-research
+      confidence: 0.7
+    - capability: architecture
+      confidence: 0.7
+
+# Decision workers should not mutate workspace/external state.
+tools:
+  allowed:
+    - view
+    - grep
+    - glob
+    - ls
+
+project-context: true
+
+# Decision orchestration belongs to DecisionEngine, not to a runtime-owned
+# phase workflow.
+workflow:
+  phases: []
+
+delegation:
+  # NOTE (runtime gap, see README.md "Gap 1" — now partial): juror/challenger
+  # are listed here for documentation and so a normal coordinator delegation
+  # to a worker literally named "juror"/"challenger" is policy-permitted, but
+  # the JUDGE/CHALLENGE/PREMORTEM/REVISE/FINALIZE stages still call the
+  # team's judge-model sidecar directly (internal/team/decision_runners.go),
+  # bypassing allowed-workers entirely. REFERENCE is the exception: it is
+  # genuinely capability-routed to one of reference/reference-specialist
+  # below (internal/team/decision_reference_capability_runner.go), and this
+  # allowed-workers list is exactly the eligible/authorized set that routing
+  # is only ever allowed to narrow, never expand
+  # (Coordinator.eligibleWorkerIDs).
+  allowed-workers:
+    - reference
+    - reference-specialist
+    - juror
+    - challenger
+  forbid-context-files: false
+
+# REQUIRED, and not mentioned in spec.md: prepareTaskDecision refuses to form
+# any decision unless decision.request-contract.enabled is true
+# (internal/team/decision_dispatch.go:106-108). Objective/success-criteria are
+# fixed per team (not something the coordinator can author per request: see
+# README.md "Gap 2"), so keep this generic across whatever question the
+# coordinator delegates as the task Goal.
+decision:
+  request-contract:
+    enabled: true
+    objective: >
+      Reach the highest-quality decision on the request the coordinator
+      delegates, using sealed independent judgment and evidence rather than
+      the model's own first instinct.
+    success-criteria:
+      - id: sealed-judgment
+        statement: >
+          The chosen option was scored by independently sealed judges against
+          a deterministic aggregate, not by a single pass of reasoning.
+      - id: legitimate-alternative
+        statement: >
+          A no-go / defer / reduce-scope / request-information alternative
+          was considered on equal footing and was not excluded by default.
+
+  default-profile: standard
+
+  profiles:
+    light:
+      independent-judgments: 2
+      context-isolation: strict
+      aggregation:
+        method: mean-score
+
+      outside-view:
+        required: false
+
+      challenge:
+        enabled: false
+
+      revision:
+        enabled: false
+
+      forecast:
+        required: false
+
+      # Coordinator cannot author decision-options at request time (TaskDef
+      # .DecisionOptions is configuration-only, json:"-" — see README.md "Gap
+      # 2"). option-proposal is enabled so this team is runnable against an
+      # arbitrary delegated question instead of requiring a hand-written task
+      # contract for every decision. The runtime still deterministically
+      # injects the required no-go/information alternatives regardless of
+      # what the proposer returns (internal/team/decision_options.go).
+      option-proposal:
+        enabled: true
+
+      budget-degradation: forbidden
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          min-options: 2
+
+        stop:
+          max-attempts: 2
+          require-kill-criteria: false
+
+        evidence:
+          required-independent-groups: 1
+
+        # UPDATE (was "Gap 3", now implemented — see README.md "Stage 8 V1"):
+        # discipline.routing.capability-aware now exists
+        # (internal/agent/decision_config.go RoutingPolicy) and would parse
+        # here. It is deliberately left off for this team: capability-aware
+        # routing (internal/team/capability_registry.go) ranks among multiple
+        # *candidate* workers for one task, and this team has no such
+        # ambiguity — reference/juror/challenger are each a single fixed
+        # role, not a pool to choose from. It also is not yet wired into the
+        # DecisionEngine dispatch path at all (plan.md Status, Stage 8). It
+        # would only do something real for a team where the coordinator picks
+        # among several eligible workers, e.g. hufu-dev's
+        # implementation-engineer vs. a future specialist.
+
+    standard:
+      independent-judgments: 3
+      context-isolation: strict
+      aggregation:
+        method: mean-score
+
+      outside-view:
+        required: true
+        # spec.md wrote `worker: reference`, which does not exist on
+        # OutsideViewPolicy. reference-evidence is the real flag that makes
+        # the engine run its built-in outside-view/base-rate stage
+        # (internal/team/decision_engine_reference.go:30).
+        reference-evidence: true
+        # UPDATE (was "Gap 1" for this stage, now RESOLVED — see README.md):
+        # this is genuinely capability-routed, not the judge-model sidecar.
+        # The runtime resolves the highest-scoring already-authorized
+        # candidate from delegation.allowed-workers whose declared
+        # capabilities satisfy required (capability-registry above scores
+        # reference-specialist 0.7 vs. reference's 0.5 for evidence-research,
+        # plus reference-specialist alone matches the preferred tag) —
+        # reference-specialist wins deterministically.
+        role:
+          required-capabilities:
+            - evidence-research
+          preferred-capabilities:
+            - architecture
+
+      challenge:
+        enabled: true
+        # spec.md wrote `worker: challenger`, which does not exist on
+        # ChallengePolicy. No worker binding is needed or possible: the
+        # challenge stage always runs on the judge-model sidecar.
+        count: 1
+
+      premortem:
+        enabled: true
+        required-before-commit: false
+
+      revision:
+        enabled: true
+
+      forecast:
+        required: true
+
+      option-proposal:
+        enabled: true
+
+      budget-degradation: forbidden
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          require-information-option: true
+          min-options: 3
+
+        stop:
+          max-attempts: 3
+          checkpoint-every: 1
+          require-kill-criteria: true
+
+        commit:
+          require-verification: true
+          require-evidence: true
+
+        replan:
+          on-critical-assumption-contradicted: replan
+          # spec.md wrote `on-evidence-packet-changed`; the real field is
+          # on-material-evidence-changed (internal/agent/decision_config.go).
+          on-material-evidence-changed: replan
+          on-repeated-failure: replan
+          # spec.md's `on-capability-invalidated` trigger does not exist in
+          # this runtime (ReplanPolicy has exactly these three triggers) and
+          # was dropped rather than left to fail closed on load.
+
+        evidence:
+          required-independent-groups: 2
+          reject-circular-citation: true
+          warn-shared-origin: true
+
+      max-rounds: 2
+
+    high-stakes:
+      independent-judgments: 5
+      context-isolation: sealed
+      aggregation:
+        method: mean-score
+
+      outside-view:
+        required: true
+        reference-evidence: true
+        role:
+          required-capabilities:
+            - evidence-research
+          preferred-capabilities:
+            - architecture
+
+      challenge:
+        enabled: true
+        count: 2
+
+      premortem:
+        enabled: true
+        required-before-commit: true
+
+      revision:
+        enabled: true
+
+      forecast:
+        required: true
+
+      option-proposal:
+        enabled: true
+
+      budget-degradation: forbidden
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          require-information-option: true
+          min-options: 3
+
+        stop:
+          checkpoint-every: 1
+          require-kill-criteria: true
+
+        commit:
+          require-reconcile: true
+          require-observability: true
+          require-verification: true
+          require-evidence: true
+
+        replan:
+          on-critical-assumption-contradicted: replan
+          on-material-evidence-changed: replan
+          on-repeated-failure: stop
+
+        evidence:
+          required-independent-groups: 2
+          reject-circular-citation: true
+          warn-shared-origin: true
+
+      max-rounds: 2
+
+max-total-tokens: 200000
+max-duration: 3600
+
+reliability:
+  hard-enforcement: true
