@@ -173,15 +173,33 @@ func compareTaskDefWithTodoOccurrence(task TaskDef, item *TodoItem, indexByID ma
 		want.OnFailure = &failureIndex
 	}
 	// Pipeline and plan ID are lifecycle/compile-time conveniences and have no
-	// meaning after the durable occurrence is created.
+	// meaning after the durable occurrence is created. FanOut is likewise a
+	// compile-time expansion directive; expanded children must not retain it in
+	// the durable execution contract.
 	task.Pipeline = false
+	task.FanOut = nil
 	want.Pipeline = false
 	task.PlanID = ""
 	want.PlanID = ""
 	if !reflect.DeepEqual(task, want) {
-		return fmt.Errorf("task %s scheduler contract differs from durable Todo occurrence", item.ID)
+		return fmt.Errorf("task %s scheduler contract differs from durable Todo occurrence (%s)", item.ID, taskOccurrenceDiff(task, want))
 	}
 	return nil
+}
+
+func taskOccurrenceDiff(got, want TaskDef) string {
+	gotValue := reflect.ValueOf(got)
+	wantValue := reflect.ValueOf(want)
+	typeOf := gotValue.Type()
+	for index := 0; index < gotValue.NumField(); index++ {
+		if !gotValue.Field(index).CanInterface() || !wantValue.Field(index).CanInterface() {
+			continue
+		}
+		if !reflect.DeepEqual(gotValue.Field(index).Interface(), wantValue.Field(index).Interface()) {
+			return fmt.Sprintf("field %s differs", typeOf.Field(index).Name)
+		}
+	}
+	return "field values differ"
 }
 
 // reconstructSchedulerTaskDefs resolves executable TaskDefs from the current
