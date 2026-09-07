@@ -132,6 +132,11 @@ type DecisionPolicy struct {
 	OutsideView OutsideViewPolicy   `yaml:"outside-view,omitempty"`
 	Criteria    []DecisionCriterion `yaml:"criteria,omitempty"`
 
+	// JudgeRole opts the JUDGE stage into real capability-routed execution
+	// (spec.md v2 §17; spec2.md PR-3). A nil JudgeRole preserves the
+	// sidecar-only behavior exactly as before this field existed.
+	JudgeRole *JudgeRolePolicy `yaml:"judge-role,omitempty"`
+
 	Aggregation  AggregationPolicy  `yaml:"aggregation,omitempty"`
 	Challenge    ChallengePolicy    `yaml:"challenge,omitempty"`
 	Revision     RevisionPolicy     `yaml:"revision,omitempty"`
@@ -187,6 +192,44 @@ func (p ReferenceRolePolicy) Validate() error {
 		return fmt.Errorf("outside-view.role.required-capabilities must name at least one capability")
 	}
 	return nil
+}
+
+// JudgeRolePolicy names the capabilities the JUDGE stage's resolved workers
+// must (and should) show, and the minimal diversity floor across them
+// (spec.md v2 §17-§18; spec2.md PR-3). MinDistinctAgents is deliberately not
+// the full DiversityPolicy spec.md v2 describes — only the floor needed to
+// prove "candidates too few must fail closed, not silently repeat one agent".
+type JudgeRolePolicy struct {
+	RequiredCapabilities  []string `yaml:"required-capabilities,omitempty"`
+	PreferredCapabilities []string `yaml:"preferred-capabilities,omitempty"`
+	MinDistinctAgents     int      `yaml:"min-distinct-agents,omitempty"`
+}
+
+// Validate enforces the same "must have something to route on" rule
+// ReferenceRolePolicy does, plus a config-time sanity bound on
+// MinDistinctAgents: independentJudgments is the caller's
+// DecisionPolicy.IndependentJudgments, since requiring more distinct agents
+// than judges dispatched could never be satisfied.
+func (p JudgeRolePolicy) Validate(independentJudgments int) error {
+	if len(p.RequiredCapabilities) == 0 {
+		return fmt.Errorf("judge-role.required-capabilities must name at least one capability")
+	}
+	if p.MinDistinctAgents < 0 {
+		return fmt.Errorf("judge-role.min-distinct-agents must not be negative, got %d", p.MinDistinctAgents)
+	}
+	if p.MinDistinctAgents > independentJudgments {
+		return fmt.Errorf("judge-role.min-distinct-agents (%d) must not exceed independent-judgments (%d)", p.MinDistinctAgents, independentJudgments)
+	}
+	return nil
+}
+
+// EffectiveMinDistinctAgents defaults to 1 (no diversity requirement beyond
+// "at least one authorized candidate exists").
+func (p JudgeRolePolicy) EffectiveMinDistinctAgents() int {
+	if p.MinDistinctAgents <= 0 {
+		return 1
+	}
+	return p.MinDistinctAgents
 }
 
 // AggregationPolicy selects the deterministic aggregator (spec §21).
@@ -480,6 +523,11 @@ func (p DecisionPolicy) Validate() error {
 	if p.OutsideView.Role != nil {
 		if err := p.OutsideView.Role.Validate(); err != nil {
 			return fmt.Errorf("outside-view.role: %w", err)
+		}
+	}
+	if p.JudgeRole != nil {
+		if err := p.JudgeRole.Validate(p.IndependentJudgments); err != nil {
+			return fmt.Errorf("judge-role: %w", err)
 		}
 	}
 	switch p.ContextIsolation {

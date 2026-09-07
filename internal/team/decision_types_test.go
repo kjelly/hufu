@@ -426,6 +426,61 @@ decision:
 	}
 }
 
+// judge-role (spec2.md PR-3) must round-trip through the strict team.yaml
+// decoder like every other discipline field.
+func TestParseTeamYMLJudgeRole(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: routed
+decision:
+  default-profile: standard
+  profiles:
+    standard:
+      independent-judgments: 3
+      judge-role:
+        required-capabilities:
+          - decision-analysis
+        preferred-capabilities:
+          - domain:storage
+        min-distinct-agents: 2
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML = %v", err)
+	}
+	policy, ok := DecisionPolicyFor(cfg.Decision, "standard")
+	if !ok || policy.JudgeRole == nil {
+		t.Fatalf("policy.JudgeRole = %#v, want it set", policy.JudgeRole)
+	}
+	if policy.JudgeRole.MinDistinctAgents != 2 {
+		t.Fatalf("MinDistinctAgents = %d, want 2", policy.JudgeRole.MinDistinctAgents)
+	}
+}
+
+// A judge-role that could never be satisfied by the configured judge count
+// must fail team load, not fail at dispatch time.
+func TestParseTeamYMLRejectsImpossibleJudgeRole(t *testing.T) {
+	dir := t.TempDir()
+	content := `decision:
+  default-profile: standard
+  profiles:
+    standard:
+      independent-judgments: 2
+      judge-role:
+        required-capabilities:
+          - decision-analysis
+        min-distinct-agents: 3
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir, nil); err == nil || !strings.Contains(err.Error(), "judge-role") {
+		t.Fatalf("parseTeamYML error = %v, want judge-role validation failure", err)
+	}
+}
+
 // A role declared with no required capabilities must fail team load.
 func TestParseTeamYMLRejectsEmptyOutsideViewRole(t *testing.T) {
 	dir := t.TempDir()

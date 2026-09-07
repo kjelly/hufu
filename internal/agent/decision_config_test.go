@@ -439,3 +439,26 @@ func TestDecisionPolicyOutsideViewRoleValidate(t *testing.T) {
 		t.Fatalf("role with a required capability should validate: %v", err)
 	}
 }
+
+// judge-role (spec2.md PR-3) must fail closed on the same "nothing to route
+// on" mistake, and on a diversity floor the configured judge count could
+// never satisfy.
+func TestDecisionPolicyJudgeRoleValidate(t *testing.T) {
+	policy := validPolicy()
+	policy.IndependentJudgments = 3
+
+	policy.JudgeRole = &JudgeRolePolicy{}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role with no required capabilities must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctAgents: 4}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("min-distinct-agents exceeding independent-judgments must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctAgents: 2}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("valid judge-role should validate: %v", err)
+	}
+}

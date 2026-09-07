@@ -25,6 +25,12 @@ type JudgeRequest struct {
 	JudgeID    string
 	Context    JudgeContext
 	Packet     DecisionEvidencePacket
+	// RoutingRole selects real capability-routed execution for this judge
+	// when non-nil (spec.md v2 §17; spec2.md PR-3). Unlike
+	// ReferenceEvidenceRequest, JudgeRequest is never marshaled into a
+	// producer-facing prompt (RunJudge sends Context.Prompt directly), so
+	// this field needs no json tag to stay out of it.
+	RoutingRole *agent.JudgeRolePolicy
 }
 
 // JudgeRunner executes one judge and returns its structured opinion. Callers
@@ -554,6 +560,7 @@ func (e *decisionEngine) runJudgeWithRepair(
 		}
 		opinion, err := e.services.Judges.RunJudge(ctx, JudgeRequest{
 			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, Context: judgeCtx, Packet: packet,
+			RoutingRole: req.Policy.JudgeRole,
 		})
 		if err != nil {
 			lastOperationalErr = err

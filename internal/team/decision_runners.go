@@ -176,15 +176,24 @@ type judgeResponse struct {
 
 // RunJudge implements JudgeRunner.
 func (r *coordinatorDecisionRunners) RunJudge(ctx context.Context, req JudgeRequest) (DecisionOpinion, error) {
+	if req.RoutingRole != nil {
+		return r.runJudgeViaCapabilityRouting(ctx, req)
+	}
 	response, err := r.ask(ctx, decisionPurposeJudge, req.Context.Prompt)
 	if err != nil {
 		return DecisionOpinion{}, err
 	}
+	return decodeJudgeOpinion(response, req.JudgeID)
+}
+
+// decodeJudgeOpinion decodes one judge's raw response into a DecisionOpinion.
+// Shared by the legacy sidecar path and the capability-routed path so the
+// opinion-shape contract never depends on who produced the text.
+func decodeJudgeOpinion(response, judgeID string) (DecisionOpinion, error) {
 	var decoded judgeResponse
 	if err := decodeStage(response, &decoded); err != nil {
-		return DecisionOpinion{}, fmt.Errorf("judge %s: %w", req.JudgeID, err)
+		return DecisionOpinion{}, fmt.Errorf("judge %s: %w", judgeID, err)
 	}
-
 	opinion := DecisionOpinion{
 		PreferredOption:       strings.TrimSpace(decoded.PreferredOption),
 		SuccessProbability:    decoded.SuccessProbability,
