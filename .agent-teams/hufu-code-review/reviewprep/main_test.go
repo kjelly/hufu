@@ -114,6 +114,32 @@ func TestPrepareLimitsRangeToMostRecentCommits(t *testing.T) {
 	}
 }
 
+func TestPrepareLimitsRangeAcrossMergeHistory(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/base.go", "package base\n", "base change", "2025-01-02T00:00:00Z")
+	gitRun(t, repo, "checkout", "-b", "side")
+	writeAndCommit(t, repo, "internal/side.go", "package side\n", "side change", "2025-01-03T00:00:00Z")
+	gitRun(t, repo, "checkout", "main")
+	writeAndCommit(t, repo, "internal/main.go", "package main\n", "main change", "2025-01-04T00:00:00Z")
+
+	merge := exec.Command("git", "-c", "user.name=Review Prep Test", "-c", "user.email=reviewprep@example.test", "merge", "--no-ff", "side", "-m", "merge side")
+	merge.Dir = repo
+	merge.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2025-01-05T00:00:00Z", "GIT_COMMITTER_DATE=2025-01-05T00:00:00Z")
+	if output, err := merge.CombinedOutput(); err != nil {
+		t.Fatalf("git merge: %v\n%s", err, output)
+	}
+
+	config := fixtureConfig(repo, "out")
+	config.MaxCommits = 2
+	if _, err := Prepare(context.Background(), config); err != nil {
+		t.Fatalf("Prepare() across merge history: %v", err)
+	}
+	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+	if manifest.Range.CommitCount != 2 {
+		t.Fatalf("commit count = %d, want 2", manifest.Range.CommitCount)
+	}
+}
+
 func TestPrepareDoesNotIncludeDirtyWorkingTree(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "internal/team/committed.go", "package team\n", "committed change", "2025-01-02T00:00:00Z")

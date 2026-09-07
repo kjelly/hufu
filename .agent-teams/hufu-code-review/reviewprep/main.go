@@ -302,7 +302,11 @@ func resolveRange(ctx context.Context, repo, since string, maxCommits int) (revi
 	if err != nil {
 		return reviewRange{}, fmt.Errorf("resolve HEAD: %w", err)
 	}
-	commitsText, err := git(ctx, repo, "rev-list", "--reverse", "--since="+since, "HEAD")
+	// Review selection follows the repository's first-parent history. Without
+	// this, selecting the last N commits from a merge-heavy repository and then
+	// representing them as a single parent..HEAD range can silently expand the
+	// range to include side-branch commits that were not selected.
+	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+since, "HEAD")
 	if err != nil {
 		return reviewRange{}, fmt.Errorf("list commits: %w", err)
 	}
@@ -319,7 +323,7 @@ func resolveRange(ctx context.Context, repo, since string, maxCommits int) (revi
 		return reviewRange{}, fmt.Errorf("resolve parent of first selected commit: %w", err)
 	}
 	r.Start = strings.TrimSpace(start)
-	verified, err := git(ctx, repo, "rev-list", "--count", r.Start+".."+r.End)
+	verified, err := git(ctx, repo, "rev-list", "--first-parent", "--count", r.Start+".."+r.End)
 	if err != nil {
 		return reviewRange{}, fmt.Errorf("verify commit count: %w", err)
 	}
