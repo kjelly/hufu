@@ -461,14 +461,397 @@ calls), `TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`
 (`internal/team/decision_judge_capability_runner_test.go`), plus config
 validation/parse-round-trip tests.
 
-Still not done: `CHALLENGE`/`REVISE`/`PREMORTEM`/`FINALIZE` capability
-routing (spec2.md PR-4 — challenger is the last piece, and revision must
-reuse the *original* judge bindings rather than re-resolving, per spec2.md
-§8), full `DiversityPolicy` (distinct models/providers/capability-groups,
-`allow-repeated-agent-definition` — only `MinDistinctAgents` shipped),
-durable `AgentBinding` persistence beyond the `routing_decision` event
-trail, pinned bindings, mid-run capability invalidation, cost/latency
-weighting, and the `verified`/outcome-calibrated confidence tier (blocked on
-Stage 9).
+**Update, same day (CHALLENGE + REVISE wiring, spec2.md PR-4 — completes
+spec2.md's MVP routed-role scope):** `CHALLENGE` is now also genuinely
+capability-routed, and `REVISE` reuses `JUDGE`'s binding instead of
+re-resolving, exactly as spec2.md's own final design specifies ("最終只有三種
+capability-routed role: REFERENCE JUDGE CHALLENGE 以及 REVISE = reuse JUDGE
+bindings"). `internal/team/decision_challenge_capability_runner.go` adds:
+- `runChallengeViaCapabilityRouting` — same shape as JUDGE's runner:
+  resolves the ranked qualified pool via `agent.ChallengeRolePolicy`
+  (`DecisionPolicy.ChallengeRole`, yaml `challenge-role`), round-robins by
+  `challengerOrdinal("challenger-N")`, invokes with zero tools + one forced
+  step, decodes with `decodeChallengeResponse` (shared with the legacy
+  path). `ChallengeRequest.RoutingRole` is set from `req.Policy.ChallengeRole`
+  in `decision_engine_stages.go`'s `runChallenges`.
+- `runRevisionViaCapabilityRouting` — resolves through
+  `resolveJudgeRoleCandidate` (factored out of `decision_judge_capability_runner.go`
+  so both call sites share one implementation), keyed by the same `JudgeID`
+  and the same `agent.JudgeRolePolicy` (**no separate revision-role config
+  exists** — `RevisionRequest.RoutingRole` is set from
+  `req.Policy.JudgeRole`, not a new field). Because the candidate-resolution
+  function is pure over `(role, ordinal)` and neither changes between JUDGE
+  round 1 and REVISE, a revision request for `judge-2` always re-derives
+  the exact same candidate JUDGE round 1 bound — this identical-resolution
+  property *is* "reuse the original binding," with no binding ever
+  persisted or looked up. Decodes with `decodeRevisionResult` (shared).
+Both new stages are opt-in per profile; a team that doesn't set
+`challenge-role` is completely unaffected. Covered by
+`TestChallengeRoleCapabilityRouting_RoutesEachChallengerToADistinctAgent`
+(spec2.md's acceptance shape for CHALLENGE),
+`_WithoutRoutingRoleStaysOnLegacySidecar`, `_FailsClosedWhenPoolTooSmall`,
+`TestChallengerOrdinal`, and — the concrete proof of spec2.md §8 —
+`TestRevisionCapabilityRouting_ReusesOriginalJudgeBinding` (dispatches a
+routed `judge-2`, then a routed revision for the same `judge-2`, and asserts
+both landed on the identical resolved candidate's provider, with the other
+candidates and the legacy sidecar untouched), plus
+`TestRevisionCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`
+(`internal/team/decision_challenge_capability_runner_test.go`), plus config
+validation/parse-round-trip tests.
+
+This completes spec2.md's own MVP scope: `REFERENCE`, `JUDGE`, and
+`CHALLENGE` are genuinely capability-routed, and `REVISE` correctly reuses
+`JUDGE`'s bindings. `PREMORTEM`, `AGGREGATE`, and `FINALIZE` remain
+sidecar-only **by spec2.md's own design** (§9 "AGGREGATE 完全不要 routing",
+§10 "FINALIZE 第一版也不用capability routing") — not a gap, not deferred work.
+
+**Update, same day (cost-aware weighted scoring + goal-driven routing
+hints, spec.md v2 §12/§16/§30-31):** after finishing spec2.md's 4 PRs, the
+user asked what else from spec.md v2's broader vision was unbuilt. Of the
+9 items surveyed, durable `AgentBinding` persistence turned out to require
+widening `DecisionOpinion`/`DecisionChallenge`/`ReferenceEvidenceDraft` —
+the engine currently has no way to learn which concrete agent a runner
+used at all — a bigger, higher-risk change than anything shipped so far.
+The user chose the two lower-risk items first, which touch neither
+`DecisionRecord` nor any persisted/hashed type:
+
+- **Cost-aware weighted scoring**: `agent.ScoringWeights`
+  (`RequiredMatch`/`PreferredMatch`/`Cost`, `internal/agent/agent.go`),
+  team-wide via `TeamConfig.RoutingPolicy` (yaml
+  `routing-policy.scoring.weights`). Defaults exactly reproduce the
+  formula `CapabilityRegistry.scoreAgent` always used before weights
+  existed (`RequiredMatch: 1.0, PreferredMatch: 0.5, Cost: 0.0`) — a team
+  that configures nothing sees zero score change, proven by
+  `TestCapabilityRegistry_DefaultWeightsReproduceLegacyScoring`. Cost
+  reads the `CostClass` field `DeclaredCapability`/`CapabilityRecord`
+  already had but nothing ever consumed
+  (`internal/team/capability_registry.go`'s new `costClassFor`/
+  `costClassScore`), and only affects ranking once a team sets a non-zero
+  `cost` weight (`TestCapabilityRegistry_CostWeightAffectsRanking`).
+  `CapabilityRegistry.WithScoringWeights` is additive — no existing
+  constructor call site needed to change.
+- **Goal-driven routing hints**: `agent.RoutingHint`
+  (`WhenGoalContains`/`PreferredCapabilities`,
+  `internal/agent/decision_config.go`), team-wide via
+  `DecisionConfig.RoutingHints` (yaml `decision.routing-hints`) and
+  threaded once into `DecisionRequest.RoutingHints`
+  (`decision_dispatch.go`, same pattern as the existing
+  `ProjectContext: c.decisionProjectContext()` line). Reuses
+  `TaskGoalInvariants`' goal-substring selector shape rather than a new
+  model-facing `TaskDef` field — deliberately avoiding the higher-risk
+  path of touching `coordinator_tools.go`'s hand-maintained,
+  provider-safe task-schema allowlist. `applyRoutingHints`
+  (`internal/team/decision_routing_hints.go`) is a pure function; it is
+  applied independently at all four routed construction sites
+  (`decision_engine.go`'s judge dispatch, `decision_engine_reference.go`,
+  `decision_engine_stages.go`'s challenge *and* revision dispatch) using
+  the same `(role, hints, question)` inputs — which is exactly what keeps
+  a hinted `REVISE` resolving to the same candidate a hinted `JUDGE`
+  round 1 did, proven end-to-end by
+  `TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt`
+  (a matching hint moves judge-1 from `cand-c` to `cand-a`, and a routed
+  revision for the same JudgeID lands on that same `cand-a`, never the
+  other two candidates).
+
+Both are demonstrated in `.agent-teams/strategic-decision/team.yaml`
+(`routing-policy.scoring.weights.cost` + `cost-class` declarations;
+`decision.routing-hints` for storage-related questions) without disturbing
+any of that team's already-documented default rankings — the hint's effect
+is conditional on the question actually matching, so the non-matching
+default case is exactly as before.
+
+Still not done: full `DiversityPolicy` (distinct models/providers/
+capability-groups, `allow-repeated-agent-definition` — only
+`MinDistinctAgents` shipped), durable `AgentBinding` persistence beyond the
+`routing_decision` event trail, pinned bindings, mid-run capability
+invalidation, latency weighting, adaptive disagreement-driven challenger
+routing, metrics, a structured explainability API, and the
+`verified`/outcome-calibrated confidence tier (blocked on Stage 9). These
+remain the explicitly-separate work spec2.md itself scopes beyond its four
+PRs, and beyond what was chosen from that list this pass.
 
 Opening Stage 9 is still a human decision, not a coding step.
+
+**Update, same day (durable AgentBinding, metrics, explainability):**
+investigated the remaining spec.md v2 extras and found capability
+freshness/invalidation was **already implemented** and just never
+demonstrated — `CapabilityRegistry.recordsFor`
+(`internal/team/capability_registry.go`) already parses
+`DeclaredCapability.DeclaredAt`/`StaleAfter`, sets `Stale=true,
+Confidence=0` past expiry, and `scoreAgent` already skips stale records —
+no code changed for that item, only documentation corrected. Full
+`DiversityPolicy` and adaptive disagreement-driven challenger routing are
+still genuinely unbuilt: neither has any partial type or scaffold to
+extend (only `MinDistinctAgents`, an explicit "not the full policy" floor
+per its own doc comment), so they need a separate design pass, not this
+one.
+
+The real remaining gap was durable `AgentBinding` persistence: the
+resolved `chosen` agent ID was already computed at every routing site
+(`decision_judge_capability_runner.go`, `decision_challenge_capability_runner.go`,
+`decision_reference_capability_runner.go`) but only reached an ephemeral
+`c.report(c.newEvent("routing_decision")...)` — a live TUI/CLI
+`StatusEvent` callback, not the durable event journal. It vanished the
+moment a run exited. Shipped:
+- `AgentID string` on `DecisionOpinion`, `DecisionChallenge`,
+  `DecisionRevision` (`internal/team/decision_types.go`), and on
+  `ReferenceEvidenceDraft` (`internal/team/decision_reference.go`, tagged
+  `json:"-"` so a producer's own response can never populate it — the
+  runner sets it after decoding, never before). `ReferenceEvidenceResult`
+  gained `ProducerAgentID`, copied from the validated draft in
+  `decision_engine_reference.go`'s `runReferenceEvidence`. All four
+  capability-routing runners now set their resolved `chosen` onto the
+  return value before returning it.
+- This is safe by construction, not just by convention: the event-log
+  idempotency-key hash (`decisionEventKey` in `decision_store.go`) only
+  hashes a small identity struct (DecisionID/RunID/TaskID/Attempt/
+  Profile/EvidenceHash/Round/JudgeID/Reason/...) that excludes Opinion/
+  Challenge/Revision content entirely, and every stage event already
+  carries the *whole* struct as a pointer field on `decisionEvent`
+  (`event.Opinion`/`.Challenge`/`.Revision`/`.ReferenceResult`) — so
+  `AgentID` rides through into the durable journal for free, with zero
+  new event kind and zero change to `decisionEventFor`/`appendDecisionEvent`
+  call sites. `DecisionRecord.Opinions`/`.Challenges`/`.Revisions` are
+  assigned straight from these slices in `buildRecord`
+  (`decision_engine.go`), so the persisted record carries `AgentID`
+  automatically too.
+- `DecisionMetrics` (`decision_metrics.go`) already existed as a real
+  projection over `(events, index entries)` — it gained
+  `CapabilityRoutedBindingCount map[string]int`, tallied from the
+  existing `EventDecisionOpinionSubmitted`/`ChallengeSubmitted`/
+  `RevisionSubmitted`/`ReferenceCompleted` events (three of those four
+  needed a new `case` in the switch; `RevisionSubmitted`'s existing case
+  just gained a second line). A stage with no `AgentID` (the legacy
+  sidecar path) is not counted at all, never counted under an empty key.
+- New `internal/team/decision_explain.go`:
+  `ExplainDecisionBindings(record, reference)` renders every stage's
+  binding (or lack of one) into a stable, stage-ordered
+  `[]DecisionAgentBinding` — pure, reads only what's already on the
+  record plus the already-resolved `*ReferenceEvidenceResult` (never
+  fetches anything itself). New `FetchDecisionArtifact[T any]`
+  (`decision_store.go`) is a generic, digest-verified content-addressed
+  read, exported so read-only tooling outside the package (the CLI) can
+  fetch a `DecisionRecord` or `ReferenceEvidenceResult` by `ArtifactRef`
+  without duplicating `store.Resolve`/`Verify`/`Open` plumbing.
+- New `hufu decision explain <decision-id>` (`cmd/hufu/decisioncmd.go`),
+  alongside the existing `list`/`show`/`resolve`/`assume`/`stats`. It
+  reads the full persisted record (not just the cross-run index summary
+  `show` uses) and tables stage/ordinal/agent/routed. Proven against a
+  real, end-to-end `DecisionEngine.Run` (real `EventStore`, real
+  `FileArtifactStore`, real `DecisionIndex` — a hand-written index row
+  is deliberately rejected: `decision_index_listing.go`'s validated
+  listing requires the durable journal to actually agree with any row
+  carrying a record digest, by design, so the CLI test could not shortcut
+  this with a synthetic fixture).
+- Covered by: AgentID assertions added to every existing
+  `TestJudgeRoleCapabilityRouting_*`/`TestChallengeRoleCapabilityRouting_*`/
+  `TestRevisionCapabilityRouting_*`/`TestReferenceRoleCapabilityRouting_*`
+  test (both the routed and legacy-sidecar cases, plus the hinted-binding
+  and REVISE-reuse tests now assert `AgentID` equality directly, not just
+  provider call counts); `TestReferenceEvidencePublishesRuntimeOwnedCASArtifacts`
+  extended to prove `ProducerAgentID` survives publication;
+  `TestComputeDecisionMetricsCountsCapabilityRoutedBindings`;
+  `TestExplainDecisionBindings` (+ the no-reference/unresolved-result
+  case); `TestDecisionExplain` (`cmd/hufu/decisioncmd_test.go`, text and
+  `--json` output, plus a not-found error case).
+- `go build`/`vet`/`golangci-lint run`/`go test ./...` all green (still
+  only the two pre-existing, unrelated `internal/tools` failures).
+
+Still not done, unchanged from above: full `DiversityPolicy`, pinned
+bindings, mid-run capability invalidation, latency weighting, adaptive
+disagreement-driven challenger routing, and the verified/outcome-calibrated
+confidence tier (blocked on Stage 9, still a human decision).
+
+**Update, same day (durable AgentBinding, metrics, explainability — shipped
+by a research fork that overstepped its read-only instructions; reviewed
+with the user and kept after independent re-verification):**
+`DecisionOpinion`/`DecisionChallenge`/`DecisionRevision`/
+`ReferenceEvidenceDraft` gained `AgentID string` (set by each
+capability-routing runner right after invoking its resolved candidate;
+empty on the legacy sidecar path). Because the event-log idempotency-key
+hash (`decisionEventKey`, `decision_store.go`) only hashes an identity
+struct that excludes Opinion/Challenge/Revision content, `AgentID` rides
+into the durable event journal and `DecisionRecord` for free — zero new
+event kind, zero schema-hash risk. `DecisionMetrics` gained
+`CapabilityRoutedBindingCount map[string]int`. New
+`hufu decision explain <decision-id>` CLI (`cmd/hufu/decisioncmd.go`) +
+`ExplainDecisionBindings`/`FetchDecisionArtifact[T]`
+(`internal/team/decision_explain.go`, `decision_store.go`) render, per
+stage, whether capability routing resolved a concrete worker and which one.
+Capability freshness/invalidation turned out to already be implemented
+(`declared-at`/`stale-after` staleness already excluded from scoring) — no
+code needed, just never demonstrated.
+
+**Update, same day (the four remaining spec.md v2 items: DiversityPolicy,
+pinned binding, mid-run capability invalidation, adaptive challenger
+routing — planned via `EnterPlanMode`/`ExitPlanMode` given none had any
+scaffolding to extend, confirmed by two rounds of read-only Explore-agent
+research):**
+
+- **Adaptive disagreement-driven challenger routing** (spec.md v2 §39-40):
+  new `internal/team/decision_adaptive_challenge.go`. `criterionDispersion`
+  computes, per criterion ID present in every valid JUDGE-round-1 opinion's
+  score for the aggregate's preferred option, the population standard
+  deviation across opinions — a pure function over data
+  `DecisionOpinion.OptionScores[].Criteria` already carried, no new judge
+  output or LLM call. `mostContestedCriterion` picks the highest-dispersion
+  criterion (ties broken by ID ascending). `ChallengeRolePolicy` gained
+  `AdaptiveCapabilities map[string][]string` (yaml
+  `challenge-role.adaptive-capabilities`, keyed by a configured
+  `decision.profiles.*.criteria[].id`; `Validate` fails closed on an
+  unknown criterion ID). `adaptiveChallengeRole` widens the (already
+  goal-hinted) `ChallengeRolePolicy`'s `PreferredCapabilities` before
+  `runChallenges` dispatches — same shallow-copy-and-augment shape
+  `hintedChallengeRole` uses, composed by concatenation. No
+  `DecisionRecord`/event changes. Covered by
+  `internal/team/decision_adaptive_challenge_test.go` (pure-function unit
+  tests plus
+  `TestChallengeRoleCapabilityRouting_AdaptiveCapabilitiesChangeBinding`,
+  which proves disagreement concentration alone — not any agent's identity
+  or opinion — flips which candidate CHALLENGE binds to) and config
+  validation/parse-round-trip tests in `internal/agent/decision_config_test.go`
+  / `internal/team/decision_routing_config_test.go`.
+
+- **REVISE uses the durable original binding — mid-run capability
+  invalidation, rescoped** (spec.md v2 §35-37): in this codebase's actual
+  execution model (team config loaded once, immutable for a run), the only
+  realistic invalidation window is the real wall-clock gap between JUDGE
+  round 1 and REVISE (CHALLENGE and aggregation run in between). Since
+  `AgentID` is now durable on `DecisionOpinion`, REVISE no longer needs to
+  blindly re-resolve through the ranked pool and hope it lands on the same
+  candidate — `revisionCandidate`
+  (`internal/team/decision_challenge_capability_runner.go`) now reuses
+  `req.Original.AgentID` directly (already in scope — `RevisionRequest.Original`
+  is the full original opinion), after confirming it is still in
+  `eligibleWorkerIDs()` and still satisfies the role's required
+  capabilities via `ResolveCapabilityCandidates` (which naturally excludes
+  anything that went stale in between) — failing closed with a clear error
+  otherwise, rather than silently landing on a different agent than JUDGE
+  used. This is a strict correctness fix, not just a spec checkbox: the old
+  "recompute and hope it matches" approach had a latent bug where a
+  capability change between rounds could silently move REVISE to a
+  different candidate. Falls back to the original `resolveJudgeRoleCandidate`
+  recompute only when `Original.AgentID` is empty (a misconfiguration edge
+  case, not the normal path). Covered by
+  `TestRevisionCapabilityRouting_UsesOriginalAgentIDNotFreshRanking`,
+  `TestRevisionCapabilityRouting_FailsClosedWhenOriginalBindingCapabilityInvalidated`,
+  `TestRevisionCapabilityRouting_FailsClosedWhenOriginalBindingNoLongerAuthorized`,
+  `TestRevisionCapabilityRouting_FallsBackToResolutionWhenOriginalAgentIDEmpty`
+  (`internal/team/decision_challenge_capability_runner_test.go`); the
+  pre-existing `TestRevisionCapabilityRouting_ReusesOriginalJudgeBinding`
+  now exercises this new mechanism directly (passes the real captured
+  opinion, not a synthetic one) and still passes.
+
+- **Pinned binding** (spec.md v2 §34): new `agent.RoutingPin{Agent, Reason
+  string}` (`internal/agent/decision_config.go`), added as
+  `Pin *RoutingPin` on `JudgeRolePolicy`/`ChallengeRolePolicy`/
+  `ReferenceRolePolicy` (yaml `pin.agent`/`pin.reason`). A profile must
+  separately opt in via new `RoutingPolicy.AllowPinnedBinding` (yaml
+  `discipline.routing.allow-pinned-binding`) — checked at **team-load
+  time** (`DecisionPolicy.Validate`'s new `requirePinPermitted` calls), so
+  a misconfigured pin fails `hufu team validate`, never a running decision.
+  A pin conflicting with `min-distinct-agents > 1` is also rejected at load
+  time (a pin forces every ordinal to the same agent, which is
+  definitionally at most one distinct agent). New shared resolver
+  `internal/team/decision_pin.go`'s `resolvePinnedCandidate` — still
+  enforces authorization (`eligibleWorkerIDs`) and the required-capability
+  check via `ResolveCapabilityCandidates`; a pin can only force *which*
+  already-qualified candidate is chosen, never bypass those checks. Wired
+  as the first step in `resolveJudgeRoleCandidate`,
+  `resolveChallengeRoleCandidate` (new, factored out of
+  `runChallengeViaCapabilityRouting`'s previously-inline body), and the
+  REFERENCE runner. `DecisionOpinion`/`DecisionChallenge`/`DecisionRevision`
+  each gained `Pinned bool`/`BindingReason string` (rides the existing
+  event/record plumbing for free, exactly like `AgentID` did — no
+  `DecisionRecord` schema bump needed for these nested-struct fields).
+  `DecisionAgentBinding`/`hufu decision explain` surface `Pinned`/`Reason`
+  too. Covered by `internal/team/decision_pin_test.go` (pin forces every
+  ordinal for judge/challenge/reference; fails closed on missing
+  capability, missing authorization, or an unconfigured agent name; REVISE
+  correctly reuses a pinned original binding) and
+  `internal/agent/decision_config_test.go`'s
+  `TestRoutingPinValidate`/`TestDecisionPolicyPinRequiresProfileGateAndNoDistinctFloor`.
+
+- **Full `DiversityPolicy` — models and providers** (spec.md v2 §13, §32):
+  deliberately **excludes capability-group distinctness** — no such
+  taxonomy exists anywhere in this codebase (confirmed by research), and
+  within one role's candidate set every qualified candidate already
+  satisfies the identical required-capability set by construction, so
+  there is no non-arbitrary way to define "distinct capability groups"
+  without inventing a new taxonomy layer; that is a product decision, not
+  a wiring gap, and stays explicitly deferred. Shipped: `JudgeRolePolicy`/
+  `ChallengeRolePolicy` gained `MinDistinctModels`/`MinDistinctProviders`
+  (hard floors, same bound-checking shape as `MinDistinctAgents`) and
+  `PreferDistinctModels`/`PreferDistinctProviders` (soft preferences) plus
+  `AllowRepeatedAgentDefinition` (spec.md v2 §33.1's light-profile escape
+  hatch; rejected at load time when combined with `min-distinct-agents >
+  1`, the same contradiction shape as the pin/distinct-floor check). Model
+  = `AgentDef.Generation.Model`; provider = `AgentDef.ProviderURL`,
+  documented as a proxy — this codebase has no separate `ProviderID`.
+  New `internal/team/decision_diversity.go`: `resolveRoleCandidateOrder`
+  reorders the ranked qualified pool so a candidate introducing a new
+  model/provider value sorts before a pure repeat — stable within each
+  bucket, so it returns the pool byte-identical when neither Prefer* flag
+  is set. This is deterministic and stateless (depends only on
+  `(pool, agents, flags)`, never on which ordinals already dispatched),
+  which is exactly what preserves the pure-function-of-`(role, ordinal)`
+  property REVISE's binding reuse and independent-per-judge resolution both
+  depend on. `distinctModelCount`/`distinctProviderCount` back the new
+  fail-closed floor checks in `resolveJudgeRoleCandidate`/
+  `resolveChallengeRoleCandidate`. `DecisionOpinion`/`DecisionChallenge`
+  also gained `Model`/`Provider string`, set by the runner alongside
+  `AgentID` — this is what lets the after-the-fact
+  `BindingDiversitySummary` computation
+  (`computeBindingDiversitySummary`/`judgeDiversitySummary`/
+  `challengeDiversitySummary`) work purely off durable per-stage record
+  data, with no live `agents` map needing to be threaded into
+  `decisionEngine` (which is deliberately decoupled from `Coordinator` for
+  testability). `DecisionRecord` gained `JudgeDiversity`/
+  `ChallengeDiversity *BindingDiversitySummary` (nil when that role was
+  never routed — never a misleading all-zero summary), set in `buildRecord`
+  (`decision_engine.go`). Because these are new **direct** fields on
+  `DecisionRecord` itself (unlike the nested per-stage `AgentID`/`Pinned`
+  additions), `DecisionRecordSchemaVersion` bumped from `2` to `3`
+  following the same precedent the finalization fields' 1→2 bump set;
+  `ValidateSchemaVersion` now accepts `{1, 2, 3}`.
+  `hufu decision explain` prints both summaries when present. Covered by
+  `internal/team/decision_diversity_test.go` (pure-function unit tests:
+  reordering, floor counts, summary computation, nil-when-unrouted),
+  `TestJudgeRoleCapabilityRouting_PreferDistinctModelsChangesBinding` /
+  `_WithoutPreferDistinctModelsIsUnaffected` /
+  `_FailsClosedWhenPoolLacksModelDiversity`
+  (`internal/team/decision_judge_capability_runner_test.go`, using a
+  dedicated `modelSharingJudgeRoutingHarness` since the existing shared
+  harness's three candidates already declare distinct models, which would
+  make the reordering behavior untestable) — the equivalent challenge-role
+  wiring is not separately integration-tested since it shares the exact
+  same `resolveRoleCandidateOrder`/`distinctModelCount` functions, a
+  deliberate scope trim given this pass's size, not an oversight — and
+  config validation/parse-round-trip tests.
+
+`internal/team/decision_types_test.go` was split: the routing-config parse
+round-trip tests (outside-view.role, judge-role, challenge-role, pin,
+diversity extensions, adaptive-capabilities, routing-policy scoring
+weights, routing-hints) moved to new `decision_routing_config_test.go` —
+the original file had grown past the project's 800-line-per-file guideline
+(caught by the repo's own `TestDecisionRuntimeFilesRespectTheSizeLimit`).
+
+`.agent-teams/strategic-decision/team.yaml` demonstrates `prefer-distinct-models`
+on both profiles' `judge-role` (a documented no-op today — this team has no
+per-agent model override, so there's nothing to differentiate on yet,
+proving the config is accepted rather than changing rankings). Pinned
+binding and adaptive-capabilities are **not** demonstrated in this team's
+config: a pin has no natural fit for a demo team built around real ranking,
+and this team declares no `decision.profiles.*.criteria` block at all today
+— adding one just to exercise `adaptive-capabilities` would change this
+team's real scoring behavior (`Overall` derivation), not just add an
+unused, inert config surface, so it was left out rather than forced.
+
+`go build`/`vet`/`golangci-lint run`/`go test ./...` all green (still only
+the two pre-existing, unrelated `internal/tools` failures);
+`hufu team validate .agent-teams/strategic-decision` passes.
+
+This closes every item spec.md v2 named beyond spec2.md's four PRs, except
+capability-group distinctness (no taxonomy exists; a product decision, not
+a gap) and the `verified`/outcome-calibrated confidence tier, which remains
+correctly blocked on Stage 9 (0/0, still a human decision to open).
