@@ -427,12 +427,48 @@ byte-for-byte unchanged when unconfigured), and
 validation/parse-round-trip tests in `internal/agent/decision_config_test.go`
 and `internal/team/decision_types_test.go`.
 
-Still not done, unchanged from before: `JUDGE` (juror) and `CHALLENGE`
-(challenger) capability routing, `DiversityPolicy`, durable `AgentBinding`
-records, binding reuse across `REVISE`, pinned bindings, mid-run capability
-invalidation, adaptive risk-tag-driven challenger routing, cost/latency
+**Update, same day (JUDGE wiring, spec2.md PR-3):** `JUDGE` (juror) is now
+also genuinely capability-routed, on the same pattern as `REFERENCE`.
+`internal/team/decision_judge_capability_runner.go`
+(`runJudgeViaCapabilityRouting`, shares `invokeCapabilityRoutedAgent` with
+the reference runner) is a new `JudgeRunner` implementation, selected
+per-judge via `JudgeRequest.RoutingRole` (`internal/team/decision_engine.go`,
+no json tag needed — unlike `ReferenceEvidenceRequest`, `JudgeRequest` is
+never marshaled into a producer prompt), sourced from
+`DecisionRequest.Policy.JudgeRole` (`agent.JudgeRolePolicy`,
+`internal/agent/decision_config.go`, yaml `decision.profiles.*.judge-role`).
+Each of the N independent judge calls (`judge-1`..`judge-N`) resolves the
+identical, deterministic ranked candidate list (no shared state across
+calls — this is what keeps isolation intact) and round-robins over the
+qualified pool by its own ordinal, so distinct judges get distinct concrete
+agents; a pool smaller than `judge-role.min-distinct-agents` fails closed
+before any judge is dispatched, never silently repeating one agent.
+Every judge-role invocation gets **zero** tools regardless of what the
+resolved agent declares (`judgeRoleZeroTools`) and a single forced step
+(`fantasy.StepCountIs(1)`) — parity with the legacy sidecar's own
+guarantee, not a new restriction: a judge must reason only from the sealed
+evidence packet, or the "same evidence" comparability the isolation
+guarantee depends on breaks. Opinion decoding is shared with the legacy
+path (`decodeJudgeOpinion`), so the opinion-shape contract does not change
+depending on who produced it. A profile that does not set `judge-role` is
+completely unaffected. Covered by
+`TestJudgeRoleCapabilityRouting_RoutesEachJudgeToADistinctAgent` (spec2.md's
+own PR-3 validation checklist: same EvidenceHash implicit in the shared
+sealed prompt, distinct bindings per judge, legacy judge-model records zero
+calls), `TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`
+(regression), `TestJudgeRoleCapabilityRouting_FailsClosedWhenPoolTooSmall`,
+`TestJudgeRoleZeroTools_IsAlwaysEmpty`, and `TestJudgeOrdinal`
+(`internal/team/decision_judge_capability_runner_test.go`), plus config
+validation/parse-round-trip tests.
+
+Still not done: `CHALLENGE`/`REVISE`/`PREMORTEM`/`FINALIZE` capability
+routing (spec2.md PR-4 — challenger is the last piece, and revision must
+reuse the *original* judge bindings rather than re-resolving, per spec2.md
+§8), full `DiversityPolicy` (distinct models/providers/capability-groups,
+`allow-repeated-agent-definition` — only `MinDistinctAgents` shipped),
+durable `AgentBinding` persistence beyond the `routing_decision` event
+trail, pinned bindings, mid-run capability invalidation, cost/latency
 weighting, and the `verified`/outcome-calibrated confidence tier (blocked on
-Stage 9). spec2.md sequences these as PR-3/PR-4, after `REFERENCE` (PR-2) is
-proven out — which it now is.
+Stage 9).
 
 Opening Stage 9 is still a human decision, not a coding step.
