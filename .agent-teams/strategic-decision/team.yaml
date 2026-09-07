@@ -38,10 +38,17 @@ capability-registry:
   reference:
     - capability: evidence-research
       confidence: 0.5
+    - capability: decision-analysis
+      confidence: 0.5
   reference-specialist:
     - capability: evidence-research
       confidence: 0.7
     - capability: architecture
+      confidence: 0.7
+    - capability: decision-analysis
+      confidence: 0.6
+  juror:
+    - capability: decision-analysis
       confidence: 0.7
 
 # Decision workers should not mutate workspace/external state.
@@ -60,14 +67,14 @@ workflow:
   phases: []
 
 delegation:
-  # NOTE (runtime gap, see README.md "Gap 1" — now partial): juror/challenger
-  # are listed here for documentation and so a normal coordinator delegation
-  # to a worker literally named "juror"/"challenger" is policy-permitted, but
-  # the JUDGE/CHALLENGE/PREMORTEM/REVISE/FINALIZE stages still call the
-  # team's judge-model sidecar directly (internal/team/decision_runners.go),
-  # bypassing allowed-workers entirely. REFERENCE is the exception: it is
-  # genuinely capability-routed to one of reference/reference-specialist
-  # below (internal/team/decision_reference_capability_runner.go), and this
+  # NOTE (runtime gap, see README.md "Gap 1" — now partial): CHALLENGE/
+  # PREMORTEM/REVISE/FINALIZE still call the team's judge-model sidecar
+  # directly (internal/team/decision_runners.go), bypassing allowed-workers
+  # entirely — challenger.md is documentation-only until spec2.md PR-4.
+  # REFERENCE and JUDGE are the exceptions: both are genuinely
+  # capability-routed to whichever of reference/reference-specialist/juror
+  # below qualifies (internal/team/decision_reference_capability_runner.go,
+  # internal/team/decision_judge_capability_runner.go), and this
   # allowed-workers list is exactly the eligible/authorized set that routing
   # is only ever allowed to narrow, never expand
   # (Coordinator.eligibleWorkerIDs).
@@ -186,6 +193,16 @@ decision:
           preferred-capabilities:
             - architecture
 
+      # UPDATE (was part of "Gap 1", now RESOLVED — see README.md): JUDGE is
+      # also genuinely capability-routed (spec2.md PR-3), not the judge-model
+      # sidecar. 3 judges, 3 distinct qualified candidates (juror 0.7 >
+      # reference-specialist 0.6 > reference 0.5 on decision-analysis) —
+      # min-distinct-agents: 3 requires full diversity for this profile.
+      judge-role:
+        required-capabilities:
+          - decision-analysis
+        min-distinct-agents: 3
+
       challenge:
         enabled: true
         # spec.md wrote `worker: challenger`, which does not exist on
@@ -254,6 +271,15 @@ decision:
             - evidence-research
           preferred-capabilities:
             - architecture
+
+      # 5 judges but only 3 declared candidates: min-distinct-agents: 3 asks
+      # for full pool diversity and accepts that 2 of the 5 invocations must
+      # repeat an already-used agent (round-robin wraps deterministically —
+      # see internal/team/decision_judge_capability_runner.go).
+      judge-role:
+        required-capabilities:
+          - decision-analysis
+        min-distinct-agents: 3
 
       challenge:
         enabled: true

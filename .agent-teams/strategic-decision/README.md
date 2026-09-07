@@ -8,11 +8,13 @@ adapted to what Hufu's real decision-aware runtime (`internal/team/decision_*.go
 **2026-09-07 update:** `spec.md` was rewritten to v2 (72 sections) and
 `spec2.md` was added, both reframing `reference`/`juror`/`challenger` as
 capability-routed logical roles rather than fixed agent identities. Per
-spec2.md's own explicit sequencing (PR-2 before PR-3/PR-4), this pass made
-the `REFERENCE` stage genuinely capability-routed — see Gap 1 below and
-`reference-specialist.md`, a second real candidate this team now routes
-between. `JUDGE`/`CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE` remain
-sidecar-only; that is documented, sequenced follow-up work, not an oversight.
+spec2.md's own explicit sequencing (PR-2, then PR-3, then PR-4), this team
+now genuinely capability-routes both `REFERENCE` (PR-2) and `JUDGE` (PR-3) —
+see Gap 1 below, `reference-specialist.md` (a second real REFERENCE
+candidate), and `judge-role` in `team.yaml` (which also makes `juror.md` a
+real JUDGE candidate). `CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE` remain
+sidecar-only; that is documented, sequenced follow-up work (PR-4), not an
+oversight.
 
 Validated with:
 
@@ -117,14 +119,16 @@ works without it (see Gap 5).
 ## Where the runtime cannot satisfy spec.md as written
 
 **Gap 1 — reference/juror/challenger are not dispatched as agents at all —
-PARTIALLY RESOLVED 2026-09-07 for REFERENCE only.** Spec.md's whole topology
-(§3–§4; v2 §4/§15/§17/§19) assumes the coordinator delegates isolated
-invocations of `reference.md` / `juror.md` / `challenger.md` through the
-normal worker/task delegation system, resolved by capability. Originally the
-`DecisionEngine` never did this at all: every stage was a direct call from
-`internal/team/decision_runners.go` to one shared, tool-less **judge-model
-sidecar**. That is now only true for `JUDGE`/`CHALLENGE`/`PREMORTEM`/
-`REVISE`/`FINALIZE`. **`REFERENCE` is genuinely capability-routed**: when a
+PARTIALLY RESOLVED 2026-09-07 for REFERENCE and JUDGE.** Spec.md's whole
+topology (§3–§4; v2 §4/§15/§17/§19) assumes the coordinator delegates
+isolated invocations of `reference.md` / `juror.md` / `challenger.md`
+through the normal worker/task delegation system, resolved by capability.
+Originally the `DecisionEngine` never did this at all: every stage was a
+direct call from `internal/team/decision_runners.go` to one shared,
+tool-less **judge-model sidecar**. That is now only true for
+`CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE`.
+
+**`REFERENCE` is genuinely capability-routed** (spec2.md PR-2): when a
 profile sets `outside-view.role.required-capabilities` (see this team's
 `standard`/`high-stakes` profiles), `internal/team/decision_reference_capability_runner.go`
 resolves the highest-scoring already-authorized candidate from
@@ -133,25 +137,45 @@ already declared via `capability-registry` — and invokes it directly via the
 normal agent-runtime primitive (`Coordinator.createGatedAgent` +
 `runAgentWithStatusAndHistory`, the same one `coordinator_plan.go`'s
 plan-reviewer uses for a bounded, non-TODO call), with its tools narrowed to
-read-only. This is spec2.md's own acceptance bar, proven in
-`TestReferenceRoleCapabilityRouting_InvokesResolvedAgentNotLegacyJudge`
-(`internal/team/decision_reference_capability_runner_test.go`): the resolved
-concrete agent's provider is called, and the legacy judge-model sidecar
-records zero calls for that stage. Every team/profile that does not set
-`outside-view.role` is completely unaffected —
-`TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar` proves the
-legacy path is byte-for-byte unchanged.
+read-only. Proven in
+`TestReferenceRoleCapabilityRouting_InvokesResolvedAgentNotLegacyJudge`.
 
-Still not done, and explicitly out of scope for this pass (spec2.md PR-3/
-PR-4): `JUDGE` (juror) and `CHALLENGE` (challenger) remain sidecar-only.
-These carry the highest-stakes N-way isolated-dispatch and sealed-evidence
-guarantees in the whole engine, so spec2.md itself sequences them after
-`REFERENCE` is proven out — `plan.md`'s Status section records exactly this
-boundary. `delegation.allowed-workers` and `juror.md`/`challenger.md` remain
-documentation-only for now; only `reference.md`/`reference-specialist.md` are
-genuinely reachable through this path. A coordinator can still delegate a
-plain task to any of these four names as an ordinary worker outside the
-decision pipeline, same as before.
+**`JUDGE` (juror) is also genuinely capability-routed** (spec2.md PR-3):
+`internal/team/decision_judge_capability_runner.go` resolves, independently
+per judge, the identical deterministic ranked candidate list and picks the
+judge's own rank (round-robin: judge-1 gets the top-ranked qualified
+candidate, judge-2 the second, ...) — this team's `standard`/`high-stakes`
+profiles set `judge-role.required-capabilities: [decision-analysis]` with
+`min-distinct-agents: 3`, so all three of `reference`/`reference-specialist`/
+`juror` genuinely execute as distinct judges (`high-stakes`'s 5 judges wrap
+back over the same 3-candidate pool once it's exhausted). Unlike
+`REFERENCE`, a judge-role invocation gets **zero** tools regardless of what
+the resolved agent declares — parity with the sidecar's own guarantee, since
+a judge must reason only from the sealed evidence packet or the "same
+evidence" comparability between judges breaks. Proven in
+`TestJudgeRoleCapabilityRouting_RoutesEachJudgeToADistinctAgent` — this is
+spec2.md's own acceptance bar for this stage: each judge's provider call is
+attributed to its own resolved candidate's model, and the legacy judge-model
+sidecar records zero calls.
+
+Every team/profile that does not set `outside-view.role`/`judge-role` is
+completely unaffected —
+`TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar` and
+`TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar` prove
+both legacy paths are byte-for-byte unchanged.
+
+Still not done, and explicitly out of scope for this pass (spec2.md PR-4):
+`CHALLENGE` (challenger), `PREMORTEM`, `REVISE`, and `FINALIZE` remain
+sidecar-only. Challenger carries its own isolation subtlety (it must see
+anonymized aggregated opinions, never raw judge identity) and revision must
+reuse the *original* judge bindings rather than re-resolving
+(spec2.md §8) — `plan.md`'s Status section records exactly this boundary.
+`challenger.md` remains documentation-only for now; `reference.md`/
+`reference-specialist.md`/`juror.md` are all genuinely reachable through
+this path (the latter two for both `REFERENCE` and `JUDGE`, since nothing
+stops one worker from qualifying for more than one role). A coordinator can
+still delegate a plain task to any of these four names as an ordinary
+worker outside the decision pipeline, same as before.
 
 **Gap 2 — decision inputs are configuration-only, not request-time-authored.**
 `TaskDef.DecisionOptions` / `DecisionFacts` / `DecisionArtifacts` /
