@@ -232,6 +232,9 @@ func (e *decisionEngine) runChallenges(
 		challenge, err := e.services.Challengers.RunChallenge(ctx, ChallengeRequest{
 			DecisionID: req.DecisionID, ChallengerID: challengerID,
 			Packet: packet, Aggregate: aggregate, Prompt: prompt,
+			RoutingRole: adaptiveChallengeRole(
+				hintedChallengeRole(req.Policy.ChallengeRole, req.RoutingHints, req.Question),
+				opinions, aggregate),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("decision %s challenge %s: %w", req.DecisionID, challengerID, err)
@@ -290,6 +293,10 @@ func (e *decisionEngine) runRevisions(
 		revision, err := e.services.Revisions.RunRevision(ctx, RevisionRequest{
 			DecisionID: req.DecisionID, JudgeID: original.JudgeID, Packet: packet, Original: original,
 			Prompt: BuildRevisionPrompt(packet, round1, challenges, original),
+			// Same (role, hints, question) JUDGE round 1 used — this is what
+			// makes REVISE resolve to the identical binding rather than a
+			// freshly re-hinted one (spec2.md §8).
+			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.Question),
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("decision %s revision %s: %w", req.DecisionID, original.JudgeID, err)

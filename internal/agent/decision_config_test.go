@@ -462,3 +462,187 @@ func TestDecisionPolicyJudgeRoleValidate(t *testing.T) {
 		t.Fatalf("valid judge-role should validate: %v", err)
 	}
 }
+
+// challenge-role (spec2.md PR-4) mirrors judge-role's validation rules,
+// bounded against challenge.count instead of independent-judgments.
+func TestDecisionPolicyChallengeRoleValidate(t *testing.T) {
+	policy := validPolicy()
+	policy.Challenge = ChallengePolicy{Enabled: true, Count: 2}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("challenge-role with no required capabilities must fail validation")
+	}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{RequiredCapabilities: []string{"adversarial-analysis"}, MinDistinctAgents: 3}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("min-distinct-agents exceeding challenge.count must fail validation")
+	}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{RequiredCapabilities: []string{"adversarial-analysis"}, MinDistinctAgents: 2}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("valid challenge-role should validate: %v", err)
+	}
+}
+
+// DiversityPolicy extensions (spec.md v2 §13): min-distinct-models/
+// min-distinct-providers must fail closed the same way min-distinct-agents
+// does, and allow-repeated-agent-definition must not coexist with a
+// diversity floor above 1.
+func TestDecisionPolicyJudgeRoleDiversityExtensionsValidate(t *testing.T) {
+	policy := validPolicy()
+	policy.IndependentJudgments = 3
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: -1}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("negative min-distinct-models must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: 4}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("min-distinct-models exceeding independent-judgments must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctProviders: 4}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("min-distinct-providers exceeding independent-judgments must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{
+		RequiredCapabilities: []string{"decision-analysis"}, MinDistinctAgents: 2, AllowRepeatedAgentDefinition: true,
+	}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("allow-repeated-agent-definition conflicting with min-distinct-agents > 1 must fail validation")
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{
+		RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: 2, PreferDistinctModels: true,
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("valid diversity extensions should validate: %v", err)
+	}
+}
+
+// RoutingPin.Validate (spec.md v2 §34) requires both fields non-empty:
+// an unaccountable pin (no reason) is exactly what the spec forbids.
+func TestRoutingPinValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		pin     RoutingPin
+		wantErr bool
+	}{
+		{name: "valid", pin: RoutingPin{Agent: "security-reviewer", Reason: "required by security acceptance policy"}},
+		{name: "empty agent", pin: RoutingPin{Reason: "required by policy"}, wantErr: true},
+		{name: "empty reason", pin: RoutingPin{Agent: "security-reviewer"}, wantErr: true},
+		{name: "both empty", pin: RoutingPin{}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.pin.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("want no error, got %v", err)
+			}
+		})
+	}
+}
+
+// A pin must fail team load unless its profile explicitly opts in via
+// discipline.routing.allow-pinned-binding (spec.md v2 §34 "profile permits
+// pin"), and must not coexist with a diversity floor above 1 (a pin forces
+// every ordinal to the same agent).
+func TestDecisionPolicyPinRequiresProfileGateAndNoDistinctFloor(t *testing.T) {
+	policy := validPolicy()
+	policy.IndependentJudgments = 3
+	validPin := &RoutingPin{Agent: "security-reviewer", Reason: "required by security acceptance policy"}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role.pin without discipline.routing.allow-pinned-binding must fail validation")
+	}
+
+	policy.Discipline.Routing.AllowPinnedBinding = true
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("judge-role.pin with the profile gate enabled should validate: %v", err)
+	}
+
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctAgents: 2, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role.pin conflicting with min-distinct-agents > 1 must fail validation")
+	}
+
+	// An invalid pin (no reason) must fail even with the gate enabled.
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, Pin: &RoutingPin{Agent: "security-reviewer"}}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role.pin with no reason must fail validation even with the profile gate enabled")
+	}
+}
+
+// adaptive-capabilities (spec.md v2 §39-40) must fail closed on a criterion
+// ID that names no configured decision criterion, or an empty capability
+// list — either mistake would otherwise silently never fire.
+func TestDecisionPolicyChallengeRoleAdaptiveCapabilitiesValidate(t *testing.T) {
+	policy := validPolicy()
+	policy.Challenge = ChallengePolicy{Enabled: true, Count: 1}
+	policy.Criteria = []DecisionCriterion{{ID: "operability", Weight: 1}}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{
+		RequiredCapabilities: []string{"adversarial-analysis"},
+		AdaptiveCapabilities: map[string][]string{"data-integrity": {"database"}},
+	}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("adaptive-capabilities referencing an unconfigured criterion must fail validation")
+	}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{
+		RequiredCapabilities: []string{"adversarial-analysis"},
+		AdaptiveCapabilities: map[string][]string{"operability": {}},
+	}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("adaptive-capabilities with an empty capability list must fail validation")
+	}
+
+	policy.ChallengeRole = &ChallengeRolePolicy{
+		RequiredCapabilities: []string{"adversarial-analysis"},
+		AdaptiveCapabilities: map[string][]string{"operability": {"operations", "reliability"}},
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("valid adaptive-capabilities should validate: %v", err)
+	}
+}
+
+// routing-hints (spec.md v2 §16) must fail closed on a hint that could never
+// match anything or never add anything.
+func TestRoutingHintValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		hint    RoutingHint
+		wantErr bool
+	}{
+		{name: "valid", hint: RoutingHint{WhenGoalContains: "kubernetes", PreferredCapabilities: []string{"kubernetes"}}},
+		{name: "empty selector", hint: RoutingHint{PreferredCapabilities: []string{"kubernetes"}}, wantErr: true},
+		{name: "no preferred capabilities", hint: RoutingHint{WhenGoalContains: "kubernetes"}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.hint.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("want no error, got %v", err)
+			}
+		})
+	}
+}
+
+// A malformed routing hint must fail team-level DecisionConfig.Validate,
+// not silently no-op forever at dispatch time.
+func TestDecisionConfigRejectsInvalidRoutingHint(t *testing.T) {
+	cfg := DecisionConfig{RoutingHints: []RoutingHint{{WhenGoalContains: "kubernetes"}}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("want error for a routing hint with no preferred capabilities")
+	}
+}

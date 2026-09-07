@@ -292,13 +292,24 @@ type challengeResponse struct {
 
 // RunChallenge implements ChallengeRunner.
 func (r *coordinatorDecisionRunners) RunChallenge(ctx context.Context, req ChallengeRequest) (DecisionChallenge, error) {
+	if req.RoutingRole != nil {
+		return r.runChallengeViaCapabilityRouting(ctx, req)
+	}
 	response, err := r.ask(ctx, decisionPurposeChallenge, req.Prompt)
 	if err != nil {
 		return DecisionChallenge{}, err
 	}
+	return decodeChallengeResponse(response, req.ChallengerID)
+}
+
+// decodeChallengeResponse decodes one challenger's raw response into a
+// DecisionChallenge. Shared by the legacy sidecar path and the
+// capability-routed path so the response-shape contract never depends on
+// who produced the text.
+func decodeChallengeResponse(response, challengerID string) (DecisionChallenge, error) {
 	var decoded challengeResponse
 	if err := decodeStage(response, &decoded); err != nil {
-		return DecisionChallenge{}, fmt.Errorf("challenger %s: %w", req.ChallengerID, err)
+		return DecisionChallenge{}, fmt.Errorf("challenger %s: %w", challengerID, err)
 	}
 	return DecisionChallenge{
 		TargetOption:         strings.TrimSpace(decoded.TargetOption),
@@ -362,15 +373,24 @@ type revisionResponse struct {
 
 // RunRevision implements RevisionRunner.
 func (r *coordinatorDecisionRunners) RunRevision(ctx context.Context, req RevisionRequest) (DecisionRevision, error) {
+	if req.RoutingRole != nil {
+		return r.runRevisionViaCapabilityRouting(ctx, req)
+	}
 	response, err := r.ask(ctx, decisionPurposeRevision, req.Prompt)
 	if err != nil {
 		return DecisionRevision{}, err
 	}
+	return decodeRevisionResult(response, req.JudgeID)
+}
+
+// decodeRevisionResult decodes one judge's raw revision response into a
+// DecisionRevision. Shared by the legacy sidecar path and the
+// capability-routed path.
+func decodeRevisionResult(response, judgeID string) (DecisionRevision, error) {
 	var decoded revisionResponse
 	if err := decodeStage(response, &decoded); err != nil {
-		return DecisionRevision{}, fmt.Errorf("revision %s: %w", req.JudgeID, err)
+		return DecisionRevision{}, fmt.Errorf("revision %s: %w", judgeID, err)
 	}
-
 	revision := DecisionRevision{
 		RevisedProbability: decoded.RevisedProbability,
 		Changed:            decoded.Changed,

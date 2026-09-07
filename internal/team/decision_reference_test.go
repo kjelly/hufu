@@ -219,7 +219,9 @@ func TestReferenceEvidencePublishesRuntimeOwnedCASArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := &memoryJournal{}
-	refRunner := &referenceDraftRunner{draft: validReferenceDraft()}
+	draft := validReferenceDraft()
+	draft.AgentID = "resolved-worker"
+	refRunner := &referenceDraftRunner{draft: draft}
 	judge := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", .8), nil
 	})
@@ -285,6 +287,9 @@ func TestReferenceEvidencePublishesRuntimeOwnedCASArtifacts(t *testing.T) {
 	}
 	if record.ReferenceEvidenceResultRef.ID != resultRef.ID {
 		t.Fatalf("record result ref = %#v, event result ref = %#v", record.ReferenceEvidenceResultRef, resultRef)
+	}
+	if completed.ProducerAgentID != "resolved-worker" {
+		t.Fatalf("ProducerAgentID = %q, want %q (durable AgentBinding must survive publication)", completed.ProducerAgentID, "resolved-worker")
 	}
 }
 

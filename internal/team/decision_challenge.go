@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // Challenge and premortem stages
@@ -21,6 +23,11 @@ type ChallengeRequest struct {
 	Packet       DecisionEvidencePacket
 	Aggregate    DecisionAggregate
 	Prompt       string
+	// RoutingRole selects real capability-routed execution for this
+	// challenger when non-nil (spec.md v2 §19; spec2.md PR-4). Like
+	// JudgeRequest, ChallengeRequest is never marshaled into a producer
+	// prompt, so this field needs no json tag to stay out of it.
+	RoutingRole *agent.ChallengeRolePolicy
 }
 
 // ChallengeRunner executes one challenger.

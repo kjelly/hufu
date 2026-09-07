@@ -347,3 +347,66 @@ func TestValidateDelegationPolicy_EnforcesCapabilityRouting(t *testing.T) {
 		t.Fatalf("validateDelegationPolicy = %v, want a capability-routing rejection", err)
 	}
 }
+
+// A registry with no configured ScoringWeights must reproduce the exact
+// scores CapabilityRegistry always computed, before weights existed
+// (spec.md v2 §12 must be additive, never a silent behavior change).
+func TestCapabilityRegistry_DefaultWeightsReproduceLegacyScoring(t *testing.T) {
+	agents := map[string]*agent.AgentDef{"worker": {Name: "worker"}}
+	maintainer := map[string][]agent.DeclaredCapability{
+		"worker": {
+			{Capability: "decision-analysis", Confidence: 0.6},
+			{Capability: "architecture", Confidence: 0.4},
+		},
+	}
+	registry := NewCapabilityRegistry(agents, maintainer)
+
+	candidates, err := registry.Resolve(context.Background(), CapabilityQuery{
+		Required: []string{"decision-analysis"}, Preferred: []string{"architecture"},
+	}, []string{"worker"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := 1.0*0.6 + 0.5*0.4 // legacy formula: required*1.0 + preferred*0.5
+	if len(candidates) != 1 || candidates[0].Score != want {
+		t.Fatalf("score = %#v, want %v", candidates, want)
+	}
+}
+
+// A configured cost weight must change ranking between two candidates with
+// otherwise-identical capability confidence but different declared cost
+// class — and must do nothing when left at its zero-value default.
+func TestCapabilityRegistry_CostWeightAffectsRanking(t *testing.T) {
+	agents := map[string]*agent.AgentDef{
+		"cheap":     {Name: "cheap"},
+		"expensive": {Name: "expensive"},
+	}
+	maintainer := map[string][]agent.DeclaredCapability{
+		"cheap":     {{Capability: "decision-analysis", Confidence: 0.6, CostClass: "low"}},
+		"expensive": {{Capability: "decision-analysis", Confidence: 0.6, CostClass: "high"}},
+	}
+	query := CapabilityQuery{Required: []string{"decision-analysis"}}
+
+	// Without a configured cost weight, equal capability confidence ties,
+	// broken deterministically by AgentID — "cheap" wins alphabetically
+	// regardless of cost, proving cost had no effect yet.
+	unweighted := NewCapabilityRegistry(agents, maintainer)
+	candidates, err := unweighted.Resolve(context.Background(), query, []string{"cheap", "expensive"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if candidates[0].Score != candidates[1].Score {
+		t.Fatalf("scores must be equal without a cost weight, got %#v", candidates)
+	}
+
+	// With cost weighted, "cheap" must score strictly higher than
+	// "expensive" despite identical capability confidence.
+	weighted := NewCapabilityRegistry(agents, maintainer).WithScoringWeights(agent.ScoringWeights{Cost: 1.0})
+	candidates, err = weighted.Resolve(context.Background(), query, []string{"cheap", "expensive"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if candidates[0].AgentID != "cheap" || candidates[0].Score <= candidates[1].Score {
+		t.Fatalf("want cheap ranked first with a strictly higher score, got %#v", candidates)
+	}
+}

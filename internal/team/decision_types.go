@@ -16,7 +16,7 @@ import (
 // DecisionRecordSchemaVersion versions the persisted DecisionRecord. Readers
 // must reject a record whose version they do not understand rather than
 // silently misinterpreting it.
-const DecisionRecordSchemaVersion = 2
+const DecisionRecordSchemaVersion = 3
 
 // Configuration type aliases (spec §12-§13).
 type (
@@ -222,6 +222,25 @@ type DecisionOpinion struct {
 	// excluded from aggregation. Rejected opinions stay durable for audit.
 	Valid          bool   `json:"valid"`
 	RejectedReason string `json:"rejected_reason,omitempty"`
+
+	// AgentID names the concrete worker capability routing resolved this
+	// judge to, if any. It is empty when the opinion was formed by the
+	// team's legacy judge-model sidecar rather than a routed role.
+	AgentID string `json:"agent_id,omitempty"`
+
+	// Pinned is true when AgentID was forced by a judge-role.pin
+	// configuration rather than resolved by ranking (spec.md v2 §34).
+	// BindingReason carries the pin's declared reason. Both are empty on
+	// every non-pinned path.
+	Pinned        bool   `json:"pinned,omitempty"`
+	BindingReason string `json:"binding_reason,omitempty"`
+
+	// Model and Provider record the resolved agent's own Generation.Model
+	// and ProviderURL at invocation time (spec.md v2 §13 model/provider
+	// diversity) — set by the runner alongside AgentID. Provider is a
+	// proxy: this codebase has no separate ProviderID concept.
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // DecisionAggregate is the deterministic aggregation of one judgment round.
@@ -256,6 +275,25 @@ type DecisionChallenge struct {
 	MissingEvidence      []string `json:"missing_evidence,omitempty"`
 	FalsificationTests   []string `json:"falsification_tests,omitempty"`
 	Severity             float64  `json:"severity,omitempty"`
+
+	// AgentID names the concrete worker capability routing resolved this
+	// challenger to, if any. It is empty when the challenge was formed by
+	// the team's legacy judge-model sidecar rather than a routed role.
+	AgentID string `json:"agent_id,omitempty"`
+
+	// Pinned is true when AgentID was forced by a challenge-role.pin
+	// configuration rather than resolved by ranking (spec.md v2 §34).
+	// BindingReason carries the pin's declared reason. Both are empty on
+	// every non-pinned path.
+	Pinned        bool   `json:"pinned,omitempty"`
+	BindingReason string `json:"binding_reason,omitempty"`
+
+	// Model and Provider record the resolved agent's own Generation.Model
+	// and ProviderURL at invocation time (spec.md v2 §13 model/provider
+	// diversity). Provider is a proxy: this codebase has no separate
+	// ProviderID concept.
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // DecisionRevision is one judge's single bounded revision (spec §25).
@@ -270,6 +308,18 @@ type DecisionRevision struct {
 
 	Changed bool   `json:"changed"`
 	Reason  string `json:"reason,omitempty"`
+
+	// AgentID names the concrete worker capability routing resolved this
+	// judge's revision to. REVISE reuses JUDGE round 1's binding rather than
+	// resolving independently, so this is always identical to the original
+	// opinion's AgentID for the same JudgeID. Empty on the legacy sidecar path.
+	AgentID string `json:"agent_id,omitempty"`
+
+	// Pinned and BindingReason carry forward the original opinion's pin
+	// status, since REVISE reuses that same binding rather than resolving
+	// independently (spec.md v2 §34).
+	Pinned        bool   `json:"pinned,omitempty"`
+	BindingReason string `json:"binding_reason,omitempty"`
 }
 
 // FailureMode is one discovered way the plan fails (spec §24).
@@ -352,6 +402,12 @@ type DecisionRecord struct {
 	Revisions  []DecisionRevision  `json:"revisions,omitempty"`
 	Premortem  *PremortemResult    `json:"premortem,omitempty"`
 
+	// JudgeDiversity/ChallengeDiversity report the diversity actually
+	// achieved across each role's durable bindings (spec.md v2 §32), nil
+	// when that role was never capability-routed at all.
+	JudgeDiversity     *BindingDiversitySummary `json:"judge_diversity,omitempty"`
+	ChallengeDiversity *BindingDiversitySummary `json:"challenge_diversity,omitempty"`
+
 	FinalOption           string       `json:"final_option,omitempty"`
 	FinalizationMode      string       `json:"finalization_mode,omitempty"`
 	FinalizationIdentity  string       `json:"finalization_identity,omitempty"`
@@ -390,7 +446,7 @@ type DecisionRecord struct {
 // schema. Zero, negative, and future versions are never compatibility signals.
 func (r DecisionRecord) ValidateSchemaVersion() error {
 	switch r.SchemaVersion {
-	case 1, DecisionRecordSchemaVersion:
+	case 1, 2, DecisionRecordSchemaVersion:
 		return nil
 	default:
 		return fmt.Errorf("decision record %s has unsupported schema version %d", r.ID, r.SchemaVersion)

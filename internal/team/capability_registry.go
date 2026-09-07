@@ -92,13 +92,25 @@ type CapabilityResolver interface {
 type CapabilityRegistry struct {
 	agents     map[string]*agent.AgentDef
 	maintainer map[string][]agent.DeclaredCapability
+	weights    agent.ScoringWeights
 	now        func() time.Time
 }
 
 // NewCapabilityRegistry builds a registry over a team's configured agents and
-// its team.yaml `capability-registry` declarations.
+// its team.yaml `capability-registry` declarations. Its scoring weights start
+// at the zero value, which resolves through ScoringWeights' Effective*
+// accessors to exactly the formula this package used before weights existed —
+// call WithScoringWeights to configure anything else.
 func NewCapabilityRegistry(agents map[string]*agent.AgentDef, maintainer map[string][]agent.DeclaredCapability) *CapabilityRegistry {
 	return &CapabilityRegistry{agents: agents, maintainer: maintainer, now: time.Now}
+}
+
+// WithScoringWeights configures the deterministic weighted-scoring formula
+// (spec.md v2 §12). Not calling this at all is equivalent to the zero value,
+// which is exactly today's hardcoded formula.
+func (r *CapabilityRegistry) WithScoringWeights(weights agent.ScoringWeights) *CapabilityRegistry {
+	r.weights = weights
+	return r
 }
 
 // Resolve implements CapabilityResolver. It is deterministic under fixed
@@ -163,13 +175,13 @@ func (r *CapabilityRegistry) scoreAgent(agentID string, query CapabilityQuery) (
 	var score float64
 	for _, req := range query.Required {
 		if rec, ok := matchCapability(best, strings.ToLower(strings.TrimSpace(req))); ok {
-			score += rec.Confidence
+			score += r.weights.EffectiveRequiredMatch() * rec.Confidence
 		}
 	}
 	for _, pref := range query.Preferred {
 		key := strings.ToLower(strings.TrimSpace(pref))
 		if rec, ok := matchCapability(best, key); ok {
-			score += 0.5 * rec.Confidence
+			score += r.weights.EffectivePreferredMatch() * rec.Confidence
 			explanation = append(explanation, fmt.Sprintf(
 				"preferred %q matched by %q (%s, confidence %.2f)", pref, rec.Capability, rec.Source, rec.Confidence))
 		}
@@ -177,7 +189,45 @@ func (r *CapabilityRegistry) scoreAgent(agentID string, query CapabilityQuery) (
 	if len(query.Required) == 0 && len(query.Preferred) == 0 {
 		explanation = append(explanation, "no capability requirement declared; every eligible candidate ties")
 	}
+	// Cost only ever affects ranking when a team explicitly configures a
+	// non-zero weight (spec.md v2 §12) — it never applies to a candidate
+	// already disqualified above.
+	if costWeight := r.weights.EffectiveCost(); costWeight != 0 {
+		if class := costClassFor(records); class != "" {
+			contribution := costWeight * costClassScore(class)
+			score += contribution
+			explanation = append(explanation, fmt.Sprintf(
+				"cost class %q contributes %.2f (weight %.2f)", class, contribution, costWeight))
+		}
+	}
 	return score, explanation
+}
+
+// costClassFor returns the first non-empty declared cost class among
+// records, in their declared order — deterministic, since records is built
+// from a fixed AgentDef.Capabilities line order followed by the
+// capability-registry's own declared (slice, not map) order.
+func costClassFor(records []CapabilityRecord) string {
+	for _, rec := range records {
+		if class := strings.ToLower(strings.TrimSpace(rec.CostClass)); class != "" {
+			return class
+		}
+	}
+	return ""
+}
+
+// costClassScores maps a declared cost class to a 0-1 desirability score
+// (higher is cheaper, so it can be added the same way a capability match
+// is). An unrecognized or empty class scores neutrally.
+var costClassScores = map[string]float64{
+	"low": 1.0, "medium": 0.6, "high": 0.2,
+}
+
+func costClassScore(class string) float64 {
+	if score, ok := costClassScores[class]; ok {
+		return score
+	}
+	return 0.5
 }
 
 // matchCapability finds the highest-confidence record whose capability text
@@ -288,7 +338,8 @@ func (c *Coordinator) ResolveCapabilityCandidates(ctx context.Context, query Cap
 	if c == nil || c.session == nil {
 		return nil, fmt.Errorf("capability routing requires an active session")
 	}
-	registry := NewCapabilityRegistry(c.session.Agents, c.session.Config.CapabilityRegistry)
+	registry := NewCapabilityRegistry(c.session.Agents, c.session.Config.CapabilityRegistry).
+		WithScoringWeights(c.session.Config.RoutingPolicy.Scoring.Weights)
 	return registry.Resolve(ctx, query, c.eligibleWorkerIDs())
 }
 
@@ -309,7 +360,8 @@ func (c *Coordinator) validateCapabilityRouting(tasks []TaskDef) error {
 	if len(eligible) == 0 {
 		return nil
 	}
-	registry := NewCapabilityRegistry(c.session.Agents, c.session.Config.CapabilityRegistry)
+	registry := NewCapabilityRegistry(c.session.Agents, c.session.Config.CapabilityRegistry).
+		WithScoringWeights(c.session.Config.RoutingPolicy.Scoring.Weights)
 	for taskIndex, task := range tasks {
 		chosen := strings.TrimSpace(task.Agent)
 		for ruleIndex, rule := range c.session.Config.Delegation.CapabilityRouting {

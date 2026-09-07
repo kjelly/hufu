@@ -107,6 +107,40 @@ func TestComputeDecisionMetricsIgnoresForeignEvents(t *testing.T) {
 	}
 }
 
+// Capability-routed opinions, challenges, revisions, and reference results
+// must tally under the concrete agent that produced them; legacy
+// sidecar-produced stages (no AgentID) must not be counted at all.
+func TestComputeDecisionMetricsCountsCapabilityRoutedBindings(t *testing.T) {
+	events := []RunEvent{
+		metricEvent(t, agent.EventDecisionOpinionSubmitted, decisionEvent{
+			DecisionID: "dec-1", Opinion: &DecisionOpinion{JudgeID: "judge-1", AgentID: "cand-a"},
+		}),
+		metricEvent(t, agent.EventDecisionOpinionSubmitted, decisionEvent{
+			DecisionID: "dec-1", Opinion: &DecisionOpinion{JudgeID: "judge-2"},
+		}),
+		metricEvent(t, agent.EventDecisionChallengeSubmitted, decisionEvent{
+			DecisionID: "dec-1", Challenge: &DecisionChallenge{AgentID: "cand-b"},
+		}),
+		metricEvent(t, agent.EventDecisionRevisionSubmitted, decisionEvent{
+			DecisionID: "dec-1", Revision: &DecisionRevision{JudgeID: "judge-1", AgentID: "cand-a"},
+		}),
+		metricEvent(t, agent.EventDecisionReferenceCompleted, decisionEvent{
+			DecisionID: "dec-1", ReferenceResult: &ReferenceEvidenceResult{ProducerAgentID: "cand-c"},
+		}),
+	}
+
+	metrics := ComputeDecisionMetrics(events, nil)
+	want := map[string]int{"cand-a": 2, "cand-b": 1, "cand-c": 1}
+	if len(metrics.CapabilityRoutedBindingCount) != len(want) {
+		t.Fatalf("CapabilityRoutedBindingCount = %#v, want %#v", metrics.CapabilityRoutedBindingCount, want)
+	}
+	for agentID, count := range want {
+		if got := metrics.CapabilityRoutedBindingCount[agentID]; got != count {
+			t.Errorf("CapabilityRoutedBindingCount[%q] = %d, want %d", agentID, got, count)
+		}
+	}
+}
+
 func TestComputeDecisionMetricsFromIndex(t *testing.T) {
 	entries := []DecisionIndexEntry{
 		{DecisionID: "dec-1", Profile: "standard", IndependenceGroupCount: 2},

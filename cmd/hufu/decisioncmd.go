@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -87,6 +88,20 @@ var decisionShowCmd = &cobra.Command{
 	RunE:  runDecisionShow,
 }
 
+var decisionExplainCmd = &cobra.Command{
+	Use:   "explain <decision-id>",
+	Short: "Show which concrete agent produced each stage of a decision",
+	Long: `hufu decision explain reads a decision's full persisted record and lists,
+for each stage that ran (reference, judge rounds, challenges, revisions),
+whether capability routing resolved a concrete worker and which one.
+
+A stage shows routed=false when it was formed by the team's legacy
+judge-model sidecar instead of a routed role — that is expected for any team
+that has not configured decision.*-role routing, not a fault.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runDecisionExplain,
+}
+
 var decisionResolveCmd = &cobra.Command{
 	Use:   "resolve <decision-id>",
 	Short: "Record what a decision actually turned out to be",
@@ -159,6 +174,7 @@ func init() {
 	decisionCmd.AddCommand(decisionListCmd)
 
 	decisionCmd.AddCommand(decisionShowCmd)
+	decisionCmd.AddCommand(decisionExplainCmd)
 
 	decisionResolveCmd.Flags().StringVar(&decisionResolveOutcome, "outcome", "", "Observed outcome: succeeded, failed, mixed, superseded, or unresolved (required)")
 	decisionResolveCmd.Flags().StringArrayVar(&decisionResolveEvidence, "evidence", nil, "SHA-256 digest of an artifact that evidences the outcome (repeatable)")
@@ -328,6 +344,89 @@ func runDecisionShow(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = fmt.Fprint(cmd.OutOrStdout(), utils.RedactSecrets(display.String()))
 	return nil
+}
+
+func runDecisionExplain(cmd *cobra.Command, args []string) error {
+	decisionID := args[0]
+	index, err := openDecisionIndex()
+	if err != nil {
+		return err
+	}
+	entry, found, err := index.Get(decisionID)
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision explain: %v", err)}
+	}
+	if !found {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision explain: decision %q is not in %s", decisionID, index.Path())}
+	}
+	ref := entry.EffectiveRecordRef()
+	if ref.ID == "" {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision explain: decision %q has no persisted record artifact", decisionID)}
+	}
+
+	workspace := getDecisionWorkspace()
+	store, err := team.NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision explain: artifact store: %v", err)}
+	}
+	ctx := context.Background()
+	record, err := team.FetchDecisionArtifact[team.DecisionRecord](ctx, store, ref)
+	if err != nil {
+		return &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision explain: %v", err)}
+	}
+
+	var reference *team.ReferenceEvidenceResult
+	if record.ReferenceEvidenceResultRef != nil {
+		if result, err := team.FetchDecisionArtifact[team.ReferenceEvidenceResult](ctx, store, *record.ReferenceEvidenceResultRef); err == nil {
+			reference = &result
+		}
+	}
+	bindings := team.ExplainDecisionBindings(record, reference)
+
+	if decisionJSON {
+		return writeDecisionJSON(cmd, map[string]any{
+			"decision_id":         record.ID,
+			"bindings":            bindings,
+			"judge_diversity":     record.JudgeDiversity,
+			"challenge_diversity": record.ChallengeDiversity,
+		})
+	}
+
+	var display strings.Builder
+	_, _ = fmt.Fprintf(&display, "Decision:   %s\n", record.ID)
+	if len(bindings) == 0 {
+		_, _ = fmt.Fprintln(&display, "No stages recorded a capability-routed binding to explain.")
+	} else {
+		w := tabwriter.NewWriter(&display, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "STAGE\tORDINAL\tAGENT\tROUTED\tPINNED\tREASON")
+		for _, binding := range bindings {
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%t\t%s\n",
+				binding.Stage, binding.Ordinal, shortOrDash(binding.AgentID), binding.Routed,
+				binding.Pinned, shortOrDash(binding.Reason))
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	printDiversitySummary(&display, "Judge diversity:", record.JudgeDiversity)
+	printDiversitySummary(&display, "Challenge diversity:", record.ChallengeDiversity)
+	_, err = fmt.Fprint(cmd.OutOrStdout(), utils.RedactSecrets(display.String()))
+	return err
+}
+
+// printDiversitySummary renders one BindingDiversitySummary (spec.md v2
+// §32), if any — a nil summary means that role was never capability-routed
+// at all, not "zero diversity", so it prints nothing.
+func printDiversitySummary(display *strings.Builder, label string, summary *team.BindingDiversitySummary) {
+	if summary == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(display, "%s %d binding(s), %d distinct agent(s), %d distinct model(s), %d distinct provider(s)",
+		label, summary.Count, summary.DistinctAgentCount, summary.DistinctModelCount, summary.DistinctProviderCount)
+	if len(summary.RepeatedAgentBindings) > 0 {
+		_, _ = fmt.Fprintf(display, ", repeated: %s", strings.Join(summary.RepeatedAgentBindings, ", "))
+	}
+	_, _ = fmt.Fprintln(display)
 }
 
 func runDecisionResolve(cmd *cobra.Command, args []string) error {

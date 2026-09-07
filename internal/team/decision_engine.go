@@ -107,6 +107,14 @@ type DecisionRequest struct {
 	Question string
 	Options  []DecisionOption
 
+	// RoutingHints widens a routed role's preferred-capability list for
+	// this specific decision, based on Question (spec.md v2 §16, §30-31).
+	// Sourced once from the team's decision.routing-hints at request
+	// construction (decision_dispatch.go); applying it independently but
+	// identically at both the JUDGE and REVISE construction sites is what
+	// keeps REVISE resolving to the same binding JUDGE round 1 did.
+	RoutingHints []agent.RoutingHint
+
 	Facts       map[string]any
 	Artifacts   []ArtifactRef
 	BaseRates   []BaseRateEvidence
@@ -399,6 +407,8 @@ func (e *decisionEngine) run(ctx context.Context, req DecisionRequest) (*Decisio
 	}
 	record.Challenges = challenges
 	record.Revisions = revisions
+	record.JudgeDiversity = judgeDiversitySummary(opinions)
+	record.ChallengeDiversity = challengeDiversitySummary(challenges)
 	record.Premortem = premortem
 	record.FalsificationConditions = PremortemFalsifications(premortem, challenges)
 
@@ -560,7 +570,7 @@ func (e *decisionEngine) runJudgeWithRepair(
 		}
 		opinion, err := e.services.Judges.RunJudge(ctx, JudgeRequest{
 			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, Context: judgeCtx, Packet: packet,
-			RoutingRole: req.Policy.JudgeRole,
+			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.Question),
 		})
 		if err != nil {
 			lastOperationalErr = err

@@ -67,6 +67,19 @@ type ReferenceBaseRateDraft struct {
 type ReferenceEvidenceDraft struct {
 	SchemaVersion int                      `json:"schema_version"`
 	Entries       []ReferenceBaseRateDraft `json:"entries"`
+
+	// AgentID names the concrete worker capability routing resolved the
+	// reference role to, if any. It is set by the runner after decoding,
+	// never by the producer's own response, and is empty on the legacy
+	// judge-model sidecar path. Carried into ReferenceEvidenceResult's
+	// ProducerAgentID when the draft is published.
+	AgentID string `json:"-"`
+
+	// Pinned and BindingReason mirror outside-view.role.pin's effect (spec.md
+	// v2 §34), set by the runner alongside AgentID, never by the producer's
+	// own response. Carried into ReferenceEvidenceResult when published.
+	Pinned        bool   `json:"-"`
+	BindingReason string `json:"-"`
 }
 
 // ReferenceEvidenceArtifact is the fixed typed payload stored for each
@@ -110,6 +123,16 @@ type ReferenceEvidenceResult struct {
 	Provenance        []EvidenceProvenance `json:"provenance"`
 	CompletedAt       time.Time            `json:"completed_at"`
 	ResultArtifactRef *ArtifactRef         `json:"result_artifact_ref,omitempty"`
+
+	// ProducerAgentID names the concrete worker capability routing resolved
+	// the reference role to for this invocation, copied from the validated
+	// draft's AgentID. Empty on the legacy judge-model sidecar path.
+	ProducerAgentID string `json:"producer_agent_id,omitempty"`
+
+	// ProducerPinned and ProducerBindingReason copy the validated draft's
+	// Pinned/BindingReason (spec.md v2 §34).
+	ProducerPinned        bool   `json:"producer_pinned,omitempty"`
+	ProducerBindingReason string `json:"producer_binding_reason,omitempty"`
 }
 
 // ReferenceEvidenceFailure is a terminal producer outcome. It is durable so

@@ -93,6 +93,39 @@ type DecisionConfig struct {
 	DefaultProfile  string                    `yaml:"default-profile,omitempty"`
 	Profiles        map[string]DecisionPolicy `yaml:"profiles,omitempty"`
 	RequestContract RequestContractConfig     `yaml:"request-contract,omitempty"`
+	// RoutingHints widen a role's preferred-capability list for a specific
+	// decision, based on the task's own question text (spec.md v2 §16,
+	// §30-31). Team-wide, not per-profile: every profile that opts a role
+	// into capability routing sees the same hints. A hint can only ever add
+	// to a role's *preferred* list — never to required — so it can widen
+	// which already-qualified candidate wins, never grant eligibility to one
+	// that failed the required-capability check.
+	RoutingHints []RoutingHint `yaml:"routing-hints,omitempty"`
+}
+
+// RoutingHint is one goal-substring-triggered capability-routing rule
+// (spec.md v2 §16). It reuses the same selector shape TaskGoalInvariants
+// already uses, rather than a new model-facing schema field: the task's
+// Goal is already free text a coordinator writes for its own reasons, and a
+// team-declared, auditable rule set matches spec.md v2's own examples
+// (its "Kubernetes migration" / "Security-sensitive task" hints are
+// themselves static, scenario-keyed rules, not freeform LLM-authored tags).
+type RoutingHint struct {
+	WhenGoalContains      string   `yaml:"when-goal-contains"`
+	PreferredCapabilities []string `yaml:"preferred-capabilities"`
+}
+
+// Validate rejects a hint that could never match anything or never add
+// anything — either mistake would silently no-op forever rather than fail
+// at load time.
+func (h RoutingHint) Validate() error {
+	if strings.TrimSpace(h.WhenGoalContains) == "" {
+		return fmt.Errorf("routing-hints[].when-goal-contains must not be empty")
+	}
+	if len(h.PreferredCapabilities) == 0 {
+		return fmt.Errorf("routing-hints[].preferred-capabilities must name at least one capability")
+	}
+	return nil
 }
 
 // RequestContractConfig contains explicit request-level intent. It is kept
@@ -137,12 +170,16 @@ type DecisionPolicy struct {
 	// sidecar-only behavior exactly as before this field existed.
 	JudgeRole *JudgeRolePolicy `yaml:"judge-role,omitempty"`
 
-	Aggregation  AggregationPolicy  `yaml:"aggregation,omitempty"`
-	Challenge    ChallengePolicy    `yaml:"challenge,omitempty"`
-	Revision     RevisionPolicy     `yaml:"revision,omitempty"`
-	Premortem    PremortemPolicy    `yaml:"premortem,omitempty"`
-	Forecast     ForecastPolicy     `yaml:"forecast,omitempty"`
-	Finalization FinalizationPolicy `yaml:"finalization,omitempty"`
+	Aggregation AggregationPolicy `yaml:"aggregation,omitempty"`
+	Challenge   ChallengePolicy   `yaml:"challenge,omitempty"`
+	// ChallengeRole opts the CHALLENGE stage into real capability-routed
+	// execution (spec.md v2 §19; spec2.md PR-4). There is no separate
+	// revision-role: REVISE reuses JudgeRole directly.
+	ChallengeRole *ChallengeRolePolicy `yaml:"challenge-role,omitempty"`
+	Revision      RevisionPolicy       `yaml:"revision,omitempty"`
+	Premortem     PremortemPolicy      `yaml:"premortem,omitempty"`
+	Forecast      ForecastPolicy       `yaml:"forecast,omitempty"`
+	Finalization  FinalizationPolicy   `yaml:"finalization,omitempty"`
 
 	OptionProposal OptionProposalPolicy `yaml:"option-proposal,omitempty"`
 
@@ -174,13 +211,37 @@ type OutsideViewPolicy struct {
 	Role *ReferenceRolePolicy `yaml:"role,omitempty"`
 }
 
+// RoutingPin forces a role to a single named agent instead of ranking
+// candidates (spec.md v2 §34). It never bypasses authorization or required-
+// capability checks — it only replaces *which* already-qualified candidate
+// is chosen. A profile must separately opt in via
+// DisciplinePolicy.Routing.AllowPinnedBinding before a pin is honored.
+type RoutingPin struct {
+	Agent  string `yaml:"agent"`
+	Reason string `yaml:"reason"`
+}
+
+// Validate requires both fields: an empty agent could never resolve to
+// anything, and a pin without a stated reason is exactly the silent,
+// unaccountable override spec.md v2 §34 requires runtimes to reject.
+func (p RoutingPin) Validate() error {
+	if strings.TrimSpace(p.Agent) == "" {
+		return fmt.Errorf("pin.agent must not be empty")
+	}
+	if strings.TrimSpace(p.Reason) == "" {
+		return fmt.Errorf("pin.reason must not be empty")
+	}
+	return nil
+}
+
 // ReferenceRolePolicy names the capabilities the reference role's resolved
 // worker must (and should) show. It is the minimal slice of spec.md v2's
-// RoleSpec this runtime implements — diversity, pinning, and provenance
-// tiers beyond declared/maintainer-declared remain future work.
+// RoleSpec this runtime implements — full diversity and provenance tiers
+// beyond declared/maintainer-declared remain future work.
 type ReferenceRolePolicy struct {
-	RequiredCapabilities  []string `yaml:"required-capabilities,omitempty"`
-	PreferredCapabilities []string `yaml:"preferred-capabilities,omitempty"`
+	RequiredCapabilities  []string    `yaml:"required-capabilities,omitempty"`
+	PreferredCapabilities []string    `yaml:"preferred-capabilities,omitempty"`
+	Pin                   *RoutingPin `yaml:"pin,omitempty"`
 }
 
 // Validate rejects a role declared with nothing to route on: without at
@@ -191,6 +252,11 @@ func (p ReferenceRolePolicy) Validate() error {
 	if len(p.RequiredCapabilities) == 0 {
 		return fmt.Errorf("outside-view.role.required-capabilities must name at least one capability")
 	}
+	if p.Pin != nil {
+		if err := p.Pin.Validate(); err != nil {
+			return fmt.Errorf("pin: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -200,16 +266,35 @@ func (p ReferenceRolePolicy) Validate() error {
 // the full DiversityPolicy spec.md v2 describes — only the floor needed to
 // prove "candidates too few must fail closed, not silently repeat one agent".
 type JudgeRolePolicy struct {
-	RequiredCapabilities  []string `yaml:"required-capabilities,omitempty"`
-	PreferredCapabilities []string `yaml:"preferred-capabilities,omitempty"`
-	MinDistinctAgents     int      `yaml:"min-distinct-agents,omitempty"`
+	RequiredCapabilities  []string    `yaml:"required-capabilities,omitempty"`
+	PreferredCapabilities []string    `yaml:"preferred-capabilities,omitempty"`
+	MinDistinctAgents     int         `yaml:"min-distinct-agents,omitempty"`
+	Pin                   *RoutingPin `yaml:"pin,omitempty"`
+	// MinDistinctModels/MinDistinctProviders extend MinDistinctAgents with
+	// two more diversity floors from spec.md v2 §13's DiversityPolicy
+	// (capability-group distinctness remains out of scope — no such
+	// taxonomy exists in this codebase). PreferDistinctModels/
+	// PreferDistinctProviders are soft preferences: when set, ranking
+	// prefers introducing a new model/provider value across a role's
+	// ordinals over repeating one already used, without ever excluding a
+	// qualified candidate outright. AllowRepeatedAgentDefinition opts a
+	// profile into the light-profile fallback spec.md v2 §33.1 describes
+	// (same concrete agent × N sealed invocations) — it is contradictory
+	// with, and rejected alongside, MinDistinctAgents > 1.
+	MinDistinctModels            int  `yaml:"min-distinct-models,omitempty"`
+	MinDistinctProviders         int  `yaml:"min-distinct-providers,omitempty"`
+	PreferDistinctModels         bool `yaml:"prefer-distinct-models,omitempty"`
+	PreferDistinctProviders      bool `yaml:"prefer-distinct-providers,omitempty"`
+	AllowRepeatedAgentDefinition bool `yaml:"allow-repeated-agent-definition,omitempty"`
 }
 
 // Validate enforces the same "must have something to route on" rule
 // ReferenceRolePolicy does, plus a config-time sanity bound on
 // MinDistinctAgents: independentJudgments is the caller's
 // DecisionPolicy.IndependentJudgments, since requiring more distinct agents
-// than judges dispatched could never be satisfied.
+// than judges dispatched could never be satisfied. A pin forces every judge
+// ordinal to the same agent, so it is definitionally incompatible with a
+// diversity floor above 1.
 func (p JudgeRolePolicy) Validate(independentJudgments int) error {
 	if len(p.RequiredCapabilities) == 0 {
 		return fmt.Errorf("judge-role.required-capabilities must name at least one capability")
@@ -220,12 +305,133 @@ func (p JudgeRolePolicy) Validate(independentJudgments int) error {
 	if p.MinDistinctAgents > independentJudgments {
 		return fmt.Errorf("judge-role.min-distinct-agents (%d) must not exceed independent-judgments (%d)", p.MinDistinctAgents, independentJudgments)
 	}
+	if err := validateDiversityFloors("judge-role", p.MinDistinctModels, p.MinDistinctProviders, independentJudgments); err != nil {
+		return err
+	}
+	if p.AllowRepeatedAgentDefinition && p.EffectiveMinDistinctAgents() > 1 {
+		return fmt.Errorf("judge-role.allow-repeated-agent-definition conflicts with judge-role.min-distinct-agents > 1")
+	}
+	if p.Pin != nil {
+		if err := p.Pin.Validate(); err != nil {
+			return fmt.Errorf("pin: %w", err)
+		}
+		if p.EffectiveMinDistinctAgents() > 1 {
+			return fmt.Errorf("judge-role.pin conflicts with judge-role.min-distinct-agents > 1: a pin forces every judge to the same agent")
+		}
+	}
 	return nil
 }
 
 // EffectiveMinDistinctAgents defaults to 1 (no diversity requirement beyond
 // "at least one authorized candidate exists").
 func (p JudgeRolePolicy) EffectiveMinDistinctAgents() int {
+	if p.MinDistinctAgents <= 0 {
+		return 1
+	}
+	return p.MinDistinctAgents
+}
+
+// validateDiversityFloors bounds a role's MinDistinctModels/
+// MinDistinctProviders the same way MinDistinctAgents is bounded: neither
+// may be negative or exceed the role's dispatch count, since requiring more
+// distinct values than dispatches could never be satisfied.
+func validateDiversityFloors(rolePrefix string, minDistinctModels, minDistinctProviders, count int) error {
+	if minDistinctModels < 0 {
+		return fmt.Errorf("%s.min-distinct-models must not be negative, got %d", rolePrefix, minDistinctModels)
+	}
+	if minDistinctModels > count {
+		return fmt.Errorf("%s.min-distinct-models (%d) must not exceed the configured count (%d)", rolePrefix, minDistinctModels, count)
+	}
+	if minDistinctProviders < 0 {
+		return fmt.Errorf("%s.min-distinct-providers must not be negative, got %d", rolePrefix, minDistinctProviders)
+	}
+	if minDistinctProviders > count {
+		return fmt.Errorf("%s.min-distinct-providers (%d) must not exceed the configured count (%d)", rolePrefix, minDistinctProviders, count)
+	}
+	return nil
+}
+
+// ChallengeRolePolicy names the capabilities the CHALLENGE stage's resolved
+// workers must (and should) show (spec.md v2 §19; spec2.md PR-4). There is
+// no separate revision-role policy: REVISE reuses JudgeRolePolicy directly
+// ("REVISE = reuse JUDGE bindings").
+type ChallengeRolePolicy struct {
+	RequiredCapabilities  []string    `yaml:"required-capabilities,omitempty"`
+	PreferredCapabilities []string    `yaml:"preferred-capabilities,omitempty"`
+	MinDistinctAgents     int         `yaml:"min-distinct-agents,omitempty"`
+	Pin                   *RoutingPin `yaml:"pin,omitempty"`
+	// MinDistinctModels/MinDistinctProviders/PreferDistinctModels/
+	// PreferDistinctProviders/AllowRepeatedAgentDefinition mirror
+	// JudgeRolePolicy's DiversityPolicy extension (spec.md v2 §13),
+	// bounded against the configured challenge count instead of judge
+	// count.
+	MinDistinctModels            int  `yaml:"min-distinct-models,omitempty"`
+	MinDistinctProviders         int  `yaml:"min-distinct-providers,omitempty"`
+	PreferDistinctModels         bool `yaml:"prefer-distinct-models,omitempty"`
+	PreferDistinctProviders      bool `yaml:"prefer-distinct-providers,omitempty"`
+	AllowRepeatedAgentDefinition bool `yaml:"allow-repeated-agent-definition,omitempty"`
+	// AdaptiveCapabilities maps a configured decision criterion ID to extra
+	// preferred capabilities for CHALLENGE routing (spec.md v2 §39-40),
+	// applied when that criterion shows the most disagreement across JUDGE
+	// round 1's opinions. Deterministic and policy-defined: the runtime
+	// never infers "who should oppose the winner", only which capability
+	// domain the aggregate's own per-criterion dispersion points at.
+	AdaptiveCapabilities map[string][]string `yaml:"adaptive-capabilities,omitempty"`
+}
+
+// Validate mirrors JudgeRolePolicy.Validate, bounding MinDistinctAgents
+// against the configured challenge count instead of judge count. criteria is
+// the decision's own DecisionPolicy.Criteria, used to fail closed on an
+// AdaptiveCapabilities key that names no configured criterion (a typo would
+// otherwise silently never fire).
+func (p ChallengeRolePolicy) Validate(challengeCount int, criteria []DecisionCriterion) error {
+	if len(p.RequiredCapabilities) == 0 {
+		return fmt.Errorf("challenge-role.required-capabilities must name at least one capability")
+	}
+	if p.MinDistinctAgents < 0 {
+		return fmt.Errorf("challenge-role.min-distinct-agents must not be negative, got %d", p.MinDistinctAgents)
+	}
+	if p.MinDistinctAgents > challengeCount {
+		return fmt.Errorf("challenge-role.min-distinct-agents (%d) must not exceed challenge.count (%d)", p.MinDistinctAgents, challengeCount)
+	}
+	if err := validateDiversityFloors("challenge-role", p.MinDistinctModels, p.MinDistinctProviders, challengeCount); err != nil {
+		return err
+	}
+	if p.AllowRepeatedAgentDefinition && p.EffectiveMinDistinctAgents() > 1 {
+		return fmt.Errorf("challenge-role.allow-repeated-agent-definition conflicts with challenge-role.min-distinct-agents > 1")
+	}
+	if p.Pin != nil {
+		if err := p.Pin.Validate(); err != nil {
+			return fmt.Errorf("pin: %w", err)
+		}
+		if p.EffectiveMinDistinctAgents() > 1 {
+			return fmt.Errorf("challenge-role.pin conflicts with challenge-role.min-distinct-agents > 1: a pin forces every challenger to the same agent")
+		}
+	}
+	if len(p.AdaptiveCapabilities) > 0 {
+		known := make(map[string]bool, len(criteria))
+		for _, c := range criteria {
+			known[strings.TrimSpace(c.ID)] = true
+		}
+		ids := make([]string, 0, len(p.AdaptiveCapabilities))
+		for id := range p.AdaptiveCapabilities {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if !known[id] {
+				return fmt.Errorf("challenge-role.adaptive-capabilities references unknown criterion %q", id)
+			}
+			if len(p.AdaptiveCapabilities[id]) == 0 {
+				return fmt.Errorf("challenge-role.adaptive-capabilities[%q] must name at least one capability", id)
+			}
+		}
+	}
+	return nil
+}
+
+// EffectiveMinDistinctAgents defaults to 1, mirroring JudgeRolePolicy.
+func (p ChallengeRolePolicy) EffectiveMinDistinctAgents() int {
 	if p.MinDistinctAgents <= 0 {
 		return 1
 	}
@@ -317,6 +523,11 @@ type DisciplinePolicy struct {
 // structurally: it only ever scores the caller-supplied eligible set).
 type RoutingPolicy struct {
 	CapabilityAware bool `yaml:"capability-aware,omitempty"`
+	// AllowPinnedBinding must be true before any role's `pin` config is
+	// honored for this profile (spec.md v2 §34's "profile permits pin").
+	// Left false, a role's pin fails team load rather than silently
+	// resolving through it or silently ignoring it.
+	AllowPinnedBinding bool `yaml:"allow-pinned-binding,omitempty"`
 }
 
 // AlternativesPolicy enforces that no-go and information options exist before
@@ -431,6 +642,11 @@ func (c DecisionConfig) Validate() error {
 	if err := c.RequestContract.Validate(); err != nil {
 		return fmt.Errorf("decision.request-contract: %w", err)
 	}
+	for i, hint := range c.RoutingHints {
+		if err := hint.Validate(); err != nil {
+			return fmt.Errorf("decision.routing-hints[%d]: %w", i, err)
+		}
+	}
 	if c.DefaultProfile != "" && c.DefaultProfile != DecisionProfileOff {
 		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
 			return fmt.Errorf("%s: decision.default-profile %q is not defined", ReasonDecisionProfileUnknown, c.DefaultProfile)
@@ -524,10 +740,24 @@ func (p DecisionPolicy) Validate() error {
 		if err := p.OutsideView.Role.Validate(); err != nil {
 			return fmt.Errorf("outside-view.role: %w", err)
 		}
+		if err := requirePinPermitted(p.OutsideView.Role.Pin, p.Discipline.Routing, "outside-view.role"); err != nil {
+			return err
+		}
 	}
 	if p.JudgeRole != nil {
 		if err := p.JudgeRole.Validate(p.IndependentJudgments); err != nil {
 			return fmt.Errorf("judge-role: %w", err)
+		}
+		if err := requirePinPermitted(p.JudgeRole.Pin, p.Discipline.Routing, "judge-role"); err != nil {
+			return err
+		}
+	}
+	if p.ChallengeRole != nil {
+		if err := p.ChallengeRole.Validate(p.Challenge.Count, p.Criteria); err != nil {
+			return fmt.Errorf("challenge-role: %w", err)
+		}
+		if err := requirePinPermitted(p.ChallengeRole.Pin, p.Discipline.Routing, "challenge-role"); err != nil {
+			return err
 		}
 	}
 	switch p.ContextIsolation {
@@ -595,6 +825,17 @@ func (p DecisionPolicy) Validate() error {
 		return fmt.Errorf("max-tokens must not be negative, got %d", p.MaxTokens)
 	}
 	return p.Discipline.Validate()
+}
+
+// requirePinPermitted rejects a role's pin at team-load time (not a runtime
+// surprise) unless its profile has explicitly opted in via
+// discipline.routing.allow-pinned-binding — spec.md v2 §34's "profile
+// permits pin" check.
+func requirePinPermitted(pin *RoutingPin, routing RoutingPolicy, roleName string) error {
+	if pin == nil || routing.AllowPinnedBinding {
+		return nil
+	}
+	return fmt.Errorf("%s.pin is set but discipline.routing.allow-pinned-binding is not true for this profile", roleName)
 }
 
 func validateCriteria(criteria []DecisionCriterion) error {

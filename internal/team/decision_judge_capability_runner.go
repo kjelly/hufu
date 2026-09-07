@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // Real capability routing for the JUDGE stage (spec.md v2 §17-§18; spec2.md
@@ -33,21 +35,32 @@ import (
 // restriction.
 var judgeRoleZeroTools []fantasy.AgentTool
 
-// runJudgeViaCapabilityRouting implements the capability-routed half of
-// coordinatorDecisionRunners.RunJudge.
-func (r *coordinatorDecisionRunners) runJudgeViaCapabilityRouting(ctx context.Context, req JudgeRequest) (DecisionOpinion, error) {
-	c := r.coordinator
+// resolveJudgeRoleCandidate picks the concrete agent judgeID is bound to
+// under role: the ranked, qualified candidate list is a pure function of
+// role alone, and judgeID's ordinal selects a stable position in it. Calling
+// this again with the same (role, judgeID) — which is exactly what a
+// revision dispatch does — always yields the same candidate, with no
+// persisted binding required (spec2.md §8 "REVISE = reuse JUDGE bindings").
+//
+// A pin (role.Pin), if set, forces every judge ordinal to the same named
+// agent instead — still subject to authorization/required-capability checks
+// (spec.md v2 §34) — short-circuiting the ranking below entirely.
+func resolveJudgeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.JudgeRolePolicy, judgeID string) (chosen string, def *agent.AgentDef, pinned bool, err error) {
 	if c == nil || c.session == nil {
-		return DecisionOpinion{}, fmt.Errorf("judge role routing requires an active session")
+		return "", nil, false, fmt.Errorf("judge role routing requires an active session")
 	}
-	role := req.RoutingRole
+	if pinnedAgent, pinnedDef, ok, err := resolvePinnedCandidate(ctx, c, "judge", role.RequiredCapabilities, role.PreferredCapabilities, role.Pin); err != nil {
+		return "", nil, false, err
+	} else if ok {
+		return pinnedAgent, pinnedDef, true, nil
+	}
 
 	candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{
 		Required:  role.RequiredCapabilities,
 		Preferred: role.PreferredCapabilities,
 	})
 	if err != nil {
-		return DecisionOpinion{}, fmt.Errorf("judge role routing: %w", err)
+		return "", nil, false, fmt.Errorf("judge role routing: %w", err)
 	}
 	qualified := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -57,33 +70,78 @@ func (r *coordinatorDecisionRunners) runJudgeViaCapabilityRouting(ctx context.Co
 	}
 	minDistinct := role.EffectiveMinDistinctAgents()
 	if len(qualified) < minDistinct {
-		return DecisionOpinion{}, fmt.Errorf(
+		return "", nil, false, fmt.Errorf(
 			"judge role routing: %d qualified candidate(s) satisfy required capabilities %v, need at least %d (judge-role.min-distinct-agents)",
 			len(qualified), role.RequiredCapabilities, minDistinct)
 	}
-
-	ordinal, err := judgeOrdinal(req.JudgeID)
-	if err != nil {
-		return DecisionOpinion{}, fmt.Errorf("judge role routing: %w", err)
+	if role.MinDistinctModels > 0 {
+		if got := distinctModelCount(qualified, c.session.Agents); got < role.MinDistinctModels {
+			return "", nil, false, fmt.Errorf(
+				"judge role routing: qualified pool spans %d distinct model(s), need at least %d (judge-role.min-distinct-models)",
+				got, role.MinDistinctModels)
+		}
 	}
-	// Round-robin over the ranked, qualified pool: judge-1 gets the top
-	// candidate, judge-2 the second, wrapping only if the pool is smaller
-	// than the judge count (which EffectiveMinDistinctAgents may forbid).
-	chosen := qualified[(ordinal-1)%len(qualified)]
-	def := c.session.Agents[chosen]
+	if role.MinDistinctProviders > 0 {
+		if got := distinctProviderCount(qualified, c.session.Agents); got < role.MinDistinctProviders {
+			return "", nil, false, fmt.Errorf(
+				"judge role routing: qualified pool spans %d distinct provider(s), need at least %d (judge-role.min-distinct-providers)",
+				got, role.MinDistinctProviders)
+		}
+	}
+	ordered := resolveRoleCandidateOrder(qualified, c.session.Agents, role.PreferDistinctModels, role.PreferDistinctProviders)
+
+	ordinal, err := judgeOrdinal(judgeID)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("judge role routing: %w", err)
+	}
+	// Round-robin over the (possibly diversity-reordered) ranked, qualified
+	// pool: judge-1 gets the top candidate, judge-2 the second, wrapping
+	// only if the pool is smaller than the judge count (which
+	// EffectiveMinDistinctAgents may forbid).
+	chosen = ordered[(ordinal-1)%len(ordered)]
+	def = c.session.Agents[chosen]
 	if def == nil {
-		return DecisionOpinion{}, fmt.Errorf("judge role routing: resolved worker %q is not a configured agent", chosen)
+		return "", nil, false, fmt.Errorf("judge role routing: resolved worker %q is not a configured agent", chosen)
+	}
+	return chosen, def, false, nil
+}
+
+// runJudgeViaCapabilityRouting implements the capability-routed half of
+// coordinatorDecisionRunners.RunJudge.
+func (r *coordinatorDecisionRunners) runJudgeViaCapabilityRouting(ctx context.Context, req JudgeRequest) (DecisionOpinion, error) {
+	c := r.coordinator
+	role := req.RoutingRole
+
+	chosen, def, pinned, err := resolveJudgeRoleCandidate(ctx, c, role, req.JudgeID)
+	if err != nil {
+		return DecisionOpinion{}, err
 	}
 
 	response, modelID, err := c.invokeCapabilityRoutedAgent(ctx, def, req.Context.Prompt, judgeRoleZeroTools, judgeRoleMaxSteps, fantasy.StepCountIs(1))
 	if err != nil {
 		return DecisionOpinion{}, fmt.Errorf("judge role invocation of %q for %s: %w", chosen, req.JudgeID, err)
 	}
-	c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
-		"judge role bound %s to %q (model %q): required=%v preferred=%v",
-		req.JudgeID, chosen, modelID, role.RequiredCapabilities, role.PreferredCapabilities)))
+	if pinned {
+		c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
+			"judge role %s pinned to %q (model %q): reason=%q", req.JudgeID, chosen, modelID, role.Pin.Reason)))
+	} else {
+		c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
+			"judge role bound %s to %q (model %q): required=%v preferred=%v",
+			req.JudgeID, chosen, modelID, role.RequiredCapabilities, role.PreferredCapabilities)))
+	}
 
-	return decodeJudgeOpinion(response, req.JudgeID)
+	opinion, err := decodeJudgeOpinion(response, req.JudgeID)
+	if err != nil {
+		return DecisionOpinion{}, err
+	}
+	opinion.AgentID = chosen
+	opinion.Model = modelID
+	opinion.Provider = strings.TrimSpace(def.ProviderURL)
+	if pinned {
+		opinion.Pinned = true
+		opinion.BindingReason = role.Pin.Reason
+	}
+	return opinion, nil
 }
 
 // judgeRoleMaxSteps bounds a judge-role invocation. A zero-tool judge has

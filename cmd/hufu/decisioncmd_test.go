@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -317,6 +319,167 @@ func TestDecisionShow(t *testing.T) {
 	_, err = runDecisionCLI(t, "show", "dec-99", "-w", workspace)
 	if err == nil || !strings.Contains(err.Error(), "is not in") {
 		t.Fatalf("show on an unknown decision = %v, want a not-found error", err)
+	}
+}
+
+// explainFixtureJudges answers judge-1 with a resolved AgentID and judge-2
+// with none, so the fixture exercises both a routed and an unrouted stage.
+type explainFixtureJudges struct{}
+
+func (explainFixtureJudges) RunJudge(_ context.Context, req team.JudgeRequest) (team.DecisionOpinion, error) {
+	opinion := team.DecisionOpinion{
+		OptionScores: []team.OptionScore{
+			{OptionID: "migrate", Criteria: map[string]float64{"cost": 8, "risk": 8}},
+			{OptionID: "wait", Criteria: map[string]float64{"cost": 4, "risk": 4}},
+		},
+		PreferredOption: "migrate", SuccessProbability: 0.8,
+	}
+	if req.JudgeID == "judge-1" {
+		opinion.AgentID = "judge-cand-a"
+	}
+	return opinion, nil
+}
+
+// explainFixtureReference answers with a resolved AgentID, standing in for a
+// capability-routed reference role.
+type explainFixtureReference struct{}
+
+func (explainFixtureReference) RunReferenceEvidence(_ context.Context, _ team.ReferenceEvidenceRequest) (team.ReferenceEvidenceDraft, error) {
+	return team.ReferenceEvidenceDraft{
+		SchemaVersion: team.ReferenceEvidenceSchemaVersion,
+		Entries: []team.ReferenceBaseRateDraft{{
+			ReferenceClass: "comparable migrations", Metric: "success_rate", SampleSize: 20,
+			Distribution: team.DistributionSummary{Mean: .8, Median: .8, P10: .5, P90: .95},
+			Source:       team.ReferenceSourceDeclaration{Name: "internal survey"},
+		}},
+		AgentID: "research-worker",
+	}, nil
+}
+
+// testEventJournal adapts the exported *team.EventStore (whose methods take
+// no context) to team.EventJournal, exactly like the runtime's own
+// unexported eventStoreJournal does, so a test outside package team can wire
+// a real event store into DecisionServices.Journal.
+type testEventJournal struct{ store *team.EventStore }
+
+func (j testEventJournal) Append(_ context.Context, event team.RunEvent) (team.RunEvent, error) {
+	return j.store.AppendPersistedContext(context.Background(), event)
+}
+
+func (j testEventJournal) ReadEvents(context.Context) ([]team.RunEvent, error) {
+	return j.store.ReadEvents()
+}
+
+func (j testEventJournal) VerifyHashChain(context.Context) error {
+	return j.store.VerifyHashChain()
+}
+
+// buildDecisionExplainFixture runs a real DecisionEngine end to end (judge
+// and reference stages, one routed and one legacy-sidecar-shaped) against a
+// real event log, artifact store, and decision index, exactly like a
+// finalized run would leave a workspace. `decision explain` re-validates a
+// row against the durable journal before showing it, so a hand-written index
+// row is not enough; this must be a genuinely finalized decision.
+func buildDecisionExplainFixture(t *testing.T) string {
+	t.Helper()
+	workspace := t.TempDir()
+
+	store, err := team.NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := team.NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = eventStore.Close() })
+	index, err := team.OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	engine := team.NewDecisionEngine(team.DecisionServices{
+		Judges:            explainFixtureJudges{},
+		ReferenceEvidence: explainFixtureReference{},
+		Journal:           testEventJournal{store: eventStore},
+		Store:             store,
+		Index:             index,
+	})
+
+	policy := team.DecisionPolicy{
+		IndependentJudgments: 2,
+		ContextIsolation:     agent.DecisionIsolationStrict,
+		ScoreScale:           agent.DecisionScoreScale,
+		Aggregation:          team.AggregationPolicy{Method: agent.AggregationMeanScore},
+		Criteria:             []team.DecisionCriterion{{ID: "cost", Weight: 1}, {ID: "risk", Weight: 1}},
+		MaxRounds:            1,
+	}
+	policy.OutsideView.Required = true
+	policy.OutsideView.ReferenceEvidence = true
+
+	req := team.DecisionRequest{
+		DecisionID: "dec-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, Profile: "standard",
+		Policy:   policy,
+		Question: "Should we migrate the storage backend?",
+		Options: []team.DecisionOption{
+			{ID: "migrate", Kind: team.OptionExecute, Title: "Migrate now"},
+			{ID: "wait", Kind: team.OptionDefer, Title: "Wait"},
+		},
+		Role: "You are a systems reviewer.",
+	}
+	if _, err := engine.Run(context.Background(), req); err != nil {
+		t.Fatalf("engine.Run: %v", err)
+	}
+	return workspace
+}
+
+func TestDecisionExplain(t *testing.T) {
+	resetDecisionCLIFlags()
+	workspace := buildDecisionExplainFixture(t)
+
+	out, err := runDecisionCLI(t, "explain", "dec-1", "-w", workspace)
+	if err != nil {
+		t.Fatalf("decision explain = %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"dec-1", "reference", "research-worker",
+		"judge-1", "judge-cand-a", "judge-2",
+		"true", "false",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	resetDecisionCLIFlags()
+	jsonOut, err := runDecisionCLI(t, "explain", "dec-1", "-w", workspace, "--json")
+	if err != nil {
+		t.Fatalf("decision explain --json = %v\n%s", err, jsonOut)
+	}
+	var payload struct {
+		DecisionID string                      `json:"decision_id"`
+		Bindings   []team.DecisionAgentBinding `json:"bindings"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &payload); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, jsonOut)
+	}
+	if payload.DecisionID != "dec-1" || len(payload.Bindings) != 3 {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.Bindings[0].Stage != "reference" || payload.Bindings[0].AgentID != "research-worker" || !payload.Bindings[0].Routed {
+		t.Fatalf("bindings[0] = %#v", payload.Bindings[0])
+	}
+	if payload.Bindings[1].Stage != "judge" || payload.Bindings[1].Ordinal != "judge-1" || payload.Bindings[1].AgentID != "judge-cand-a" || !payload.Bindings[1].Routed {
+		t.Fatalf("bindings[1] = %#v", payload.Bindings[1])
+	}
+	if payload.Bindings[2].Stage != "judge" || payload.Bindings[2].Ordinal != "judge-2" || payload.Bindings[2].Routed {
+		t.Fatalf("bindings[2] = %#v, want an unrouted legacy-sidecar judge-2 opinion", payload.Bindings[2])
+	}
+
+	resetDecisionCLIFlags()
+	_, err = runDecisionCLI(t, "explain", "dec-99", "-w", workspace)
+	if err == nil || !strings.Contains(err.Error(), "is not in") {
+		t.Fatalf("explain on an unknown decision = %v, want a not-found error", err)
 	}
 }
 

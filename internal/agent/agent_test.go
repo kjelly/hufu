@@ -680,3 +680,41 @@ func TestCreateAgentWarnsOnUnsupportedTopK(t *testing.T) {
 		t.Errorf("expected no repeat warning, got: %q", logBuf.String())
 	}
 }
+
+// ScoringWeights (spec.md v2 §12) must default to today's hardcoded
+// formula exactly when unset, and reject a negative weight.
+func TestScoringWeightsEffectiveDefaults(t *testing.T) {
+	var zero ScoringWeights
+	if got := zero.EffectiveRequiredMatch(); got != defaultRequiredMatchWeight {
+		t.Fatalf("EffectiveRequiredMatch() = %v, want %v", got, defaultRequiredMatchWeight)
+	}
+	if got := zero.EffectivePreferredMatch(); got != defaultPreferredMatchWeight {
+		t.Fatalf("EffectivePreferredMatch() = %v, want %v", got, defaultPreferredMatchWeight)
+	}
+	if got := zero.EffectiveCost(); got != 0 {
+		t.Fatalf("EffectiveCost() = %v, want 0 (unset cost must not affect ranking)", got)
+	}
+
+	explicit := ScoringWeights{RequiredMatch: 2, PreferredMatch: 1, Cost: 0.5}
+	if got := explicit.EffectiveRequiredMatch(); got != 2 {
+		t.Fatalf("EffectiveRequiredMatch() = %v, want 2", got)
+	}
+	if got := explicit.EffectivePreferredMatch(); got != 1 {
+		t.Fatalf("EffectivePreferredMatch() = %v, want 1", got)
+	}
+	if got := explicit.EffectiveCost(); got != 0.5 {
+		t.Fatalf("EffectiveCost() = %v, want 0.5", got)
+	}
+}
+
+func TestScoringWeightsValidate(t *testing.T) {
+	if err := (ScoringWeights{}).Validate(); err != nil {
+		t.Fatalf("zero-value weights should validate: %v", err)
+	}
+	if err := (ScoringWeights{Cost: -0.1}).Validate(); err == nil {
+		t.Fatal("negative cost weight must fail validation")
+	}
+	if err := (ScoringWeights{RequiredMatch: -1}).Validate(); err == nil {
+		t.Fatal("negative required-match weight must fail validation")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -347,4 +348,36 @@ func persistDecisionRecord(ctx context.Context, store ArtifactStore, record Deci
 		return ArtifactRef{}, fmt.Errorf("persisting decision record: %w", err)
 	}
 	return result.ArtifactRef, nil
+}
+
+// FetchDecisionArtifact reads and JSON-decodes a content-addressed artifact
+// this package persisted (a decision record or a reference evidence result),
+// verifying its digest before decoding. It is exported for read-only
+// inspection tooling (hufu decision explain) that has no other durable path
+// to a specific stage's detail beyond the cross-run index summary.
+func FetchDecisionArtifact[T any](ctx context.Context, store ArtifactStore, ref ArtifactRef) (T, error) {
+	var out T
+	if store == nil || ref.ID == "" {
+		return out, fmt.Errorf("artifact reference is unavailable")
+	}
+	resolved, err := store.Resolve(ctx, ref)
+	if err != nil {
+		return out, fmt.Errorf("resolve artifact %s: %w", ref.ID, err)
+	}
+	if err := store.Verify(ctx, resolved); err != nil {
+		return out, fmt.Errorf("verify artifact %s: %w", ref.ID, err)
+	}
+	reader, err := store.Open(ctx, resolved.ID)
+	if err != nil {
+		return out, fmt.Errorf("open artifact %s: %w", ref.ID, err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return out, fmt.Errorf("read artifact %s: %w", ref.ID, err)
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, fmt.Errorf("decode artifact %s: %w", ref.ID, err)
+	}
+	return out, nil
 }

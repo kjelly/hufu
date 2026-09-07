@@ -84,7 +84,7 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 		Question:         req.Question,
 		ContractRef:      req.RequestContractRef,
 		ContractRevision: req.RequestContractRevision,
-		RoutingRole:      req.Policy.OutsideView.Role,
+		RoutingRole:      hintedReferenceRole(req.Policy.OutsideView.Role, req.RoutingHints, req.Question),
 	}
 	inputHash, err := request.ComputeInputHash()
 	if err != nil {
@@ -176,6 +176,9 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 	result := &ReferenceEvidenceResult{
 		SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: request.InvocationID, InputHash: request.InputHash,
 		BaseRates: rates, Artifacts: artifacts, Provenance: provenance, CompletedAt: e.now(),
+		ProducerAgentID:       draft.AgentID,
+		ProducerPinned:        draft.Pinned,
+		ProducerBindingReason: draft.BindingReason,
 	}
 	resultBytes, err := referenceEvidenceResultBytes(*result)
 	if err != nil {

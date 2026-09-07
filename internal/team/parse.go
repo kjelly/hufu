@@ -129,6 +129,7 @@ type teamConfigYAML struct {
 	Retry              agent.RetryConfig                     `yaml:"retry"`
 	Decision           agent.DecisionConfig                  `yaml:"decision"`
 	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry"`
+	RoutingPolicy      agent.RoutingPolicyConfig             `yaml:"routing-policy"`
 	ActionProviders    map[string]agent.ActionProviderConfig `yaml:"action-providers"`
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
@@ -1189,6 +1190,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 		cfg.CapabilityRegistry = yc.CapabilityRegistry
 	}
+
+	// Routing-policy scoring weights (spec.md v2 §12) are likewise
+	// independent of decision profiles: they configure how
+	// CapabilityRegistry ranks candidates, not whether any role uses it.
+	if err := yc.RoutingPolicy.Scoring.Weights.Validate(); err != nil {
+		return cfg, fmt.Errorf("routing-policy.scoring.weights: %w", err)
+	}
+	cfg.RoutingPolicy = yc.RoutingPolicy
 
 	// Action providers are independent of whether the optional phase workflow
 	// is enabled. Keeping this outside the workflow block ensures configured

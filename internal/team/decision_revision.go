@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // The single bounded revision round
@@ -22,6 +24,13 @@ type RevisionRequest struct {
 	Packet     DecisionEvidencePacket
 	Original   DecisionOpinion
 	Prompt     string
+	// RoutingRole selects real capability-routed execution for this
+	// revision when non-nil. It is JudgeRolePolicy, not a separate
+	// revision-role: REVISE reuses JUDGE's binding rather than re-resolving
+	// (spec2.md §8) — resolving the same (role, ordinal) pair a second time
+	// against the unchanged, deterministic candidate list yields the exact
+	// same candidate JUDGE round 1 did, with no persisted binding required.
+	RoutingRole *agent.JudgeRolePolicy
 }
 
 // RevisionRunner executes one judge's revision.

@@ -223,6 +223,7 @@ func (c *Coordinator) formTaskDecisionWithAdmission(
 		BaseRates:      cloneBaseRateEvidence(task.DecisionBaseRates),
 		Assumptions:    task.DecisionAssumptions,
 		Provenance:     cloneEvidenceProvenance(task.DecisionProvenance),
+		RoutingHints:   c.decisionConfig().RoutingHints,
 		Role:           "You are an independent reviewer on this team.",
 		ProjectContext: c.decisionProjectContext(),
 		Contract:       requestContract, RequireRequestContract: true, RequestContractRef: requestContractRef,

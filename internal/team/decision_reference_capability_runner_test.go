@@ -123,6 +123,9 @@ func TestReferenceRoleCapabilityRouting_InvokesResolvedAgentNotLegacyJudge(t *te
 	if len(draft.Entries) != 1 || draft.Entries[0].ReferenceClass != "comparable migrations" {
 		t.Fatalf("draft = %#v", draft)
 	}
+	if draft.AgentID != "research-worker" {
+		t.Fatalf("draft.AgentID = %q, want %q (durable AgentBinding must record the resolved worker)", draft.AgentID, "research-worker")
+	}
 	// The exact call count is an artifact of the shared agent-runtime step
 	// loop (e.g. a benign extra turn), not something this test is about; what
 	// matters is that the resolved candidate was reached at all.
@@ -186,8 +189,12 @@ func TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar(t *testing.T) 
 	}
 	req.InputHash = hash
 
-	if _, err := runners.RunReferenceEvidence(context.Background(), req); err != nil {
+	draft, err := runners.RunReferenceEvidence(context.Background(), req)
+	if err != nil {
 		t.Fatalf("RunReferenceEvidence: %v", err)
+	}
+	if draft.AgentID != "" {
+		t.Fatalf("draft.AgentID = %q, want empty on the legacy sidecar path", draft.AgentID)
 	}
 	if got := judge.count(stageReference); got != 1 {
 		t.Fatalf("legacy judge-model reference-stage calls = %d, want 1 (unchanged legacy path)", got)

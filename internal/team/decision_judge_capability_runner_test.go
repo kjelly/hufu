@@ -65,7 +65,14 @@ func newJudgeRoutingHarness(t *testing.T) *judgeRoutingHarness {
 			Name:       "judge-routing-test",
 			Generation: agent.GenerationParams{Model: legacyJudgeModel},
 			CapabilityRegistry: map[string][]agent.DeclaredCapability{
-				"judge-cand-a": {{Capability: "decision-analysis", Confidence: 0.5}},
+				// architecture is irrelevant to every test that only queries
+				// decision-analysis; it exists so routing-hint tests have a
+				// preferred capability that can flip cand-a from last place
+				// to first.
+				"judge-cand-a": {
+					{Capability: "decision-analysis", Confidence: 0.5},
+					{Capability: "architecture", Confidence: 0.9},
+				},
 				"judge-cand-b": {{Capability: "decision-analysis", Confidence: 0.6}},
 				"judge-cand-c": {{Capability: "decision-analysis", Confidence: 0.7}},
 			},
@@ -100,6 +107,153 @@ func newJudgeRoutingHarness(t *testing.T) *judgeRoutingHarness {
 	return &judgeRoutingHarness{coordinator: c, legacyJudge: legacyJudge, candA: candA, candB: candB, candC: candC}
 }
 
+// modelSharingJudgeRoutingHarness mirrors newJudgeRoutingHarness's shape but
+// gives two candidates the *same* declared model (and hence the same
+// provider, since a model ID's provider prefix determines routing) so a
+// test can distinguish "prefer distinct models" reordering from plain
+// rank-order round-robin (newJudgeRoutingHarness's three candidates each
+// already declare a distinct model, which would make that distinction
+// untestable). Ranked by decision-analysis confidence: x (0.7) > y (0.6) >
+// z (0.5). x and y share model+provider "shared/model" (and hence one fake
+// server, distinguishable only by AgentID, not call count); z has its own
+// "distinct/model" on its own fake server.
+func modelSharingJudgeRoutingHarness(t *testing.T) *judgeRoutingHarness {
+	t.Helper()
+	const legacyJudgeModel = "decision-v1-judge"
+
+	legacyJudge := newFakeJudge("execute")
+	legacyServer := newIPv4TestServer(t, legacyJudge)
+	t.Cleanup(legacyServer.Close)
+
+	sharedProvider := &fixedAnswerProvider{body: validJudgeResponseJSON}
+	sharedServer := newIPv4TestServer(t, sharedProvider)
+	t.Cleanup(sharedServer.Close)
+	distinctProvider := &fixedAnswerProvider{body: validJudgeResponseJSON}
+	distinctServer := newIPv4TestServer(t, distinctProvider)
+	t.Cleanup(distinctServer.Close)
+
+	for _, modelID := range []string{legacyJudgeModel, "shared/model", "distinct/model"} {
+		GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{
+			ModelID: modelID, ContextWindow: 32768, MaxOutputTokens: 2048, SafetyMarginTokens: 128,
+		})
+	}
+	manager, err := agent.NewProviderManager(legacyServer.URL+"/v1", "judge-secret", map[string]config.ProviderConfig{
+		"ollama":   {ProviderURL: legacyServer.URL + "/v1"},
+		"shared":   {ProviderURL: sharedServer.URL + "/v1"},
+		"distinct": {ProviderURL: distinctServer.URL + "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("NewProviderManager: %v", err)
+	}
+
+	dir := t.TempDir()
+	session := &TeamSession{
+		Dir: dir, Workspace: dir,
+		Config: agent.TeamConfig{
+			Name:       "model-sharing-judge-routing-test",
+			Generation: agent.GenerationParams{Model: legacyJudgeModel},
+			CapabilityRegistry: map[string][]agent.DeclaredCapability{
+				"judge-cand-x": {{Capability: "decision-analysis", Confidence: 0.7}},
+				"judge-cand-y": {{Capability: "decision-analysis", Confidence: 0.6}},
+				"judge-cand-z": {{Capability: "decision-analysis", Confidence: 0.5}},
+			},
+		},
+		Agents: map[string]*agent.AgentDef{
+			"judge-cand-x": {Name: "judge-cand-x", Role: "worker", Generation: agent.GenerationParams{Model: "shared/model"}},
+			"judge-cand-y": {Name: "judge-cand-y", Role: "worker", Generation: agent.GenerationParams{Model: "shared/model"}},
+			"judge-cand-z": {Name: "judge-cand-z", Role: "worker", Generation: agent.GenerationParams{Model: "distinct/model"}},
+		},
+	}
+
+	store, err := NewEventStore(dir, "run-model-sharing-judge-routing", "session-model-sharing-judge-routing")
+	if err != nil {
+		t.Fatalf("NewEventStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	c := &Coordinator{
+		session: session, projectDir: dir, sessionTime: time.Now(),
+		providerManager:         manager,
+		modelProfileRuntime:     NewModelProfileRuntime(manager, false),
+		taskTracker:             NewTaskTracker(),
+		eventStore:              store,
+		executionRunID:          "run-model-sharing-judge-routing",
+		judgeModel:              legacyJudgeModel,
+		sidecarModel:            legacyJudgeModel,
+		reportStatus:            func(StatusEvent) {},
+		providerBoundaryStarted: true,
+	}
+	c.SetSessionData(NewSession())
+
+	// candB is unused by these tests (x and y share sharedProvider, so
+	// per-candidate call counts can't distinguish them — AgentID does that).
+	return &judgeRoutingHarness{coordinator: c, legacyJudge: legacyJudge, candA: sharedProvider, candC: distinctProvider}
+}
+
+// PreferDistinctModels must move a lower-ranked, model-diverse candidate
+// ahead of a higher-ranked one that repeats an already-used model.
+func TestJudgeRoleCapabilityRouting_PreferDistinctModelsChangesBinding(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.JudgeRolePolicy{
+		RequiredCapabilities: []string{"decision-analysis"},
+		PreferDistinctModels: true,
+	}
+
+	// Without the preference, judge-1 -> cand-x, judge-2 -> cand-y (both
+	// "shared/model"). With it, judge-2 should move to cand-z instead
+	// ("distinct/model"), since cand-y only repeats judge-1's model.
+	opinion1, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-1): %v", err)
+	}
+	opinion2, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-2", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-2): %v", err)
+	}
+	if opinion1.AgentID != "judge-cand-x" {
+		t.Fatalf("judge-1 opinion.AgentID = %q, want %q", opinion1.AgentID, "judge-cand-x")
+	}
+	if opinion2.AgentID != "judge-cand-z" {
+		t.Fatalf("judge-2 opinion.AgentID = %q, want %q (prefer-distinct-models should skip the same-model repeat)", opinion2.AgentID, "judge-cand-z")
+	}
+	if got := h.candC.count(); got < 1 {
+		t.Fatalf("cand-z (distinct model) call count = %d, want at least 1", got)
+	}
+}
+
+// Without prefer-distinct-models, ranking is completely unaffected — plain
+// round-robin over the rank order, same as before this feature existed.
+func TestJudgeRoleCapabilityRouting_WithoutPreferDistinctModelsIsUnaffected(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+
+	opinion2, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-2", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-2): %v", err)
+	}
+	if opinion2.AgentID != "judge-cand-y" {
+		t.Fatalf("judge-2 opinion.AgentID = %q, want %q (plain rank order, unaffected)", opinion2.AgentID, "judge-cand-y")
+	}
+}
+
+// min-distinct-models must fail closed when the qualified pool cannot reach
+// the configured floor.
+func TestJudgeRoleCapabilityRouting_FailsClosedWhenPoolLacksModelDiversity(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	// Only cand-x and cand-y qualify, both on the same model.
+	role := &agent.JudgeRolePolicy{
+		RequiredCapabilities: []string{"decision-analysis"},
+		MinDistinctModels:    2,
+	}
+	h.coordinator.session.Config.Delegation.AllowedWorkers = []string{"judge-cand-x", "judge-cand-y"}
+	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role)); err == nil {
+		t.Fatal("want an error when the qualified pool cannot reach min-distinct-models")
+	}
+}
+
 func judgeRequestFor(judgeID string, role *agent.JudgeRolePolicy) JudgeRequest {
 	// The prompt text must contain the marker classifyDecisionStagePrompt
 	// (decision_fake_judge_test.go) looks for, so the legacy-sidecar fake
@@ -123,15 +277,20 @@ func TestJudgeRoleCapabilityRouting_RoutesEachJudgeToADistinctAgent(t *testing.T
 	runners := newDecisionRunners(h.coordinator, "task-1")
 	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
 
+	// Ranked by declared confidence: c (0.7) > b (0.6) > a (0.5), so
+	// judge-1 -> cand-c, judge-2 -> cand-b, judge-3 -> cand-a.
+	wantAgent := map[string]string{"judge-1": "judge-cand-c", "judge-2": "judge-cand-b", "judge-3": "judge-cand-a"}
 	for judgeID := range 3 {
-		_, err := runners.RunJudge(context.Background(), judgeRequestFor(fmtJudgeID(judgeID+1), role))
+		id := fmtJudgeID(judgeID + 1)
+		opinion, err := runners.RunJudge(context.Background(), judgeRequestFor(id, role))
 		if err != nil {
-			t.Fatalf("RunJudge(%s): %v", fmtJudgeID(judgeID+1), err)
+			t.Fatalf("RunJudge(%s): %v", id, err)
+		}
+		if opinion.AgentID != wantAgent[id] {
+			t.Fatalf("%s opinion.AgentID = %q, want %q (durable AgentBinding must record the resolved worker)", id, opinion.AgentID, wantAgent[id])
 		}
 	}
 
-	// Ranked by declared confidence: c (0.7) > b (0.6) > a (0.5), so
-	// judge-1 -> cand-c, judge-2 -> cand-b, judge-3 -> cand-a.
 	if got := h.candC.count(); got < 1 {
 		t.Fatalf("judge-1's resolved candidate (cand-c) call count = %d, want at least 1", got)
 	}
@@ -164,8 +323,12 @@ func TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar(t *te
 	h := newJudgeRoutingHarness(t)
 	runners := newDecisionRunners(h.coordinator, "task-1")
 
-	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", nil)); err != nil {
+	opinion, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", nil))
+	if err != nil {
 		t.Fatalf("RunJudge: %v", err)
+	}
+	if opinion.AgentID != "" {
+		t.Fatalf("opinion.AgentID = %q, want empty on the legacy sidecar path", opinion.AgentID)
 	}
 	if got := h.legacyJudge.count(stageJudge); got != 1 {
 		t.Fatalf("legacy judge-model JUDGE-stage calls = %d, want 1 (unchanged legacy path)", got)
@@ -233,5 +396,77 @@ func TestJudgeOrdinal(t *testing.T) {
 				t.Fatalf("judgeOrdinal(%q) = %d, want %d", tc.id, got, tc.want)
 			}
 		})
+	}
+}
+
+// Integration proof that a matching routing hint changes which candidate
+// judge-1 binds to, and that a routed revision for the same JudgeID still
+// lands on that same hint-influenced candidate — hints don't break "reuse
+// the original binding" (spec2.md §8), because the engine applies the same
+// deterministic augmentation independently at both the JUDGE and REVISE
+// construction sites (decision_engine.go / decision_engine_stages.go).
+func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *testing.T) {
+	h := newJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	baseRole := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+	hints := []agent.RoutingHint{
+		{WhenGoalContains: "storage", PreferredCapabilities: []string{"architecture"}},
+	}
+	const question = "Should we change the storage backend?"
+
+	// Without the hint applying (a non-matching question), judge-1 ranks to
+	// cand-c exactly as the non-hinted tests already prove.
+	unhintedRole := hintedJudgeRole(baseRole, hints, "an unrelated question")
+	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", unhintedRole)); err != nil {
+		t.Fatalf("RunJudge(judge-1, unhinted): %v", err)
+	}
+	if got := h.candC.count(); got < 1 {
+		t.Fatalf("unhinted judge-1 should still resolve to cand-c, got cand-c calls = %d", got)
+	}
+	if got := h.candA.count(); got != 0 {
+		t.Fatalf("unhinted judge-1 must not reach cand-a, got %d calls", got)
+	}
+
+	// With the hint matching, cand-a's declared "architecture" preference
+	// (0.9 confidence) outscores cand-c's plain required match (0.7), so
+	// judge-1 now binds to cand-a instead.
+	beforeB, beforeC := h.candB.count(), h.candC.count()
+	hintedRole := hintedJudgeRole(baseRole, hints, question)
+	hintedOpinion, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", hintedRole))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-1, hinted): %v", err)
+	}
+	if got := h.candA.count(); got < 1 {
+		t.Fatalf("hinted judge-1 should resolve to cand-a, got cand-a calls = %d", got)
+	}
+	if hintedOpinion.AgentID != "judge-cand-a" {
+		t.Fatalf("hinted opinion.AgentID = %q, want %q", hintedOpinion.AgentID, "judge-cand-a")
+	}
+	beforeA := h.candA.count()
+
+	// REVISE for judge-1, applying the identical hint independently, must
+	// land on the same candidate (cand-a) the hinted JUDGE round did.
+	revisionReq := RevisionRequest{
+		DecisionID:  "dec-1",
+		JudgeID:     "judge-1",
+		Original:    DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute"},
+		Prompt:      "You are judge judge-1 revising your own judgment once (round 2).",
+		RoutingRole: hintedJudgeRole(baseRole, hints, question),
+	}
+	revision, err := runners.RunRevision(context.Background(), revisionReq)
+	if err != nil {
+		t.Fatalf("RunRevision(judge-1, hinted): %v", err)
+	}
+	if revision.AgentID != hintedOpinion.AgentID {
+		t.Fatalf("revision.AgentID = %q, want it to reuse the JUDGE round's binding %q", revision.AgentID, hintedOpinion.AgentID)
+	}
+	if got := h.candA.count(); got <= beforeA {
+		t.Fatalf("hinted revision did not reach cand-a: before=%d after=%d", beforeA, got)
+	}
+	if got := h.candB.count(); got != beforeB {
+		t.Fatalf("hinted judge/revision must not reach cand-b: before=%d after=%d", beforeB, got)
+	}
+	if got := h.candC.count(); got != beforeC {
+		t.Fatalf("hinted judge/revision must not reach cand-c: before=%d after=%d", beforeC, got)
 	}
 }

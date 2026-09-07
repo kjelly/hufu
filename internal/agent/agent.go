@@ -382,6 +382,75 @@ type TeamConfig struct {
 	// human wrote these into team.yaml, the agent did not write them about
 	// itself.
 	CapabilityRegistry map[string][]DeclaredCapability
+	// RoutingPolicy is team-wide capability-routing configuration beyond the
+	// per-role required/preferred capability lists (spec.md v2 §12). A team
+	// that declares none of it gets today's hardcoded scoring formula
+	// exactly, via ScoringWeights' Effective* accessors.
+	RoutingPolicy RoutingPolicyConfig
+}
+
+// RoutingPolicyConfig is the yaml `routing-policy` block (spec.md v2 §12).
+type RoutingPolicyConfig struct {
+	Scoring RoutingScoringConfig `yaml:"scoring,omitempty"`
+}
+
+// RoutingScoringConfig is the yaml `routing-policy.scoring` block.
+type RoutingScoringConfig struct {
+	Weights ScoringWeights `yaml:"weights,omitempty"`
+}
+
+// ScoringWeights configures CapabilityRegistry's deterministic weighted
+// ranking formula (spec.md v2 §12). Every weight defaults to today's
+// hardcoded behavior when left unset (the zero value): required-match
+// contributes its full confidence, preferred-match contributes half, and
+// cost contributes nothing. A team can only ever *narrow or reorder* an
+// already-authorized candidate set this way — weights never grant a
+// candidate that failed the required-capability check.
+type ScoringWeights struct {
+	RequiredMatch  float64 `yaml:"required-match,omitempty"`
+	PreferredMatch float64 `yaml:"preferred-match,omitempty"`
+	// Cost only ever affects ranking when explicitly set to a non-zero
+	// value; unlike RequiredMatch/PreferredMatch, zero has no separate
+	// "default" to fall back to, because "cost does not affect ranking" is
+	// itself the correct default.
+	Cost float64 `yaml:"cost,omitempty"`
+}
+
+// defaultRequiredMatchWeight/defaultPreferredMatchWeight reproduce the
+// scoring formula CapabilityRegistry used before ScoringWeights existed.
+const (
+	defaultRequiredMatchWeight  = 1.0
+	defaultPreferredMatchWeight = 0.5
+)
+
+// EffectiveRequiredMatch defaults to defaultRequiredMatchWeight.
+func (w ScoringWeights) EffectiveRequiredMatch() float64 {
+	if w.RequiredMatch == 0 {
+		return defaultRequiredMatchWeight
+	}
+	return w.RequiredMatch
+}
+
+// EffectivePreferredMatch defaults to defaultPreferredMatchWeight.
+func (w ScoringWeights) EffectivePreferredMatch() float64 {
+	if w.PreferredMatch == 0 {
+		return defaultPreferredMatchWeight
+	}
+	return w.PreferredMatch
+}
+
+// EffectiveCost has no default beyond zero: an unset Cost correctly means
+// "cost does not affect ranking", not "use some non-zero default weight".
+func (w ScoringWeights) EffectiveCost() float64 { return w.Cost }
+
+// Validate rejects a negative weight, which would let cost or a capability
+// match *penalize* a candidate rather than merely fail to reward it — a
+// surprising inversion no config should produce by accident.
+func (w ScoringWeights) Validate() error {
+	if w.RequiredMatch < 0 || w.PreferredMatch < 0 || w.Cost < 0 {
+		return fmt.Errorf("routing-policy.scoring.weights must not be negative")
+	}
+	return nil
 }
 
 // CompactionPolicy is the team-level safety policy for coordinator history and

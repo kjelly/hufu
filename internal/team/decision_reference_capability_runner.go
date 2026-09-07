@@ -41,27 +41,35 @@ func (r *coordinatorDecisionRunners) runReferenceEvidenceViaCapabilityRouting(ct
 	}
 	role := req.RoutingRole
 
-	candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{
-		Required:  role.RequiredCapabilities,
-		Preferred: role.PreferredCapabilities,
-	})
-	if err != nil {
-		return ReferenceEvidenceDraft{}, fmt.Errorf("reference role routing: %w", err)
-	}
 	var chosen string
-	for _, candidate := range candidates {
-		if candidate.Score > 0 {
-			chosen = candidate.AgentID
-			break
+	var def *agent.AgentDef
+	var pinned bool
+	if pinnedAgent, pinnedDef, ok, err := resolvePinnedCandidate(ctx, c, "reference", role.RequiredCapabilities, role.PreferredCapabilities, role.Pin); err != nil {
+		return ReferenceEvidenceDraft{}, err
+	} else if ok {
+		chosen, def, pinned = pinnedAgent, pinnedDef, true
+	} else {
+		candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{
+			Required:  role.RequiredCapabilities,
+			Preferred: role.PreferredCapabilities,
+		})
+		if err != nil {
+			return ReferenceEvidenceDraft{}, fmt.Errorf("reference role routing: %w", err)
 		}
-	}
-	if chosen == "" {
-		return ReferenceEvidenceDraft{}, fmt.Errorf(
-			"reference role routing: no authorized worker satisfies required capabilities %v", role.RequiredCapabilities)
-	}
-	def := c.session.Agents[chosen]
-	if def == nil {
-		return ReferenceEvidenceDraft{}, fmt.Errorf("reference role routing: resolved worker %q is not a configured agent", chosen)
+		for _, candidate := range candidates {
+			if candidate.Score > 0 {
+				chosen = candidate.AgentID
+				break
+			}
+		}
+		if chosen == "" {
+			return ReferenceEvidenceDraft{}, fmt.Errorf(
+				"reference role routing: no authorized worker satisfies required capabilities %v", role.RequiredCapabilities)
+		}
+		def = c.session.Agents[chosen]
+		if def == nil {
+			return ReferenceEvidenceDraft{}, fmt.Errorf("reference role routing: resolved worker %q is not a configured agent", chosen)
+		}
 	}
 
 	requestBytes, err := json.Marshal(req)
@@ -74,9 +82,14 @@ func (r *coordinatorDecisionRunners) runReferenceEvidenceViaCapabilityRouting(ct
 	if err != nil {
 		return ReferenceEvidenceDraft{}, fmt.Errorf("reference role invocation of %q: %w", chosen, err)
 	}
-	c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
-		"reference role bound to %q (model %q) for decision %s: required=%v preferred=%v",
-		chosen, modelID, req.DecisionID, role.RequiredCapabilities, role.PreferredCapabilities)))
+	if pinned {
+		c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
+			"reference role pinned to %q (model %q) for decision %s: reason=%q", chosen, modelID, req.DecisionID, role.Pin.Reason)))
+	} else {
+		c.report(c.newEvent("routing_decision").withMessage(fmt.Sprintf(
+			"reference role bound to %q (model %q) for decision %s: required=%v preferred=%v",
+			chosen, modelID, req.DecisionID, role.RequiredCapabilities, role.PreferredCapabilities)))
+	}
 
 	var decoded ReferenceEvidenceDraft
 	if err := decodeReferenceEvidence(response, &decoded); err != nil {
@@ -84,6 +97,11 @@ func (r *coordinatorDecisionRunners) runReferenceEvidenceViaCapabilityRouting(ct
 	}
 	if err := decoded.Validate(); err != nil {
 		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence: %w", err)
+	}
+	decoded.AgentID = chosen
+	if pinned {
+		decoded.Pinned = true
+		decoded.BindingReason = role.Pin.Reason
 	}
 	return decoded, nil
 }

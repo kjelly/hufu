@@ -47,6 +47,27 @@ type DecisionMetrics struct {
 	// close the sample is to opening it (§49.2).
 	ResolvedCount int `json:"resolved_count"`
 	VerifiedCount int `json:"verified_count"`
+
+	// CapabilityRoutedBindingCount tallies opinions, challenges, revisions,
+	// and reference-evidence results actually produced by a capability-routed
+	// concrete agent, keyed by that agent's ID. A stage the legacy
+	// judge-model sidecar produced carries no AgentID and is not counted, so
+	// this is empty for every team that has not configured routing.
+	CapabilityRoutedBindingCount map[string]int `json:"capability_routed_binding_count,omitempty"`
+}
+
+// countCapabilityRoutedBinding tallies one capability-routed stage output by
+// its resolved agent. agentID is empty for every stage the legacy
+// judge-model sidecar produced, which must not be counted at all rather than
+// counted under an empty key.
+func (m *DecisionMetrics) countCapabilityRoutedBinding(agentID string) {
+	if agentID == "" {
+		return
+	}
+	if m.CapabilityRoutedBindingCount == nil {
+		m.CapabilityRoutedBindingCount = map[string]int{}
+	}
+	m.CapabilityRoutedBindingCount[agentID]++
 }
 
 // ComputeDecisionMetrics projects decision activity from a run's event log and
@@ -78,9 +99,24 @@ func ComputeDecisionMetrics(events []RunEvent, entries []DecisionIndexEntry) Dec
 			if payload.DecisionID != "" {
 				finalized[payload.DecisionID] = true
 			}
+		case agent.EventDecisionOpinionSubmitted:
+			if payload.Opinion != nil {
+				metrics.countCapabilityRoutedBinding(payload.Opinion.AgentID)
+			}
+		case agent.EventDecisionChallengeSubmitted:
+			if payload.Challenge != nil {
+				metrics.countCapabilityRoutedBinding(payload.Challenge.AgentID)
+			}
 		case agent.EventDecisionRevisionSubmitted:
 			if payload.DecisionID != "" {
 				revised[payload.DecisionID] = true
+			}
+			if payload.Revision != nil {
+				metrics.countCapabilityRoutedBinding(payload.Revision.AgentID)
+			}
+		case agent.EventDecisionReferenceCompleted:
+			if payload.ReferenceResult != nil {
+				metrics.countCapabilityRoutedBinding(payload.ReferenceResult.ProducerAgentID)
 			}
 		case agent.EventDecisionAggregateComputed:
 			if payload.Aggregate != nil && payload.DecisionID != "" {
