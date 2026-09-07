@@ -261,3 +261,53 @@ func TestLoadRuntimeWorksetProjectionRejectsWrongRunOrDigest(t *testing.T) {
 		t.Fatal("digest-mismatched projection was accepted")
 	}
 }
+
+func TestCompletedRunWithoutWorksetReplacesOlderWorkspaceProjection(t *testing.T) {
+	workspace := t.TempDir()
+	currentPath := filepath.Join(workspace, "runtime", "current-workset.json")
+	old := RuntimeWorksetProjection{SchemaVersion: 1, RunID: "run-20260907090000-old"}
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicWriteFile(currentPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
+	if err := c.clearStaleRuntimeWorksetProjection("run-20260907100000-new"); err != nil {
+		t.Fatalf("clearStaleRuntimeWorksetProjection() error = %v", err)
+	}
+	var got RuntimeWorksetProjection
+	data, err = os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("read replaced workspace projection: %v", err)
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode replaced workspace projection: %v", err)
+	}
+	if got.RunID != "run-20260907100000-new" || len(got.Pointers) != 0 {
+		t.Fatalf("workspace projection = %#v, want empty projection for new run", got)
+	}
+}
+
+func TestCompletedRunDoesNotRemoveNewerWorkspaceProjection(t *testing.T) {
+	workspace := t.TempDir()
+	currentPath := filepath.Join(workspace, "runtime", "current-workset.json")
+	newer := RuntimeWorksetProjection{SchemaVersion: 1, RunID: "run-20260907110000-newer"}
+	data, err := json.Marshal(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicWriteFile(currentPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
+	if err := c.clearStaleRuntimeWorksetProjection("run-20260907100000-new"); err != nil {
+		t.Fatalf("clearStaleRuntimeWorksetProjection() error = %v", err)
+	}
+	if _, err := os.Stat(currentPath); err != nil {
+		t.Fatalf("newer workspace projection was removed: %v", err)
+	}
+}

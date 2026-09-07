@@ -195,7 +195,7 @@ func (c *Coordinator) publishCompletedRuntimeWorksetProjection(result *RunResult
 		projection.Pointers = append(projection.Pointers, pointer)
 	}
 	if len(projection.Pointers) == 0 {
-		return nil
+		return c.clearStaleRuntimeWorksetProjection(result.RunID)
 	}
 	// Monotonicity is evaluated from completed run identities; a late older run
 	// cannot replace a newer workspace pointer. The write itself is atomic.
@@ -211,6 +211,46 @@ func (c *Coordinator) publishCompletedRuntimeWorksetProjection(result *RunResult
 		return fmt.Errorf("encode completed workset projection: %w", err)
 	}
 	return AtomicWriteFile(workspacePointer, encoded, 0o644)
+}
+
+// clearStaleRuntimeWorksetProjection publishes an empty projection when the
+// current run produced no workset. A workspace-level pointer is only a
+// projection, so retaining an older run's pointer makes reports for a fresh
+// run emit a misleading stale-workset warning. Never replace a projection
+// belonging to a lexicographically newer run: that run may have completed
+// concurrently and owns the newer projection.
+func (c *Coordinator) clearStaleRuntimeWorksetProjection(runID string) error {
+	if c == nil || c.session == nil || strings.TrimSpace(runID) == "" {
+		return nil
+	}
+	path := filepath.Join(c.session.Workspace, "runtime", "current-workset.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read current runtime workset projection: %w", err)
+	}
+	var current RuntimeWorksetProjection
+	if err := json.Unmarshal(data, &current); err != nil {
+		return nil
+	}
+	if current.RunID > runID {
+		return nil
+	}
+	empty := RuntimeWorksetProjection{
+		SchemaVersion: 1,
+		RunID:         runID,
+		CompletedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	encoded, err := json.MarshalIndent(empty, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode empty runtime workset projection: %w", err)
+	}
+	if err := AtomicWriteFile(path, encoded, 0o644); err != nil {
+		return fmt.Errorf("publish empty runtime workset projection: %w", err)
+	}
+	return nil
 }
 
 // LoadRuntimeWorksetProjection reads only the completed workspace pointer and
