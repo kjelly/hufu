@@ -79,6 +79,14 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	if globPattern == "" {
 		globPattern = args.Glob
 	}
+	// A file supplied as the explicit operand is searched directly by ripgrep,
+	// even when the caller also supplied a recursive include filter. Keep the
+	// parsed filter for the GNU fallback, whose native direct-operand behavior
+	// still applies it.
+	nativeGlobPattern := globPattern
+	if !isDirectory(searchPath) {
+		nativeGlobPattern = ""
+	}
 	wsName := workspaceDirName(cfg)
 	excludeRecords := !pathHasComponent(searchPath, wsName)
 	policy := effectiveCfg.ArtifactPathPolicy
@@ -87,7 +95,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	// No policy and exact-file searches retain the backend's direct operand
 	// semantics. resolveSearchRoot has already enforced an exact path.
 	if !policyActive || !isDirectory(searchPath) {
-		result, err := grepWithRg(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords)
+		result, err := grepWithRg(ctx, args, searchPath, nativeGlobPattern, limit, wsName, excludeRecords)
 		if err == nil {
 			return result, nil
 		}
@@ -96,7 +104,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 
 	// Artifact authorization subtracts from rg's native directory selection;
 	// it must not replace that selection with a filepath.Walk.
-	candidates, rgAvailable, err := collectNativeRgCandidates(ctx, searchPath, globPattern, wsName, excludeRecords, policy)
+	candidates, rgAvailable, err := collectNativeRgCandidates(ctx, searchPath, globPattern, wsName, excludeRecords, args.Path != "", policy)
 	if err != nil && rgAvailable {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("grep failed: %v", err)), nil
 	}
@@ -153,6 +161,13 @@ func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath, globPa
 			baseArgs = append(baseArgs, "--glob="+g)
 		}
 	}
+	baseArgs = appendRgIgnoreFiles(baseArgs, searchPath)
+	if args.Path != "" && isDirectory(searchPath) {
+		// An explicitly named directory is a direct operand. Ignore rules from
+		// its parents must not hide the operand, while nested ignore files still
+		// apply to descendants.
+		baseArgs = append(baseArgs, "--no-ignore-parent")
+	}
 
 	operands := []string{searchPath}
 	if candidates != nil {
@@ -194,7 +209,7 @@ func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath, globPa
 	return fantasy.NewTextResponse(tr.Content + formatTruncationNotice(tr)), nil
 }
 
-func collectNativeRgCandidates(ctx context.Context, searchPath, globPattern, wsName string, excludeRecords bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
+func collectNativeRgCandidates(ctx context.Context, searchPath, globPattern, wsName string, excludeRecords, explicitRoot bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		return nil, false, nil
 	}
@@ -206,6 +221,10 @@ func collectNativeRgCandidates(ctx context.Context, searchPath, globPattern, wsN
 		for _, g := range workspaceRecordRgGlobs(wsName) {
 			rgArgs = append(rgArgs, "--glob", g)
 		}
+	}
+	rgArgs = appendRgIgnoreFiles(rgArgs, searchPath)
+	if explicitRoot && isDirectory(searchPath) {
+		rgArgs = append(rgArgs, "--no-ignore-parent")
 	}
 	rgArgs = append(rgArgs, searchPath)
 	cmd := exec.CommandContext(ctx, "rg", rgArgs...)
@@ -222,6 +241,37 @@ func collectNativeRgCandidates(ctx context.Context, searchPath, globPattern, wsN
 		return nil, true, fmt.Errorf("rg file discovery failed: %s", stderr.String())
 	}
 	return filterNativeCandidates(bytes.Split(stdout.Bytes(), []byte{0}), policy), true, nil
+}
+
+// appendRgIgnoreFiles makes ripgrep apply repository-style ignore files even
+// when the search root is outside a Git worktree, as is common for temporary
+// workspaces and tests. The nearest ignore file is not necessarily enough for
+// a nested search root, so include each ancestor file up to the filesystem
+// root; ripgrep resolves each file's patterns relative to its location.
+func appendRgIgnoreFiles(args []string, searchPath string) []string {
+	root, err := filepath.Abs(searchPath)
+	if err != nil {
+		return args
+	}
+	if info, statErr := os.Stat(root); statErr == nil && !info.IsDir() {
+		root = filepath.Dir(root)
+	}
+	seen := make(map[string]struct{})
+	for {
+		ignoreFile := filepath.Join(root, ".gitignore")
+		if _, ok := seen[ignoreFile]; !ok {
+			if info, statErr := os.Stat(ignoreFile); statErr == nil && !info.IsDir() {
+				args = append(args, "--ignore-file", ignoreFile)
+			}
+			seen[ignoreFile] = struct{}{}
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			break
+		}
+		root = parent
+	}
+	return args
 }
 
 // GNU grep recursively considers hidden and ignored files, does not follow

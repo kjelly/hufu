@@ -336,7 +336,7 @@ func CheckToolPermissionDetail(ctx context.Context, toolName string) (bool, bool
 	// all tools except ask_user. Exception: in unattended mode the allowlist is
 	// trusted to run without a human, so fall through to the allowlist check
 	// (step 3) instead of blanket-denying — otherwise no tool could ever run.
-	if !IsUnattended(ctx) && !IsInteractiveEnvironment() {
+	if !IsUnattended(ctx) && !processUnattended.Load() && !IsInteractiveEnvironment() {
 		return false, false, "non-interactive environment: stdin is not a terminal and unattended mode is off", nil
 	}
 

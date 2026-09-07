@@ -444,9 +444,6 @@ func (c *Coordinator) providerSemaphore(modelID string) chan struct{} {
 }
 
 func (c *Coordinator) sharedProviderSemaphoreState() *providerSemaphoreState {
-	if c.providerSemState != nil {
-		return c.providerSemState
-	}
 	c.providerSemStateMu.Lock()
 	defer c.providerSemStateMu.Unlock()
 	if c.providerSemState == nil {
