@@ -9,12 +9,54 @@ adapted to what Hufu's real decision-aware runtime (`internal/team/decision_*.go
 `spec2.md` was added, both reframing `reference`/`juror`/`challenger` as
 capability-routed logical roles rather than fixed agent identities. Per
 spec2.md's own explicit sequencing (PR-2, then PR-3, then PR-4), this team
-now genuinely capability-routes both `REFERENCE` (PR-2) and `JUDGE` (PR-3) —
-see Gap 1 below, `reference-specialist.md` (a second real REFERENCE
-candidate), and `judge-role` in `team.yaml` (which also makes `juror.md` a
-real JUDGE candidate). `CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE` remain
-sidecar-only; that is documented, sequenced follow-up work (PR-4), not an
-oversight.
+now genuinely capability-routes `REFERENCE` (PR-2), `JUDGE` (PR-3), and
+`CHALLENGE` (PR-4), with `REVISE` correctly reusing `JUDGE`'s binding rather
+than re-resolving — see Gap 1 below, `reference-specialist.md` (a second
+real REFERENCE candidate), and `judge-role`/`challenge-role` in `team.yaml`
+(which also make `juror.md`/`challenger.md` real candidates). This is
+spec2.md's **complete MVP scope**: `PREMORTEM`/`FINALIZE` remain
+sidecar-only by spec2.md's own design (§9/§10), not an oversight or
+remaining follow-up.
+
+**Further same-day update:** after finishing spec2.md's 4 PRs, this team
+also picked up two of the (lower-risk) extras spec.md v2 describes beyond
+spec2.md's own plan — see the `routing-policy.scoring.weights` and
+`decision.routing-hints` blocks in `team.yaml`.
+
+**Same-day update again (durable AgentBinding, metrics, explainability):**
+`DecisionOpinion`/`DecisionChallenge`/`DecisionRevision`/
+`ReferenceEvidenceDraft` now carry the resolved `AgentID` (the runner sets
+it after invoking the candidate; empty on the legacy sidecar path), so a
+routing decision survives past the run instead of only reaching an
+ephemeral TUI status line. `DecisionMetrics` gained
+`CapabilityRoutedBindingCount`, and `hufu decision explain <decision-id>`
+now shows, per stage, whether capability routing resolved a concrete
+worker and which one. Capability freshness/invalidation turned out to
+already be implemented (`CapabilityRegistry.recordsFor` already honors
+`declared-at`/`stale-after` and `scoreAgent` already skips stale records)
+— just never demonstrated in this team's config, not a code gap.
+
+**Same-day update, final pass (DiversityPolicy, pinned binding, mid-run
+capability invalidation, adaptive challenger routing):** all four of the
+previously-listed "still unbuilt" items are now shipped. `judge-role`/
+`challenge-role` gained `min-distinct-models`/`min-distinct-providers`
+(hard floors), `prefer-distinct-models`/`prefer-distinct-providers` (soft
+preferences that reorder ranking without excluding a qualified candidate),
+and `allow-repeated-agent-definition`; every role gained `pin.agent`/
+`pin.reason` (gated by a new `discipline.routing.allow-pinned-binding`,
+checked at `hufu team validate` time, not at run time); `challenge-role`
+gained `adaptive-capabilities` (maps a configured decision criterion to
+extra preferred capabilities, applied when JUDGE round 1's opinions
+disagreed most on that criterion); and REVISE now reuses the original
+opinion's durable `AgentID` directly instead of re-resolving, closing a
+latent bug where a capability change between JUDGE and REVISE could
+previously move REVISE to a silently different agent. Capability-group
+distinctness remains explicitly out of scope — no such taxonomy exists in
+this codebase, and inventing one is a product decision, not a wiring gap.
+This team demonstrates `prefer-distinct-models` (a documented no-op today,
+since every worker here shares one team-wide model) but not pinned binding
+or adaptive-capabilities — see `plan.md`'s matching update for why. See
+`plan.md`'s Status section for the full file/function/test breakdown.
 
 Validated with:
 
@@ -42,10 +84,19 @@ Cross-checking against the gaps below: **only Gap 3 (capability-aware
 routing) was genuinely pending, plan.md-tracked work — and it has since been
 implemented, including wiring into the real worker-delegation dispatch path
 (see Gap 3 below and `plan.md`'s Status section).** The
-"on-capability-invalidated" half of Gap 7 remains open: that replan trigger
-needs a "capability no longer available" signal, and nothing produces one —
-capability routing was wired into ordinary worker delegation, not into the
-DecisionEngine itself, so there is still nothing there to invalidate against.
+"on-capability-invalidated" half of Gap 7 is **now partially resolved**:
+REVISE (`internal/team/decision_challenge_capability_runner.go`'s
+`revisionCandidate`) now re-checks its original binding's authorization and
+required-capability satisfaction before reusing it, and fails closed rather
+than silently invoking a different agent when either check no longer
+passes — this is the one place in the engine that currently has a
+"capability no longer available" signal to act on. There is still no
+generic `on-capability-invalidated` replan trigger (spec.md §19's third
+bullet) that would fire for JUDGE/CHALLENGE mid-round, since those
+invocations happen close enough together that no realistic wall-clock gap
+exists between resolving a binding and invoking it — only the JUDGE→REVISE
+gap (with CHALLENGE and aggregation in between) is a real window in this
+codebase's execution model, and that is exactly what's now handled.
 Everything else in this document —
 Gap 2 (decision options/facts staying `json:"-"`) above all — is not missing;
 it is a **deliberate, completed architectural choice**, stated directly in
@@ -119,14 +170,16 @@ works without it (see Gap 5).
 ## Where the runtime cannot satisfy spec.md as written
 
 **Gap 1 — reference/juror/challenger are not dispatched as agents at all —
-PARTIALLY RESOLVED 2026-09-07 for REFERENCE and JUDGE.** Spec.md's whole
-topology (§3–§4; v2 §4/§15/§17/§19) assumes the coordinator delegates
-isolated invocations of `reference.md` / `juror.md` / `challenger.md`
-through the normal worker/task delegation system, resolved by capability.
-Originally the `DecisionEngine` never did this at all: every stage was a
-direct call from `internal/team/decision_runners.go` to one shared,
-tool-less **judge-model sidecar**. That is now only true for
-`CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE`.
+RESOLVED 2026-09-07 for every role spec2.md defines as capability-routed.**
+Spec.md's whole topology (§3–§4; v2 §4/§15/§17/§19) assumes the coordinator
+delegates isolated invocations of `reference.md` / `juror.md` /
+`challenger.md` through the normal worker/task delegation system, resolved
+by capability. Originally the `DecisionEngine` never did this at all: every
+stage was a direct call from `internal/team/decision_runners.go` to one
+shared, tool-less **judge-model sidecar**. That is now only true for
+`PREMORTEM`/`FINALIZE` — and per spec2.md's own design (§9/§10), it stays
+true for those two permanently; they were never meant to be capability-routed
+roles in the first place.
 
 **`REFERENCE` is genuinely capability-routed** (spec2.md PR-2): when a
 profile sets `outside-view.role.required-capabilities` (see this team's
@@ -158,22 +211,41 @@ spec2.md's own acceptance bar for this stage: each judge's provider call is
 attributed to its own resolved candidate's model, and the legacy judge-model
 sidecar records zero calls.
 
-Every team/profile that does not set `outside-view.role`/`judge-role` is
-completely unaffected —
-`TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar` and
-`TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar` prove
-both legacy paths are byte-for-byte unchanged.
+**`CHALLENGE` is also genuinely capability-routed** (spec2.md PR-4):
+`internal/team/decision_challenge_capability_runner.go` follows the exact
+same shape as `JUDGE`'s runner — this team's `standard`/`high-stakes`
+profiles set `challenge-role.required-capabilities: [adversarial-analysis]`
+(`min-distinct-agents: 2` for `high-stakes`'s 2 challengers), ranked
+`challenger` (0.7) > `reference-specialist` (0.6) > `juror` (0.5). Proven in
+`TestChallengeRoleCapabilityRouting_RoutesEachChallengerToADistinctAgent`.
 
-Still not done, and explicitly out of scope for this pass (spec2.md PR-4):
-`CHALLENGE` (challenger), `PREMORTEM`, `REVISE`, and `FINALIZE` remain
-sidecar-only. Challenger carries its own isolation subtlety (it must see
-anonymized aggregated opinions, never raw judge identity) and revision must
-reuse the *original* judge bindings rather than re-resolving
-(spec2.md §8) — `plan.md`'s Status section records exactly this boundary.
-`challenger.md` remains documentation-only for now; `reference.md`/
-`reference-specialist.md`/`juror.md` are all genuinely reachable through
-this path (the latter two for both `REFERENCE` and `JUDGE`, since nothing
-stops one worker from qualifying for more than one role). A coordinator can
+**`REVISE` reuses `JUDGE`'s binding rather than re-resolving** (spec2.md
+§8): there is no separate "revision-role" — `RevisionRequest.RoutingRole`
+is `agent.JudgeRolePolicy` (the *same* config `JUDGE` used), and resolution
+runs through the *same* function `JUDGE`'s runner calls, keyed by the same
+`JudgeID`. Because that resolution is a pure function of `(role, ordinal)`
+and neither changes between rounds, a revision for `judge-2` always
+re-derives the exact candidate `judge-2` got in round 1 — no binding
+persistence needed. Proven concretely (not just inferred from shared code)
+in `TestRevisionCapabilityRouting_ReusesOriginalJudgeBinding`: it dispatches
+a routed `judge-2`, then a routed revision for the same `judge-2`, and
+asserts both land on the identical resolved candidate's provider.
+
+Every team/profile that does not set `outside-view.role`/`judge-role`/
+`challenge-role` is completely unaffected —
+`TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar`,
+`TestJudgeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`,
+`TestChallengeRoleCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`,
+and `TestRevisionCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar`
+prove every legacy path stays byte-for-byte unchanged.
+
+**Permanently sidecar-only, by spec2.md's own design, not a gap**:
+`PREMORTEM` and `FINALIZE` (§9 "AGGREGATE 完全不要 routing", §10 "FINALIZE 第
+一版也不用 capability routing" — spec2.md's final role list names exactly
+three routed roles plus REVISE-reuses-JUDGE, nothing else). `reference.md`/
+`reference-specialist.md`/`juror.md`/`challenger.md` are all genuinely
+reachable through this path (several of them for more than one role, since
+nothing stops one worker from qualifying for multiple). A coordinator can
 still delegate a plain task to any of these four names as an ordinary
 worker outside the decision pipeline, same as before.
 

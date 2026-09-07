@@ -45,13 +45,22 @@ Your purpose is to find systematic blind spots.
 
 ## Runtime note
 
-This file is not currently dispatched by Hufu's DecisionEngine as a separate
-delegated worker. `challenge.enabled` / `challenge.count` and
-`premortem.enabled` in team.yaml run the equivalent stages internally against
-the team's `judge-model` sidecar (`internal/team/decision_challenge.go`),
-which has no tool access. This file documents the judgment standard those
-stages must meet for anyone reading or extending the team; `memory: mode:
-off` and `delegation: disabled` above only take effect if the coordinator
-ever delegates a plain task to "challenger" outside the decision pipeline
-(and even then, `delegation: disabled` is not a recognized frontmatter field
-in the current parser — see README.md "Gap 4").
+UPDATE (was "not dispatched", now RESOLVED for CHALLENGE — see README.md
+"Gap 1"): this file is a genuine capability-routing candidate for the
+CHALLENGE stage. This team's `challenge-role` config makes the runtime
+resolve `challenge.count` distinct, already-authorized candidates
+(round-robin over `challenger`/`reference-specialist`/`juror`, ranked by
+declared `adversarial-analysis` confidence —
+`internal/team/decision_challenge_capability_runner.go`) and invoke each
+directly — not the judge-model sidecar. Regardless of which candidate is
+bound, the `tools:` line above is never honored for this role: every
+challenge-role invocation gets **zero** tools by construction
+(`challengeRoleZeroTools`), matching this team's `REFERENCE`/`JUDGE` policy
+of keeping "live research" off for MVP (spec2.md §7). `premortem.enabled`
+still runs on the team's `judge-model` sidecar unconditionally — spec2.md
+itself never defines PREMORTEM as a capability-routed role, so this is not a
+gap, by design. `memory: mode: off` and `delegation: disabled` above only
+take effect if the coordinator ever delegates a plain task to "challenger"
+outside the decision pipeline (and even then, `delegation: disabled` is not
+a recognized frontmatter field in the current parser — see README.md
+"Gap 4").

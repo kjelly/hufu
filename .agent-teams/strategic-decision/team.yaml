@@ -38,19 +38,61 @@ capability-registry:
   reference:
     - capability: evidence-research
       confidence: 0.5
+      cost-class: medium
     - capability: decision-analysis
       confidence: 0.5
+      cost-class: medium
   reference-specialist:
     - capability: evidence-research
       confidence: 0.7
+      cost-class: low
     - capability: architecture
       confidence: 0.7
+      cost-class: low
     - capability: decision-analysis
       confidence: 0.6
+      cost-class: low
+    - capability: adversarial-analysis
+      confidence: 0.6
+      cost-class: low
   juror:
     - capability: decision-analysis
       confidence: 0.7
+      cost-class: high
+    - capability: adversarial-analysis
+      confidence: 0.5
+      cost-class: high
+  challenger:
+    - capability: adversarial-analysis
+      confidence: 0.7
+      cost-class: medium
 
+# Cost-aware weighted scoring (spec.md v2 §12): CapabilityRegistry.scoreAgent
+# already contributes required/preferred capability matches at weight
+# 1.0/0.5 with no config at all (internal/team/capability_registry.go). This
+# block adds a small cost term on top, using the cost-class declarations
+# above. At 0.05 it never overrides this team's primary rankings — it only
+# breaks a near-tie in reference-specialist's favor (it declares cost-class:
+# low throughout) — because the 0.1-0.2 capability-confidence gaps between
+# this team's candidates already dominate at the default weights. See
+# internal/team/capability_registry_test.go's
+# TestCapabilityRegistry_CostWeightAffectsRanking for a case where a larger
+# cost weight does flip a ranking between equal-confidence candidates.
+routing-policy:
+  scoring:
+    weights:
+      cost: 0.05
+
+# Goal-driven routing hints (spec.md v2 §16): unlike the block above, this
+# one *does* visibly change a ranking — but only for a decision whose
+# question actually matches. A judge-role/challenge-role query for a
+# storage-related question gets "architecture" added to its preferred list;
+# reference-specialist (architecture: 0.7) already wins REFERENCE outright,
+# but for JUDGE this pushes reference-specialist's score from 0.6 to
+# 0.6+0.5*0.7=0.95, past juror's plain 0.7 — so judge-1 binds to
+# reference-specialist instead of juror specifically for storage questions,
+# and nowhere else. See
+# TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt.
 # Decision workers should not mutate workspace/external state.
 tools:
   allowed:
@@ -67,14 +109,18 @@ workflow:
   phases: []
 
 delegation:
-  # NOTE (runtime gap, see README.md "Gap 1" — now partial): CHALLENGE/
-  # PREMORTEM/REVISE/FINALIZE still call the team's judge-model sidecar
-  # directly (internal/team/decision_runners.go), bypassing allowed-workers
-  # entirely — challenger.md is documentation-only until spec2.md PR-4.
-  # REFERENCE and JUDGE are the exceptions: both are genuinely
-  # capability-routed to whichever of reference/reference-specialist/juror
-  # below qualifies (internal/team/decision_reference_capability_runner.go,
-  # internal/team/decision_judge_capability_runner.go), and this
+  # NOTE (runtime gap, see README.md "Gap 1" — now resolved for every routed
+  # role spec2.md defines): PREMORTEM/FINALIZE still call the team's
+  # judge-model sidecar directly (internal/team/decision_runners.go) — that
+  # is by spec2.md's own design, not a gap (§9/§10: AGGREGATE/FINALIZE are
+  # never capability-routed roles). REFERENCE, JUDGE, and CHALLENGE are all
+  # genuinely capability-routed to whichever of
+  # reference/reference-specialist/juror/challenger below qualifies
+  # (internal/team/decision_reference_capability_runner.go,
+  # internal/team/decision_judge_capability_runner.go,
+  # internal/team/decision_challenge_capability_runner.go); REVISE reuses
+  # whichever judge candidate JUDGE round 1 already bound, by construction
+  # (spec2.md §8), not a fourth independent routed role. This
   # allowed-workers list is exactly the eligible/authorized set that routing
   # is only ever allowed to narrow, never expand
   # (Coordinator.eligibleWorkerIDs).
@@ -92,6 +138,21 @@ delegation:
 # README.md "Gap 2"), so keep this generic across whatever question the
 # coordinator delegates as the task Goal.
 decision:
+  # Goal-driven routing hints (spec.md v2 §16): unlike the routing-policy
+  # cost weight above, this one *does* visibly change a ranking — but only
+  # for a decision whose question actually matches. A judge-role/
+  # challenge-role query for a storage-related question gets "architecture"
+  # added to its preferred list; reference-specialist (architecture: 0.7)
+  # already wins REFERENCE outright, but for JUDGE this pushes
+  # reference-specialist's score from 0.6 to 0.6+0.5*0.7=0.95, past juror's
+  # plain 0.7 — so judge-1 binds to reference-specialist instead of juror
+  # specifically for storage questions, and nowhere else. See
+  # TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt.
+  routing-hints:
+    - when-goal-contains: storage
+      preferred-capabilities:
+        - architecture
+
   request-contract:
     enabled: true
     objective: >
@@ -202,13 +263,28 @@ decision:
         required-capabilities:
           - decision-analysis
         min-distinct-agents: 3
+        # DiversityPolicy extension (spec.md v2 §13): this team has no
+        # per-agent model override (every worker uses the team-wide
+        # `model:` above), so this is a genuine no-op today — reordering
+        # has nothing to differentiate on. Demonstrates the config is
+        # accepted and safe to enable ahead of any future per-agent model
+        # override, without changing this profile's current rankings.
+        prefer-distinct-models: true
 
       challenge:
         enabled: true
         # spec.md wrote `worker: challenger`, which does not exist on
-        # ChallengePolicy. No worker binding is needed or possible: the
-        # challenge stage always runs on the judge-model sidecar.
+        # ChallengePolicy — but capability routing (below) genuinely
+        # replaces what that field was trying to express.
         count: 1
+
+      # UPDATE (was part of "Gap 1", now RESOLVED — see README.md): CHALLENGE
+      # is also genuinely capability-routed (spec2.md PR-4). 1 challenger,
+      # ranked: challenger 0.7 > reference-specialist 0.6 > juror 0.5 on
+      # adversarial-analysis — challenger.md wins deterministically.
+      challenge-role:
+        required-capabilities:
+          - adversarial-analysis
 
       premortem:
         enabled: true
@@ -280,10 +356,21 @@ decision:
         required-capabilities:
           - decision-analysis
         min-distinct-agents: 3
+        # See the standard profile's identical field: a documented no-op
+        # today given this team's single shared model.
+        prefer-distinct-models: true
 
       challenge:
         enabled: true
         count: 2
+
+      # 2 challengers, 3 declared candidates: challenger 0.7 > reference-
+      # specialist 0.6 > juror 0.5 on adversarial-analysis — min-distinct-
+      # agents: 2 requires full diversity across both challenger dispatches.
+      challenge-role:
+        required-capabilities:
+          - adversarial-analysis
+        min-distinct-agents: 2
 
       premortem:
         enabled: true
