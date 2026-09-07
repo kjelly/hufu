@@ -1,11 +1,11 @@
 name: hufu-code-review
 description: "Read-only, artifact-backed review of the Hufu Go codebase"
-max-rounds: 12
+max-rounds: 64
 max-steps: 80
 timeout: 3600
 verify-timeout: 120
 max-retries: 1
-max-concurrent: 1
+max-concurrent: 4
 workspace: workspace
 goal-mode: outcome
 execution-profile: fresh-session
@@ -64,7 +64,7 @@ tasks:
     action:
       capability: produce-workset
       type: prepare_review_workset
-      payload: '{"since":"3.days.ago","max_commits":10,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
+      payload: '{"since":"1970-01-01","max_commits":10,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
 
   - id: review-workset
     agent: reviewer
