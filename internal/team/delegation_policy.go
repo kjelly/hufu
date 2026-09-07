@@ -58,6 +58,9 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 	if err := c.validateTaskGoalInvariants(tasks); err != nil {
 		return err
 	}
+	if err := c.validateCapabilityRouting(tasks); err != nil {
+		return err
+	}
 	if c.coordinatorPolicyRepairsAttempt.Load() > 0 {
 		hasDone := make(map[string]bool)
 		hasUnfinished := make(map[string]bool)

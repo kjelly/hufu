@@ -207,6 +207,9 @@ func (r *coordinatorDecisionRunners) RunReferenceEvidence(ctx context.Context, r
 	if err := req.Validate(); err != nil {
 		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence request: %w", err)
 	}
+	if req.RoutingRole != nil {
+		return r.runReferenceEvidenceViaCapabilityRouting(ctx, req)
+	}
 	requestBytes, err := json.Marshal(req)
 	if err != nil {
 		return ReferenceEvidenceDraft{}, fmt.Errorf("reference evidence request: %w", err)

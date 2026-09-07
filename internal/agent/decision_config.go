@@ -160,6 +160,33 @@ type DecisionCriterion struct {
 type OutsideViewPolicy struct {
 	Required          bool `yaml:"required,omitempty"`
 	ReferenceEvidence bool `yaml:"reference-evidence,omitempty"`
+	// Role opts the reference stage into real capability-routed execution
+	// (spec.md v2 §15; plan.md Stage 8 follow-up): instead of the team's
+	// judge-model sidecar, the runtime resolves an authorized,
+	// capability-matched concrete worker and invokes it directly, with its
+	// tools narrowed to read-only. A nil Role preserves the sidecar-only
+	// behavior exactly as before this field existed.
+	Role *ReferenceRolePolicy `yaml:"role,omitempty"`
+}
+
+// ReferenceRolePolicy names the capabilities the reference role's resolved
+// worker must (and should) show. It is the minimal slice of spec.md v2's
+// RoleSpec this runtime implements — diversity, pinning, and provenance
+// tiers beyond declared/maintainer-declared remain future work.
+type ReferenceRolePolicy struct {
+	RequiredCapabilities  []string `yaml:"required-capabilities,omitempty"`
+	PreferredCapabilities []string `yaml:"preferred-capabilities,omitempty"`
+}
+
+// Validate rejects a role declared with nothing to route on: without at
+// least one required capability, routing could never disqualify any
+// candidate, which is indistinguishable from not configuring it at all,
+// except silently.
+func (p ReferenceRolePolicy) Validate() error {
+	if len(p.RequiredCapabilities) == 0 {
+		return fmt.Errorf("outside-view.role.required-capabilities must name at least one capability")
+	}
+	return nil
 }
 
 // AggregationPolicy selects the deterministic aggregator (spec §21).
@@ -236,6 +263,17 @@ type DisciplinePolicy struct {
 	Commit       CommitGatePolicy           `yaml:"commit,omitempty"`
 	Replan       ReplanPolicy               `yaml:"replan,omitempty"`
 	Evidence     EvidenceIndependencePolicy `yaml:"evidence,omitempty"`
+	Routing      RoutingPolicy              `yaml:"routing,omitempty"`
+}
+
+// RoutingPolicy opts a decision profile into capability-aware worker routing
+// (plan.md Stage 8; spec1.md §12). It only ever narrows an already-authorized
+// candidate set by declared capability match — it can never grant
+// authorization to a worker delegation.allowed-workers would otherwise
+// reject (internal/team's CapabilityRegistry.Resolve enforces this
+// structurally: it only ever scores the caller-supplied eligible set).
+type RoutingPolicy struct {
+	CapabilityAware bool `yaml:"capability-aware,omitempty"`
 }
 
 // AlternativesPolicy enforces that no-go and information options exist before
@@ -438,6 +476,11 @@ func (p DecisionPolicy) Validate() error {
 	}
 	if p.MaxRounds != 0 && (p.MaxRounds < 1 || p.MaxRounds > maxDecisionRounds) {
 		return fmt.Errorf("max-rounds must be between 1 and %d, got %d", maxDecisionRounds, p.MaxRounds)
+	}
+	if p.OutsideView.Role != nil {
+		if err := p.OutsideView.Role.Validate(); err != nil {
+			return fmt.Errorf("outside-view.role: %w", err)
+		}
 	}
 	switch p.ContextIsolation {
 	case "", DecisionIsolationStrict, DecisionIsolationSealed:

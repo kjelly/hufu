@@ -372,3 +372,70 @@ func TestExpectedValueKillKindRejected(t *testing.T) {
 		t.Fatal("expected_value must not be a known kill criterion kind")
 	}
 }
+
+// DeclaredCapability (plan.md Stage 8; spec1.md §12.1) must fail closed on a
+// malformed declaration at team-load time, before any routing decision ever
+// consults it.
+func TestDeclaredCapabilityValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		decl    DeclaredCapability
+		wantErr bool
+	}{
+		{name: "valid minimal", decl: DeclaredCapability{Capability: "security-review"}},
+		{name: "valid with confidence", decl: DeclaredCapability{Capability: "security-review", Confidence: 0.5}},
+		{name: "empty capability", decl: DeclaredCapability{}, wantErr: true},
+		{name: "confidence too high", decl: DeclaredCapability{Capability: "x", Confidence: 1.5}, wantErr: true},
+		{name: "confidence negative", decl: DeclaredCapability{Capability: "x", Confidence: -0.1}, wantErr: true},
+		{
+			name:    "stale-after without declared-at",
+			decl:    DeclaredCapability{Capability: "x", StaleAfter: "24h"},
+			wantErr: true,
+		},
+		{
+			name:    "unparseable stale-after",
+			decl:    DeclaredCapability{Capability: "x", DeclaredAt: "2026-01-01T00:00:00Z", StaleAfter: "not-a-duration"},
+			wantErr: true,
+		},
+		{
+			name:    "unparseable declared-at",
+			decl:    DeclaredCapability{Capability: "x", DeclaredAt: "not-a-date"},
+			wantErr: true,
+		},
+		{
+			name: "valid with declared-at and stale-after",
+			decl: DeclaredCapability{Capability: "x", DeclaredAt: "2026-01-01T00:00:00Z", StaleAfter: "720h"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.decl.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("want no error, got %v", err)
+			}
+		})
+	}
+}
+
+// outside-view.role (plan.md Stage 8 follow-up; spec.md v2 §15) must fail
+// closed at load time when declared with nothing to route on, and must not
+// affect an otherwise-valid policy when left unset.
+func TestDecisionPolicyOutsideViewRoleValidate(t *testing.T) {
+	policy := validPolicy()
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("policy with no role configured should validate: %v", err)
+	}
+
+	policy.OutsideView.Role = &ReferenceRolePolicy{}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("role with no required capabilities must fail validation")
+	}
+
+	policy.OutsideView.Role = &ReferenceRolePolicy{RequiredCapabilities: []string{"evidence-research"}}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("role with a required capability should validate: %v", err)
+	}
+}

@@ -84,6 +84,7 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 		Question:         req.Question,
 		ContractRef:      req.RequestContractRef,
 		ContractRevision: req.RequestContractRevision,
+		RoutingRole:      req.Policy.OutsideView.Role,
 	}
 	inputHash, err := request.ComputeInputHash()
 	if err != nil {

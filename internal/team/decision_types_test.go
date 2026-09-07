@@ -322,3 +322,127 @@ func TestParseTeamYMLRejectsUnknownDecisionField(t *testing.T) {
 		t.Fatalf("parseTeamYML error = %v, want unknown-field rejection", err)
 	}
 }
+
+// discipline.routing.capability-aware (plan.md Stage 8) must round-trip
+// through the strict team.yaml decoder like every other discipline field.
+func TestParseTeamYMLDecisionRoutingCapabilityAware(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: routed
+decision:
+  default-profile: standard
+  profiles:
+    standard:
+      independent-judgments: 3
+      discipline:
+        routing:
+          capability-aware: true
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML = %v", err)
+	}
+	policy, ok := DecisionPolicyFor(cfg.Decision, "standard")
+	if !ok || !policy.Discipline.Routing.CapabilityAware {
+		t.Fatalf("policy.Discipline.Routing = %#v, want capability-aware: true", policy.Discipline.Routing)
+	}
+}
+
+// capability-registry (plan.md Stage 8) is a maintainer-authored, team-level
+// trust source, independent of whether decision profiles are configured.
+func TestParseTeamYMLCapabilityRegistry(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: routed
+capability-registry:
+  reviewer:
+    - capability: security-review
+      confidence: 0.6
+      cost-class: low
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML = %v", err)
+	}
+	decls := cfg.CapabilityRegistry["reviewer"]
+	if len(decls) != 1 || decls[0].Capability != "security-review" || decls[0].Confidence != 0.6 {
+		t.Fatalf("CapabilityRegistry[reviewer] = %#v", decls)
+	}
+}
+
+// A malformed declaration must fail team load, not fail silently the first
+// time a routing decision happens to consult it.
+func TestParseTeamYMLRejectsInvalidCapabilityRegistry(t *testing.T) {
+	dir := t.TempDir()
+	content := `capability-registry:
+  reviewer:
+    - capability: security-review
+      confidence: 2.0
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir, nil); err == nil || !strings.Contains(err.Error(), "capability-registry.reviewer") {
+		t.Fatalf("parseTeamYML error = %v, want capability-registry validation failure", err)
+	}
+}
+
+// outside-view.role (plan.md Stage 8 follow-up) must round-trip through the
+// strict team.yaml decoder like every other discipline field.
+func TestParseTeamYMLOutsideViewRole(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: routed
+decision:
+  default-profile: standard
+  profiles:
+    standard:
+      independent-judgments: 3
+      outside-view:
+        required: true
+        reference-evidence: true
+        role:
+          required-capabilities:
+            - evidence-research
+          preferred-capabilities:
+            - domain:storage
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML = %v", err)
+	}
+	policy, ok := DecisionPolicyFor(cfg.Decision, "standard")
+	if !ok || policy.OutsideView.Role == nil {
+		t.Fatalf("policy.OutsideView.Role = %#v, want it set", policy.OutsideView)
+	}
+	if len(policy.OutsideView.Role.RequiredCapabilities) != 1 || policy.OutsideView.Role.RequiredCapabilities[0] != "evidence-research" {
+		t.Fatalf("RequiredCapabilities = %#v", policy.OutsideView.Role.RequiredCapabilities)
+	}
+}
+
+// A role declared with no required capabilities must fail team load.
+func TestParseTeamYMLRejectsEmptyOutsideViewRole(t *testing.T) {
+	dir := t.TempDir()
+	content := `decision:
+  default-profile: standard
+  profiles:
+    standard:
+      independent-judgments: 3
+      outside-view:
+        required: true
+        reference-evidence: true
+        role: {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir, nil); err == nil || !strings.Contains(err.Error(), "outside-view.role") {
+		t.Fatalf("parseTeamYML error = %v, want outside-view.role validation failure", err)
+	}
+}

@@ -35,7 +35,8 @@
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": null,
       "ForbidContextFiles": false,
-      "TaskGoalInvariants": null
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null
     }
   },
   "agents": [

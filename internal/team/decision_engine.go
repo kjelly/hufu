@@ -43,6 +43,13 @@ type ReferenceEvidenceRequest struct {
 	Question         string `json:"question"`
 	ContractRef      string `json:"contract_ref,omitempty"`
 	ContractRevision uint64 `json:"contract_revision,omitempty"`
+	// RoutingRole selects real capability-routed execution for this
+	// invocation when non-nil (plan.md Stage 8 follow-up; spec.md v2 §15).
+	// json:"-" for the same reason TaskDef.DecisionOptions is: it must never
+	// reach the producer's own prompt or count toward ComputeInputHash, and a
+	// resumed decision must derive it solely from the durable policy
+	// snapshot, never from live config.
+	RoutingRole *agent.ReferenceRolePolicy `json:"-"`
 }
 
 type ReferenceEvidenceRunner interface {

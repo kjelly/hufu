@@ -117,18 +117,19 @@ type teamConfigYAML struct {
 	Vars                 map[string]interface{}           `yaml:"vars"`
 	// WorkerContextSize is a token budget, not a character count (spec.md
 	// item 7); the YAML key is kept as-is for backward compatibility.
-	WorkerContextSize int                                   `yaml:"worker-context-size"`
-	ToolsAllowed      interface{}                           `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Requirements      agent.ContractRequirements            `yaml:"requires"`
-	Delegation        rawDelegationPolicy                   `yaml:"delegation"`
-	Preflight         []agent.CapabilityRequirement         `yaml:"preflight"`
-	Workflow          agent.WorkflowConfig                  `yaml:"workflow"`
-	Policies          agent.WorkflowPolicies                `yaml:"policies"`
-	Capabilities      agent.CapabilityConfig                `yaml:"capabilities"`
-	Verification      agent.VerificationConfig              `yaml:"verification"`
-	Retry             agent.RetryConfig                     `yaml:"retry"`
-	Decision          agent.DecisionConfig                  `yaml:"decision"`
-	ActionProviders   map[string]agent.ActionProviderConfig `yaml:"action-providers"`
+	WorkerContextSize  int                                   `yaml:"worker-context-size"`
+	ToolsAllowed       interface{}                           `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
+	Requirements       agent.ContractRequirements            `yaml:"requires"`
+	Delegation         rawDelegationPolicy                   `yaml:"delegation"`
+	Preflight          []agent.CapabilityRequirement         `yaml:"preflight"`
+	Workflow           agent.WorkflowConfig                  `yaml:"workflow"`
+	Policies           agent.WorkflowPolicies                `yaml:"policies"`
+	Capabilities       agent.CapabilityConfig                `yaml:"capabilities"`
+	Verification       agent.VerificationConfig              `yaml:"verification"`
+	Retry              agent.RetryConfig                     `yaml:"retry"`
+	Decision           agent.DecisionConfig                  `yaml:"decision"`
+	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry"`
+	ActionProviders    map[string]agent.ActionProviderConfig `yaml:"action-providers"`
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
@@ -262,10 +263,11 @@ type rawDelegationPolicy struct {
 		FirstTool     string   `yaml:"first-tool"`
 		BindContracts bool     `yaml:"bind-contracts"`
 	} `yaml:"initial-batch"`
-	BindTaskGoalContracts    bool                      `yaml:"bind-task-goal-contracts"`
-	NoRedispatchAfterSuccess []string                  `yaml:"no-redispatch-after-success"`
-	ForbidContextFiles       bool                      `yaml:"forbid-context-files"`
-	TaskGoalInvariants       []agent.TaskGoalInvariant `yaml:"task-goal-invariants"`
+	BindTaskGoalContracts    bool                          `yaml:"bind-task-goal-contracts"`
+	NoRedispatchAfterSuccess []string                      `yaml:"no-redispatch-after-success"`
+	ForbidContextFiles       bool                          `yaml:"forbid-context-files"`
+	TaskGoalInvariants       []agent.TaskGoalInvariant     `yaml:"task-goal-invariants"`
+	CapabilityRouting        []agent.CapabilityRoutingRule `yaml:"capability-routing"`
 }
 
 type rawReliabilityConfig struct {
@@ -1145,6 +1147,14 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if len(yc.Delegation.TaskGoalInvariants) > 0 {
 		cfg.Delegation.TaskGoalInvariants = yc.Delegation.TaskGoalInvariants
 	}
+	for i, rule := range yc.Delegation.CapabilityRouting {
+		if strings.TrimSpace(rule.RequiredCapability) == "" {
+			return cfg, fmt.Errorf("delegation.capability-routing[%d].required-capability must not be empty", i)
+		}
+	}
+	if len(yc.Delegation.CapabilityRouting) > 0 {
+		cfg.Delegation.CapabilityRouting = yc.Delegation.CapabilityRouting
+	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight
 	}
@@ -1164,6 +1174,20 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 			return cfg, fmt.Errorf("invalid team config: %w", err)
 		}
 		cfg.Decision = yc.Decision
+	}
+
+	// Capability-aware routing (plan.md Stage 8) is independent of the
+	// optional phase workflow and of decision profiles: a team may declare
+	// maintainer-authored capabilities without adopting either.
+	if len(yc.CapabilityRegistry) > 0 {
+		for agentName, decls := range yc.CapabilityRegistry {
+			for i, decl := range decls {
+				if err := decl.Validate(); err != nil {
+					return cfg, fmt.Errorf("capability-registry.%s[%d]: %w", agentName, i, err)
+				}
+			}
+		}
+		cfg.CapabilityRegistry = yc.CapabilityRegistry
 	}
 
 	// Action providers are independent of whether the optional phase workflow

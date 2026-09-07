@@ -1290,3 +1290,45 @@ Worker for {@ .project_name @} in {@ .env @}.
 		t.Fatalf("ValidateAgentContentWithVars: %v", err)
 	}
 }
+
+// delegation.capability-routing (plan.md Stage 8) must round-trip through
+// the strict team.yaml decoder.
+func TestParseTeamYMLDelegationCapabilityRouting(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: routed
+delegation:
+  capability-routing:
+    - when-goal-contains: security audit
+      required-capability: security-review
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML = %v", err)
+	}
+	if len(cfg.Delegation.CapabilityRouting) != 1 {
+		t.Fatalf("CapabilityRouting = %#v", cfg.Delegation.CapabilityRouting)
+	}
+	rule := cfg.Delegation.CapabilityRouting[0]
+	if rule.WhenGoalContains != "security audit" || rule.RequiredCapability != "security-review" {
+		t.Fatalf("rule = %#v", rule)
+	}
+}
+
+// A rule with no required-capability can never match anything meaningfully
+// and must fail team load rather than silently becoming a no-op.
+func TestParseTeamYMLRejectsEmptyCapabilityRoutingRequirement(t *testing.T) {
+	dir := t.TempDir()
+	content := `delegation:
+  capability-routing:
+    - when-goal-contains: security audit
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTeamYML(dir, nil); err == nil || !strings.Contains(err.Error(), "required-capability") {
+		t.Fatalf("parseTeamYML error = %v, want required-capability validation failure", err)
+	}
+}

@@ -375,6 +375,13 @@ type TeamConfig struct {
 	// preserves pre-decision behavior exactly
 	// (docs/hufu-decision-aware-runtime-spec.md §8, §10).
 	Decision DecisionConfig
+	// CapabilityRegistry holds maintainer-authored capability claims per
+	// configured agent name, keyed by agent name (plan.md Stage 8; spec1.md
+	// §12). These are distinct from — and trusted above — an agent's
+	// self-declared capabilities extracted from its own system prompt: a
+	// human wrote these into team.yaml, the agent did not write them about
+	// itself.
+	CapabilityRegistry map[string][]DeclaredCapability
 }
 
 // CompactionPolicy is the team-level safety policy for coordinator history and
@@ -483,6 +490,45 @@ type CapabilityConfig struct {
 	Required []string `json:"required,omitempty" yaml:"required,omitempty"`
 }
 
+// DeclaredCapability is one maintainer-authored capability claim about a
+// configured worker (plan.md Stage 8; spec1.md §12.1). DeclaredAt and
+// StaleAfter are strings, not time.Time/time.Duration, so the YAML decoder
+// never has to parse either directly — the same pattern StopPolicy.MaxDuration
+// already uses. A declaration with no DeclaredAt is never treated as stale.
+type DeclaredCapability struct {
+	Capability string  `yaml:"capability" json:"capability"`
+	Confidence float64 `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+	CostClass  string  `yaml:"cost-class,omitempty" json:"cost_class,omitempty"`
+	DeclaredAt string  `yaml:"declared-at,omitempty" json:"declared_at,omitempty"`
+	StaleAfter string  `yaml:"stale-after,omitempty" json:"stale_after,omitempty"`
+}
+
+// Validate checks one declaration at team-load time so a malformed
+// declared-at/stale-after fails closed before any routing decision ever
+// consults it.
+func (d DeclaredCapability) Validate() error {
+	if strings.TrimSpace(d.Capability) == "" {
+		return fmt.Errorf("capability must not be empty")
+	}
+	if d.Confidence < 0 || d.Confidence > 1 {
+		return fmt.Errorf("confidence must be between 0 and 1, got %v", d.Confidence)
+	}
+	if strings.TrimSpace(d.StaleAfter) != "" {
+		if _, err := time.ParseDuration(strings.TrimSpace(d.StaleAfter)); err != nil {
+			return fmt.Errorf("stale-after: %w", err)
+		}
+		if strings.TrimSpace(d.DeclaredAt) == "" {
+			return fmt.Errorf("stale-after requires declared-at")
+		}
+	}
+	if strings.TrimSpace(d.DeclaredAt) != "" {
+		if _, err := time.Parse(time.RFC3339, strings.TrimSpace(d.DeclaredAt)); err != nil {
+			return fmt.Errorf("declared-at: %w", err)
+		}
+	}
+	return nil
+}
+
 // DelegationPolicy makes a team's coordinator dispatch contract executable.
 // It is deliberately expressed in terms of configured worker names rather
 // than provider, project, or task-domain concepts.
@@ -524,6 +570,23 @@ type DelegationPolicy struct {
 	// only compares literals; provider- and project-specific content remains
 	// in the team configuration.
 	TaskGoalInvariants []TaskGoalInvariant
+	// CapabilityRouting requires a delegated task's chosen worker to show a
+	// declared capability before a TODO is created (plan.md Stage 8; spec1.md
+	// §12). It reuses TaskGoalInvariants' goal-substring selector shape so
+	// authors do not learn a second selector language, but the check itself
+	// only ever narrows which already-authorized worker (from AllowedWorkers)
+	// may be chosen — it can never grant eligibility to one absent from it.
+	CapabilityRouting []CapabilityRoutingRule
+}
+
+// CapabilityRoutingRule is one maintainer-authored routing requirement
+// (plan.md Stage 8; spec1.md §12). WhenGoalContains selects which delegated
+// tasks the rule applies to, the same way TaskGoalInvariant.WhenGoalContains
+// does; RequiredCapability is checked against the CapabilityRegistry, never
+// against the coordinator's own claim about its task.
+type CapabilityRoutingRule struct {
+	WhenGoalContains   string `yaml:"when-goal-contains" json:"when_goal_contains"`
+	RequiredCapability string `yaml:"required-capability" json:"required_capability"`
 }
 
 // TaskGoalInvariant constrains a task selected by worker and a required goal

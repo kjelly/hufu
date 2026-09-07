@@ -12,18 +12,22 @@ import (
 // The deferred phases must not start before their entry gates
 // (docs/hufu-decision-aware-runtime-spec.md §49; plan Stages 8 and 9).
 //
-// Both phases are deferred for a reason that can be checked, not merely
-// remembered: Phase 4 has no trusted capability evidence to rank with, and
-// Phase 5 has no sample large enough for a Brier score to mean anything.
-// Encoding the gates as tests is what keeps "not yet" from decaying into
-// "someone started it quietly".
-
-// Phase 4 (capability-aware routing) has not started, and the invariant it
-// would have to renegotiate first still holds: a capability may rank an
-// already-authorized candidate, never grant authorization.
-func TestPhase4CapabilityRoutingHasNotStarted(t *testing.T) {
-	// The capability surface is still the greenfield the spec described: a
-	// declared requirement, with nothing that scores or ranks candidates.
+// Phase 5 is still fully deferred: it has no sample large enough for a Brier
+// score to mean anything. Phase 4 (capability-aware routing) opened a scoped
+// V1 (CapabilityRegistry / CapabilityResolver in capability_registry.go,
+// RoutingPolicy.CapabilityAware in internal/agent/decision_config.go): a
+// human explicitly approved starting it, and a trusted config-level source
+// (agent.DeclaredCapability, team.yaml `capability-registry`) now exists —
+// but self-declared and maintainer-declared are the only reachable trust
+// tiers. CapabilitySourceVerified stays structurally unreachable (no
+// producer anywhere in this package emits it) until Phase 5 supplies real
+// outcome data, so "unverified self-claims must not raise trusted score"
+// still holds, and the invariant this test protects — a capability may rank
+// an already-authorized candidate, never grant authorization — is unchanged.
+func TestPhase4AuthorizationStillPrecedesCapability(t *testing.T) {
+	// The legacy Preflight capability surface is unrelated to routing: a
+	// declared environment requirement, never something that scores or ranks
+	// candidate workers.
 	config := agent.CapabilityConfig{Required: []string{"network"}}
 	if len(config.Required) != 1 {
 		t.Fatalf("capability config = %#v", config)
@@ -37,6 +41,16 @@ func TestPhase4CapabilityRoutingHasNotStarted(t *testing.T) {
 	}
 	if agentCanInvoke(def, "sudo") {
 		t.Fatal("an undeclared tool became invocable; capability must never grant authorization")
+	}
+
+	// CapabilityRegistry.Resolve enforces the same invariant structurally: it
+	// only ever scores the caller-supplied eligible set (see
+	// TestCapabilityRegistry_UnauthorizedNeverSelected in
+	// capability_registry_test.go), and no CapabilitySourceVerified record can
+	// currently be produced (see capabilityConfidenceCeiling and its doc
+	// comment in capability_registry.go).
+	if _, ok := capabilityConfidenceCeiling[CapabilitySourceVerified]; !ok {
+		t.Fatal("CapabilitySourceVerified must still have a defined ceiling even though nothing produces it yet")
 	}
 }
 
