@@ -45,7 +45,11 @@ var judgeRoleZeroTools []fantasy.AgentTool
 // A pin (role.Pin), if set, forces every judge ordinal to the same named
 // agent instead — still subject to authorization/required-capability checks
 // (spec.md v2 §34) — short-circuiting the ranking below entirely.
-func resolveJudgeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.JudgeRolePolicy, judgeID string) (chosen string, def *agent.AgentDef, pinned bool, err error) {
+func resolveJudgeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.JudgeRolePolicy, judgeID string, requestedDispatchCount int) (chosen string, def *agent.AgentDef, pinned bool, err error) {
+	ordinal, err := judgeOrdinal(judgeID)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("judge role routing: %w", err)
+	}
 	if c == nil || c.session == nil {
 		return "", nil, false, fmt.Errorf("judge role routing requires an active session")
 	}
@@ -55,55 +59,19 @@ func resolveJudgeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.
 		return pinnedAgent, pinnedDef, true, nil
 	}
 
-	candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{
-		Required:  role.RequiredCapabilities,
-		Preferred: role.PreferredCapabilities,
-	})
+	dispatchCount := roleDispatchCount(ordinal, role.EffectiveMinDistinctAgents(), role.MinDistinctModels, role.MinDistinctProviders, requestedDispatchCount)
+	plan, err := resolveDecisionRoleBindingPlan(ctx, c, "judge", role.RequiredCapabilities, role.PreferredCapabilities,
+		dispatchCount, role.EffectiveMinDistinctAgents(), role.MinDistinctModels, role.MinDistinctProviders,
+		role.PreferDistinctModels, role.PreferDistinctProviders)
 	if err != nil {
-		return "", nil, false, fmt.Errorf("judge role routing: %w", err)
+		return "", nil, false, err
 	}
-	qualified := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.Score > 0 {
-			qualified = append(qualified, candidate.AgentID)
-		}
-	}
-	minDistinct := role.EffectiveMinDistinctAgents()
-	if len(qualified) < minDistinct {
-		return "", nil, false, fmt.Errorf(
-			"judge role routing: %d qualified candidate(s) satisfy required capabilities %v, need at least %d (judge-role.min-distinct-agents)",
-			len(qualified), role.RequiredCapabilities, minDistinct)
-	}
-	if role.MinDistinctModels > 0 {
-		if got := distinctModelCount(qualified, c.session.Agents); got < role.MinDistinctModels {
-			return "", nil, false, fmt.Errorf(
-				"judge role routing: qualified pool spans %d distinct model(s), need at least %d (judge-role.min-distinct-models)",
-				got, role.MinDistinctModels)
-		}
-	}
-	if role.MinDistinctProviders > 0 {
-		if got := distinctProviderCount(qualified, c.session.Agents); got < role.MinDistinctProviders {
-			return "", nil, false, fmt.Errorf(
-				"judge role routing: qualified pool spans %d distinct provider(s), need at least %d (judge-role.min-distinct-providers)",
-				got, role.MinDistinctProviders)
-		}
-	}
-	ordered := resolveRoleCandidateOrder(qualified, c.session.Agents, role.PreferDistinctModels, role.PreferDistinctProviders)
+	binding := plan[ordinal-1]
+	return binding.AgentID, binding.Def, false, nil
+}
 
-	ordinal, err := judgeOrdinal(judgeID)
-	if err != nil {
-		return "", nil, false, fmt.Errorf("judge role routing: %w", err)
-	}
-	// Round-robin over the (possibly diversity-reordered) ranked, qualified
-	// pool: judge-1 gets the top candidate, judge-2 the second, wrapping
-	// only if the pool is smaller than the judge count (which
-	// EffectiveMinDistinctAgents may forbid).
-	chosen = ordered[(ordinal-1)%len(ordered)]
-	def = c.session.Agents[chosen]
-	if def == nil {
-		return "", nil, false, fmt.Errorf("judge role routing: resolved worker %q is not a configured agent", chosen)
-	}
-	return chosen, def, false, nil
+func roleDispatchCount(ordinal, minAgents, minModels, minProviders, requested int) int {
+	return max(ordinal, minAgents, minModels, minProviders, requested)
 }
 
 // runJudgeViaCapabilityRouting implements the capability-routed half of
@@ -112,7 +80,7 @@ func (r *coordinatorDecisionRunners) runJudgeViaCapabilityRouting(ctx context.Co
 	c := r.coordinator
 	role := req.RoutingRole
 
-	chosen, def, pinned, err := resolveJudgeRoleCandidate(ctx, c, role, req.JudgeID)
+	chosen, def, pinned, err := resolveJudgeRoleCandidate(ctx, c, role, req.JudgeID, req.DispatchCount)
 	if err != nil {
 		return DecisionOpinion{}, err
 	}
@@ -136,7 +104,10 @@ func (r *coordinatorDecisionRunners) runJudgeViaCapabilityRouting(ctx context.Co
 	}
 	opinion.AgentID = chosen
 	opinion.Model = modelID
-	opinion.Provider = strings.TrimSpace(def.ProviderURL)
+	opinion.Provider, err = c.canonicalProviderKey(modelID)
+	if err != nil {
+		return DecisionOpinion{}, fmt.Errorf("resolve judge provider identity: %w", err)
+	}
 	if pinned {
 		opinion.Pinned = true
 		opinion.BindingReason = role.Pin.Reason

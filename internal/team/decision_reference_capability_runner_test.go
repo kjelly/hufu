@@ -18,16 +18,29 @@ import (
 // body and counts how many times it was called, so a test can assert exactly
 // which provider a capability-routed invocation actually reached.
 type fixedAnswerProvider struct {
-	calls int32
-	body  string
+	calls     int32
+	body      string
+	responses []string
+	onChat    func()
 }
 
-func (f *fixedAnswerProvider) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	atomic.AddInt32(&f.calls, 1)
+func (f *fixedAnswerProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body := f.body
+	// Profile introspection may hit the same test server, but provider-call
+	// assertions must count only actual chat transport requests.
+	if r.URL.Path == "/v1/chat/completions" {
+		call := atomic.AddInt32(&f.calls, 1)
+		if f.onChat != nil {
+			f.onChat()
+		}
+		if call <= int32(len(f.responses)) {
+			body = f.responses[call-1]
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(w,
 		"data: {\"id\":\"fake\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\n",
-		f.body)
+		body)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 }
 

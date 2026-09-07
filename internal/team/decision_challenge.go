@@ -20,9 +20,12 @@ import (
 type ChallengeRequest struct {
 	DecisionID   string
 	ChallengerID string
-	Packet       DecisionEvidencePacket
-	Aggregate    DecisionAggregate
-	Prompt       string
+	// DispatchCount is the complete CHALLENGE fan-out. Capability-routed
+	// runners use it to validate hard diversity floors before provider calls.
+	DispatchCount int
+	Packet        DecisionEvidencePacket
+	Aggregate     DecisionAggregate
+	Prompt        string
 	// RoutingRole selects real capability-routed execution for this
 	// challenger when non-nil (spec.md v2 §19; spec2.md PR-4). Like
 	// JudgeRequest, ChallengeRequest is never marshaled into a producer

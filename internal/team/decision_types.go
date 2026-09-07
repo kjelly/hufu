@@ -235,10 +235,9 @@ type DecisionOpinion struct {
 	Pinned        bool   `json:"pinned,omitempty"`
 	BindingReason string `json:"binding_reason,omitempty"`
 
-	// Model and Provider record the resolved agent's own Generation.Model
-	// and ProviderURL at invocation time (spec.md v2 §13 model/provider
-	// diversity) — set by the runner alongside AgentID. Provider is a
-	// proxy: this codebase has no separate ProviderID concept.
+	// Model and Provider record the effective model and canonical transport
+	// provider selected at invocation time (spec.md v2 §13 model/provider
+	// diversity) — set by the runner alongside AgentID.
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 }
@@ -288,10 +287,9 @@ type DecisionChallenge struct {
 	Pinned        bool   `json:"pinned,omitempty"`
 	BindingReason string `json:"binding_reason,omitempty"`
 
-	// Model and Provider record the resolved agent's own Generation.Model
-	// and ProviderURL at invocation time (spec.md v2 §13 model/provider
-	// diversity). Provider is a proxy: this codebase has no separate
-	// ProviderID concept.
+	// Model and Provider record the effective model and canonical transport
+	// provider selected at invocation time (spec.md v2 §13 model/provider
+	// diversity).
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 }
@@ -320,6 +318,12 @@ type DecisionRevision struct {
 	// independently (spec.md v2 §34).
 	Pinned        bool   `json:"pinned,omitempty"`
 	BindingReason string `json:"binding_reason,omitempty"`
+
+	// Model and Provider durably identify the effective REVISE invocation.
+	// REVISE must retain the original JUDGE AgentID while still exposing the
+	// actual model/provider selected for this provider call.
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // FailureMode is one discovered way the plan fails (spec §24).

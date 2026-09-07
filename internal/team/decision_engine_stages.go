@@ -230,7 +230,7 @@ func (e *decisionEngine) runChallenges(
 	for i := len(challenges); i < policy.Challenge.Count; i++ {
 		challengerID := fmt.Sprintf("challenger-%d", i+1)
 		challenge, err := e.services.Challengers.RunChallenge(ctx, ChallengeRequest{
-			DecisionID: req.DecisionID, ChallengerID: challengerID,
+			DecisionID: req.DecisionID, ChallengerID: challengerID, DispatchCount: policy.Challenge.Count,
 			Packet: packet, Aggregate: aggregate, Prompt: prompt,
 			RoutingRole: adaptiveChallengeRole(
 				hintedChallengeRole(req.Policy.ChallengeRole, req.RoutingHints, req.Question),

@@ -2,6 +2,10 @@ package team
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -236,6 +240,250 @@ func TestJudgeRoleCapabilityRouting_WithoutPreferDistinctModelsIsUnaffected(t *t
 	if opinion2.AgentID != "judge-cand-y" {
 		t.Fatalf("judge-2 opinion.AgentID = %q, want %q (plain rank order, unaffected)", opinion2.AgentID, "judge-cand-y")
 	}
+}
+
+func TestJudgeRoleCapabilityRouting_HardModelFloorPlansAllOrdinals(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: 2}
+
+	first, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-1): %v", err)
+	}
+	second, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-2", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-2): %v", err)
+	}
+	if first.AgentID != "judge-cand-x" || second.AgentID != "judge-cand-z" {
+		t.Fatalf("bindings = [%q %q], want [judge-cand-x judge-cand-z]", first.AgentID, second.AgentID)
+	}
+	if got := judgeDiversitySummary([]DecisionOpinion{first, second}); got == nil || got.DistinctModelCount != 2 {
+		t.Fatalf("judge diversity = %#v, want two models", got)
+	}
+}
+
+func TestJudgeRoleCapabilityRouting_HardProviderFloorUsesCanonicalProvider(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctProviders: 2}
+
+	first, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-1): %v", err)
+	}
+	second, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-2", role))
+	if err != nil {
+		t.Fatalf("RunJudge(judge-2): %v", err)
+	}
+	if first.AgentID != "judge-cand-x" || second.AgentID != "judge-cand-z" {
+		t.Fatalf("bindings = [%q %q], want [judge-cand-x judge-cand-z]", first.AgentID, second.AgentID)
+	}
+	if first.Provider != "shared" || second.Provider != "distinct" {
+		t.Fatalf("providers = [%q %q], want canonical [shared distinct]", first.Provider, second.Provider)
+	}
+}
+
+func TestJudgeRoleCapabilityRouting_ProfileSyncFailurePrecedesProviderCall(t *testing.T) {
+	h := newJudgeRoutingHarness(t)
+	configureEventStoreSyncFailureForEventType(t, h.coordinator.eventStore, string(EventModelProfileResolved), 1, fmt.Errorf("injected decision profile sync failure"))
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role)); err == nil {
+		t.Fatal("expected model profile persistence failure")
+	}
+	if calls := h.candA.count() + h.candB.count() + h.candC.count(); calls != 0 {
+		t.Fatalf("provider calls after profile sync failure = %d, want 0", calls)
+	}
+}
+
+func TestDecisionRoutingDurableIdentityMatchesModelProfileTelemetry(t *testing.T) {
+	h := newJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	judgeRole := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+	challengeRole := &agent.ChallengeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+
+	opinions := []DecisionOpinion{
+		mustRunJudge(t, runners, "judge-1", judgeRole),
+		mustRunJudge(t, runners, "judge-2", judgeRole),
+	}
+	challenges := []DecisionChallenge{
+		mustRunChallenge(t, runners, "challenger-1", challengeRole),
+		mustRunChallenge(t, runners, "challenger-2", challengeRole),
+	}
+	revisions := make([]DecisionRevision, 0, len(opinions))
+	for _, opinion := range opinions {
+		revision, err := runners.RunRevision(context.Background(), RevisionRequest{
+			DecisionID: "dec-1", JudgeID: opinion.JudgeID, Original: opinion,
+			Prompt:      "You are judge " + opinion.JudgeID + " revising your own judgment once (round 2).",
+			RoutingRole: judgeRole,
+		})
+		if err != nil {
+			t.Fatalf("RunRevision(%s): %v", opinion.JudgeID, err)
+		}
+		if revision.AgentID != opinion.AgentID || revision.Model != opinion.Model || revision.Provider != opinion.Provider {
+			t.Fatalf("revision route = %#v, want original route agent=%q model=%q provider=%q", revision, opinion.AgentID, opinion.Model, opinion.Provider)
+		}
+		revisions = append(revisions, revision)
+	}
+	if len(challenges) != 2 {
+		t.Fatalf("challenges = %d, want 2", len(challenges))
+	}
+
+	events, err := h.coordinator.eventStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	profiles := 0
+	for _, event := range events {
+		if event.Type != string(EventModelProfileResolved) {
+			continue
+		}
+		var projection struct {
+			ModelID  string `json:"model_id"`
+			Provider string `json:"provider"`
+		}
+		if err := json.Unmarshal(event.Payload, &projection); err != nil {
+			t.Fatalf("decode model profile event: %v", err)
+		}
+		if projection.Provider == "" || projection.ModelID == "" {
+			t.Fatalf("incomplete model profile telemetry: %#v", projection)
+		}
+		profiles++
+	}
+	if profiles != 6 {
+		t.Fatalf("model profile events = %d, want 6 for JUDGE→CHALLENGE→REVISE", profiles)
+	}
+}
+
+func TestDecisionEngineRoutingDurableIdentityAndProfileOrder(t *testing.T) {
+	h := newJudgeRoutingHarness(t)
+	judgeResponse := `{"option_scores":[{"option_id":"migrate","criteria":{"cost":8,"risk":8}},{"option_id":"wait","criteria":{"cost":5,"risk":5}}],"preferred_option":"migrate","success_probability":0.7,"confidence":0.8}`
+	challengeResponse := `{"target_option":"migrate","strongest_countercase":"capacity risk","fragile_assumptions":["capacity holds"],"missing_evidence":[],"falsification_tests":["run capacity test"],"severity":0.4}`
+	revisionResponse := `{"revised_scores":[{"option_id":"migrate","criteria":{"cost":8,"risk":8}},{"option_id":"wait","criteria":{"cost":5,"risk":5}}],"revised_probability":0.7,"changed":false,"reason":"countercase does not change the judgment"}`
+	for _, provider := range []*fixedAnswerProvider{h.candA, h.candB, h.candC} {
+		provider.responses = []string{judgeResponse, challengeResponse, revisionResponse}
+	}
+
+	var mu sync.Mutex
+	profileCount, providerRequests := 0, 0
+	var orderErr error
+	h.coordinator.reportStatus = func(event StatusEvent) {
+		if event.Type != string(EventModelProfileResolved) {
+			return
+		}
+		mu.Lock()
+		profileCount++
+		mu.Unlock()
+	}
+	for _, provider := range []*fixedAnswerProvider{h.candA, h.candB, h.candC} {
+		provider.onChat = func() {
+			mu.Lock()
+			defer mu.Unlock()
+			providerRequests++
+			if profileCount < providerRequests && orderErr == nil {
+				orderErr = fmt.Errorf("provider request %d preceded model profile event %d", providerRequests, profileCount)
+			}
+		}
+	}
+
+	artifactStore, err := NewFileArtifactStore(h.coordinator.session.Workspace, h.coordinator.session.Workspace)
+	if err != nil {
+		t.Fatalf("NewFileArtifactStore: %v", err)
+	}
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	policy := enginePolicy(2)
+	policy.MaxRounds = 2
+	policy.Challenge = ChallengePolicy{Enabled: true, Count: 2}
+	policy.Revision = RevisionPolicy{Enabled: true}
+	policy.JudgeRole = &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+	policy.ChallengeRole = &agent.ChallengeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
+	req := engineRequest(policy)
+	req.DecisionID = "decision-routing-integration"
+	req.RunID = h.coordinator.executionRunID
+	engine := NewDecisionEngine(DecisionServices{
+		Judges: runners, Challengers: runners, Revisions: runners,
+		Journal: eventStoreJournal{store: h.coordinator.eventStore}, Store: artifactStore,
+	})
+	record, err := engine.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("decision engine Run: %v", err)
+	}
+	if len(record.Opinions) != 2 || len(record.Challenges) != 2 || len(record.Revisions) != 2 {
+		t.Fatalf("decision stages = opinions:%d challenges:%d revisions:%d, want 2/2/2", len(record.Opinions), len(record.Challenges), len(record.Revisions))
+	}
+	mu.Lock()
+	gotProfiles, gotRequests, gotOrderErr := profileCount, providerRequests, orderErr
+	mu.Unlock()
+	if gotOrderErr != nil {
+		t.Fatal(gotOrderErr)
+	}
+	if gotProfiles != gotRequests || gotRequests != 6 {
+		t.Fatalf("profile/request counts = %d/%d, want 6/6", gotProfiles, gotRequests)
+	}
+
+	events, err := h.coordinator.eventStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	profileProviders := make(map[string]string)
+	for _, event := range events {
+		if event.Type != string(EventModelProfileResolved) {
+			continue
+		}
+		var profile struct {
+			ModelID  string `json:"model_id"`
+			Provider string `json:"provider"`
+		}
+		if err := json.Unmarshal(event.Payload, &profile); err != nil {
+			t.Fatalf("decode profile event: %v", err)
+		}
+		profileProviders[profile.ModelID] = profile.Provider
+	}
+	for _, event := range events {
+		if event.Type != string(agent.EventDecisionOpinionSubmitted) &&
+			event.Type != string(agent.EventDecisionChallengeSubmitted) &&
+			event.Type != string(agent.EventDecisionRevisionSubmitted) {
+			continue
+		}
+		var durable decisionEvent
+		if err := json.Unmarshal(event.Payload, &durable); err != nil {
+			t.Fatalf("decode durable decision event: %v", err)
+		}
+		var agentID, modelID, provider string
+		switch event.Type {
+		case string(agent.EventDecisionOpinionSubmitted):
+			agentID, modelID, provider = durable.Opinion.AgentID, durable.Opinion.Model, durable.Opinion.Provider
+		case string(agent.EventDecisionChallengeSubmitted):
+			agentID, modelID, provider = durable.Challenge.AgentID, durable.Challenge.Model, durable.Challenge.Provider
+		case string(agent.EventDecisionRevisionSubmitted):
+			agentID, modelID, provider = durable.Revision.AgentID, durable.Revision.Model, durable.Revision.Provider
+		}
+		if agentID == "" || modelID == "" || provider == "" || profileProviders[modelID] != provider {
+			t.Fatalf("durable decision identity = agent:%q model:%q provider:%q, profiles=%v", agentID, modelID, provider, profileProviders)
+		}
+		if !strings.Contains(modelID, "/") {
+			t.Fatalf("durable decision model %q lost its named provider prefix", modelID)
+		}
+	}
+}
+
+func mustRunJudge(t *testing.T, runners *coordinatorDecisionRunners, judgeID string, role *agent.JudgeRolePolicy) DecisionOpinion {
+	t.Helper()
+	opinion, err := runners.RunJudge(context.Background(), judgeRequestFor(judgeID, role))
+	if err != nil {
+		t.Fatalf("RunJudge(%s): %v", judgeID, err)
+	}
+	return opinion
+}
+
+func mustRunChallenge(t *testing.T, runners *coordinatorDecisionRunners, challengerID string, role *agent.ChallengeRolePolicy) DecisionChallenge {
+	t.Helper()
+	challenge, err := runners.RunChallenge(context.Background(), challengeRequestFor(challengerID, role))
+	if err != nil {
+		t.Fatalf("RunChallenge(%s): %v", challengerID, err)
+	}
+	return challenge
 }
 
 // min-distinct-models must fail closed when the qualified pool cannot reach

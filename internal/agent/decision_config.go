@@ -318,6 +318,12 @@ func (p JudgeRolePolicy) Validate(independentJudgments int) error {
 		if p.EffectiveMinDistinctAgents() > 1 {
 			return fmt.Errorf("judge-role.pin conflicts with judge-role.min-distinct-agents > 1: a pin forces every judge to the same agent")
 		}
+		if p.MinDistinctModels > 1 {
+			return fmt.Errorf("judge-role.pin conflicts with judge-role.min-distinct-models > 1: a pin forces every judge to the same model")
+		}
+		if p.MinDistinctProviders > 1 {
+			return fmt.Errorf("judge-role.pin conflicts with judge-role.min-distinct-providers > 1: a pin forces every judge to the same provider")
+		}
 	}
 	return nil
 }
@@ -406,6 +412,12 @@ func (p ChallengeRolePolicy) Validate(challengeCount int, criteria []DecisionCri
 		}
 		if p.EffectiveMinDistinctAgents() > 1 {
 			return fmt.Errorf("challenge-role.pin conflicts with challenge-role.min-distinct-agents > 1: a pin forces every challenger to the same agent")
+		}
+		if p.MinDistinctModels > 1 {
+			return fmt.Errorf("challenge-role.pin conflicts with challenge-role.min-distinct-models > 1: a pin forces every challenger to the same model")
+		}
+		if p.MinDistinctProviders > 1 {
+			return fmt.Errorf("challenge-role.pin conflicts with challenge-role.min-distinct-providers > 1: a pin forces every challenger to the same provider")
 		}
 	}
 	if len(p.AdaptiveCapabilities) > 0 {

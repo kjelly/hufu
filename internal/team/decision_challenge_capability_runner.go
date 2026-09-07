@@ -34,7 +34,7 @@ func (r *coordinatorDecisionRunners) runChallengeViaCapabilityRouting(ctx contex
 	}
 	role := req.RoutingRole
 
-	chosen, def, pinned, err := resolveChallengeRoleCandidate(ctx, c, role, req.ChallengerID)
+	chosen, def, pinned, err := resolveChallengeRoleCandidate(ctx, c, role, req.ChallengerID, req.DispatchCount)
 	if err != nil {
 		return DecisionChallenge{}, err
 	}
@@ -58,7 +58,10 @@ func (r *coordinatorDecisionRunners) runChallengeViaCapabilityRouting(ctx contex
 	}
 	challenge.AgentID = chosen
 	challenge.Model = modelID
-	challenge.Provider = strings.TrimSpace(def.ProviderURL)
+	challenge.Provider, err = c.canonicalProviderKey(modelID)
+	if err != nil {
+		return DecisionChallenge{}, fmt.Errorf("resolve challenge provider identity: %w", err)
+	}
 	if pinned {
 		challenge.Pinned = true
 		challenge.BindingReason = role.Pin.Reason
@@ -71,58 +74,26 @@ func (r *coordinatorDecisionRunners) runChallengeViaCapabilityRouting(ctx contex
 // same named agent (still subject to authorization/required-capability
 // checks); otherwise it round-robins over the ranked qualified pool exactly
 // as resolveJudgeRoleCandidate does for JUDGE.
-func resolveChallengeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.ChallengeRolePolicy, challengerID string) (chosen string, def *agent.AgentDef, pinned bool, err error) {
+func resolveChallengeRoleCandidate(ctx context.Context, c *Coordinator, role *agent.ChallengeRolePolicy, challengerID string, requestedDispatchCount int) (chosen string, def *agent.AgentDef, pinned bool, err error) {
+	ordinal, err := challengerOrdinal(challengerID)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("challenge role routing: %w", err)
+	}
 	if pinnedAgent, pinnedDef, ok, err := resolvePinnedCandidate(ctx, c, "challenge", role.RequiredCapabilities, role.PreferredCapabilities, role.Pin); err != nil {
 		return "", nil, false, err
 	} else if ok {
 		return pinnedAgent, pinnedDef, true, nil
 	}
 
-	candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{
-		Required:  role.RequiredCapabilities,
-		Preferred: role.PreferredCapabilities,
-	})
+	dispatchCount := roleDispatchCount(ordinal, role.EffectiveMinDistinctAgents(), role.MinDistinctModels, role.MinDistinctProviders, requestedDispatchCount)
+	plan, err := resolveDecisionRoleBindingPlan(ctx, c, "challenge", role.RequiredCapabilities, role.PreferredCapabilities,
+		dispatchCount, role.EffectiveMinDistinctAgents(), role.MinDistinctModels, role.MinDistinctProviders,
+		role.PreferDistinctModels, role.PreferDistinctProviders)
 	if err != nil {
-		return "", nil, false, fmt.Errorf("challenge role routing: %w", err)
+		return "", nil, false, err
 	}
-	qualified := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.Score > 0 {
-			qualified = append(qualified, candidate.AgentID)
-		}
-	}
-	minDistinct := role.EffectiveMinDistinctAgents()
-	if len(qualified) < minDistinct {
-		return "", nil, false, fmt.Errorf(
-			"challenge role routing: %d qualified candidate(s) satisfy required capabilities %v, need at least %d (challenge-role.min-distinct-agents)",
-			len(qualified), role.RequiredCapabilities, minDistinct)
-	}
-	if role.MinDistinctModels > 0 {
-		if got := distinctModelCount(qualified, c.session.Agents); got < role.MinDistinctModels {
-			return "", nil, false, fmt.Errorf(
-				"challenge role routing: qualified pool spans %d distinct model(s), need at least %d (challenge-role.min-distinct-models)",
-				got, role.MinDistinctModels)
-		}
-	}
-	if role.MinDistinctProviders > 0 {
-		if got := distinctProviderCount(qualified, c.session.Agents); got < role.MinDistinctProviders {
-			return "", nil, false, fmt.Errorf(
-				"challenge role routing: qualified pool spans %d distinct provider(s), need at least %d (challenge-role.min-distinct-providers)",
-				got, role.MinDistinctProviders)
-		}
-	}
-	ordered := resolveRoleCandidateOrder(qualified, c.session.Agents, role.PreferDistinctModels, role.PreferDistinctProviders)
-
-	ordinal, err := challengerOrdinal(challengerID)
-	if err != nil {
-		return "", nil, false, fmt.Errorf("challenge role routing: %w", err)
-	}
-	chosen = ordered[(ordinal-1)%len(ordered)]
-	def = c.session.Agents[chosen]
-	if def == nil {
-		return "", nil, false, fmt.Errorf("challenge role routing: resolved worker %q is not a configured agent", chosen)
-	}
-	return chosen, def, false, nil
+	binding := plan[ordinal-1]
+	return binding.AgentID, binding.Def, false, nil
 }
 
 // runRevisionViaCapabilityRouting implements the capability-routed half of
@@ -152,6 +123,11 @@ func (r *coordinatorDecisionRunners) runRevisionViaCapabilityRouting(ctx context
 		return DecisionRevision{}, err
 	}
 	revision.AgentID = chosen
+	revision.Model = modelID
+	revision.Provider, err = c.canonicalProviderKey(modelID)
+	if err != nil {
+		return DecisionRevision{}, fmt.Errorf("resolve revision provider identity: %w", err)
+	}
 	if pinned {
 		revision.Pinned = true
 		revision.BindingReason = reason
@@ -180,7 +156,7 @@ func (r *coordinatorDecisionRunners) runRevisionViaCapabilityRouting(ctx context
 func revisionCandidate(ctx context.Context, c *Coordinator, role *agent.JudgeRolePolicy, req RevisionRequest) (chosen string, def *agent.AgentDef, pinned bool, reason string, err error) {
 	original := strings.TrimSpace(req.Original.AgentID)
 	if original == "" {
-		chosen, def, pinned, err = resolveJudgeRoleCandidate(ctx, c, role, req.JudgeID)
+		chosen, def, pinned, err = resolveJudgeRoleCandidate(ctx, c, role, req.JudgeID, 0)
 		if pinned {
 			reason = role.Pin.Reason
 		}

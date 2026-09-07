@@ -1,11 +1,177 @@
 package team
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+type decisionRoleBinding struct {
+	AgentID  string
+	Def      *agent.AgentDef
+	Model    string
+	Provider string
+}
+
+// resolveDecisionRoleBindingPlan resolves every ordinal before any ordinal is
+// dispatched. Hard diversity floors are properties of the resulting binding
+// plan, not of the candidate pool, so a pool with X,X,Y must produce X,Y for
+// two dispatches when two distinct models are required.
+func resolveDecisionRoleBindingPlan(
+	ctx context.Context,
+	c *Coordinator,
+	roleName string,
+	required, preferred []string,
+	dispatchCount, minAgents, minModels, minProviders int,
+	preferModels, preferProviders bool,
+) ([]decisionRoleBinding, error) {
+	if c == nil || c.session == nil {
+		return nil, fmt.Errorf("%s role routing requires an active session", roleName)
+	}
+	candidates, err := c.ResolveCapabilityCandidates(ctx, CapabilityQuery{Required: required, Preferred: preferred})
+	if err != nil {
+		return nil, fmt.Errorf("%s role routing: %w", roleName, err)
+	}
+	qualified := make([]decisionRoleBinding, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Score <= 0 {
+			continue
+		}
+		def := c.session.Agents[candidate.AgentID]
+		if def == nil {
+			return nil, fmt.Errorf("%s role routing: resolved worker %q is not a configured agent", roleName, candidate.AgentID)
+		}
+		model := strings.TrimSpace(c.resolveAgentModel(def, ""))
+		if model == "" {
+			return nil, fmt.Errorf("%s role routing: resolved worker %q has no configured model", roleName, candidate.AgentID)
+		}
+		provider, err := c.canonicalProviderKey(model)
+		if err != nil {
+			return nil, fmt.Errorf("%s role routing: resolve provider for worker %q: %w", roleName, candidate.AgentID, err)
+		}
+		qualified = append(qualified, decisionRoleBinding{AgentID: candidate.AgentID, Def: def, Model: model, Provider: provider})
+	}
+	if len(qualified) < max(1, minAgents) {
+		return nil, fmt.Errorf(
+			"%s role routing: %d qualified candidate(s) satisfy required capabilities %v, need at least %d (%s-role.min-distinct-agents)",
+			roleName, len(qualified), required, max(1, minAgents), roleName)
+	}
+	if dispatchCount < 1 {
+		return nil, fmt.Errorf("%s role routing: dispatch count must be positive", roleName)
+	}
+	ordered := orderDecisionRoleBindings(qualified, preferModels, preferProviders)
+	plan := make([]decisionRoleBinding, 0, dispatchCount)
+	var buildPlan func(int) bool
+	buildPlan = func(ordinal int) bool {
+		if ordinal == dispatchCount {
+			diversity := decisionRoleBindingDiversity(plan)
+			return diversity.DistinctAgentCount >= max(1, minAgents) &&
+				diversity.DistinctModelCount >= minModels &&
+				diversity.DistinctProviderCount >= minProviders
+		}
+		desired := ordinal % len(ordered)
+		for offset := range len(ordered) {
+			index := (desired + offset) % len(ordered)
+			candidate := ordered[index]
+			remaining := dispatchCount - ordinal - 1
+			if !decisionRoleBindingCanSatisfy(plan, candidate, ordered, remaining, minAgents, minModels, minProviders) {
+				continue
+			}
+			plan = append(plan, candidate)
+			if buildPlan(ordinal + 1) {
+				return true
+			}
+			plan = plan[:len(plan)-1]
+		}
+		return false
+	}
+	if !buildPlan(0) {
+		return nil, fmt.Errorf("%s role routing: no binding plan satisfies the configured diversity floors", roleName)
+	}
+	if got := decisionRoleBindingDiversity(plan); got.DistinctAgentCount < max(1, minAgents) ||
+		got.DistinctModelCount < minModels || got.DistinctProviderCount < minProviders {
+		return nil, fmt.Errorf("%s role routing: binding plan achieved insufficient diversity: agents=%d models=%d providers=%d", roleName, got.DistinctAgentCount, got.DistinctModelCount, got.DistinctProviderCount)
+	}
+	return plan, nil
+}
+
+func (c *Coordinator) canonicalProviderKey(modelID string) (string, error) {
+	if c == nil || c.providerManager == nil {
+		return "", fmt.Errorf("provider manager unavailable")
+	}
+	policy, err := c.providerManager.ResolveProviderExecutionPolicy(modelID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(policy.ProviderKey) == "" {
+		return "", fmt.Errorf("provider identity unavailable for model %q", modelID)
+	}
+	return strings.TrimSpace(policy.ProviderKey), nil
+}
+
+func orderDecisionRoleBindings(pool []decisionRoleBinding, preferModels, preferProviders bool) []decisionRoleBinding {
+	if !preferModels && !preferProviders {
+		return pool
+	}
+	seenModels := map[string]bool{}
+	seenProviders := map[string]bool{}
+	fresh := make([]decisionRoleBinding, 0, len(pool))
+	repeat := make([]decisionRoleBinding, 0, len(pool))
+	for _, binding := range pool {
+		isFresh := (preferModels && !seenModels[binding.Model]) || (preferProviders && !seenProviders[binding.Provider])
+		if isFresh {
+			fresh = append(fresh, binding)
+		} else {
+			repeat = append(repeat, binding)
+		}
+		seenModels[binding.Model] = true
+		seenProviders[binding.Provider] = true
+	}
+	return append(fresh, repeat...)
+}
+
+func decisionRoleBindingCanSatisfy(selected []decisionRoleBinding, candidate decisionRoleBinding, pool []decisionRoleBinding, remaining, minAgents, minModels, minProviders int) bool {
+	selected = append(selected, candidate)
+	if !decisionRoleFloorReachable(selected, pool, remaining, minAgents, func(binding decisionRoleBinding) string { return binding.AgentID }) {
+		return false
+	}
+	if !decisionRoleFloorReachable(selected, pool, remaining, minModels, func(binding decisionRoleBinding) string { return binding.Model }) {
+		return false
+	}
+	return decisionRoleFloorReachable(selected, pool, remaining, minProviders, func(binding decisionRoleBinding) string { return binding.Provider })
+}
+
+func decisionRoleFloorReachable(selected, pool []decisionRoleBinding, remaining, floor int, key func(decisionRoleBinding) string) bool {
+	if floor <= 0 {
+		return true
+	}
+	seen := make(map[string]bool, len(selected))
+	for _, binding := range selected {
+		seen[key(binding)] = true
+	}
+	if len(seen) >= floor {
+		return true
+	}
+	possible := make(map[string]bool, len(seen)+len(pool))
+	for value := range seen {
+		possible[value] = true
+	}
+	for _, binding := range pool {
+		possible[key(binding)] = true
+	}
+	return len(possible) >= floor && len(seen)+remaining >= floor
+}
+
+func decisionRoleBindingDiversity(bindings []decisionRoleBinding) BindingDiversitySummary {
+	identities := make([]bindingIdentity, 0, len(bindings))
+	for _, binding := range bindings {
+		identities = append(identities, bindingIdentity{AgentID: binding.AgentID, Model: binding.Model, Provider: binding.Provider})
+	}
+	return computeBindingDiversitySummary(identities)
+}
 
 // DiversityPolicy extensions beyond MinDistinctAgents (spec.md v2 §13, §32).
 //
@@ -16,6 +182,11 @@ import (
 // to define "distinct capability groups" without inventing a new taxonomy
 // layer — a real product decision, not a wiring gap.
 
+// The following helpers are retained for the pure legacy ranking tests and
+// callers that operate only on declarative AgentDef data. Capability-routed
+// decision execution must use resolveDecisionRoleBindingPlan above, because
+// only that path has ProviderManager's canonical effective provider identity.
+//
 // resolveRoleCandidateOrder returns pool reordered so that, when at least
 // one of preferModels/preferProviders is set, a candidate introducing a
 // model or provider value not yet seen (per the enabled dimensions) sorts

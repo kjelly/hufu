@@ -572,6 +572,24 @@ func TestDecisionPolicyPinRequiresProfileGateAndNoDistinctFloor(t *testing.T) {
 	if err := policy.Validate(); err == nil {
 		t.Fatal("judge-role.pin conflicting with min-distinct-agents > 1 must fail validation")
 	}
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: 2, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role.pin conflicting with min-distinct-models > 1 must fail validation")
+	}
+	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctProviders: 2, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("judge-role.pin conflicting with min-distinct-providers > 1 must fail validation")
+	}
+
+	policy.Challenge = ChallengePolicy{Enabled: true, Count: 2}
+	policy.ChallengeRole = &ChallengeRolePolicy{RequiredCapabilities: []string{"adversarial-analysis"}, MinDistinctModels: 2, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("challenge-role.pin conflicting with min-distinct-models > 1 must fail validation")
+	}
+	policy.ChallengeRole = &ChallengeRolePolicy{RequiredCapabilities: []string{"adversarial-analysis"}, MinDistinctProviders: 2, Pin: validPin}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("challenge-role.pin conflicting with min-distinct-providers > 1 must fail validation")
+	}
 
 	// An invalid pin (no reason) must fail even with the gate enabled.
 	policy.JudgeRole = &JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, Pin: &RoutingPin{Agent: "security-reviewer"}}

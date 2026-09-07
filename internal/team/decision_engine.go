@@ -23,8 +23,12 @@ type JudgeRequest struct {
 	DecisionID string
 	Round      int
 	JudgeID    string
-	Context    JudgeContext
-	Packet     DecisionEvidencePacket
+	// DispatchCount is the complete JUDGE fan-out. Capability-routed runners
+	// use it to build and validate the full binding plan before invoking any
+	// provider.
+	DispatchCount int
+	Context       JudgeContext
+	Packet        DecisionEvidencePacket
 	// RoutingRole selects real capability-routed execution for this judge
 	// when non-nil (spec.md v2 §17; spec2.md PR-3). Unlike
 	// ReferenceEvidenceRequest, JudgeRequest is never marshaled into a
@@ -569,7 +573,7 @@ func (e *decisionEngine) runJudgeWithRepair(
 			return DecisionOpinion{}, fmt.Errorf("decision %s: no judge runner configured", req.DecisionID)
 		}
 		opinion, err := e.services.Judges.RunJudge(ctx, JudgeRequest{
-			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, Context: judgeCtx, Packet: packet,
+			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, DispatchCount: policy.IndependentJudgments, Context: judgeCtx, Packet: packet,
 			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.Question),
 		})
 		if err != nil {

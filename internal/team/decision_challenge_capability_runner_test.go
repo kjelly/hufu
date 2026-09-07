@@ -92,6 +92,42 @@ func TestChallengeRoleCapabilityRouting_FailsClosedWhenPoolTooSmall(t *testing.T
 	}
 }
 
+func TestChallengeRoleCapabilityRouting_HardModelFloorPlansAllOrdinals(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.ChallengeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctModels: 2}
+
+	first, err := runners.RunChallenge(context.Background(), challengeRequestFor("challenger-1", role))
+	if err != nil {
+		t.Fatalf("RunChallenge(challenger-1): %v", err)
+	}
+	second, err := runners.RunChallenge(context.Background(), challengeRequestFor("challenger-2", role))
+	if err != nil {
+		t.Fatalf("RunChallenge(challenger-2): %v", err)
+	}
+	if first.AgentID != "judge-cand-x" || second.AgentID != "judge-cand-z" {
+		t.Fatalf("bindings = [%q %q], want [judge-cand-x judge-cand-z]", first.AgentID, second.AgentID)
+	}
+}
+
+func TestChallengeRoleCapabilityRouting_HardProviderFloorUsesCanonicalProvider(t *testing.T) {
+	h := modelSharingJudgeRoutingHarness(t)
+	runners := newDecisionRunners(h.coordinator, "task-1")
+	role := &agent.ChallengeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}, MinDistinctProviders: 2}
+
+	first, err := runners.RunChallenge(context.Background(), challengeRequestFor("challenger-1", role))
+	if err != nil {
+		t.Fatalf("RunChallenge(challenger-1): %v", err)
+	}
+	second, err := runners.RunChallenge(context.Background(), challengeRequestFor("challenger-2", role))
+	if err != nil {
+		t.Fatalf("RunChallenge(challenger-2): %v", err)
+	}
+	if first.Provider != "shared" || second.Provider != "distinct" {
+		t.Fatalf("providers = [%q %q], want canonical [shared distinct]", first.Provider, second.Provider)
+	}
+}
+
 func TestChallengerOrdinal(t *testing.T) {
 	cases := []struct {
 		id      string
@@ -157,6 +193,9 @@ func TestRevisionCapabilityRouting_ReusesOriginalJudgeBinding(t *testing.T) {
 	}
 	if revision.AgentID != opinion.AgentID {
 		t.Fatalf("revision.AgentID = %q, want it to durably record the same binding as the original opinion %q", revision.AgentID, opinion.AgentID)
+	}
+	if revision.Model != opinion.Model || revision.Provider != opinion.Provider {
+		t.Fatalf("revision route = %q/%q, want original effective route %q/%q", revision.Model, revision.Provider, opinion.Model, opinion.Provider)
 	}
 
 	if got := h.candB.count(); got <= beforeB {
