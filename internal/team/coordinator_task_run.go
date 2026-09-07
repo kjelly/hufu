@@ -1295,6 +1295,7 @@ retryLoop:
 							}
 							repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 								Attempt:         1,
+								InvocationRunID: c.executionRunID,
 								Success:         repairSuccess,
 								Prompt:          repairPrompt,
 								SubmittedResult: typedRes,
@@ -1318,6 +1319,7 @@ retryLoop:
 								}
 								repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 									Attempt:         2,
+									InvocationRunID: c.executionRunID,
 									Success:         repairSuccess,
 									Prompt:          schemaRepairPrompt,
 									SubmittedResult: typedRes,
@@ -2396,6 +2398,7 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 	if prior == nil || !prior.Success {
 		provenance.History = append(provenance.History, RepairAttemptProvenance{
 			Attempt:         provenance.RepairAttempts,
+			InvocationRunID: c.executionRunID,
 			Success:         true,
 			SubmittedResult: result,
 		})
@@ -2445,9 +2448,10 @@ func (c *Coordinator) persistProtocolRepairPreparationFailure(item *TodoItem, ag
 
 	repairHistory := append([]RepairAttemptProvenance(nil), history...)
 	repairHistory = append(repairHistory, RepairAttemptProvenance{
-		Attempt:       attempt,
-		Prompt:        prompt,
-		FailureReason: repairFailurePreparation,
+		Attempt:         attempt,
+		InvocationRunID: c.executionRunID,
+		Prompt:          prompt,
+		FailureReason:   repairFailurePreparation,
 	})
 	repairAttempts := max(priorAttempts, attempt)
 	for _, prior := range repairHistory {
@@ -2636,9 +2640,10 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			runErr = fmt.Errorf("prepare protocol repair prompt: %w", prepareErr)
 			repairReason = repairFailurePreparation
 			repairHistory = append(repairHistory, RepairAttemptProvenance{
-				Attempt:       attempt,
-				Prompt:        repairPrompt,
-				FailureReason: repairFailurePreparation,
+				Attempt:         attempt,
+				InvocationRunID: c.executionRunID,
+				Prompt:          repairPrompt,
+				FailureReason:   repairFailurePreparation,
 			})
 			break
 		}
@@ -2653,6 +2658,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 		repairHistory = append(repairHistory, RepairAttemptProvenance{
 			Attempt:         attempt,
+			InvocationRunID: c.executionRunID,
 			Success:         repairSuccess,
 			Prompt:          repairPrompt,
 			SubmittedResult: typedRes,

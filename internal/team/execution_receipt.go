@@ -43,7 +43,11 @@ func (r RepairFailureReason) IsProtocolRepairFailure() bool {
 // turn preserves the distinction between an initial schema failure and a
 // second schema-only repair outcome in the durable receipt.
 type RepairAttemptProvenance struct {
-	Attempt         int                 `json:"attempt"`
+	Attempt int `json:"attempt"`
+	// InvocationRunID identifies the public invocation that performed this
+	// repair. Receipt.RunID intentionally remains the original task occurrence
+	// identity, which may belong to an earlier run during resume.
+	InvocationRunID string              `json:"invocation_run_id,omitempty"`
 	Success         bool                `json:"success"`
 	Prompt          string              `json:"prompt,omitempty"`
 	SubmittedResult *TaskResult         `json:"submitted_result,omitempty"`

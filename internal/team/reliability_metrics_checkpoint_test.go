@@ -193,6 +193,36 @@ func TestMetricsIncludeOutcomeReliabilitySignals(t *testing.T) {
 	}
 }
 
+func TestMetricsScopeProtocolRepairsToInvocationRun(t *testing.T) {
+	tracker := NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resumed repair"}})[0]
+	item.ExecutionReceipts = []ExecutionReceipt{{
+		RunID: "run-A",
+		RepairProvenance: &RepairProvenance{
+			Attempted: true,
+			Success:   true,
+			History: []RepairAttemptProvenance{
+				{Attempt: 1, InvocationRunID: "run-A", FailureReason: RepairFailureInvalidSchema},
+				{Attempt: 2, InvocationRunID: "run-B", Success: true},
+			},
+		},
+	}}
+	c := &Coordinator{taskTracker: tracker, executionRunID: "run-B"}
+	metrics := c.Metrics()
+	if metrics.ProtocolRepairsAttempted != 1 || metrics.ProtocolRepairsSucceeded != 1 {
+		t.Fatalf("run-B protocol repairs = %d/%d, want 1/1", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+	}
+	if metrics.ProtocolRepairFailuresByReason[RepairFailureInvalidSchema] != 0 {
+		t.Fatalf("run-B inherited run-A repair failures: %#v", metrics.ProtocolRepairFailuresByReason)
+	}
+
+	c.executionRunID = "run-C"
+	metrics = c.Metrics()
+	if metrics.ProtocolRepairsAttempted != 0 || metrics.ProtocolRepairsSucceeded != 0 {
+		t.Fatalf("run-C inherited prior repair history: %d/%d", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+	}
+}
+
 func TestMetricsIncludeWP17ContractAndVerifierSignals(t *testing.T) {
 	tracker := NewTaskTracker()
 	tracker.TodoList().Restore([]*TodoItem{

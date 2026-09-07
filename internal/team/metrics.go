@@ -66,7 +66,7 @@ func (c *Coordinator) Metrics() RunMetrics {
 	}
 	metrics.TasksByCriterion = make(map[string]int)
 	if c.taskTracker != nil {
-		accumulateTodoMetrics(&metrics, c.taskTracker.TodoList().Items())
+		accumulateTodoMetrics(&metrics, c.taskTracker.TodoList().Items(), c.executionRunID)
 		accumulateToolDispositionMetrics(&metrics, c.taskTracker.TodoList().Items(), c.executionRunID)
 		metrics.ProtocolRepairsAttempted += int(c.coordinatorProtocolRepairsAttempt.Load())
 		metrics.ProtocolRepairsSucceeded += int(c.coordinatorProtocolRepairsSuccess.Load())
@@ -158,7 +158,7 @@ func (c *Coordinator) retrySuppressionsFromEvents() (map[string]int, bool) {
 	return counts, found
 }
 
-func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
+func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem, runID string) {
 	for _, item := range items {
 		if item == nil {
 			continue
@@ -180,7 +180,7 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem) {
 		accumulateVerificationMetrics(metrics, item)
 		accumulateStepBudgetMetrics(metrics, item)
 		for _, receipt := range item.ExecutionReceipts {
-			accumulateProtocolRepairMetrics(metrics, receipt.RepairProvenance)
+			accumulateProtocolRepairMetrics(metrics, receipt, runID)
 		}
 		metrics.ReplayAttempts += item.Retries
 		if item.RecoveryState != "" && item.RecoveryState != RecoveryStateNotStarted {
@@ -332,14 +332,52 @@ func accumulateStepBudgetMetrics(metrics *RunMetrics, item *TodoItem) {
 	}
 }
 
-func accumulateProtocolRepairMetrics(metrics *RunMetrics, provenance *RepairProvenance) {
+func accumulateProtocolRepairMetrics(metrics *RunMetrics, receipt ExecutionReceipt, runID string) {
+	provenance := receipt.RepairProvenance
 	if provenance == nil || !provenance.Attempted {
 		return
 	}
-	metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(provenance)
-	if provenance.Success {
-		metrics.ProtocolRepairsSucceeded++
+	if runID == "" {
+		metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(provenance)
+		if provenance.Success {
+			metrics.ProtocolRepairsSucceeded++
+		}
+		accumulateProtocolRepairFailureReasons(metrics, provenance)
+		return
 	}
+	current := RepairProvenance{Attempted: true}
+	for _, attempt := range provenance.History {
+		// New attempts carry the invocation identity. Legacy attempts have no
+		// such field and can only be attributed safely when the occurrence
+		// receipt itself belongs to this run; this deliberately excludes an old
+		// occurrence being repaired during a later invocation.
+		if attempt.InvocationRunID != runID && (attempt.InvocationRunID != "" || receipt.RunID != runID) {
+			continue
+		}
+		current.History = append(current.History, attempt)
+	}
+	if len(current.History) == 0 {
+		if receipt.RunID != runID {
+			return
+		}
+		current = *provenance
+		metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(&current)
+		if current.Success {
+			metrics.ProtocolRepairsSucceeded++
+		}
+		accumulateProtocolRepairFailureReasons(metrics, &current)
+		return
+	}
+	for _, attempt := range current.History {
+		if attempt.Success {
+			metrics.ProtocolRepairsSucceeded++
+		}
+	}
+	metrics.ProtocolRepairsAttempted += protocolRepairAttemptCount(&current)
+	accumulateProtocolRepairFailureReasons(metrics, &current)
+}
+
+func accumulateProtocolRepairFailureReasons(metrics *RunMetrics, provenance *RepairProvenance) {
 	for _, attempt := range provenance.History {
 		if attempt.FailureReason != "" {
 			metrics.ProtocolRepairFailuresByReason[attempt.FailureReason]++

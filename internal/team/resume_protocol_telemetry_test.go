@@ -270,3 +270,94 @@ func TestResumeProtocolRepairSecondProfileAppendFailureMakesNoProviderRequest(t 
 		t.Fatalf("first provider tools = %v, want result-only surface", requestTools[0])
 	}
 }
+
+func TestResumeProtocolRepairSeparatesOccurrenceAndInvocationRuns(t *testing.T) {
+	first, _, provider, firstStore := newResumedProtocolTelemetryCoordinator(t)
+	workspace := first.session.Workspace
+	first.saveCheckpoint()
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close run-A event store: %v", err)
+	}
+	first.eventStore = nil
+
+	checkpoint := LoadSession(workspace)
+	if checkpoint == nil || len(checkpoint.Tasks) != 1 || checkpoint.Tasks[0].Status != TaskProtocolIncomplete {
+		t.Fatalf("checkpoint = %#v, want one protocol-incomplete task", checkpoint)
+	}
+	const occurrenceRunID = "run-resumed-protocol-telemetry"
+	checkpoint.Tasks[0].ExecutionReceipt = &ExecutionReceipt{
+		RunID:   occurrenceRunID,
+		TaskID:  checkpoint.Tasks[0].ID,
+		Attempt: 1,
+	}
+	if err := SaveSession(workspace, checkpoint); err != nil {
+		t.Fatalf("save durable run-A receipt: %v", err)
+	}
+	second := &Coordinator{
+		session:                 first.session,
+		projectDir:              workspace,
+		providerManager:         first.providerManager,
+		modelProfileRuntime:     NewModelProfileRuntime(first.providerManager, false),
+		coreTools:               agent.BuildAllAgentTools(workspace),
+		taskTracker:             NewTaskTracker(),
+		reportStatus:            provider.recordStatus,
+		providerBoundaryStart:   func(context.Context, string) error { return nil },
+		providerBoundaryAbort:   func() error { return nil },
+		providerBoundaryStarted: true,
+	}
+	second.SetSessionData(checkpoint)
+	ctx, end, err := second.beginPublicInvocationExecutionRun(context.Background())
+	if err != nil {
+		t.Fatalf("begin run-B: %v", err)
+	}
+	defer end()
+	runB := second.executionRunID
+	if runB == "" || runB == checkpoint.Tasks[0].ExecutionReceipt.RunID {
+		t.Fatalf("run-B identity = %q, occurrence run = %q", runB, checkpoint.Tasks[0].ExecutionReceipt.RunID)
+	}
+	if _, err := second.ResumeInterruptedTasks(ctx); err != nil {
+		t.Fatalf("ResumeInterruptedTasks: %v", err)
+	}
+
+	updated := second.taskTracker.TodoList().Items()[0]
+	if updated.ExecutionReceipt == nil || updated.ExecutionReceipt.RunID != checkpoint.Tasks[0].ExecutionReceipt.RunID {
+		t.Fatalf("receipt occurrence run = %#v, want run-A", updated.ExecutionReceipt)
+	}
+	provenance := updated.ExecutionReceipt.RepairProvenance
+	if provenance == nil || len(provenance.History) != 2 {
+		t.Fatalf("repair provenance = %#v, want two attempts", provenance)
+	}
+	for _, attempt := range provenance.History {
+		if attempt.InvocationRunID != runB {
+			t.Fatalf("repair attempt invocation run = %q, want run-B %q", attempt.InvocationRunID, runB)
+		}
+	}
+	if second.contextRunID() != runB {
+		t.Fatalf("contextRunID = %q, want run-B %q", second.contextRunID(), runB)
+	}
+	metrics := second.Metrics()
+	if metrics.ProtocolRepairsAttempted != 2 || metrics.ProtocolRepairsSucceeded != 1 {
+		t.Fatalf("run-B metrics = %d/%d, want 2/1", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+	}
+
+	events, err := second.eventStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("read run events: %v", err)
+	}
+	profileEvents := 0
+	for _, event := range events {
+		if event.Type == string(EventModelProfileResolved) {
+			profileEvents++
+			if event.RunID != runB {
+				t.Fatalf("model profile event run = %q, want run-B %q", event.RunID, runB)
+			}
+		}
+	}
+	if profileEvents != 2 {
+		t.Fatalf("run-B model profile events = %d, want 2", profileEvents)
+	}
+	_, profiles, orderErr := provider.snapshot()
+	if orderErr != nil || len(profiles) != 2 {
+		t.Fatalf("provider profile reports = %d, order error = %v", len(profiles), orderErr)
+	}
+}
