@@ -1,619 +1,1442 @@
-# Hufu Context Router 未完成工作規格
+# Hufu Strategic Decision Discipline Runtime Specification
+## 將《孫子兵法商學院》可實證化原則導入 Hufu Runtime
 
-## 1. 文件目的
-
-本文件定義目前 Context Router 實作仍需完成的功能、runtime 契約、持久化要求與驗收條件。完成本文件要求後，Hufu 必須能依據 agent、phase、attempt、trigger、failure evidence 與 environment，為每一次模型呼叫建立最小充分、可解釋、可重播且不洩漏敏感內容的 context。
-
-現有程式已具備以下基礎，實作時應直接沿用：
-
-- typed context compiler 與 required/optional budget semantics；
-- `ContextRequest`、deterministic query/fingerprint 基礎；
-- canonical context repository 與 hybrid retrieval；
-- candidate/inject K 與 learning mode ranking；
-- activation metadata eligibility 基礎；
-- worker retry 的 per-attempt route/compile；
-- general context manifest、receipt/session/event/JSON/report 的部分接線；
-- skill summary/full fallback 基礎；
-- typed dependency result projection。
-
-實作不得建立第二套 memory repository，不得繞過既有 tool policy、execution receipt、objective verification、recovery disposition、anti-thrashing、event store 或 session checkpoint。
+> Status: Draft implementation specification
+> Target: `github.com/kjelly/hufu`
+> Compatibility intent: **extend current execution semantics; do not replace scheduler/workflow/verification architecture**
+> Design rule: **Runtime owns procedure; agents own judgment.**
 
 ---
 
-## 2. 完成交付定義
+# 1. Objective
 
-以下條件必須同時成立：
-
-1. coordinator、DAG worker、direct-agent、nested `request_agent`、extra-model worker、retry、repair 與所有 auxiliary LLM 呼叫都建立 purpose-specific `ContextRequest`。
-2. 每一次實際模型呼叫都必須先經 context routing、compiler budget、secret redaction 與 context manifest persistence。
-3. 每一次 deterministic fallback 都必須留下可區分的 no-model/fallback manifest decision。
-4. task/session/event/receipt/journal/branch replay/JSON/report/TUI 對 manifest 的投影一致。
-5. VERIFY phase 只取得驗證所需的 typed evidence，不注入 raw transcript 或無條件 generic history。
-6. assigned、forced、auto-selected skill 都遵守 progressive disclosure，且 mandatory skill load 由 runtime 強制。
-7. tool failure 能在下一個 model turn 取得 bounded recovery context，並提供 policy-gated JIT context tools。
-8. activation policy 具有 typed schema/index、outcome attribution、candidate policy、shadow comparison、adopt 與 rollback。
-9. 所有 execution-path coverage matrix 項目都有通過的自動化測試。
-10. `go test ./...`、`go vet ./...`、`golangci-lint run` 全部成功且無錯誤。
-
----
-
-## 3. ContextRequest 契約補全
-
-### 3.1 Trigger 集合
-
-擴充 `internal/team/context_request.go`：
-
-```go
-const (
-    ContextTriggerCoordinatorStart ContextTrigger = "coordinator_start"
-    ContextTriggerContinuation     ContextTrigger = "continuation"
-    ContextTriggerTaskDispatch     ContextTrigger = "task_dispatch"
-    ContextTriggerRetry            ContextTrigger = "retry"
-    ContextTriggerToolFailure      ContextTrigger = "tool_failure"
-    ContextTriggerSidecarTask      ContextTrigger = "sidecar_task"
-    ContextTriggerSkillMatch       ContextTrigger = "skill_match"
-    ContextTriggerGuardReview      ContextTrigger = "guard_review"
-    ContextTriggerPlanReview       ContextTrigger = "plan_review"
-    ContextTriggerJudge            ContextTrigger = "judge"
-    ContextTriggerSkeptic          ContextTrigger = "skeptic"
-    ContextTriggerRepair           ContextTrigger = "repair"
-)
-```
-
-`Validate()` 必須依 trigger 驗證必要欄位：
-
-| Trigger | 必要欄位 |
-| --- | --- |
-| coordinator start / continuation | run ID、goal、agent role、phase |
-| task dispatch | run ID、task ID、attempt、goal、agent identity、phase |
-| retry | task dispatch 欄位、`Failure`、attempt > 1 |
-| tool failure | task ID、attempt、tool name、error class、tool input hash |
-| skill match | run ID、goal、agent role |
-| guard review | agent、tool name、tool input hash、guard component |
-| plan review | task ID、plan/revision identity、verification criteria |
-| judge | task ID、candidate identities、selection contract |
-| skeptic | task ID、verification contract、candidate identity |
-| repair | task ID、approved failure evidence、recovery disposition |
-
-### 3.2 Determinism 與敏感資料
-
-- `RequestID` 必須由 canonical、已正規化且不含 secret 明文的欄位產生。
-- `Fingerprint()` 必須包含 trigger、phase、attempt、agent role、environment、failure class 與 model-call purpose。
-- extra-model request identity 必須包含穩定的 model execution identity，避免相同 task/agent/attempt 的 manifest 相互覆寫。
-- `RetrievalQuery()` 只可包含 redacted、bounded evidence；不得包含 raw tool input、完整 tool output、完整 transcript 或 credential。
-- manifest 只保存 request/query hash，不保存完整 query。
-
-### 3.3 測試
-
-- 每種 trigger 的 valid/invalid table test；
-- 相同 canonical request 產生相同 fingerprint；
-- attempt、trigger、failure class、environment、model execution identity 改變時 fingerprint 必須改變；
-- secret、raw tool input 與 raw transcript 不得出現在 request JSON、manifest、event 或 report。
-
----
-
-## 4. Execution path parity
-
-### 4.1 共用 builder 與 compiler
-
-所有 worker 類路徑必須使用 `buildWorkerContextInput(...)` 與同一 compiler contract：
-
-- normal DAG worker；
-- direct-agent；
-- nested `request_agent`；
-- extra-model isolated worker；
-- plan-only worker；
-- approved-plan execution；
-- retry attempt；
-- crash-resumed task。
-
-不得在 caller 中重新把 goal、constraints、plan、verification、runtime context 或 skill content 拼成 giant prompt。
-
-### 4.2 Extra-model identity 與投影
-
-每個 extra-model execution 必須擁有唯一且穩定的：
-
-- request ID；
-- manifest fingerprint；
-- receipt identity；
-- model/provider identity；
-- event idempotency key。
-
-多個 model 共用 todo ID 時，manifest 與 receipt 必須以 `(run_id, task_id, attempt, model_execution_id)` 區分，不得以 request ID 或 attempt 單獨覆寫其他 model 的資料。
-
-isolated coordinator 產生的 manifest、receipt、usage 與 failure evidence 必須合併回 canonical parent event lineage，並能由 session reload、event replay 與 branch checkout 還原。
-
-### 4.3 驗收
-
-- 對同一 `TaskDef`，DAG/direct/nested/extra-model 的 normative fragments 必須一致；
-- goal、constraints、approved plan、instructions、verification 與 runtime context 各只出現一次；
-- plan-only prompt 不得含 execute/result instructions；
-- approved-plan execution 必須將 plan 標為 required normative item；
-- 同時執行三個 extra models 時，必須留下三份獨立 manifest 與 receipt；
-- crash-resume 不得覆寫已完成 attempt 或重新播放已完成 side effect。
-
----
-
-## 5. Context Router eligibility 完整化
-
-### 5.1 Activation helper
-
-在 canonical context owner 提供共用 parser/validator，支援：
+把下列 10 個實證／理論支持較強的策略原則，轉成 Hufu 可執行的 runtime discipline：
 
 ```text
-activation.phases
-activation.triggers
-activation.roles
-activation.capabilities
-activation.tools
-activation.error_classes
-activation.environment
+R1  Assess Before Commit
+R2  Premortem Before High-Risk Action
+R3  Define Exit Before Entry
+R4  Preserve a No-Go Option
+R5  Robustness Before Optimization
+R6  Concentrate Comparative Advantage
+R7  Replan When Assumptions Break
+R8  Know Who Knows What
+R9  Preserve Evidence Independence
+R10 Share Objective, Preserve Dissent
+```
+
+**不要**在 runtime API、event type、CLI 或 schema 中使用「孫子」「兵法」「戰爭」等書籍語意。
+
+這些規則應被抽象成一般化的：
+
+- decision contract
+- execution discipline
+- evidence policy
+- stop/replan policy
+- capability routing
+- dissent/isolation policy
+
+---
+
+# 2. Existing Hufu Architecture to Preserve
+
+本規格假設並保留目前 Hufu 的核心結構：
+
+```text
+TaskDef
+  - depends_on
+  - pipeline
+  - verify / verify_spec
+  - max_retries
+  - on_failure
+  - escalate
+  - adversarial_verify
+  - side_effect
+  - recovery
+  - execution
+  - phase
+  - fact_refs
+  - fan_out
+
+runtime-owned workflow phases
+DAG scheduler
+typed TaskResult
+objective verification
+adversarial verification
+event persistence / recovery
+token / wall-clock budget
+worker memory policy
+deterministic fan-out
+Artifact / Evidence / Acceptance
+```
+
+本規格 **不得**：
+
+1. 再建立另一套 team-level DAG。
+2. 取代 `PREPARE → AUDIT → EXECUTE → VERIFY`。
+3. 把 decision loop 全寫進 coordinator prompt。
+4. 讓 `team.yaml` 同時變成 workflow engine。
+5. 把 `adversarial_verify` 改造成 decision formation。
+6. 用 10 個「偏誤 specialist agent」取代 deterministic runtime policy。
+7. 讓 LLM 算 arithmetic aggregation。
+8. 把 Markdown report 當 canonical runtime state。
+
+---
+
+# 3. Architectural Placement
+
+## 3.1 Team workflow 不變
+
+```text
+PREPARE
+   ↓
+AUDIT
+   ↓
+EXECUTE
+   ↓
+VERIFY
+```
+
+## 3.2 Decision Engine 保持 task-local sub-state machine
+
+既有：
+
+```text
+PREPARE
+  ↓
+REFERENCE
+  ↓
+JUDGE
+  ↓
+AGGREGATE
+  ↓
+CHALLENGE
+  ↓
+REVISE
+  ↓
+FINALIZE
+```
+
+本規格不新增另一個 state machine，而是在 Decision Engine 與 task execution boundary 增加 **DisciplinePolicy**。
+
+```text
+Team Phase
+   │
+   └── Task
+        │
+        ├── optional DecisionEngine
+        │     └── DisciplinePolicy
+        │
+        └── normal execution
+              └── Execution Discipline / Stop / Replan gates
+```
+
+---
+
+# 4. Mapping: 10 Principles → Hufu Primitives
+
+| Rule | Runtime primitive | Enforcement |
+|---|---|---|
+| R1 Assess Before Commit | `RequestContract` + outside view + assumptions | hard for configured profiles |
+| R2 Premortem | existing `PremortemPolicy` | profile-driven |
+| R3 Define Exit Before Entry | `StopPolicy` + execution budget + checkpoints | hard |
+| R4 Preserve No-Go | `AlternativesPolicy` | hard for decision tasks |
+| R5 Robustness Before Optimization | `CommitGatePolicy` + side-effect/recovery/evidence | hard for mutations |
+| R6 Comparative Advantage | `CapabilityResolver` / routing hint | heuristic, deterministic ranking |
+| R7 Replan | typed assumptions + invalidation events + `ReplanPolicy` | hard trigger, policy-driven action |
+| R8 Know Who Knows What | capability registry | runtime service |
+| R9 Evidence Independence | sealed evidence + provenance `independence_group` | hard |
+| R10 Preserve Dissent | context isolation + challenger + adversarial verify | hard for configured decision profile |
+
+---
+
+# 5. Do Not Create a Parallel "Sun Tzu" Feature
+
+禁止：
+
+```go
+type SunTzuMode bool
+type ArtOfWarPolicy struct{}
+type StrategyRule string // "avoid-strong-attack-weak"
+```
+
+建議：
+
+```go
+type DisciplinePolicy struct {
+    Alternatives  AlternativesPolicy  `yaml:"alternatives,omitempty"`
+    Stop          StopPolicy          `yaml:"stop,omitempty"`
+    Commit        CommitGatePolicy    `yaml:"commit,omitempty"`
+    Replan        ReplanPolicy        `yaml:"replan,omitempty"`
+    Evidence      EvidenceDiscipline  `yaml:"evidence,omitempty"`
+    Routing       RoutingPolicy       `yaml:"routing,omitempty"`
+}
+```
+
+這些語意應可套用到：
+
+- software architecture
+- migration
+- incident remediation
+- research
+- procurement
+- deployment
+- operations
+- general multi-agent decision
+
+---
+
+# 6. RequestContract
+
+Hufu 已有 task `goal` / `constraints`；不要把所有目的欄位重複塞進 `TaskDef`。
+
+建議維持 **session-scoped / request-scoped contract**：
+
+```go
+type RequestContract struct {
+    RawRequest      string
+    DirectQuestion  string
+
+    Objective       string
+    SuccessCriteria []SuccessCriterion
+    Constraints     []Constraint
+    Assumptions     []DecisionAssumption
+
+    Confidence      float64
+    Revision        uint64
+}
 ```
 
 規則：
 
-- 單一欄位內採 OR；多個非空欄位採 AND；
-- phase 使用正式 `Phase` 常數；其他 token trim 後轉小寫；
-- environment 明確不一致時 hard omit；
-- malformed activation metadata 必須在 model call 前 fail closed；
-- lifecycle、scope、authority、superseded、validity 與 expiry gate 必須先於 retrieval/ranking；
-- failed-run candidate、其他 worker private memory、expired 或 superseded item 不得重新可見；
-- applicability 必須是 deterministic eligibility，不能由 relevance threshold 推導。
+```text
+Question → Objective → Success Criteria → Tasks
+```
 
-### 5.2 Decision reasons
+首次 dispatch 應攜帶 RequestContract 的 reference，不額外增加一次 LLM round-trip。
 
-所有 candidate 必須產生唯一且 deterministic 的 inclusion/omission reason。Router decisions 與 compiler 的 dedup/budget omissions 必須合併，不能遺失原始 eligibility reason。
+### Validation
 
-### 5.3 測試矩陣
-
-- PREPARE、AUDIT、EXECUTE、VERIFY phase；
-- dispatch、retry、tool failure、guard、judge、skeptic 與 repair trigger；
-- role/capability/tool/error/environment match 與 mismatch；
-- current-run candidate、failed previous-run candidate、expired、superseded；
-- repository unavailable、malformed activation、ranking degradation；
-- direct-agent、nested、extra-model 與 retry integration。
-
----
-
-## 6. Retry、repair 與 crash-resume 完整化
-
-### 6.1 Per-attempt context
-
-每個 attempt 必須在 model call 前依序完成：
-
-1. 建立 request；
-2. route canonical context；
-3. recall worker-private context；
-4. 建立 bounded/redacted failure delta；
-5. compile；
-6. persist general manifest；
-7. persist memory-learning manifest（learning enabled 時）；
-8. 建立並持久化 matching execution receipt boundary；
-9. 啟動模型。
-
-retry context 必須包含：
-
-- prior failure class；
-- bounded/redacted evidence；
-- transcript/artifact opaque reference；
-- verifier command、exit code與 evidence reference；
-- last tool name 與 bounded result summary；
-- mutable fields；
-- approved recovery disposition。
-
-### 6.2 Recovery invariants
-
-- cancellation 不建立 recovery retrieval；
-- protocol-incomplete result repair 不重新建立 worker或重新執行 tool；
-- potentially completed side effect 不得自動 replay；
-- reflection/repair 只能取得 recovery machinery 核准的 evidence；
-- router/compiler/persistence failure 必須發生在 model/side effect 前；
-- prior receipt、verification evidence、manifest identity 不得由新 attempt 改寫。
-
-### 6.3 驗收
-
-- attempt 1/2 的 request、retrieval、manifest 與 receipt identity 不同；
-- retry-only memory 在 attempt 2 可見且 attempt 1 不可見；
-- objective verify failure 的 command/exit/evidence 保留在原 attempt；
-- crash-resume 能重建 task context lineage且不重播已完成 action；
-- cancellation、timeout、budget、permission denial、protocol incomplete 與 verification failure 都有不同的 failure attribution。
-
----
-
-## 7. General ContextInjectionManifest 完整化
-
-### 7.1 Canonical manifest
-
-`ContextInjectionManifest` 必須涵蓋每一次模型呼叫與 deterministic fallback，並保存：
-
-- schema version；
-- request ID/hash；
-- run/task/attempt；
-- agent、role、model execution identity；
-- phase、trigger、purpose；
-- included/omitted items；
-- reason、tokens、compressed、base/final score；
-- content-free fingerprint 與 timestamp。
-
-不得保存 prompt、context content、raw query、raw tool input、raw output、credential 或完整 failure evidence。
-
-### 7.2 Persistence 與 replay
-
-manifest 必須同步投影到：
-
-- `TodoItem` / session checkpoint；
-- coordinator session manifests；
-- matching `ExecutionReceipt`；
-- event store 與 reducer；
-- task journal；
-- session reload；
-- session branch fork/checkout/time-travel；
-- projection shadow；
-- JSON output；
-- markdown report；
-- TUI status/detail log。
-
-event replay 與 branch checkout 後，manifest fingerprint、request identity、item order 與 reason aggregate 必須保持一致。
-
-### 7.3 TUI 接線
-
-新增 context routing status event 與對應的 TUI message，內容至少包含：
-
-- request/attempt identity；
-- included/omitted count；
-- included token total；
-- omission reason aggregate；
-- fallback/no-model 狀態。
-
-必須同步修改：
-
-- coordinator status emission；
-- `makeTUIReporter` translation；
-- `Model.Update()`；
-- message tests；
-- detail log rendering。
-
-使用既有 status/detail log，不新增 overlay，不改變 `View()` priority order，`Update()` 保持純函式。
-
-### 7.4 Memory manifest projection
-
-`MemoryInjectionManifest` 必須由 general manifest 的 included canonical-memory subset 衍生，不得重新執行 selection。item order、token count、score 與 retrieval identity 必須一致。
-
-### 7.5 驗收
-
-- learning mode `off` 仍有 general manifest，且沒有 learning outcome event；
-- task、coordinator、direct、nested、extra-model、retry 與 auxiliary calls 都可在 replay 後還原；
-- TUI、JSON、report 的 request/item/token/reason aggregate 一致；
-- persistence failure 阻止模型啟動；
-- 輸出與 durable sinks 不洩漏 context content 或 secret。
-
----
-
-## 8. Skill progressive disclosure 完整化
-
-### 8.1 Disclosure levels
-
-| Level | 內容 | 使用條件 |
-| --- | --- | --- |
-| 0 | name | skill index、manifest |
-| 1 | name、summary、path | task dispatch |
-| 2 | 依 phase、trigger、section heading 選出的 bounded relevant sections | JIT hint 或 bounded load |
-| 3 | full content | 成功的 `load_skill` 或 deterministic fallback |
-
-assigned、forced、auto-selected skill 與其 dependencies 必須使用同一條 resolution、ordering、filter 與 disclosure pipeline。
-
-### 8.2 Runtime enforcement
-
-當 manifest 宣告 mandatory skill load 時：
-
-- runtime 必須在任何 task-work tool 前要求完成相應 `load_skill`；
-- mandatory skills 必須依 deterministic dependency order 載入；
-- closed tool sequence 必須預留並驗證 skill-load slots；
-- `load_skill` 不在 resolved tool set 或 sequence 不允許時，compiler 注入 required full-content fragment；
-- worker 未完成 mandatory load 就呼叫其他工作工具時，回傳可恢復的 policy error，不中止 model round；
-- `InjectedSkills`、`LoadedSkills`、`skill_used` event 與 manifest disclosure level 必須一致；
-- summary disclosure 不得記錄為已完整載入。
-
-### 8.3 驗收
-
-- 初始 prompt 在可 JIT load 時不含完整 skill content；
-- worker 第一個 task-work tool 前必須載入所有 mandatory skills；
-- dependency order deterministic；
-- filtered/missing dependency 在 model call 前失敗；
-- full fallback 保證完整 instructions 可見；
-- DAG/direct/nested/extra-model 行為一致；
-- manifest 記錄 disclosure level 且不保存 skill content。
-
----
-
-## 9. VERIFY-specific context projection
-
-### 9.1 Required sources
-
-`PhaseVerify` request 必須優先且明確建立以下 typed fragments：
-
-- task goal；
-- acceptance/verification criteria；
-- dependency typed results；
-- artifact opaque references；
-- files modified；
-- execution receipt references；
-- verifier command/exit/fingerprint；
-- unresolved findings、risks 與 questions；
-- runtime phase/capability contract。
-
-### 9.2 Source restrictions
-
-- raw shell output、raw verifier stdout/stderr與完整 transcript 不得進 prompt；
-- 需要原始資料時只提供 authorized opaque artifact/transcript reference；
-- progress chatter 不得成為 required context；
-- generic STM/LTM 必須具有符合 VERIFY 的 activation eligibility 才可注入；
-- EXECUTE-only memory 在 VERIFY 必須以 `phase_mismatch` omit；
-- historical content 保持 historical authority，不得覆蓋 verification contract；
-- 模型 prose 不得取代 objective verifier 或 phase state machine 的成功判定。
-
-### 9.3 驗收
-
-- VERIFY worker 看得到 criteria、artifacts、modified files、receipt 與 verification evidence；
-- generic 或 EXECUTE-only history 不進 VERIFY prompt；
-- raw transcript/output 不進 compiled prompt、manifest、report；
-- required verification fragment overflow 在 model call 前 fail closed；
-- PREPARE/AUDIT/EXECUTE/VERIFY integration tests 全部覆蓋。
-
----
-
-## 10. Tool-failure JIT context
-
-### 10.1 JIT tools
-
-新增 model-visible tools：
-
-- `context_query`：依目前 request/phase/trigger 查詢 bounded context index；
-- `context_get`：以 authorized opaque context ID 取得 bounded內容。
-
-工具必須通過：
-
-- central tool policy gate；
-- model-visible tool resolution；
-- execution-time authorization；
-- unattended allowlist；
-- force-MCP restrictions；
-- phase/capability grants；
-- closed tool sequence preflight；
-- context item scope/lifecycle/authority authorization。
-
-不得允許模型用任意路徑、Todo ID 或未授權 reference 讀取 context。
-
-### 10.2 Tool failure next-turn injection
-
-central tool wrapper/stream 收到 failed tool result 後必須：
-
-1. 分類 error、exit code 與 component；
-2. 建立 `tool_failure` ContextRequest；
-3. route failure-specific context；
-4. redaction、dedup、budget；
-5. persist manifest/event；
-6. 將 bounded recovery annotation 放入下一個 model turn。
-
-不得修改已完成的 model decision，不得把 `before_tool_call` hook 當成 prompt injection，不得隱藏 retry、切換替代工具、重播 side effect 或繞過 action receipt。
-
-### 10.3 Evidence 與限制
-
-- tool input 只保存 hash；
-- tool output 只保存 bounded/redacted summary 或 opaque transcript ref；
-- context tool output 必須有 token/rune upper bound；
-- 每次 query/get 與 automatic next-turn injection 都需 audit/event/manifest；
-- recoverable authorization error 必須回到模型作為 tool result，保留 attempt evidence。
-
-### 10.4 驗收
-
-- failed SSH/bash/MCP call 的下一 turn 能取得符合 tool/error activation 的 context；
-- 成功 tool call 不觸發 failure context；
-- unattended、force-MCP、closed sequence 的 allow/deny 測試；
-- secret、raw input/output 不出現在 durable sinks；
-- context tools 無法跨 scope、run、worker 或 artifact authorization boundary；
-- tool failure 不造成 side effect replay。
-
----
-
-## 11. Activation schema、outcome attribution 與 policy optimization
-
-### 11.1 Typed schema 與索引
-
-將 activation metadata 映射到 repository typed schema，至少包含：
-
-- phases；
-- triggers；
-- roles；
-- capabilities；
-- tools；
-- error classes；
-- environment。
-
-migration 必須：
-
-- 冪等且可重跑；
-- 保持既有 metadata rows 可讀；
-- 不改變 context item identity/content hash；
-- 建立 routing 所需索引；
-- 支援 mixed-version repository；
-- 提供 migration/reopen/rollback 測試。
-
-### 11.2 Outcome observation
-
-selection、use 與 outcome observation 的 key 至少包含：
+在需要 structured execution 的 run：
 
 ```text
-context_item_id × phase × trigger × agent_role × environment
+Objective != ""
+SuccessCriteria >= 1
+Task.Goal != ""
 ```
 
-每筆 observation 必須能連回：
-
-- request/manifest；
-- task/attempt/model execution；
-- verification result；
-- acceptance outcome；
-- skeptic/guard/judge signal；
-- failure attribution。
-
-只有 manifest 中實際 included 的 context item 可取得 exposure/use attribution。
-
-### 11.3 Policy lifecycle
-
-optimizer 必須產生 immutable candidate policy，並依序執行：
-
-1. observations aggregation；
-2. candidate policy generation；
-3. shadow comparison；
-4. deterministic acceptance gate；
-5. explicit adopt；
-6. active policy application；
-7. rollback 到上一 revision。
-
-optimizer 不得直接覆寫 active policy。adopt 與 rollback 必須留下 event、policy revision、snapshot hash 與 verification evidence。
-
-### 11.4 驗收
-
-- phase/trigger/role/environment outcome attribution 正確；
-- omitted item 不計為 exposure；
-- failed run 與 unverified prose 不產生正向 adoption signal；
-- shadow policy 不改變 prompt selection；
-- active policy 只有通過 acceptance gate 後才影響 routing；
-- adopt/rollback 可由 event replay 重建；
-- legacy policy snapshot 與 mixed schema repository 可讀。
+Coordinator 不能只用 prose 宣稱「已理解目標」。
 
 ---
 
-## 12. Auxiliary LLM 全面納管
+# 7. R1 — Assess Before Commit
 
-### 12.1 必須納管的模型路徑
+## 7.1 Existing DecisionEngine integration
 
-- sidecar task；
-- skill matcher；
-- guard tool-call reviewer；
-- path reviewer；
-- plan reviewer；
-- extra-model judge；
-- skeptic；
-- reflection；
-- protocol/result repair；
-- context/project compacter 中實際呼叫模型的路徑。
+沿用：
 
-### 12.2 Purpose-specific source allowlist
-
-| Purpose | Required context | 禁止來源 |
-| --- | --- | --- |
-| skill match | goal、agent role、skill name/summary index | full skill content、raw history |
-| guard review | guard rules、agent、tool name、bounded/redacted arguments | unrelated STM/LTM、worker transcript |
-| plan review | goal、constraints、plan revision、acceptance criteria | unrelated task chatter |
-| judge | selection contract、candidate identities、bounded candidate outputs | worker private memory、unrelated STM/LTM |
-| skeptic | goal、criteria、candidate output、artifact/verification refs | raw transcript、unrelated history |
-| reflection/repair | approved failure class、bounded evidence、mutable fields、recovery disposition | unapproved evidence、completed side-effect replay instructions |
-| compacter | explicit bounded source items與 compaction contract | ambient session history |
-
-### 12.3 Failure semantics
-
-- guard reviewer failure、router failure、compiler failure與 manifest persistence failure維持 fail closed；
-- judge/skeptic 的既有 fallback policy 必須明確記錄於 fallback manifest；
-- deterministic fallback 必須可與「模型有呼叫但 context 為空」區分；
-- repair 不得擴張工具權限、phase capability 或 artifact access；
-- auxiliary token usage 必須計入既有 no-progress/token budget。
-
-### 12.4 Chokepoint audit
-
-建立自動化測試或 static audit，列舉 repository 中所有：
-
-- `runAgentWithStatusAndHistory`；
-- sidecar `Execute` / `ExecuteProfile`；
-- `MatchSkills`；
-- `ReviewToolCall` / `ReviewPathAccess`；
-- compacter/model generate entry point；
-- 等價的 provider model call。
-
-每個 chokepoint 必須能對應到 request、compiled prompt、manifest 與 persistence boundary，或有明確的 deterministic no-model test。
-
-### 12.5 驗收
-
-- 每一 auxiliary model call 都有 purpose-specific request/manifest；
-- judge/skeptic/guard allowlist tests 阻止 unrelated STM/LTM 與 raw transcript；
-- no-sidecar fallback 產生 fallback manifest；
-- guard failure保持 deny；
-- auxiliary manifests 可由 event/session/branch replay 還原；
-- JSON/report/TUI 可區分 purpose、called/fallback、included/omitted counts。
-
----
-
-## 13. Required test matrix
-
-### 13.1 Unit
-
-- 所有 ContextRequest trigger validation/query/fingerprint；
-- activation parse/match/schema migration；
-- lifecycle/scope/expiry/failed-run visibility；
-- compiler fragment authority/conflict/dedup/budget；
-- general manifest identity、reason merge、secret redaction；
-- skill disclosure levels、dependency order、mandatory load enforcement；
-- verify-specific source allowlist；
-- JIT context tool authorization與 bounds；
-- policy observation、candidate、adopt、rollback。
-
-### 13.2 Coordinator integration
-
-- normal DAG worker；
-- direct-agent；
-- nested `request_agent`；
-- concurrent extra-model workers與 judge；
-- plan-only與 approved-plan execution；
-- PREPARE、AUDIT、EXECUTE、VERIFY；
-- retry after tool failure；
-- retry after objective verify failure；
-- cancelled/timeout/budget/permission-denied attempt；
-- protocol-incomplete result repair；
-- crash-resume與 non-replay；
-- unattended、force-MCP、closed tool sequence；
-- repository unavailable/degraded；
-- sidecar/skill match/guard/plan review/judge/skeptic/reflection/repair。
-
-### 13.3 Persistence與 projection
-
-- Todo/session checkpoint；
-- execution receipt；
-- event reducer replay；
-- branch fork/checkout/time-travel；
-- task journal；
-- projection shadow；
-- JSON output；
-- markdown report；
-- TUI reporter/Update/detail log；
-- general manifest memory subset與 outcome attribution。
-
----
-
-## 14. Validation gate
-
-所有實作完成後必須執行：
-
-```bash
-gofmt -w <changed-go-files>
-go test ./...
-go vet ./...
-golangci-lint run
+```go
+DecisionEvidencePacket
+BaseRateEvidence
+OutsideViewPolicy
 ```
 
-目前已知必須修正的 lint 問題：
+不要再造另一份 `AssessmentPacket`。
 
-- `CompileWorkerContext` cyclomatic complexity 超過門檻，需拆分 typed fragment/source collection helpers；
-- `internal/team/context_router.go` 必須通過 gofmt；
-- `internal/team/coordinator_task_run.go` 的初始 `retrievalQuery` assignment 無效，需移除或改成實際使用的單一賦值。
+新增 typed assumption：
 
-完成報告必須列出：
+```go
+type DecisionAssumption struct {
+    ID          string
+    Statement   string
+    Status      string // unknown, supported, contradicted, stale
+    EvidenceRefs []ArtifactRef
+    Critical    bool
+    CheckedAt   time.Time
+}
+```
 
-- execution-path coverage matrix；
-- request/manifest schema versions；
-- persistence/replay 變更；
-- required/optional omission 行為；
-- tool policy 與 recovery invariants；
-- 實際執行的 validation commands 與結果；
-- 所有測試矩陣項目的證據位置。
+## 7.2 Commit condition
 
-當所有章節的驗收條件與 validation gate 全部通過時，本規格即告完成。
+對 `standard` / `high-stakes` decision：
+
+```text
+question exists
+options valid
+criteria valid
+required facts present
+critical assumptions declared
+outside-view requirement satisfied
+```
+
+未達成不得進 `JUDGE` / `COMMIT`。
+
+---
+
+# 8. R2 — Premortem
+
+沿用既有：
+
+```go
+PremortemPolicy
+PremortemResult
+FailureMode
+```
+
+不要建立第二套 risk agent graph。
+
+建議擴充 `FailureMode`：
+
+```go
+type FailureMode struct {
+    ID                  string
+    Description         string
+    Likelihood          float64
+    Impact              float64
+    EarlyWarningSignals []string
+    Mitigations         []string
+    EvidenceRefs        []ArtifactRef
+}
+```
+
+規則：
+
+```text
+premortem discovers risk
+premortem does NOT automatically reject option
+```
+
+High-stakes profile：
+
+```yaml
+premortem:
+  enabled: true
+  required-before-commit: true
+```
+
+---
+
+# 9. R3 — Define Exit Before Entry
+
+## 9.1 Problem
+
+`max_retries` / token budget / wall-clock budget 已存在，但它們主要是 runtime resource guard。
+
+策略層還需要：
+
+> 「什麼情況下，從決策上不應繼續？」
+
+## 9.2 StopPolicy
+
+```go
+type StopPolicy struct {
+    MaxAttempts        int           `yaml:"max-attempts,omitempty"`
+    MaxToolCalls       int           `yaml:"max-tool-calls,omitempty"`
+    MaxTokens          int64         `yaml:"max-tokens,omitempty"`
+    MaxDuration        time.Duration `yaml:"max-duration,omitempty"`
+
+    CheckpointEvery    int           `yaml:"checkpoint-every,omitempty"`
+    RequireKillCriteria bool         `yaml:"require-kill-criteria,omitempty"`
+
+    KillCriteria []KillCriterion `yaml:"kill-criteria,omitempty"`
+}
+
+type KillCriterion struct {
+    ID          string
+    Kind        string // assumption_invalid, no_progress, budget, expected_value, repeated_failure
+    Threshold   float64
+    Description string
+}
+```
+
+### Important boundary
+
+既有 budget 仍是 canonical resource accounting。
+
+`StopPolicy` 不重複計數，只引用／解釋 budget state：
+
+```text
+BudgetManager owns counters.
+StopPolicy decides whether current state still permits continuation.
+```
+
+## 9.3 Required rule
+
+在 `EXECUTE` 前持久化：
+
+```text
+entry decision
+budget snapshot
+kill criteria
+checkpoint rule
+```
+
+不得在已消耗大量資源後才臨時發明退出條件。
+
+---
+
+# 10. R4 — Preserve a No-Go Option
+
+## 10.1 DecisionOption extension
+
+```go
+type DecisionOptionKind string
+
+const (
+    OptionExecute      DecisionOptionKind = "execute"
+    OptionDefer        DecisionOptionKind = "defer"
+    OptionNegotiate    DecisionOptionKind = "negotiate"
+    OptionRequestInfo  DecisionOptionKind = "request_information"
+    OptionReduceScope  DecisionOptionKind = "reduce_scope"
+    OptionAbandon      DecisionOptionKind = "abandon"
+    OptionCustom       DecisionOptionKind = "custom"
+)
+```
+
+`DecisionOption` 加：
+
+```go
+Kind DecisionOptionKind
+```
+
+## 10.2 AlternativesPolicy
+
+```go
+type AlternativesPolicy struct {
+    RequireNoActionOption bool `yaml:"require-no-action-option,omitempty"`
+    RequireInfoOption     bool `yaml:"require-information-option,omitempty"`
+    MinOptions            int  `yaml:"min-options,omitempty"`
+}
+```
+
+### Gate
+
+```text
+require-no-action-option = true
+AND no defer/abandon/no-op equivalent exists
+→ DecisionEngine MUST NOT enter JUDGE
+```
+
+### Exception
+
+如果 objective 本身是：
+
+```text
+"已經發生事故，必須立即恢復服務"
+```
+
+runtime 可以使用 explicit policy override：
+
+```yaml
+alternatives:
+  require-no-action-option: false
+  reason-required: true
+```
+
+override reason 必須進 event log / DecisionRecord。
+
+---
+
+# 11. R5 — Robustness Before Optimization
+
+## 11.1 Reuse existing Hufu safety semantics
+
+優先重用：
+
+```text
+side_effect
+recovery
+EvidenceRequirement
+EvidenceManifest
+blocking acceptance
+ArtifactStore
+verification
+terminal lifecycle
+```
+
+不要再創建第二套 safety framework。
+
+## 11.2 CommitGatePolicy
+
+```go
+type CommitGatePolicy struct {
+    RequiredForSideEffects []SideEffectClass `yaml:"required-for-side-effects,omitempty"`
+
+    RequireRollback       bool `yaml:"require-rollback,omitempty"`
+    RequireReconcile      bool `yaml:"require-reconcile,omitempty"`
+    RequireObservability  bool `yaml:"require-observability,omitempty"`
+    RequireVerification   bool `yaml:"require-verification,omitempty"`
+    RequireEvidence       bool `yaml:"require-evidence,omitempty"`
+
+    Invariants []InvariantRequirement `yaml:"invariants,omitempty"`
+}
+```
+
+對 mutation task：
+
+```text
+side_effect != none
+→ policy evaluates commit gate
+```
+
+若 `recovery-policy=reconcile`，不能要求虛假的 rollback；允許：
+
+```text
+rollback OR reconcile
+```
+
+### Fail closed
+
+在 strict profile：
+
+```text
+missing required commit prerequisite
+→ policy_blocked
+→ tool process MUST NOT start
+```
+
+---
+
+# 12. R6 / R8 — Comparative Advantage + Know Who Knows What
+
+這兩條不應塞入 DecisionEngine。
+
+應放在 AgentPool / routing service 邊界。
+
+## 12.1 Capability Index
+
+```go
+type CapabilityRecord struct {
+    AgentID       string
+    Capability    string
+    Confidence    float64
+    CostClass     string
+    Freshness     time.Time
+    EvidenceRefs  []ArtifactRef
+}
+
+type CapabilityQuery struct {
+    Required []string
+    Preferred []string
+    RiskClass string
+}
+
+type CapabilityCandidate struct {
+    AgentID      string
+    Score        float64
+    Explanation  []string
+}
+
+type CapabilityResolver interface {
+    Resolve(ctx context.Context, q CapabilityQuery) ([]CapabilityCandidate, error)
+}
+```
+
+## 12.2 Routing principle
+
+Ranking inputs may include:
+
+```text
+capability match
+historical verified outcome
+cost
+latency
+tool access
+scope authorization
+freshness
+```
+
+不得：
+
+```text
+randomly assign
+round-robin high-stakes specialist work
+choose highest-cost model by default
+infer expertise solely from self-description
+```
+
+## 12.3 Historical outcome
+
+若未來使用 outcome memory：
+
+```text
+verified outcomes may update capability confidence
+unverified self-claims must not
+```
+
+Capability metadata 必須有 provenance。
+
+---
+
+# 13. R7 — Replan When Assumptions Break
+
+## 13.1 ReplanPolicy
+
+```go
+type ReplanPolicy struct {
+    OnCriticalAssumptionContradicted string `yaml:"on-critical-assumption-contradicted"`
+    OnEvidencePacketChanged          string `yaml:"on-evidence-packet-changed"`
+    OnRepeatedFailure                string `yaml:"on-repeated-failure"`
+    OnCapabilityInvalidated          string `yaml:"on-capability-invalidated"`
+}
+```
+
+合法 action：
+
+```text
+continue
+replan
+stop
+request_information
+escalate
+needs_human
+```
+
+## 13.2 Events
+
+新增或映射到既有 event model：
+
+```text
+assumption.declared
+assumption.supported
+assumption.contradicted
+assumption.stale
+decision.invalidated
+replan.requested
+replan.completed
+```
+
+event 必須 append-only；不得覆寫過去 assumption state 造成 audit gap。
+
+## 13.3 Evidence packet interaction
+
+沿用既有規則：
+
+```text
+evidence packet hash changed
+→ old first-round opinions stale
+```
+
+若 critical assumption 改變造成 decision input materially changed：
+
+```text
+DecisionRecord remains durable
+new DecisionRevision / new DecisionRun created
+```
+
+不要原地改寫舊 DecisionRecord。
+
+---
+
+# 14. R9 — Preserve Evidence Independence
+
+既有 sealed evidence / strict isolation 已處理 agent-opinion independence。
+
+還需補 **source independence**。
+
+## 14.1 Evidence metadata
+
+```go
+type EvidenceProvenance struct {
+    SourceID          string
+    SourceType        string
+    ParentSourceIDs   []string
+    IndependenceGroup string
+    RetrievedAt       time.Time
+    ContentHash       string
+}
+```
+
+## 14.2 Independence policy
+
+```go
+type EvidenceIndependencePolicy struct {
+    RequiredIndependentGroups int  `yaml:"required-independent-groups,omitempty"`
+    RejectCircularCitation    bool `yaml:"reject-circular-citation,omitempty"`
+    WarnSharedOrigin          bool `yaml:"warn-shared-origin,omitempty"`
+}
+```
+
+High-impact claim：
+
+```text
+3 reports copied from same wire story
+= 1 independence group
+```
+
+不是：
+
+```text
+3 independent confirmations
+```
+
+## 14.3 Aggregation
+
+不要只存：
+
+```text
+source_count
+```
+
+至少存：
+
+```text
+source_count
+independence_group_count
+shared_origin_warnings
+```
+
+---
+
+# 15. R10 — Share Objective, Preserve Dissent
+
+沿用：
+
+```text
+sealed evidence
+strict/sealed context isolation
+N independent jurors
+challenger
+independent revision
+adversarial_verify
+```
+
+責任邊界：
+
+```text
+challenger:
+  decision formation 前找共同盲點
+
+adversarial_verify:
+  execution 完成後嘗試推翻「已完成/正確」的 claim
+```
+
+不要合併。
+
+### Required rule
+
+High-stakes：
+
+```text
+first-round jurors MUST NOT see:
+- other juror opinions
+- aggregate
+- coordinator preference
+
+challenger MUST see:
+- sealed evidence
+- anonymized opinions
+- deterministic aggregate
+```
+
+Consensus 不是 verification evidence。
+
+---
+
+# 16. DisciplinePolicy
+
+為避免 boolean soup，把新增策略放進 profile-scoped policy：
+
+```go
+type DisciplinePolicy struct {
+    Alternatives AlternativesPolicy       `yaml:"alternatives,omitempty"`
+    Stop         StopPolicy               `yaml:"stop,omitempty"`
+    Commit       CommitGatePolicy         `yaml:"commit,omitempty"`
+    Replan       ReplanPolicy             `yaml:"replan,omitempty"`
+    Evidence     EvidenceIndependencePolicy `yaml:"evidence,omitempty"`
+    Routing      RoutingPolicy            `yaml:"routing,omitempty"`
+}
+```
+
+DecisionPolicy 擴充：
+
+```go
+type DecisionPolicy struct {
+    // existing fields:
+    IndependentJudgments int
+    ContextIsolation string
+    OutsideView OutsideViewPolicy
+    Criteria []DecisionCriterion
+    Aggregation AggregationPolicy
+    Challenge ChallengePolicy
+    Revision RevisionPolicy
+    Premortem PremortemPolicy
+    Forecast ForecastPolicy
+    MaxRounds int
+    MaxTokens int64
+
+    Discipline DisciplinePolicy `yaml:"discipline,omitempty"`
+}
+```
+
+---
+
+# 17. Proposed `team.yaml` Target Schema
+
+> 下列為 target schema；若 parser 尚未支援，必須先以 schema migration / typed config 實作，不能默默忽略 unknown fields。
+
+```yaml
+decision:
+  default-profile: standard
+
+  profiles:
+    light:
+      independent-judgments: 2
+      context-isolation: strict
+      aggregation: mean-score
+
+      outside-view:
+        required: false
+
+      challenge:
+        enabled: false
+
+      revision:
+        enabled: false
+
+      forecast:
+        required: false
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          min-options: 2
+
+        stop:
+          max-attempts: 2
+          require-kill-criteria: false
+
+        evidence:
+          required-independent-groups: 1
+
+        routing:
+          capability-aware: true
+
+    standard:
+      independent-judgments: 3
+      context-isolation: strict
+      aggregation: mean-score
+
+      outside-view:
+        required: true
+
+      challenge:
+        enabled: true
+        count: 1
+
+      revision:
+        enabled: true
+
+      premortem:
+        enabled: true
+        required-before-commit: false
+
+      forecast:
+        required: true
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          require-information-option: true
+          min-options: 3
+
+        stop:
+          max-attempts: 3
+          checkpoint-every: 1
+          require-kill-criteria: true
+
+        commit:
+          require-verification: true
+          require-evidence: true
+
+        replan:
+          on-critical-assumption-contradicted: replan
+          on-evidence-packet-changed: replan
+          on-repeated-failure: replan
+          on-capability-invalidated: replan
+
+        evidence:
+          required-independent-groups: 2
+          reject-circular-citation: true
+          warn-shared-origin: true
+
+        routing:
+          capability-aware: true
+
+      max-rounds: 2
+
+    high-stakes:
+      independent-judgments: 5
+      context-isolation: sealed
+      aggregation: mean-score
+
+      outside-view:
+        required: true
+
+      challenge:
+        enabled: true
+        count: 2
+
+      premortem:
+        enabled: true
+        required-before-commit: true
+
+      revision:
+        enabled: true
+
+      forecast:
+        required: true
+
+      discipline:
+        alternatives:
+          require-no-action-option: true
+          require-information-option: true
+          min-options: 3
+
+        stop:
+          checkpoint-every: 1
+          require-kill-criteria: true
+
+        commit:
+          require-rollback: false
+          require-reconcile: true
+          require-observability: true
+          require-verification: true
+          require-evidence: true
+
+        replan:
+          on-critical-assumption-contradicted: replan
+          on-evidence-packet-changed: replan
+          on-repeated-failure: stop
+          on-capability-invalidated: replan
+
+        evidence:
+          required-independent-groups: 2
+          reject-circular-citation: true
+          warn-shared-origin: true
+
+        routing:
+          capability-aware: true
+
+      max-rounds: 2
+```
+
+---
+
+# 18. Execution Lifecycle
+
+## 18.1 Decision-producing task
+
+```text
+RequestContract
+   ↓
+Assess
+  - objective
+  - options
+  - base rates
+  - assumptions
+   ↓
+Alternatives Gate
+   ↓
+Premortem (profile-driven)
+   ↓
+Sealed Evidence
+   ↓
+Independent Judgments
+   ↓
+Deterministic Aggregate
+   ↓
+Challenge
+   ↓
+Revision
+   ↓
+DecisionRecord
+```
+
+## 18.2 Side-effect execution task
+
+```text
+DecisionRecord / normal TaskDef
+   ↓
+Commit Gate
+  - side-effect policy
+  - rollback/reconcile
+  - observability
+  - verification
+  - evidence requirements
+   ↓
+Persist Stop Policy + Kill Criteria
+   ↓
+Execute
+   ↓
+Checkpoint
+   ├─ assumptions valid → continue
+   ├─ kill criterion hit → stop
+   ├─ evidence changed → replan
+   └─ unknown side effect state → reconcile / needs_human
+   ↓
+Verify
+   ↓
+Evidence Gate
+   ↓
+Acceptance
+```
+
+---
+
+# 19. DecisionRecord Extensions
+
+不要只保存 winner。
+
+```go
+type DecisionRecord struct {
+    // existing fields...
+
+    RequestContractRef string
+
+    Assumptions []DecisionAssumption
+
+    AlternativesChecked bool
+    NoGoOptionID        string
+
+    StopPolicySnapshot StopPolicy
+
+    IndependentEvidenceGroups int
+
+    RoutingRationale []RoutingDecision
+
+    ReplanTriggers []string
+
+    FalsificationConditions []string
+}
+```
+
+對 future outcome resolution 保留：
+
+```text
+decision quality != outcome quality
+```
+
+一次好結果不能反推原本決策程序一定正確。
+
+---
+
+# 20. Memory Integration
+
+Hufu memory 應維持 typed record 與 provenance。
+
+可 promotion 到 LTM 的 decision lesson：
+
+```text
+- verified failure lesson
+- repeated pattern
+- reviewer-confirmed rule
+- outcome-resolved forecast
+```
+
+不要 promotion：
+
+```text
+- 一次成功的 anecdote
+- agent 自稱的 expertise
+- 未驗證的 causal story
+- coordinator preference
+```
+
+建議 record：
+
+```go
+type DecisionOutcomeRecord struct {
+    DecisionID        string
+    ResolvedOutcome   string
+    Forecast          float64
+    SuccessCriteria   []string
+    ObservedEvidence  []ArtifactRef
+    Lessons           []string
+    Verified          bool
+}
+```
+
+用途：
+
+```text
+future reference class
+capability calibration
+forecast calibration
+failure-pattern retrieval
+```
+
+Memory 注入仍應標示：
+
+```text
+Background reference, not authoritative instruction.
+```
+
+---
+
+# 21. Failure Semantics
+
+新增 discipline 之後，不能用 vague error。
+
+建議 reason codes：
+
+```text
+decision_missing_objective
+decision_missing_alternative
+decision_no_no_go_option
+decision_outside_view_missing
+decision_evidence_not_independent
+decision_premortem_required
+commit_gate_missing_recovery
+commit_gate_missing_observability
+stop_policy_missing_kill_criteria
+assumption_invalidated
+decision_stale
+routing_capability_unavailable
+```
+
+這些 reason 應可：
+
+```text
+event log
+TUI
+report
+resume/replay
+tests
+```
+
+一致使用。
+
+---
+
+# 22. Recovery
+
+本規格必須服從現有副作用 recovery 原則：
+
+```text
+none            → retry may be safe
+local_mutation  → policy-dependent
+infra_mutation  → reconcile before retry
+credential      → manual by default
+```
+
+Crash 發生於 decision execution：
+
+```text
+persisted opinions remain valid only if evidence hash unchanged
+aggregate may be reused if inputs unchanged
+challenge may resume
+```
+
+Crash 發生於 side effect：
+
+```text
+DO NOT blindly re-run
+→ reconcile
+→ classify completed / partial / not-started / unknown
+```
+
+---
+
+# 23. Observability
+
+至少輸出 metrics：
+
+```text
+decision_count
+decision_profile_count
+outside_view_gate_failures
+premortem_failure_modes
+no_go_option_missing
+kill_criteria_triggered
+replan_count
+assumption_invalidations
+independent_evidence_group_count
+shared_origin_warnings
+capability_routing_fallbacks
+decision_dispersion
+decision_revision_rate
+```
+
+以及 trace：
+
+```text
+RequestContract
+→ EvidencePacket hash
+→ opinions
+→ aggregate
+→ challenge
+→ revision
+→ DecisionRecord
+→ execution task
+→ commit gate
+→ evidence
+→ acceptance
+```
+
+---
+
+# 24. Security / Safety Boundaries
+
+1. Decision workers 預設 read-only。
+2. Decision worker 不因需要研究就自動取得 shell。
+3. External research tool 依 team policy 最小授權。
+4. DecisionEngine 不直接知道 Ollama/OpenAI/Lemonade。
+5. DecisionEngine 不自行組 shell command。
+6. DecisionEngine 不自行讀 team files。
+7. Commit gate 必須在 tool process start 前完成。
+8. Unknown policy state 在 strict profile fail closed。
+9. Evidence provenance 不可信時不得假裝成 independent evidence。
+10. Secret handling 沿用全域 Redactor / SecretRef policy。
+
+---
+
+# 25. Implementation Plan
+
+## Phase 0 — Typed records, no behavior change
+
+低風險先加入：
+
+```text
+DecisionAssumption
+DecisionOptionKind
+EvidenceProvenance.independence_group
+DecisionRecord extensions
+reason codes
+events
+```
+
+Acceptance:
+
+- old team config 行為完全相同；
+- unknown new enum fail validation；
+- old DecisionRecord 可 migration/read；
+- event replay deterministic。
+
+## Phase 1 — Hard decision gates
+
+加入：
+
+```text
+AlternativesPolicy
+StopPolicy
+CommitGatePolicy
+EvidenceIndependencePolicy
+```
+
+Acceptance:
+
+- no-go required 時缺 option 必須 block；
+- kill criteria 在 execution 前持久化；
+- side-effect commit gate 失敗時 tool 不啟動；
+- 2 個相同 origin 的 source 不算 2 independent groups。
+
+## Phase 2 — Replan / assumption invalidation
+
+加入：
+
+```text
+assumption lifecycle
+replan triggers
+stale decision behavior
+```
+
+Acceptance:
+
+- critical assumption contradicted 會觸發 configured action；
+- old DecisionRecord 不被覆寫；
+- evidence hash changed 會 stale first-round opinions。
+
+## Phase 3 — Capability routing
+
+加入：
+
+```text
+CapabilityResolver
+verified outcome signals
+routing rationale
+freshness
+```
+
+Acceptance:
+
+- unauthorized agent 永遠不因 capability score 被選中；
+- stale capability 可被 invalidated；
+- self-claimed capability 不可自動提高 trusted score；
+- routing deterministic under fixed inputs。
+
+## Phase 4 — Outcome calibration
+
+加入：
+
+```text
+DecisionOutcomeRecord
+forecast resolution
+Brier/calibration metrics
+reference-class retrieval
+```
+
+---
+
+# 26. Test Matrix
+
+## A. No-Go
+
+```text
+profile requires no-go
+options = [A, B]
+→ blocked
+
+options = [A, B, DEFER]
+→ continue
+```
+
+## B. Premortem
+
+```text
+high-stakes + premortem missing
+→ blocked before commit
+```
+
+## C. Sunk-cost prevention
+
+```text
+attempts consumed > 0
+remaining expected value below threshold
+kill criterion hit
+→ stop
+```
+
+Past consumption must not appear as positive continuation evidence.
+
+## D. Assumption invalidation
+
+```text
+A1 critical = true
+A1 supported
+→ execute
+new evidence contradicts A1
+→ decision stale
+→ replan
+```
+
+## E. Evidence independence
+
+```text
+source A
+source B cites A
+source C mirrors A
+→ independence_group_count = 1
+```
+
+## F. Isolation
+
+```text
+juror A prompt MUST NOT contain juror B/C opinion
+```
+
+## G. Routing
+
+```text
+security task
+candidate generalist score < security specialist
+specialist authorized
+→ specialist selected
+```
+
+## H. Commit Gate
+
+```text
+infra_mutation
+recovery required
+no reconcile / rollback
+→ policy_blocked
+→ zero tool process starts
+```
+
+## I. Crash / Resume
+
+```text
+2/3 judgments persisted
+same evidence hash
+→ dispatch only missing judgment
+```
+
+## J. Strict Finish
+
+```text
+required evidence missing
+→ run must not be success
+```
+
+---
+
+# 27. Non-Goals
+
+第一版不要做：
+
+- automatic strategy generation from Sun Tzu quotes
+- 47-rule prompt injection
+- 10 bias/strategy specialist agents
+- LLM-controlled stop counters
+- LLM arithmetic aggregation
+- adaptive juror weights without historical calibration
+- unlimited Delphi rounds
+- automatic high-stakes classification without policy boundary
+- rewriting scheduler
+- replacing TaskDef
+- replacing existing verification/evidence architecture
+
+---
+
+# 28. Definition of Done
+
+本規格完成時，Hufu 應具備：
+
+```text
+[ ] 重大決策先 assessment，而非直接 commit
+[ ] profile 可強制 premortem
+[ ] 開始前持久化 stop / kill criteria
+[ ] decision 可強制包含 no-go option
+[ ] mutation 前有 runtime-owned commit gate
+[ ] capability routing 可解釋且有 provenance
+[ ] critical assumption 改變可觸發 replan
+[ ] evidence 可區分 source count 與 independent group count
+[ ] first-round judgments 保持隔離
+[ ] challenger 與 adversarial verification 責任分離
+[ ] crash/resume 不破壞上述語意
+[ ] 所有 hard gate 可 deterministic test
+```
+
+---
+
+# 29. Final Design Principle
+
+```text
+LLM:
+  understands objective
+  proposes options
+  produces judgment
+  discovers risk
+  explains trade-offs
+
+Runtime:
+  enforces isolation
+  counts budget
+  preserves no-go
+  gates commitment
+  tracks assumptions
+  verifies evidence independence
+  stops / replans by policy
+  persists provenance
+  performs deterministic aggregation
+
+Scheduler / AgentPool:
+  routes work by capability
+  enforces authorization
+  owns execution lifecycle
+```
+
+最重要的抽象：
+
+> **Plan is a hypothesis. Commitment is conditional. Evidence can invalidate both.**

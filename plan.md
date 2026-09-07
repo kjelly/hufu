@@ -314,9 +314,10 @@ or explicitly isolated with evidence.
       `TestDecisionV1OffProfileIsInert`,
       `TestParseTeamYMLWithoutDecisionBlock`,
       `TestDisciplineHooksAreNoOpsWhenUnarmed`.
-- [x] Phase 4 and Phase 5 have not started before their stated entry gates.
-      Made executable rather than remembered:
-      `TestPhase4CapabilityRoutingHasNotStarted`,
+- [x] Phase 5 has not started before its stated entry gate; Phase 4 did not
+      start before a human explicitly opened it (see Status). Made executable
+      rather than remembered:
+      `TestPhase4AuthorizationStillPrecedesCapability`,
       `TestPhase5CalibrationHasNotStarted`,
       `TestOutcomeRecordingDoesNotFeedBackIntoJudgment`.
 
@@ -327,15 +328,111 @@ not when this plan was written — three of the failures predated the branch
 and two of those tests had never passed since the commit that introduced
 them.
 
-Stages 8 and 9 remain **deliberately not started**. Their entry gates are
-unmet and are checked, not assumed:
+Stage 9 remains **deliberately not started**. Its entry gate is unmet and is
+checked, not assumed:
 
 ```text
-Stage 8  no trusted capability evidence source exists (CapabilityConfig is
-         still Required []string), and the capability/authorization
-         relationship has not been explicitly approved
 Stage 9  Phase5Entry() reports the gate closed: 0 of 30 resolved decisions
          and 0 of 20 verified outcomes
 ```
 
-Opening either gate is a human decision, not a coding step.
+Stage 8 was **explicitly opened by human decision on 2026-09-07** and has a
+scoped V1: `agent.DeclaredCapability` / `capability-registry` in team.yaml is
+the trusted, config-level capability evidence source that did not exist
+before (`internal/agent/agent.go`); `CapabilityRegistry`/`CapabilityResolver`
+(`internal/team/capability_registry.go`) rank an already-authorized candidate
+set and can never expand it; `DisciplinePolicy.Routing.CapabilityAware`
+(`internal/agent/decision_config.go`) is the schema surface spec1.md §17 and
+plan.md always described. Covered by
+`TestCapabilityRegistry_UnauthorizedNeverSelected`,
+`TestCapabilityRegistry_SpecialistBeatsGeneralist`,
+`TestCapabilityRegistry_SelfDeclaredNeverExceedsCeiling`,
+`TestCapabilityRegistry_StaleDeclarationInvalidated`,
+`TestCapabilityRegistry_DeterministicOrdering`, and
+`TestCoordinator_ResolveCapabilityCandidates_RespectsAllowedWorkers`
+(`internal/team/capability_registry_test.go`).
+
+**Update, same day:** `Coordinator.ResolveCapabilityCandidates` is now wired
+into the real dispatch path, by explicit follow-up decision.
+`Coordinator.validateCapabilityRouting` (`internal/team/capability_registry.go`)
+runs inside `validateDelegationPolicy` (`internal/team/delegation_policy.go`,
+called from `coordinator_execute.go` before any TODO is created), gated by
+the new `delegation.capability-routing` team.yaml rules
+(`agent.CapabilityRoutingRule`, `internal/agent/agent.go`; parsed in
+`internal/team/parse.go`). A rule matches a delegated task by the same
+goal-substring selector `TaskGoalInvariants` already uses; if the task's
+chosen worker cannot show the required capability while another
+already-authorized worker can, the delegation is rejected before dispatch —
+a real production path, not just a callable method. It never blocks when no
+eligible worker anywhere qualifies, and it never lets an unauthorized worker
+appear as the suggested alternative (both are structural, not just
+convention). Every routing decision — pass or reject — is also recorded as a
+`routing_decision` event. Covered by
+`TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative`,
+`TestValidateCapabilityRouting_AllowsQualifiedChoice`,
+`TestValidateCapabilityRouting_IgnoresNonMatchingGoal`,
+`TestValidateCapabilityRouting_DoesNotBlockWhenNoOneQualifies`,
+`TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative`, and
+`TestValidateDelegationPolicy_EnforcesCapabilityRouting` (the last exercises
+the real `validateDelegationPolicy` entry point, not the unit-level method)
+in `internal/team/capability_registry_test.go`; `expected-effective.json` for
+the `05-workflow-and-tasks` compat fixture was regenerated
+(`UPDATE_TEAM_COMPAT_GOLDEN=1`) to include the new
+`delegation.CapabilityRouting` field.
+
+What Stage 8 still does **not** do, on purpose: `CapabilitySourceVerified` has
+a defined confidence ceiling but no producer anywhere in this package —
+nothing promotes a capability claim using resolved decision outcomes, because
+that data source is Stage 9's, and Stage 9 has not opened
+(`TestPhase4AuthorizationStillPrecedesCapability`,
+`internal/team/deferred_phase_gate_test.go`, asserts this stays true).
+Outcome-driven confidence remains follow-up work, not part of this V1.
+
+**Update, same day (DecisionEngine wiring, spec.md v2 / spec2.md):** spec.md
+was rewritten to v2, reframing `reference`/`juror`/`challenger` as
+capability-routed logical roles rather than fixed agent identities, and
+spec2.md made the acceptance bar explicit: a stage's *trace* must show a
+resolved concrete agent's own model being called, with zero calls to the
+legacy judge-model sidecar — anything less is "shadow routing." Per spec2.md's
+own sequencing (PR-2 before PR-3/PR-4), the `REFERENCE` stage is now
+genuinely capability-routed:
+`internal/team/decision_reference_capability_runner.go`
+(`runReferenceEvidenceViaCapabilityRouting`, `invokeReferenceRoleAgent`) is a
+new `ReferenceEvidenceRunner` implementation, selected per-request via
+`ReferenceEvidenceRequest.RoutingRole` (`internal/team/decision_engine.go`,
+`json:"-"`, sourced from `DecisionRequest.Policy.OutsideView.Role` in
+`internal/team/decision_engine_reference.go`) — no change to
+`DecisionEngine`'s own interfaces (`DecisionServices.ReferenceEvidence` was
+already an interface seam; `coordinatorDecisionRunners`
+(`internal/team/decision_runners.go`) was simply its only implementation
+before this). The resolved candidate is invoked via
+`Coordinator.createGatedAgent` + `runAgentWithStatusAndHistory` — the same
+bounded, non-TODO primitive `coordinator_plan.go`'s plan-reviewer and
+`coordinator_run.go`'s orchestrator calls already use — with tools narrowed to
+a fixed read-only ceiling (`referenceRoleTools`) regardless of what the
+resolved agent declares for itself. New schema:
+`agent.ReferenceRolePolicy`/`OutsideViewPolicy.Role`
+(`internal/agent/decision_config.go`), YAML key
+`decision.profiles.*.outside-view.role.{required,preferred}-capabilities`. A
+profile that does not set `outside-view.role` is completely unaffected — the
+legacy sidecar path is untouched code, still the exclusive path for
+`JUDGE`/`CHALLENGE`/`PREMORTEM`/`REVISE`/`FINALIZE`. Covered by
+`TestReferenceRoleCapabilityRouting_InvokesResolvedAgentNotLegacyJudge` (the
+concrete spec2.md acceptance test — the resolved agent's provider is called,
+the legacy judge-model provider records zero calls for that stage),
+`TestReferenceEvidence_WithoutRoutingRoleStaysOnLegacySidecar` (regression:
+byte-for-byte unchanged when unconfigured), and
+`TestReferenceRoleTools_NarrowsToReadOnly`
+(`internal/team/decision_reference_capability_runner_test.go`), plus config
+validation/parse-round-trip tests in `internal/agent/decision_config_test.go`
+and `internal/team/decision_types_test.go`.
+
+Still not done, unchanged from before: `JUDGE` (juror) and `CHALLENGE`
+(challenger) capability routing, `DiversityPolicy`, durable `AgentBinding`
+records, binding reuse across `REVISE`, pinned bindings, mid-run capability
+invalidation, adaptive risk-tag-driven challenger routing, cost/latency
+weighting, and the `verified`/outcome-calibrated confidence tier (blocked on
+Stage 9). spec2.md sequences these as PR-3/PR-4, after `REFERENCE` (PR-2) is
+proven out — which it now is.
+
+Opening Stage 9 is still a human decision, not a coding step.
