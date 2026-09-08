@@ -169,6 +169,85 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 	}
 }
 
+// TestDebugCmd_RedactsProviderTranscript is spec.md §36 Phase 7 PR-16's
+// named test (TestDebugBundleRedactsProviderTranscript): a Codex provider
+// transcript (internal/team/subagent_codex.go's codexTranscript.persist
+// writes to logs/codex-transcripts/*.log) is troubleshooting-relevant
+// evidence, not a credential file — it must be included in the debug
+// bundle, but any secret-shaped content it happens to record (e.g. an
+// api_key echoed into a milestone line) must still be redacted like any
+// other included text file, through the same generic mechanism every other
+// logs/ file already goes through.
+func TestDebugCmd_RedactsProviderTranscript(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "myworkspace")
+	transcriptDir := filepath.Join(workspaceDir, "logs", "codex-transcripts")
+	if err := os.MkdirAll(transcriptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const secretValue = "sk-super-secret-codex-value"
+	transcriptContent := "2026-09-08T00:00:00Z attempt start task=1 attempt=1 model=gpt-5-codex\n" +
+		"2026-09-08T00:00:01Z api_key: " + secretValue + "\n" +
+		"2026-09-08T00:00:02Z turn completed turn_id=turn-1 status=success\n"
+	if err := os.WriteFile(filepath.Join(transcriptDir, "1-attempt-1-123.log"), []byte(transcriptContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalWD, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(originalWD)
+
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"debug", workspaceDir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected success for workspace dir, got: %v", err)
+	}
+
+	bundlePath := filepath.Join(tmpDir, "hufu-debug-myworkspace.tar.gz")
+	f, err := os.Open(bundlePath)
+	if err != nil {
+		t.Fatalf("failed to open bundle: %v", err)
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("failed to open gzip: %v", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	var transcriptData []byte
+	found := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read error: %v", err)
+		}
+		if hdr.Name == "logs/codex-transcripts/1-attempt-1-123.log" {
+			found = true
+			transcriptData, err = io.ReadAll(tr)
+			if err != nil {
+				t.Fatalf("failed to read transcript entry: %v", err)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("debug bundle omitted the provider transcript entirely, want it included (redacted)")
+	}
+	if strings.Contains(string(transcriptData), secretValue) {
+		t.Fatalf("debug bundle leaked the raw secret value in the provider transcript:\n%s", transcriptData)
+	}
+	if !strings.Contains(string(transcriptData), "[REDACTED]") {
+		t.Fatalf("debug bundle transcript has no redaction marker, want the secret-shaped line redacted:\n%s", transcriptData)
+	}
+	if !strings.Contains(string(transcriptData), "turn completed turn_id=turn-1") {
+		t.Fatalf("debug bundle transcript lost non-secret evidence it should have preserved:\n%s", transcriptData)
+	}
+}
+
 func TestDebugCmd_RunIDContents(t *testing.T) {
 	tmpDir := t.TempDir()
 

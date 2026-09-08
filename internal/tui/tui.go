@@ -2572,6 +2572,17 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 		modelLine += dimStyle.Render("—")
 	}
 
+	// providerLine exposes which SubagentProvider ran this task (spec.md
+	// §36 Phase 7 PR-16) — only when it is something other than the
+	// hufu-local default, to keep the common case's detail view
+	// uncluttered. Only the Hufu-assigned provider name is ever shown here,
+	// never anything provider-issued (session id, transcript) that could
+	// carry a secret.
+	var providerLine string
+	if provider := strings.TrimSpace(item.SubagentProvider); provider != "" && provider != "hufu-local" {
+		providerLine = dimStyle.Render("provider: ") + dimStyle.Render(provider)
+	}
+
 	var skillsLine string
 	if len(item.Skills) > 0 {
 		skillsLine = skillStyle.Render("skills: " + strings.Join(item.Skills, " · "))
@@ -2596,7 +2607,11 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 
 	var parts []string
 	parts = append(parts, titleLine)
-	parts = append(parts, agentLine+"  "+modelLine)
+	agentModelLine := agentLine + "  " + modelLine
+	if providerLine != "" {
+		agentModelLine += "  " + providerLine
+	}
+	parts = append(parts, agentModelLine)
 	if skillsLine != "" {
 		parts = append(parts, skillsLine)
 	}

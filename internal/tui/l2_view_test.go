@@ -350,6 +350,39 @@ func TestView_DetailContent(t *testing.T) {
 	}
 }
 
+// TestView_DetailShowsNonLocalProviderIdentity proves spec.md §36 Phase 7
+// PR-16's TUI half: a task whose SubagentProvider is not the hufu-local
+// default shows that provider name in its detail view, while an
+// unset/hufu-local task's detail view stays uncluttered (no "provider:"
+// line at all) — the common case is the overwhelming majority of tasks, and
+// this view has limited terminal width to work with, unlike the full
+// markdown report.
+func TestView_DetailShowsNonLocalProviderIdentity(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "t"})
+	m.width = 100
+	m.height = 30
+	m.tasks = []*team.TodoItem{
+		{ID: "t1", Status: team.TaskDone, Desc: "Reviewed via Codex", Agent: "reviewer", SubagentProvider: "codex"},
+		{ID: "t2", Status: team.TaskDone, Desc: "Local task", Agent: "worker", SubagentProvider: "hufu-local"},
+	}
+	m.inDetail = true
+	m.vpReady = true
+	m.vp.Width = 100
+	m.vp.Height = 20
+
+	m.detailID = "t1"
+	view := m.renderDetailHeader(m.tasks[0])
+	if !containsView(view, "provider: codex") {
+		t.Errorf("detail header for a codex-backed task missing provider identity:\n%s", view)
+	}
+
+	m.detailID = "t2"
+	view = m.renderDetailHeader(m.tasks[1])
+	if containsView(view, "provider:") {
+		t.Errorf("detail header for a hufu-local task should not show a provider line, got:\n%s", view)
+	}
+}
+
 func TestView_DetailEmptyLogs(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	m.width = 100

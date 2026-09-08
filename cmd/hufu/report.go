@@ -151,6 +151,26 @@ func formatVerificationSummary(item *team.TodoItem) string {
 	return fmt.Sprintf("%s: %s (%s)", status, limitStr(cmd, 120), item.VerifyResult.Duration.Round(time.Millisecond))
 }
 
+// reportProviderIdentity renders a task's SubagentProvider (spec.md §37
+// PR-16, "expose provider identity without leaking secrets"). It is always a
+// short, Hufu-assigned provider name (e.g. "codex", "hufu-local") — never a
+// session id, transcript, or anything provider-issued that could carry a
+// secret; ProviderBinding's own fields (session id, sandbox, effective
+// model) are diagnostic-only and deliberately left out of the report.
+func reportProviderIdentity(item *team.TodoItem) string {
+	if item == nil {
+		return ""
+	}
+	if provider := strings.TrimSpace(item.SubagentProvider); provider != "" {
+		return provider
+	}
+	// A legacy occurrence created before durable provider binding existed
+	// (spec.md §41 migration) has no recorded provider at all; it always ran
+	// hufu-local, so report that explicitly rather than an empty cell that
+	// could read as "unknown".
+	return "hufu-local"
+}
+
 func gatherReportData(tc *teamContext, teamName string) *reportData {
 	d := &reportData{
 		TaskHistory:           make(map[string]string),
@@ -662,8 +682,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
-		b.WriteString("| ID | Status | Agent | Description | Detail | Verify | Duration |\n")
-		b.WriteString("|----|--------|-------|-------------|--------|--------|----------|\n")
+		b.WriteString("| ID | Status | Agent | Provider | Description | Detail | Verify | Duration |\n")
+		b.WriteString("|----|--------|-------|----------|-------------|--------|--------|----------|\n")
 		for _, t := range data.Todos {
 			statusIcon := taskStatusIcons[t.Status]
 			if statusIcon == "" {
@@ -675,8 +695,8 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			if !t.EndedAt.IsZero() && !t.StartedAt.IsZero() {
 				dur = t.EndedAt.Sub(t.StartedAt).Round(time.Second).String()
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n",
-				t.ID, statusIcon, t.Agent, t.Desc, detail, verify, dur)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+				t.ID, statusIcon, t.Agent, reportProviderIdentity(t), t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n---\n\n")
 	}

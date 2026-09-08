@@ -139,6 +139,46 @@ func TestBuildReportMDIncludesVerificationEvidence(t *testing.T) {
 	}
 }
 
+// TestReportShowsProviderIdentity is spec.md §36 Phase 7 PR-16's named
+// test: the report's Task Summary table must show which SubagentProvider
+// ran each task — a Codex-backed task and a hufu-local one distinguishably,
+// including a legacy occurrence with no recorded provider at all
+// defaulting to the same "hufu-local" every such task actually ran under
+// (§41 migration) — and must never show anything provider-issued (a
+// session id, transcript content, or anything else that could carry a
+// secret) alongside it.
+func TestReportShowsProviderIdentity(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		Todos: []*team.TodoItem{
+			{ID: "1", Agent: "worker", Desc: "codex task", Status: team.TaskDone, SubagentProvider: "codex",
+				ProviderBinding: &team.ProviderBinding{Provider: "codex", SessionID: "thread-secret-session-id"}},
+			{ID: "2", Agent: "worker", Desc: "local task", Status: team.TaskDone, SubagentProvider: "hufu-local"},
+			{ID: "3", Agent: "worker", Desc: "legacy task", Status: team.TaskDone},
+		},
+	}
+
+	report := buildReportMD(data, "demo", "finished")
+
+	if !strings.Contains(report, "| Provider |") {
+		t.Fatalf("report missing Provider column header:\n%s", report)
+	}
+	if !strings.Contains(report, "| codex |") {
+		t.Fatalf("report missing the codex-backed task's provider identity:\n%s", report)
+	}
+	if !strings.Contains(report, "| hufu-local |") {
+		t.Fatalf("report missing the hufu-local task's provider identity:\n%s", report)
+	}
+	// A legacy occurrence with no recorded SubagentProvider must still show
+	// "hufu-local" — the provider it actually ran under — not an empty cell.
+	if got := strings.Count(report, "| hufu-local |"); got < 2 {
+		t.Fatalf("report shows hufu-local %d time(s), want at least 2 (the explicit task and the legacy one):\n%s", got, report)
+	}
+	if strings.Contains(report, "thread-secret-session-id") {
+		t.Fatalf("report leaked the provider session id, want only the provider name exposed:\n%s", report)
+	}
+}
+
 // WP-0 fixes the baseline report projection for a generic batch. It must show
 // individual child state and failed objective evidence without depending on a
 // consumer-specific item name or presentation format.
@@ -165,9 +205,9 @@ func TestCharacterizationReportProjectsGenericChildStates(t *testing.T) {
 	}
 	taskSummary := report[taskSummaryStart : taskSummaryStart+taskSummaryEnd]
 	for _, want := range []string{
-		"| 1 | ● | worker | process alpha |",
-		"| 2 | ✗ | worker | process beta |",
-		"| 3 | ○ | worker | process gamma |",
+		"| 1 | ● | worker | hufu-local | process alpha |",
+		"| 2 | ✗ | worker | hufu-local | process beta |",
+		"| 3 | ○ | worker | hufu-local | process gamma |",
 	} {
 		if !strings.Contains(taskSummary, want) {
 			t.Fatalf("task summary missing canonical task state/description %q:\n%s", want, taskSummary)
