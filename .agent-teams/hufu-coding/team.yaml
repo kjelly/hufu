@@ -1,0 +1,102 @@
+name: hufu-coding
+description: "Hufu-owned SA -> Codex coder -> verify -> review -> final-SA coding workflow"
+max-rounds: 64
+max-steps: 96
+timeout: 3600
+verify-timeout: 1800
+max-retries: 2
+max-concurrent: 1
+workspace: workspace
+goal-mode: outcome
+execution-profile: fresh-session
+unattended: true
+max-duration: 21600
+max-total-tokens: 0
+allow-free-text-results: false
+
+subagent-providers:
+  codex:
+    type: codex-app-server
+    command: [codex, -c, "agents.enabled=false", -c, "features.multi_agent_v2=false", app-server]
+    startup-timeout: "30s"
+    interrupt-grace: "5s"
+    shutdown-grace: "5s"
+    inherit-env: [PATH, CODEX_HOME, HOME]
+
+delegation:
+  bind-task-goal-contracts: true
+  allowed-workers: [sa, coder, verifier, reviewer, final-sa]
+  no-redispatch-after-success: [sa]
+
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+
+# Static task contracts freeze side effect, provider-relevant execution
+# semantics, verification, retry budget, and (for verifier/reviewer/final-sa)
+# the on-failure-classes reliability policy per role. The coordinator's own
+# dynamic batch call only ever supplies goal/depends_on/on_failure — it
+# cannot widen a role's side effect or bypass the failure-class gate below.
+# Each agent below has exactly one contract, so contract binding never
+# depends on the coordinator repeating the literal goal token verbatim
+# (internal/team/contract_compile.go: a worker with exactly one configured
+# goal contract binds by agent identity alone).
+tasks:
+  - agent: sa
+    when-goal-contains: "SA_ANALYZE"
+    side_effect: none
+    recovery: retry
+    max_retries: 2
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+
+  - agent: coder
+    when-goal-contains: "CODER_IMPLEMENT"
+    side_effect: workspace_write
+    recovery: retry
+    max_retries: 2
+    execution:
+      requires-result: true
+
+  - agent: verifier
+    when-goal-contains: "VERIFY_IMPLEMENTATION"
+    side_effect: none
+    recovery: retry
+    max_retries: 4
+    on-failure-classes: [verification]
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - { pointer: /facts/all_checks_passed, op: equals, value: true }
+
+  - agent: reviewer
+    when-goal-contains: "REVIEW_CODE"
+    side_effect: none
+    recovery: retry
+    max_retries: 4
+    on-failure-classes: [verification]
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - { pointer: /facts/must_fix_found, op: equals, value: false }
+
+  - agent: final-sa
+    when-goal-contains: "FINAL_SA_GATE"
+    side_effect: none
+    recovery: retry
+    max_retries: 2
+    on-failure-classes: [verification]
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - { pointer: /facts/request_satisfied, op: equals, value: true }
