@@ -386,3 +386,74 @@ func TestCodexSmokeInvalidArtifactProposalRejected(t *testing.T) {
 		t.Fatalf("result = %#v, want no canonical result for a rejected fabricated-artifact proposal", result)
 	}
 }
+
+// codexNativeMultiAgentToolNames are the concrete tool names spec.md §2.2
+// names as the Codex native multi-agent surface Hufu must never depend on
+// (wait_agent, send_input, close_agent) plus the obvious spawn counterpart.
+// If the live app-server exposes any of these to the model despite the
+// hufu-coding team.yaml's -c agents.enabled=false -c
+// features.multi_agent_v2=false overrides (see
+// TestHufuCodingCodexProviderDisablesNativeMultiAgent's config-lint half),
+// this is the one place that would actually notice, since Hufu's own client
+// code never negotiates or inspects a tool list itself (there is nothing to
+// unit-test against a fake server here — the fake server only ever offers
+// what the test script says).
+var codexNativeMultiAgentToolNames = []string{"spawn_agent", "wait_agent", "send_input", "close_agent"}
+
+// TestCodexSmokeNativeMultiAgentToolsUnavailable is the behavioral half of
+// spec.md test-matrix item I (the config half is
+// TestHufuCodingCodexProviderDisablesNativeMultiAgent): against the real
+// installed Codex CLI, started with the exact hufu-coding command
+// (agents.enabled=false, features.multi_agent_v2=false), the model must
+// report it has no tool for spawning, delegating to, or waiting on another
+// agent. Assertion is deliberately on the absence of the known native
+// tool-name signatures, not on exact wording, per this suite's stated
+// philosophy (loose on content, strict on protocol/safety outcomes).
+func TestCodexSmokeNativeMultiAgentToolsUnavailable(t *testing.T) {
+	codexSmokeRequireReady(t)
+	workspace := newCodexSmokeWorkspace(t)
+	store, err := NewEventStore(workspace, "codex-smoke-run", "codex-smoke-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	c := &Coordinator{
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "codex-smoke"}},
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		sessionData:    NewSession(),
+		eventStore:     store,
+		executionRunID: "codex-smoke-run",
+		reportStatus:   func(StatusEvent) {},
+	}
+	// The exact command hufu-coding/team.yaml configures, not the plain
+	// "codex app-server" newCodexSmokeHarness uses elsewhere in this file —
+	// this test exists specifically to prove *these* overrides work live.
+	provider := NewCodexSubagentProvider(c, "codex", agent.SubagentProviderConfig{
+		Type:           codexAppServerProviderType,
+		Command:        []string{"codex", "-c", "agents.enabled=false", "-c", "features.multi_agent_v2=false", "app-server"},
+		InheritEnv:     codexSmokeInheritEnv,
+		StartupTimeout: "20s", InterruptGrace: "3s", ShutdownGrace: "5s",
+	})
+	item := newCodexSmokeItem(c, "list agent-spawning tools")
+
+	request := AttemptRequest{
+		RunID: "codex-smoke-run", TaskID: item.ID, Attempt: 1,
+		Task:   TaskDef{Agent: "worker", Goal: "list agent-spawning tools", SideEffect: SideEffectNone},
+		Prompt: "List every tool available to you right now, one per line, by its exact tool name. Do not create, modify, or delete any files. Do not attempt to use any tool other than listing them.",
+		ModelID: codexSmokeModelID(), Provider: "codex", Timeout: 5 * time.Minute,
+	}
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if result.CanonicalResult == nil {
+		t.Fatal("want a canonical result for a read-only tool-listing task")
+	}
+	reported := strings.ToLower(result.CanonicalResult.Summary + " " + result.CanonicalResult.Details)
+	for _, name := range codexNativeMultiAgentToolNames {
+		if strings.Contains(reported, name) {
+			t.Fatalf("Codex reported the native multi-agent tool %q as available despite agents.enabled=false/features.multi_agent_v2=false; result=%#v", name, result.CanonicalResult)
+		}
+	}
+}
