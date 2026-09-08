@@ -439,8 +439,8 @@ func TestCodexSmokeNativeMultiAgentToolsUnavailable(t *testing.T) {
 
 	request := AttemptRequest{
 		RunID: "codex-smoke-run", TaskID: item.ID, Attempt: 1,
-		Task:   TaskDef{Agent: "worker", Goal: "list agent-spawning tools", SideEffect: SideEffectNone},
-		Prompt: "List every tool available to you right now, one per line, by its exact tool name. Do not create, modify, or delete any files. Do not attempt to use any tool other than listing them.",
+		Task:    TaskDef{Agent: "worker", Goal: "list agent-spawning tools", SideEffect: SideEffectNone},
+		Prompt:  "List every tool available to you right now, one per line, by its exact tool name. Do not create, modify, or delete any files. Do not attempt to use any tool other than listing them.",
 		ModelID: codexSmokeModelID(), Provider: "codex", Timeout: 5 * time.Minute,
 	}
 	result, err := provider.RunAttempt(context.Background(), request)
