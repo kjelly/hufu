@@ -846,6 +846,11 @@ retryLoop:
 		var output string
 		var steps []fantasy.StepResult
 		var err error
+		// attemptProviderTurnID is this attempt's diagnostic provider turn
+		// identity (§20), captured only when dispatch went through an external
+		// SubagentProvider — reset each attempt so a retry's receipt never
+		// carries a stale prior turn id.
+		var attemptProviderTurnID string
 		checkpointStopped := false
 		// attemptTokens is assigned inside the closure below and read after it
 		// returns, so its growth-based snapshot (see attempt_budget.go) can
@@ -1020,6 +1025,7 @@ retryLoop:
 					}
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
 					ag = attemptResult.agent
+					attemptProviderTurnID = attemptResult.ProviderTurnID
 				}
 			}
 			if _, stopped := asCheckpointControlError(err); stopped {
@@ -1093,6 +1099,19 @@ retryLoop:
 				Exhausted: stepBudget > 0 && len(steps) >= stepBudget,
 			},
 			ToolDispositions: attemptDispositions.snapshot(),
+			// Provider identity is always recorded, hufu-local included — §20's
+			// "MUST NOT be overloaded as the only provider/session field" means
+			// ProducerID staying the isolated-worker identity is not enough on
+			// its own. SessionID/ExecutionWorldID come from the durable
+			// ProviderBinding (already persisted before any turn ran, §7.4) since
+			// they outlive any one attempt; ProviderTurnID is this attempt's own,
+			// diagnostic-only, so it comes from the attempt itself.
+			SubagentProvider: task.SubagentProvider,
+			ProviderTurnID:   attemptProviderTurnID,
+		}
+		if durable := c.todoItemByID(todoID); durable != nil && durable.ProviderBinding != nil {
+			receipt.ProviderSessionID = durable.ProviderBinding.SessionID
+			receipt.ExecutionWorldID = durable.ProviderBinding.ExecutionWorldID
 		}
 		if err == nil {
 			zero := 0

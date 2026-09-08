@@ -139,6 +139,20 @@ type ExecutionReceipt struct {
 	ProducerID       string               `json:"producer_id,omitempty"`
 	ArtifactScope    *ArtifactAccessScope `json:"artifact_scope,omitempty"`
 	TranscriptRef    string               `json:"transcript_ref,omitempty"`
+	// SubagentProvider/ProviderSessionID/ProviderTurnID/ExecutionWorldID/
+	// WorkspaceBefore/WorkspaceAfter are Hufu-written provider provenance
+	// (docs/hufu-external-coding-agent-runtime-spec.md §20). ProducerID may
+	// continue to carry the isolated-worker identity, but these are the
+	// dedicated provider/session fields — never overloaded onto ProducerID.
+	// Reports/TUI/debug bundle (§37 PR-16) read these to show provider
+	// identity without ever needing (or having access to) any provider
+	// secret.
+	SubagentProvider  string `json:"subagent_provider,omitempty"`
+	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	ProviderTurnID    string `json:"provider_turn_id,omitempty"`
+	ExecutionWorldID  string `json:"execution_world_id,omitempty"`
+	WorkspaceBefore   string `json:"workspace_before,omitempty"`
+	WorkspaceAfter    string `json:"workspace_after,omitempty"`
 	// SubmittedResult retains a structurally valid but non-terminal worker
 	// handoff for this exact attempt. It is evidence for a bounded replay and
 	// must never satisfy the next attempt's requires-result contract.
