@@ -288,3 +288,44 @@ func TestDirectCodexWorkerPreservesNormalTaskSemantics(t *testing.T) {
 		t.Fatalf("ExecutionReceipt = %#v, want provider identity recorded (§20) exactly as the coordinated path records it", item.ExecutionReceipt)
 	}
 }
+
+// TestCodexReviewWorksetStyleTaskSatisfiesFilesReadVerifySpec proves the
+// §38/§9.1 files_read extension closes the gap that same section documented:
+// a task shaped like hufu-code-review's review-workset — task_result_assert
+// verify-spec requiring /files_read with at least one item — can now reach
+// TaskDone through a Codex-routed attempt, driven through the full
+// production dispatch path (not just the canonicalizer in isolation).
+func TestCodexReviewWorksetStyleTaskSatisfiesFilesReadVerifySpec(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	worker := &agent.AgentDef{
+		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 0,
+		Generation: agent.GenerationParams{Model: "gpt-5-codex"},
+	}
+	verify := &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
+		{Pointer: "/summary", Op: "non_empty"},
+		{Pointer: "/files_read", Op: "min_items", Value: 1},
+	}}
+	turnStep := fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON(`"files_read":["reviewed.go"]`))
+	turnStep.WriteFile, turnStep.WriteFileContent = "reviewed.go", "package main\n"
+	c, item := newCodexEndToEndCoordinator(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-files-read", workspace),
+		turnStep,
+	}, worker, verify)
+
+	task := TaskDef{
+		Agent: worker.Name, Goal: "baseline worker task", SideEffect: SideEffectWorkspaceWrite,
+		Execution: ExecutionContract{RequiresResult: true}, VerifySpec: verify,
+	}
+	if _, err := c.executeTask(context.Background(), task, item.ID); err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	got := c.taskTracker.TodoList().Items()[0]
+	if got.Status != TaskDone {
+		t.Fatalf("task status = %s, want done", got.Status)
+	}
+	typedRes := c.GetTaskResult(item.ID)
+	if typedRes == nil || len(typedRes.FilesRead) != 1 || typedRes.FilesRead[0].Path != "reviewed.go" {
+		t.Fatalf("TaskResult.FilesRead = %#v, want exactly reviewed.go carried through from the Codex proposal", typedRes)
+	}
+}

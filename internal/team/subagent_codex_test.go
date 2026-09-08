@@ -608,3 +608,239 @@ func TestCodexResumeAfterHufuRestart(t *testing.T) {
 		t.Fatalf("recorded calls = %v, want no fresh thread/start — the durable session must be reused", methods)
 	}
 }
+
+// TestCodexRejectsExtraModelFanout proves §29: a task whose ModelTopology
+// has more than one leaf (Hufu's own extra-model fanout) fails closed before
+// any process or RPC activity, rather than silently running a single Codex
+// occurrence as if it had covered every leaf — v1 has no implementation
+// routing Hufu's local fanout concept into Codex's own internal behavior.
+func TestCodexRejectsExtraModelFanout(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, rawLogPath := newCodexHarness(t, workspace, nil)
+
+	request := codexAttemptRequest(item, "do the work")
+	request.Task.ModelTopology = []string{"gpt-5-codex", "gpt-5-codex-mini"}
+
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err == nil {
+		t.Fatal("expected RunAttempt to reject a multi-leaf ModelTopology")
+	}
+	var provErr *CodexProviderError
+	if !errors.As(err, &provErr) || provErr.Class != CodexFailureUnavailable {
+		t.Fatalf("err = %v, want a classified %q failure", err, CodexFailureUnavailable)
+	}
+	if result.CanonicalResult != nil {
+		t.Fatalf("result = %#v, want no canonical result for a rejected fanout request", result)
+	}
+	if calls := readRawCalls(t, rawLogPath); len(calls) != 0 {
+		t.Fatalf("recorded calls = %v, want no process/RPC activity before rejection", rawCallMethods(t, calls))
+	}
+}
+
+// TestCodexAllowsSingleLeafModelTopology proves the §29 guard only rejects
+// an actual fanout (more than one leaf) — a normal single-model task, which
+// happens to carry a length-1 ModelTopology (the common case set by
+// initialTaskModelTopology), must still run normally.
+func TestCodexAllowsSingleLeafModelTopology(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-single-leaf", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
+	})
+
+	request := codexAttemptRequest(item, "do the work")
+	request.Task.ModelTopology = []string{"gpt-5-codex"}
+
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if result.CanonicalResult == nil {
+		t.Fatalf("result = %#v, want a canonical result for a single-leaf topology", result)
+	}
+}
+
+// TestCodexPreflightRejectsMissingExecutable exercises §25's "preflight
+// failure MUST occur before the task enters provider execution": a
+// nonexistent executable must fail RunAttempt without any process/RPC
+// activity, via the plain LookPath check in codexRunCheapPreflightChecks.
+func TestCodexPreflightRejectsMissingExecutable(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	c := &Coordinator{
+		session:      &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-test"}},
+		projectDir:   workspace,
+		taskTracker:  NewTaskTracker(),
+		sessionData:  NewSession(),
+		reportStatus: func(StatusEvent) {},
+	}
+	provider := NewCodexSubagentProvider(c, "codex", agent.SubagentProviderConfig{
+		Type:    codexAppServerProviderType,
+		Command: []string{"definitely-not-a-real-codex-binary-xyz"},
+	})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "x", Goal: "x"}})[0]
+
+	_, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err == nil {
+		t.Fatal("expected RunAttempt to fail preflight for a missing executable")
+	}
+	var provErr *CodexProviderError
+	if !errors.As(err, &provErr) || provErr.Class != CodexFailureUnavailable {
+		t.Fatalf("err = %v, want a classified %q failure", err, CodexFailureUnavailable)
+	}
+}
+
+// TestCodexPreflightRejectsMissingCodexHomeAuth exercises the CODEX_HOME
+// authentication heuristic: when CODEX_HOME is inherited but has no
+// auth.json, preflight must fail closed before any subprocess is started —
+// the configured Command here (os.Args[0]) is never actually invoked, since
+// there is no fake-server script wired up.
+func TestCodexPreflightRejectsMissingCodexHomeAuth(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	t.Setenv("CODEX_HOME", t.TempDir())
+
+	c := &Coordinator{
+		session:      &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-test"}},
+		projectDir:   workspace,
+		taskTracker:  NewTaskTracker(),
+		sessionData:  NewSession(),
+		reportStatus: func(StatusEvent) {},
+	}
+	provider := NewCodexSubagentProvider(c, "codex", agent.SubagentProviderConfig{
+		Type:       codexAppServerProviderType,
+		Command:    []string{os.Args[0]},
+		InheritEnv: []string{"CODEX_HOME"},
+	})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "x", Goal: "x"}})[0]
+
+	_, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err == nil {
+		t.Fatal("expected RunAttempt to fail preflight for CODEX_HOME with no auth.json")
+	}
+	var provErr *CodexProviderError
+	if !errors.As(err, &provErr) || provErr.Class != CodexFailureUnavailable {
+		t.Fatalf("err = %v, want a classified %q failure", err, CodexFailureUnavailable)
+	}
+}
+
+// TestCodexPreflightCachesAcrossAttempts confirms §25's "cacheable by
+// provider binary/version" behavior: once a provider instance has passed
+// preflight, a later attempt on the same instance must reuse the cached
+// result rather than re-running the CODEX_HOME/auth.json check — proven here
+// by deleting auth.json between two attempts and observing the second one
+// still succeeds.
+func TestCodexPreflightCachesAcrossAttempts(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	codexHome := t.TempDir()
+	authPath := filepath.Join(codexHome, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+
+	scriptDir := t.TempDir()
+	scriptPath := filepath.Join(scriptDir, "script.json")
+	rawLogPath := filepath.Join(scriptDir, "raw_calls.log")
+	steps := []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-preflight-cache-1", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-preflight-cache-2", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-2", validProposalJSON("")),
+	}
+	data, err := json.Marshal(fakeCodexScript{Steps: steps, RawLogPath: rawLogPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scriptPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fakeCodexServerScriptEnvVar, scriptPath)
+
+	store, err := NewEventStore(workspace, "codex-attempt-run", "codex-attempt-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	c := &Coordinator{
+		session:        &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-cache-test"}},
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		sessionData:    NewSession(),
+		eventStore:     store,
+		executionRunID: "codex-attempt-run",
+		reportStatus:   func(StatusEvent) {},
+	}
+	provider := NewCodexSubagentProvider(c, "codex", agent.SubagentProviderConfig{
+		Type:           codexAppServerProviderType,
+		Command:        []string{os.Args[0]},
+		InheritEnv:     []string{fakeCodexServerScriptEnvVar, "CODEX_HOME"},
+		StartupTimeout: "5s", InterruptGrace: "200ms", ShutdownGrace: "200ms",
+	})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "codex attempt", Goal: "codex attempt"}})[0]
+
+	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err != nil {
+		t.Fatalf("first RunAttempt: %v", err)
+	}
+	if result.CanonicalResult == nil {
+		t.Fatal("first RunAttempt: want a canonical result")
+	}
+
+	if err := os.Remove(authPath); err != nil {
+		t.Fatal(err)
+	}
+
+	item2 := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "codex attempt 2", Goal: "codex attempt 2"}})[0]
+	request2 := AttemptRequest{
+		RunID: "codex-attempt-run", TaskID: item2.ID, Attempt: 1,
+		Task:   TaskDef{Agent: "worker", Goal: "codex attempt", SideEffect: SideEffectWorkspaceWrite},
+		Prompt: "do the work", ModelID: "gpt-5-codex", Provider: "codex",
+	}
+	result2, err := provider.RunAttempt(context.Background(), request2)
+	if err != nil {
+		t.Fatalf("second RunAttempt (expected cached preflight to skip auth.json re-check): %v", err)
+	}
+	if result2.CanonicalResult == nil {
+		t.Fatal("second RunAttempt: want a canonical result")
+	}
+}
+
+// TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset proves a fix
+// found by actually running the §38 live smoke suite against a real
+// account: every scenario failed preflight with "CODEX_HOME is not set"
+// even though a real, authenticated CODEX_HOME existed at the real CLI's own
+// default location — because the environment simply never exported
+// CODEX_HOME explicitly. The real codex CLI itself defaults to
+// $HOME/.codex, so preflight must apply the same fallback rather than
+// treating an unset CODEX_HOME as an outright failure.
+func TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset(t *testing.T) {
+	fakeHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(fakeHome, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeHome, ".codex", "auth.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("CODEX_HOME", "")
+
+	if err := codexHomeLooksAuthenticated(); err != nil {
+		t.Fatalf("codexHomeLooksAuthenticated() = %v, want it to fall back to $HOME/.codex and succeed", err)
+	}
+}
+
+// TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile proves the
+// fallback still fails closed — it is a real check, not a bypass — when the
+// default $HOME/.codex has no auth.json either.
+func TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("CODEX_HOME", "")
+
+	if err := codexHomeLooksAuthenticated(); err == nil {
+		t.Fatal("codexHomeLooksAuthenticated() = nil, want an error when the default $HOME/.codex has no auth.json")
+	}
+}

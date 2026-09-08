@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -98,18 +100,160 @@ type CodexSubagentProvider struct {
 	coordinator *Coordinator
 	name        string
 	config      agent.SubagentProviderConfig
+	preflight   *codexPreflightCache
 }
 
 // NewCodexSubagentProvider builds a codex-app-server provider from its
 // parsed team config (§6.1), registered under name. Construction performs no
 // process/model call — only structural readiness for later per-attempt
-// preflight (§27).
+// preflight (§25, §27).
 func NewCodexSubagentProvider(c *Coordinator, name string, config agent.SubagentProviderConfig) *CodexSubagentProvider {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
 		name = codexSubagentProviderName
 	}
-	return &CodexSubagentProvider{coordinator: c, name: name, config: config}
+	return &CodexSubagentProvider{coordinator: c, name: name, config: config, preflight: &codexPreflightCache{}}
+}
+
+// codexPreflightCache caches §25's provider-level preflight result across
+// RunAttempt calls — "cacheable by provider binary/version but MUST be
+// invalidated when executable identity changes". It is keyed by the
+// resolved executable's absolute path plus its size and modification time,
+// so a rebuilt or replaced binary at the same configured path automatically
+// invalidates the cache without needing an explicit version string to
+// track.
+//
+// This deliberately only covers the checks that need no subprocess: command
+// executable exists, execution world is supported, workspace root is valid,
+// and (when CODEX_HOME is inherited) it looks authenticated. §25 also lists
+// "app-server initialize works", "required protocol methods available",
+// "process-tree cleanup available", and §26's per-method capability checks
+// (thread/start accepted, turn/interrupt accepted or advertised, ...) —
+// these are NOT independently re-verified here via a second, throwaway
+// process. The real app-server has no side-effect-free capability-
+// introspection RPC (confirmed live against codex-cli 0.153.4, 2026-09-08 —
+// see §26's "Corrected" note and §13.3), so a dedicated preflight probe
+// could only ever repeat the exact same initialize handshake RunAttempt's
+// own StartCodexAppServer call already performs — a call that already
+// fails closed, before any workspace side effect, if the binary or
+// protocol is actually broken. A second probe would only double the
+// process-launch cost without adding a real safety property.
+type codexPreflightCache struct {
+	mu    sync.Mutex
+	key   string
+	err   error
+	valid bool
+}
+
+// run executes (or reuses a cached result of) p's cheap preflight checks.
+func (c *codexPreflightCache) run(p *CodexSubagentProvider) error {
+	key, keyErr := codexPreflightCacheKey(p.config.Command)
+	c.mu.Lock()
+	if c.valid && keyErr == nil && key == c.key {
+		err := c.err
+		c.mu.Unlock()
+		return err
+	}
+	c.mu.Unlock()
+
+	err := codexRunCheapPreflightChecks(p)
+	if keyErr == nil {
+		c.mu.Lock()
+		c.key, c.err, c.valid = key, err, true
+		c.mu.Unlock()
+	}
+	return err
+}
+
+// codexPreflightCacheKey resolves argv[0] to an absolute path and combines
+// it with the resolved file's size/mtime, so replacing the binary at the
+// same configured path is detected without any explicit version string.
+func codexPreflightCacheKey(argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", fmt.Errorf("no command configured")
+	}
+	resolved, err := exec.LookPath(argv[0])
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%d", resolved, info.Size(), info.ModTime().UnixNano()), nil
+}
+
+// codexRunCheapPreflightChecks implements the local, no-subprocess-needed
+// half of §25's preflight list. See codexPreflightCache's doc comment for
+// which checks are deliberately not included and why.
+func codexRunCheapPreflightChecks(p *CodexSubagentProvider) error {
+	if len(p.config.Command) == 0 {
+		return fmt.Errorf("codex provider has no configured command")
+	}
+	if _, err := exec.LookPath(p.config.Command[0]); err != nil {
+		return fmt.Errorf("executable %q not found: %w", p.config.Command[0], err)
+	}
+	if p.config.ExecutionWorld != "" && p.config.ExecutionWorld != localExecutionWorldName {
+		return fmt.Errorf("unsupported execution world %q", p.config.ExecutionWorld)
+	}
+	workspace := ""
+	if p.coordinator != nil {
+		workspace = p.coordinator.projectDir
+	}
+	if _, err := resolveSnapshotRoot(workspace); err != nil {
+		return fmt.Errorf("workspace root invalid: %w", err)
+	}
+	if codexHomeInherited(p.config.InheritEnv) {
+		if err := codexHomeLooksAuthenticated(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func codexHomeInherited(inheritEnv []string) bool {
+	for _, name := range inheritEnv {
+		if strings.EqualFold(strings.TrimSpace(name), "CODEX_HOME") {
+			return true
+		}
+	}
+	return false
+}
+
+// codexHomeLooksAuthenticated is a best-effort heuristic, not a guarantee:
+// Hufu cannot safely make a real authenticated API call during preflight —
+// that would be a genuine side effect and cost, not a preflight check — so
+// this only confirms CODEX_HOME points at a directory containing the auth
+// file the real CLI writes on login. auth.json's content is never read or
+// validated; that is exactly the kind of secret material Hufu must never
+// touch.
+//
+// **Fixed 2026-09-08** (found running the real §38 smoke suite against a
+// genuine account for the first time): an unset CODEX_HOME env var used to
+// be treated as an outright preflight failure. That is wrong — the real
+// codex CLI itself defaults to `$HOME/.codex` when CODEX_HOME is not set,
+// and a team.yaml listing "CODEX_HOME" in inherit-env is declaring "let the
+// child see whatever CODEX_HOME resolves to", not "CODEX_HOME must be
+// explicitly exported". Every live smoke scenario failed preflight with
+// "CODEX_HOME is not set" until this fallback was added to match the real
+// CLI's own default resolution.
+func codexHomeLooksAuthenticated() error {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("CODEX_HOME is not set and the default ($HOME/.codex) could not be resolved: %w", err)
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	info, err := os.Stat(home)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("CODEX_HOME %q is not a directory: %w", home, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); err != nil {
+		return fmt.Errorf("CODEX_HOME %q has no auth.json (codex login required): %w", home, err)
+	}
+	return nil
 }
 
 func (p *CodexSubagentProvider) Name() string { return p.name }
@@ -196,11 +340,25 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("codex attempt requires a coordinator")
 	}
-	if len(p.config.Command) == 0 {
-		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex provider has no configured command"))
+	// §25: preflight failure MUST occur before the task enters provider
+	// execution — this runs (or reuses a cached result) before any process,
+	// workspace, or protocol activity below.
+	preflight := p.preflight
+	if preflight == nil {
+		preflight = &codexPreflightCache{}
 	}
-	if p.config.ExecutionWorld != "" && p.config.ExecutionWorld != localExecutionWorldName {
-		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("unsupported execution world %q", p.config.ExecutionWorld))
+	if err := preflight.run(p); err != nil {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex preflight: %w", err))
+	}
+	// §29: Hufu's ModelTopology (local extra-model fanout) is a separate
+	// concept from Codex's own internal multi-agent behavior, and v1 has no
+	// implementation routing one to the other. Silently running a single
+	// Codex occurrence for a multi-leaf ModelTopology would misrepresent
+	// Codex as having covered every leaf when it only ever saw one prompt;
+	// fail closed instead of reinterpreting local fanout as something Codex
+	// never agreed to do.
+	if len(request.Task.ModelTopology) > 1 {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex provider does not support extra-model fanout (ModelTopology has %d entries); route this task through hufu-local or reduce it to a single model", len(request.Task.ModelTopology)))
 	}
 
 	transcript := newCodexTranscript(p.config.MaxTranscriptBytes)
