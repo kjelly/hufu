@@ -812,6 +812,31 @@ func (tl *TodoList) SetVerificationResult(id string, result *VerificationResult)
 	return nil
 }
 
+// SetProviderBinding updates one Todo's ProviderBinding in place. It never
+// changes SubagentProvider (immutable after admission, §7.2); it is used
+// only to attach/refresh the mutable runtime portion (session/turn identity)
+// once an external provider establishes it mid-attempt.
+func (tl *TodoList) SetProviderBinding(id string, binding *ProviderBinding) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.ProviderBinding = cloneProviderBinding(binding)
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
 func (tl *TodoList) SetRuntimeError(id string, runtimeErr *ExecutionError) error {
 	tl.mu.Lock()
 	updated := false

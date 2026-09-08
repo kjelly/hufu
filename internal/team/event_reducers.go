@@ -332,6 +332,24 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 			continue
 		}
+		if e.Type == string(EventProviderSessionBound) && e.TaskID != "" {
+			var payload ProviderSessionBoundPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				if item := taskMap[e.TaskID]; item != nil {
+					binding := cloneProviderBinding(item.ProviderBinding)
+					if binding == nil {
+						binding = &ProviderBinding{}
+					}
+					binding.Provider = payload.Provider
+					binding.Protocol = payload.Protocol
+					binding.SessionID = payload.SessionID
+					binding.ExecutionWorldID = payload.ExecutionWorldID
+					binding.CWD = payload.CWD
+					item.ProviderBinding = binding
+				}
+			}
+			continue
+		}
 		if e.Type == "failure_fingerprint" {
 			var payload struct {
 				Fingerprint FailureFingerprint `json:"fingerprint"`

@@ -37,6 +37,12 @@ type fakeCodexStep struct {
 	NoResponse    bool                    `json:"no_response,omitempty"`
 	CloseAfter    bool                    `json:"close_after,omitempty"`
 	Notifications []fakeCodexNotification `json:"notifications,omitempty"`
+	// WriteFile, when set, is written (relative to the server process's own
+	// CWD, i.e. the prepared workspace root) before this step's response —
+	// simulating a real coding agent's side effect happening-before a
+	// subsequent crash/response, with no test timing race.
+	WriteFile        string `json:"write_file,omitempty"`
+	WriteFileContent string `json:"write_file_content,omitempty"`
 }
 
 // fakeCodexScript is the whole scripted program: steps plus where to log
@@ -98,6 +104,11 @@ func runFakeCodexAppServer(scriptPath string) {
 		step := steps[stepIndex]
 		stepIndex++
 
+		if step.WriteFile != "" {
+			if err := os.WriteFile(step.WriteFile, []byte(step.WriteFileContent), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, "fake codex server: write file:", err)
+			}
+		}
 		for _, notif := range step.Notifications {
 			writeFakeLine(out, map[string]any{"jsonrpc": "2.0", "method": notif.Method, "params": notif.Params})
 		}

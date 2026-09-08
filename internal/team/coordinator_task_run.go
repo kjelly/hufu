@@ -990,21 +990,34 @@ retryLoop:
 				if providerErr != nil {
 					err = providerErr
 				} else {
+					var providerBinding *ProviderBinding
+					if durable := c.todoItemByID(todoID); durable != nil {
+						providerBinding = durable.ProviderBinding
+					}
 					attemptResult, runErr := provider.RunAttempt(taskCtx, AttemptRequest{
-						RunID:    runID,
-						BranchID: c.activeBranchID(),
-						TaskID:   todoID,
-						Attempt:  attempt,
-						Agent:    agentDef,
-						Task:     task,
-						Prompt:   currentPrompt,
-						ModelID:  resolvedModel,
-						MaxSteps: stepBudget,
-						Tools:    resolvedTools,
-						History:  conversationHistory,
-						Provider: task.SubagentProvider,
-						timing:   timing,
+						RunID:           runID,
+						BranchID:        c.activeBranchID(),
+						TaskID:          todoID,
+						Attempt:         attempt,
+						Agent:           agentDef,
+						Task:            task,
+						Prompt:          currentPrompt,
+						ModelID:         resolvedModel,
+						MaxSteps:        stepBudget,
+						Tools:           resolvedTools,
+						History:         conversationHistory,
+						Provider:        task.SubagentProvider,
+						ProviderBinding: providerBinding,
+						timing:          timing,
 					})
+					// An external provider's canonical result is Hufu-owned
+					// Go code's own output (§9.3), not a provider claim —
+					// route it through the same storage path hufu-local's
+					// submit_result tool uses so both providers converge on
+					// one receipt/verification/completion pipeline.
+					if attemptResult.CanonicalResult != nil {
+						c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
+					}
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
 					ag = attemptResult.agent
 				}

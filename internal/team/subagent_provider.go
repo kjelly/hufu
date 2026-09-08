@@ -42,19 +42,43 @@ type AttemptRequest struct {
 }
 
 type AttemptResult struct {
+	// TypedResult is hufu-local compatibility only: its submit_result tool
+	// stores the canonical result as a side effect of the run itself
+	// (submitResultTool → storeSubmittedTaskResult), and this field is just a
+	// convenience copy of that already-stored result. An external provider
+	// MUST leave it nil (§8.3) — the coordinator never reads TypedResult from
+	// the AttemptResult an external provider returns.
 	Output      string
 	TypedResult *TaskResult
-	// ResultProposal is an external provider's untrusted final response
-	// (spec.md §8.3, §9.1). It is nil for hufu-local, which continues to
-	// populate TypedResult through the existing submit_result path.
-	ResultProposal    *WorkerResultProposal
+	// ResultProposal is an external provider's untrusted raw final response,
+	// kept for diagnostics/audit (spec.md §8.3, §9.1). It is nil for
+	// hufu-local.
+	ResultProposal *WorkerResultProposal
+	// CanonicalResult is the Hufu-owned result an external provider computed
+	// via ExternalResultCanonicalizer from ResultProposal and its own
+	// observed WorkspaceDelta (§9.3, §19, PR-11's "canonicalize" step). It is
+	// Hufu Go code producing this, not the untrusted provider process, so it
+	// does not violate INV-05 the way a provider-populated TypedResult would.
+	// The coordinator's dispatch code stores it via the same
+	// storeSubmittedTaskResult path hufu-local's submit_result tool uses, so
+	// both providers converge on one receipt/verification/completion
+	// pipeline. Nil for hufu-local.
+	CanonicalResult *TaskResult
+	// WorkspaceDelta is the actually-observed change for this attempt, when
+	// an external provider's ExecutionWorld captured one — populated even on
+	// a failed/cancelled attempt when a final snapshot was possible (§16.3:
+	// "post-cancel workspace snapshot"). Zero value for hufu-local.
+	WorkspaceDelta    WorkspaceDelta
 	Usage             ExecutionUsage
 	StepsUsed         int
 	StopReason        string
 	ProviderSessionID string
-	TranscriptRef     string
-	steps             []fantasy.StepResult
-	agent             fantasy.Agent
+	// ProviderTurnID is the last active provider turn, diagnostic only
+	// (mirrors ProviderBinding.TurnID's doc comment).
+	ProviderTurnID string
+	TranscriptRef  string
+	steps          []fantasy.StepResult
+	agent          fantasy.Agent
 }
 
 type AttemptRunner interface {

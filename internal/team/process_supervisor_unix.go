@@ -26,6 +26,15 @@ func (h *unixProcessHandle) Pid() int { return h.cmd.Process.Pid }
 
 func (h *unixProcessHandle) Wait() error { return h.cmd.Wait() }
 
+// waitRaw reaps the process directly (a plain wait4/waitid on the pid),
+// bypassing *exec.Cmd.Wait's join on any bridging io-copy goroutines it
+// spawned for non-*os.File Stdin/Stdout. See codex_process.go's
+// processRawWaiter doc comment for why this matters.
+func (h *unixProcessHandle) waitRaw() error {
+	_, err := h.cmd.Process.Wait()
+	return err
+}
+
 func (unixProcessSupervisor) Start(_ context.Context, spec ProcessSpec) (ProcessHandle, error) {
 	if len(spec.Argv) == 0 {
 		return nil, fmt.Errorf("process supervisor: argv is required")

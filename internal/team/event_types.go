@@ -40,6 +40,12 @@ const (
 	EventContextWindowDownshift                  EventType = "context_window_downshift"
 	EventModelProfileResolved                    EventType = "model_profile_resolved"
 	EventDecisionAdmitted                        EventType = "decision_admitted"
+	// EventProviderSessionBound records an external SubagentProvider's
+	// durable session identity (e.g. a Codex thread_id) established mid-attempt,
+	// after task_created but before the first turn that depends on it
+	// (docs/hufu-external-coding-agent-runtime-spec.md §7.4, §14.1: "persist
+	// provider_session_bound" happens between thread/start and turn/start).
+	EventProviderSessionBound EventType = "provider_session_bound"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -62,7 +68,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
-		EventModelProfileResolved, EventDecisionAdmitted:
+		EventModelProfileResolved, EventDecisionAdmitted, EventProviderSessionBound:
 		return true
 	default:
 		return false

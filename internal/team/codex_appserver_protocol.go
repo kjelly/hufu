@@ -12,11 +12,12 @@ import (
 // these functions are exercised directly against a fake app-server fixture.
 
 const (
-	codexMethodInitialize   = "initialize"
-	codexMethodThreadStart  = "thread/start"
-	codexMethodThreadResume = "thread/resume"
-	codexMethodTurnStart    = "turn/start"
-	codexMethodThreadRead   = "thread/read"
+	codexMethodInitialize    = "initialize"
+	codexMethodThreadStart   = "thread/start"
+	codexMethodThreadResume  = "thread/resume"
+	codexMethodTurnStart     = "turn/start"
+	codexMethodTurnInterrupt = "turn/interrupt"
+	codexMethodThreadRead    = "thread/read"
 
 	// codexNotificationTurnCompleted is the one notification the driver
 	// requires for correctness; every other notification is advisory
@@ -169,6 +170,21 @@ type codexTurnStartParams struct {
 
 type codexTurnStartResult struct {
 	TurnID string `json:"turn_id"`
+}
+
+type codexTurnInterruptParams struct {
+	ThreadID string `json:"thread_id"`
+	TurnID   string `json:"turn_id"`
+}
+
+// codexTurnInterrupt sends turn/interrupt, the first step of §16.1's
+// cancellation flow: a graceful, in-protocol request to stop the current
+// turn before Hufu escalates to signaling the process tree.
+func codexTurnInterrupt(ctx context.Context, client *CodexRPCClient, threadID, turnID string) error {
+	if err := client.Call(ctx, codexMethodTurnInterrupt, codexTurnInterruptParams{ThreadID: threadID, TurnID: turnID}, nil); err != nil {
+		return fmt.Errorf("codex turn/interrupt: %w", err)
+	}
+	return nil
 }
 
 type codexThreadReadParams struct {

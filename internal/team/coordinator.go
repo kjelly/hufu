@@ -2050,7 +2050,19 @@ func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
 	if c.subagentRegistry != nil {
 		return c.subagentRegistry
 	}
-	return NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+	registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+	if c.session != nil {
+		for name, cfg := range c.session.Config.SubagentProviders {
+			if cfg.Type != codexAppServerProviderType {
+				// An unrecognized provider type is never registered, so
+				// resolving it later fails closed as "unknown subagent
+				// provider" (§27) instead of silently doing nothing.
+				continue
+			}
+			_ = registry.Register(NewCodexSubagentProvider(c, name, cfg))
+		}
+	}
+	return registry
 }
 
 func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
