@@ -28,14 +28,26 @@ type AttemptRequest struct {
 	Timeout                 time.Duration
 	Tools                   ResolvedWorkerTools
 	History                 []fantasy.Message
+	// Provider is the durable occurrence's resolved SubagentProvider name
+	// (task.SubagentProvider at dispatch time). It is an assertion from Hufu,
+	// not a value the provider may set or override
+	// (docs/hufu-external-coding-agent-runtime-spec.md §8.2).
+	Provider string
+	// ProviderBinding carries the durable provider/session identity for this
+	// occurrence, when one exists. Nil for hufu-local.
+	ProviderBinding *ProviderBinding
 	// timing is package-private so Hufu-local can contribute to the existing
 	// receipt timing accumulator without exposing Fantasy internals in the DTO.
 	timing *taskTiming
 }
 
 type AttemptResult struct {
-	Output            string
-	TypedResult       *TaskResult
+	Output      string
+	TypedResult *TaskResult
+	// ResultProposal is an external provider's untrusted final response
+	// (spec.md §8.3, §9.1). It is nil for hufu-local, which continues to
+	// populate TypedResult through the existing submit_result path.
+	ResultProposal    *WorkerResultProposal
 	Usage             ExecutionUsage
 	StepsUsed         int
 	StopReason        string

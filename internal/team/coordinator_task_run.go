@@ -1002,6 +1002,7 @@ retryLoop:
 						MaxSteps: stepBudget,
 						Tools:    resolvedTools,
 						History:  conversationHistory,
+						Provider: task.SubagentProvider,
 						timing:   timing,
 					})
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
