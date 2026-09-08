@@ -298,7 +298,27 @@ type TaskResult struct {
 	Facts map[string]any `json:"facts,omitempty"`
 
 	Confidence float64 `json:"confidence"`
-	Source     string  `json:"source"` // "submitted", "promoted_free_text", or "parsed_free_text"
+	// Source is "submitted" (the local provider's own submit_result tool
+	// call), ExternalProviderProposalSource ("external_provider_proposal",
+	// an external provider's proposal after canonicalization, §9.3),
+	// "promoted_free_text", "parsed_free_text", or "recovered_protocol".
+	// isSubmittedResultSource below is the single place that decides which
+	// of these count as a genuine structured handoff.
+	Source string `json:"source"`
+}
+
+// isSubmittedResultSource reports whether source represents a genuine,
+// non-fabricated structured handoff — either the local provider's own
+// submit_result tool call ("submitted"), or an external provider's proposal
+// after Hufu's own untrusted-boundary canonicalization
+// (ExternalProviderProposalSource, §9.3) — as opposed to a promoted/parsed
+// free-text fallback that was never a structured handoff at all. The two are
+// treated identically downstream: Hufu already independently re-derived
+// every trusted field for the external case before a TaskResult with this
+// Source ever exists in memory, so schema validation and completion
+// semantics do not need to distinguish which one produced it.
+func isSubmittedResultSource(source string) bool {
+	return source == "submitted" || source == ExternalProviderProposalSource
 }
 
 const (
@@ -420,7 +440,7 @@ func (tr *TaskResult) FormatForContext() string {
 // worker may acknowledge submit_result in prose or emit nothing after it;
 // neither should hide the data the coordinator needs to continue safely.
 func coordinatorTaskOutput(fallback string, result *TaskResult) string {
-	if result != nil && result.Source == "submitted" {
+	if result != nil && isSubmittedResultSource(result.Source) {
 		if formatted := result.FormatForContext(); formatted != "" {
 			return formatted
 		}

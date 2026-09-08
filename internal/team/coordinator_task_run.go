@@ -1151,7 +1151,11 @@ retryLoop:
 			// handoff, but not a terminal completion. Preserve it on this exact
 			// receipt and route it through normal recovery as an execution
 			// failure; malformed submit_result data remains a protocol failure.
-			if typedRes != nil && typedRes.Source == "submitted" {
+			// An external provider's canonicalized proposal is the same kind of
+			// genuine structured handoff (isSubmittedResultSource) — without this,
+			// a Codex-reported partial/failed/blocked status would silently sail
+			// through to TaskDone instead of being classified as incomplete.
+			if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 				receipt.HandoffState = ResultHandoffSubmitted
 				if schemaErr := validateSubmittedTaskResult(typedRes); schemaErr != nil {
 					err = withFailureClassOverride(schemaErr, FailureProtocol)
@@ -1470,7 +1474,7 @@ retryLoop:
 					c.storeSubmittedTaskResult(todoID, recovered)
 					typedRes = recovered
 				}
-				if err == nil && typedRes != nil && typedRes.Source == "submitted" {
+				if err == nil && typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
 						err = withFailureClassOverride(resultErr, FailureExecution)
 					}
@@ -1557,7 +1561,7 @@ retryLoop:
 				}
 			}
 			if err == nil {
-				if typedRes != nil && typedRes.Source == "submitted" {
+				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					receipt.HandoffState = ResultHandoffSubmitted
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)

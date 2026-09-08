@@ -1300,7 +1300,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.eventJournal = eventStoreJournal{}
 	c.toolResolver = &defaultToolResolver{c: c}
 	c.modelRuntime = &defaultModelRuntime{c: c}
-	c.subagentRegistry = NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+	c.subagentRegistry = newSubagentRegistryFor(c)
 	c.experienceProcessor = &defaultExperienceProcessor{c: c}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -2044,25 +2044,38 @@ func (c *Coordinator) SetModelRuntime(runtime ModelRuntime) {
 	c.modelRuntime = runtime
 }
 
-func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.subagentRegistry != nil {
-		return c.subagentRegistry
-	}
+// newSubagentRegistryFor builds a SubagentRegistry from c's current session
+// config: the reserved local provider plus every configured external
+// provider whose type is recognized. An unrecognized provider type is never
+// registered, so resolving it later fails closed as "unknown subagent
+// provider" (§27) instead of silently doing nothing.
+//
+// This is the single source of truth for registry construction — shared by
+// the real constructor (so a team.yaml `subagent-providers` entry is wired
+// in for every real run) and SubagentRegistry's own lazy fallback below
+// (used by tests/harnesses that construct a *Coordinator directly via
+// struct literal, bypassing the constructor entirely).
+func newSubagentRegistryFor(c *Coordinator) *SubagentRegistry {
 	registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
-	if c.session != nil {
+	if c != nil && c.session != nil {
 		for name, cfg := range c.session.Config.SubagentProviders {
 			if cfg.Type != codexAppServerProviderType {
-				// An unrecognized provider type is never registered, so
-				// resolving it later fails closed as "unknown subagent
-				// provider" (§27) instead of silently doing nothing.
 				continue
 			}
 			_ = registry.Register(NewCodexSubagentProvider(c, name, cfg))
 		}
 	}
 	return registry
+}
+
+func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
+	c.mu.RLock()
+	if c.subagentRegistry != nil {
+		defer c.mu.RUnlock()
+		return c.subagentRegistry
+	}
+	c.mu.RUnlock()
+	return newSubagentRegistryFor(c)
 }
 
 func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
