@@ -175,6 +175,26 @@ func isWithinRoot(root, resolved string) bool {
 	return strings.HasPrefix(resolved, root+string(filepath.Separator))
 }
 
+// escapingSymlinkState represents a symlink whose target lies outside the
+// workspace root. Its content is never read — that would leak outside-root
+// bytes into the snapshot as if they were legitimately part of the
+// workspace — but a stable placeholder identity, derived only from the
+// resolved target path (never its content), still lets Diff correctly
+// detect this exact symlink appearing, retargeting, or disappearing as
+// Added/Modified/Deleted (§10.4's actual security-relevant signal: a
+// provider creating a new escaping symlink during its attempt). A
+// pre-existing escaping symlink already present before the attempt started
+// — e.g. some unrelated local tool's own runtime artifact sitting in a real
+// repository — is therefore unchanged across baseline and final snapshots
+// and never trips ValidateExecutionWorldDelta on its own; only a genuinely
+// new or retargeted one does.
+func escapingSymlinkState(rel, resolvedTarget string) WorkspaceFileState {
+	h := sha256.New()
+	h.Write([]byte("workspace-snapshot:escaping-symlink:"))
+	h.Write([]byte(resolvedTarget))
+	return WorkspaceFileState{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: 0, Mode: uint32(fs.ModeSymlink)}
+}
+
 // workspaceInternalDirs are skipped by the directory walk: they are Hufu's
 // own bookkeeping, never a provider's or worker's deliverable, and walking
 // them wastes the file-count budget on churn this attempt did not produce.
@@ -217,7 +237,12 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int) (map[s
 				return fmt.Errorf("resolve symlink %q: %w", rel, evalErr)
 			}
 			if !isWithinRoot(root, resolved) {
-				return fmt.Errorf("symlink %q escapes the workspace root", rel)
+				count++
+				if count > maxFiles {
+					return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
+				}
+				files[rel] = escapingSymlinkState(rel, resolved)
+				return nil
 			}
 		}
 		count++
@@ -264,7 +289,8 @@ func hashCandidateFiles(root string, candidates []string, maxFiles int) (map[str
 				return nil, fmt.Errorf("resolve symlink %q: %w", rel, evalErr)
 			}
 			if !isWithinRoot(root, resolved) {
-				return nil, fmt.Errorf("symlink %q escapes the workspace root", rel)
+				files[rel] = escapingSymlinkState(rel, resolved)
+				continue
 			}
 			full = resolved
 			info, err = os.Stat(full)

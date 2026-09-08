@@ -71,10 +71,19 @@ func TestWorkspaceDeltaAddedModifiedDeleted(t *testing.T) {
 	}
 }
 
-// TestWorkspaceSnapshotRejectsSymlinkEscape proves a symlink whose target
-// resolves outside the workspace root fails the whole snapshot rather than
-// being silently skipped or, worse, accepted (§11.4, §SEC-08).
-func TestWorkspaceSnapshotRejectsSymlinkEscape(t *testing.T) {
+// TestWorkspaceSnapshotToleratesPreexistingSymlinkEscape proves a symlink
+// whose target resolves outside the workspace root does not abort the whole
+// snapshot: a real repository can already contain one, unrelated to any
+// attempt (e.g. another local tool's own runtime artifact), and that alone
+// must not make every attempt against that repository fail before it can
+// even start. Its content is never read or hashed — a stable placeholder
+// identity is recorded instead, never the outside-root bytes — and an
+// unchanged escaping symlink present in both snapshots produces no diff
+// (§11.4, §SEC-08's "MUST NOT be accepted as result artifacts" is enforced
+// at the artifact-canonicalization boundary, not by refusing to observe the
+// workspace at all — see TestWorkspaceDeltaDetectsNewSymlinkEscape below for
+// the case §SEC-08 actually guards against).
+func TestWorkspaceSnapshotToleratesPreexistingSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.txt")
@@ -85,8 +94,43 @@ func TestWorkspaceSnapshotRejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks unavailable in this environment: %v", err)
 	}
 
-	if _, err := NewWorkspaceSnapshotter().Snapshot(context.Background(), root); err == nil {
-		t.Fatal("expected Snapshot to reject a symlink escaping the workspace root")
+	before := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+	after := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+	delta, err := NewWorkspaceSnapshotter().Diff(context.Background(), before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Added) != 0 || len(delta.Modified) != 0 || len(delta.Deleted) != 0 {
+		t.Fatalf("delta = %#v, want no changes for an unchanged pre-existing escaping symlink", delta)
+	}
+}
+
+// TestWorkspaceDeltaDetectsNewSymlinkEscape proves the security-relevant
+// signal §SEC-08/§10.4 actually care about is preserved: a symlink escaping
+// the workspace root that appears during an attempt (absent from baseline,
+// present after) still shows up as Added, exactly like any other new file —
+// tolerating a pre-existing one does not mean losing the ability to notice
+// a newly created one.
+func TestWorkspaceDeltaDetectsNewSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("outside the workspace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+	if err := os.Symlink(secret, filepath.Join(root, "escape.txt")); err != nil {
+		t.Skipf("symlinks unavailable in this environment: %v", err)
+	}
+	after := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+
+	delta, err := NewWorkspaceSnapshotter().Diff(context.Background(), before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Added) != 1 || delta.Added[0].Path != "escape.txt" {
+		t.Fatalf("delta.Added = %#v, want exactly the newly created escaping symlink", delta.Added)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -155,6 +156,17 @@ func (defaultExternalResultCanonicalizer) Canonicalize(_ context.Context, reques
 		mentioned[cleanPath] = true
 
 		if state, ok := addedOrModified[cleanPath]; ok {
+			// SEC-08: a symlink resolving outside the authorized workspace
+			// must never be accepted as a result artifact — even though the
+			// snapshot itself now records such a symlink (as a placeholder
+			// identity, never its actual outside-root content) rather than
+			// hard-failing the whole workspace snapshot over it.
+			if fs.FileMode(state.Mode)&fs.ModeSymlink != 0 {
+				if requiresGrounded {
+					return nil, fmt.Errorf("canonicalize external result: proposed artifact %q is a symlink escaping the authorized workspace", cleanPath)
+				}
+				continue
+			}
 			artifacts = append(artifacts, canonicalArtifactRef(request, proposed, cleanPath, state.SHA256, state.Bytes))
 			continue
 		}
