@@ -229,3 +229,95 @@ func TestExternalResultRejectsOutsideWorkspaceArtifact(t *testing.T) {
 		}
 	})
 }
+
+// TestExternalResultCanonicalizesFilesReadFromDelta proves the §38/§9.1
+// files_read extension: a claimed files_read path that is corroborated by
+// the actually-observed delta becomes a canonical FilesRead entry.
+func TestExternalResultCanonicalizesFilesReadFromDelta(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "reviewed.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := NewWorkspaceSnapshotter().Snapshot(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := snap.fileState("reviewed.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := WorkspaceDelta{Added: []WorkspaceFileState{state}}
+
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["reviewed.go"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
+		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, delta, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.FilesRead) != 1 || result.FilesRead[0].Path != "reviewed.go" {
+		t.Fatalf("FilesRead = %#v, want exactly reviewed.go", result.FilesRead)
+	}
+}
+
+// TestExternalResultCanonicalizesFilesReadFromLiveWorkspace proves a
+// files_read claim for a pre-existing file the delta never touched (the
+// provider read it but did not modify it) is still verified — against the
+// live workspace, not the delta alone — and accepted.
+func TestExternalResultCanonicalizesFilesReadFromLiveWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "unchanged.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["unchanged.go"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
+		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.FilesRead) != 1 || result.FilesRead[0].Path != "unchanged.go" {
+		t.Fatalf("FilesRead = %#v, want exactly unchanged.go verified against the live workspace", result.FilesRead)
+	}
+}
+
+// TestExternalResultRejectsFabricatedFilesReadUnderGroundedResult proves a
+// files_read claim naming a file that never existed at all fails a
+// grounded-result attempt closed, the same provider_claimed_missing_file
+// treatment §9.4 already gives ProposedFiles.
+func TestExternalResultRejectsFabricatedFilesReadUnderGroundedResult(t *testing.T) {
+	root := t.TempDir()
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["never-existed.go"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(),
+		AttemptRequest{Provider: "codex", TaskID: "t", Task: TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}}},
+		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("Canonicalize error = %v, want a does-not-exist rejection", err)
+	}
+}
+
+// TestExternalResultDropsFabricatedFilesReadWhenNotGrounded proves the same
+// fabricated claim is merely dropped, not trusted, for a non-grounded task.
+func TestExternalResultDropsFabricatedFilesReadWhenNotGrounded(t *testing.T) {
+	root := t.TempDir()
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["never-existed.go"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
+		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.FilesRead) != 0 {
+		t.Fatalf("FilesRead = %#v, want none: an unverifiable claim must never become a trusted FilesRead entry", result.FilesRead)
+	}
+}

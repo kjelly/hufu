@@ -27,6 +27,16 @@ type WorkerResultProposal struct {
 	Summary       string         `json:"summary"`
 	Details       string         `json:"details,omitempty"`
 	ProposedFiles []ProposedFile `json:"proposed_files,omitempty"`
+	// FilesRead names paths the provider claims to have read while producing
+	// this result — distinct from ProposedFiles (files produced/relied on as
+	// output artifacts). It is an additive extension to §9.1's original
+	// shape (spec.md §38's "known, separate, still-open gap" note), added so
+	// a task whose verify-spec asserts canonical TaskResult's /files_read
+	// (e.g. hufu-code-review's review-workset) is satisfiable through an
+	// external provider at all. Like ProposedFiles, each entry is untrusted
+	// and is verified against the actually-observed workspace/live
+	// filesystem before becoming a canonical FileRef — never trusted as-is.
+	FilesRead     []string       `json:"files_read,omitempty"`
 	Findings      []Finding      `json:"findings,omitempty"`
 	Risks         []Risk         `json:"risks,omitempty"`
 	OpenQuestions []string       `json:"open_questions,omitempty"`
@@ -51,6 +61,7 @@ const (
 	workerResultProposalMaxFindings      = 50
 	workerResultProposalMaxRisks         = 50
 	workerResultProposalMaxOpenQuestions = 50
+	workerResultProposalMaxFilesRead     = 200
 	workerResultProposalMaxTextRunes     = 4000
 	workerResultProposalMaxFactsBytes    = 16 * 1024
 )
@@ -203,6 +214,11 @@ func (defaultExternalResultCanonicalizer) Canonicalize(_ context.Context, reques
 	sort.Slice(filesModified, func(i, j int) bool { return filesModified[i].Path < filesModified[j].Path })
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 
+	filesRead, err := canonicalFilesRead(proposal, addedOrModified, deleted, workspaceRoot, requiresGrounded)
+	if err != nil {
+		return nil, err
+	}
+
 	return &TaskResult{
 		TaskID:  request.TaskID,
 		Attempt: request.Attempt,
@@ -213,6 +229,7 @@ func (defaultExternalResultCanonicalizer) Canonicalize(_ context.Context, reques
 
 		Artifacts:     artifacts,
 		FilesModified: filesModified,
+		FilesRead:     filesRead,
 
 		Findings:      boundedFindings(proposal.Findings),
 		Risks:         boundedRisks(proposal.Risks),
@@ -233,6 +250,59 @@ func canonicalArtifactRef(request AttemptRequest, proposed ProposedFile, cleanPa
 		RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt,
 		Provider: request.Provider,
 	}
+}
+
+// canonicalFilesRead verifies proposal.FilesRead against the same truth
+// sources canonicalArtifactRef's ProposedFiles loop uses — the observed
+// delta first, then a live-filesystem existence check for a path the delta
+// doesn't mention — and turns each verified claim into a canonical FileRef.
+// A claim that resolves outside the workspace, or names a path that never
+// existed, is dropped silently unless requiresGrounded, in which case it
+// fails the whole attempt closed (the same provider_claimed_outside_workspace
+// / provider_claimed_missing_file treatment §9.4 already gives
+// ProposedFiles). Deduplicated and bounded by workerResultProposalMaxFilesRead
+// so an untrusted provider cannot inflate canonical TaskResult storage.
+func canonicalFilesRead(proposal *WorkerResultProposal, addedOrModified map[string]WorkspaceFileState, deleted map[string]bool, workspaceRoot string, requiresGrounded bool) ([]FileRef, error) {
+	claims := proposal.FilesRead
+	if len(claims) > workerResultProposalMaxFilesRead {
+		claims = claims[:workerResultProposalMaxFilesRead]
+	}
+	seen := make(map[string]bool, len(claims))
+	var refs []FileRef
+	for _, raw := range claims {
+		cleanPath, err := sanitizeWorkspaceRelativePath(raw)
+		if err != nil {
+			if requiresGrounded {
+				return nil, fmt.Errorf("canonicalize external result: claimed files_read entry %q resolves outside the authorized workspace: %w", raw, err)
+			}
+			continue
+		}
+		if seen[cleanPath] {
+			continue
+		}
+		seen[cleanPath] = true
+
+		if _, ok := addedOrModified[cleanPath]; ok {
+			refs = append(refs, FileRef{Path: cleanPath})
+			continue
+		}
+		if deleted[cleanPath] {
+			// The file existed before this attempt (it could have been read
+			// before being deleted), so the claim is plausible even though
+			// it no longer exists now.
+			refs = append(refs, FileRef{Path: cleanPath})
+			continue
+		}
+		if _, _, statErr := hashWorkspaceFile(workspaceRoot, cleanPath); statErr == nil {
+			refs = append(refs, FileRef{Path: cleanPath})
+			continue
+		}
+		if requiresGrounded {
+			return nil, fmt.Errorf("canonicalize external result: claimed files_read entry %q does not exist", cleanPath)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Path < refs[j].Path })
+	return refs, nil
 }
 
 func canonicalAttemptAgentName(request AttemptRequest) string {
