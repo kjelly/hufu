@@ -300,13 +300,23 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		return
 	}
 	if classes := s.tasks[idx].OnFailureClasses; len(classes) > 0 {
-		if class := failureClassForTodo(s.todoItems[idx]); !failureClassAllowed(class, classes) {
+		if class := failureClassForTodo(s.todoItems[idx]); !failureClassAllowed(class, classes) && !isGenuineWorkerReportedFailure(s.todoItems[idx]) {
 			// This failure class is not authorized to reset the on_failure
 			// ancestor wave (spec.md §10.2): only a genuine semantic
 			// verification/review/final-gate rejection may reset an
-			// upstream task. An infrastructure/provider/protocol/
-			// environment/timeout/contract/cancelled failure instead
-			// retries this same task in place, never widening the reset.
+			// upstream task. But not every non-authorized class should be
+			// retried in place either — spec.md §10.1's table prescribes a
+			// different disposition per class (environment -> replan/block;
+			// contract/policy -> fail closed; cancelled -> honor
+			// cancellation, no remediation loop), matching disposition.go's
+			// own DecideRecovery semantics for these same classes. Retrying
+			// here would grant a second, DAG-level retry cycle the task's
+			// own inner attempt loop (coordinator_task_run.go) already
+			// correctly refused for exactly these classes.
+			if !selfHealEligibleFailureClass(class) {
+				c.report(c.newEvent("step").withMessage(fmt.Sprintf("task %q failed with class %q; not retrying in place (fail-closed per spec.md §10.1) and not resetting task %q", s.tasks[idx].Agent, class, s.tasks[*s.tasks[idx].OnFailure].Agent)))
+				return
+			}
 			s.retries[idx]++
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf("task %q failed with non-semantic class %q; retrying in place instead of resetting task %q (retry %d/%d)", s.tasks[idx].Agent, class, s.tasks[*s.tasks[idx].OnFailure].Agent, s.retries[idx], maxRetries)))
 			if err := s.resetTask(ctx, idx, fmt.Sprintf("retrying same task after %s failure class; on_failure reset suppressed", class)); err != nil {
@@ -788,9 +798,8 @@ func validateOnFailureTargets(tasks []TaskDef) error {
 // retry loop persisted it (via PersistFailureWithClass, using the structured
 // classifier with exit-code evidence) before giving up, or the
 // terminalizeTaskErrorIfUnresolved fallback classified a late/scheduler-side
-// error. An empty class (no FailureEvent at all) is treated as unrestricted
-// so a task lacking evidence for any reason is never silently blocked from
-// its configured remediation loop.
+// error. An empty class (no FailureEvent at all) is treated as *not*
+// authorized by failureClassAllowed below — see that function's comment.
 func failureClassForTodo(item *TodoItem) TaskFailureClass {
 	if item == nil || item.FailureEvent == nil {
 		return ""
@@ -800,19 +809,81 @@ func failureClassForTodo(item *TodoItem) TaskFailureClass {
 
 // failureClassAllowed reports whether class is authorized to trigger an
 // on_failure back-edge under the task's configured OnFailureClasses
-// allowlist. An empty/unknown class (see failureClassForTodo) is allowed so
-// a task with no captured failure evidence keeps today's behavior rather
-// than being silently stuck self-retrying forever.
+// allowlist. An empty/unknown class (no captured failure evidence at all)
+// is deliberately *not* authorized: this decision only ever runs once an
+// operator has configured an explicit allowlist for this task (the caller
+// only reaches here when len(allowlist) > 0), and for that explicit,
+// deliberate configuration, treating unclassified evidence as "allowed"
+// would silently reset an ancestor task on the one kind of failure Hufu
+// itself could not even classify — the opposite of what an operator who
+// bothered to restrict this edge would want. An unrecognized class instead
+// falls through to the same self-heal/fail-closed handling as any other
+// non-authorized class (see selfHealEligibleFailureClass).
 func failureClassAllowed(class TaskFailureClass, allowed []TaskFailureClass) bool {
-	if class == "" {
-		return true
-	}
 	for _, c := range allowed {
 		if c == class {
 			return true
 		}
 	}
 	return false
+}
+
+// isGenuineWorkerReportedFailure reports whether a task's terminal failure is
+// a complete, honest self-report — the worker itself called submit_result
+// with a non-success status — rather than a protocol/infrastructure abort
+// that never produced a typed result at all.
+//
+// This exists because Hufu's own non-terminal-status handling
+// (coordinator_task_run.go's withFailureClassOverride) always reports "the
+// worker submitted status: failed/partial/blocked" as TaskFailureClass =
+// execution, the exact same class an app-server crash or network timeout
+// gets. A fixed OnFailureClasses allowlist cannot tell these apart by class
+// alone: it would either let a real infra failure reset an ancestor
+// (unsafe) or block a worker from ever being able to honestly report a
+// confirmed defect at all (a task_result_assert-style verify-spec on the
+// submitted fact fails closed for the same underlying reason — it rejects
+// the submission itself rather than letting a complete, negative report
+// through). A stored TypedResult with Source "submitted" (or an external
+// provider's canonicalized equivalent) and Status "failed" is Hufu's own
+// evidence that the worker finished its job and is reporting a genuine
+// negative verdict, not that its attempt was aborted out from under it — so
+// this authorizes the on_failure edge even when the class itself is not in
+// the task's allowlist. "partial"/"blocked" are deliberately excluded: those
+// mean the worker itself could not reach a confident verdict, which spec.md
+// §10.1 requires never be treated as a semantic rejection.
+func isGenuineWorkerReportedFailure(item *TodoItem) bool {
+	if item == nil || item.TypedResult == nil {
+		return false
+	}
+	return isSubmittedResultSource(item.TypedResult.Source) && item.TypedResult.Status == TaskResultStatusFailed
+}
+
+// selfHealEligibleFailureClass reports whether a failure class not
+// authorized to trigger an on_failure reset (see failureClassAllowed) should
+// nonetheless be retried in place, versus left in its already-persisted
+// terminal state.
+//
+// Mirrors spec.md §10.1's disposition table, which prescribes a different
+// outcome per class: execution/timeout/protocol are transient provider or
+// worker conditions worth one more DAG-level attempt cycle, matching
+// disposition.go's own RetryWorker/repeatable dispositions for these
+// classes. Environment/contract/policy/cancelled are structural — the same
+// classes disposition.go's DecideRecovery maps to ReplanRequired/RetryNone
+// precisely because blindly replaying the worker cannot fix them (a missing
+// tool, an invalid contract, a policy denial, or a cancellation are not
+// resolved by trying again) — retrying here would grant a second,
+// DAG-level retry cycle the task's own inner attempt loop already correctly
+// refused for exactly these classes. FailureVerify is included as
+// retry-eligible for the (unusual) case where a task's on-failure-classes
+// allowlist excludes verification itself; retrying in place is never less
+// safe than the legacy (no-allowlist) behavior.
+func selfHealEligibleFailureClass(class TaskFailureClass) bool {
+	switch class {
+	case FailureExecution, FailureTimeout, FailureProtocol, FailureVerify:
+		return true
+	default:
+		return false
+	}
 }
 
 // detectTaskCycle returns true if the DependsOn indices form a cycle.

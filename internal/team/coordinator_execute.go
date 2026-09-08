@@ -363,6 +363,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			WorksetBinding:      cloneWorksetBinding(t.WorksetBinding),
 			WorksetReceipt:      cloneWorksetReceipt(t.WorksetReceipt),
 			MaxRetries:          t.MaxRetries,
+			OnFailureClasses:    append([]TaskFailureClass(nil), t.OnFailureClasses...),
 			Escalate:            t.Escalate,
 			AdversarialVerify:   t.AdversarialVerify,
 			SideEffect:          t.SideEffect,

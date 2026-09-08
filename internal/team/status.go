@@ -270,20 +270,27 @@ type TodoItem struct {
 	VerifyResult   *VerificationResult
 	// RuntimeError preserves a structured runtime/provider failure so phase
 	// aggregation does not degrade it into an unclassified worker error.
-	RuntimeError        *ExecutionError      `json:"runtime_error,omitempty"`
-	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
-	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
-	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
+	RuntimeError      *ExecutionError      `json:"runtime_error,omitempty"`
+	ExecutionReceipt  *ExecutionReceipt    `json:"execution_receipt,omitempty"`
+	ExecutionReceipts []ExecutionReceipt   `json:"execution_receipts,omitempty"`
+	FailureEvent      *FailureEventPayload `json:"failure_event,omitempty"`
 	// RemediationContext carries the canonical failure/result of the task
 	// whose on_failure back-edge most recently reset this task (spec.md
 	// §9.3). It is set by dagScheduler right before an authorized semantic
 	// reset and read (non-destructively) each time this occurrence is
 	// dispatched; the next genuine reset always replaces it with fresh
 	// evidence rather than stacking.
-	RemediationContext  *RemediationContext  `json:"remediation_context,omitempty"`
-	MaxRetries          int                  // Maximum number of retries for this task
-	Retries             int                  // Current number of retries
-	OnFailure           string               // ID of the task to jump back to if this task fails (creates a loop)
+	RemediationContext *RemediationContext `json:"remediation_context,omitempty"`
+	MaxRetries         int                 // Maximum number of retries for this task
+	Retries            int                 // Current number of retries
+	OnFailure          string              // ID of the task to jump back to if this task fails (creates a loop)
+	// OnFailureClasses mirrors TaskDef.OnFailureClasses. It must be carried
+	// through the durable TodoItem (not just the coordinator's in-memory
+	// TaskDef) because task_occurrence_projection.go's
+	// compareTaskDefWithTodoOccurrence reconstructs a TaskDef from this
+	// TodoItem via taskDefFromTodoItem and rejects the whole dispatch if it
+	// differs from the originally-supplied TaskDef.
+	OnFailureClasses    []TaskFailureClass   `json:"on_failure_classes,omitempty"`
 	Escalate            bool                 `json:"escalate,omitempty"`
 	AdversarialVerify   int                  `json:"adversarial_verify,omitempty"`
 	SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
@@ -348,34 +355,43 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
-	PlanTaskID          string
-	PlanFirst           bool
-	PlanID              string
-	Phase               Phase
-	Action              *Action
-	ContractID          string
-	ContractHash        string
-	ContractRevision    int
-	Agent               string
-	Desc                string
-	Goal                string
-	Constraints         string
-	Model               string
-	ModelTopology       []string
-	Sidecar             bool
-	Summarize           bool
-	OutputMode          string
-	ContextFiles        []string
-	Requires            []string
-	Source              string
-	ParentID            string
-	Verify              string
-	VerifyMode          string
-	VerifySpec          *VerificationSpec
-	WorksetBinding      *WorksetBinding
-	WorksetReceipt      *WorksetExpansionReceipt
-	MaxRetries          int
-	OnFailure           string
+	PlanTaskID       string
+	PlanFirst        bool
+	PlanID           string
+	Phase            Phase
+	Action           *Action
+	ContractID       string
+	ContractHash     string
+	ContractRevision int
+	Agent            string
+	Desc             string
+	Goal             string
+	Constraints      string
+	Model            string
+	ModelTopology    []string
+	Sidecar          bool
+	Summarize        bool
+	OutputMode       string
+	ContextFiles     []string
+	Requires         []string
+	Source           string
+	ParentID         string
+	Verify           string
+	VerifyMode       string
+	VerifySpec       *VerificationSpec
+	WorksetBinding   *WorksetBinding
+	WorksetReceipt   *WorksetExpansionReceipt
+	MaxRetries       int
+	OnFailure        string
+	// OnFailureClasses mirrors TaskDef.OnFailureClasses (coordinator.go):
+	// which TaskFailureClass values authorize this task's on_failure
+	// back-edge. It must survive the durable TodoSpec/TodoItem round trip
+	// (task_occurrence_projection.go's compareTaskDefWithTodoOccurrence
+	// rebuilds the scheduler's TaskDef from the durable TodoItem via
+	// taskDefFromTodoItem and rejects any mismatch) exactly like SideEffect/
+	// Recovery already do, or a real hufu-coding dispatch fails admission
+	// before a dagScheduler is ever constructed.
+	OnFailureClasses    []TaskFailureClass
 	Escalate            bool
 	AdversarialVerify   int
 	DependsOn           []string
@@ -444,6 +460,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
 		MaxRetries:          item.MaxRetries,
 		OnFailure:           item.OnFailure,
+		OnFailureClasses:    append([]TaskFailureClass(nil), item.OnFailureClasses...),
 		Escalate:            item.Escalate,
 		AdversarialVerify:   item.AdversarialVerify,
 		DependsOn:           append([]string(nil), item.DependsOn...),
@@ -1151,6 +1168,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		MaxRetries:          item.MaxRetries,
 		Retries:             item.Retries,
 		OnFailure:           item.OnFailure,
+		OnFailureClasses:    append([]TaskFailureClass(nil), item.OnFailureClasses...),
 		Escalate:            item.Escalate,
 		AdversarialVerify:   item.AdversarialVerify,
 		SideEffect:          item.SideEffect,

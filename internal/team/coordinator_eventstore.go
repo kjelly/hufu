@@ -1374,6 +1374,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"parent_id":             item.ParentID,
 		"depends_on":            item.DependsOn,
 		"on_failure":            item.OnFailure,
+		"on_failure_classes":    item.OnFailureClasses,
 		"escalate":              item.Escalate,
 		"adversarial_verify":    item.AdversarialVerify,
 		"kind":                  item.Kind,

@@ -495,6 +495,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ParentID            string                     `json:"parent_id"`
 			DependsOn           []string                   `json:"depends_on"`
 			OnFailure           string                     `json:"on_failure"`
+			OnFailureClasses    []TaskFailureClass         `json:"on_failure_classes"`
 			Escalate            bool                       `json:"escalate"`
 			AdversarialVerify   int                        `json:"adversarial_verify"`
 			Verify              string                     `json:"verify"`
@@ -604,6 +605,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				ParentID:            payload.ParentID,
 				DependsOn:           payload.DependsOn,
 				OnFailure:           payload.OnFailure,
+				OnFailureClasses:    append([]TaskFailureClass(nil), payload.OnFailureClasses...),
 				Escalate:            payload.Escalate,
 				AdversarialVerify:   payload.AdversarialVerify,
 				Kind:                payload.Kind,
@@ -725,6 +727,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.OnFailure != "" {
 			item.OnFailure = payload.OnFailure
+		}
+		if len(payload.OnFailureClasses) > 0 {
+			item.OnFailureClasses = append([]TaskFailureClass(nil), payload.OnFailureClasses...)
 		}
 		if payload.Kind != "" {
 			item.Kind = payload.Kind
