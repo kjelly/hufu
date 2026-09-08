@@ -33,6 +33,7 @@ func (unixProcessSupervisor) Start(_ context.Context, spec ProcessSpec) (Process
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	cmd.Stdin = spec.Stdin
 	cmd.Stdout = spec.Stdout
 	cmd.Stderr = spec.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
