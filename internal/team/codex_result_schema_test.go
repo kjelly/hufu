@@ -38,21 +38,39 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 			t.Fatalf("schema exposes trusted field %q, want it absent", forbidden)
 		}
 	}
+	// The real OpenAI structured-output validator behind codex-cli 0.153.4
+	// rejects any object schema where a declared property is missing from
+	// "required" (confirmed live, not a guess — see codex_result_schema.go's
+	// doc comment). Guard that constraint here so a future field addition
+	// can't silently regress it.
+	for key := range props {
+		if !slices.Contains(required, key) {
+			t.Fatalf("property %q is not in required %v, want every declared property required (real API strict-mode constraint)", key, required)
+		}
+	}
 }
 
 // runCodexTurnWithFinalOutput scripts a fake server that acknowledges
-// turn/start, immediately signals turn/completed, then returns finalOutput
-// from thread/read.
+// turn/start, then signals turn/completed with a Turn whose items embed
+// finalOutput as the terminal agentMessage — mirroring the real protocol,
+// where the completion notification itself carries the schema-constrained
+// final answer (no separate thread/read call).
 func runCodexTurnWithFinalOutput(t *testing.T, finalOutput string, extraNotifications ...fakeCodexNotification) (CodexTurnResult, error) {
 	t.Helper()
+	turn := map[string]any{
+		"id":     "turn-1",
+		"status": "completed",
+		"items": []map[string]any{
+			{"type": "agentMessage", "phase": "final_answer", "text": finalOutput},
+		},
+	}
 	notifications := append(append([]fakeCodexNotification(nil), extraNotifications...),
-		fakeCodexNotification{Method: "turn/completed", Params: rawJSON(t, map[string]any{"turn_id": "turn-1"})})
+		fakeCodexNotification{Method: "turn/completed", Params: rawJSON(t, map[string]any{"threadId": "thread-1", "turn": turn})})
 	server := startFakeCodexServer(t, []fakeCodexStep{
-		{Result: rawJSON(t, map[string]any{"turn_id": "turn-1"}), Notifications: notifications},
-		{Result: rawJSON(t, map[string]any{"final_output": finalOutput})},
+		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-1"}}), Notifications: notifications},
 	})
 	defer server.Client.Close()
-	return codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", "")
+	return codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", nil)
 }
 
 // TestCodexMissingProposalIsProtocolIncomplete proves a turn that completes
@@ -92,7 +110,7 @@ func TestCodexInvalidProposalDoesNotBecomeTaskResult(t *testing.T) {
 // driver never depends on non-terminal streaming notifications for
 // correctness: even interspersed with unrelated/malformed activity
 // notifications, only turn/completed matters, and the final proposal always
-// comes from the authoritative thread/read (§13.4).
+// comes from that notification's own embedded turn items (§13.4).
 func TestCodexTerminalReadWinsOverDroppedActivityNotification(t *testing.T) {
 	noise := []fakeCodexNotification{
 		{Method: "item/started", Params: rawJSON(t, map[string]any{"unexpected": "shape"})},

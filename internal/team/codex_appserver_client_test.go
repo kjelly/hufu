@@ -15,7 +15,7 @@ import (
 // client's Call sends a request and correctly decodes the matching response.
 func TestCodexRPCInitialize(t *testing.T) {
 	server := startFakeCodexServer(t, []fakeCodexStep{
-		{Result: rawJSON(t, map[string]any{"protocol_version": "v2", "server_version": "fake-1.0"})},
+		{Result: rawJSON(t, map[string]any{"userAgent": "fake/1.0", "codexHome": "/fake/home"})},
 	})
 	defer server.Client.Close()
 
@@ -23,7 +23,7 @@ func TestCodexRPCInitialize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ProtocolVersion != "v2" || result.ServerVersion != "fake-1.0" {
+	if result.UserAgent != "fake/1.0" || result.CodexHome != "/fake/home" {
 		t.Fatalf("initialize result = %#v, want the fake server's values", result)
 	}
 }

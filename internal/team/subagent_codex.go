@@ -35,6 +35,17 @@ const (
 	codexSandboxWorkspaceWrite = "workspace-write"
 )
 
+// codexResultRepairPrompt/codexResultRepairInstruction implement §23's
+// "schema-only result repair prompt": no new work is requested, only a
+// structured account of the turn that already ran. The instruction spells
+// out that the workspace is already frozen, so an app-server that
+// nonetheless attempts a write gains nothing — canonicalization never
+// re-observes the workspace after this point (see attemptResultRepair).
+const (
+	codexResultRepairPrompt      = "Report the outcome of your previous turn as a structured result. Do not perform any further work."
+	codexResultRepairInstruction = "This is a read-only repair turn. The workspace state from your previous turn is already frozen and will not be re-observed, so any further file changes will not be recorded or credited. Do not modify any files. Respond only with a WorkerResultProposal matching the required schema, describing the final status of the work you already attempted."
+)
+
 // CodexProviderFailureClass classifies a RunAttempt failure so recovery
 // policy can distinguish them (spec.md §33). This is a deliberately small
 // subset of the full taxonomy §33 names — only the classes this phase's
@@ -256,7 +267,10 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if request.ProviderBinding != nil {
 		existingThreadID = request.ProviderBinding.SessionID
 	}
-	threadCfg := CodexThreadConfig{CWD: prepared.CWD, Model: request.ModelID, Sandbox: sandbox}
+	threadCfg := CodexThreadConfig{
+		CWD: prepared.CWD, Model: request.ModelID, Sandbox: sandbox,
+		DeveloperInstructions: "Work only inside the provided workspace. Produce the final response matching the supplied JSON schema. Do not claim verification or receipt authority.",
+	}
 	effective, err := codexStartOrResumeThread(ctx, proc.Client, existingThreadID, threadCfg, func(state CodexEffectiveThreadState) error {
 		transcript.record("session bound thread_id=%s", state.ThreadID)
 		return p.coordinator.persistProviderSessionBinding(context.Background(), request.TaskID, request.Attempt, ProviderBinding{
@@ -271,13 +285,23 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	}
 	result.ProviderSessionID = effective.ThreadID
 
-	developerInstruction := "Work only inside the provided workspace. Produce the final response matching the supplied JSON schema. Do not claim verification or receipt authority."
+	// turnIDCh carries turn/start's synchronous ack (the real turn id,
+	// required by turn/interrupt — the protocol has no "interrupt whatever
+	// is active" shorthand) from the turn goroutine to the cancellation
+	// branch below, which runs concurrently with it.
+	turnIDCh := make(chan string, 1)
+	onTurnStarted := func(id string) {
+		select {
+		case turnIDCh <- id:
+		default:
+		}
+	}
 	turnDone := make(chan struct{})
 	var turnResult CodexTurnResult
 	var turnErr error
 	go func() {
 		defer close(turnDone)
-		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, developerInstruction)
+		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, onTurnStarted)
 	}()
 
 	select {
@@ -293,9 +317,20 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		// never acks it (or a fake-server fixture with no scripted response)
 		// must never block the cancellation path itself — stopProcess's own
 		// interrupt-grace/terminate/kill escalation is what actually
-		// guarantees forward progress.
+		// guarantees forward progress. The same budget also covers the rare
+		// race where cancellation arrives before turn/start's own ack: if no
+		// turn id shows up in time, skip the (now impossible, since the real
+		// protocol requires turnId) interrupt call and fall straight through
+		// to process-tree escalation.
 		interruptCtx, interruptCancel := context.WithTimeout(context.Background(), interruptGrace)
-		_ = codexTurnInterrupt(interruptCtx, proc.Client, effective.ThreadID, "")
+		var turnID string
+		select {
+		case turnID = <-turnIDCh:
+		case <-interruptCtx.Done():
+		}
+		if turnID != "" {
+			_ = codexTurnInterrupt(interruptCtx, proc.Client, effective.ThreadID, turnID)
+		}
 		interruptCancel()
 		stopProcess()
 		<-turnDone // codexRunTurn observes the same ctx and returns once the process/context closes
@@ -305,8 +340,42 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 
 	if turnErr != nil {
 		transcript.record("turn failed: %v", turnErr)
-		delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
-		return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, p.classifyTurnError(turnErr))
+		var protoErr *CodexProtocolIncompleteError
+		if !errors.As(turnErr, &protoErr) {
+			delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
+			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, p.classifyTurnError(turnErr))
+		}
+
+		// §23: an invalid/missing proposal MUST NOT immediately rerun the
+		// full coding task. Freeze whatever the workspace already shows
+		// before attempting exactly one read-only, schema-only repair — a
+		// repair proposal can never retroactively change what Hufu already
+		// observed here.
+		stopProcess()
+		frozen, snapErr := world.Snapshot(context.Background(), prepared)
+		if snapErr != nil {
+			transcript.record("repair: freeze snapshot failed: %v", snapErr)
+			return finish(AttemptResult{ProviderSessionID: effective.ThreadID}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace snapshot: %w", snapErr)))
+		}
+		frozenDelta, diffErr := NewWorkspaceSnapshotter().Diff(context.Background(), prepared.Baseline, frozen)
+		if diffErr != nil {
+			transcript.record("repair: freeze diff failed: %v", diffErr)
+			return finish(AttemptResult{ProviderSessionID: effective.ThreadID}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace diff: %w", diffErr)))
+		}
+		if err := ValidateExecutionWorldDelta(prepared, frozenDelta); err != nil {
+			transcript.record("repair: workspace violation before repair: %v", err)
+			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta}, codexFail(CodexFailureWorkspaceViolation, err))
+		}
+
+		canonical, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, startupTimeout, interruptGrace, shutdownGrace)
+		if repairErr != nil {
+			transcript.record("repair failed: %v", repairErr)
+			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID}, repairErr)
+		}
+		return finish(AttemptResult{
+			ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID,
+			CanonicalResult: canonical, Output: canonical.Summary,
+		}, nil)
 	}
 	transcript.record("turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
 	result.ProviderTurnID = turnResult.TurnID
@@ -329,14 +398,6 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		return finish(result, codexFail(CodexFailureWorkspaceViolation, err))
 	}
 
-	if turnResult.Proposal == nil {
-		// Missing/invalid proposal (CodexProtocolIncompleteError from
-		// codexRunTurn): the workspace may already have changed, but there is
-		// no trusted result. Result-only repair (§23) is Phase 6 — for now
-		// this surfaces as a plain execution failure with evidence preserved.
-		return finish(result, turnErr)
-	}
-
 	canonical, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, wdelta, prepared.Root)
 	if err != nil {
 		transcript.record("canonicalize failed: %v", err)
@@ -346,6 +407,69 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	result.CanonicalResult = canonical
 	result.Output = canonical.Summary
 	return finish(result, nil)
+}
+
+// attemptResultRepair implements §23's repair flow: start a fresh app-server
+// process (the original one is already stopped by the caller before this
+// runs), resume the same thread while forcing a read-only sandbox, and send
+// exactly one schema-only turn asking only for a structured account of the
+// work already done. It never re-observes the workspace itself —
+// canonicalization always uses frozenDelta, the delta the caller captured
+// before calling this — so a repair turn cannot retroactively change
+// observed workspace history even if the app-server disobeys the read-only
+// instruction. Returns the canonical result, the repair turn's ID
+// (diagnostic only, may be empty on failure), and an error.
+func (p *CodexSubagentProvider) attemptResultRepair(
+	ctx context.Context, sup ProcessSupervisor, request AttemptRequest,
+	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta,
+	transcript *codexTranscript, startupTimeout, interruptGrace, shutdownGrace time.Duration,
+) (canonical *TaskResult, turnID string, resultErr error) {
+	transcript.record("attempting result-only repair thread_id=%s", threadID)
+
+	startCtx := ctx
+	var startCancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		startCtx, startCancel = context.WithTimeout(ctx, startupTimeout)
+		defer startCancel()
+	}
+	repairProc, err := StartCodexAppServer(startCtx, sup, CodexProcessConfig{
+		Argv: p.config.Command, Dir: p.coordinator.projectDir, Env: prepared.Environment,
+		MaxFrameBytes: int(p.config.MaxEventBytes), StartupTimeout: startupTimeout,
+	})
+	if err != nil {
+		transcript.record("repair: start app-server failed: %v", err)
+		return nil, "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
+	}
+	defer p.stopCodexProcess(sup, repairProc, interruptGrace, shutdownGrace, transcript)
+
+	// Sandbox is forced to read-only here regardless of the original task's
+	// side-effect-derived sandbox: the repair turn MUST NOT have
+	// workspace-write permission (§23). DeveloperInstructions is thread-
+	// scoped in the real protocol, so the read-only repair instruction is
+	// bound to this resumed thread, not passed per-turn.
+	threadCfg := CodexThreadConfig{
+		CWD: prepared.CWD, Model: request.ModelID, Sandbox: codexSandboxReadOnly,
+		DeveloperInstructions: codexResultRepairInstruction,
+	}
+	effective, err := codexStartOrResumeThread(ctx, repairProc.Client, threadID, threadCfg, nil)
+	if err != nil {
+		transcript.record("repair: thread/resume failed: %v", err)
+		return nil, "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
+	}
+
+	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, nil)
+	if turnErr != nil {
+		transcript.record("repair: turn failed: %v", turnErr)
+		return nil, turnResult.TurnID, p.classifyTurnError(turnErr)
+	}
+	transcript.record("repair: turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
+
+	canonical, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, frozenDelta, prepared.Root)
+	if err != nil {
+		transcript.record("repair: canonicalize failed: %v", err)
+		return nil, turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
+	}
+	return canonical, turnResult.TurnID, nil
 }
 
 func proposalStatusForLog(p *WorkerResultProposal) string {

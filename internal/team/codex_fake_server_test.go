@@ -52,6 +52,12 @@ type fakeCodexStep struct {
 type fakeCodexScript struct {
 	LogPath string          `json:"log_path,omitempty"`
 	Steps   []fakeCodexStep `json:"steps"`
+	// RawLogPath, when set, additionally records each inbound request's full
+	// raw JSON line (not just its method) — used by tests that need to
+	// assert on a specific request's params (e.g. the sandbox value a
+	// result-repair resume actually sent), without changing LogPath's
+	// existing method-only format that other tests already depend on.
+	RawLogPath string `json:"raw_log_path,omitempty"`
 }
 
 // runFakeCodexAppServer is the fake server's entire program: read the
@@ -79,11 +85,36 @@ func runFakeCodexAppServer(scriptPath string) {
 		}
 		defer logFile.Close()
 	}
+	var rawLogFile *os.File
+	if script.RawLogPath != "" {
+		rawLogFile, err = os.OpenFile(script.RawLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake codex server: open raw log:", err)
+			os.Exit(1)
+		}
+		defer rawLogFile.Close()
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
 	out := os.Stdout
+	// A single RunAttempt call may start a second app-server process after
+	// stopping the first (e.g. §23's result-only repair, or a resumed
+	// process after a restart) — a fresh OS process re-executing this same
+	// script from disk, with no memory of what the prior process already
+	// consumed. RawLogPath persists across that process boundary (it is
+	// opened for append, on the same file, by every process reading this
+	// script), so its already-written line count is the durable cursor: a
+	// second process continues from where the first left off instead of
+	// restarting the same steps from index 0.
 	stepIndex := 0
+	if script.RawLogPath != "" {
+		if data, err := os.ReadFile(script.RawLogPath); err == nil {
+			if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 {
+				stepIndex = bytes.Count(trimmed, []byte("\n")) + 1
+			}
+		}
+	}
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
@@ -96,6 +127,10 @@ func runFakeCodexAppServer(scriptPath string) {
 		_ = json.Unmarshal(line, &req)
 		if logFile != nil {
 			fmt.Fprintln(logFile, req.Method)
+		}
+		if rawLogFile != nil {
+			rawLogFile.Write(line)
+			rawLogFile.Write([]byte("\n"))
 		}
 
 		if stepIndex >= len(steps) {

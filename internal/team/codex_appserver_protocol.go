@@ -8,39 +8,59 @@ import (
 
 // This file builds Codex's specific thread/turn vocabulary on top of the
 // generic CodexRPCClient (docs/hufu-external-coding-agent-runtime-spec.md
-// §12, §13.3, §14). Still no real SubagentProvider wiring (PR-11, Phase 5) —
-// these functions are exercised directly against a fake app-server fixture.
-
+// §12, §13.3, §14).
+//
+// Field shapes here are verified against the real, installed codex CLI
+// (codex-cli 0.153.4, `codex app-server`, JSON Schema dumped via
+// `codex app-server generate-json-schema` and a live stdio round trip — not
+// a guess): camelCase throughout, `initialize` takes a `clientInfo` object
+// rather than a flat client name, `turn/start.input` is a `UserInput[]`
+// array rather than a plain string, thread ids live at `result.thread.id`
+// (not a flat `thread_id`), and a `turn/completed` notification's own
+// `turn.items` already carries the schema-constrained final assistant
+// message — `thread/read` is not needed to obtain it, and the app-server
+// itself deprecates full-history `thread/read` for this purpose in favor of
+// reading the notification/turn payload directly.
 const (
 	codexMethodInitialize    = "initialize"
 	codexMethodThreadStart   = "thread/start"
 	codexMethodThreadResume  = "thread/resume"
 	codexMethodTurnStart     = "turn/start"
 	codexMethodTurnInterrupt = "turn/interrupt"
-	codexMethodThreadRead    = "thread/read"
 
 	// codexNotificationTurnCompleted is the one notification the driver
 	// requires for correctness; every other notification is advisory
-	// telemetry only (§13.3).
+	// telemetry only (§13.3) — confirmed live: a real session emits a large,
+	// evolving stream of advisory notifications (mcpServer/startupStatus,
+	// account/rateLimits, thread/status/changed, item/started|completed,
+	// ...) that the driver correctly ignores by construction (it only
+	// matches on this one method name).
 	codexNotificationTurnCompleted = "turn/completed"
 )
 
-const hufuCodexClientName = "hufu"
+const (
+	hufuCodexClientName    = "hufu"
+	hufuCodexClientVersion = "0.1.0"
+)
 
-// codexInitializeResult's exact field names are a documented assumption
-// pending verification against the real codex app-server (§38 opt-in smoke
-// tests); nothing downstream depends on its contents beyond the call
-// succeeding before any thread operation (§13.2 step 8).
+type codexClientInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// codexInitializeResult's fields are read from the real app-server's
+// response but are not load-bearing for Hufu's driver — only call success
+// matters before any thread operation (§13.2 step 8).
 type codexInitializeResult struct {
-	ProtocolVersion string `json:"protocol_version,omitempty"`
-	ServerVersion   string `json:"server_version,omitempty"`
+	UserAgent string `json:"userAgent,omitempty"`
+	CodexHome string `json:"codexHome,omitempty"`
 }
 
 func codexInitialize(ctx context.Context, client *CodexRPCClient) (codexInitializeResult, error) {
 	var result codexInitializeResult
 	params := struct {
-		ClientName string `json:"client_name"`
-	}{ClientName: hufuCodexClientName}
+		ClientInfo codexClientInfo `json:"clientInfo"`
+	}{ClientInfo: codexClientInfo{Name: hufuCodexClientName, Version: hufuCodexClientVersion}}
 	if err := client.Call(ctx, codexMethodInitialize, params, &result); err != nil {
 		return codexInitializeResult{}, fmt.Errorf("codex initialize: %w", err)
 	}
@@ -50,10 +70,13 @@ func codexInitialize(ctx context.Context, client *CodexRPCClient) (codexInitiali
 // CodexThreadConfig is what Hufu requires of a thread — the assertion side
 // of §14.1's "Hufu MUST verify the returned effective: cwd; sandbox; model".
 type CodexThreadConfig struct {
-	CWD                   string
-	Model                 string
-	Sandbox               string // "read-only" | "workspace-write" | "danger-full-access"
-	RuntimeWorkspaceRoots []string
+	CWD     string
+	Model   string
+	Sandbox string // "read-only" | "workspace-write" | "danger-full-access"
+	// DeveloperInstructions is thread-scoped in the real protocol (there is
+	// no per-turn developer-instruction field) — it applies to every turn
+	// run on this thread for as long as the thread lives.
+	DeveloperInstructions string
 }
 
 // CodexEffectiveThreadState is what the app-server actually reports for a
@@ -65,31 +88,49 @@ type CodexEffectiveThreadState struct {
 	Sandbox  string
 }
 
-type codexThreadStartParams struct {
-	Ephemeral             bool     `json:"ephemeral"`
-	CWD                   string   `json:"cwd"`
-	RuntimeWorkspaceRoots []string `json:"runtime_workspace_roots,omitempty"`
-	ApprovalPolicy        string   `json:"approval_policy"`
-	Sandbox               string   `json:"sandbox"`
-	Model                 string   `json:"model,omitempty"`
+type codexThreadRef struct {
+	ID string `json:"id"`
 }
 
+type codexThreadStartParams struct {
+	CWD                   string `json:"cwd"`
+	ApprovalPolicy        string `json:"approvalPolicy"`
+	Sandbox               string `json:"sandbox"`
+	Model                 string `json:"model,omitempty"`
+	DeveloperInstructions string `json:"developerInstructions,omitempty"`
+}
+
+// codexThreadStartResult/codexThreadResumeResult decode only the fields
+// Hufu's driver actually needs from the real, much larger response (Thread,
+// instructionSources, approvalsReviewer, reasoningEffort, ... are all
+// silently ignored — this is a plain json.Unmarshal, not a strict decode,
+// since this is a trusted transport-internal shape, not the untrusted
+// external-result boundary). Sandbox is decoded as raw JSON because the
+// response's sandbox is a policy object (e.g. {"type":"readOnly",...}), not
+// the plain string the request side accepts — see codexSandboxPolicyMode.
 type codexThreadStartResult struct {
-	ThreadID string `json:"thread_id"`
-	CWD      string `json:"cwd"`
-	Model    string `json:"model"`
-	Sandbox  string `json:"sandbox"`
+	Thread  codexThreadRef  `json:"thread"`
+	CWD     string          `json:"cwd"`
+	Model   string          `json:"model"`
+	Sandbox json.RawMessage `json:"sandbox"`
 }
 
 type codexThreadResumeParams struct {
-	ThreadID string `json:"thread_id"`
+	ThreadID string `json:"threadId"`
+	// Sandbox lets a resume request a narrower sandbox than the thread's
+	// original (§23: a result-only repair resume MUST force read-only,
+	// regardless of what sandbox the original task's turn ran under).
+	// Omitted for an ordinary retry/restart resume where the caller expects
+	// the thread's existing sandbox back unchanged.
+	Sandbox               string `json:"sandbox,omitempty"`
+	DeveloperInstructions string `json:"developerInstructions,omitempty"`
 }
 
 type codexThreadResumeResult struct {
-	ThreadID string `json:"thread_id"`
-	CWD      string `json:"cwd"`
-	Model    string `json:"model"`
-	Sandbox  string `json:"sandbox"`
+	Thread  codexThreadRef  `json:"thread"`
+	CWD     string          `json:"cwd"`
+	Model   string          `json:"model"`
+	Sandbox json.RawMessage `json:"sandbox"`
 }
 
 // codexSandboxRank orders sandbox modes from least to most permissive so a
@@ -99,6 +140,31 @@ var codexSandboxRank = map[string]int{
 	"read-only":          0,
 	"workspace-write":    1,
 	"danger-full-access": 2,
+}
+
+// codexSandboxPolicyMode maps the real app-server's response-side sandbox
+// policy object (a discriminated union: {"type":"readOnly"|"workspaceWrite"|
+// "dangerFullAccess", ...}) back to Hufu's plain request-side mode string.
+// The request side already accepts (and the real server already honors) the
+// plain string directly — this mapping exists only because the response
+// echoes back the richer object form, confirmed via a live thread/start.
+func codexSandboxPolicyMode(raw json.RawMessage) string {
+	var policy struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return ""
+	}
+	switch policy.Type {
+	case "readOnly":
+		return codexSandboxReadOnly
+	case "workspaceWrite":
+		return codexSandboxWorkspaceWrite
+	case "dangerFullAccess":
+		return "danger-full-access"
+	default:
+		return ""
+	}
 }
 
 func validateCodexEffectiveThreadState(cfg CodexThreadConfig, effective CodexEffectiveThreadState) error {
@@ -123,7 +189,7 @@ func validateCodexEffectiveThreadState(cfg CodexThreadConfig, effective CodexEff
 }
 
 // codexStartOrResumeThread implements §14.1/§14.2: start a fresh thread when
-// no durable session exists, or resume by thread_id when one does. Either
+// no durable session exists, or resume by thread id when one does. Either
 // way, the effective cwd/model/sandbox is verified before onSessionBound is
 // invoked — and onSessionBound (the durable persistence callback) always
 // runs before the caller is allowed to proceed to turn/start, so a crash
@@ -134,20 +200,21 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 	var effective CodexEffectiveThreadState
 	if existingThreadID != "" {
 		var result codexThreadResumeResult
-		if err := client.Call(ctx, codexMethodThreadResume, codexThreadResumeParams{ThreadID: existingThreadID}, &result); err != nil {
+		params := codexThreadResumeParams{ThreadID: existingThreadID, Sandbox: cfg.Sandbox, DeveloperInstructions: cfg.DeveloperInstructions}
+		if err := client.Call(ctx, codexMethodThreadResume, params, &result); err != nil {
 			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/resume: %w", err)
 		}
-		effective = CodexEffectiveThreadState{ThreadID: existingThreadID, CWD: result.CWD, Model: result.Model, Sandbox: result.Sandbox}
+		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox)}
 	} else {
 		var result codexThreadStartResult
 		params := codexThreadStartParams{
-			Ephemeral: false, CWD: cfg.CWD, RuntimeWorkspaceRoots: cfg.RuntimeWorkspaceRoots,
-			ApprovalPolicy: "never", Sandbox: cfg.Sandbox, Model: cfg.Model,
+			CWD: cfg.CWD, ApprovalPolicy: "never", Sandbox: cfg.Sandbox, Model: cfg.Model,
+			DeveloperInstructions: cfg.DeveloperInstructions,
 		}
 		if err := client.Call(ctx, codexMethodThreadStart, params, &result); err != nil {
 			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/start: %w", err)
 		}
-		effective = CodexEffectiveThreadState(result)
+		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox)}
 	}
 
 	if err := validateCodexEffectiveThreadState(cfg, effective); err != nil {
@@ -161,25 +228,39 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 	return effective, nil
 }
 
+// codexUserInput is one element of turn/start's input array. Hufu only ever
+// sends a single plain-text element — the real schema's other variants
+// (image/audio/local file references) have no v1 use case.
+type codexUserInput struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 type codexTurnStartParams struct {
-	ThreadID             string          `json:"thread_id"`
-	Input                string          `json:"input"`
-	DeveloperInstruction string          `json:"developer_instruction,omitempty"`
-	OutputSchema         json.RawMessage `json:"output_schema"`
+	ThreadID     string           `json:"threadId"`
+	Input        []codexUserInput `json:"input"`
+	OutputSchema json.RawMessage  `json:"outputSchema"`
+}
+
+type codexTurnRef struct {
+	ID string `json:"id"`
 }
 
 type codexTurnStartResult struct {
-	TurnID string `json:"turn_id"`
+	Turn codexTurnRef `json:"turn"`
 }
 
 type codexTurnInterruptParams struct {
-	ThreadID string `json:"thread_id"`
-	TurnID   string `json:"turn_id"`
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
 }
 
 // codexTurnInterrupt sends turn/interrupt, the first step of §16.1's
 // cancellation flow: a graceful, in-protocol request to stop the current
-// turn before Hufu escalates to signaling the process tree.
+// turn before Hufu escalates to signaling the process tree. Both threadId
+// and turnId are required by the real protocol; callers with no known
+// in-flight turn id (a race with turn/start's own ack) should skip calling
+// this and rely on process-tree escalation instead.
 func codexTurnInterrupt(ctx context.Context, client *CodexRPCClient, threadID, turnID string) error {
 	if err := client.Call(ctx, codexMethodTurnInterrupt, codexTurnInterruptParams{ThreadID: threadID, TurnID: turnID}, nil); err != nil {
 		return fmt.Errorf("codex turn/interrupt: %w", err)
@@ -187,12 +268,48 @@ func codexTurnInterrupt(ctx context.Context, client *CodexRPCClient, threadID, t
 	return nil
 }
 
-type codexThreadReadParams struct {
-	ThreadID string `json:"thread_id"`
+// codexThreadItem is a single item inside a Turn's items array, decoded
+// loosely: the real ThreadItem union has many variants (userMessage,
+// agentMessage, commandExecution, fileChange, reasoning, ...); Hufu only
+// ever looks for the terminal agentMessage carrying the schema-constrained
+// final answer, so every other field/variant is simply ignored.
+type codexThreadItem struct {
+	Type  string `json:"type"`
+	Phase string `json:"phase,omitempty"`
+	Text  string `json:"text,omitempty"`
 }
 
-type codexThreadReadResult struct {
-	FinalOutput string `json:"final_output"`
+type codexTurnError struct {
+	Message string `json:"message"`
+}
+
+// codexTurn mirrors the real protocol's Turn object closely enough for
+// Hufu's needs (id/items/status/error) — confirmed live via
+// turn/completed's own notification payload, which already carries a full
+// Turn including items, not just an id.
+type codexTurn struct {
+	ID     string            `json:"id"`
+	Items  []codexThreadItem `json:"items"`
+	Status string            `json:"status"`
+	Error  *codexTurnError   `json:"error,omitempty"`
+}
+
+type codexTurnCompletedParams struct {
+	ThreadID string    `json:"threadId"`
+	Turn     codexTurn `json:"turn"`
+}
+
+// codexFinalAgentMessage returns the last item marked as the turn's final
+// answer — the one whose text is the schema-constrained JSON Hufu asked for
+// via outputSchema. Scanning from the end handles a turn with more than one
+// agentMessage item (intermediate progress messages before the final one).
+func codexFinalAgentMessage(items []codexThreadItem) (string, bool) {
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Type == "agentMessage" && items[i].Phase == "final_answer" {
+			return items[i].Text, true
+		}
+	}
+	return "", false
 }
 
 // CodexProtocolIncompleteError classifies a turn that completed without ever
@@ -222,35 +339,55 @@ type CodexTurnResult struct {
 // codexRunTurn implements §14.4/§14.5 and §13.4: send the already-compiled
 // Hufu prompt with a strict output schema, wait for the terminal
 // turn/completed notification (never assuming any non-terminal notification
-// arrived), then perform the authoritative thread/read and strictly decode
-// its final output as a WorkerResultProposal. A missing or invalid proposal
-// becomes a CodexProtocolIncompleteError, never a fabricated success.
-func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt, developerInstruction string) (CodexTurnResult, error) {
+// arrived), then extract and strictly decode its embedded final answer as a
+// WorkerResultProposal. A missing/invalid proposal, or a turn the app-server
+// itself reports as failed, becomes a CodexProtocolIncompleteError, never a
+// fabricated success.
+//
+// onTurnStarted, if non-nil, is invoked with the turn id as soon as
+// turn/start's synchronous ack arrives — before this function blocks
+// waiting for completion — so a concurrent caller (RunAttempt's
+// cancellation path) can learn the id in time to send a targeted
+// turn/interrupt.
+func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt string, onTurnStarted func(turnID string)) (CodexTurnResult, error) {
 	schema, err := json.Marshal(codexWorkerResultProposalSchema())
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: marshal output schema: %w", err)
 	}
 	var startResult codexTurnStartResult
-	params := codexTurnStartParams{ThreadID: threadID, Input: prompt, DeveloperInstruction: developerInstruction, OutputSchema: schema}
+	params := codexTurnStartParams{ThreadID: threadID, Input: []codexUserInput{{Type: "text", Text: prompt}}, OutputSchema: schema}
 	if err := client.Call(ctx, codexMethodTurnStart, params, &startResult); err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
 	}
-
-	if err := waitForCodexTurnCompleted(ctx, client, startResult.TurnID); err != nil {
-		return CodexTurnResult{TurnID: startResult.TurnID}, err
+	turnID := startResult.Turn.ID
+	if onTurnStarted != nil {
+		onTurnStarted(turnID)
 	}
 
-	var readResult codexThreadReadResult
-	if err := client.Call(ctx, codexMethodThreadRead, codexThreadReadParams{ThreadID: threadID}, &readResult); err != nil {
-		return CodexTurnResult{TurnID: startResult.TurnID}, fmt.Errorf("codex thread/read: %w", err)
+	completed, err := waitForCodexTurnCompleted(ctx, client, threadID, turnID)
+	if err != nil {
+		return CodexTurnResult{TurnID: turnID}, err
+	}
+	if completed.Status != "completed" {
+		msg := completed.Status
+		if completed.Error != nil && completed.Error.Message != "" {
+			msg = completed.Error.Message
+		}
+		return CodexTurnResult{TurnID: turnID}, fmt.Errorf("codex turn ended with status %q: %s", completed.Status, msg)
 	}
 
-	proposal, decodeErr := DecodeWorkerResultProposal([]byte(readResult.FinalOutput))
+	finalText, ok := codexFinalAgentMessage(completed.Items)
+	if !ok {
+		return CodexTurnResult{TurnID: turnID},
+			&CodexProtocolIncompleteError{Reason: fmt.Errorf("turn/completed carried no final agent message")}
+	}
+
+	proposal, decodeErr := DecodeWorkerResultProposal([]byte(finalText))
 	if decodeErr != nil {
-		return CodexTurnResult{TurnID: startResult.TurnID, RawFinalOutput: readResult.FinalOutput},
-			&CodexProtocolIncompleteError{Reason: decodeErr, RawFinalOutput: readResult.FinalOutput}
+		return CodexTurnResult{TurnID: turnID, RawFinalOutput: finalText},
+			&CodexProtocolIncompleteError{Reason: decodeErr, RawFinalOutput: finalText}
 	}
-	return CodexTurnResult{TurnID: startResult.TurnID, Proposal: proposal, RawFinalOutput: readResult.FinalOutput}, nil
+	return CodexTurnResult{TurnID: turnID, Proposal: proposal, RawFinalOutput: finalText}, nil
 }
 
 // waitForCodexTurnCompleted blocks on the notification stream until the
@@ -258,30 +395,30 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt,
 // notification along the way (§13.3: "MUST NOT require every non-terminal
 // notification for correctness"). Since v1 runs exactly one app-server
 // process per attempt (§13.1) with exactly one active turn, a
-// turn/completed notification that omits turn_id is unambiguous; one that
+// turn/completed notification that omits a turn id is unambiguous; one that
 // includes it is still checked for an exact match as a defensive measure.
-func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, turnID string) error {
+func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, threadID, turnID string) (codexTurn, error) {
 	for {
 		select {
 		case notif := <-client.Notifications():
 			if notif.Method != codexNotificationTurnCompleted {
 				continue
 			}
-			var params struct {
-				TurnID string `json:"turn_id"`
+			var params codexTurnCompletedParams
+			if err := json.Unmarshal(notif.Params, &params); err != nil {
+				continue
 			}
-			_ = json.Unmarshal(notif.Params, &params)
-			if params.TurnID == "" || turnID == "" || params.TurnID == turnID {
-				return nil
+			if params.Turn.ID == "" || turnID == "" || params.Turn.ID == turnID {
+				return params.Turn, nil
 			}
 		case <-client.Done():
 			err := client.Err()
 			if err == nil {
 				err = fmt.Errorf("codex app-server disconnected")
 			}
-			return fmt.Errorf("codex app-server disconnected while waiting for turn/completed: %w", err)
+			return codexTurn{}, fmt.Errorf("codex app-server disconnected while waiting for turn/completed: %w", err)
 		case <-ctx.Done():
-			return ctx.Err()
+			return codexTurn{}, ctx.Err()
 		}
 	}
 }

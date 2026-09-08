@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,11 +30,12 @@ func newCodexWorkspace(t *testing.T) string {
 	return t.TempDir()
 }
 
-func newCodexHarness(t *testing.T, workspace string, steps []fakeCodexStep) (*Coordinator, *CodexSubagentProvider, *TodoItem) {
+func newCodexHarness(t *testing.T, workspace string, steps []fakeCodexStep) (*Coordinator, *CodexSubagentProvider, *TodoItem, string) {
 	t.Helper()
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "script.json")
-	data, err := json.Marshal(fakeCodexScript{Steps: steps})
+	rawLogPath := filepath.Join(scriptDir, "raw_calls.log")
+	data, err := json.Marshal(fakeCodexScript{Steps: steps, RawLogPath: rawLogPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +66,7 @@ func newCodexHarness(t *testing.T, workspace string, steps []fakeCodexStep) (*Co
 		InheritEnv:     []string{fakeCodexServerScriptEnvVar},
 		StartupTimeout: "5s", InterruptGrace: "200ms", ShutdownGrace: "200ms",
 	})
-	return c, provider, item
+	return c, provider, item, rawLogPath
 }
 
 func codexAttemptRequest(item *TodoItem, prompt string) AttemptRequest {
@@ -78,11 +80,77 @@ func codexAttemptRequest(item *TodoItem, prompt string) AttemptRequest {
 // codexInitializeStep answers the "initialize" call StartCodexAppServer
 // always makes first, before any thread/turn operation (§13.2 step 8).
 func codexInitializeStep(t *testing.T) fakeCodexStep {
-	return fakeCodexStep{Result: rawJSON(t, map[string]any{"protocol_version": "v2", "server_version": "fake-1.0"})}
+	return fakeCodexStep{Result: rawJSON(t, map[string]any{"userAgent": "fake/1.0", "codexHome": "/fake/home"})}
 }
 
+// codexThreadStartStep answers a thread/start call with a fixed
+// gpt-5-codex/workspace-write effective state — see
+// codex_thread_lifecycle_test.go's fakeCodexThreadStartStep for the real
+// (thread.id-nested, sandbox-policy-object) response shape this wraps.
 func codexThreadStartStep(t *testing.T, threadID, cwd string) fakeCodexStep {
-	return fakeCodexStep{Result: rawJSON(t, map[string]any{"thread_id": threadID, "cwd": cwd, "model": "gpt-5-codex", "sandbox": "workspace-write"})}
+	return fakeCodexThreadStartStep(threadID, cwd, "gpt-5-codex", "workspace-write", t)
+}
+
+// codexThreadResumeStep answers a thread/resume call, with an explicit
+// sandbox so tests can prove Hufu correctly validates (or a compliant
+// app-server correctly honors) a forced sandbox override such as §23's
+// read-only repair resume. The real protocol's thread/resume response has
+// the same shape as thread/start's, so this reuses the same builder.
+func codexThreadResumeStep(t *testing.T, threadID, cwd, sandbox string) fakeCodexStep {
+	return fakeCodexThreadStartStep(threadID, cwd, "gpt-5-codex", sandbox, t)
+}
+
+// readRawCalls decodes every raw JSON-RPC request line recorded at path (see
+// fakeCodexScript.RawLogPath), generically, so a test can inspect a specific
+// call's params rather than just its method name.
+func readRawCalls(t *testing.T, path string) []map[string]json.RawMessage {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil
+	}
+	var calls []map[string]json.RawMessage
+	for _, line := range strings.Split(trimmed, "\n") {
+		var call map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &call); err != nil {
+			t.Fatal(err)
+		}
+		calls = append(calls, call)
+	}
+	return calls
+}
+
+// findRawCall returns the first recorded call to method, or fails the test.
+func findRawCall(t *testing.T, calls []map[string]json.RawMessage, method string) map[string]json.RawMessage {
+	t.Helper()
+	for _, call := range calls {
+		var m string
+		_ = json.Unmarshal(call["method"], &m)
+		if m == method {
+			return call
+		}
+	}
+	t.Fatalf("no recorded call to %q among %d calls", method, len(calls))
+	return nil
+}
+
+// rawCallMethods returns every recorded call's method, in arrival order.
+func rawCallMethods(t *testing.T, calls []map[string]json.RawMessage) []string {
+	t.Helper()
+	methods := make([]string, 0, len(calls))
+	for _, call := range calls {
+		var m string
+		_ = json.Unmarshal(call["method"], &m)
+		methods = append(methods, m)
+	}
+	return methods
 }
 
 // TestCodexProviderRegisteredAndResolvable is supplementary (not one of
@@ -114,14 +182,10 @@ func TestCodexProviderRegisteredAndResolvable(t *testing.T) {
 // the session binding is durably visible afterward.
 func TestCodexProviderResultBecomesCanonical(t *testing.T) {
 	workspace := newCodexWorkspace(t)
-	c, provider, item := newCodexHarness(t, workspace, []fakeCodexStep{
+	c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
 		codexThreadStartStep(t, "thread-1", workspace),
-		{
-			Result:        rawJSON(t, map[string]any{"turn_id": "turn-1"}),
-			Notifications: []fakeCodexNotification{{Method: "turn/completed", Params: rawJSON(t, map[string]any{"turn_id": "turn-1"})}},
-		},
-		{Result: rawJSON(t, map[string]any{"final_output": validProposalJSON("")})},
+		fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
 	})
 
 	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
@@ -148,10 +212,10 @@ func TestCodexProviderResultBecomesCanonical(t *testing.T) {
 // binding is not erased and a non-empty transcript is preserved.
 func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 	workspace := newCodexWorkspace(t)
-	c, provider, item := newCodexHarness(t, workspace, []fakeCodexStep{
+	c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
 		codexThreadStartStep(t, "thread-cancel", workspace),
-		{Result: rawJSON(t, map[string]any{"turn_id": "turn-cancel"})}, // acked, but turn/completed never arrives
+		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-cancel"}})}, // acked, but turn/completed never arrives
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -186,7 +250,7 @@ func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 // along with the failed attempt.
 func TestCodexCrashPreservesWorkspaceDelta(t *testing.T) {
 	workspace := newCodexWorkspace(t)
-	_, provider, item := newCodexHarness(t, workspace, []fakeCodexStep{
+	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
 		codexThreadStartStep(t, "thread-crash", workspace),
 		{WriteFile: "changed-before-crash.txt", WriteFileContent: "written just before the crash", CloseAfter: true},
@@ -212,10 +276,10 @@ func TestCodexCrashPreservesWorkspaceDelta(t *testing.T) {
 // no ResultProposal, and a classified provider_timeout error.
 func TestCodexTimeoutDoesNotReportSuccess(t *testing.T) {
 	workspace := newCodexWorkspace(t)
-	_, provider, item := newCodexHarness(t, workspace, []fakeCodexStep{
+	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
 		codexThreadStartStep(t, "thread-timeout", workspace),
-		{Result: rawJSON(t, map[string]any{"turn_id": "turn-timeout"})}, // acked, turn/completed never arrives
+		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-timeout"}})}, // acked, turn/completed never arrives
 	})
 
 	request := codexAttemptRequest(item, "do the work")
@@ -230,5 +294,317 @@ func TestCodexTimeoutDoesNotReportSuccess(t *testing.T) {
 	}
 	if result.CanonicalResult != nil || result.ResultProposal != nil {
 		t.Fatalf("result = %#v, want no proposal/canonical result reported on timeout", result)
+	}
+}
+
+// Phase 6 tests (spec.md §36 PR-13/PR-14): result-only protocol repair and
+// crash/restart reconciliation.
+
+// codexRepairScript builds the 6-request script every result-only-repair
+// test shares: the original turn's init/thread-start/turn-completion,
+// followed by the repair process's own init/thread-resume/turn-completion
+// (the fake server continues consuming this same list across both
+// processes — see codex_fake_server_test.go's RawLogPath cursor). Real
+// turn/completed notifications carry the final answer inline, so there is
+// no separate thread/read step. originalFinalOutput and repairFinalOutput
+// are each test's only variable.
+func codexRepairScript(t *testing.T, workspace, threadID, originalFinalOutput, repairFinalOutput string, originalWrite, repairWrite fakeCodexStep) []fakeCodexStep {
+	original := fakeCodexTurnCompletedStep(t, "turn-original", originalFinalOutput)
+	original.WriteFile, original.WriteFileContent = originalWrite.WriteFile, originalWrite.WriteFileContent
+	repair := fakeCodexTurnCompletedStep(t, "turn-repair", repairFinalOutput)
+	repair.WriteFile, repair.WriteFileContent = repairWrite.WriteFile, repairWrite.WriteFileContent
+	return []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, threadID, workspace),
+		original,
+		codexInitializeStep(t),
+		codexThreadResumeStep(t, threadID, workspace, codexSandboxReadOnly),
+		repair,
+	}
+}
+
+// TestCodexResultRepairIsReadOnly proves §23: the repair resume requests a
+// read-only sandbox, never the original task's (here, workspace-write)
+// sandbox.
+func TestCodexResultRepairIsReadOnly(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, rawLogPath := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-ro",
+		"", validProposalJSON(""), fakeCodexStep{}, fakeCodexStep{}))
+
+	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if result.CanonicalResult == nil {
+		t.Fatalf("CanonicalResult = nil, want the repair proposal to become the canonical result")
+	}
+
+	resumeCall := findRawCall(t, readRawCalls(t, rawLogPath), codexMethodThreadResume)
+	var params struct {
+		Sandbox string `json:"sandbox"`
+	}
+	if err := json.Unmarshal(resumeCall["params"], &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Sandbox != codexSandboxReadOnly {
+		t.Fatalf("repair thread/resume sandbox = %q, want %q", params.Sandbox, codexSandboxReadOnly)
+	}
+}
+
+// TestCodexResultRepairDoesNotReplayWorkspaceWrite proves §23: a repair
+// proposal cannot retroactively change observed workspace history. Even if
+// the repair turn writes a file (an app-server disobeying the read-only
+// instruction, worst case), Hufu's canonical WorkspaceDelta reflects only
+// what was already frozen before the repair began.
+func TestCodexResultRepairDoesNotReplayWorkspaceWrite(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-freeze",
+		"", validProposalJSON(""),
+		fakeCodexStep{WriteFile: "before-repair.txt", WriteFileContent: "written by the original turn"},
+		fakeCodexStep{WriteFile: "during-repair.txt", WriteFileContent: "written despite the read-only instruction"},
+	))
+
+	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	added := make(map[string]bool, len(result.WorkspaceDelta.Added))
+	for _, f := range result.WorkspaceDelta.Added {
+		added[f.Path] = true
+	}
+	if !added["before-repair.txt"] {
+		t.Fatalf("WorkspaceDelta.Added = %v, want the original turn's file frozen as evidence", result.WorkspaceDelta.Added)
+	}
+	if added["during-repair.txt"] {
+		t.Fatalf("WorkspaceDelta.Added = %v, want the repair turn's file excluded (frozen history)", result.WorkspaceDelta.Added)
+	}
+}
+
+// TestCodexSecondInvalidResultBecomesProtocolIncomplete proves §23: when the
+// repair turn ALSO fails to produce a valid proposal, Hufu does not attempt
+// a further repair — it classifies the attempt as protocol-incomplete and
+// reports no fabricated success.
+func TestCodexSecondInvalidResultBecomesProtocolIncomplete(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-fail",
+		"", "", fakeCodexStep{}, fakeCodexStep{}))
+
+	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err == nil {
+		t.Fatal("expected RunAttempt to fail when both the original and repair turns produce no valid proposal")
+	}
+	var protoErr *CodexProtocolIncompleteError
+	if !errors.As(err, &protoErr) {
+		t.Fatalf("err = %v, want *CodexProtocolIncompleteError", err)
+	}
+	if result.CanonicalResult != nil || result.ResultProposal != nil {
+		t.Fatalf("result = %#v, want no proposal/canonical result after a failed repair", result)
+	}
+}
+
+// TestResumeDoesNotReplayUnsafeSideEffect proves §22.4/§33: an existing
+// provider session binding never bypasses the side-effect admission gate —
+// a credential-mutation task is rejected before any process or RPC activity,
+// resume or not.
+func TestResumeDoesNotReplayUnsafeSideEffect(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, rawLogPath := newCodexHarness(t, workspace, nil)
+
+	request := codexAttemptRequest(item, "do the work")
+	request.Task.SideEffect = SideEffectCredential
+	request.ProviderBinding = &ProviderBinding{Provider: "codex", SessionID: "thread-existing", ResumeSupported: true}
+
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err == nil {
+		t.Fatal("expected RunAttempt to reject a credential-mutation side effect even with an existing session binding")
+	}
+	var provErr *CodexProviderError
+	if !errors.As(err, &provErr) || provErr.Class != CodexFailureUnavailable {
+		t.Fatalf("err = %v, want a classified %q failure", err, CodexFailureUnavailable)
+	}
+	if result.ProviderSessionID != "" || result.CanonicalResult != nil {
+		t.Fatalf("result = %#v, want no session/result activity for a rejected side effect", result)
+	}
+	if calls := readRawCalls(t, rawLogPath); len(calls) != 0 {
+		t.Fatalf("recorded calls = %v, want no process/RPC activity before rejection", rawCallMethods(t, calls))
+	}
+}
+
+// TestCrashAfterProviderSessionBeforeTurnTerminal proves §24.2: on resume, a
+// file that already existed on disk before the crash (i.e. before this
+// RunAttempt call's baseline snapshot) is reconciled as baseline, not
+// credited as new evidence from the resumed turn — only what the resumed
+// turn itself changes is new.
+func TestCrashAfterProviderSessionBeforeTurnTerminal(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	if err := os.WriteFile(filepath.Join(workspace, "pre-crash-change.txt"), []byte("already there before the crash"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumeStep := fakeCodexTurnCompletedStep(t, "turn-resume", validProposalJSON(""))
+	resumeStep.WriteFile, resumeStep.WriteFileContent = "new-work.txt", "written after resuming"
+	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadResumeStep(t, "thread-precrash", workspace, codexSandboxWorkspaceWrite),
+		resumeStep,
+	})
+
+	request := codexAttemptRequest(item, "continue the work")
+	request.Attempt = 2
+	request.ProviderBinding = &ProviderBinding{Provider: "codex", SessionID: "thread-precrash", ResumeSupported: true}
+
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	added := make(map[string]bool, len(result.WorkspaceDelta.Added))
+	for _, f := range result.WorkspaceDelta.Added {
+		added[f.Path] = true
+	}
+	if added["pre-crash-change.txt"] {
+		t.Fatalf("WorkspaceDelta.Added = %v, want the pre-crash file treated as baseline, not new evidence", result.WorkspaceDelta.Added)
+	}
+	if !added["new-work.txt"] {
+		t.Fatalf("WorkspaceDelta.Added = %v, want the resumed turn's own new file", result.WorkspaceDelta.Added)
+	}
+}
+
+// TestCrashAfterWorkspaceMutationBeforeVerification proves §24.3: Hufu never
+// reuses a prior attempt's cached proposal/delta — a second, independent
+// RunAttempt call (as Hufu's own retry policy would drive if verification
+// failed after the first attempt) reconciles entirely fresh from what it
+// itself observes.
+func TestCrashAfterWorkspaceMutationBeforeVerification(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+
+	firstStep := fakeCodexTurnCompletedStep(t, "turn-1", `{"status":"success","summary":"first pass done"}`)
+	firstStep.WriteFile, firstStep.WriteFileContent = "first.txt", "first pass"
+	_, provider1, item1, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-unverified", workspace),
+		firstStep,
+	})
+	result1, err := provider1.RunAttempt(context.Background(), codexAttemptRequest(item1, "do the work"))
+	if err != nil {
+		t.Fatalf("attempt 1 RunAttempt: %v", err)
+	}
+
+	// A second, independent RunAttempt call — as Hufu's own retry policy
+	// would issue after attempt 1's verification failed downstream, not
+	// because this provider remembers anything from attempt 1.
+	secondStep := fakeCodexTurnCompletedStep(t, "turn-2", `{"status":"success","summary":"second pass done"}`)
+	secondStep.WriteFile, secondStep.WriteFileContent = "second.txt", "second pass"
+	_, provider2, item2, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadResumeStep(t, "thread-unverified", workspace, codexSandboxWorkspaceWrite),
+		secondStep,
+	})
+	request2 := codexAttemptRequest(item2, "continue the work")
+	request2.Attempt = 2
+	request2.ProviderBinding = &ProviderBinding{Provider: "codex", SessionID: result1.ProviderSessionID, ResumeSupported: true}
+
+	result2, err := provider2.RunAttempt(context.Background(), request2)
+	if err != nil {
+		t.Fatalf("attempt 2 RunAttempt: %v", err)
+	}
+	if result2.CanonicalResult == nil || result2.CanonicalResult.Summary == result1.CanonicalResult.Summary {
+		t.Fatalf("attempt 2 CanonicalResult = %#v, want a fresh summary distinct from attempt 1's %q", result2.CanonicalResult, result1.CanonicalResult.Summary)
+	}
+	added := make(map[string]bool, len(result2.WorkspaceDelta.Added))
+	for _, f := range result2.WorkspaceDelta.Added {
+		added[f.Path] = true
+	}
+	if added["first.txt"] {
+		t.Fatalf("attempt 2 WorkspaceDelta.Added = %v, want attempt 1's file excluded (already baseline)", result2.WorkspaceDelta.Added)
+	}
+	if !added["second.txt"] {
+		t.Fatalf("attempt 2 WorkspaceDelta.Added = %v, want attempt 2's own new file", result2.WorkspaceDelta.Added)
+	}
+}
+
+// TestCodexResumeAfterHufuRestart proves §24.2 end to end through the real
+// EventStore: a durable provider session binding, written before a
+// simulated Hufu restart, survives replay into a brand-new
+// Coordinator/TaskTracker with no in-memory state carried over, and driving
+// a further attempt from that replayed binding alone resumes the existing
+// thread rather than starting a new one.
+func TestCodexResumeAfterHufuRestart(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+
+	c1, provider1, item1, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-restart", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
+	})
+	// The harness adds item1 straight to the in-memory TodoList (a testing
+	// shortcut), never through a durable task_created event. Append one now
+	// so the event log this test replays from is a faithful stand-in for the
+	// real event-first admission boundary (§7.2).
+	createdPayload, err := json.Marshal(taskTransitionPayload(item1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c1.EventJournal().Append(context.Background(), RunEvent{Type: string(EventTaskCreated), Actor: "coordinator", TaskID: item1.ID, Payload: createdPayload}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider1.RunAttempt(context.Background(), codexAttemptRequest(item1, "do the work")); err != nil {
+		t.Fatalf("attempt 1 RunAttempt: %v", err)
+	}
+
+	// Simulate a Hufu restart: replay the durable event log from scratch,
+	// with no in-memory state carried over, and recover the binding purely
+	// from what is on disk (§24.2 step 1).
+	store, err := OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	replayed := ReduceToTodoList(events)
+	var binding *ProviderBinding
+	for _, it := range replayed {
+		if it.ID == item1.ID {
+			binding = it.ProviderBinding
+		}
+	}
+	if binding == nil || binding.SessionID != "thread-restart" {
+		t.Fatalf("replayed ProviderBinding = %#v, want a durable thread-restart session", binding)
+	}
+
+	// Attempt 2, after the simulated restart: a fresh Coordinator/provider,
+	// driven only by the replayed binding above.
+	_, provider2, item2, rawLogPath2 := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadResumeStep(t, "thread-restart", workspace, codexSandboxWorkspaceWrite),
+		fakeCodexTurnCompletedStep(t, "turn-2", validProposalJSON("")),
+	})
+	request := codexAttemptRequest(item2, "continue the work")
+	request.Attempt = 2
+	request.ProviderBinding = binding
+
+	result, err := provider2.RunAttempt(context.Background(), request)
+	if err != nil {
+		t.Fatalf("attempt 2 RunAttempt: %v", err)
+	}
+	if result.ProviderSessionID != "thread-restart" {
+		t.Fatalf("ProviderSessionID = %q, want the resumed thread-restart session", result.ProviderSessionID)
+	}
+	methods := rawCallMethods(t, readRawCalls(t, rawLogPath2))
+	sawResume, sawStart := false, false
+	for _, m := range methods {
+		switch m {
+		case codexMethodThreadResume:
+			sawResume = true
+		case codexMethodThreadStart:
+			sawStart = true
+		}
+	}
+	if !sawResume {
+		t.Fatalf("recorded calls = %v, want a thread/resume after the simulated restart", methods)
+	}
+	if sawStart {
+		t.Fatalf("recorded calls = %v, want no fresh thread/start — the durable session must be reused", methods)
 	}
 }
