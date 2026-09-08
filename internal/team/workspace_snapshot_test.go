@@ -187,7 +187,10 @@ func TestWorkspaceSnapshotFallbackNonGit(t *testing.T) {
 // TestWorkspaceSnapshotGitOptimizedMatchesFallback is supplementary (not one
 // of PR-05's named tests): it exercises the Git-assisted candidate-discovery
 // path added alongside the required fallback, proving it produces the same
-// real-byte hashes for the same content.
+// real-byte hashes for the same content. See
+// TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs below for the
+// Hufu-internal-directory exclusion this path also applies explicitly, not
+// merely by relying on Git's own (optional, absent-by-default) ignore rules.
 func TestWorkspaceSnapshotGitOptimizedMatchesFallback(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary unavailable")
@@ -228,5 +231,71 @@ func TestWorkspaceSnapshotGitOptimizedMatchesFallback(t *testing.T) {
 	}
 	if _, err := snap.fileState("untracked.txt"); err != nil {
 		t.Fatalf("untracked.txt missing from git-optimized snapshot: %v", err)
+	}
+}
+
+// TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs proves the git-assisted
+// path applies the same Hufu-internal exclusions as the non-Git fallback
+// (TestWorkspaceSnapshotFallbackNonGit), not just Git's own .gitignore
+// rules.
+//
+// **Fixed 2026-09-08** (found running the real §38 smoke suite for the first
+// time, against a genuine git-initialized scratch repository — every
+// fake-server unit test's workspace is a plain non-Git temp dir, so none of
+// them ever exercised this path at all): gitCandidateFiles previously had no
+// such exclusion. A real Coordinator's own logs/event_store.jsonl, sitting
+// untracked inside the same git-backed workspace an attempt operates in, was
+// a legitimate git "untracked file" candidate — so any append Hufu's own
+// EventStore made to it during a real attempt was indistinguishable from a
+// provider write, and a read-only task (empty WritableRoots) failed closed
+// on its own coordinator's bookkeeping.
+func TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary unavailable")
+	}
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("tracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "tracked.txt")
+	run("commit", "-q", "-m", "initial")
+
+	// No .gitignore for logsDir at all: the exclusion must not depend on it.
+	if err := os.MkdirAll(filepath.Join(root, logsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, logsDir, "event_store.jsonl"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := gitCandidateFiles(context.Background(), root); !ok {
+		t.Fatal("expected root to be detected as a Git working tree")
+	}
+	baseline := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+	if _, err := baseline.fileState(logsDir + "/event_store.jsonl"); err == nil {
+		t.Fatalf("Hufu-internal %s/ directory was not skipped by the git-assisted snapshot", logsDir)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, logsDir, "event_store.jsonl"), []byte(`{"an":"event"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
+	delta, err := NewWorkspaceSnapshotter().Diff(context.Background(), baseline, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Added) != 0 || len(delta.Modified) != 0 || len(delta.Deleted) != 0 {
+		t.Fatalf("delta = %#v, want no changes: Hufu's own %s/ write must never surface as a workspace delta entry", delta, logsDir)
 	}
 }

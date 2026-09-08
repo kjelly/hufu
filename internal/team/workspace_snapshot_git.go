@@ -34,7 +34,7 @@ func gitCandidateFiles(ctx context.Context, root string) ([]string, bool) {
 	seen := make(map[string]bool, len(tracked)+len(untracked))
 	candidates := make([]string, 0, len(tracked)+len(untracked))
 	for _, path := range append(tracked, untracked...) {
-		if path == "" || seen[path] {
+		if path == "" || seen[path] || isWorkspaceInternalPath(path) {
 			continue
 		}
 		seen[path] = true

@@ -207,6 +207,34 @@ var workspaceInternalDirs = map[string]bool{
 	logsDir:    true,
 }
 
+// isWorkspaceInternalPath reports whether rel (forward-slash, workspace-
+// relative) falls under any workspaceInternalDirs entry at any depth —
+// gitCandidateFiles' equivalent of walkAndHashWorkspace's fs.SkipDir on a
+// matching directory name.
+//
+// **Fixed 2026-09-08** (found running the real §38 smoke suite against a
+// genuine account for the first time, against a real git-backed scratch
+// repository — every fake-server unit test's workspace is a plain temp dir
+// with no .git, so none of them ever exercised the git-assisted snapshot
+// path at all): gitCandidateFiles previously had no such exclusion, so
+// Hufu's own logs/event_store.jsonl (created by the very same Coordinator
+// running the attempt) was a legitimate git "untracked file" candidate.
+// Every append Hufu made to its own event log during a real attempt then
+// showed up as an external "Modified" delta entry — indistinguishable from
+// a provider write — and a read-only task (empty WritableRoots) failed
+// closed on its own coordinator's bookkeeping. Confirmed via a synthetic
+// reproduction before this fix: two live Snapshot calls around one raw
+// append to logs/event_store.jsonl in a git-initialized temp dir reported
+// exactly that file Modified.
+func isWorkspaceInternalPath(rel string) bool {
+	for _, segment := range strings.Split(rel, "/") {
+		if workspaceInternalDirs[segment] {
+			return true
+		}
+	}
+	return false
+}
+
 func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int) (map[string]WorkspaceFileState, error) {
 	files := make(map[string]WorkspaceFileState)
 	count := 0
