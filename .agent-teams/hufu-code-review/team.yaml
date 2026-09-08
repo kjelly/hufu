@@ -15,6 +15,15 @@ max-total-tokens: 0
 no-net: true
 allow-free-text-results: false
 
+subagent-providers:
+  codex:
+    type: codex-app-server
+    command: [codex, app-server]
+    startup-timeout: "30s"
+    interrupt-grace: "5s"
+    shutdown-grace: "5s"
+    inherit-env: [PATH, CODEX_HOME, HOME]
+
 workflow:
   phases: [prepare, verify]
 policies:
