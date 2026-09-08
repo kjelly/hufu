@@ -1,0 +1,137 @@
+package team
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Phase 3 tests (spec.md §36 PR-06): the generic ExecutionWorld contract and
+// its local-sandbox implementation. Still no Codex — every test drives
+// LocalExecutionWorld directly.
+
+// TestExecutionWorldSideEffectMapping proves §10.5's Hufu-side-effect
+// projection: none is read-only, workspace_write/external_write/
+// infra_mutation all project to workspace-write (the wider effect is simply
+// unavailable in v1, not silently granted), and credential_mutation has no
+// projection — Prepare must reject it outright.
+func TestExecutionWorldSideEffectMapping(t *testing.T) {
+	cases := []struct {
+		name         string
+		effect       SideEffectClass
+		wantWritable bool
+		wantReadOnly bool
+		wantRejected bool
+	}{
+		{name: "none", effect: SideEffectNone, wantReadOnly: true},
+		{name: "empty defaults like none", effect: "", wantReadOnly: true},
+		{name: "workspace_write", effect: SideEffectWorkspaceWrite, wantWritable: true},
+		{name: "external_write maps to workspace-write only", effect: SideEffectExternalWrite, wantWritable: true},
+		{name: "infra_mutation maps to workspace-write only", effect: SideEffectInfraMutation, wantWritable: true},
+		{name: "credential_mutation is rejected", effect: SideEffectCredential, wantRejected: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			world := NewLocalExecutionWorld()
+			prepared, err := world.Prepare(context.Background(), ExecutionWorldSpec{Root: root, SideEffect: tc.effect})
+			if tc.wantRejected {
+				if err == nil {
+					t.Fatal("expected Prepare to reject credential_mutation admission")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			if tc.wantWritable && len(prepared.WritableRoots) == 0 {
+				t.Fatalf("WritableRoots = %#v, want the root to be writable", prepared.WritableRoots)
+			}
+			if tc.wantReadOnly && (len(prepared.WritableRoots) != 0 || len(prepared.ReadOnlyRoots) == 0) {
+				t.Fatalf("writable=%#v readOnly=%#v, want read-only only", prepared.WritableRoots, prepared.ReadOnlyRoots)
+			}
+		})
+	}
+}
+
+// TestExecutionWorldDoesNotInheritSecrets proves the process environment is
+// built strictly from EnvironmentAllowlist, never from os.Environ(), so a
+// secret present in Hufu's own process environment never reaches the
+// prepared world just because it happens to be set (§10.7).
+func TestExecutionWorldDoesNotInheritSecrets(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("OPENAI_API_KEY", "sk-should-never-appear")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "also-should-never-appear")
+
+	root := t.TempDir()
+	world := NewLocalExecutionWorld()
+	prepared, err := world.Prepare(context.Background(), ExecutionWorldSpec{
+		Root: root, SideEffect: SideEffectWorkspaceWrite,
+		EnvironmentAllowlist: []string{"PATH", "CODEX_HOME"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPath := false
+	for _, kv := range prepared.Environment {
+		if strings.HasPrefix(kv, "OPENAI_API_KEY=") || strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
+			t.Fatalf("prepared environment %v leaked a non-allowlisted secret variable", prepared.Environment)
+		}
+		if kv == "PATH=/usr/bin:/bin" {
+			foundPath = true
+		}
+	}
+	if !foundPath {
+		t.Fatalf("prepared environment %v missing the allowlisted PATH", prepared.Environment)
+	}
+}
+
+// TestExecutionWorldRejectsCredentialMutation proves admission for a
+// credential_mutation task fails before any workspace side effect (§10.5's
+// last row: "reject provider admission").
+func TestExecutionWorldRejectsCredentialMutation(t *testing.T) {
+	world := NewLocalExecutionWorld()
+	_, err := world.Prepare(context.Background(), ExecutionWorldSpec{Root: t.TempDir(), SideEffect: SideEffectCredential})
+	if err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("Prepare error = %v, want a credential_mutation rejection", err)
+	}
+}
+
+// TestExecutionWorldRejectsOutsideWritableRoot proves
+// ValidateExecutionWorldDelta rejects any observed change outside the
+// prepared WritableRoots, and accepts one inside them (§10.4: "detect
+// changes outside allowed writable roots after execution").
+func TestExecutionWorldRejectsOutsideWritableRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "allowed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	world := NewLocalExecutionWorld()
+	prepared, err := world.Prepare(context.Background(), ExecutionWorldSpec{
+		Root: root, SideEffect: SideEffectWorkspaceWrite,
+		WritableRoots: []string{filepath.Join(root, "allowed")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ValidateExecutionWorldDelta(prepared, WorkspaceDelta{
+		Modified: []WorkspaceFileState{{Path: "allowed/inside.txt"}},
+	}); err != nil {
+		t.Fatalf("in-bounds change unexpectedly rejected: %v", err)
+	}
+
+	if err := ValidateExecutionWorldDelta(prepared, WorkspaceDelta{
+		Added: []WorkspaceFileState{{Path: "outside.txt"}},
+	}); err == nil {
+		t.Fatal("expected a change outside the writable root to be rejected")
+	}
+
+	if err := ValidateExecutionWorldDelta(prepared, WorkspaceDelta{
+		Deleted: []string{"elsewhere.txt"},
+	}); err == nil {
+		t.Fatal("expected a deletion outside the writable root to be rejected")
+	}
+}
