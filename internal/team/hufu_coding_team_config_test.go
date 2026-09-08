@@ -1,10 +1,12 @@
 package team
 
 import (
+	"context"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -185,62 +187,153 @@ func TestHufuCodingOnFailureClassesFreezeSemanticRejectionOnly(t *testing.T) {
 	}
 }
 
-// hufuCodingReviewerVerifySpec is exactly the verify-spec
-// .agent-teams/hufu-coding/team.yaml binds to the reviewer's static
-// contract, loaded from the real file so a future edit to the shipped YAML
-// is what these two tests actually exercise, not a hand-copied duplicate.
-func hufuCodingReviewerVerifySpec(t *testing.T) VerificationSpec {
-	t.Helper()
+// TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch drives the
+// REAL production dispatch entrypoint (Coordinator.ExecuteTasks), not a
+// direct newDAGScheduler construction like every other test in this package
+// — the gap a prior review correctly identified: OnFailureClasses must
+// survive the durable TodoSpec/TodoItem round trip
+// (task_occurrence_projection.go's compareTaskDefWithTodoOccurrence rebuilds
+// the scheduler's TaskDef from the durable TodoItem via taskDefFromTodoItem
+// and reflect.DeepEqual-rejects the entire batch on any mismatch), or a real
+// hufu-coding run never reaches a dagScheduler at all. This test lets
+// bindTaskGoalContracts derive OnFailureClasses from the real team.yaml
+// contract by goal-text match (exactly as coordinator.md instructs the
+// coordinator to phrase goals) rather than setting the field directly, so it
+// exercises the identical path production uses. A short-timeout context
+// bounds real (and here, expected-to-fail: no live model/Codex configured)
+// worker execution — this test only cares that admission itself does not
+// reject the batch over OnFailureClasses before a single worker is dispatched.
+func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) {
 	session := loadHufuCodingTeam(t)
-	for _, task := range session.ContractTasks {
-		if strings.EqualFold(strings.TrimSpace(task.Agent), "reviewer") {
-			if task.VerifySpec == nil {
-				t.Fatal("hufu-coding reviewer contract has no verify-spec")
-			}
-			return *task.VerifySpec
+	workspace := t.TempDir()
+	session.Workspace = workspace
+	session.Dir = workspace
+	store, err := NewEventStore(workspace, "hufu-coding-admission-test", "hufu-coding-admission-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	c := &Coordinator{
+		session: session, projectDir: workspace,
+		taskTracker: NewTaskTracker(), sessionData: NewSession(),
+		eventStore: store, executionRunID: "hufu-coding-admission-test",
+		reportStatus:    func(StatusEvent) {},
+		delegatedTasks:  make(map[string]int),
+		taskResultCache: make(map[string][]cachedTaskEntry),
+		maxConcurrent:   1,
+	}
+	tasks := []TaskDef{
+		{Agent: "sa", Goal: "SA_ANALYZE: implement a small safe test change"},
+		{Agent: "coder", Goal: "CODER_IMPLEMENT: implement the change", DependsOn: []int{0}},
+		{Agent: "verifier", Goal: "VERIFY_IMPLEMENTATION: run required checks", DependsOn: []int{0, 1}, OnFailure: intPtr(1), MaxRetries: 4},
+		{Agent: "reviewer", Goal: "REVIEW_CODE: review the change", DependsOn: []int{0, 1, 2}, OnFailure: intPtr(1), MaxRetries: 4},
+		{Agent: "final-sa", Goal: "FINAL_SA_GATE: accept or reject the result", DependsOn: []int{0, 1, 2, 3}, OnFailure: intPtr(1), MaxRetries: 2},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.ExecuteTasks(ctx, tasks); err != nil && strings.Contains(err.Error(), "OnFailureClasses") {
+		t.Fatalf("ExecuteTasks rejected the hufu-coding batch on admission due to an OnFailureClasses mismatch between the supplied TaskDef and the durable Todo occurrence: %v", err)
+	}
+	// Confirm the static contract actually bound OnFailureClasses onto the
+	// durable occurrence, so a passing test above isn't just "nothing ran".
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 5 {
+		t.Fatalf("want 5 durable Todo occurrences admitted, got %d", len(items))
+	}
+	for _, idx := range []int{2, 3, 4} {
+		if len(items[idx].OnFailureClasses) != 1 || items[idx].OnFailureClasses[0] != FailureVerify {
+			t.Fatalf("items[%d] (%s) OnFailureClasses = %v, want [verification] bound from the static contract", idx, items[idx].Agent, items[idx].OnFailureClasses)
 		}
 	}
-	t.Fatal("hufu-coding has no static task contract for \"reviewer\"")
-	return VerificationSpec{}
 }
 
-// TestHufuCodingReviewerCompletedWithGapsPassesVerifySpec is matrix item J
-// ("evidence gap is not coder failure") exercised against the real
-// verify-spec mechanism (executeTaskResultAssertVerification), not just the
-// DAG-level simulation in hufu_coding_workflow_test.go: a reviewer that
-// honestly reports completed_with_gaps with no confirmed must-fix finding
-// passes the same verify-spec team.yaml ships, so the task reaches TaskDone
-// exactly like success — no on_failure edge is ever consulted, let alone
-// fires, for an evidence gap.
-func TestHufuCodingReviewerCompletedWithGapsPassesVerifySpec(t *testing.T) {
-	spec := hufuCodingReviewerVerifySpec(t)
-	result := &TaskResult{
-		Status: TaskResultStatusCompletedWithGaps, Summary: "one cited file could not be read",
-		Facts: map[string]any{"must_fix_found": false},
+// TestHufuCodingVerifierReceivesSAResult and
+// TestHufuCodingFinalSAReceivesAllUpstreamResults are the direct regression
+// for a prior review finding: coordinator.md's batch used to list only each
+// task's immediately preceding index in depends_on, but
+// Coordinator.dependencyResultsForTask (coordinator_task_run.go) only ever
+// exposes a task's *direct* dependencies' results — never a transitive walk
+// — to its compiled prompt. With the widened depends_on lists coordinator.md
+// now instructs ([0,1] for verifier, [0,1,2,3] for final-sa), every
+// downstream task actually receives every upstream typed result its prompt
+// assumes is present.
+func TestHufuCodingVerifierReceivesSAResult(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "sa", Desc: "SA_ANALYZE"},
+		{Agent: "coder", Desc: "CODER_IMPLEMENT"},
+		{Agent: "verifier", Desc: "VERIFY_IMPLEMENTATION"},
+	})
+	items[2].DependsOn = []string{items[0].ID, items[1].ID}
+	for i, summary := range []string{"sa contract", "coder change"} {
+		c.taskTracker.TodoList().UpdateStatus(items[i].ID, TaskDone, "done")
+		c.storeSubmittedTaskResult(items[i].ID, &TaskResult{TaskID: items[i].ID, Status: "success", Summary: summary, Source: "submitted"})
 	}
-	vr, err := executeTaskResultAssertVerification(t.TempDir(), spec, result)
-	if err != nil {
-		t.Fatalf("expected completed_with_gaps + must_fix_found:false to pass the reviewer's verify-spec, got err=%v vr=%#v", err, vr)
+
+	got := c.dependencyResultsForTask(items[2].ID)
+	if len(got) != 2 {
+		t.Fatalf("verifier's dependency results = %d, want 2 (sa, coder): %+v", len(got), got)
 	}
-	if vr == nil || vr.ExitCode != 0 {
-		t.Fatalf("verification result = %#v, want ExitCode 0", vr)
+	summaries := map[string]bool{}
+	for _, r := range got {
+		summaries[r.Summary] = true
+	}
+	if !summaries["sa contract"] {
+		t.Fatalf("verifier did not receive SA's result: %+v", got)
+	}
+	if !summaries["coder change"] {
+		t.Fatalf("verifier did not receive coder's result: %+v", got)
 	}
 }
 
-// TestHufuCodingReviewerMustFixFindingFailsVerifySpecAsVerification proves
-// the contrasting case classifies as a genuine (FailureVerify-eligible)
-// rejection: must_fix_found:true fails the same verify-spec.
-func TestHufuCodingReviewerMustFixFindingFailsVerifySpecAsVerification(t *testing.T) {
-	spec := hufuCodingReviewerVerifySpec(t)
-	result := &TaskResult{
-		Status: TaskResultStatusFailed, Summary: "found a concrete bug",
-		Facts: map[string]any{"must_fix_found": true},
+func TestHufuCodingFinalSAReceivesAllUpstreamResults(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "sa", Desc: "SA_ANALYZE"},
+		{Agent: "coder", Desc: "CODER_IMPLEMENT"},
+		{Agent: "verifier", Desc: "VERIFY_IMPLEMENTATION"},
+		{Agent: "reviewer", Desc: "REVIEW_CODE"},
+		{Agent: "final-sa", Desc: "FINAL_SA_GATE"},
+	})
+	items[4].DependsOn = []string{items[0].ID, items[1].ID, items[2].ID, items[3].ID}
+	summaries := []string{"sa contract", "coder change", "verifier evidence", "reviewer result"}
+	for i, summary := range summaries {
+		c.taskTracker.TodoList().UpdateStatus(items[i].ID, TaskDone, "done")
+		c.storeSubmittedTaskResult(items[i].ID, &TaskResult{TaskID: items[i].ID, Status: "success", Summary: summary, Source: "submitted"})
 	}
-	vr, err := executeTaskResultAssertVerification(t.TempDir(), spec, result)
-	if err == nil {
-		t.Fatal("expected must_fix_found:true to fail the reviewer's verify-spec")
+
+	got := c.dependencyResultsForTask(items[4].ID)
+	if len(got) != 4 {
+		t.Fatalf("final-sa's dependency results = %d, want 4 (sa, coder, verifier, reviewer): %+v", len(got), got)
 	}
-	if vr == nil || vr.ExitCode == 0 {
-		t.Fatalf("verification result = %#v, want a non-zero ExitCode", vr)
+	gotSummaries := map[string]bool{}
+	for _, r := range got {
+		gotSummaries[r.Summary] = true
+	}
+	for _, want := range summaries {
+		if !gotSummaries[want] {
+			t.Fatalf("final-sa did not receive result summary %q: %+v", want, got)
+		}
+	}
+}
+
+// TestHufuCodingNoVerifySpecOnSemanticRoles pins the fix for a prior review
+// finding: verifier/reviewer/final-sa deliberately carry no verify-spec at
+// all. A task_result_assert verify-spec enforces at submit_result admission
+// time (task_result_contract.go) and would reject the tool call itself for
+// an honest, confirmed `status: failed` finding — making a true positive
+// literally un-submittable. The semantic verdict is carried by `status`
+// alone; see TestHufuCodingGenuineFailedReportAuthorizesReset and
+// TestHufuCodingInfraFailureWithNoStoredResultDoesNotAuthorizeReset in
+// hufu_coding_classification_test.go for the runtime mechanism that reads it.
+func TestHufuCodingNoVerifySpecOnSemanticRoles(t *testing.T) {
+	session := loadHufuCodingTeam(t)
+	for _, task := range session.ContractTasks {
+		name := strings.ToLower(strings.TrimSpace(task.Agent))
+		if name == "verifier" || name == "reviewer" || name == "final-sa" {
+			if task.VerifySpec != nil {
+				t.Fatalf("%s has a verify-spec %+v, want none (see comment above)", name, task.VerifySpec)
+			}
+		}
 	}
 }

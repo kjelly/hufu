@@ -229,6 +229,44 @@ func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string
 	return ok && sameTaskResultOccurrence(identity, active)
 }
 
+// dependencyResultsForTask returns the completed TaskResult of every task
+// named in todoID's own DependsOn list (only the *direct* dependencies — a
+// task that needs an ancestor's result must list that ancestor explicitly in
+// depends_on; there is no automatic transitive walk). This is the only
+// mechanism a worker's compiled prompt uses to see another task's evidence,
+// so a team whose batch shape lists only the immediately preceding task
+// (e.g. a linear pipeline) never receives an earlier ancestor's contract —
+// widen depends_on in the team/coordinator's batch construction, not here,
+// when a downstream worker genuinely needs an earlier task's result.
+func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	var currentTodo *TodoItem
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.ID == todoID {
+			currentTodo = item
+			break
+		}
+	}
+	if currentTodo == nil || len(currentTodo.DependsOn) == 0 {
+		return nil
+	}
+	depSet := make(map[string]bool, len(currentTodo.DependsOn))
+	for _, depID := range currentTodo.DependsOn {
+		depSet[depID] = true
+	}
+	var depResults []TaskResult
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if depSet[item.ID] && item.Status == TaskDone {
+			if res := c.GetTaskResult(item.ID); res != nil {
+				depResults = append(depResults, projectDependencyResultForWorker(res, currentTodo.WorksetBinding))
+			}
+		}
+	}
+	return depResults
+}
+
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
 	// Re-resolve the occurrence before any execution branch only when the Todo
@@ -524,29 +562,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
-	var depResults []TaskResult
-	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		var currentTodo *TodoItem
-		for _, item := range c.taskTracker.TodoList().Items() {
-			if item.ID == todoID {
-				currentTodo = item
-				break
-			}
-		}
-		if currentTodo != nil && len(currentTodo.DependsOn) > 0 {
-			depSet := make(map[string]bool, len(currentTodo.DependsOn))
-			for _, depID := range currentTodo.DependsOn {
-				depSet[depID] = true
-			}
-			for _, item := range c.taskTracker.TodoList().Items() {
-				if depSet[item.ID] && item.Status == TaskDone {
-					if res := c.GetTaskResult(item.ID); res != nil {
-						depResults = append(depResults, projectDependencyResultForWorker(res, currentTodo.WorksetBinding))
-					}
-				}
-			}
-		}
-	}
+	depResults := c.dependencyResultsForTask(todoID)
 
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)

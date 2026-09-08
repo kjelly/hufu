@@ -12,9 +12,20 @@ import (
 //
 //	0: sa        (no deps)
 //	1: coder     depends_on [0]
-//	2: verifier  depends_on [1], on_failure -> 1, on-failure-classes:[verification]
-//	3: reviewer  depends_on [2], on_failure -> 1, on-failure-classes:[verification]
-//	4: final-sa  depends_on [3], on_failure -> 1, on-failure-classes:[verification]
+//	2: verifier  depends_on [0,1],     on_failure -> 1, on-failure-classes:[verification]
+//	3: reviewer  depends_on [0,1,2],   on_failure -> 1, on-failure-classes:[verification]
+//	4: final-sa  depends_on [0,1,2,3], on_failure -> 1, on-failure-classes:[verification]
+//
+// depends_on lists every earlier task, not only the immediately preceding
+// one, matching coordinator.md: Coordinator.dependencyResultsForTask only
+// ever exposes a task's *direct* dependencies' results to its compiled
+// prompt (no transitive walk), so verifier/reviewer/final-sa each need SA's
+// contract listed explicitly, and final-sa additionally needs verifier's and
+// reviewer's own results. Widening depends_on does not change resetWave's
+// reset set (BFS over revDeps still visits the same {1,2,3,4} whether coder's
+// dependents list it directly or reach it transitively) or launchReady's
+// readiness gating (task 0 is done permanently before any of 1-4 ever run),
+// only which typed results a task's prompt receives.
 //
 // exactly mirroring .agent-teams/hufu-coding/team.yaml's static contracts. It
 // drives dagScheduler.handleEvent directly (the same technique as
@@ -44,9 +55,9 @@ func hufuCodingWorkflowFixture(t *testing.T) (*dagScheduler, []*TodoItem) {
 	tasks := []TaskDef{
 		{Agent: "sa"},
 		{Agent: "coder", DependsOn: []int{0}},
-		{Agent: "verifier", DependsOn: []int{1}, OnFailure: intPtr(1), MaxRetries: 4, OnFailureClasses: classes},
-		{Agent: "reviewer", DependsOn: []int{2}, OnFailure: intPtr(1), MaxRetries: 4, OnFailureClasses: classes},
-		{Agent: "final-sa", DependsOn: []int{3}, OnFailure: intPtr(1), MaxRetries: 2, OnFailureClasses: classes},
+		{Agent: "verifier", DependsOn: []int{0, 1}, OnFailure: intPtr(1), MaxRetries: 4, OnFailureClasses: classes},
+		{Agent: "reviewer", DependsOn: []int{0, 1, 2}, OnFailure: intPtr(1), MaxRetries: 4, OnFailureClasses: classes},
+		{Agent: "final-sa", DependsOn: []int{0, 1, 2, 3}, OnFailure: intPtr(1), MaxRetries: 2, OnFailureClasses: classes},
 	}
 	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "sa", Desc: "SA_ANALYZE"},
@@ -116,10 +127,15 @@ func TestHufuCodingWorkflowCleanPath(t *testing.T) {
 }
 
 // TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream is
-// matrix item B: verifier reports a real check failure (FailureVerify, the
-// one class its contract allows), which must reset the coder and every
-// downstream task in its wave, and the coder's reset must carry durable
-// remediation evidence from the verifier.
+// matrix item B, exercising the on-failure-classes allowlist path directly
+// (a class actually matching [verification] — kept as defense-in-depth per
+// team.yaml's own comment; team.yaml ships no verify-spec that currently
+// produces this class). See
+// TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream
+// below for the path hufu-coding's verifier.md/team.yaml actually use today
+// (status:failed -> FailureClass=execution ->
+// isGenuineWorkerReportedFailure). Both paths must reset the coder and every
+// downstream task in its wave, carrying durable remediation evidence.
 func TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream(t *testing.T) {
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,11 +177,73 @@ func TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream(t *te
 	cancel()
 }
 
+// TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream
+// is the full-DAG counterpart to
+// TestHufuCodingGenuineFailedReportAuthorizesReset
+// (hufu_coding_classification_test.go): it drives the exact class real
+// production produces for hufu-coding's verifier.md (status:failed ->
+// FailureClass=execution via coordinator_task_run.go's
+// withFailureClassOverride, since team.yaml ships no verify-spec — see
+// TestHufuCodingNoVerifySpecOnSemanticRoles), not the FailureVerify class the
+// sibling test above uses. The reset must still fire, via
+// isGenuineWorkerReportedFailure rather than the class allowlist.
+func TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream(t *testing.T) {
+	s, items := hufuCodingWorkflowFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.inProgress = 1
+	hufuCodingAdvance(t, ctx, s, items, 0, nil, "")
+	hufuCodingAdvance(t, ctx, s, items, 1, nil, "")
+	items[2].TypedResult = &TaskResult{Status: TaskResultStatusFailed, Source: "submitted", Findings: []Finding{{Category: "correctness", Summary: "go test ./... failed"}}}
+	hufuCodingAdvance(t, ctx, s, items, 2, errors.New("required check failed"), FailureExecution)
+
+	if s.states[1] != TaskInProgress {
+		t.Fatalf("expected coder to be reset and relaunched, states[1]=%s", s.states[1])
+	}
+	if s.states[2] != TaskPending || s.states[3] != TaskPending || s.states[4] != TaskPending {
+		t.Fatalf("expected the whole downstream wave reset to Pending, got states=%v", s.states)
+	}
+	rc := items[1].RemediationContext
+	if rc == nil || rc.SourceTaskID != items[2].ID || rc.SourceAgent != "verifier" || rc.FailureClass != FailureExecution {
+		t.Fatalf("coder did not receive verifier's remediation evidence: %+v", rc)
+	}
+	if len(rc.Findings) != 1 || rc.Findings[0].Summary != "go test ./... failed" {
+		t.Fatalf("remediation evidence missing verifier's finding: %+v", rc.Findings)
+	}
+}
+
+// TestHufuCodingWorkflowVerifierInfraFailureWithNoStoredResultDoesNotReset
+// is the negative complement: a verifier task that fails with the exact same
+// FailureClass=execution but never stored a TypedResult at all (a real
+// protocol/infra abort, not a self-report) must self-heal instead of
+// resetting the coder — the class alone is identical to the test above, so
+// only isGenuineWorkerReportedFailure's TypedResult check tells them apart.
+func TestHufuCodingWorkflowVerifierInfraFailureWithNoStoredResultDoesNotReset(t *testing.T) {
+	s, items := hufuCodingWorkflowFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.inProgress = 1
+	hufuCodingAdvance(t, ctx, s, items, 0, nil, "")
+	hufuCodingAdvance(t, ctx, s, items, 1, nil, "")
+	hufuCodingAdvance(t, ctx, s, items, 2, errors.New("app-server disconnected"), FailureExecution)
+
+	if s.states[1] != TaskDone {
+		t.Fatalf("infra failure with no stored result must not reset the coder ancestor: states=%v", s.states)
+	}
+	if items[1].RemediationContext != nil {
+		t.Fatalf("infra failure must not synthesize a fake finding, got %+v", items[1].RemediationContext)
+	}
+	if s.states[2] != TaskInProgress {
+		t.Fatalf("expected the verifier itself to be retried in place, states[2]=%s", s.states[2])
+	}
+}
+
 // TestHufuCodingWorkflowReviewerMustFixFindingResetsCoder is matrix item C:
-// the reviewer's own must-fix finding (still FailureVerify — see
-// team.yaml's `/facts/must_fix_found` task_result_assert) resets the coder,
-// carries the finding forward, and the verifier reruns even though it was
-// previously green.
+// the reviewer's own must-fix finding (FailureVerify, exercising the
+// allowlist path directly — see the comment on
+// TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream)
+// resets the coder, carries the finding forward, and the verifier reruns
+// even though it was previously green.
 func TestHufuCodingWorkflowReviewerMustFixFindingResetsCoder(t *testing.T) {
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
