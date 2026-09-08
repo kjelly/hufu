@@ -132,6 +132,14 @@ type TaskDef struct {
 	Requires   []string          `json:"requires,omitempty"`
 	MaxRetries int               `json:"max_retries,omitempty" yaml:"max_retries,omitempty"` // Maximum number of retries if verify fails
 	OnFailure  *int              `json:"on_failure,omitempty"`                               // 0-based index of the task to jump back to if verify fails
+	// OnFailureClasses restricts which TaskFailureClass values may trigger
+	// this task's on_failure back-edge. Configuration-only (never
+	// coordinator-settable, like Action/Phase above) so an LLM coordinator
+	// cannot bypass reliability policy by omitting or widening it. Nil/empty
+	// preserves legacy behavior: any terminal failure triggers on_failure.
+	//
+	// Refs: docs/hufu-external-coding-agent-runtime-spec.md, spec.md §10.2
+	OnFailureClasses []TaskFailureClass `json:"-" yaml:"on-failure-classes,omitempty"`
 	// Escalate makes each retry after a failure re-run the task on the next
 	// stronger model in the model-list (ordered weakest→strongest).
 	Escalate bool `json:"escalate,omitempty"`

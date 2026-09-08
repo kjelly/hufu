@@ -274,6 +274,13 @@ type TodoItem struct {
 	ExecutionReceipt    *ExecutionReceipt    `json:"execution_receipt,omitempty"`
 	ExecutionReceipts   []ExecutionReceipt   `json:"execution_receipts,omitempty"`
 	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
+	// RemediationContext carries the canonical failure/result of the task
+	// whose on_failure back-edge most recently reset this task (spec.md
+	// §9.3). It is set by dagScheduler right before an authorized semantic
+	// reset and read (non-destructively) each time this occurrence is
+	// dispatched; the next genuine reset always replaces it with fresh
+	// evidence rather than stacking.
+	RemediationContext  *RemediationContext  `json:"remediation_context,omitempty"`
 	MaxRetries          int                  // Maximum number of retries for this task
 	Retries             int                  // Current number of retries
 	OnFailure           string               // ID of the task to jump back to if this task fails (creates a loop)
@@ -1140,6 +1147,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ExecutionReceipt:    execReceipt,
 		ExecutionReceipts:   execReceipts,
 		FailureEvent:        failureEvent,
+		RemediationContext:  cloneRemediationContext(item.RemediationContext),
 		MaxRetries:          item.MaxRetries,
 		Retries:             item.Retries,
 		OnFailure:           item.OnFailure,

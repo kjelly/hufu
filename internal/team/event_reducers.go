@@ -537,6 +537,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ResetForRetry       bool                       `json:"reset_for_retry"`
 			SubagentProvider    string                     `json:"subagent_provider"`
 			ProviderBinding     *ProviderBinding           `json:"provider_binding"`
+			RemediationContext  *RemediationContext        `json:"remediation_context"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -637,6 +638,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				FailureEvent:        failureEvent,
 				SubagentProvider:    payload.SubagentProvider,
 				ProviderBinding:     cloneProviderBinding(payload.ProviderBinding),
+				RemediationContext:  cloneRemediationContext(payload.RemediationContext),
 			}
 			taskMap[taskID] = item
 			taskOrder = append(taskOrder, taskID)
@@ -694,6 +696,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.ProviderBinding != nil {
 			item.ProviderBinding = cloneProviderBinding(payload.ProviderBinding)
+		}
+		if payload.RemediationContext != nil {
+			item.RemediationContext = cloneRemediationContext(payload.RemediationContext)
 		}
 		// Creation establishes the topology. Later lifecycle events carry the
 		// same field for projection parity, but may not overwrite it.

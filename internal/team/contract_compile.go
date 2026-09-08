@@ -27,6 +27,7 @@ type EffectiveTaskContract struct {
 	Action              *Action              `json:"action,omitempty"`
 	FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
 	Optional            bool                 `json:"optional,omitempty"`
+	OnFailureClasses    []TaskFailureClass   `json:"on_failure_classes,omitempty"`
 	DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
 	DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
 	DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
@@ -89,13 +90,14 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
+		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -159,13 +161,14 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
+		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -259,14 +262,16 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		Action              *Action              `json:"action,omitempty"`
 		FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
 		Optional            bool                 `json:"optional,omitempty"`
+		OnFailureClasses    []TaskFailureClass   `json:"on_failure_classes,omitempty"`
 		DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
 		DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
 		DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
 		DecisionAssumptions []DecisionAssumption `json:"decision_assumptions,omitempty"`
 		DecisionProvenance  []EvidenceProvenance `json:"decision_provenance,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, nil, nil, nil, nil, nil}
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, nil, nil, nil, nil, nil, nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
+		payload.OnFailureClasses = append([]TaskFailureClass(nil), declared.OnFailureClasses...)
 		payload.DecisionFacts = cloneDecisionFacts(declared.DecisionFacts)
 		payload.DecisionArtifacts = append([]ArtifactRef(nil), declared.DecisionArtifacts...)
 		payload.DecisionBaseRates = cloneBaseRateEvidence(declared.DecisionBaseRates)
@@ -324,6 +329,7 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 			if err := validateTaskOutputMode(task); err != nil {
 				findings = append(findings, contractFinding(field+".output_mode", "goal_contract_output_mode", err.Error()))
 			}
+			findings = append(findings, validateOnFailureClasses(field, task.OnFailureClasses)...)
 			for _, finding := range ValidateExecutionContractFull(task, "error").Findings {
 				if finding.Severity == FindingSeverityError {
 					finding.Field = field + "." + finding.Field
@@ -366,6 +372,7 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 		if err := validateTaskOutputMode(task); err != nil {
 			findings = append(findings, contractFinding(field+".output_mode", "initial_contract_output_mode", err.Error()))
 		}
+		findings = append(findings, validateOnFailureClasses(field, task.OnFailureClasses)...)
 		for _, finding := range ValidateExecutionContractFull(task, "error").Findings {
 			if finding.Severity == FindingSeverityError {
 				finding.Field = field + "." + finding.Field
@@ -487,6 +494,32 @@ func staticContractToolFindings(field string, task TaskDef, declaredTools string
 
 func contractFinding(field, code, message string) ContractFinding {
 	return ContractFinding{Severity: FindingSeverityError, Code: code, Field: field, Message: message}
+}
+
+// knownTaskFailureClasses is the exhaustive TaskFailureClass enum
+// (run_result.go), reused here so an "on-failure-classes" typo (e.g.
+// "verify" instead of "verification") fails hufu team validate instead of
+// silently never matching and stranding the task's on_failure edge.
+var knownTaskFailureClasses = []TaskFailureClass{
+	FailureContract, FailureEnvironment, FailureExecution, FailureProtocol,
+	FailureVerify, FailurePolicy, FailureTimeout, FailureCancelled,
+}
+
+func validateOnFailureClasses(field string, classes []TaskFailureClass) []ContractFinding {
+	var findings []ContractFinding
+	for _, class := range classes {
+		known := false
+		for _, want := range knownTaskFailureClasses {
+			if class == want {
+				known = true
+				break
+			}
+		}
+		if !known {
+			findings = append(findings, contractFinding(field+".on-failure-classes", "on_failure_classes_unknown", fmt.Sprintf("on-failure-classes entry %q is not a known failure class", class)))
+		}
+	}
+	return findings
 }
 
 func sortedContractFindingMessages(findings []ContractFinding) []string {

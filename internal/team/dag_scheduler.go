@@ -299,6 +299,24 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if s.tasks[idx].OnFailure == nil || s.retries[idx] >= maxRetries {
 		return
 	}
+	if classes := s.tasks[idx].OnFailureClasses; len(classes) > 0 {
+		if class := failureClassForTodo(s.todoItems[idx]); !failureClassAllowed(class, classes) {
+			// This failure class is not authorized to reset the on_failure
+			// ancestor wave (spec.md §10.2): only a genuine semantic
+			// verification/review/final-gate rejection may reset an
+			// upstream task. An infrastructure/provider/protocol/
+			// environment/timeout/contract/cancelled failure instead
+			// retries this same task in place, never widening the reset.
+			s.retries[idx]++
+			c.report(c.newEvent("step").withMessage(fmt.Sprintf("task %q failed with non-semantic class %q; retrying in place instead of resetting task %q (retry %d/%d)", s.tasks[idx].Agent, class, s.tasks[*s.tasks[idx].OnFailure].Agent, s.retries[idx], maxRetries)))
+			if err := s.resetTask(ctx, idx, fmt.Sprintf("retrying same task after %s failure class; on_failure reset suppressed", class)); err != nil {
+				return
+			}
+			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+			s.launchReady(ctx)
+			return
+		}
+	}
 	if s.coord.phaseWorkflow != nil && !s.coord.phaseWorkflow.permitRepairRetry(s.tasks[idx], res.err) {
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("repair retry for task %q blocked by failure-signature limit", s.tasks[idx].Agent)))
 		return
@@ -310,6 +328,15 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	}
 	targetIdx := *s.tasks[idx].OnFailure
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("DAG loop triggered: task %q failed, jumping back to task %q (retry %d/%d)", s.tasks[idx].Agent, s.tasks[targetIdx].Agent, s.retries[idx], maxRetries)))
+	// Attach durable remediation evidence (spec.md §9.3) from the source
+	// failing task to the reset target's TodoItem *before* resetWave/
+	// CommitTaskResetForRetry runs, so its projected-copy-then-emit path
+	// (coordinator_eventstore.go) captures it in the same reset event and it
+	// survives process restart/event replay. A later genuine reset always
+	// overwrites this with fresh evidence rather than stacking.
+	if targetIdx != idx {
+		s.todoItems[targetIdx].RemediationContext = buildRemediationContext(res.todoID, s.todoItems[idx])
+	}
 	if err := s.resetWave(ctx, targetIdx); err != nil {
 		return
 	}
@@ -753,6 +780,39 @@ func validateOnFailureTargets(tasks []TaskDef) error {
 		}
 	}
 	return nil
+}
+
+// failureClassForTodo reads the terminal TaskFailureClass already persisted
+// on a task's TodoItem. By the time dagScheduler.handleEvent evaluates an
+// on_failure edge, this field is guaranteed set: either executeTask's own
+// retry loop persisted it (via PersistFailureWithClass, using the structured
+// classifier with exit-code evidence) before giving up, or the
+// terminalizeTaskErrorIfUnresolved fallback classified a late/scheduler-side
+// error. An empty class (no FailureEvent at all) is treated as unrestricted
+// so a task lacking evidence for any reason is never silently blocked from
+// its configured remediation loop.
+func failureClassForTodo(item *TodoItem) TaskFailureClass {
+	if item == nil || item.FailureEvent == nil {
+		return ""
+	}
+	return item.FailureEvent.FailureClass
+}
+
+// failureClassAllowed reports whether class is authorized to trigger an
+// on_failure back-edge under the task's configured OnFailureClasses
+// allowlist. An empty/unknown class (see failureClassForTodo) is allowed so
+// a task with no captured failure evidence keeps today's behavior rather
+// than being silently stuck self-retrying forever.
+func failureClassAllowed(class TaskFailureClass, allowed []TaskFailureClass) bool {
+	if class == "" {
+		return true
+	}
+	for _, c := range allowed {
+		if c == class {
+			return true
+		}
+	}
+	return false
 }
 
 // detectTaskCycle returns true if the DependsOn indices form a cycle.

@@ -1408,6 +1408,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.ProviderBinding != nil {
 		payload["provider_binding"] = item.ProviderBinding
 	}
+	if item.RemediationContext != nil {
+		payload["remediation_context"] = item.RemediationContext
+	}
 	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete
 	if !failureTransition {
 		payload["desc"] = item.Desc

@@ -788,6 +788,20 @@ retryLoop:
 				}
 			}
 		}
+		// spec.md §9.3: a task reset by an authorized on_failure back-edge
+		// carries the source task's canonical remediation evidence on its
+		// TodoItem (dagScheduler.handleEvent). Include it on every attempt
+		// of this occurrence, in addition to (not instead of) this task's
+		// own same-attempt retry context above.
+		if item := c.todoItemByID(todoID); item != nil && item.RemediationContext != nil {
+			var remediationBuilder strings.Builder
+			appendRemediationContext(&remediationBuilder, item.RemediationContext)
+			if attemptInput.FailureContext != "" {
+				attemptInput.FailureContext += "\n\n" + remediationBuilder.String()
+			} else {
+				attemptInput.FailureContext = remediationBuilder.String()
+			}
+		}
 		var routeDecisions []ContextRouteDecision
 		if canonical && !c.historicalMemoryDisabled() {
 			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(attemptCtx, request)
@@ -4874,4 +4888,46 @@ func appendSubmittedResultRetryEvidence(b *strings.Builder, result *TaskResult) 
 		b.WriteString("\n")
 	}
 	b.WriteString("This is an evidence-aware finalization retry: retain verified facts, inspect only missing required evidence, then submit success or completed_with_gaps only when the full task contract is satisfied.\n")
+}
+
+// appendRemediationContext renders the bounded, already-redacted evidence a
+// DAG on_failure back-edge attached to this task's TodoItem (spec.md §9.3):
+// the source task's own failure class, status, summary, findings, and
+// verification result. This is the cross-task analog of
+// appendSubmittedResultRetryEvidence above, which only ever carries a task's
+// own prior attempt forward; this carries a *different* task's rejection to
+// the task an authorized semantic failure reset.
+func appendRemediationContext(b *strings.Builder, rc *RemediationContext) {
+	if b == nil || rc == nil {
+		return
+	}
+	b.WriteString("**Remediation context (§9.3): a downstream check rejected the previous attempt.**\n")
+	fmt.Fprintf(b, "- source task: %s (agent %s, attempt %d)\n", redactRetryText(rc.SourceTaskID, 200), redactRetryText(rc.SourceAgent, 100), rc.SourceAttempt)
+	fmt.Fprintf(b, "- failure class: %s\n", rc.FailureClass)
+	if status := redactRetryText(rc.Status, 80); status != "" {
+		fmt.Fprintf(b, "- reported status: %s\n", status)
+	}
+	if summary := redactRetryText(rc.Summary, 800); summary != "" {
+		fmt.Fprintf(b, "- summary: %s\n", summary)
+	}
+	if len(rc.Findings) > 0 {
+		b.WriteString("- findings:\n")
+		for i, finding := range rc.Findings {
+			if i == maxRemediationFindings {
+				b.WriteString("  - additional findings omitted from remediation context\n")
+				break
+			}
+			text := strings.TrimSpace(strings.Join([]string{finding.Category, finding.Summary, finding.Detail}, ": "))
+			fmt.Fprintf(b, "  - %s\n", redactRetryText(text, 500))
+		}
+	}
+	if v := rc.Verification; v != nil {
+		fmt.Fprintf(b, "- verification: command=%q exit_code=%d\n", redactRetryText(v.Command, 500), v.ExitCode)
+		if stderr := redactRetryText(v.Stderr, 500); stderr != "" {
+			fmt.Fprintf(b, "  stderr: %s\n", stderr)
+		} else if stdout := redactRetryText(v.Stdout, 500); stdout != "" {
+			fmt.Fprintf(b, "  stdout: %s\n", stdout)
+		}
+	}
+	b.WriteString("Address this concrete rejection; do not repeat work it already shows was insufficient, and do not assume a clean-looking implementation is enough if this evidence says otherwise.\n")
 }
