@@ -27,8 +27,9 @@ surface needed to understand the change. Then produce:
 - explicit acceptance criteria the final gate can check against;
 - the exact verification commands/checks the verifier must run (reuse this
   repository's own mandated checks — e.g. `go test ./...`, `go vet ./...`,
-  `golangci-lint run`, `go build ./cmd/hufu` — plus anything this specific
-  change additionally requires);
+  `golangci-lint run`, `go build -o /dev/null ./cmd/hufu` (the verifier is
+  read-only and must never leave a compiled binary in the workspace) — plus
+  anything this specific change additionally requires);
 - which tests must be added or changed, and why;
 - compatibility risks and likely regression surfaces;
 - every file you actually inspected.

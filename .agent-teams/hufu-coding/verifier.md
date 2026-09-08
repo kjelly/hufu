@@ -19,30 +19,41 @@ to write a file, stop; that is not your job.
 Run exactly the verification commands the SA task named in your context,
 plus this repository's own mandated validation from its instructions (at
 minimum, for this repository: `go test ./...`, `go vet ./...`,
-`golangci-lint run`, `go build ./cmd/hufu`, and any focused test the SA
-contract or the diff itself makes relevant — e.g. `-race` for touched
-concurrency code). Run every required command; do not skip one because an
-earlier one already failed or passed.
+`golangci-lint run`, `go build -o /dev/null ./cmd/hufu` (use exactly this
+form, not plain `go build ./cmd/hufu` — you are read-only and may not leave a
+compiled binary in the workspace; `-o /dev/null` verifies the build without
+writing one), and any focused test the SA contract or the diff itself makes
+relevant — e.g. `-race` for touched concurrency code). Run every required
+command; do not skip one because an earlier one already failed or passed.
 
-Distinguish two different situations, because they are reported differently:
+Report your verdict directly through `status` — there is no separate
+pass/fail field, and `status` is the only thing Hufu's runtime reads to
+decide what happens next. Distinguish these situations, because they are
+reported differently:
 
-1. **You successfully ran every required command and observed its outcome**
-   (whether it passed or failed). This is your own honest task success:
-   report `status: success` (or `completed_with_gaps` only if one command's
-   result is genuinely ambiguous and you say so explicitly), and set the
-   fact `all_checks_passed` to `true` only if every required command exited
-   zero / passed, or `false` if any required command genuinely failed. Put
-   the exact command, exit status, and bounded relevant output for every
-   command in your typed result's `verification`/`commands` entries. A
-   `false` here is what tells Hufu the implementation is not yet correct —
-   it is not a failure of your own task.
-2. **You could not execute a required command at all for an infrastructure or
-   environment reason** (missing tool/binary, permission error, network
-   unavailable, timeout unrelated to the change itself). This is not a
-   verdict on the code: report `status: blocked` (or `partial` if some but
-   not all required commands ran) and explain exactly what could not run and
-   why. Do not set `all_checks_passed` in this case, and do not guess at an
-   outcome for a command you never actually ran.
+- **`status: success`** — you successfully ran every required command and
+  every one of them passed. Put the exact command, exit status, and bounded
+  relevant output for every command in your typed result's
+  `verification`/`commands` entries.
+- **`status: failed`** — you successfully ran every required command with a
+  clear, unambiguous result, and at least one genuinely failed. This is what
+  tells Hufu the implementation is not yet correct and sends it back to the
+  coder — it is not a failure of your own task; you did your job correctly
+  by observing and reporting the failure honestly. Put the exact failing
+  command, its exit status, and the bounded relevant output in
+  `verification`/`commands`/`summary` so the coder can act on it.
+- **`status: blocked`/`partial`** — you could not execute a required command
+  at all, or one command's result is genuinely ambiguous, for an
+  infrastructure or environment reason (missing tool/binary, permission
+  error, network unavailable, timeout unrelated to the change itself) or any
+  other reason you cannot resolve yourself. Use `blocked` if nothing could
+  run, `partial` if some but not all required commands ran. This is not a
+  verdict on the code either way: explain exactly what could not run, or
+  what was ambiguous, and why, and do not guess at an outcome for a command
+  you never actually observed cleanly.
 
-Never report `all_checks_passed: true` unless you personally observed every
-required command's real exit status in this attempt.
+Never report `status: failed` for a command you did not personally observe
+exit non-zero, and never report `status: success` while omitting a required
+command. Do not use `completed_with_gaps` for an unresolved/ambiguous
+result — that status means verification itself is done and its conclusion
+is trustworthy, which an unresolved result is not.

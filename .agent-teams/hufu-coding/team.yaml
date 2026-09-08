@@ -33,14 +33,34 @@ acceptance:
   require-no-unresolved-tasks: true
 
 # Static task contracts freeze side effect, provider-relevant execution
-# semantics, verification, retry budget, and (for verifier/reviewer/final-sa)
-# the on-failure-classes reliability policy per role. The coordinator's own
+# semantics, retry budget, and (for verifier/reviewer/final-sa) the
+# on-failure-classes reliability policy per role. The coordinator's own
 # dynamic batch call only ever supplies goal/depends_on/on_failure — it
 # cannot widen a role's side effect or bypass the failure-class gate below.
 # Each agent below has exactly one contract, so contract binding never
 # depends on the coordinator repeating the literal goal token verbatim
 # (internal/team/contract_compile.go: a worker with exactly one configured
 # goal contract binds by agent identity alone).
+#
+# Deliberately no verify-spec here: a task_result_assert verify-spec enforces
+# its assertions at submit_result *admission* time (task_result_contract.go),
+# rejecting the tool call itself when an assertion fails. That is correct for
+# a protocol-completeness check (e.g. hufu-code-review's "files_read must be
+# non-empty") but wrong for a semantic verdict — it would make an honest,
+# confirmed defect literally un-submittable, since the assertion could never
+# pass for a worker that truthfully found one. Instead, verifier/reviewer/
+# final-sa report their verdict directly via `status`: `success` for a clean
+# pass, `failed` for a confirmed rejection (see each agent's own .md for the
+# exact contract), `blocked`/`partial` for an evidence gap or infra problem
+# they could not resolve themselves. `on-failure-classes: [verification]`
+# below is defense-in-depth for a future VerifyCommandExit-style check;
+# the actual gate for a genuine `status: failed` self-report is a small,
+# generic runtime rule in dagScheduler.handleEvent (dag_scheduler.go) that
+# authorizes the reset for any confirmed worker-submitted failure regardless
+# of TaskFailureClass, since Hufu's own non-terminal-status handling
+# (coordinator_task_run.go) always reports "worker submitted a non-success
+# status" as TaskFailureClass=execution — the same class an infra failure
+# gets — and a fixed class alone cannot tell the two apart.
 tasks:
   - agent: sa
     when-goal-contains: "SA_ANALYZE"
@@ -68,10 +88,6 @@ tasks:
     execution:
       requires-result: true
       requires-grounded-result: true
-    verify-spec:
-      type: task_result_assert
-      task-result-assertions:
-        - { pointer: /facts/all_checks_passed, op: equals, value: true }
 
   - agent: reviewer
     when-goal-contains: "REVIEW_CODE"
@@ -82,10 +98,6 @@ tasks:
     execution:
       requires-result: true
       requires-grounded-result: true
-    verify-spec:
-      type: task_result_assert
-      task-result-assertions:
-        - { pointer: /facts/must_fix_found, op: equals, value: false }
 
   - agent: final-sa
     when-goal-contains: "FINAL_SA_GATE"
@@ -96,7 +108,3 @@ tasks:
     execution:
       requires-result: true
       requires-grounded-result: true
-    verify-spec:
-      type: task_result_assert
-      task-result-assertions:
-        - { pointer: /facts/request_satisfied, op: equals, value: true }

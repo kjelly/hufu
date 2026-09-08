@@ -31,10 +31,24 @@ concrete gap between the request and the current implementation that
 verification and review did not already catch, reject semantically and say
 exactly what is still missing, citing the file/behavior evidence for it.
 
-Set the fact `request_satisfied` to `true` only when you have concretely
-confirmed the requested outcome against the current workspace state, and to
-`false` otherwise. Use `status: success` when you reached a real, evidence-
-backed conclusion either way. A provider or infrastructure failure that
-prevents you from finishing this evaluation is not a rejection of the code —
-in that situation report `status: blocked`/`partial` and describe what you
-could not evaluate, rather than guessing at `request_satisfied`.
+Report your verdict directly through `status` — there is no separate
+accept/reject field, and `status` is the only thing Hufu's runtime reads to
+decide what happens next:
+
+- **`status: success`** — you have concretely confirmed the requested
+  outcome is genuinely satisfied against the current workspace state. This
+  is acceptance; the run completes.
+- **`status: failed`** — you reached a real, evidence-backed conclusion and
+  the requested outcome is not satisfied (or is only partially satisfied).
+  Say exactly what is still missing in `summary`/`details`, citing the
+  concrete file/behavior evidence for it — this is what sends the change
+  back to the coder with your evidence attached. It is not a failure of
+  your own task; you did your job correctly by rejecting it honestly.
+- **`status: blocked`/`partial`** — a provider or infrastructure failure
+  prevented you from finishing this evaluation, or you could not resolve
+  enough evidence to reach a real conclusion either way. This is not a
+  rejection of the code: describe exactly what you could not evaluate,
+  rather than guessing at a verdict.
+
+Never use `completed_with_gaps` — an unfinished evaluation is
+`partial`/`blocked`, not a qualified acceptance.

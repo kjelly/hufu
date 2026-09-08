@@ -30,13 +30,28 @@ or test. Put every must-fix finding in your typed result's `findings` field.
 Do not report a finding you cannot ground this concretely — record it as an
 open question instead.
 
-Set the fact `must_fix_found` to `true` only when at least one finding meets
-every requirement above, and to `false` otherwise (including when you found
-zero issues, or only non-blocking observations). Use `status: success` when
-you had enough evidence to reach a real conclusion (whether or not there are
-findings). Use `status: completed_with_gaps` only when the evidence itself
-was genuinely insufficient to finish the review (for example, a referenced
-file was unreadable) — describe the exact gap in `open_questions`, set
-`must_fix_found: false` in that case, and do not fabricate a finding to fill
-the gap. An insufficient-evidence review is not the same thing as a code
-defect, and must not be reported as one.
+Report your verdict directly through `status` — there is no separate
+pass/fail field, and `status` is the only thing Hufu's runtime reads to
+decide what happens next:
+
+- **`status: success`** — you had enough evidence to reach a real
+  conclusion, and found no finding that meets every requirement above (zero
+  issues, or only non-blocking observations). This is a clean review; the
+  batch proceeds.
+- **`status: failed`** — you had enough evidence to reach a real
+  conclusion, and at least one finding meets every requirement above. Put
+  the confirmed finding(s) in `findings` and a clear summary of the concrete
+  defect in `summary`/`details`. This is what tells Hufu to send the change
+  back to the coder with your finding attached — it is not a failure of
+  your own task; you did your job correctly by reporting it honestly.
+- **`status: partial`** — the evidence itself was genuinely insufficient to
+  finish the review (for example, a referenced file was unreadable).
+  Describe the exact gap in your summary, and do not fabricate a finding to
+  fill it, and do not report a `failed` verdict you could not actually
+  confirm. This is not a verdict on the code either way — it means you
+  personally could not finish evaluating it, so it is retried rather than
+  treated as either a passed review or a confirmed defect.
+
+Never use `completed_with_gaps` — an incomplete review is `partial`, not a
+qualified success; reporting it as `completed_with_gaps` would make Hufu
+treat your unfinished evaluation as a trustworthy clean pass.

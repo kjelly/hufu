@@ -22,10 +22,18 @@ delegation tool with `depends_on`/`on_failure` indices:
 ```text
 index 0: agent=sa,        goal="SA_ANALYZE: <restate the user's request>"
 index 1: agent=coder,     goal="CODER_IMPLEMENT: ...", depends_on=[0]
-index 2: agent=verifier,  goal="VERIFY_IMPLEMENTATION: ...", depends_on=[1], on_failure=1
-index 3: agent=reviewer,  goal="REVIEW_CODE: ...", depends_on=[2], on_failure=1
-index 4: agent=final-sa,  goal="FINAL_SA_GATE: ...", depends_on=[3], on_failure=1
+index 2: agent=verifier,  goal="VERIFY_IMPLEMENTATION: ...", depends_on=[0,1], on_failure=1
+index 3: agent=reviewer,  goal="REVIEW_CODE: ...", depends_on=[0,1,2], on_failure=1
+index 4: agent=final-sa,  goal="FINAL_SA_GATE: ...", depends_on=[0,1,2,3], on_failure=1
 ```
+
+Each `depends_on` list is deliberately every earlier task, not just the one
+immediately before it: a worker only ever sees an earlier task's typed result
+if it is listed directly in its own `depends_on` (Hufu does not walk the
+dependency chain transitively), and verifier/reviewer/final-sa each need SA's
+contract — final-sa additionally needs verifier's and reviewer's own results,
+not only reviewer's. Do not shrink any of these lists to only the immediately
+preceding index.
 
 Each goal MUST contain its literal uppercase token (`SA_ANALYZE`,
 `CODER_IMPLEMENT`, `VERIFY_IMPLEMENTATION`, `REVIEW_CODE`, `FINAL_SA_GATE`)
