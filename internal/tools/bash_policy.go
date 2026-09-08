@@ -243,7 +243,7 @@ func checkReadOnlyBashSegment(segment string) error {
 		return nil
 	}
 	if name == "go" {
-		if len(fields) < 2 || !map[string]bool{"test": true, "vet": true, "list": true, "env": true, "version": true, "doc": true}[fields[1]] {
+		if len(fields) < 2 || !map[string]bool{"test": true, "vet": true, "list": true, "env": true, "version": true, "doc": true, "build": true}[fields[1]] {
 			return fmt.Errorf("read-only bash policy denied go command %q", segment)
 		}
 		// Reject flags that write files or persist configuration state.
@@ -259,6 +259,18 @@ func checkReadOnlyBashSegment(segment string) error {
 		case "env":
 			if hasWriteFlag(fields[2:], "-w", "-u") {
 				return fmt.Errorf("read-only bash policy denied go env mutation flag in %q", segment)
+			}
+		case "build":
+			// Unlike `go test`/`go vet`, `go build` always produces a binary
+			// somewhere: with no -o, it writes one into the current directory
+			// (a real, persistent workspace mutation); with any -o other than
+			// /dev/null, it writes wherever that path names. The only
+			// invocation that verifies a package compiles with no artifact
+			// left behind is an explicit `-o /dev/null` — require exactly
+			// that, the same "discard, don't suppress" idiom already granted
+			// for stderr (hasReadOnlyStderrDiscardAt) elsewhere in this file.
+			if !goBuildDiscardsOutput(fields[2:]) {
+				return fmt.Errorf("read-only bash policy requires go build -o /dev/null (got %q)", segment)
 			}
 		}
 		return nil
@@ -495,6 +507,23 @@ func hasWriteFlag(fields []string, flags ...string) bool {
 			if f == fl || strings.HasPrefix(f, fl+"=") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// goBuildDiscardsOutput reports whether a `go build` invocation's -o flag
+// names exactly /dev/null, in either `-o /dev/null` (two fields) or
+// `-o=/dev/null` (one field) form. Any other -o value, or no -o at all
+// (go build's own default: a binary written into the current directory), is
+// a real filesystem write and must be denied by the read-only bash policy.
+func goBuildDiscardsOutput(fields []string) bool {
+	for i, f := range fields {
+		if f == "-o" {
+			return i+1 < len(fields) && fields[i+1] == "/dev/null"
+		}
+		if value, ok := strings.CutPrefix(f, "-o="); ok {
+			return value == "/dev/null"
 		}
 	}
 	return false
