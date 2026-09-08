@@ -341,17 +341,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
-	// The one-worker direct-agent fast path does not yet implement provider
-	// binding, execution-world policy, or result canonicalization (that parity
-	// is PR-15). Until then it MUST fail closed rather than silently execute a
-	// non-hufu-local provider through its own inline Fantasy agent, which
-	// would bypass every invariant this specification depends on
-	// (docs/hufu-external-coding-agent-runtime-spec.md §28.1).
-	if directTask.SubagentProvider != localSubagentProviderName {
-		err = fmt.Errorf("direct agent invocation does not support subagent provider %q; dispatch through the coordinator instead", directTask.SubagentProvider)
-		c.finalizePublicInvocationFailure(err)
-		return nil, err
-	}
 	directTask.ModelTopology = []string{directTask.Model}
 	directModel = directTask.Model
 	directSpec := TodoSpec{
@@ -391,6 +380,25 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// Direct-agent invocation creates a real task and must participate in the
 	// same run-scoped task budget as coordinator-created work.
 	c.recordNoProgressTasks(len(todoItems))
+
+	// §28/§28.1: this function's remaining flow (decision boundary, provider
+	// execution boundary, inline Fantasy-agent construction, receipt,
+	// verification, finalization) only ever assumed a locally-invoked agent.
+	// A non-hufu-local provider cannot preserve that same semantics through a
+	// second, parallel implementation of all of it — and duplicating that
+	// pipeline here would itself be the "second, simplified Codex path" §28
+	// explicitly forbids. Escalating to the exact same dispatch path a
+	// normal coordinated task already uses — executeTask, on this same
+	// freshly admitted, still-pending durable occurrence — makes provider
+	// binding, execution-world policy, canonicalization, receipt,
+	// verification, and finalization byte-for-byte identical to the
+	// coordinated case, not merely similar, which is the actual parity
+	// requirement (docs/hufu-external-coding-agent-runtime-spec.md §28).
+	if directTask.SubagentProvider != localSubagentProviderName {
+		output, execErr := c.executeTask(ctx, directTask, todoID)
+		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr
+	}
+
 	disarmDecision, err := c.prepareTaskDecision(ctx, directTask, todoID)
 	if err != nil {
 		c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, "error"))

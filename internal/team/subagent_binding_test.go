@@ -321,12 +321,50 @@ func TestProviderBindingAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 
 // --- PR-03: coordinator resolves the durable provider -----------------------
 
-// TestDirectFastPathFailsClosedForNonLocalProvider proves §28.1's guard:
-// createDirectAgent/RunDirectAgent must reject a non-hufu-local resolved
-// provider rather than silently executing it through the direct path's own
-// inline Fantasy agent, which has no provider binding, execution-world, or
-// canonicalization parity yet (that parity is PR-15).
-func TestDirectFastPathFailsClosedForNonLocalProvider(t *testing.T) {
+// directParityProvider is a minimal SubagentProvider that returns a valid
+// canonical success result — enough for executeTask to reach TaskDone
+// without a real model backend, so a direct-path escalation test can assert
+// on the actual completion outcome (status, durable ProviderBinding,
+// receipt fields), not merely that a call happened.
+type directParityProvider struct {
+	name  string
+	calls int
+}
+
+func (p *directParityProvider) Name() string { return p.name }
+func (p *directParityProvider) Capabilities() SubagentCapabilities {
+	return SubagentCapabilities{}
+}
+func (p *directParityProvider) RunAttempt(_ context.Context, req AttemptRequest) (AttemptResult, error) {
+	p.calls++
+	agentName := ""
+	if req.Agent != nil {
+		agentName = req.Agent.Name
+	}
+	return AttemptResult{
+		CanonicalResult: &TaskResult{
+			TaskID: req.TaskID, Attempt: req.Attempt, Agent: agentName,
+			Status: TaskResultStatusSuccess, Summary: "direct parity provider success",
+			Source: ExternalProviderProposalSource,
+		},
+		Output: "direct parity provider success",
+	}, nil
+}
+
+// TestDirectFastPathEscalatesNonLocalProviderToCoordinatedDispatch proves
+// §28/§28.1 together: a non-hufu-local resolved provider is never executed
+// through the direct path's own inline Fantasy agent (which has no
+// provider binding, execution-world, or canonicalization parity of its
+// own) — but, now that PR-15 has landed, it is also never simply rejected.
+// It is escalated to the exact same executeTask dispatch a coordinated task
+// uses, so the provider genuinely runs and the task reaches the same
+// terminal state coordinated dispatch would produce. Before PR-15 this test
+// asserted the opposite (a fail-closed rejection, zero provider calls); the
+// mandatory-matrix requirement it satisfies — "direct path cannot silently
+// bypass provider binding" — is unchanged, only how that is achieved.
+// TestDirectCodexWorkerPreservesNormalTaskSemantics below is the fuller,
+// real-Codex-fixture version of the same proof.
+func TestDirectFastPathEscalatesNonLocalProviderToCoordinatedDispatch(t *testing.T) {
 	workspace := t.TempDir()
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "shadow",
@@ -342,22 +380,30 @@ func TestDirectFastPathFailsClosedForNonLocalProvider(t *testing.T) {
 		taskTracker: NewTaskTracker(), sessionData: NewSession(), sessionTime: time.Now(),
 		reportStatus: func(StatusEvent) {},
 	}
-	shadow := &callTrackingSubagentProvider{name: "shadow"}
+	shadow := &directParityProvider{name: "shadow"}
 	registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
 	_ = registry.Register(shadow)
 	c.SetSubagentRegistry(registry)
 
 	result, err := c.RunDirectAgent(context.Background(), "worker", "do the work")
-	if err == nil {
-		t.Fatalf("RunDirectAgent result = %#v, want a fail-closed rejection for a non-hufu-local provider", result)
+	if err != nil {
+		t.Fatalf("RunDirectAgent: %v", err)
 	}
-	if !strings.Contains(err.Error(), "shadow") {
-		t.Fatalf("RunDirectAgent error = %v, want it to name the rejected provider", err)
+	if result == nil || result.AgentName != "worker" {
+		t.Fatalf("RunDirectAgent result = %#v", result)
 	}
-	if shadow.calls != 0 {
-		t.Fatalf("shadow provider RunAttempt calls = %d, want 0 (direct path must not execute a non-local provider)", shadow.calls)
+	if shadow.calls != 1 {
+		t.Fatalf("shadow provider RunAttempt calls = %d, want exactly 1 (the direct path must genuinely dispatch through the resolved provider)", shadow.calls)
 	}
-	if items := c.taskTracker.TodoList().Items(); len(items) != 0 {
-		t.Fatalf("todo items = %#v, want none created by the rejected direct invocation", items)
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 {
+		t.Fatalf("todo items = %#v, want exactly one durable task occurrence created by the direct invocation", items)
+	}
+	if items[0].Status != TaskDone {
+		t.Fatalf("task status = %s, want done (same terminal state coordinated dispatch would reach)", items[0].Status)
+	}
+	typedRes := c.GetTaskResult(items[0].ID)
+	if typedRes == nil || typedRes.Source != ExternalProviderProposalSource || typedRes.Status != TaskResultStatusSuccess {
+		t.Fatalf("TaskResult = %#v, want the provider's canonicalized result (same convergence coordinated dispatch uses, §9.3)", typedRes)
 	}
 }

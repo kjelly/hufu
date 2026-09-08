@@ -21,12 +21,13 @@ import (
 // reaches TaskDone or retries lives entirely in coordinator_task_run.go,
 // which never runs at all when a test calls RunAttempt on its own.
 
-// newCodexEndToEndCoordinator builds a real, EventStore-backed Coordinator
+// newCodexE2ECoordinatorBase builds a real, EventStore-backed Coordinator
 // with "codex" registered as a SubagentProvider (via the fake app-server
-// fixture) and worker durably admitted through admitCodexE2ETask below — so
-// the resulting Todo is a genuine durable task occurrence, not an ephemeral
-// in-memory one.
-func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef, verify *VerificationSpec) (*Coordinator, *TodoItem) {
+// fixture), but admits no task — callers that need a durable, pre-admitted
+// occurrence (coordinated dispatch) use newCodexEndToEndCoordinator below;
+// callers that need RunDirectAgent to perform its own admission (the direct
+// fast path) use this directly.
+func newCodexE2ECoordinatorBase(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef) *Coordinator {
 	t.Helper()
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "script.json")
@@ -64,11 +65,20 @@ func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCod
 		},
 		Agents: map[string]*agent.AgentDef{worker.Name: worker},
 	}
-	c := &Coordinator{
+	return &Coordinator{
 		session: session, projectDir: workspace,
 		taskTracker: NewTaskTracker(), sessionData: NewSession(), sessionTime: time.Now(),
 		eventStore: store, executionRunID: runID, reportStatus: func(StatusEvent) {},
 	}
+}
+
+// newCodexEndToEndCoordinator additionally admits worker durably through
+// admitCodexE2ETask below — so the resulting Todo is a genuine durable task
+// occurrence, not an ephemeral in-memory one, ready for a direct
+// c.executeTask call.
+func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef, verify *VerificationSpec) (*Coordinator, *TodoItem) {
+	t.Helper()
+	c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
 	item := admitCodexE2ETask(t, c, worker, verify)
 	return c, item
 }
@@ -228,5 +238,53 @@ func TestCodexPartialStatusStaysIncompleteWithoutVerifySpec(t *testing.T) {
 	}
 	if got := c.GetTaskResult(item.ID); got == nil || got.Summary != "done now" {
 		t.Fatalf("final TaskResult = %#v, want the retry's own successful result, not attempt 1's partial one", got)
+	}
+}
+
+// TestDirectCodexWorkerPreservesNormalTaskSemantics is spec.md §36 Phase 7
+// PR-15's named test: a Codex-backed worker invoked through the direct fast
+// path (RunDirectAgent) must exhibit the same observable semantics — durable
+// provider binding, canonicalized result, receipt provider identity (§20) —
+// as the same worker dispatched through the normal coordinator task path.
+// It does, because RunDirectAgent now escalates a non-hufu-local provider to
+// the exact same executeTask dispatch (§28); this test drives a real fake
+// app-server subprocess through that escalated path to prove it end to end,
+// not just that the escalation branch is reached.
+func TestDirectCodexWorkerPreservesNormalTaskSemantics(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	worker := &agent.AgentDef{
+		Name: "worker", Role: "worker", SubagentProvider: "codex", SideEffect: "workspace_write",
+		Generation: agent.GenerationParams{Model: "gpt-5-codex"},
+	}
+	c := newCodexE2ECoordinatorBase(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-direct", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
+	}, worker)
+
+	result, err := c.RunDirectAgent(context.Background(), "worker", "do the work")
+	if err != nil {
+		t.Fatalf("RunDirectAgent: %v", err)
+	}
+	if result == nil || result.AgentName != "worker" {
+		t.Fatalf("RunDirectAgent result = %#v", result)
+	}
+	items := c.taskTracker.TodoList().Items()
+	if len(items) != 1 {
+		t.Fatalf("todo items = %#v, want exactly one durable task occurrence", items)
+	}
+	item := items[0]
+	if item.Status != TaskDone {
+		t.Fatalf("task status = %s, want done", item.Status)
+	}
+	if item.ProviderBinding == nil || item.ProviderBinding.SessionID != "thread-direct" {
+		t.Fatalf("ProviderBinding = %#v, want the durable Codex session — same as the coordinated path persists (§7.4)", item.ProviderBinding)
+	}
+	typedRes := c.GetTaskResult(item.ID)
+	if typedRes == nil || typedRes.Source != ExternalProviderProposalSource || typedRes.Status != TaskResultStatusSuccess {
+		t.Fatalf("TaskResult = %#v, want the canonicalized external-provider result (§9.3), same as the coordinated path produces", typedRes)
+	}
+	if item.ExecutionReceipt == nil || item.ExecutionReceipt.SubagentProvider != "codex" || item.ExecutionReceipt.ProviderSessionID != "thread-direct" {
+		t.Fatalf("ExecutionReceipt = %#v, want provider identity recorded (§20) exactly as the coordinated path records it", item.ExecutionReceipt)
 	}
 }
