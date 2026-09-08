@@ -171,11 +171,15 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("resolve selected sub-agent %q: %v", selected, err)), nil
 	}
-	subTask = c.canonicalizeTaskOccurrence(subTask, subAgentDef, c.resolveAgentModel(subAgentDef, ""))
+	subTask, err = c.canonicalizeTaskOccurrence(subTask, subAgentDef, c.resolveAgentModel(subAgentDef, ""))
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to resolve subagent provider: %v", err)), nil
+	}
 	subTask.ModelTopology = []string{subTask.Model}
 	subSpec.Agent, subSpec.Model = subTask.Agent, subTask.Model
 	subSpec.ModelTopology = cloneModelTopology(subTask.ModelTopology)
 	subSpec.SideEffect, subSpec.Recovery, subSpec.ReconcileTool = subTask.SideEffect, subTask.Recovery, subTask.ReconcileTool
+	subSpec.SubagentProvider = subTask.SubagentProvider
 	// request_agent is an executable durable occurrence. Freeze its effective
 	// decision contract before task_created or any child transition.
 	if c.hasDurableEventJournal() {

@@ -206,6 +206,11 @@ type TaskDef struct {
 	// DecisionProvenance records advisory source lineage for independence
 	// reporting. Parent declarations are never trusted for grouping.
 	DecisionProvenance []EvidenceProvenance `json:"-" yaml:"decision-provenance,omitempty"`
+	// SubagentProvider is configuration-owned. The coordinator model cannot
+	// choose or lower it at dispatch time, exactly as DecisionProfile, Action
+	// and Phase are protected
+	// (docs/hufu-external-coding-agent-runtime-spec.md §6.3).
+	SubagentProvider string `json:"-" yaml:"subagent-provider,omitempty"`
 }
 
 // FactRef names one substitution: {Name} in the consuming task's Goal and

@@ -980,7 +980,13 @@ retryLoop:
 			if c.workerAgentOverride != nil {
 				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 			} else {
-				provider, providerErr := c.SubagentRegistry().Resolve(localSubagentProviderName)
+				// task.SubagentProvider is the durable occurrence's frozen provider
+				// (canonicalizeTaskOccurrence resolved and validated it once, at
+				// admission). For a durable Todo, task was just re-derived from the
+				// canonical projection above via taskDefFromTodoItem, so a later
+				// config change can never retarget an in-flight retry/resume
+				// (docs/hufu-external-coding-agent-runtime-spec.md §6.4, §7.3).
+				provider, providerErr := c.SubagentRegistry().Resolve(task.SubagentProvider)
 				if providerErr != nil {
 					err = providerErr
 				} else {

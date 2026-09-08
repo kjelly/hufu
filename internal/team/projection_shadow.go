@@ -235,6 +235,8 @@ type canonicalTaskShadow struct {
 	DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance,omitempty"`
 	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
 	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
+	SubagentProvider    string                     `json:"subagent_provider,omitempty"`
+	ProviderBinding     *ProviderBinding           `json:"provider_binding,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -310,6 +312,8 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
 		MemoryManifests:     normalizeMemoryManifests(item.MemoryManifests),
 		ContextManifests:    normalizeContextManifests(item.ContextManifests),
+		SubagentProvider:    strings.TrimSpace(item.SubagentProvider),
+		ProviderBinding:     cloneProviderBinding(item.ProviderBinding),
 	}
 }
 

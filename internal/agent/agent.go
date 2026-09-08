@@ -171,6 +171,10 @@ type AgentDef struct {
 	Memory      WorkerMemoryPolicy
 	Generation  GenerationParams
 	ExtraModels []string
+	// SubagentProvider is this agent's default SubagentProvider (e.g.
+	// "codex"). Empty defers to the team default, then "hufu-local"
+	// (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+	SubagentProvider string
 }
 
 // ContractRequirements describes prerequisites for a team or worker without
@@ -387,6 +391,13 @@ type TeamConfig struct {
 	// that declares none of it gets today's hardcoded scoring formula
 	// exactly, via ScoringWeights' Effective* accessors.
 	RoutingPolicy RoutingPolicyConfig
+	// SubagentProviderDefault names the team-wide default SubagentProvider
+	// for tasks/agents that do not pin one explicitly. Empty resolves to
+	// "hufu-local" (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+	SubagentProviderDefault string
+	// SubagentProviders declares external SubagentProvider configurations by
+	// name. The reserved name "hufu-local" cannot be overridden here.
+	SubagentProviders map[string]SubagentProviderConfig
 }
 
 // RoutingPolicyConfig is the yaml `routing-policy` block (spec.md v2 §12).
@@ -550,6 +561,23 @@ type ActionProviderConfig struct {
 	Command []string `json:"command" yaml:"command"`
 	Dir     string   `json:"dir,omitempty" yaml:"dir,omitempty"`
 	Timeout int64    `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+}
+
+// SubagentProviderConfig configures one external SubagentProvider driver
+// (docs/hufu-external-coding-agent-runtime-spec.md §6.1). Structural
+// validation only happens at parse time; constructing/registering the
+// actual provider (and any process/model call) is a later runtime phase.
+type SubagentProviderConfig struct {
+	Type               string   `json:"type" yaml:"type"`
+	Command            []string `json:"command" yaml:"command"`
+	Protocol           string   `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	StartupTimeout     string   `json:"startup_timeout,omitempty" yaml:"startup-timeout,omitempty"`
+	InterruptGrace     string   `json:"interrupt_grace,omitempty" yaml:"interrupt-grace,omitempty"`
+	ShutdownGrace      string   `json:"shutdown_grace,omitempty" yaml:"shutdown-grace,omitempty"`
+	MaxEventBytes      int64    `json:"max_event_bytes,omitempty" yaml:"max-event-bytes,omitempty"`
+	MaxTranscriptBytes int64    `json:"max_transcript_bytes,omitempty" yaml:"max-transcript-bytes,omitempty"`
+	ExecutionWorld     string   `json:"execution_world,omitempty" yaml:"execution-world,omitempty"`
+	InheritEnv         []string `json:"inherit_env,omitempty" yaml:"inherit-env,omitempty"`
 }
 
 // CapabilityConfig names provider-neutral capabilities required by a runtime

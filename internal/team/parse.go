@@ -37,37 +37,38 @@ type TeamSession struct {
 }
 
 type agentFrontmatter struct {
-	Name            string                            `yaml:"name"`
-	Description     string                            `yaml:"description"`
-	Role            string                            `yaml:"role"`
-	Preset          string                            `yaml:"preset"`
-	Tools           any                               `yaml:"tools"`  // string, []string, or {allowed: [...], denied: [...]}
-	Skills          any                               `yaml:"skills"` // string or []string (YAML list)
-	Guard           []string                          `yaml:"guard"`
-	Model           string                            `yaml:"model"`
-	ExtraModels     []string                          `yaml:"extra-models"`
-	Temperature     string                            `yaml:"temperature"`
-	MaxTokens       string                            `yaml:"max-tokens"`
-	TopP            string                            `yaml:"top-p"`
-	TopK            string                            `yaml:"top-k"`
-	ReasoningEffort string                            `yaml:"reasoning-effort"`
-	Timeout         int64                             `yaml:"timeout"`
-	MaxRetries      any                               `yaml:"max-retries"` // int or string
-	MaxSteps        int                               `yaml:"max-steps"`
-	ProviderURL     string                            `yaml:"provider-url"`
-	AllowedPaths    any                               `yaml:"allowed-paths"` // string or []string
-	RestrictedPath  string                            `yaml:"restricted-path"`
-	NoNet           bool                              `yaml:"no-net"`
-	ForceMCP        bool                              `yaml:"force-mcp"`
-	Shell           string                            `yaml:"shell"`
-	MCPTools        map[string]agent.MCPToolConfig    `yaml:"mcp-tools"`
-	Requirements    agent.ContractRequirements        `yaml:"requires"`
-	SideEffect      string                            `yaml:"side_effect"`
-	Recovery        string                            `yaml:"recovery"`
-	ReconcileTool   string                            `yaml:"reconcile-tool"`
-	ToolRecovery    map[string]agent.ToolRecoveryDecl `yaml:"tool-recovery"`
-	MemoryID        string                            `yaml:"memory-id"`
-	Memory          rawWorkerMemoryPolicy             `yaml:"memory"`
+	Name             string                            `yaml:"name"`
+	Description      string                            `yaml:"description"`
+	Role             string                            `yaml:"role"`
+	Preset           string                            `yaml:"preset"`
+	Tools            any                               `yaml:"tools"`  // string, []string, or {allowed: [...], denied: [...]}
+	Skills           any                               `yaml:"skills"` // string or []string (YAML list)
+	Guard            []string                          `yaml:"guard"`
+	Model            string                            `yaml:"model"`
+	ExtraModels      []string                          `yaml:"extra-models"`
+	Temperature      string                            `yaml:"temperature"`
+	MaxTokens        string                            `yaml:"max-tokens"`
+	TopP             string                            `yaml:"top-p"`
+	TopK             string                            `yaml:"top-k"`
+	ReasoningEffort  string                            `yaml:"reasoning-effort"`
+	Timeout          int64                             `yaml:"timeout"`
+	MaxRetries       any                               `yaml:"max-retries"` // int or string
+	MaxSteps         int                               `yaml:"max-steps"`
+	ProviderURL      string                            `yaml:"provider-url"`
+	AllowedPaths     any                               `yaml:"allowed-paths"` // string or []string
+	RestrictedPath   string                            `yaml:"restricted-path"`
+	NoNet            bool                              `yaml:"no-net"`
+	ForceMCP         bool                              `yaml:"force-mcp"`
+	Shell            string                            `yaml:"shell"`
+	MCPTools         map[string]agent.MCPToolConfig    `yaml:"mcp-tools"`
+	Requirements     agent.ContractRequirements        `yaml:"requires"`
+	SideEffect       string                            `yaml:"side_effect"`
+	Recovery         string                            `yaml:"recovery"`
+	SubagentProvider string                            `yaml:"subagent-provider"`
+	ReconcileTool    string                            `yaml:"reconcile-tool"`
+	ToolRecovery     map[string]agent.ToolRecoveryDecl `yaml:"tool-recovery"`
+	MemoryID         string                            `yaml:"memory-id"`
+	Memory           rawWorkerMemoryPolicy             `yaml:"memory"`
 }
 
 type teamConfigYAML struct {
@@ -117,20 +118,22 @@ type teamConfigYAML struct {
 	Vars                 map[string]interface{}           `yaml:"vars"`
 	// WorkerContextSize is a token budget, not a character count (spec.md
 	// item 7); the YAML key is kept as-is for backward compatibility.
-	WorkerContextSize  int                                   `yaml:"worker-context-size"`
-	ToolsAllowed       interface{}                           `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Requirements       agent.ContractRequirements            `yaml:"requires"`
-	Delegation         rawDelegationPolicy                   `yaml:"delegation"`
-	Preflight          []agent.CapabilityRequirement         `yaml:"preflight"`
-	Workflow           agent.WorkflowConfig                  `yaml:"workflow"`
-	Policies           agent.WorkflowPolicies                `yaml:"policies"`
-	Capabilities       agent.CapabilityConfig                `yaml:"capabilities"`
-	Verification       agent.VerificationConfig              `yaml:"verification"`
-	Retry              agent.RetryConfig                     `yaml:"retry"`
-	Decision           agent.DecisionConfig                  `yaml:"decision"`
-	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry"`
-	RoutingPolicy      agent.RoutingPolicyConfig             `yaml:"routing-policy"`
-	ActionProviders    map[string]agent.ActionProviderConfig `yaml:"action-providers"`
+	WorkerContextSize       int                                     `yaml:"worker-context-size"`
+	ToolsAllowed            interface{}                             `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
+	Requirements            agent.ContractRequirements              `yaml:"requires"`
+	Delegation              rawDelegationPolicy                     `yaml:"delegation"`
+	Preflight               []agent.CapabilityRequirement           `yaml:"preflight"`
+	Workflow                agent.WorkflowConfig                    `yaml:"workflow"`
+	Policies                agent.WorkflowPolicies                  `yaml:"policies"`
+	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities"`
+	Verification            agent.VerificationConfig                `yaml:"verification"`
+	Retry                   agent.RetryConfig                       `yaml:"retry"`
+	Decision                agent.DecisionConfig                    `yaml:"decision"`
+	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry"`
+	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy"`
+	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers"`
+	SubagentProviderDefault string                                  `yaml:"subagent-provider-default"`
+	SubagentProviders       map[string]agent.SubagentProviderConfig `yaml:"subagent-providers"`
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
@@ -670,13 +673,14 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 			TopK:            fm.TopK,
 			ReasoningEffort: fm.ReasoningEffort,
 		},
-		ProviderURL:   fm.ProviderURL,
-		ExtraModels:   fm.ExtraModels,
-		SideEffect:    sideEffect,
-		Recovery:      fm.Recovery,
-		ReconcileTool: fm.ReconcileTool,
-		ToolRecovery:  fm.ToolRecovery,
-		MemoryID:      fm.MemoryID,
+		ProviderURL:      fm.ProviderURL,
+		ExtraModels:      fm.ExtraModels,
+		SideEffect:       sideEffect,
+		Recovery:         fm.Recovery,
+		SubagentProvider: fm.SubagentProvider,
+		ReconcileTool:    fm.ReconcileTool,
+		ToolRecovery:     fm.ToolRecovery,
+		MemoryID:         fm.MemoryID,
 	}
 	if fm.Memory.isSet() {
 		def.Memory = resolveWorkerMemoryPolicy(fm.Memory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
@@ -1208,6 +1212,26 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		for capability, provider := range yc.ActionProviders {
 			cfg.ActionProviders[capability] = agent.ActionProviderConfig{
 				Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
+			}
+		}
+	}
+
+	cfg.SubagentProviderDefault = strings.ToLower(strings.TrimSpace(yc.SubagentProviderDefault))
+	// The reserved "hufu-local" provider is always the built-in local
+	// SubagentProvider; a team must not shadow it with its own external
+	// provider configuration (docs/hufu-external-coding-agent-runtime-spec.md §6.1).
+	if len(yc.SubagentProviders) > 0 {
+		cfg.SubagentProviders = make(map[string]agent.SubagentProviderConfig, len(yc.SubagentProviders))
+		for name, provider := range yc.SubagentProviders {
+			normalized := strings.ToLower(strings.TrimSpace(name))
+			if normalized == localSubagentProviderName {
+				return cfg, fmt.Errorf("subagent-providers: %q is a reserved provider name and cannot be overridden", name)
+			}
+			cfg.SubagentProviders[normalized] = agent.SubagentProviderConfig{
+				Type: provider.Type, Command: append([]string(nil), provider.Command...), Protocol: provider.Protocol,
+				StartupTimeout: provider.StartupTimeout, InterruptGrace: provider.InterruptGrace, ShutdownGrace: provider.ShutdownGrace,
+				MaxEventBytes: provider.MaxEventBytes, MaxTranscriptBytes: provider.MaxTranscriptBytes,
+				ExecutionWorld: provider.ExecutionWorld, InheritEnv: append([]string(nil), provider.InheritEnv...),
 			}
 		}
 	}

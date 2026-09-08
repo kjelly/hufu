@@ -336,21 +336,37 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	todoID := ids[0]
 	directTask := TaskDef{Agent: resolvedName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
-	directTask = c.canonicalizeTaskOccurrence(directTask, agentDef, directModel)
+	directTask, err = c.canonicalizeTaskOccurrence(directTask, agentDef, directModel)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
+	// The one-worker direct-agent fast path does not yet implement provider
+	// binding, execution-world policy, or result canonicalization (that parity
+	// is PR-15). Until then it MUST fail closed rather than silently execute a
+	// non-hufu-local provider through its own inline Fantasy agent, which
+	// would bypass every invariant this specification depends on
+	// (docs/hufu-external-coding-agent-runtime-spec.md §28.1).
+	if directTask.SubagentProvider != localSubagentProviderName {
+		err = fmt.Errorf("direct agent invocation does not support subagent provider %q; dispatch through the coordinator instead", directTask.SubagentProvider)
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	directTask.ModelTopology = []string{directTask.Model}
 	directModel = directTask.Model
 	directSpec := TodoSpec{
-		Agent:         directTask.Agent,
-		Desc:          directTask.Goal,
-		Goal:          directTask.Goal,
-		Model:         directTask.Model,
-		ModelTopology: cloneModelTopology(directTask.ModelTopology),
-		Source:        TaskSourceCoordinator,
-		ParentID:      "",
-		Execution:     cloneExecutionContract(directTask.Execution),
-		SideEffect:    directTask.SideEffect,
-		Recovery:      directTask.Recovery,
-		ReconcileTool: directTask.ReconcileTool,
+		Agent:            directTask.Agent,
+		Desc:             directTask.Goal,
+		Goal:             directTask.Goal,
+		Model:            directTask.Model,
+		ModelTopology:    cloneModelTopology(directTask.ModelTopology),
+		Source:           TaskSourceCoordinator,
+		ParentID:         "",
+		Execution:        cloneExecutionContract(directTask.Execution),
+		SideEffect:       directTask.SideEffect,
+		Recovery:         directTask.Recovery,
+		ReconcileTool:    directTask.ReconcileTool,
+		SubagentProvider: directTask.SubagentProvider,
 	}
 	// Admission is the creation boundary: it precedes task_created, provider
 	// admission, sidecar matching, in_progress, and every worker-side effect.
@@ -774,20 +790,24 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	}
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	occurrence := TaskDef{Agent: agentName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
-	occurrence = c.canonicalizeTaskOccurrence(occurrence, agentDef, model)
+	occurrence, err := c.canonicalizeTaskOccurrence(occurrence, agentDef, model)
+	if err != nil {
+		return errors.Join(cancellation, fmt.Errorf("canonicalize pre-cancelled direct task: %w", err))
+	}
 	occurrence.ModelTopology = []string{occurrence.Model}
 	spec := TodoSpec{
-		Agent:         occurrence.Agent,
-		Desc:          occurrence.Goal,
-		Goal:          occurrence.Goal,
-		Model:         occurrence.Model,
-		ModelTopology: cloneModelTopology(occurrence.ModelTopology),
-		Source:        TaskSourceCoordinator,
-		ParentID:      "",
-		Execution:     cloneExecutionContract(occurrence.Execution),
-		SideEffect:    occurrence.SideEffect,
-		Recovery:      occurrence.Recovery,
-		ReconcileTool: occurrence.ReconcileTool,
+		Agent:            occurrence.Agent,
+		Desc:             occurrence.Goal,
+		Goal:             occurrence.Goal,
+		Model:            occurrence.Model,
+		ModelTopology:    cloneModelTopology(occurrence.ModelTopology),
+		Source:           TaskSourceCoordinator,
+		ParentID:         "",
+		Execution:        cloneExecutionContract(occurrence.Execution),
+		SideEffect:       occurrence.SideEffect,
+		Recovery:         occurrence.Recovery,
+		ReconcileTool:    occurrence.ReconcileTool,
+		SubagentProvider: occurrence.SubagentProvider,
 	}
 	if c.hasDurableEventJournal() {
 		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, ids[0])

@@ -153,6 +153,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		Artifacts                                                            []ArtifactRef
 		BaseRates                                                            []BaseRateEvidence
 		Provenance                                                           []EvidenceProvenance
+		SubagentProvider                                                     string
 	}{
 		ID: task.ID, PlanTaskID: task.PlanTaskID, Phase: string(task.Phase), Agent: task.Agent, Desc: task.Desc, Goal: task.Goal, Constraints: task.Constraints, Model: task.Model, Source: task.Source, PlanFirst: task.PlanFirst, ModelTopology: task.ModelTopology,
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
@@ -163,6 +164,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		RecoveryHypothesis: task.RecoveryHypothesis,
 		Profile:            task.DecisionProfile, Options: task.DecisionOptions, Assumptions: task.DecisionAssumptions, Facts: task.DecisionFacts,
 		Artifacts: task.DecisionArtifacts, BaseRates: task.DecisionBaseRates, Provenance: task.DecisionProvenance,
+		SubagentProvider: task.SubagentProvider,
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -242,8 +244,12 @@ func loadDecisionAdmission(ctx context.Context, journal EventJournal, taskID str
 // canonicalizeTaskOccurrence freezes the effective task contract shared by
 // decision admission, task_created, checkpoint replay, and execution. The
 // caller supplies the model selected at the creation boundary; no later
-// consumer is allowed to re-resolve it from mutable team configuration.
-func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentDef, resolvedModel string) TaskDef {
+// consumer is allowed to re-resolve it from mutable team configuration. The
+// same freeze applies to SubagentProvider: resolution happens exactly once,
+// here, before any TODO/model call
+// (docs/hufu-external-coding-agent-runtime-spec.md §6.4), and an unknown
+// provider fails the whole occurrence closed.
+func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentDef, resolvedModel string) (TaskDef, error) {
 	if def != nil {
 		task.Agent = strings.ToLower(strings.TrimSpace(def.Name))
 	}
@@ -251,7 +257,12 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if c != nil {
 		task.SideEffect, task.Recovery, task.ReconcileTool = c.PolicyEngine().ResolveRecoveryPolicy(def, task)
 	}
-	return task
+	provider, err := c.resolveSubagentProvider(task, def)
+	if err != nil {
+		return task, err
+	}
+	task.SubagentProvider = provider
+	return task, nil
 }
 
 // validateTaskOccurrenceAdmission validates the one durable marker that

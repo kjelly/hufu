@@ -1403,6 +1403,10 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"decision_base_rates":   item.DecisionBaseRates,
 		"decision_provenance":   item.DecisionProvenance,
 		"attempt":               item.Retries + 1,
+		"subagent_provider":     item.SubagentProvider,
+	}
+	if item.ProviderBinding != nil {
+		payload["provider_binding"] = item.ProviderBinding
 	}
 	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete
 	if !failureTransition {

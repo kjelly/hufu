@@ -310,6 +310,13 @@ type TodoItem struct {
 	DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance,omitempty"`
 	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
 	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
+	// SubagentProvider is immutable after task admission
+	// (docs/hufu-external-coding-agent-runtime-spec.md §7.2).
+	SubagentProvider string `json:"subagent_provider,omitempty"`
+	// ProviderBinding carries the durable provider/session identity for this
+	// occurrence. Its SessionID/TurnID MAY transition from empty to populated
+	// as execution progresses; Provider itself does not change.
+	ProviderBinding *ProviderBinding `json:"provider_binding,omitempty"`
 }
 
 type TodoList struct {
@@ -383,12 +390,22 @@ type TodoSpec struct {
 	DecisionArtifacts   []ArtifactRef
 	DecisionBaseRates   []BaseRateEvidence
 	DecisionProvenance  []EvidenceProvenance
+	// SubagentProvider and ProviderBinding follow TaskDef's field of the same
+	// name (docs/hufu-external-coding-agent-runtime-spec.md §7.2). Callers
+	// normally only set SubagentProvider; todoItemFromSpec derives a minimal
+	// ProviderBinding from it when ProviderBinding is left nil.
+	SubagentProvider string
+	ProviderBinding  *ProviderBinding
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
 // It is shared by AddBatch and the event-first CommitTaskCreation boundary so
 // both paths produce byte-identical projection state.
 func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
+	providerBinding := item.ProviderBinding
+	if providerBinding == nil && strings.TrimSpace(item.SubagentProvider) != "" {
+		providerBinding = &ProviderBinding{Provider: item.SubagentProvider}
+	}
 	return &TodoItem{
 		ID:                  id,
 		PlanTaskID:          item.PlanTaskID,
@@ -442,6 +459,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
 		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
 		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
+		SubagentProvider:    item.SubagentProvider,
+		ProviderBinding:     cloneProviderBinding(providerBinding),
 	}
 }
 
@@ -1129,6 +1148,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
 		MemoryManifests:     memoryManifests,
 		ContextManifests:    contextManifests,
+		SubagentProvider:    item.SubagentProvider,
+		ProviderBinding:     cloneProviderBinding(item.ProviderBinding),
 	}
 }
 

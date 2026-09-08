@@ -68,6 +68,12 @@ type TaskOccurrenceProjection struct {
 	DecisionArtifacts   []ArtifactRef
 	DecisionBaseRates   []BaseRateEvidence
 	DecisionProvenance  []EvidenceProvenance
+
+	// SubagentProvider is part of the immutable admission-time contract
+	// (docs/hufu-external-coding-agent-runtime-spec.md §7.3). ProviderBinding
+	// is deliberately absent here: it carries mutable runtime session state,
+	// analogous to why ExecutionReceipt/VerifyResult are also absent.
+	SubagentProvider string
 }
 
 func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, error) {
@@ -96,6 +102,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
 		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), item.DecisionArtifacts...),
 		DecisionBaseRates: cloneBaseRateEvidence(item.DecisionBaseRates), DecisionProvenance: cloneEvidenceProvenance(item.DecisionProvenance),
+		SubagentProvider: item.SubagentProvider,
 	}, nil
 }
 
@@ -137,6 +144,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		DecisionAssumptions: cloneDecisionAssumptions(task.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(task.DecisionFacts),
 		DecisionArtifacts: append([]ArtifactRef(nil), task.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(task.DecisionBaseRates),
 		DecisionProvenance: cloneEvidenceProvenance(task.DecisionProvenance),
+		SubagentProvider:   task.SubagentProvider,
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

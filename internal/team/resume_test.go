@@ -456,23 +456,28 @@ func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.
 		Execution: ExecutionContract{RequiresResult: true},
 	}
 	resolvedModel := c.resolveAgentModel(agents["worker"], "")
-	task = c.canonicalizeTaskOccurrence(task, agents["worker"], resolvedModel)
+	var canonicalizeErr error
+	task, canonicalizeErr = c.canonicalizeTaskOccurrence(task, agents["worker"], resolvedModel)
+	if canonicalizeErr != nil {
+		t.Fatalf("canonicalizeTaskOccurrence: %v", canonicalizeErr)
+	}
 	task.ModelTopology = initialTaskModelTopology(agents["worker"], resolvedModel)
 	if _, err := c.admitTaskOccurrence(context.Background(), task, ids[0], 1); err != nil {
 		t.Fatalf("admitTaskOccurrence: %v", err)
 	}
 	items, err := c.CommitTaskCreationResolved(context.Background(), []TodoSpec{{
-		PlanTaskID:    task.ID,
-		Agent:         task.Agent,
-		Desc:          task.Goal,
-		Goal:          task.Goal,
-		Model:         task.Model,
-		ModelTopology: cloneModelTopology(task.ModelTopology),
-		Source:        TaskSourceCoordinator,
-		Execution:     task.Execution,
-		SideEffect:    task.SideEffect,
-		Recovery:      task.Recovery,
-		ReconcileTool: task.ReconcileTool,
+		PlanTaskID:       task.ID,
+		Agent:            task.Agent,
+		Desc:             task.Goal,
+		Goal:             task.Goal,
+		Model:            task.Model,
+		ModelTopology:    cloneModelTopology(task.ModelTopology),
+		Source:           TaskSourceCoordinator,
+		Execution:        task.Execution,
+		SideEffect:       task.SideEffect,
+		Recovery:         task.Recovery,
+		ReconcileTool:    task.ReconcileTool,
+		SubagentProvider: task.SubagentProvider,
 	}}, ids)
 	if err != nil {
 		t.Fatalf("CommitTaskCreationResolved: %v", err)

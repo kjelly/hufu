@@ -323,7 +323,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		// TaskDef is then used for both admission and task_created, preventing a
 		// resumed task from hashing a different model/agent/recovery contract than
 		// the projection it will execute.
-		t = c.canonicalizeTaskOccurrence(t, agentDef, resolvedModel)
+		var canonicalizeErr error
+		t, canonicalizeErr = c.canonicalizeTaskOccurrence(t, agentDef, resolvedModel)
+		if canonicalizeErr != nil {
+			// An unknown subagent provider fails the whole dispatch before any
+			// TODO/model call, exactly like the other admission-time contract
+			// errors above (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
+		}
 		if agentDef != nil {
 			t.ModelTopology = initialTaskModelTopology(agentDef, resolvedModel)
 		}
@@ -376,6 +383,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			DecisionArtifacts:   append([]ArtifactRef(nil), t.DecisionArtifacts...),
 			DecisionBaseRates:   cloneBaseRateEvidence(t.DecisionBaseRates),
 			DecisionProvenance:  cloneEvidenceProvenance(t.DecisionProvenance),
+			SubagentProvider:    t.SubagentProvider,
 		}
 	}
 	// The successful exact initial-policy validation above is the sole point at

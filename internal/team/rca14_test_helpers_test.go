@@ -26,7 +26,11 @@ func createAdmittedTestTask(t *testing.T, c *Coordinator, task TaskDef) (TaskDef
 	if agentDef != nil && resolvedModel == "" {
 		resolvedModel = c.resolveAgentModel(agentDef, "")
 	}
-	task = c.canonicalizeTaskOccurrence(task, agentDef, resolvedModel)
+	var canonicalizeErr error
+	task, canonicalizeErr = c.canonicalizeTaskOccurrence(task, agentDef, resolvedModel)
+	if canonicalizeErr != nil {
+		t.Fatalf("canonicalizeTaskOccurrence: %v", canonicalizeErr)
+	}
 	if agentDef != nil {
 		task.ModelTopology = initialTaskModelTopology(agentDef, resolvedModel)
 	}
