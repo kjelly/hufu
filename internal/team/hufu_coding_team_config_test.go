@@ -91,24 +91,37 @@ func TestHufuCodingCodexProviderDisablesNativeMultiAgent(t *testing.T) {
 	}
 }
 
-// TestHufuCodingCoderIsBoundToCodex pins spec.md §5.3/§16 Phase 1 acceptance
-// ("coder is configuration-bound to Codex external provider").
-func TestHufuCodingCoderIsBoundToCodex(t *testing.T) {
+// TestHufuCodingAllRolesBoundToCodex pins the operator-directed change (all
+// five hufu-coding workers dispatch through the codex subagent-provider, not
+// just the coder leaf): every worker's SubagentProvider must be "codex".
+// subagent_codex.go derives its sandbox mode (read-only vs workspace-write)
+// generically from each task's own side_effect
+// (dagScheduler/ExecutionWorldSpec, see subagent_codex.go's
+// `sandbox := codexSandboxReadOnly; if len(prepared.WritableRoots) > 0 {...}`),
+// so binding a side_effect:none role to codex does not grant it write access
+// — this is a config-only change, no runtime behavior to add.
+func TestHufuCodingAllRolesBoundToCodex(t *testing.T) {
 	session := loadHufuCodingTeam(t)
-	coder := session.Agents["coder"]
-	if coder == nil {
-		t.Fatal("hufu-coding is missing the coder worker")
-	}
-	if coder.SubagentProvider != "codex" {
-		t.Fatalf("coder.SubagentProvider = %q, want \"codex\"", coder.SubagentProvider)
+	for _, name := range []string{"sa", "coder", "verifier", "reviewer", "final-sa"} {
+		def := session.Agents[name]
+		if def == nil {
+			t.Fatalf("hufu-coding is missing the %q worker", name)
+		}
+		if def.SubagentProvider != "codex" {
+			t.Fatalf("%s.SubagentProvider = %q, want \"codex\"", name, def.SubagentProvider)
+		}
 	}
 }
 
 // TestHufuCodingReadOnlyRolesCannotWrite is the static half of matrix item M
-// ("SA/reviewer/final-SA attempts to write must fail closed"): the
-// frontmatter tool grant itself must never include a write-capable tool for
-// these three roles, or the runtime's tool-policy enforcement never gets a
-// chance to run at all.
+// ("SA/reviewer/final-SA attempts to write must fail closed"). These roles
+// are codex-bound (TestHufuCodingAllRolesBoundToCodex), so Hufu's own
+// frontmatter tool grant no longer gates their access at all — codex
+// providers set SupportsHufuTools:false and use Codex's own built-in tools
+// regardless of `tools:`. The real gate is the side_effect-derived sandbox
+// mode (see TestHufuCodingAllRolesBoundToCodex's comment); this test only
+// pins the weaker, still-worth-keeping invariant that the frontmatter itself
+// never *also* grants a write-capable tool name.
 func TestHufuCodingReadOnlyRolesCannotWrite(t *testing.T) {
 	session := loadHufuCodingTeam(t)
 	forbidden := []string{"edit", "write", "multiedit"}
@@ -140,6 +153,30 @@ func TestHufuCodingVerifierCannotWrite(t *testing.T) {
 	for _, tool := range hufuCodingAgentToolNames(def) {
 		if tool == "edit" || tool == "write" || tool == "multiedit" {
 			t.Fatalf("verifier grants write-capable tool %q", tool)
+		}
+	}
+}
+
+// TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox pins the actual
+// write-prevention mechanism for sa/verifier/reviewer/final-sa now that they
+// are codex-bound (TestHufuCodingAllRolesBoundToCodex): each static task
+// contract's side_effect must be "none" so subagent_codex.go's generic
+// ExecutionWorldSpec/WritableRoots derivation resolves their Codex sandbox to
+// read-only rather than workspace-write, regardless of what `tools:` would
+// otherwise have gated for a Hufu-native (non-subagent-provider) worker.
+func TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox(t *testing.T) {
+	session := loadHufuCodingTeam(t)
+	byAgent := map[string]TaskDef{}
+	for _, task := range session.ContractTasks {
+		byAgent[strings.ToLower(strings.TrimSpace(task.Agent))] = task
+	}
+	for _, name := range []string{"sa", "verifier", "reviewer", "final-sa"} {
+		task, ok := byAgent[name]
+		if !ok {
+			t.Fatalf("hufu-coding has no static task contract for %q", name)
+		}
+		if task.SideEffect != SideEffectNone {
+			t.Fatalf("%s.side_effect = %q, want %q so its Codex sandbox resolves to read-only", name, task.SideEffect, SideEffectNone)
 		}
 	}
 }

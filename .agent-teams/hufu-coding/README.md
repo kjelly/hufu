@@ -2,9 +2,17 @@
 
 A reliability-oriented coding team: Hufu owns the control plane (task
 admission, retry, failure classification, recovery, and final acceptance);
-Codex is a bounded leaf implementation worker. See `../../spec.md` for the
-full design rationale (gitignored; ask the operator if you need the original
-document).
+every worker's actual reasoning turn executes through the `codex`
+subagent-provider. See `../../spec.md` for the full design rationale
+(gitignored; ask the operator if you need the original document; the original
+design scoped Codex to just the coder leaf — see "All five roles are
+codex-bound" below for why every role uses it here instead).
+
+Binding a worker to a subagent-provider changes only *which process executes
+its model call* — Hufu's own control plane (task admission, the typed
+`submit_result` protocol, DAG scheduling, retry/failure classification,
+on-failure-classes, remediation context, final acceptance) is unchanged and
+still fully owned by Hufu regardless of which agent below is codex-bound.
 
 ## Fixed batch shape
 
@@ -132,6 +140,25 @@ source task's own canonical failure/result — source task id, agent, attempt,
 failure class, status, summary, findings, verification evidence — to the
 coder's next dispatch. The coder never has to be manually re-told what went
 wrong by the coordinator's prose.
+
+## All five roles are codex-bound
+
+`sa`, `coder`, `verifier`, `reviewer`, and `final-sa` each carry
+`subagent-provider: codex` in their frontmatter (operator-directed change;
+the original design bound only `coder`, keeping Codex a bounded leaf
+implementation worker). This does not weaken read-only enforcement for the
+four non-coder roles: `subagent_codex.go` derives each dispatch's Codex
+sandbox mode (`read-only` vs `workspace-write`) generically from the task's
+own `side_effect` (`ExecutionWorldSpec`/`WritableRoots`), the same mechanism
+that already gated `coder`'s `workspace_write` access — so `sa`/`verifier`/
+`reviewer`/`final-sa`'s `side_effect: none` contracts still force a read-only
+Codex sandbox exactly as they did against Hufu's native model before this
+change. A codex-bound worker also carries no `tools:` frontmatter (unlike a
+Hufu-native worker): a codex provider sets `SupportsHufuTools: false` and
+always uses Codex's own built-in tools, so Hufu's `tools:` allowlist has no
+effect once a role is codex-bound — the sandbox mode is the only gate that
+matters for these roles now (`TestHufuCodingAllRolesBoundToCodex`,
+`TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox`).
 
 ## Running it
 

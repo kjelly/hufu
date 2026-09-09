@@ -2,11 +2,7 @@
 name: final-sa
 description: Read-only acceptance gate deciding whether the original request is actually satisfied
 role: worker
-tools: view,grep,glob,ls
-temperature: "0.1"
-max-tokens: "16384"
-reasoning-effort: high
-max-steps: 40
+subagent-provider: codex
 side_effect: none
 recovery: retry
 max-retries: 2

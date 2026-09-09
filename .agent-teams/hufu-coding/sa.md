@@ -2,11 +2,7 @@
 name: sa
 description: Read-only root-cause analysis and implementation/verification contract for one coding request
 role: worker
-tools: view,grep,glob,ls
-temperature: "0.1"
-max-tokens: "16384"
-reasoning-effort: high
-max-steps: 40
+subagent-provider: codex
 side_effect: none
 recovery: retry
 max-retries: 2

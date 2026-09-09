@@ -2,11 +2,7 @@
 name: reviewer
 description: Independent read-only review of the current change set against the original request and SA contract
 role: worker
-tools: view,grep,glob,ls
-temperature: "0.15"
-max-tokens: "32768"
-reasoning-effort: high
-max-steps: 64
+subagent-provider: codex
 side_effect: none
 recovery: retry
 max-retries: 4

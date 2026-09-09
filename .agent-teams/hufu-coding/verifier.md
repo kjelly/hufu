@@ -2,11 +2,7 @@
 name: verifier
 description: Runs the SA-required and repository-mandated verification commands and reports exact evidence
 role: worker
-tools: view,grep,glob,ls,bash
-temperature: "0.1"
-max-tokens: "16384"
-reasoning-effort: high
-max-steps: 40
+subagent-provider: codex
 side_effect: none
 recovery: retry
 max-retries: 4
