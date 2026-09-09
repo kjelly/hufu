@@ -47,6 +47,7 @@ type TaskOccurrenceProjection struct {
 	WorksetBinding      *WorksetBinding
 	WorksetReceipt      *WorksetExpansionReceipt
 	MaxRetries          int
+	OnFailureClasses    []TaskFailureClass
 	SideEffect          SideEffectClass
 	Escalate            bool
 	AdversarialVerify   int
@@ -91,7 +92,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DependsOn: append([]string(nil), item.DependsOn...), OnFailure: item.OnFailure,
 		Verify: item.Verify, VerifyMode: item.VerifyMode, VerifySpec: cloneVerificationSpecPtr(item.VerifySpec),
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
-		MaxRetries: item.MaxRetries, SideEffect: item.SideEffect, Recovery: item.Recovery,
+		MaxRetries: item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
 		Escalate: item.Escalate, AdversarialVerify: item.AdversarialVerify,
 		ReconcileTool: item.ReconcileTool, Kind: item.Kind, Advances: append([]string(nil), item.Advances...),
 		ExpectedStateChange: item.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(item.RecoveryHypothesis),
@@ -134,7 +135,8 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		ContextFiles: append([]string(nil), task.ContextFiles...), Requires: append([]string(nil), task.Requires...),
 		Verify: task.Verify, VerifyMode: task.VerifyMode,
 		VerifySpec: cloneVerificationSpecPtr(task.VerifySpec), MaxRetries: task.MaxRetries,
-		SideEffect: task.SideEffect, Escalate: task.Escalate, AdversarialVerify: task.AdversarialVerify,
+		OnFailureClasses: append([]TaskFailureClass(nil), task.OnFailureClasses...),
+		SideEffect:       task.SideEffect, Escalate: task.Escalate, AdversarialVerify: task.AdversarialVerify,
 		Recovery: task.Recovery, ReconcileTool: task.ReconcileTool,
 		Source: TaskSourceCoordinator,
 		Kind:   task.Kind, Advances: append([]string(nil), task.Advances...), ExpectedStateChange: task.ExpectedStateChange,

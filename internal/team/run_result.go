@@ -838,6 +838,21 @@ const (
 	FailurePolicy      TaskFailureClass = "policy"
 	FailureTimeout     TaskFailureClass = "timeout"
 	FailureCancelled   TaskFailureClass = "cancelled"
+	// FailureSemanticRejection is Hufu's own canonicalized class for a
+	// complete, honest worker self-report of non-success (a submit_result
+	// call with status: failed) — as opposed to the raw class Hufu's
+	// generic non-terminal-status handling persists for that same
+	// submission (execution — coordinator_task_run.go's
+	// withFailureClassOverride, since a non-done status is not otherwise
+	// distinguished from a protocol/infra abort). It is never itself
+	// persisted as a task's own FailureEvent.FailureClass; it exists purely
+	// as the canonicalized value dagScheduler's on_failure gate
+	// (effectiveFailureClassForTodo) evaluates an OnFailureClasses
+	// allowlist against, so "a worker reported failed" cannot silently
+	// bypass an allowlist that does not name it — the allowlist check stays
+	// a single, uniform comparison instead of a class check ORed with a
+	// separate bypass condition.
+	FailureSemanticRejection TaskFailureClass = "semantic_rejection"
 )
 
 // SummarizeRunStats aggregates canonical statistics over a slice of TodoItems.

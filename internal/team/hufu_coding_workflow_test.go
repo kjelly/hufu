@@ -51,7 +51,7 @@ func hufuCodingWorkflowFixture(t *testing.T) (*dagScheduler, []*TodoItem) {
 		taskResultCache: make(map[string][]cachedTaskEntry),
 		maxConcurrent:   1,
 	}
-	classes := []TaskFailureClass{FailureVerify}
+	classes := []TaskFailureClass{FailureVerify, FailureSemanticRejection}
 	tasks := []TaskDef{
 		{Agent: "sa"},
 		{Agent: "coder", DependsOn: []int{0}},
@@ -94,7 +94,11 @@ func hufuCodingAdvance(t *testing.T, ctx context.Context, s *dagScheduler, items
 	if taskErr != nil {
 		s.coord.taskTracker.TodoList().UpdateStatus(items[idx].ID, TaskInProgress, "running")
 		s.coord.taskTracker.TodoList().UpdateStatus(items[idx].ID, TaskError, "terminal failure")
-		items[idx].FailureEvent = &FailureEventPayload{FailureClass: class}
+		// retryDispositionForTerminalTestClass (dag_scheduler_failure_class_test.go)
+		// mirrors what disposition.go's real DecideRecovery would have
+		// persisted alongside this class for a budget-exhausted attempt —
+		// selfHealEligible reads the disposition, not the class.
+		items[idx].FailureEvent = &FailureEventPayload{FailureClass: class, RetryDisposition: retryDispositionForTerminalTestClass(class)}
 	}
 	s.handleEvent(ctx, agentTaskResult{idx: idx, agentName: s.tasks[idx].Agent, todoID: items[idx].ID, err: taskErr})
 	select {
@@ -180,13 +184,15 @@ func TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream(t *te
 // TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream
 // is the full-DAG counterpart to
 // TestHufuCodingGenuineFailedReportAuthorizesReset
-// (hufu_coding_classification_test.go): it drives the exact class real
-// production produces for hufu-coding's verifier.md (status:failed ->
+// (hufu_coding_classification_test.go): it drives the exact raw class real
+// production persists for hufu-coding's verifier.md (status:failed ->
 // FailureClass=execution via coordinator_task_run.go's
 // withFailureClassOverride, since team.yaml ships no verify-spec — see
 // TestHufuCodingNoVerifySpecOnSemanticRoles), not the FailureVerify class the
-// sibling test above uses. The reset must still fire, via
-// isGenuineWorkerReportedFailure rather than the class allowlist.
+// sibling test above uses directly. The reset must still fire, because
+// dagScheduler.effectiveFailureClassForTodo canonicalizes this genuine
+// self-report to FailureSemanticRejection — which team.yaml's
+// on-failure-classes names explicitly — before checking the allowlist.
 func TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream(t *testing.T) {
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -204,8 +210,8 @@ func TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream(t
 		t.Fatalf("expected the whole downstream wave reset to Pending, got states=%v", s.states)
 	}
 	rc := items[1].RemediationContext
-	if rc == nil || rc.SourceTaskID != items[2].ID || rc.SourceAgent != "verifier" || rc.FailureClass != FailureExecution {
-		t.Fatalf("coder did not receive verifier's remediation evidence: %+v", rc)
+	if rc == nil || rc.SourceTaskID != items[2].ID || rc.SourceAgent != "verifier" || rc.FailureClass != FailureSemanticRejection {
+		t.Fatalf("coder did not receive verifier's remediation evidence with the canonicalized class: %+v", rc)
 	}
 	if len(rc.Findings) != 1 || rc.Findings[0].Summary != "go test ./... failed" {
 		t.Fatalf("remediation evidence missing verifier's finding: %+v", rc.Findings)
@@ -391,4 +397,30 @@ func TestHufuCodingWorkflowFinalSAInfraFailureDoesNotResetCoder(t *testing.T) {
 		t.Fatalf("expected final-sa itself to be retried in place, states[4]=%s", s.states[4])
 	}
 	cancel()
+}
+
+// TestHufuCodingWorkflowSAFailureNeverLetsCoderStart is the direct
+// regression for a prior review finding (SA could report
+// completed_with_gaps for a blocking requirement ambiguity, and since that
+// status reaches TaskDone, the coder could start against an unconfirmed
+// contract). SA has no on_failure edge of its own — nothing resets into it,
+// and it resets nothing else — so the *only* mechanism protecting the coder
+// is the ordinary DAG dependency gate: coder (depends_on: [0]) cannot become
+// ready until SA reaches TaskDone. sa.md now never uses completed_with_gaps
+// (partial/blocked for a genuine ambiguity instead), so this failure path is
+// what actually happens for a request SA could not confidently confirm; the
+// coder must simply never launch.
+func TestHufuCodingWorkflowSAFailureNeverLetsCoderStart(t *testing.T) {
+	s, items := hufuCodingWorkflowFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.inProgress = 1
+	hufuCodingAdvance(t, ctx, s, items, 0, errors.New("requirement is ambiguous"), FailureExecution)
+
+	if s.states[0] != TaskError {
+		t.Fatalf("expected SA to remain in its terminal state, got %s", s.states[0])
+	}
+	if s.states[1] != TaskPending {
+		t.Fatalf("expected the coder to never become ready while SA has not reached TaskDone, got %s", s.states[1])
+	}
 }

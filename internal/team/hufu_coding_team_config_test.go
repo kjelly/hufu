@@ -174,8 +174,8 @@ func TestHufuCodingOnFailureClassesFreezeSemanticRejectionOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("hufu-coding has no static task contract for %q", name)
 		}
-		if len(task.OnFailureClasses) != 1 || task.OnFailureClasses[0] != FailureVerify {
-			t.Fatalf("%s.on-failure-classes = %v, want [verification] so only a genuine semantic rejection resets the coder", name, task.OnFailureClasses)
+		if len(task.OnFailureClasses) != 2 || task.OnFailureClasses[0] != FailureVerify || task.OnFailureClasses[1] != FailureSemanticRejection {
+			t.Fatalf("%s.on-failure-classes = %v, want [verification, semantic_rejection] so only a genuine semantic rejection resets the coder", name, task.OnFailureClasses)
 		}
 	}
 	coder, ok := byAgent["coder"]
@@ -241,8 +241,8 @@ func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) 
 		t.Fatalf("want 5 durable Todo occurrences admitted, got %d", len(items))
 	}
 	for _, idx := range []int{2, 3, 4} {
-		if len(items[idx].OnFailureClasses) != 1 || items[idx].OnFailureClasses[0] != FailureVerify {
-			t.Fatalf("items[%d] (%s) OnFailureClasses = %v, want [verification] bound from the static contract", idx, items[idx].Agent, items[idx].OnFailureClasses)
+		if len(items[idx].OnFailureClasses) != 2 || items[idx].OnFailureClasses[0] != FailureVerify || items[idx].OnFailureClasses[1] != FailureSemanticRejection {
+			t.Fatalf("items[%d] (%s) OnFailureClasses = %v, want [verification, semantic_rejection] bound from the static contract", idx, items[idx].Agent, items[idx].OnFailureClasses)
 		}
 	}
 }

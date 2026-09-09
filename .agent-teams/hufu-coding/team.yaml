@@ -52,15 +52,25 @@ acceptance:
 # final-sa report their verdict directly via `status`: `success` for a clean
 # pass, `failed` for a confirmed rejection (see each agent's own .md for the
 # exact contract), `blocked`/`partial` for an evidence gap or infra problem
-# they could not resolve themselves. `on-failure-classes: [verification]`
-# below is defense-in-depth for a future VerifyCommandExit-style check;
-# the actual gate for a genuine `status: failed` self-report is a small,
-# generic runtime rule in dagScheduler.handleEvent (dag_scheduler.go) that
-# authorizes the reset for any confirmed worker-submitted failure regardless
-# of TaskFailureClass, since Hufu's own non-terminal-status handling
-# (coordinator_task_run.go) always reports "worker submitted a non-success
-# status" as TaskFailureClass=execution — the same class an infra failure
-# gets — and a fixed class alone cannot tell the two apart.
+# they could not resolve themselves.
+#
+# `on-failure-classes: [verification, semantic_rejection]` below names two
+# distinct things: `verification` is defense-in-depth for a future
+# VerifyCommandExit-style check that might genuinely produce that raw class;
+# `semantic_rejection` is what a genuine `status: failed` self-report is
+# actually canonicalized to. Hufu's own generic non-terminal-status handling
+# (coordinator_task_run.go) persists any non-success status uniformly as
+# TaskFailureClass=execution — the same raw class an infra failure gets, so
+# the raw class alone can never authorize this edge. Instead,
+# dagScheduler.handleEvent (dag_scheduler.go, effectiveFailureClassForTodo)
+# canonicalizes a complete, honest worker self-report of failure to
+# `semantic_rejection` *before* checking it against this allowlist, so "the
+# worker said failed" is subject to the exact same allowlist check as any
+# other class — never a separate bypass condition alongside it. Naming
+# `semantic_rejection` here is what actually authorizes the reset; omitting
+# it would make every genuine `status: failed` report fail closed instead
+# (see dag_scheduler.go's selfHealEligibleFailureClass) rather than silently
+# ignored.
 tasks:
   - agent: sa
     when-goal-contains: "SA_ANALYZE"
@@ -84,7 +94,7 @@ tasks:
     side_effect: none
     recovery: retry
     max_retries: 4
-    on-failure-classes: [verification]
+    on-failure-classes: [verification, semantic_rejection]
     execution:
       requires-result: true
       requires-grounded-result: true
@@ -94,7 +104,7 @@ tasks:
     side_effect: none
     recovery: retry
     max_retries: 4
-    on-failure-classes: [verification]
+    on-failure-classes: [verification, semantic_rejection]
     execution:
       requires-result: true
       requires-grounded-result: true
@@ -104,7 +114,7 @@ tasks:
     side_effect: none
     recovery: retry
     max_retries: 2
-    on-failure-classes: [verification]
+    on-failure-classes: [verification, semantic_rejection]
     execution:
       requires-result: true
       requires-grounded-result: true

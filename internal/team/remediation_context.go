@@ -96,8 +96,14 @@ func buildRemediationContext(sourceTaskID string, source *TodoItem) *Remediation
 		SourceAgent:   source.Agent,
 		SourceAttempt: source.Retries + 1,
 	}
+	// The canonicalized class (effectiveFailureClassForTodo,
+	// dag_scheduler.go), not the raw persisted one: a genuine worker
+	// self-report of failure is FailureSemanticRejection here regardless of
+	// what generic non-terminal-status handling classified it as, so the
+	// coder reads a meaningful reason rather than a misleadingly generic
+	// "execution" for what was actually a confirmed rejection.
+	rc.FailureClass = effectiveFailureClassForTodo(source)
 	if source.FailureEvent != nil {
-		rc.FailureClass = source.FailureEvent.FailureClass
 		rc.Summary = source.FailureEvent.Summary
 	}
 	if source.TypedResult != nil {

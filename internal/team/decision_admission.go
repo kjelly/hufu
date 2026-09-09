@@ -129,6 +129,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		ContractID, ContractHash                                             string
 		ContractRevision                                                     int
 		MaxRetries                                                           int
+		OnFailureClasses                                                     []TaskFailureClass
 		Verify, VerifyMode                                                   string
 		VerifySpec                                                           *VerificationSpec
 		SideEffect                                                           SideEffectClass
@@ -159,7 +160,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
 		ParentID: task.ParentID, OnFailure: task.OnFailure, DependsOn: task.DependsOn,
 		Action: task.Action, ContractID: task.ContractID, ContractHash: task.ContractHash, ContractRevision: task.ContractRevision,
-		MaxRetries: task.MaxRetries, Verify: task.Verify, VerifyMode: task.VerifyMode, VerifySpec: task.VerifySpec, SideEffect: sideEffect, Escalate: task.Escalate, AdversarialVerify: task.AdversarialVerify, Recovery: task.Recovery,
+		MaxRetries: task.MaxRetries, OnFailureClasses: task.OnFailureClasses, Verify: task.Verify, VerifyMode: task.VerifyMode, VerifySpec: task.VerifySpec, SideEffect: sideEffect, Escalate: task.Escalate, AdversarialVerify: task.AdversarialVerify, Recovery: task.Recovery,
 		ReconcileTool: task.ReconcileTool, Execution: cloneExecutionContract(task.Execution), Optional: task.Optional, ResourceClaims: task.ResourceClaims, Resources: task.Resources, WorksetBinding: task.WorksetBinding, WorksetReceipt: task.WorksetReceipt, Kind: task.Kind, Advances: task.Advances, ExpectedStateChange: task.ExpectedStateChange,
 		RecoveryHypothesis: task.RecoveryHypothesis,
 		Profile:            task.DecisionProfile, Options: task.DecisionOptions, Assumptions: task.DecisionAssumptions, Facts: task.DecisionFacts,

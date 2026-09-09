@@ -30,6 +30,22 @@ Hufu's DAG scheduler (`internal/team/dag_scheduler.go`) owns everything past
 that point: readiness, concurrency, retry, and the bounded coder-remediation
 loop.
 
+## SA never lets the coder start on an unconfirmed contract
+
+The coder depends on SA (`depends_on: [0]`), and Hufu's own DAG readiness
+rule requires every dependency to reach `TaskDone` before a task becomes
+ready — SA has no `on_failure` edge of its own (nothing resets into it, and
+it resets nothing else), so this dependency gate is the *only* mechanism
+that matters for it, and it already does the right thing with no further
+runtime change: SA reports `status: success` only when its implementation
+contract is actionable, `status: partial` for a genuine blocking ambiguity,
+`status: blocked` for a missing input/environment/human decision — never
+`completed_with_gaps` (sa.md is explicit: for this task a "gap" is never one
+safe to hand to the coder). A `partial`/`blocked` SA never reaches
+`TaskDone`, so the coder simply never becomes ready; the run correctly ends
+up blocked/partial instead of the coder implementing against a contract SA
+itself was not confident in.
+
 ## How a semantic rejection reaches the coder
 
 Verifier/reviewer/final-sa each submit an honest `status` for their own task —
@@ -65,24 +81,31 @@ settling on the `status`-based approach documented here).
 Instead: `status: failed` is a fully valid, *admission-accepted* submission
 (only `success`/`completed_with_gaps` are ever gated by a verify-spec at
 all), and Hufu's own generic non-terminal-status handling
-(`coordinator_task_run.go`'s `withFailureClassOverride`) always classifies it
-`TaskFailureClass = execution` — the exact same class an app-server crash or
-network timeout gets, since from Hufu's point of view both are simply "the
-worker did not reach a done state." A fixed class alone cannot tell a
-confirmed rejection apart from an infra failure, so `dagScheduler.handleEvent`
-(`internal/team/dag_scheduler.go`, `isGenuineWorkerReportedFailure`) also
-checks whether the terminal `TypedResult` is a genuine, complete
-worker-authored submission with `status: failed` — if so, the on_failure edge
-is authorized regardless of the raw failure class; if the task instead has no
-stored result at all (a real protocol/infra abort) or reported
-`blocked`/`partial`, it is not. Each of the three tasks' contract still sets
-`on-failure-classes: [verification]` — a new, generic, backward-compatible
-field on `TaskDef` (`internal/team/coordinator.go`) — as defense-in-depth for
-a future `VerifyCommandExit`-style check that might genuinely produce that
-class; it does no active work for the `status: failed` path today. This is
-what makes "reviewer's app-server disconnected" and "reviewer couldn't read a
-cited file" both behave completely differently from "reviewer found a real
-bug," even though all three start as a task error.
+(`coordinator_task_run.go`'s `withFailureClassOverride`) always persists its
+raw `TaskFailureClass` as `execution` — the exact same raw class an
+app-server crash or network timeout gets, since from Hufu's point of view
+both are simply "the worker did not reach a done state." A raw class alone
+cannot tell a confirmed rejection apart from an infra failure, so
+`dagScheduler.handleEvent` (`internal/team/dag_scheduler.go`) canonicalizes
+the class it actually checks against the allowlist
+(`effectiveFailureClassForTodo`): if the terminal `TypedResult` is a genuine,
+complete worker-authored submission with `status: failed`
+(`isGenuineWorkerReportedFailure`), the class it evaluates is
+`TaskFailureClass = semantic_rejection`, a value Hufu itself assigns and
+that is never bypassed by a separate OR-condition — the allowlist is one
+single, uniform check against this canonicalized class. If the task instead
+has no stored result at all (a real protocol/infra abort) or reported
+`blocked`/`partial`, the raw class (`execution`, unchanged) is what gets
+checked, and `on-failure-classes` correctly does not name it. Each of the
+three tasks' contract sets `on-failure-classes: [verification,
+semantic_rejection]` — `verification` is defense-in-depth for a future
+`VerifyCommandExit`-style check that might genuinely produce that raw class;
+`semantic_rejection` is what actually authorizes today's `status: failed`
+path — omitting it here would make every genuine confirmed rejection fail
+closed instead of resetting the coder. This is what makes "reviewer's
+app-server disconnected" and "reviewer couldn't read a cited file" both
+behave completely differently from "reviewer found a real bug," even though
+all three start as a task error.
 
 A non-authorized class is not automatically retried in place, either.
 `dagScheduler`'s gate (`selfHealEligibleFailureClass`) only self-heals

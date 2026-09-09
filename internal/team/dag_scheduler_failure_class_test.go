@@ -64,11 +64,30 @@ func dagSchedulerOnFailureClassesFixture(t *testing.T, onFailureClasses []TaskFa
 	// it from the bare error text. Match that here: seed the terminal status
 	// first, then the FailureEvent, so the pre-seeded class survives.
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskError, "terminal failure")
-	items[1].FailureEvent = &FailureEventPayload{FailureClass: terminalClass}
+	items[1].FailureEvent = &FailureEventPayload{FailureClass: terminalClass, RetryDisposition: retryDispositionForTerminalTestClass(terminalClass)}
 
 	s := newDAGScheduler(coord, tasks, items, nil)
 	s.states[0], s.states[1], s.inProgress = TaskDone, TaskInProgress, 1
 	return s, items
+}
+
+// retryDispositionForTerminalTestClass mirrors, for a terminal (budget-
+// exhausted) attempt, what disposition.go's real DecideRecovery would have
+// persisted alongside this FailureClass — production always persists both
+// together (PersistFailureWithClass*), and selfHealEligible reads the
+// disposition, not the class, so a fixture that only sets FailureClass
+// would silently exercise a combination production can never produce.
+func retryDispositionForTerminalTestClass(class TaskFailureClass) RetryDisposition {
+	switch class {
+	case FailureExecution, FailureTimeout, FailureVerify, FailureCancelled:
+		return RetryNone
+	case FailureProtocol:
+		return ReconcileOnly
+	case FailureContract, FailureEnvironment, FailurePolicy:
+		return ReplanRequired
+	default:
+		return ""
+	}
 }
 
 // drainRelaunchedTask waits for the goroutine that launchReady starts (as a
@@ -112,6 +131,36 @@ func TestDAGSchedulerOnFailureClassesSuppressesNonSemanticReset(t *testing.T) {
 		t.Fatalf("expected the in-place self-heal retry to consume the task's own retry budget, got retries=%v", s.retries)
 	}
 	drainRelaunchedTask(t, s)
+}
+
+// TestDAGSchedulerGenuineFailedReportRequiresSemanticRejectionInAllowlist is
+// the direct regression for a prior review finding: a genuine, complete
+// worker self-report of failure (isGenuineWorkerReportedFailure) must not
+// silently bypass an OnFailureClasses allowlist that does not name
+// FailureSemanticRejection. Before effectiveFailureClassForTodo existed, the
+// gate was `!failureClassAllowed(class, classes) &&
+// !isGenuineWorkerReportedFailure(item)` — an OR-condition that authorized
+// the reset regardless of what the allowlist said. Now the genuine report is
+// canonicalized to FailureSemanticRejection *before* the allowlist check, so
+// an allowlist that only names FailureVerify (as this test's does) must
+// still fail closed for it.
+func TestDAGSchedulerGenuineFailedReportRequiresSemanticRejectionInAllowlist(t *testing.T) {
+	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureExecution)
+	items[1].TypedResult = &TaskResult{Status: TaskResultStatusFailed, Source: "submitted", Summary: "confirmed a real defect"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s.handleEvent(ctx, agentTaskResult{idx: 1, agentName: "verifier", todoID: items[1].ID, err: errors.New("required check failed")})
+
+	if s.states[0] != TaskDone {
+		t.Fatalf("a genuine status:failed report must not reset the coder ancestor when the allowlist does not name semantic_rejection: states=%v", s.states)
+	}
+	if s.states[1] != TaskError {
+		t.Fatalf("expected the verifier to be left in its terminal state (fail closed), got %s", s.states[1])
+	}
+	if s.retries[1] != 0 {
+		t.Fatalf("expected no retry to be consumed, got retries=%v", s.retries)
+	}
 }
 
 // TestDAGSchedulerOnFailureClassesFailsClosedForStructuralFailure is the
