@@ -95,6 +95,18 @@ func TestDispatchStatusEventShowsTaskTimeout(t *testing.T) {
 	}
 }
 
+func TestDispatchStatusEventShowsCodexActivity(t *testing.T) {
+	w := &testStatusWriter{}
+	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{
+		Type: "codex_activity", Agent: "coder", Model: "codex/gpt-5.6-luna", Message: "Codex is still working (10s elapsed)",
+	})
+
+	out := w.b.String()
+	if !strings.Contains(out, "coder") || !strings.Contains(out, "Codex is still working") {
+		t.Fatalf("expected Codex activity in output, got: %q", out)
+	}
+}
+
 func TestWrapPreviewLinesWideEnough(t *testing.T) {
 	got := wrapPreviewLines("go run ./cmd/tool inspect --name host-a -- cat /etc/ssh/sshd_config", 120, 4)
 	if len(got) != 1 {

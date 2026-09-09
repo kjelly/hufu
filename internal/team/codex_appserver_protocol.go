@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // This file builds Codex's specific thread/turn vocabulary on top of the
@@ -29,13 +33,12 @@ const (
 	codexMethodTurnInterrupt = "turn/interrupt"
 
 	// codexNotificationTurnCompleted is the one notification the driver
-	// requires for correctness; every other notification is advisory
-	// telemetry only (§13.3) — confirmed live: a real session emits a large,
-	// evolving stream of advisory notifications (mcpServer/startupStatus,
-	// account/rateLimits, thread/status/changed, item/started|completed,
-	// ...) that the driver correctly ignores by construction (it only
-	// matches on this one method name).
+	// requires for correctness. Other notifications are advisory telemetry;
+	// the driver must tolerate them, but selected high-signal events are
+	// surfaced to Hufu's status reporter so a quiet coding turn remains
+	// observable.
 	codexNotificationTurnCompleted = "turn/completed"
+	codexTurnHeartbeatInterval     = 10 * time.Second
 )
 
 const (
@@ -240,6 +243,34 @@ type codexTurnStartParams struct {
 	ThreadID     string           `json:"threadId"`
 	Input        []codexUserInput `json:"input"`
 	OutputSchema json.RawMessage  `json:"outputSchema"`
+	Effort       string           `json:"effort,omitempty"`
+}
+
+type codexTurnOptions struct {
+	ReasoningEffort string
+	OnTurnStarted   func(turnID string)
+	OnActivity      func(codexTurnActivity)
+}
+
+// codexTurnActivity is intentionally a safe summary rather than a raw JSON-
+// RPC payload. App-server notifications may contain command arguments,
+// prompts, or other sensitive workspace/provider data.
+type codexTurnActivity struct {
+	Method    string
+	Message   string
+	Elapsed   time.Duration
+	Heartbeat bool
+}
+
+func normalizeCodexReasoningEffort(raw string) (string, error) {
+	effort := strings.ToLower(strings.TrimSpace(raw))
+	if effort == "" {
+		return "", nil
+	}
+	if !agent.ValidReasoningEfforts[effort] {
+		return "", fmt.Errorf("unsupported Codex reasoning effort %q (want high, medium, low, or none)", raw)
+	}
+	return effort, nil
 }
 
 type codexTurnRef struct {
@@ -344,27 +375,35 @@ type CodexTurnResult struct {
 // itself reports as failed, becomes a CodexProtocolIncompleteError, never a
 // fabricated success.
 //
-// onTurnStarted, if non-nil, is invoked with the turn id as soon as
-// turn/start's synchronous ack arrives — before this function blocks
-// waiting for completion — so a concurrent caller (RunAttempt's
-// cancellation path) can learn the id in time to send a targeted
-// turn/interrupt.
-func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt string, onTurnStarted func(turnID string)) (CodexTurnResult, error) {
+// options.OnTurnStarted, if non-nil, is invoked with the turn id as soon as
+// turn/start's synchronous ack arrives — before this function blocks waiting
+// for completion — so a concurrent caller (RunAttempt's cancellation path)
+// can learn the id in time to send a targeted turn/interrupt.
+func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt string, options codexTurnOptions) (CodexTurnResult, error) {
+	effort, err := normalizeCodexReasoningEffort(options.ReasoningEffort)
+	if err != nil {
+		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
+	}
 	schema, err := json.Marshal(codexWorkerResultProposalSchema())
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: marshal output schema: %w", err)
 	}
 	var startResult codexTurnStartResult
-	params := codexTurnStartParams{ThreadID: threadID, Input: []codexUserInput{{Type: "text", Text: prompt}}, OutputSchema: schema}
+	params := codexTurnStartParams{
+		ThreadID:     threadID,
+		Input:        []codexUserInput{{Type: "text", Text: prompt}},
+		OutputSchema: schema,
+		Effort:       effort,
+	}
 	if err := client.Call(ctx, codexMethodTurnStart, params, &startResult); err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
 	}
 	turnID := startResult.Turn.ID
-	if onTurnStarted != nil {
-		onTurnStarted(turnID)
+	if options.OnTurnStarted != nil {
+		options.OnTurnStarted(turnID)
 	}
 
-	completed, err := waitForCodexTurnCompleted(ctx, client, threadID, turnID)
+	completed, err := waitForCodexTurnCompleted(ctx, client, threadID, turnID, options.OnActivity)
 	if err != nil {
 		return CodexTurnResult{TurnID: turnID}, err
 	}
@@ -391,26 +430,44 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 }
 
 // waitForCodexTurnCompleted blocks on the notification stream until the
-// terminal turn/completed notification arrives, discarding every other
-// notification along the way (§13.3: "MUST NOT require every non-terminal
-// notification for correctness"). Since v1 runs exactly one app-server
-// process per attempt (§13.1) with exactly one active turn, a
-// turn/completed notification that omits a turn id is unambiguous; one that
-// includes it is still checked for an exact match as a defensive measure.
-func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, threadID, turnID string) (codexTurn, error) {
+// terminal turn/completed notification arrives. Non-terminal notifications
+// remain advisory (§13.3: "MUST NOT require every non-terminal notification
+// for correctness"), but selected safe summaries and periodic heartbeats are
+// forwarded to onActivity. Since v1 runs exactly one app-server process per
+// attempt (§13.1) with exactly one active turn, a turn/completed notification
+// that omits a turn id is unambiguous; one that includes it is still checked
+// for an exact match as a defensive measure.
+func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, threadID, turnID string, onActivity func(codexTurnActivity)) (codexTurn, error) {
+	start := time.Now()
+	var heartbeat <-chan time.Time
+	if onActivity != nil {
+		heartbeat = time.Tick(codexTurnHeartbeatInterval)
+	}
 	for {
 		select {
 		case notif := <-client.Notifications():
-			if notif.Method != codexNotificationTurnCompleted {
+			if notif.Method == codexNotificationTurnCompleted {
+				var params codexTurnCompletedParams
+				if err := json.Unmarshal(notif.Params, &params); err != nil {
+					continue
+				}
+				if params.Turn.ID == "" || turnID == "" || params.Turn.ID == turnID {
+					return params.Turn, nil
+				}
 				continue
 			}
-			var params codexTurnCompletedParams
-			if err := json.Unmarshal(notif.Params, &params); err != nil {
-				continue
+			if activity, ok := codexActivityForNotification(notif); ok && onActivity != nil {
+				activity.Elapsed = time.Since(start)
+				onActivity(activity)
 			}
-			if params.Turn.ID == "" || turnID == "" || params.Turn.ID == turnID {
-				return params.Turn, nil
-			}
+		case <-heartbeat:
+			elapsed := time.Since(start)
+			onActivity(codexTurnActivity{
+				Method:    "heartbeat",
+				Message:   fmt.Sprintf("Codex is still working (%s elapsed)", elapsed.Round(time.Second)),
+				Elapsed:   elapsed,
+				Heartbeat: true,
+			})
 		case <-client.Done():
 			err := client.Err()
 			if err == nil {
@@ -420,5 +477,43 @@ func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, thre
 		case <-ctx.Done():
 			return codexTurn{}, ctx.Err()
 		}
+	}
+}
+
+func codexActivityForNotification(notif CodexNotification) (codexTurnActivity, bool) {
+	message := ""
+	switch notif.Method {
+	case "turn/started":
+		message = "Codex turn started"
+	case "thread/status/changed":
+		message = "Codex status changed"
+	case "turn/plan/updated":
+		message = "Codex plan updated"
+	case "item/started":
+		message = "Codex item started (" + codexNotificationItemType(notif.Params) + ")"
+	case "item/completed":
+		message = "Codex item completed (" + codexNotificationItemType(notif.Params) + ")"
+	case "error", "turn/failed":
+		message = "Codex reported an app-server error"
+	default:
+		return codexTurnActivity{}, false
+	}
+	return codexTurnActivity{Method: notif.Method, Message: message}, true
+}
+
+func codexNotificationItemType(raw json.RawMessage) string {
+	var payload struct {
+		Item struct {
+			Type string `json:"type"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "item"
+	}
+	switch payload.Item.Type {
+	case "agentMessage", "commandExecution", "fileChange", "mcpToolCall", "reasoning", "webSearch":
+		return payload.Item.Type
+	default:
+		return "item"
 	}
 }

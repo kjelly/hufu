@@ -82,7 +82,7 @@ func TestCodexNewThreadPersistsBindingBeforeTurn(t *testing.T) {
 			t.Fatalf("persisted bindings = %#v, want exactly one for thread-1", persisted)
 		}
 
-		turnResult, err := codexRunTurn(context.Background(), server.Client, effective.ThreadID, "do the work", nil)
+		turnResult, err := codexRunTurn(context.Background(), server.Client, effective.ThreadID, "do the work", codexTurnOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

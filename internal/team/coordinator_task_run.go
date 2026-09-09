@@ -1076,6 +1076,7 @@ retryLoop:
 							Task:            task,
 							Prompt:          currentPrompt,
 							ModelID:         target.Model,
+							ReasoningEffort: c.effectiveReasoningEffort(agentDef),
 							MaxSteps:        stepBudget,
 							Tools:           resolvedTools,
 							History:         conversationHistory,

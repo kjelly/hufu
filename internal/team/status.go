@@ -18,7 +18,7 @@ import (
 var ErrTasksUnresolved = errors.New("tasks unresolved")
 
 type StatusEvent struct {
-	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout", "model_profile_resolved"
+	Type       string // "start", "step", "tool_call", "tool_result", "codex_activity", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout", "model_profile_resolved"
 	TeamName   string
 	Agent      string
 	Message    string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -70,7 +71,7 @@ func runCodexTurnWithFinalOutput(t *testing.T, finalOutput string, extraNotifica
 		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-1"}}), Notifications: notifications},
 	})
 	defer server.Client.Close()
-	return codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", nil)
+	return codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", codexTurnOptions{})
 }
 
 // TestCodexMissingProposalIsProtocolIncomplete proves a turn that completes
@@ -123,5 +124,36 @@ func TestCodexTerminalReadWinsOverDroppedActivityNotification(t *testing.T) {
 	}
 	if result.Proposal == nil || result.Proposal.Status != TaskResultStatusSuccess {
 		t.Fatalf("result.Proposal = %#v, want a successful decoded proposal despite the dropped/noisy activity notifications", result.Proposal)
+	}
+}
+
+func TestCodexActivitySummaryIsSafeAndUseful(t *testing.T) {
+	activity, ok := codexActivityForNotification(CodexNotification{
+		Method: "item/started",
+		Params: rawJSON(t, map[string]any{
+			"item": map[string]any{"type": "commandExecution", "command": "secret command"},
+		}),
+	})
+	if !ok {
+		t.Fatal("expected item/started to produce an activity summary")
+	}
+	if activity.Message != "Codex item started (commandExecution)" {
+		t.Fatalf("activity message = %q, want a safe commandExecution summary", activity.Message)
+	}
+	if strings.Contains(activity.Message, "secret command") {
+		t.Fatalf("activity message exposed command contents: %q", activity.Message)
+	}
+}
+
+func TestCodexTurnRejectsUnsupportedReasoningEffortBeforeRPC(t *testing.T) {
+	server := startFakeCodexServer(t, nil)
+	defer server.Client.Close()
+
+	_, err := codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", codexTurnOptions{ReasoningEffort: "maximum"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported Codex reasoning effort") {
+		t.Fatalf("err = %v, want unsupported-effort validation error", err)
+	}
+	if calls := server.CallLog(t); len(calls) != 0 {
+		t.Fatalf("RPC calls = %v, want none for invalid effort", calls)
 	}
 }

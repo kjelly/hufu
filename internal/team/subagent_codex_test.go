@@ -206,6 +206,32 @@ func TestCodexProviderResultBecomesCanonical(t *testing.T) {
 	}
 }
 
+func TestCodexProviderForwardsReasoningEffortToTurnStart(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	_, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-effort", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-effort", validProposalJSON("")),
+	})
+
+	request := codexAttemptRequest(item, "do the work")
+	request.ReasoningEffort = "HIGH"
+	if _, err := provider.RunAttempt(context.Background(), request); err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+
+	call := findRawCall(t, readRawCalls(t, rawLogPath), codexMethodTurnStart)
+	var params struct {
+		Effort string `json:"effort"`
+	}
+	if err := json.Unmarshal(call["params"], &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Effort != "high" {
+		t.Fatalf("turn/start effort = %q, want %q", params.Effort, "high")
+	}
+}
+
 // TestCodexCancellationPreservesBindingAndTranscript proves §16.1/§16.3: when
 // the caller's context is cancelled mid-turn, RunAttempt returns promptly
 // with a classified error, but the already-persisted durable session

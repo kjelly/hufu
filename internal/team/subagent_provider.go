@@ -25,10 +25,15 @@ type AttemptRequest struct {
 	Task                    TaskDef
 	Prompt                  string
 	ModelID                 string
-	MaxSteps                int
-	Timeout                 time.Duration
-	Tools                   ResolvedWorkerTools
-	History                 []fantasy.Message
+	// ReasoningEffort is the effective per-attempt thinking budget selected
+	// from the agent definition or team configuration. External providers own
+	// the wire translation; keeping it on the immutable attempt request makes
+	// sure retries and resumed attempts use the same execution contract.
+	ReasoningEffort string
+	MaxSteps        int
+	Timeout         time.Duration
+	Tools           ResolvedWorkerTools
+	History         []fantasy.Message
 	// ExecutionTarget and BackendBinding are the canonical immutable target
 	// and mutable session evidence consumed by ExecutionBackend. They are the
 	// only execution identity fields the scheduler populates.
@@ -170,4 +175,26 @@ type SubagentProvider interface {
 	AttemptRunner
 	Name() string
 	Capabilities() SubagentCapabilities
+}
+
+// effectiveReasoningEffort mirrors CreateAgent's agent-first/team-fallback
+// precedence without coupling external providers to Fantasy's option types.
+// The returned value is normalized for provider-specific validation; an empty
+// value means that the provider should use its own default.
+func effectiveReasoningEffort(def *agent.AgentDef, cfg *agent.TeamConfig) string {
+	raw := ""
+	if def != nil {
+		raw = def.Generation.ReasoningEffort
+	}
+	if strings.TrimSpace(raw) == "" && cfg != nil {
+		raw = cfg.Generation.ReasoningEffort
+	}
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func (c *Coordinator) effectiveReasoningEffort(def *agent.AgentDef) string {
+	if c == nil || c.session == nil {
+		return effectiveReasoningEffort(def, nil)
+	}
+	return effectiveReasoningEffort(def, &c.session.Config)
 }

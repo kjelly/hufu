@@ -340,6 +340,11 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("codex attempt requires a coordinator")
 	}
+	normalizedReasoningEffort, err := normalizeCodexReasoningEffort(request.ReasoningEffort)
+	if err != nil {
+		return AttemptResult{}, codexFail(CodexFailureProtocolError, err)
+	}
+	request.ReasoningEffort = normalizedReasoningEffort
 	// §25: preflight failure MUST occur before the task enters provider
 	// execution — this runs (or reuses a cached result) before any process,
 	// workspace, or protocol activity below.
@@ -448,18 +453,49 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	// is active" shorthand) from the turn goroutine to the cancellation
 	// branch below, which runs concurrently with it.
 	turnIDCh := make(chan string, 1)
+	reportCodexActivity := func(activity codexTurnActivity) {
+		transcript.record("turn activity method=%s message=%s elapsed=%s heartbeat=%t", activity.Method, activity.Message, activity.Elapsed.Round(time.Millisecond), activity.Heartbeat)
+		if p.coordinator == nil {
+			return
+		}
+		agentName := ""
+		if request.Agent != nil {
+			agentName = request.Agent.Name
+		}
+		p.coordinator.report(StatusEvent{
+			Type:    "codex_activity",
+			Agent:   agentName,
+			Message: activity.Message,
+			Model:   request.ModelID,
+			TodoID:  request.TaskID,
+			Data: map[string]any{
+				"codex_method": activity.Method,
+				"elapsed_ms":   activity.Elapsed.Milliseconds(),
+				"heartbeat":    activity.Heartbeat,
+			},
+		})
+	}
 	onTurnStarted := func(id string) {
 		select {
 		case turnIDCh <- id:
 		default:
 		}
+		message := "Codex turn accepted"
+		if request.ReasoningEffort != "" {
+			message += " (reasoning effort: " + request.ReasoningEffort + ")"
+		}
+		reportCodexActivity(codexTurnActivity{Method: codexMethodTurnStart, Message: message})
 	}
 	turnDone := make(chan struct{})
 	var turnResult CodexTurnResult
 	var turnErr error
 	go func() {
 		defer close(turnDone)
-		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, onTurnStarted)
+		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
+			ReasoningEffort: request.ReasoningEffort,
+			OnTurnStarted:   onTurnStarted,
+			OnActivity:      reportCodexActivity,
+		})
 	}()
 
 	select {
@@ -525,7 +561,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta}, codexFail(CodexFailureWorkspaceViolation, err))
 		}
 
-		canonical, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, startupTimeout, interruptGrace, shutdownGrace)
+		canonical, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
 		if repairErr != nil {
 			transcript.record("repair failed: %v", repairErr)
 			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID}, repairErr)
@@ -580,7 +616,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 func (p *CodexSubagentProvider) attemptResultRepair(
 	ctx context.Context, sup ProcessSupervisor, request AttemptRequest,
 	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta,
-	transcript *codexTranscript, startupTimeout, interruptGrace, shutdownGrace time.Duration,
+	transcript *codexTranscript, onActivity func(codexTurnActivity), startupTimeout, interruptGrace, shutdownGrace time.Duration,
 ) (canonical *TaskResult, turnID string, resultErr error) {
 	transcript.record("attempting result-only repair thread_id=%s", threadID)
 
@@ -615,7 +651,10 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 		return nil, "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
 	}
 
-	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, nil)
+	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, codexTurnOptions{
+		ReasoningEffort: request.ReasoningEffort,
+		OnActivity:      onActivity,
+	})
 	if turnErr != nil {
 		transcript.record("repair: turn failed: %v", turnErr)
 		return nil, turnResult.TurnID, p.classifyTurnError(turnErr)

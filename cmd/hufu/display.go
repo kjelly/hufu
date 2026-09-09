@@ -206,6 +206,13 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			stepStyle.Render(label),
 		))
 
+	case "codex_activity":
+		w.write(fmt.Sprintf("  %s %s %s\n",
+			stepStyle.Render("│"),
+			formatAgentLabel(event),
+			dimStyle.Render(event.Message),
+		))
+
 	case "verify_start":
 		w.write(fmt.Sprintf("  %s %s %s\n",
 			stepStyle.Render("│"),
@@ -1463,6 +1470,18 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			} else if event.Message != "" {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}
+
+		case "codex_activity":
+			if event.TodoID == "" {
+				return
+			}
+			line := dimStyle.Render("⟳ " + event.Message)
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: line, Model: event.Model})
+			label := agentStyle.Render(event.Agent)
+			if event.Model != "" {
+				label += " " + dimStyle.Render("["+event.Model+"]")
+			}
+			p.Send(tuipkg.StatusBarMsg{Text: label + "  " + dimStyle.Render(event.Message)})
 
 		case "tool_call":
 			if event.TodoID == "" {
