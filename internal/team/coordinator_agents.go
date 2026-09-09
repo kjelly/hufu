@@ -381,23 +381,34 @@ func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
 	if err == nil && agentDef != nil {
 		return c.resolveAgentModel(agentDef, "")
 	}
-	if c.session != nil && c.session.Config.WorkerModel != "" {
-		return c.session.Config.WorkerModel
+	if c != nil && c.session != nil {
+		if c.session.Config.WorkerModel != "" {
+			return c.session.Config.WorkerModel
+		}
+		return c.session.Config.Generation.Model
 	}
-	return c.session.Config.Generation.Model
+	return ""
 }
 
 func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel string) string {
 	if overrideModel != "" {
 		return overrideModel
 	}
-	if def.Generation.Model != "" {
+	if c != nil && c.session != nil && def != nil &&
+		(strings.EqualFold(def.Role, "coordinator") || strings.EqualFold(def.Role, "orchestrator")) &&
+		c.session.Config.CoordinatorModel != "" {
+		return c.session.Config.CoordinatorModel
+	}
+	if def != nil && def.Generation.Model != "" {
 		return def.Generation.Model
 	}
-	if c.session != nil && c.session.Config.WorkerModel != "" {
-		return c.session.Config.WorkerModel
+	if c != nil && c.session != nil {
+		if c.session.Config.WorkerModel != "" {
+			return c.session.Config.WorkerModel
+		}
+		return c.session.Config.Generation.Model
 	}
-	return c.session.Config.Generation.Model
+	return ""
 }
 
 // resolveAgentMaxOutputTokens returns the max-output-tokens Hufu will
