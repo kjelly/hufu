@@ -108,15 +108,23 @@ behave completely differently from "reviewer found a real bug," even though
 all three start as a task error.
 
 A non-authorized class is not automatically retried in place, either.
-`dagScheduler`'s gate (`selfHealEligibleFailureClass`) only self-heals
-execution/timeout/protocol (and verification, if a task's allowlist ever
-excludes it) — transient conditions worth one more attempt. Environment,
-contract, policy, and cancelled fail closed instead (no retry, no reset,
-left in whatever terminal state the task's own inner attempt loop already
-persisted), matching `disposition.go`'s own `DecideRecovery` semantics for
-these same classes: a missing tool, an invalid contract, a policy denial, or
-a cancellation is not fixed by trying again, and retrying here would grant a
-second, DAG-level retry cycle the inner loop already correctly refused.
+`dagScheduler`'s gate (`selfHealEligible`) reuses the task's own
+already-persisted `RetryDisposition` (`disposition.go`'s `DecideRecovery`)
+rather than re-deriving eligibility from `TaskFailureClass` in a second,
+independently-maintained mapping. `RetryDisposition == RetryNone` is
+necessary but not sufficient: DecideRecovery also returns `RetryNone` for a
+resolved recovery policy that is explicitly `never` (or, via the same
+`CanAutomaticallyReplay` check, `manual`/`reconcile`, or a structurally
+non-replayable side effect) *regardless of remaining retry budget* — so
+`selfHealEligible` additionally requires `CanAutomaticallyReplay` (the same
+authority `resetTask` itself already gates on) before treating a `RetryNone`
+as "budget exhausted on an otherwise-retryable class, safe for one more
+DAG-level attempt". Cancellation is excluded directly by `FailureClass`.
+Everything else `DecideRecovery` decided must not be replayed
+(`ReplanRequired`, `ReconcileOnly`, `NeedsHuman`) fails closed here too: a
+missing tool, an invalid contract, a policy denial, or a cancellation is not
+fixed by trying again, and retrying here would grant a second, DAG-level
+retry cycle the task's own inner attempt loop already correctly refused.
 
 When a semantic rejection does reset the coder, Hufu attaches a durable
 `RemediationContext` (`internal/team/remediation_context.go`) built from the

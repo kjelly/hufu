@@ -69,8 +69,7 @@ acceptance:
 # other class — never a separate bypass condition alongside it. Naming
 # `semantic_rejection` here is what actually authorizes the reset; omitting
 # it would make every genuine `status: failed` report fail closed instead
-# (see dag_scheduler.go's selfHealEligibleFailureClass) rather than silently
-# ignored.
+# (see dag_scheduler.go's selfHealEligible) rather than silently ignored.
 tasks:
   - agent: sa
     when-goal-contains: "SA_ANALYZE"

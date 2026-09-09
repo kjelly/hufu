@@ -104,6 +104,37 @@ func drainRelaunchedTask(t *testing.T, s *dagScheduler) {
 	}
 }
 
+// TestDAGSchedulerSelfHealRespectsRecoveryNeverPolicy is the direct
+// regression for a review finding: RetryDisposition=RetryNone is
+// disposition.go's DecideRecovery disposition both for "a genuinely
+// retryable class exhausted its own retry budget" and for "the resolved
+// recovery policy is explicitly never" (DecideRecovery's own comment:
+// "resolved recovery policy is never; no retry") *regardless of remaining
+// budget*. A disposition-only check cannot tell these two apart, so
+// self-healing on bare RetryDisposition==RetryNone would let the DAG's own
+// automatic replay silently override a task's explicit recovery:never
+// policy — exactly what that policy exists to forbid. selfHealEligible must
+// additionally require CanAutomaticallyReplay (the same authority resetTask
+// itself already gates on).
+func TestDAGSchedulerSelfHealRespectsRecoveryNeverPolicy(t *testing.T) {
+	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureExecution)
+	items[1].Recovery = RecoveryNever
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s.handleEvent(ctx, agentTaskResult{idx: 1, agentName: "verifier", todoID: items[1].ID, err: errors.New("app-server disconnected")})
+
+	if s.states[0] != TaskDone {
+		t.Fatalf("recovery:never task must not reset the coder ancestor: states=%v", s.states)
+	}
+	if s.states[1] != TaskError {
+		t.Fatalf("recovery:never task must not be self-healed/retried in place despite RetryDisposition=RetryNone, got %s", s.states[1])
+	}
+	if s.retries[1] != 0 {
+		t.Fatalf("recovery:never task must not consume a retry, got retries=%v", s.retries)
+	}
+}
+
 // TestDAGSchedulerOnFailureClassesSuppressesNonSemanticReset is the central
 // spec.md §10.2 regression: an infrastructure/provider-class failure on a
 // task whose contract restricts on_failure to `verification` must retry that

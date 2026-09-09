@@ -824,7 +824,7 @@ func failureClassForTodo(item *TodoItem) TaskFailureClass {
 // itself could not even classify — the opposite of what an operator who
 // bothered to restrict this edge would want. An unrecognized class instead
 // falls through to the same self-heal/fail-closed handling as any other
-// non-authorized class (see selfHealEligibleFailureClass).
+// non-authorized class (see selfHealEligible).
 func failureClassAllowed(class TaskFailureClass, allowed []TaskFailureClass) bool {
 	for _, c := range allowed {
 		if c == class {
@@ -893,12 +893,25 @@ func isGenuineWorkerReportedFailure(item *TodoItem) bool {
 // maintained mapping — the two would otherwise be free to drift apart the
 // next time disposition.go's per-class policy changes.
 //
-// RetryNone is DecideRecovery's disposition both when a genuinely retryable
-// class (execution/timeout/verification) exhausted its own retry budget —
-// a fresh DAG-level occurrence is exactly one more attempt cycle, and is
-// never less safe than the legacy (no-allowlist) behavior — and when the
-// failure was a cancellation, which is excluded explicitly below since
-// spec.md §10.1 requires honoring a cancellation, never a remediation loop.
+// RetryDisposition alone is not enough, though: RetryNone is DecideRecovery's
+// disposition for at least three structurally different situations — a
+// cancellation; a genuinely retryable class (execution/timeout/verification)
+// that simply exhausted its own retry budget (the one this function exists
+// to permit one more DAG-level attempt cycle for — never less safe than the
+// legacy, no-allowlist behavior); and a resolved recovery policy that is
+// explicitly RecoveryNever, which DecideRecovery also reports as RetryNone
+// ("resolved recovery policy is never; no retry") *regardless of remaining
+// budget*. A disposition-only check cannot tell these apart, so treating
+// every RetryNone as "budget exhausted, safe to retry" would silently
+// override a recovery:never (or :manual/:reconcile, or a structurally
+// non-replayable side effect) task's own explicit policy — the DAG-level
+// self-heal loop is itself another automatic replay, exactly what those
+// policies exist to forbid. Cancellation is excluded by FailureClass
+// directly (spec.md §10.1: honor a cancellation, never a remediation loop);
+// the recovery-policy/replayability case is excluded by reusing
+// CanAutomaticallyReplay — the same authority resetTask itself already gates
+// on — rather than re-deriving that decision here a second time.
+//
 // Every other disposition (ReplanRequired, ReconcileOnly, NeedsHuman, or no
 // FailureEvent at all) means DecideRecovery itself already decided this
 // failure must not be replayed — a protocol failure classified
@@ -927,7 +940,10 @@ func selfHealEligible(item *TodoItem) bool {
 	if item.FailureEvent.FailureClass == FailureCancelled {
 		return false
 	}
-	return item.FailureEvent.RetryDisposition == RetryNone
+	if item.FailureEvent.RetryDisposition != RetryNone {
+		return false
+	}
+	return CanAutomaticallyReplay(taskDefFromTodoItem(item))
 }
 
 // detectTaskCycle returns true if the DependsOn indices form a cycle.

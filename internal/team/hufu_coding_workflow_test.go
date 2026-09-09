@@ -12,9 +12,9 @@ import (
 //
 //	0: sa        (no deps)
 //	1: coder     depends_on [0]
-//	2: verifier  depends_on [0,1],     on_failure -> 1, on-failure-classes:[verification]
-//	3: reviewer  depends_on [0,1,2],   on_failure -> 1, on-failure-classes:[verification]
-//	4: final-sa  depends_on [0,1,2,3], on_failure -> 1, on-failure-classes:[verification]
+//	2: verifier  depends_on [0,1],     on_failure -> 1, on-failure-classes:[verification, semantic_rejection]
+//	3: reviewer  depends_on [0,1,2],   on_failure -> 1, on-failure-classes:[verification, semantic_rejection]
+//	4: final-sa  depends_on [0,1,2,3], on_failure -> 1, on-failure-classes:[verification, semantic_rejection]
 //
 // depends_on lists every earlier task, not only the immediately preceding
 // one, matching coordinator.md: Coordinator.dependencyResultsForTask only
@@ -131,10 +131,10 @@ func TestHufuCodingWorkflowCleanPath(t *testing.T) {
 }
 
 // TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream is
-// matrix item B, exercising the on-failure-classes allowlist path directly
-// (a class actually matching [verification] — kept as defense-in-depth per
-// team.yaml's own comment; team.yaml ships no verify-spec that currently
-// produces this class). See
+// matrix item B, exercising the on-failure-classes allowlist's `verification`
+// member directly (the allowlist is [verification, semantic_rejection] —
+// `verification` is kept as defense-in-depth per team.yaml's own comment;
+// team.yaml ships no verify-spec that currently produces this class). See
 // TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream
 // below for the path hufu-coding's verifier.md/team.yaml actually use today
 // (status:failed -> FailureClass=execution ->
