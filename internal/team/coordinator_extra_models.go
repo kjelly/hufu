@@ -10,12 +10,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -30,6 +32,23 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	task TaskDef,
 	todoID string,
 ) (string, error) {
+	// A durable task owns this ordered topology. Resolve it before mutating the
+	// parent lifecycle so state-changing fanout cannot start after an unsafe
+	// mixed/external backend admission has already been accepted.
+	taskDesc := task.Goal
+	models := executionTopologySelectors(task)
+	if len(models) == 0 {
+		primary := strings.TrimSpace(task.Model)
+		if primary == "" {
+			primary = strings.TrimSpace(agentDef.Generation.Model)
+		}
+		models = initialTaskModelTopology(agentDef, primary)
+	}
+	if len(models) >= 2 {
+		if err := c.validateExtraModelExecutionTopology(task); err != nil {
+			return "", err
+		}
+	}
 	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
 	// occurrence once before any leaf starts; isolated leaves below receive
 	// private Todo state and therefore cannot race this transition or arm a
@@ -46,20 +65,10 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		c.reconcileTaskStatusProjection()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
-	taskDesc := task.Goal
-	// A durable task owns this ordered topology. Only the ephemeral compatibility
-	// path derives it from AgentDef.ExtraModels; retries and resumes pass the
-	// recorded topology here and never re-expand live configuration.
-	models := cloneModelTopology(task.ModelTopology)
-	if len(models) == 0 {
-		primary := strings.TrimSpace(task.Model)
-		if primary == "" {
-			primary = strings.TrimSpace(agentDef.Generation.Model)
-		}
-		models = initialTaskModelTopology(agentDef, primary)
-	}
+	// Retries and resumes pass the recorded topology here and never re-expand
+	// live configuration.
 	if len(models) < 2 {
-		return c.executeSingleAgentWithModel(parentCtx, agentName, cloneAgentDef(agentDef), task, todoID, "main")
+		return c.executeSingleAgentWithModel(parentCtx, agentName, cloneAgentDef(agentDef), task, todoID, "main", 0)
 	}
 	// Pin the parent control plane before any leaf is created. The worker
 	// workspace below is deliberately disposable and must never become the
@@ -83,19 +92,19 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	mainDef.Generation.Model = mainModel
 
 	go func() {
-		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main")
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main", 0)
 		results <- &agentResult{model: mainModel, output: output, err: err}
 	}()
 
 	// Execute each extra model with its own deep copy
 	for index, extraModel := range models[1:] {
-		go func(model, slot string) {
+		go func(model, slot string, topologyIndex int) {
 			extraDef := cloneAgentDef(agentDef)
 			extraDef.ExtraModels = nil
 			extraDef.Generation.Model = model
-			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, task, todoID, slot)
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, task, todoID, slot, topologyIndex)
 			results <- &agentResult{model: model, output: output, err: err}
-		}(extraModel, fmt.Sprintf("extra-%d", index+1))
+		}(extraModel, fmt.Sprintf("extra-%d", index+1), index+1)
 	}
 
 	// Collect all results (continue on error)
@@ -139,6 +148,18 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	return merged, nil
 }
 
+// executionTopologySelectors preserves backend qualification after a durable
+// occurrence is replayed. The legacy ModelTopology shadow intentionally keeps
+// only model leaves for old callers, but fanout dispatch must use the ordered
+// canonical topology so equal model names on different backends remain
+// distinct.
+func executionTopologySelectors(task TaskDef) []string {
+	if len(task.ExecutionTopology) > 0 {
+		return modelTopologyFromExecutionTargets(task.ExecutionTopology)
+	}
+	return cloneModelTopology(task.ModelTopology)
+}
+
 // cloneAgentDef creates a deep copy of an AgentDef to prevent data races
 // when running multiple models concurrently.
 func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {
@@ -164,6 +185,83 @@ func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {
 	return &clone
 }
 
+func admittedExecutionTargetForModel(task TaskDef, model string) (execution.ExecutionTarget, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return execution.ExecutionTarget{}, fmt.Errorf("extra-model leaf model is required")
+	}
+	if len(task.ModelTopology) != len(task.ExecutionTopology) {
+		return execution.ExecutionTarget{}, fmt.Errorf("extra-model topology has %d model leaves but %d admitted execution targets", len(task.ModelTopology), len(task.ExecutionTopology))
+	}
+	for index, topologyModel := range task.ModelTopology {
+		if strings.TrimSpace(topologyModel) != model {
+			continue
+		}
+		target := task.ExecutionTopology[index]
+		if err := target.Validate(); err != nil {
+			return execution.ExecutionTarget{}, fmt.Errorf("extra-model leaf target %q is invalid: %w", target, err)
+		}
+		return target, nil
+	}
+	return execution.ExecutionTarget{}, fmt.Errorf("extra-model leaf %q is not present in admitted execution topology", model)
+}
+
+func admittedExecutionTargetAt(task TaskDef, index int) (execution.ExecutionTarget, error) {
+	if index < 0 || index >= len(task.ExecutionTopology) {
+		return execution.ExecutionTarget{}, fmt.Errorf("extra-model topology index %d is out of range", index)
+	}
+	target := task.ExecutionTopology[index]
+	if err := target.Validate(); err != nil {
+		return execution.ExecutionTarget{}, fmt.Errorf("extra-model leaf target %q is invalid: %w", target, err)
+	}
+	return target, nil
+}
+
+// validateExtraModelExecutionTopology is the fanout admission boundary for
+// state-changing tasks. Hufu's local LLM leaves receive private workspaces,
+// but an external agent backend has no declared isolated execution world. A
+// state-changing topology that crosses backend kinds is therefore rejected
+// before any leaf worker is launched; silently running such leaves would make
+// their writes race in one execution world.
+func (c *Coordinator) validateExtraModelExecutionTopology(task TaskDef) error {
+	if len(task.ExecutionTopology) < 2 {
+		return nil
+	}
+	effect := task.SideEffect
+	if c != nil {
+		effect = c.effectiveSideEffect(task)
+	}
+	if effect == "" || effect == SideEffectNone {
+		return nil
+	}
+	if c == nil || c.ExecutionRegistry() == nil {
+		return fmt.Errorf("state-changing extra-model fanout requires an execution registry")
+	}
+	backends := make(map[string]struct{}, len(task.ExecutionTopology))
+	for _, target := range task.ExecutionTopology {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("state-changing extra-model topology target %q is invalid: %w", target, err)
+		}
+		backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend)
+		if err != nil {
+			return fmt.Errorf("state-changing extra-model topology backend %q is unavailable: %w", target.Backend, err)
+		}
+		if backend.Kind() == execution.BackendKindAgent {
+			return fmt.Errorf("state-changing extra-model fanout cannot use external agent backend %q without an isolated execution world", target.Backend)
+		}
+		backends[target.Backend] = struct{}{}
+	}
+	if len(backends) > 1 {
+		names := make([]string, 0, len(backends))
+		for name := range backends {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("state-changing extra-model fanout crosses execution backends %s without demonstrably isolated worlds", strings.Join(names, ", "))
+	}
+	return nil
+}
+
 // executeSingleAgentWithModel executes a single agent task with a pre-configured agentDef.
 // The caller must ensure agentDef.ExtraModels is nil to prevent infinite recursion.
 // Extra models execute in isolated Coordinator instances with cloned sessions
@@ -175,9 +273,24 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	task TaskDef,
 	todoID string,
 	slot string,
+	topologyIndex int,
 ) (string, error) {
 	task.Agent = agentDef.Name
 	task.Model = agentDef.Generation.Model
+	// Each isolated leaf must execute on the exact admitted topology target
+	// corresponding to its model. Never leave the parent primary target on a
+	// leaf: mixed-backend fanout would otherwise silently route every leaf to
+	// the first backend and its limiter.
+	leafTarget, err := admittedExecutionTargetAt(task, topologyIndex)
+	if err != nil && len(task.ExecutionTopology) == 0 {
+		// Compatibility for ephemeral callers that predate canonical topology
+		// admission. Durable occurrences always take the indexed path above.
+		leafTarget, err = admittedExecutionTargetForModel(task, task.Model)
+	}
+	if err != nil {
+		return "", err
+	}
+	task.ResolvedExecutionTarget = leafTarget
 
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	// Use unique token (timestamp + agentName) to prevent collision when multiple
@@ -243,7 +356,8 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	task.executionModelOverride = strings.TrimSpace(agentDef.Generation.Model)
 	// Every isolated leaf is explicitly singleton. The parent Todo retains the
 	// full topology because all leaves share its lifecycle record.
-	task.ModelTopology = []string{task.executionModelOverride}
+	task.ModelTopology = []string{task.Model}
+	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
 	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
 	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
 
@@ -522,6 +636,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	// resolve the same dedup pointer (never reassigning a non-nil set).
 	contractWarnings := orig.contractWarningsDedup()
 	providerSemState := orig.sharedProviderSemaphoreState()
+	backendSemState := orig.sharedBackendSemaphoreState()
 
 	// Isolated extra-model coordinators must report their LLM usage to the
 	// parent run's no-progress budget. Keep a distinct namespace per clone so
@@ -607,6 +722,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		forcedSkillNames:                   forcedSkillNamesClone,
 		maxConcurrent:                      orig.maxConcurrent,
 		providerSemState:                   providerSemState,
+		backendSemState:                    backendSemState,
 		sessionTime:                        orig.sessionTime,
 		tokenBudgetOwner:                   orig.tokenBudgetRoot(),
 		skillDetector:                      orig.skillDetector,

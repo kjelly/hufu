@@ -235,16 +235,17 @@ go run ./cmd/hufu
 | `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
-| `--model` | — | `string` | `""` | Override default model for the active team (highest priority) |
+| `--model` / `-m` | `-m` | `string` | `""` | Override the worker execution target only (for example `codex/gpt-5.6-luna` or `local/qwen3:8b`) |
+| `--coordinator-model` | — | `string` | `""` | Override the coordinator's independent LLM target |
 | `--context-window` | — | `int` | `0` | Explicit positive model context capacity in tokens for pre-provider admission; `0` uses provider metadata or the model registry |
 | `--temperature` | — | `string` | `""` | Override sampling temperature |
 | `--max-tokens` | — | `string` | `""` | Override max output tokens |
 | `--top-p` | — | `string` | `""` | Override top-p value |
 | `--top-k` | — | `string` | `""` | Override top-k value |
-| `--sidecar-model` | — | `string` | `""` | Override sidecar model used for skill matching (falls back to `--model` when not set) |
-| `--guard-model` | — | `string` | `""` | Override guard model used for output review (falls back to `--model` when not set) |
-| `--judge-model` | — | `string` | `""` | Override judge model used for multi-model result selection (falls back to sidecar when not set) |
-| `--plan-reviewer-model` | — | `string` | `""` | Override plan reviewer model (falls back to `--model` when not set) |
+| `--sidecar-model` | — | `string` | `""` | Override the sidecar's independent LLM target |
+| `--guard-model` | — | `string` | `""` | Override the guard's independent LLM target |
+| `--judge-model` | — | `string` | `""` | Override the judge's independent LLM target |
+| `--plan-reviewer-model` | — | `string` | `""` | Override the plan reviewer's independent LLM target |
 | `--timeout` | — | `int64` | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. |
 | `--max-rounds` | — | `int` | `0` | Override team.yaml max-rounds (coordinator round limit) |
 | `--max-concurrent` | — | `int` | `0` | Override team.yaml max-concurrent (parallel worker dispatch) |
@@ -535,8 +536,17 @@ max-concurrent: 8                # Maximum concurrent worker tasks (default: 8)
 # === Workspace ===
 workspace: workspace             # Workspace directory (default: "workspace")
 
-# === Model Settings ===
-model: ollama/qwen3:8b           # Default model name
+# === Execution Targets ===
+# `model` remains accepted for legacy configurations. New teams should use
+# the role-specific target keys below.
+worker-model: codex/gpt-5.6-luna  # Worker backend/model target
+coordinator-model: local/qwen3:8b # Coordinator LLM target
+default-llm-backend: local         # Bare worker model target default
+backends:
+  codex: {}                        # Built-in Codex app-server backend
+
+# === Legacy Model Settings ===
+model: ollama/qwen3:8b
 temperature: "0.2"               # Temperature value
 max-tokens: "16384"               # Maximum output tokens
 top-p: "0.9"                     # Top P value

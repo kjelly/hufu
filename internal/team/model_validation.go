@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // collectConfiguredModels gathers every model ID the run can use: per-agent
@@ -60,13 +62,37 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 	cache := make(map[string]*providerModels)
 	var problems []string
 
+	defaultBackend := "local"
+	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
+		defaultBackend = c.session.Config.DefaultLLMBackend
+	}
 	for _, id := range ids {
-		p := c.providerManager.GetProvider(id)
-		key := p.Name()
+		selector, parseErr := execution.ParseExecutionSelector(id)
+		if parseErr != nil {
+			problems = append(problems, fmt.Sprintf("model %q has an invalid execution selector: %v", id, parseErr))
+			continue
+		}
+		_, backend, resolveErr := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+		if resolveErr != nil {
+			problems = append(problems, fmt.Sprintf("model %q could not resolve an execution backend: %v", id, resolveErr))
+			continue
+		}
+		catalog, ok := backend.(ModelCatalogBackend)
+		if !ok {
+			// External agent backends do not expose an OpenAI-compatible model
+			// catalog. Their executable/protocol preflight owns validation.
+			continue
+		}
+		target, _, targetErr := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+		if targetErr != nil {
+			problems = append(problems, fmt.Sprintf("model %q could not resolve an execution target: %v", id, targetErr))
+			continue
+		}
+		key := backend.Name()
 		pm, cached := cache[key]
 		if !cached {
 			pm = &providerModels{}
-			if names, err := p.ListModelNames(listCtx); err == nil {
+			if names, err := catalog.ListModelNames(listCtx, target); err == nil {
 				pm.ok = true
 				pm.names = make(map[string]bool, len(names))
 				for _, n := range names {

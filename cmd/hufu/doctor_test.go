@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -102,6 +105,44 @@ func TestCollectDoctorContractFindingsChecksEffectiveRequirements(t *testing.T) 
 	findings := collectDoctorContractFindings(session, t.TempDir())
 	if !hasDoctorFinding(findings, team.FindingRequiredEnvMissing, "requires.environment[0]") {
 		t.Fatalf("doctor findings = %#v, want missing environment finding", findings)
+	}
+}
+
+func TestValidateDoctorExecutionTargetsUsesRunTargetHierarchy(t *testing.T) {
+	session := &team.TeamSession{Config: agent.TeamConfig{}}
+	cfg := &config.Config{
+		WorkerModel:      "codex/gpt-5.6-luna",
+		CoordinatorModel: "local/qwen3:8b",
+	}
+	calls := 0
+	err := validateDoctorExecutionTargets(session, cfg, func(binary string) (string, error) {
+		calls++
+		if binary != "codex" {
+			t.Fatalf("LookPath binary = %q, want codex", binary)
+		}
+		return "/test/codex", nil
+	})
+	if err != nil {
+		t.Fatalf("validateDoctorExecutionTargets() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("LookPath calls = %d, want 1", calls)
+	}
+	if session.Config.WorkerModel != "codex/gpt-5.6-luna" || session.Config.CoordinatorModel != "local/qwen3:8b" {
+		t.Fatalf("resolved targets = worker %q coordinator %q", session.Config.WorkerModel, session.Config.CoordinatorModel)
+	}
+}
+
+func TestValidateDoctorExecutionTargetsReportsMissingCodex(t *testing.T) {
+	session := &team.TeamSession{Config: agent.TeamConfig{
+		WorkerModel:      "codex/gpt-5.6-luna",
+		CoordinatorModel: "local/qwen3:8b",
+	}}
+	err := validateDoctorExecutionTargets(session, &config.Config{}, func(string) (string, error) {
+		return "", errors.New("not found")
+	})
+	if err == nil || !strings.Contains(err.Error(), "codex executable") {
+		t.Fatalf("validateDoctorExecutionTargets() error = %v, want missing Codex executable", err)
 	}
 }
 

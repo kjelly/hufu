@@ -96,7 +96,9 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 			models = append(models, m)
 		}
 	}
-	add(session.Config.Generation.Model)
+	add(session.Config.WorkerModel)
+	add(session.Config.CoordinatorModel)
+	add(session.Config.Generation.Model) // legacy compatibility target
 	add(sidecarModel)
 	add(guardModel)
 	add(judgeModel)
@@ -161,6 +163,49 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	displayTeamHeader(session)
 
 	cfg := config.LoadConfig()
+	if err := applyConfiguredBackends(session, cfg); err != nil {
+		return nil, err
+	}
+	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
+	roleModels, err := resolveExecutionRoleModels(session, cfg)
+	if err != nil {
+		return nil, err
+	}
+	resolvedSidecarModel := roleModels.Sidecar
+	resolvedGuardModel := roleModels.Guard
+	resolvedJudgeModel := roleModels.Judge
+	resolvedPlanReviewerModel := roleModels.PlanReviewer
+	// This is deliberately before MCP loading, legacy-draft migration,
+	// workspace initialization, lifecycle archive/checkpoint, and coordinator
+	// construction. It is a read-only setup gate.
+	if err := preflightExecutionTargets(session, cfg, roleModels, nil); err != nil {
+		return nil, err
+	}
+	// Read the durable checkpoint before any lifecycle mutation. A resumed
+	// occurrence owns its frozen canonical target, so a changed CLI/config
+	// worker target must never bypass executable/kind preflight for that work.
+	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
+	if !startsFresh {
+		// Read the checked active event lineage once so both checkpoint and
+		// event-first legacy occurrences can use the same historical evidence
+		// before any lifecycle mutation. This read is strictly read-only; the
+		// migration event is still appended only at dispatch.
+		eventTasks, eventEvidence, err := team.ReadCheckedActiveExecutionTaskEvidence(session.Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("restored event lineage preflight failed: %w", err)
+		}
+		if restored := team.LoadSession(session.Workspace); restored != nil {
+			if err := preflightRestoredExecutionTargetsWithEvidence(session, cfg, restored.Tasks, eventEvidence, eventTasks, nil); err != nil {
+				return nil, err
+			}
+		}
+		// Event-first transitions are durable before the checkpoint write. The
+		// checked replay above is performed before workspace/session
+		// initialization so a crash-window task cannot bypass target preflight.
+		if err := preflightRestoredExecutionTargetsWithEvidence(session, cfg, eventTasks, eventEvidence, nil, nil); err != nil {
+			return nil, err
+		}
+	}
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
@@ -183,19 +228,10 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 	memStore := buildMemoryStore(resolvedProviderURL)
 
-	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
-	resolvedSidecarModel := cfg.ResolveSidecarModel(session.Config.SidecarModel)
-	resolvedGuardModel := cfg.ResolveGuardModel(session.Config.GuardModel, session.Config.SidecarModel)
-	resolvedJudgeModel := cfg.ResolveJudgeModel(session.Config.JudgeModel, session.Config.SidecarModel)
-	resolvedPlanReviewerModel := cfg.ResolvePlanReviewerModel(session.Config.PlanReviewerModel, session.Config.Generation.Model)
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
 	}
-	if err := resolveAndCheckModel(session, cfg); err != nil {
-		return nil, err
-	}
-
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
@@ -209,7 +245,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 	// Resolve this once so lifecycle reset, historical extraction, pruning, and
 	// coordinator visibility all agree on what "fresh" means.
-	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
 	// A profile that forbids historical task reuse must start from an empty
 	// checkpoint and a new event-store root as well. Otherwise the event-store
 	// projection checker compares this run against an unrelated prior run.
@@ -241,7 +276,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		}
 	}
 
-	roleModels := team.RoleModels{Sidecar: resolvedSidecarModel, Guard: resolvedGuardModel, Judge: resolvedJudgeModel, PlanReviewer: resolvedPlanReviewerModel}
 	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)

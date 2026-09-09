@@ -45,6 +45,82 @@ type ProviderConfig struct {
 	MaxConcurrent int `yaml:"max-concurrent"`
 }
 
+// BackendConfig is the canonical target-backend configuration. Legacy
+// providers and subagent-providers are mapped into this runtime shape by the
+// command setup layer while remaining readable during migration.
+type BackendConfig struct {
+	Kind           string   `yaml:"kind"`
+	Type           string   `yaml:"type"`
+	BaseURL        string   `yaml:"base-url"`
+	ProviderAPIKey string   `yaml:"provider-api-key"`
+	Command        []string `yaml:"command"`
+	Protocol       string   `yaml:"protocol"`
+	StartupTimeout string   `yaml:"startup-timeout"`
+	InterruptGrace string   `yaml:"interrupt-grace"`
+	ShutdownGrace  string   `yaml:"shutdown-grace"`
+	ExecutionWorld string   `yaml:"execution-world"`
+	InheritEnv     []string `yaml:"inherit-env"`
+	MaxConcurrent  int      `yaml:"max-concurrent"`
+	present        map[string]bool
+}
+
+// UnmarshalYAML records field presence in addition to values. Canonical
+// backend overlays must distinguish an omitted setting (inherit a built-in
+// default) from an explicitly empty scalar or empty atomic list (replace it).
+func (b *BackendConfig) UnmarshalYAML(value *yaml.Node) error {
+	type plain BackendConfig
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*b = BackendConfig(decoded)
+	b.present = make(map[string]bool)
+	if value.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		b.present[value.Content[i].Value] = true
+	}
+	return nil
+}
+
+// Has reports whether the backend field occurred in YAML. Programmatic
+// configurations have no syntax-presence record; for those, non-zero values
+// are considered supplied to preserve the established Go construction API.
+func (b BackendConfig) Has(field string) bool {
+	if b.present != nil {
+		return b.present[field]
+	}
+	switch field {
+	case "kind":
+		return b.Kind != ""
+	case "type":
+		return b.Type != ""
+	case "base-url":
+		return b.BaseURL != ""
+	case "provider-api-key":
+		return b.ProviderAPIKey != ""
+	case "command":
+		return b.Command != nil
+	case "protocol":
+		return b.Protocol != ""
+	case "startup-timeout":
+		return b.StartupTimeout != ""
+	case "interrupt-grace":
+		return b.InterruptGrace != ""
+	case "shutdown-grace":
+		return b.ShutdownGrace != ""
+	case "execution-world":
+		return b.ExecutionWorld != ""
+	case "inherit-env":
+		return b.InheritEnv != nil
+	case "max-concurrent":
+		return b.MaxConcurrent != 0
+	default:
+		return false
+	}
+}
+
 // Validate checks provider configuration values that affect runtime adapter
 // selection. An omitted type is valid because named providers have an
 // explicit openai-compatible default.
@@ -61,7 +137,11 @@ type Config struct {
 	ProviderURL       string                    `yaml:"provider-url"`
 	ProviderAPIKey    string                    `yaml:"provider-api-key"`
 	Providers         map[string]ProviderConfig `yaml:"providers"`
+	Backends          map[string]BackendConfig  `yaml:"backends"`
 	Model             string                    `yaml:"model"`
+	WorkerModel       string                    `yaml:"worker-model"`
+	CoordinatorModel  string                    `yaml:"coordinator-model"`
+	DefaultLLMBackend string                    `yaml:"default-llm-backend"`
 	EmbeddingModel    string                    `yaml:"embedding-model"`
 	ModelList         []ModelEntry              `yaml:"model-list"`
 	SidecarModel      string                    `yaml:"sidecar-model"`
@@ -132,56 +212,8 @@ func (c *Config) mergeFromFile(path string) {
 		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
-	if fileCfg.ProviderURL != "" {
-		c.ProviderURL = fileCfg.ProviderURL
-	}
-	if fileCfg.Model != "" {
-		c.Model = fileCfg.Model
-	}
-	if fileCfg.EmbeddingModel != "" {
-		c.EmbeddingModel = fileCfg.EmbeddingModel
-	}
-	if len(fileCfg.ModelList) > 0 {
-		c.ModelList = fileCfg.ModelList
-	}
-	if fileCfg.SidecarModel != "" {
-		c.SidecarModel = fileCfg.SidecarModel
-	}
-	if fileCfg.PlanReviewerModel != "" {
-		c.PlanReviewerModel = fileCfg.PlanReviewerModel
-	}
-	if fileCfg.GuardModel != "" {
-		c.GuardModel = fileCfg.GuardModel
-	}
-	if fileCfg.JudgeModel != "" {
-		c.JudgeModel = fileCfg.JudgeModel
-	}
-	if fileCfg.MaxConcurrent > 0 {
-		c.MaxConcurrent = fileCfg.MaxConcurrent
-	}
-	if fileCfg.StallThreshold != "" {
-		c.StallThreshold = fileCfg.StallThreshold
-	}
-	if len(fileCfg.AllowedPaths) > 0 {
-		c.AllowedPaths = fileCfg.AllowedPaths
-	}
-	if fileCfg.NoNet {
-		c.NoNet = true
-	}
-	if fileCfg.ForceMCP {
-		c.ForceMCP = true
-	}
-	if fileCfg.ProjectContext {
-		c.ProjectContext = true
-	}
-	if len(fileCfg.Hooks) > 0 {
-		if c.Hooks == nil {
-			c.Hooks = make(map[string]string)
-		}
-		for k, v := range fileCfg.Hooks {
-			c.Hooks[k] = v
-		}
-	}
+	c.mergeScalarFields(&fileCfg)
+	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {
 		c.mergeNotify(fileCfg.Notify)
 	}
@@ -194,29 +226,13 @@ func (c *Config) mergeFromFile(path string) {
 			c.Profiles[name] = flags
 		}
 	}
-	if len(fileCfg.Providers) > 0 {
-		if c.Providers == nil {
-			c.Providers = make(map[string]ProviderConfig)
+	c.mergeProviders(fileCfg.Providers)
+	if len(fileCfg.Backends) > 0 {
+		if c.Backends == nil {
+			c.Backends = make(map[string]BackendConfig)
 		}
-		for k, v := range fileCfg.Providers {
-			if _, exists := c.Providers[k]; exists {
-				existing := c.Providers[k]
-				if v.ProviderURL != "" {
-					existing.ProviderURL = v.ProviderURL
-				}
-				if v.ProviderAPIKey != "" {
-					existing.ProviderAPIKey = v.ProviderAPIKey
-				}
-				if v.Insecure {
-					existing.Insecure = true
-				}
-				if v.IntrospectionType != "" {
-					existing.IntrospectionType = v.IntrospectionType
-				}
-				c.Providers[k] = existing
-			} else {
-				c.Providers[k] = v
-			}
+		for name, backend := range fileCfg.Backends {
+			c.Backends[name] = backend
 		}
 	}
 	fileVars := fileCfg.GetVars()
@@ -233,6 +249,74 @@ func (c *Config) mergeFromFile(path string) {
 			merged[k] = v
 		}
 		c.RawVars = merged
+	}
+}
+
+func (c *Config) mergeScalarFields(fileCfg *Config) {
+	for _, field := range []struct{ dst, src *string }{
+		{&c.ProviderURL, &fileCfg.ProviderURL}, {&c.Model, &fileCfg.Model},
+		{&c.WorkerModel, &fileCfg.WorkerModel}, {&c.CoordinatorModel, &fileCfg.CoordinatorModel},
+		{&c.DefaultLLMBackend, &fileCfg.DefaultLLMBackend}, {&c.EmbeddingModel, &fileCfg.EmbeddingModel},
+		{&c.SidecarModel, &fileCfg.SidecarModel}, {&c.PlanReviewerModel, &fileCfg.PlanReviewerModel},
+		{&c.GuardModel, &fileCfg.GuardModel}, {&c.JudgeModel, &fileCfg.JudgeModel},
+		{&c.StallThreshold, &fileCfg.StallThreshold},
+	} {
+		if *field.src != "" {
+			*field.dst = *field.src
+		}
+	}
+	if len(fileCfg.ModelList) > 0 {
+		c.ModelList = fileCfg.ModelList
+	}
+	if fileCfg.MaxConcurrent > 0 {
+		c.MaxConcurrent = fileCfg.MaxConcurrent
+	}
+	if len(fileCfg.AllowedPaths) > 0 {
+		c.AllowedPaths = fileCfg.AllowedPaths
+	}
+	c.NoNet = c.NoNet || fileCfg.NoNet
+	c.ForceMCP = c.ForceMCP || fileCfg.ForceMCP
+	c.ProjectContext = c.ProjectContext || fileCfg.ProjectContext
+}
+
+func (c *Config) mergeHooks(hooks map[string]string) {
+	if len(hooks) == 0 {
+		return
+	}
+	if c.Hooks == nil {
+		c.Hooks = make(map[string]string)
+	}
+	for k, v := range hooks {
+		c.Hooks[k] = v
+	}
+}
+
+func (c *Config) mergeProviders(providers map[string]ProviderConfig) {
+	if len(providers) == 0 {
+		return
+	}
+	if c.Providers == nil {
+		c.Providers = make(map[string]ProviderConfig)
+	}
+	for k, v := range providers {
+		existing, exists := c.Providers[k]
+		if !exists {
+			c.Providers[k] = v
+			continue
+		}
+		if v.ProviderURL != "" {
+			existing.ProviderURL = v.ProviderURL
+		}
+		if v.ProviderAPIKey != "" {
+			existing.ProviderAPIKey = v.ProviderAPIKey
+		}
+		if v.Insecure {
+			existing.Insecure = true
+		}
+		if v.IntrospectionType != "" {
+			existing.IntrospectionType = v.IntrospectionType
+		}
+		c.Providers[k] = existing
 	}
 }
 
@@ -389,6 +473,30 @@ func (c *Config) ResolveModel(teamModel string) string {
 		return teamModel
 	}
 	return c.Model
+}
+
+// ResolveWorkerModel applies the canonical worker-model hierarchy while
+// retaining legacy model values as the final compatibility fallback.
+func (c *Config) ResolveWorkerModel(teamWorkerModel, legacyTeamModel string) string {
+	if teamWorkerModel != "" {
+		return teamWorkerModel
+	}
+	if c.WorkerModel != "" {
+		return c.WorkerModel
+	}
+	return c.ResolveModel(legacyTeamModel)
+}
+
+// ResolveCoordinatorModel applies the independent coordinator target
+// hierarchy. Legacy model remains a read-only fallback for existing configs.
+func (c *Config) ResolveCoordinatorModel(teamCoordinatorModel, legacyTeamModel string) string {
+	if teamCoordinatorModel != "" {
+		return teamCoordinatorModel
+	}
+	if c.CoordinatorModel != "" {
+		return c.CoordinatorModel
+	}
+	return c.ResolveModel(legacyTeamModel)
 }
 
 func (c *Config) GetHooks() map[string]string {

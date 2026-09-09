@@ -15,6 +15,14 @@ func (c *Coordinator) filterWorkerToolsForModel(ctx context.Context, modelID str
 	if c == nil || c.modelProfileRuntime == nil || strings.TrimSpace(modelID) == "" {
 		return candidate, nil
 	}
+	// Agent backends execute their own protocol and do not expose the
+	// OpenAI-compatible model metadata API used by ModelProfileRuntime. Tool
+	// capability filtering is therefore an LLM-backend concern only; attempting
+	// profile resolution here would incorrectly turn an external worker target
+	// into a local-provider lookup.
+	if !c.executionTargetHasLanguageModelCapability(modelID) {
+		return candidate, nil
+	}
 	profile, err := c.modelProfileRuntime.Profile(ctx, modelID, 0, 0)
 	if err != nil || profile.SupportsTools != modelprofile.CapabilityNo {
 		return candidate, nil
@@ -49,6 +57,10 @@ func (c *Coordinator) ValidateModelCapabilities(ctx context.Context) ModelCapabi
 	for _, candidate := range c.modelCapabilityCandidates() {
 		requirements := mergeModelRequirements(c.session.Config.Requirements.Model, candidate.def.Requirements.Model)
 		if requirements == (agent.ModelRequirements{}) {
+			continue
+		}
+		if !c.executionTargetHasLanguageModelCapability(candidate.model) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("model capability warning for agent %q target %q: backend model metadata is unknown", candidate.def.Name, candidate.model))
 			continue
 		}
 		operatorContext := candidate.def.Generation.ContextWindow

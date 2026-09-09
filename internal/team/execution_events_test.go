@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/execution"
 
 	"github.com/kjelly/hufu/internal/agent"
 
@@ -146,9 +147,14 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 		providerManager: pm,
 	}
 	c.session = &TeamSession{Config: agent.TeamConfig{Name: "test-team"}}
+	registry := NewExecutionRegistry()
+	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "openai", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	c.SetExecutionRegistry(registry)
 
 	tracker := NewTaskTracker()
-	items := tracker.TodoList().AddBatch([]TodoSpec{{Desc: "test", Agent: "tester"}})
+	items := tracker.TodoList().AddBatch([]TodoSpec{{Desc: "test", Agent: "tester", ExecutionTarget: execution.ExecutionTarget{Backend: "openai", Model: "gpt-4o"}}})
 	tid := items[0].ID
 	tracker.TodoList().SetTypedResult(tid, &TaskResult{Artifacts: []ArtifactRef{{Path: "art1"}}})
 	_ = tracker.TodoList().AppendFailureFingerprint(tid, FailureFingerprint{Digest: "fail1"})
@@ -178,6 +184,9 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 	json.Unmarshal(scanner.Bytes(), &ev1)
 	if ev1.Provider != "openai" {
 		t.Errorf("expected openai, got %v", ev1.Provider)
+	}
+	if ev1.ExecutionTarget != "openai/gpt-4o" || ev1.Backend != "openai" || ev1.BackendKind != "llm" {
+		t.Errorf("execution identity = target:%q backend:%q kind:%q", ev1.ExecutionTarget, ev1.Backend, ev1.BackendKind)
 	}
 	if len(ev1.ArtifactRefs) != 1 || ev1.ArtifactRefs[0].Path != "art1" {
 		t.Errorf("expected art1, got %v", ev1.ArtifactRefs)

@@ -292,18 +292,24 @@ type TeamConfig struct {
 	// that can change state.
 	AllowFreeTextResults bool
 	Generation           GenerationParams
-	Skills               string
-	SkillsExclude        string
-	ProviderURL          string
-	ProviderAPIKey       string
-	Providers            map[string]config.ProviderConfig
-	ModelList            []config.ModelEntry
-	SidecarModel         string
-	GuardModel           string
-	JudgeModel           string
-	PlanReviewerModel    string
-	MaxConcurrent        int
-	StallThreshold       string
+	// WorkerModel and CoordinatorModel are canonical execution selectors. The
+	// legacy Generation.Model remains readable during migration.
+	WorkerModel       string `yaml:"worker-model" json:"worker_model,omitempty"`
+	CoordinatorModel  string `yaml:"coordinator-model" json:"coordinator_model,omitempty"`
+	DefaultLLMBackend string `yaml:"default-llm-backend" json:"default_llm_backend,omitempty"`
+	Skills            string
+	SkillsExclude     string
+	ProviderURL       string
+	ProviderAPIKey    string
+	Providers         map[string]config.ProviderConfig
+	Backends          map[string]config.BackendConfig `yaml:"backends" json:"backends,omitempty"`
+	ModelList         []config.ModelEntry
+	SidecarModel      string
+	GuardModel        string
+	JudgeModel        string
+	PlanReviewerModel string
+	MaxConcurrent     int
+	StallThreshold    string
 	// MaxCoordinatorTurns bounds automatic continuation turns after a
 	// coordinator step limit. Zero uses the built-in safe default.
 	MaxCoordinatorTurns int
@@ -578,6 +584,9 @@ type SubagentProviderConfig struct {
 	MaxTranscriptBytes int64    `json:"max_transcript_bytes,omitempty" yaml:"max-transcript-bytes,omitempty"`
 	ExecutionWorld     string   `json:"execution_world,omitempty" yaml:"execution-world,omitempty"`
 	InheritEnv         []string `json:"inherit_env,omitempty" yaml:"inherit-env,omitempty"`
+	// MaxConcurrent independently limits attempts dispatched through this
+	// canonical agent backend. Zero leaves only the team-wide limit in force.
+	MaxConcurrent int `json:"max_concurrent,omitempty" yaml:"max-concurrent,omitempty"`
 }
 
 // CapabilityConfig names provider-neutral capabilities required by a runtime

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelcatalog"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -69,7 +70,40 @@ func (c *Coordinator) WarmModelProfiles(ctx context.Context, modelIDs []string, 
 	if c == nil || c.modelProfileRuntime == nil {
 		return
 	}
-	c.modelProfileRuntime.WarmModels(ctx, modelIDs, operatorContext)
+	llmModels := make([]string, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if c.executionTargetHasLanguageModelCapability(modelID) {
+			llmModels = append(llmModels, modelID)
+		}
+	}
+	c.modelProfileRuntime.WarmModels(ctx, llmModels, operatorContext)
+}
+
+// executionTargetHasLanguageModelCapability protects provider-oriented model
+// profile code from treating an external worker backend as OpenAI-compatible.
+// Unknown selectors retain the prior best-effort profile path; configured
+// agent backends are explicitly represented as unknown metadata instead.
+func (c *Coordinator) executionTargetHasLanguageModelCapability(raw string) bool {
+	selector, err := execution.ParseExecutionSelector(raw)
+	if err != nil || selector.Model == "" {
+		return true
+	}
+	backend := selector.Backend
+	if backend == "" && c != nil && c.session != nil {
+		backend = execution.CanonicalBackendName(c.session.Config.DefaultLLMBackend)
+	}
+	if backend == "" {
+		backend = "local"
+	}
+	if backend == "codex" {
+		return false
+	}
+	if c != nil && c.session != nil {
+		if _, agentBackend := c.session.Config.SubagentProviders[backend]; agentBackend {
+			return false
+		}
+	}
+	return true
 }
 
 func NewModelProfileRuntime(manager *agent.ProviderManager, noNet bool) *ModelProfileRuntime {

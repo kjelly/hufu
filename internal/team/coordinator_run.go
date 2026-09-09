@@ -18,6 +18,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/skill"
@@ -253,10 +254,27 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	if c.workerAgentOverride != nil {
 		return c.workerAgentOverride, resolvedTools, nil
 	}
-	provider, err := c.ModelRuntime().ProviderFor(directModel)
+	selector, err := execution.ParseExecutionSelector(directModel)
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
 	}
+	defaultBackend := "local"
+	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
+		defaultBackend = c.session.Config.DefaultLLMBackend
+	}
+	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+	if err != nil {
+		return nil, ResolvedWorkerTools{}, err
+	}
+	backend, err := c.ExecutionRegistry().LanguageModelBackend(target)
+	if err != nil {
+		return nil, ResolvedWorkerTools{}, err
+	}
+	llmBackend, ok := backend.(*LLMExecutionBackend)
+	if !ok {
+		return nil, ResolvedWorkerTools{}, fmt.Errorf("direct worker target %q has no gated-agent provider", target)
+	}
+	provider := llmBackend.AgentProvider(ctx, target)
 	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
@@ -342,20 +360,22 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 	directTask.ModelTopology = []string{directTask.Model}
+	directTask.ExecutionTopology = []execution.ExecutionTarget{directTask.ResolvedExecutionTarget}
 	directModel = directTask.Model
 	directSpec := TodoSpec{
-		Agent:            directTask.Agent,
-		Desc:             directTask.Goal,
-		Goal:             directTask.Goal,
-		Model:            directTask.Model,
-		ModelTopology:    cloneModelTopology(directTask.ModelTopology),
-		Source:           TaskSourceCoordinator,
-		ParentID:         "",
-		Execution:        cloneExecutionContract(directTask.Execution),
-		SideEffect:       directTask.SideEffect,
-		Recovery:         directTask.Recovery,
-		ReconcileTool:    directTask.ReconcileTool,
-		SubagentProvider: directTask.SubagentProvider,
+		Agent:             directTask.Agent,
+		Desc:              directTask.Goal,
+		Goal:              directTask.Goal,
+		Model:             directTask.Model,
+		ModelTopology:     cloneModelTopology(directTask.ModelTopology),
+		ExecutionTarget:   directTask.ResolvedExecutionTarget,
+		ExecutionTopology: cloneExecutionTopology(directTask.ExecutionTopology),
+		Source:            TaskSourceCoordinator,
+		ParentID:          "",
+		Execution:         cloneExecutionContract(directTask.Execution),
+		SideEffect:        directTask.SideEffect,
+		Recovery:          directTask.Recovery,
+		ReconcileTool:     directTask.ReconcileTool,
 	}
 	// Admission is the creation boundary: it precedes task_created, provider
 	// admission, sidecar matching, in_progress, and every worker-side effect.
@@ -394,7 +414,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// verification, and finalization byte-for-byte identical to the
 	// coordinated case, not merely similar, which is the actual parity
 	// requirement (docs/hufu-external-coding-agent-runtime-spec.md §28).
-	if directTask.SubagentProvider != localSubagentProviderName {
+	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr
 	}
@@ -405,8 +425,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 	defer disarmDecision()
-	needsProviderBoundary := directModel != ""
-	if needsProviderBoundary {
+	// The override is a deterministic in-process test seam. It never reaches
+	// a provider, so opening a provider hard-abort boundary would only add an
+	// unrelated subprocess dependency to an otherwise local attempt.
+	if directModel != "" && c.workerAgentOverride == nil {
 		if err := c.startProviderExecutionBoundary(ctx); err != nil {
 			c.PersistFailure(resolvedName, task, todoID, c.FailureDetail(err, "error"))
 			c.finalizePublicInvocationFailure(err)
@@ -476,7 +498,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		})
 		return nil, fmt.Errorf("failed to create agent %q: %w", resolvedName, err)
 	}
-
 	directDispositions := &attemptToolDispositions{}
 	directSideEffect := SideEffectClass(strings.TrimSpace(agentDef.SideEffect))
 	if directSideEffect == "" {
@@ -803,19 +824,21 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 		return errors.Join(cancellation, fmt.Errorf("canonicalize pre-cancelled direct task: %w", err))
 	}
 	occurrence.ModelTopology = []string{occurrence.Model}
+	occurrence.ExecutionTopology = []execution.ExecutionTarget{occurrence.ResolvedExecutionTarget}
 	spec := TodoSpec{
-		Agent:            occurrence.Agent,
-		Desc:             occurrence.Goal,
-		Goal:             occurrence.Goal,
-		Model:            occurrence.Model,
-		ModelTopology:    cloneModelTopology(occurrence.ModelTopology),
-		Source:           TaskSourceCoordinator,
-		ParentID:         "",
-		Execution:        cloneExecutionContract(occurrence.Execution),
-		SideEffect:       occurrence.SideEffect,
-		Recovery:         occurrence.Recovery,
-		ReconcileTool:    occurrence.ReconcileTool,
-		SubagentProvider: occurrence.SubagentProvider,
+		Agent:             occurrence.Agent,
+		Desc:              occurrence.Goal,
+		Goal:              occurrence.Goal,
+		Model:             occurrence.Model,
+		ModelTopology:     cloneModelTopology(occurrence.ModelTopology),
+		ExecutionTarget:   occurrence.ResolvedExecutionTarget,
+		ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
+		Source:            TaskSourceCoordinator,
+		ParentID:          "",
+		Execution:         cloneExecutionContract(occurrence.Execution),
+		SideEffect:        occurrence.SideEffect,
+		Recovery:          occurrence.Recovery,
+		ReconcileTool:     occurrence.ReconcileTool,
 	}
 	if c.hasDurableEventJournal() {
 		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, ids[0])
@@ -1192,9 +1215,13 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve coordinator provider context: %w", err)
 	}
+	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(orchModelID)
+	if backendErr != nil {
+		return "", nil, fmt.Errorf("resolve coordinator execution backend: %w", backendErr)
+	}
 	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
-	orch, err := c.createGatedAgent(orchCtx, c.providerManager.GetProvider(orchModelID), agent.AgentConfig{
+	orch, err := c.createGatedAgent(orchCtx, gatedBackend.AgentProvider(orchCtx, executionTarget), agent.AgentConfig{
 		AdmissionContext:  orchInvocation.AdmissionContext,
 		Def:               orchDef,
 		TeamConfig:        &c.session.Config,

@@ -308,7 +308,11 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	}
 
 	replayedSD := ReduceToSessionData(lineage)
-	replayedTasks := ReduceToTodoList(lineage)
+	replayedTasks, err := ReplayTodoList(lineage)
+	if err != nil {
+		c.markSessionRecovery("canonical execution replay rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 
 	var emptyProjection bool
 	c.viewSessionData(func(sd *SessionData) {
@@ -1359,14 +1363,12 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"retries":               item.Retries,
 		"agent":                 item.Agent,
 		"goal":                  item.Goal,
-		"model_topology":        cloneModelTopology(item.ModelTopology),
 		"sidecar":               item.Sidecar,
 		"summarize":             item.Summarize,
 		"output_mode":           item.OutputMode,
 		"context_files":         item.ContextFiles,
 		"requires":              item.Requires,
 		"constraints":           item.Constraints,
-		"model":                 item.Model,
 		"skills":                item.Skills,
 		"injected_skills":       item.InjectedSkills,
 		"loaded_skills":         item.LoadedSkills,
@@ -1404,10 +1406,32 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"decision_base_rates":   item.DecisionBaseRates,
 		"decision_provenance":   item.DecisionProvenance,
 		"attempt":               item.Retries + 1,
-		"subagent_provider":     item.SubagentProvider,
 	}
-	if item.ProviderBinding != nil {
+	// A typed target is the sole durable execution identity for new
+	// occurrences. The legacy model/topology fields remain accepted below only
+	// for target-less historical projections.
+	if item.ExecutionTarget.IsZero() {
+		payload["model"] = item.Model
+		payload["model_topology"] = cloneModelTopology(item.ModelTopology)
+	}
+	// Canonical task occurrences persist ExecutionTarget/BackendBinding. Keep
+	// the old provider marker only when serializing a legacy, target-less
+	// projection so historical fixtures remain readable; newly admitted task
+	// transitions never dual-write the retired identity field.
+	if item.ExecutionTarget.IsZero() && strings.TrimSpace(item.SubagentProvider) != "" {
+		payload["subagent_provider"] = item.SubagentProvider
+	}
+	if item.ExecutionTarget.IsZero() && item.ProviderBinding != nil {
 		payload["provider_binding"] = item.ProviderBinding
+	}
+	if item.BackendBinding != nil {
+		payload["backend_binding"] = item.BackendBinding
+	}
+	if !item.ExecutionTarget.IsZero() {
+		payload["execution_target"] = item.ExecutionTarget
+	}
+	if len(item.ExecutionTopology) > 0 {
+		payload["execution_topology"] = cloneExecutionTopology(item.ExecutionTopology)
 	}
 	if item.RemediationContext != nil {
 		payload["remediation_context"] = item.RemediationContext

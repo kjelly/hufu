@@ -11,8 +11,8 @@ import (
 )
 
 func TestJSONStatusEventMarshals(t *testing.T) {
-	data, err := json.Marshal(jsonStatusEvent{Type: "start", Agent: "worker", Time: "2026-01-01T00:00:00Z"})
-	if err != nil || !strings.Contains(string(data), `"type":"start"`) {
+	data, err := json.Marshal(jsonStatusEvent{Type: "start", Agent: "worker", Time: "2026-01-01T00:00:00Z", ExecutionTarget: "codex/gpt-5.6-luna", Backend: "codex", BackendKind: "agent"})
+	if err != nil || !strings.Contains(string(data), `"type":"start"`) || !strings.Contains(string(data), `"execution_target":"codex/gpt-5.6-luna"`) || !strings.Contains(string(data), `"backend_kind":"agent"`) {
 		t.Fatalf("json = %q, err = %v", data, err)
 	}
 }

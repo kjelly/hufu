@@ -56,3 +56,19 @@ func (r *SubagentRegistry) Resolve(name string) (SubagentProvider, error) {
 	}
 	return provider, nil
 }
+
+// Snapshot returns stable compatibility sources for an explicit legacy
+// injection. It does not grant scheduler authority to this registry; normal
+// production construction derives ExecutionRegistry from team configuration.
+func (r *SubagentRegistry) Snapshot() map[string]SubagentProvider {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	providers := make(map[string]SubagentProvider, len(r.providers))
+	for name, provider := range r.providers {
+		providers[name] = provider
+	}
+	return providers
+}

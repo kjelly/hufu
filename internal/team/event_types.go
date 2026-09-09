@@ -45,7 +45,11 @@ const (
 	// after task_created but before the first turn that depends on it
 	// (docs/hufu-external-coding-agent-runtime-spec.md §7.4, §14.1: "persist
 	// provider_session_bound" happens between thread/start and turn/start).
+	// EventProviderSessionBound remains a legacy replay-only event name.
 	EventProviderSessionBound EventType = "provider_session_bound"
+	// EventBackendSessionBound is the canonical mutable backend-session event.
+	EventBackendSessionBound     EventType = "backend_session_bound"
+	EventExecutionTargetMigrated EventType = "execution_target_migrated"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -68,7 +72,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
-		EventModelProfileResolved, EventDecisionAdmitted, EventProviderSessionBound:
+		EventModelProfileResolved, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated:
 		return true
 	default:
 		return false

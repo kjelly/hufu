@@ -76,7 +76,10 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
-	if action == TargetedRecoveryRetry {
+	// A deterministic in-process override is an execution seam, not a
+	// provider request. Retrying it must retain the normal recovery lifecycle
+	// without requiring an unrelated provider proxy to start.
+	if action == TargetedRecoveryRetry && c.workerAgentOverride == nil {
 		if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
 			c.finalizePublicInvocationFailure(err)
 			return TargetedRecoveryReport{Action: action, TaskID: taskID}, err

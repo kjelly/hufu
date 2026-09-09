@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
@@ -380,6 +381,9 @@ func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
 	if err == nil && agentDef != nil {
 		return c.resolveAgentModel(agentDef, "")
 	}
+	if c.session != nil && c.session.Config.WorkerModel != "" {
+		return c.session.Config.WorkerModel
+	}
 	return c.session.Config.Generation.Model
 }
 
@@ -389,6 +393,9 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 	}
 	if def.Generation.Model != "" {
 		return def.Generation.Model
+	}
+	if c.session != nil && c.session.Config.WorkerModel != "" {
+		return c.session.Config.WorkerModel
 	}
 	return c.session.Config.Generation.Model
 }
@@ -452,10 +459,75 @@ func (c *Coordinator) sharedProviderSemaphoreState() *providerSemaphoreState {
 	return c.providerSemState
 }
 
+// BackendExecutionPolicy is the immutable concurrency policy of one admitted
+// worker execution target. It intentionally keys by backend, never by model
+// or legacy provider routing, so unrelated runtimes cannot share a limiter.
+type BackendExecutionPolicy struct {
+	Backend       string
+	MaxConcurrent int
+}
+
+// ResolveBackendExecutionPolicy derives the worker-attempt policy only from
+// the target frozen at admission and the backend configuration selected for
+// that target. It does not parse a model prefix or consult live model routing.
+func (c *Coordinator) ResolveBackendExecutionPolicy(target execution.ExecutionTarget) (BackendExecutionPolicy, error) {
+	if err := target.Validate(); err != nil {
+		return BackendExecutionPolicy{}, err
+	}
+	backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend)
+	if err != nil {
+		return BackendExecutionPolicy{}, err
+	}
+	policy := BackendExecutionPolicy{Backend: target.Backend}
+	if c == nil || c.session == nil {
+		return policy, nil
+	}
+	switch backend.Kind() {
+	case execution.BackendKindLLM:
+		policy.MaxConcurrent = c.session.Config.Providers[target.Backend].MaxConcurrent
+	case execution.BackendKindAgent:
+		policy.MaxConcurrent = c.session.Config.SubagentProviders[target.Backend].MaxConcurrent
+	}
+	return policy, nil
+}
+
+// executionBackendSemaphore returns the shared bucket for a frozen worker
+// target. A zero configured capacity deliberately produces no extra limiter.
+func (c *Coordinator) executionBackendSemaphore(target execution.ExecutionTarget) (chan struct{}, error) {
+	policy, err := c.ResolveBackendExecutionPolicy(target)
+	if err != nil || policy.MaxConcurrent <= 0 {
+		return nil, err
+	}
+	state := c.sharedBackendSemaphoreState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.sem == nil {
+		state.sem = make(map[string]chan struct{})
+	}
+	if sem := state.sem[policy.Backend]; sem != nil {
+		return sem, nil
+	}
+	sem := make(chan struct{}, policy.MaxConcurrent)
+	state.sem[policy.Backend] = sem
+	return sem, nil
+}
+
+func (c *Coordinator) sharedBackendSemaphoreState() *backendSemaphoreState {
+	c.backendSemStateMu.Lock()
+	defer c.backendSemStateMu.Unlock()
+	if c.backendSemState == nil {
+		c.backendSemState = &backendSemaphoreState{}
+	}
+	return c.backendSemState
+}
+
 // coordinatorModelID returns the team default model used by the coordinator for
 // model-aware token accounting (compaction records, context budget reporting).
 // It falls back to "default" when no team model is configured.
 func (c *Coordinator) coordinatorModelID() string {
+	if c.session != nil && c.session.Config.CoordinatorModel != "" {
+		return c.session.Config.CoordinatorModel
+	}
 	if c.session != nil && c.session.Config.Generation.Model != "" {
 		return c.session.Config.Generation.Model
 	}

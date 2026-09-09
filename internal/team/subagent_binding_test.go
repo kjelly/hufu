@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // Phase 1 tests (spec.md §36 PR-01/PR-02/PR-03): durable provider binding.
@@ -144,47 +145,87 @@ func newPrecedenceRegistry(extra ...string) *SubagentRegistry {
 	return registry
 }
 
-// TestProviderResolutionPrecedence proves the static precedence chain
-// (spec.md §6.4): TaskDef.SubagentProvider > AgentDef.SubagentProvider >
-// TeamConfig.SubagentProviderDefault > hufu-local, normalized to lowercase
-// and validated against SubagentRegistry.
-func TestProviderResolutionPrecedence(t *testing.T) {
+// TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission proves legacy
+// provider fields are consumed once, at canonical task admission. Scheduler
+// dispatch never calls the legacy resolution chain.
+func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T) {
+	admit := func(t *testing.T, c *Coordinator, task TaskDef, def *agent.AgentDef) execution.ExecutionTarget {
+		t.Helper()
+		registry := NewExecutionRegistry()
+		for _, backend := range []ExecutionBackend{
+			fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}},
+			fakeExecutionBackend{name: "codex", kind: execution.BackendKindAgent},
+			fakeExecutionBackend{name: "shadow", kind: execution.BackendKindAgent},
+		} {
+			if err := registry.Register(backend); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.SetExecutionRegistry(registry)
+		canonical, err := c.canonicalizeTaskOccurrence(task, def, "model-x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return canonical.ResolvedExecutionTarget
+	}
 	t.Run("defaults to hufu-local", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}}
-		got, err := c.resolveSubagentProvider(TaskDef{}, &agent.AgentDef{Name: "worker"})
-		if err != nil || got != localSubagentProviderName {
-			t.Fatalf("got=%q err=%v, want %q", got, err, localSubagentProviderName)
+		got := admit(t, c, TaskDef{}, &agent.AgentDef{Name: "worker"})
+		if got.Backend != "local" {
+			t.Fatalf("target=%q, want local/model-x", got)
 		}
 	})
 	t.Run("team default overrides hufu-local", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{SubagentProviderDefault: "Codex"}}}
 		c.SetSubagentRegistry(newPrecedenceRegistry("codex"))
-		got, err := c.resolveSubagentProvider(TaskDef{}, &agent.AgentDef{Name: "worker"})
-		if err != nil || got != "codex" {
-			t.Fatalf("got=%q err=%v, want %q (normalized to lowercase)", got, err, "codex")
+		got := admit(t, c, TaskDef{}, &agent.AgentDef{Name: "worker"})
+		if got.Backend != "codex" {
+			t.Fatalf("target=%q, want codex/model-x", got)
 		}
 	})
 	t.Run("agent default overrides team default", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{SubagentProviderDefault: "codex"}}}
 		c.SetSubagentRegistry(newPrecedenceRegistry("codex", "shadow"))
-		got, err := c.resolveSubagentProvider(TaskDef{}, &agent.AgentDef{Name: "worker", SubagentProvider: "shadow"})
-		if err != nil || got != "shadow" {
-			t.Fatalf("got=%q err=%v, want %q", got, err, "shadow")
+		got := admit(t, c, TaskDef{}, &agent.AgentDef{Name: "worker", SubagentProvider: "shadow"})
+		if got.Backend != "shadow" {
+			t.Fatalf("target=%q, want shadow/model-x", got)
 		}
 	})
 	t.Run("task pin overrides agent default", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{SubagentProviderDefault: "codex"}}}
 		c.SetSubagentRegistry(newPrecedenceRegistry("codex", "shadow"))
-		got, err := c.resolveSubagentProvider(TaskDef{SubagentProvider: "hufu-local"}, &agent.AgentDef{Name: "worker", SubagentProvider: "shadow"})
-		if err != nil || got != localSubagentProviderName {
-			t.Fatalf("got=%q err=%v, want the task-pinned %q", got, err, localSubagentProviderName)
+		got := admit(t, c, TaskDef{SubagentProvider: "hufu-local"}, &agent.AgentDef{Name: "worker", SubagentProvider: "shadow"})
+		if got.Backend != "local" {
+			t.Fatalf("target=%q, want the task-pinned local/model-x", got)
+		}
+	})
+	t.Run("qualified model overrides agent and team defaults", func(t *testing.T) {
+		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{SubagentProviderDefault: "codex"}}}
+		c.SetSubagentRegistry(newPrecedenceRegistry("codex"))
+		registry := NewExecutionRegistry()
+		for _, backend := range []ExecutionBackend{
+			fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}},
+			fakeExecutionBackend{name: "codex", kind: execution.BackendKindAgent},
+		} {
+			if err := registry.Register(backend); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.SetExecutionRegistry(registry)
+		canonical, err := c.canonicalizeTaskOccurrence(TaskDef{}, &agent.AgentDef{Name: "worker", SubagentProvider: "codex"}, "local/qwen3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := execution.ExecutionTarget{Backend: "local", Model: "qwen3"}
+		if canonical.ResolvedExecutionTarget != want {
+			t.Fatalf("target = %#v, want %#v", canonical.ResolvedExecutionTarget, want)
 		}
 	})
 	t.Run("unknown provider fails closed", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}}
-		got, err := c.resolveSubagentProvider(TaskDef{SubagentProvider: "does-not-exist"}, &agent.AgentDef{Name: "worker"})
-		if err == nil || !strings.Contains(err.Error(), "unknown subagent provider") {
-			t.Fatalf("got=%q err=%v, want a fail-closed unknown-provider error", got, err)
+		_, err := c.canonicalizeTaskOccurrence(TaskDef{SubagentProvider: "does-not-exist"}, &agent.AgentDef{Name: "worker"}, "model-x")
+		if err == nil || !strings.Contains(err.Error(), "unknown execution backend") {
+			t.Fatalf("err=%v, want a fail-closed unknown-backend error", err)
 		}
 	})
 }

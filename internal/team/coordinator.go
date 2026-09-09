@@ -19,6 +19,7 @@ import (
 	"github.com/kjelly/hufu/internal/audit"
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
@@ -102,6 +103,11 @@ type TaskDef struct {
 	Constraints      string   `json:"constraints,omitempty"`
 	Model            string   `json:"model,omitempty"`
 	ModelTopology    []string `json:"model_topology,omitempty"`
+	// ResolvedExecutionTarget is trusted runtime-owned state. It is never
+	// exposed through coordinator task JSON and is frozen into TodoItem at
+	// admission alongside the legacy model/provider fields during migration.
+	ResolvedExecutionTarget execution.ExecutionTarget   `json:"-" yaml:"-"`
+	ExecutionTopology       []execution.ExecutionTarget `json:"-" yaml:"-"`
 	// executionModelOverride is set only by the bounded non-durable
 	// extra-model leaf path. It is intentionally not serialized or accepted
 	// from coordinator/task input; the leaf receives an explicit single-model
@@ -355,6 +361,14 @@ type providerSemaphoreState struct {
 	sem map[string]chan struct{}
 }
 
+// backendSemaphoreState owns worker-attempt concurrency buckets. Unlike the
+// provider semaphore, its keys are immutable execution backend identities and
+// therefore include external agent runtimes such as Codex.
+type backendSemaphoreState struct {
+	mu  sync.Mutex
+	sem map[string]chan struct{}
+}
+
 type Coordinator struct {
 	mu                 sync.RWMutex
 	session            *TeamSession
@@ -550,6 +564,8 @@ type Coordinator struct {
 	// policy. It is shared with isolated extra-model clones.
 	providerSemStateMu sync.Mutex
 	providerSemState   *providerSemaphoreState
+	backendSemStateMu  sync.Mutex
+	backendSemState    *backendSemaphoreState
 	sessionTime        time.Time
 	stmWriteMu         sync.Mutex // serializes Read-Modify-Write STM operations to prevent lost-updates
 	ltmWriteMu         sync.Mutex // Protect LTM file reads and writes
@@ -757,6 +773,7 @@ type Coordinator struct {
 	toolResolver        ToolResolver
 	modelRuntime        ModelRuntime
 	subagentRegistry    *SubagentRegistry
+	executionRegistry   *ExecutionRegistry
 	experienceProcessor ExperienceProcessor
 	phaseWorkflow       *runtimeWorkflow
 }
@@ -1214,6 +1231,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		planReviewerModel:         roleModels.PlanReviewer,
 		maxConcurrent:             maxConcurrent,
 		providerSemState:          &providerSemaphoreState{},
+		backendSemState:           &backendSemaphoreState{},
 		sessionTime:               time.Now(),
 		hooks:                     hookRegistry,
 		rbashMode:                 rbashMode,
@@ -1309,6 +1327,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.toolResolver = &defaultToolResolver{c: c}
 	c.modelRuntime = &defaultModelRuntime{c: c}
 	c.subagentRegistry = newSubagentRegistryFor(c)
+	c.executionRegistry = newExecutionRegistryFor(c)
 	c.experienceProcessor = &defaultExperienceProcessor{c: c}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -1568,12 +1587,34 @@ func (c *Coordinator) Hooks() *hooks.HookRegistry {
 }
 
 func (c *Coordinator) report(event StatusEvent) {
+	c.enrichStatusExecutionIdentity(&event)
 	// Populate SSH session count automatically
 	if c.sshSessionMgr != nil {
 		event.SSHSessions = c.sshSessionMgr.Count()
 	}
 	if c.reportStatus != nil {
 		c.reportStatus(event)
+	}
+}
+
+// enrichStatusExecutionIdentity projects the immutable task target onto all
+// task-level reporter paths. Status consumers must not reverse-engineer a
+// backend from a model string, because qualified leaves are not authority.
+func (c *Coordinator) enrichStatusExecutionIdentity(event *StatusEvent) {
+	if c == nil || event == nil || event.TodoID == "" || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil || item.ID != event.TodoID || item.ExecutionTarget.IsZero() {
+			continue
+		}
+		event.ExecutionTarget = item.ExecutionTarget.String()
+		event.Backend = item.ExecutionTarget.Backend
+		event.Model = item.ExecutionTarget.Model
+		if backend, err := c.ExecutionRegistry().ResolveBackend(item.ExecutionTarget.Backend); err == nil {
+			event.BackendKind = string(backend.Kind())
+		}
+		return
 	}
 }
 
@@ -2052,28 +2093,86 @@ func (c *Coordinator) SetModelRuntime(runtime ModelRuntime) {
 	c.modelRuntime = runtime
 }
 
-// newSubagentRegistryFor builds a SubagentRegistry from c's current session
-// config: the reserved local provider plus every configured external
-// provider whose type is recognized. An unrecognized provider type is never
-// registered, so resolving it later fails closed as "unknown subagent
-// provider" (§27) instead of silently doing nothing.
-//
-// This is the single source of truth for registry construction — shared by
-// the real constructor (so a team.yaml `subagent-providers` entry is wired
-// in for every real run) and SubagentRegistry's own lazy fallback below
-// (used by tests/harnesses that construct a *Coordinator directly via
-// struct literal, bypassing the constructor entirely).
-func newSubagentRegistryFor(c *Coordinator) *SubagentRegistry {
-	registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+// configuredAgentProvidersFor builds the canonical external worker backends
+// from the immutable team configuration. The scheduler consumes this map
+// directly through ExecutionRegistry; the legacy SubagentRegistry is only a
+// compatibility facade for callers that still resolve providers by name.
+func configuredAgentProvidersFor(c *Coordinator) map[string]SubagentProvider {
+	providers := make(map[string]SubagentProvider)
+	// Codex is a built-in agent backend. A team may specialize its process
+	// settings through the legacy provider map during migration, but selecting
+	// codex/<model> never requires a team-local declaration.
+	codexConfig := agent.SubagentProviderConfig{
+		Type:           codexAppServerProviderType,
+		Command:        []string{"codex", "app-server"},
+		Protocol:       "app-server-v2",
+		ExecutionWorld: "local-sandbox",
+		InheritEnv:     []string{"PATH", "CODEX_HOME"},
+	}
 	if c != nil && c.session != nil {
+		if configured, ok := c.session.Config.SubagentProviders[codexSubagentProviderName]; ok && configured.Type == codexAppServerProviderType {
+			codexConfig = mergeCodexBackendConfig(codexConfig, configured)
+		}
+		providers[codexSubagentProviderName] = NewCodexSubagentProvider(c, codexSubagentProviderName, codexConfig)
 		for name, cfg := range c.session.Config.SubagentProviders {
+			if name == codexSubagentProviderName {
+				continue
+			}
+			if execution.CanonicalBackendName(name) == "local" {
+				continue // reserved built-in LLM backend; preflight rejects this configuration
+			}
 			if cfg.Type != codexAppServerProviderType {
 				continue
 			}
-			_ = registry.Register(NewCodexSubagentProvider(c, name, cfg))
+			providers[name] = NewCodexSubagentProvider(c, name, cfg)
 		}
+	} else {
+		providers[codexSubagentProviderName] = NewCodexSubagentProvider(c, codexSubagentProviderName, codexConfig)
+	}
+	return providers
+}
+
+// newSubagentRegistryFor builds the legacy provider facade from the same
+// canonical configured backend factory. It is retained for compatibility and
+// tests; production scheduler dispatch does not consult it.
+func newSubagentRegistryFor(c *Coordinator) *SubagentRegistry {
+	registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+	for _, provider := range configuredAgentProvidersFor(c) {
+		_ = registry.Register(provider)
 	}
 	return registry
+}
+
+// mergeCodexBackendConfig applies the built-in identity template while letting
+// an explicit command or environment allowlist replace the corresponding
+// vector atomically. Empty scalar fields inherit the built-in defaults.
+func mergeCodexBackendConfig(base, override agent.SubagentProviderConfig) agent.SubagentProviderConfig {
+	result := base
+	if override.Type != "" {
+		result.Type = override.Type
+	}
+	if len(override.Command) > 0 {
+		result.Command = append([]string(nil), override.Command...)
+	}
+	if override.Protocol != "" {
+		result.Protocol = override.Protocol
+	}
+	if override.StartupTimeout != "" {
+		result.StartupTimeout = override.StartupTimeout
+	}
+	if override.InterruptGrace != "" {
+		result.InterruptGrace = override.InterruptGrace
+	}
+	if override.ShutdownGrace != "" {
+		result.ShutdownGrace = override.ShutdownGrace
+	}
+	if override.ExecutionWorld != "" {
+		result.ExecutionWorld = override.ExecutionWorld
+	}
+	if override.InheritEnv != nil {
+		result.InheritEnv = append([]string(nil), override.InheritEnv...)
+	}
+	return result
 }
 
 func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
@@ -2090,6 +2189,98 @@ func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.subagentRegistry = registry
+	// Legacy callers that inject only a provider registry still receive a
+	// canonical execution registry, but the translation happens once at this
+	// compatibility boundary. The scheduler never consults SubagentRegistry.
+	if registry != nil && c.executionRegistry == nil {
+		canonical := NewExecutionRegistry()
+		if c.providerManager != nil {
+			_ = registerLLMExecutionBackend(canonical, "local", c.providerManager, NewHufuLocalSubagentProvider(c))
+		}
+		for name, provider := range registry.Snapshot() {
+			if name == localSubagentProviderName {
+				continue
+			}
+			backend, err := NewAgentExecutionBackend(name, provider)
+			if err == nil {
+				_ = canonical.Register(backend)
+			}
+		}
+		c.executionRegistry = canonical
+	}
+}
+
+// newExecutionRegistryFor is the unified worker runtime factory. LLM and
+// external-agent backends are constructed from canonical team configuration;
+// scheduler dispatch never treats the legacy provider registry as authority.
+func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
+	registry := NewExecutionRegistry()
+	if c == nil {
+		return registry
+	}
+	if c.providerManager != nil {
+		runner := NewHufuLocalSubagentProvider(c)
+		registered := map[string]bool{"local": true}
+		_ = registerLLMExecutionBackend(registry, "local", c.providerManager, runner)
+		if c.session != nil {
+			for name := range c.session.Config.Providers {
+				name = execution.CanonicalBackendName(name)
+				if name == "" || registered[name] {
+					continue // registered once below as the built-in local LLM backend
+				}
+				if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner); registerErr == nil {
+					registered[name] = true
+				}
+			}
+		}
+		// ProviderManager is also used by compatibility/test constructors that
+		// inject a configured provider map without copying those names into the
+		// TeamConfig. Mirror its public effective-provider view into the same
+		// canonical registry so those invocations do not fall back to local or
+		// bypass registry admission. Production scheduler code still resolves
+		// through this registry; ProviderManager remains an adapter detail.
+		for _, provider := range c.providerManager.EffectiveProviderRefs() {
+			name := execution.CanonicalBackendName(provider.Name)
+			if name == "" || registered[name] {
+				continue
+			}
+			if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner); registerErr == nil {
+				registered[name] = true
+			}
+		}
+	}
+	providers := configuredAgentProvidersFor(c)
+	for name, provider := range providers {
+		backend, err := NewAgentExecutionBackend(name, provider)
+		if err == nil {
+			_ = registry.Register(backend)
+		}
+	}
+	return registry
+}
+
+func registerLLMExecutionBackend(registry *ExecutionRegistry, name string, manager *agent.ProviderManager, runner AttemptRunner) error {
+	backend, err := NewLLMExecutionBackend(name, manager, runner)
+	if err != nil {
+		return err
+	}
+	return registry.Register(backend)
+}
+
+func (c *Coordinator) ExecutionRegistry() *ExecutionRegistry {
+	c.mu.RLock()
+	if c.executionRegistry != nil {
+		defer c.mu.RUnlock()
+		return c.executionRegistry
+	}
+	c.mu.RUnlock()
+	return newExecutionRegistryFor(c)
+}
+
+func (c *Coordinator) SetExecutionRegistry(registry *ExecutionRegistry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.executionRegistry = registry
 }
 
 func (c *Coordinator) ExperienceProcessor() ExperienceProcessor {
@@ -2122,6 +2313,7 @@ func (c *Coordinator) RuntimeServices() RuntimeServices {
 		ToolResolver:        c.ToolResolver(),
 		ModelRuntime:        c.ModelRuntime(),
 		SubagentRegistry:    c.SubagentRegistry(),
+		ExecutionRegistry:   c.ExecutionRegistry(),
 		ExperienceProcessor: c.ExperienceProcessor(),
 	}
 }
@@ -2159,6 +2351,9 @@ func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
 	}
 	if services.SubagentRegistry != nil {
 		c.SetSubagentRegistry(services.SubagentRegistry)
+	}
+	if services.ExecutionRegistry != nil {
+		c.SetExecutionRegistry(services.ExecutionRegistry)
 	}
 	if services.ExperienceProcessor != nil {
 		c.SetExperienceProcessor(services.ExperienceProcessor)

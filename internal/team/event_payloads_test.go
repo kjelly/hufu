@@ -328,6 +328,10 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 	workspace := t.TempDir()
 	worker := &failOnAttemptAgent{}
 	journal := &conditionalFailingJournal{err: errors.New("journal append failed")}
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatalf("NewProviderManager: %v", err)
+	}
 
 	c := &Coordinator{
 		session: &TeamSession{
@@ -346,6 +350,7 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 		reportStatus:    func(StatusEvent) {},
 		taskResultCache: make(map[string][]cachedTaskEntry),
 		executionRunID:  "run-retry",
+		providerManager: providerManager,
 	}
 	c.workerAgentOverride = worker
 	c.SetEventJournal(journal)
@@ -353,7 +358,7 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 	taskDef, item := createAdmittedTestTask(t, c, TaskDef{Agent: "worker", Goal: "flaky task", MaxRetries: 2, Recovery: RecoveryRetry})
 	todoID := item.ID
 
-	_, err := c.executeTask(context.Background(), taskDef, todoID)
+	_, err = c.executeTask(context.Background(), taskDef, todoID)
 	if err == nil {
 		t.Fatal("expected executeTask to fail on retry journal append failure")
 	}

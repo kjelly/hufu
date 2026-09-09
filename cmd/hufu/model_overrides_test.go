@@ -8,9 +8,7 @@ import (
 )
 
 func TestApplyCLIModelOverrides_Empty(t *testing.T) {
-	// Empty Generation.Model so the sidecar/guard fallback does not kick
-	// in. Pre-existing team.yaml/hufu.yaml sidecar/guard values stay
-	// intact when --model is not set.
+	// Pre-existing role targets stay intact when no dedicated override is set.
 	cfg := agent.TeamConfig{
 		Generation:   agent.GenerationParams{},
 		SidecarModel: "sidecar-from-yaml",
@@ -46,8 +44,11 @@ func TestApplyCLIModelOverrides_All(t *testing.T) {
 		GuardModel:    "cli-guard",
 	})
 
-	if cfg.Generation.Model != "cli-model" {
-		t.Errorf("Generation.Model = %q, want %q", cfg.Generation.Model, "cli-model")
+	if cfg.WorkerModel != "cli-model" {
+		t.Errorf("WorkerModel = %q, want %q", cfg.WorkerModel, "cli-model")
+	}
+	if cfg.Generation.Model != "from-yaml" {
+		t.Errorf("Generation.Model = %q, want unchanged %q", cfg.Generation.Model, "from-yaml")
 	}
 	if cfg.Generation.ContextWindow != 65536 {
 		t.Errorf("Generation.ContextWindow = %d, want 65536", cfg.Generation.ContextWindow)
@@ -78,27 +79,28 @@ func TestApplyCLIModelOverrides_Partial(t *testing.T) {
 		SidecarModel: "sidecar-from-yaml",
 		GuardModel:   "guard-from-yaml",
 	}
-	// Only --model is set. Sidecar/guard fall back to --model,
-	// so they get clobbered; temperature stays unchanged.
+	// Only --model is set. Role targets and legacy model stay unchanged.
 	applyCLIModelOverrides(&cfg, ModelCLIOverrides{Model: "cli-model"})
 
-	if cfg.Generation.Model != "cli-model" {
-		t.Errorf("Generation.Model = %q, want %q", cfg.Generation.Model, "cli-model")
+	if cfg.WorkerModel != "cli-model" {
+		t.Errorf("WorkerModel = %q, want %q", cfg.WorkerModel, "cli-model")
+	}
+	if cfg.Generation.Model != "from-yaml" {
+		t.Errorf("Generation.Model = %q, want unchanged %q", cfg.Generation.Model, "from-yaml")
 	}
 	if cfg.Generation.Temperature != "0.7" {
 		t.Errorf("Generation.Temperature = %q, want unchanged %q", cfg.Generation.Temperature, "0.7")
 	}
-	if cfg.SidecarModel != "cli-model" {
-		t.Errorf("SidecarModel = %q, want fallback %q (--model)", cfg.SidecarModel, "cli-model")
+	if cfg.SidecarModel != "sidecar-from-yaml" {
+		t.Errorf("SidecarModel = %q, want unchanged %q", cfg.SidecarModel, "sidecar-from-yaml")
 	}
-	if cfg.GuardModel != "cli-model" {
-		t.Errorf("GuardModel = %q, want fallback %q (--model)", cfg.GuardModel, "cli-model")
+	if cfg.GuardModel != "guard-from-yaml" {
+		t.Errorf("GuardModel = %q, want unchanged %q", cfg.GuardModel, "guard-from-yaml")
 	}
 }
 
 func TestApplyCLIGenerationOverridesToAgents_ForcesCLIOverrides(t *testing.T) {
-	// A real CLI flag is the highest-priority layer and must overwrite
-	// every agent's own Generation, even a deliberately-set one.
+	// A worker CLI override is highest-priority for workers only.
 	session := &team.TeamSession{
 		Config: agent.TeamConfig{
 			ProviderURL: "http://cli-host:11434/v1",
@@ -126,7 +128,11 @@ func TestApplyCLIGenerationOverridesToAgents_ForcesCLIOverrides(t *testing.T) {
 	})
 
 	for k, def := range session.Agents {
-		if def.Generation.Model != "cli-model" {
+		if k == "coordinator" {
+			if def.Generation.Model != "agent-own-model" {
+				t.Errorf("[%s] Generation.Model = %q, want unchanged coordinator model", k, def.Generation.Model)
+			}
+		} else if def.Generation.Model != "cli-model" {
 			t.Errorf("[%s] Generation.Model = %q, want %q", k, def.Generation.Model, "cli-model")
 		}
 		if def.Generation.Temperature != "0.2" {
@@ -207,25 +213,14 @@ func TestApplyCLIGenerationOverridesToAgents_NilSafe(t *testing.T) {
 	applyCLIGenerationOverridesToAgents(nil, ModelCLIOverrides{})
 }
 
-func TestApplyCLIModelOverrides_SidecarFallsBackToModel(t *testing.T) {
+func TestApplyCLIModelOverrides_ModelDoesNotFanOutToSidecarOrGuard(t *testing.T) {
 	cfg := agent.TeamConfig{}
 	applyCLIModelOverrides(&cfg, ModelCLIOverrides{
 		Model: "ollama/qwen3:8b",
 		// SidecarModel intentionally empty
 	})
-	if cfg.SidecarModel != "ollama/qwen3:8b" {
-		t.Errorf("SidecarModel = %q, want %q (fallback to --model)", cfg.SidecarModel, "ollama/qwen3:8b")
-	}
-}
-
-func TestApplyCLIModelOverrides_GuardFallsBackToModel(t *testing.T) {
-	cfg := agent.TeamConfig{}
-	applyCLIModelOverrides(&cfg, ModelCLIOverrides{
-		Model: "ollama/qwen3:8b",
-		// GuardModel intentionally empty
-	})
-	if cfg.GuardModel != "ollama/qwen3:8b" {
-		t.Errorf("GuardModel = %q, want %q (fallback to --model)", cfg.GuardModel, "ollama/qwen3:8b")
+	if cfg.SidecarModel != "" || cfg.GuardModel != "" {
+		t.Errorf("--model changed auxiliary targets: sidecar=%q guard=%q", cfg.SidecarModel, cfg.GuardModel)
 	}
 }
 
@@ -240,9 +235,8 @@ func TestApplyCLIModelOverrides_ExplicitSidecarWins(t *testing.T) {
 	if cfg.SidecarModel != "ollama/qwen3:1b" {
 		t.Errorf("SidecarModel = %q, want explicit %q", cfg.SidecarModel, "ollama/qwen3:1b")
 	}
-	// And guard still falls back to --model
-	if cfg.GuardModel != "ollama/qwen3:8b" {
-		t.Errorf("GuardModel = %q, want fallback %q", cfg.GuardModel, "ollama/qwen3:8b")
+	if cfg.GuardModel != "" {
+		t.Errorf("GuardModel = %q, want unchanged empty target", cfg.GuardModel)
 	}
 }
 

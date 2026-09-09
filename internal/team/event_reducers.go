@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 func pointerValueOrZero[T any](value *T) (zero T) {
@@ -319,6 +321,42 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventExecutionTargetMigrated) && e.TaskID != "" {
+			var payload ExecutionTargetMigratedPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				if item := taskMap[e.TaskID]; item != nil {
+					item.ExecutionTarget = payload.ExecutionTarget
+					if len(payload.ExecutionTopology) == 0 {
+						// Migration version 1 events written before topology
+						// persistence are singleton occurrences. Keep them readable
+						// while new events replay their complete ordered topology.
+						item.ExecutionTopology = []execution.ExecutionTarget{payload.ExecutionTarget}
+					} else {
+						item.ExecutionTopology = cloneExecutionTopology(payload.ExecutionTopology)
+					}
+					item.BackendBinding = backendBindingFromProviderBinding(item.ProviderBinding, payload.ExecutionTarget)
+					materializeLegacyIdentityShadow(item)
+				}
+			}
+			continue
+		}
+		if e.Type == string(EventBackendSessionBound) && e.TaskID != "" {
+			var payload BackendSessionBoundPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				if item := taskMap[e.TaskID]; item != nil {
+					if !payload.ExecutionTarget.IsZero() {
+						item.ExecutionTarget = payload.ExecutionTarget
+					}
+					item.BackendBinding = &BackendBinding{
+						Backend: payload.Backend, SessionID: payload.SessionID,
+						ExecutionWorldID: payload.ExecutionWorldID, CWD: payload.CWD,
+					}
+					item.ProviderBinding = providerBindingFromBackendBinding(item.BackendBinding)
+					materializeLegacyIdentityShadow(item)
+				}
+			}
+			continue
+		}
 		if e.Type == "criterion_re_evaluated" && e.TaskID != "" {
 			var payload struct {
 				Progress         TaskProgress `json:"progress"`
@@ -346,6 +384,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 					binding.ExecutionWorldID = payload.ExecutionWorldID
 					binding.CWD = payload.CWD
 					item.ProviderBinding = binding
+					materializeLegacyIdentityShadow(item)
 				}
 			}
 			continue
@@ -458,87 +497,90 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 
 		var payload struct {
-			ID                  string                     `json:"id"`
-			Phase               Phase                      `json:"phase"`
-			Action              *Action                    `json:"action"`
-			PlanTaskID          string                     `json:"plan_task_id"`
-			PlanFirst           *bool                      `json:"plan_first"`
-			PlanID              *string                    `json:"plan_id"`
-			ContractID          string                     `json:"contract_id"`
-			ContractHash        string                     `json:"contract_hash"`
-			ContractRevision    int                        `json:"contract_revision"`
-			Description         string                     `json:"description"`
-			Desc                string                     `json:"desc"`
-			Goal                string                     `json:"goal"`
-			Constraints         string                     `json:"constraints"`
-			Status              string                     `json:"status"`
-			Detail              string                     `json:"detail"`
-			CheckpointPause     *bool                      `json:"checkpoint_pause"`
-			OccurrenceRevision  int                        `json:"occurrence_revision"`
-			DispatchID          string                     `json:"dispatch_id"`
-			MaxRetries          int                        `json:"max_retries"`
-			Retries             int                        `json:"retries"`
-			Output              string                     `json:"output"`
-			Summary             string                     `json:"summary"`
-			Agent               string                     `json:"agent"`
-			Model               string                     `json:"model"`
-			ModelTopology       []string                   `json:"model_topology"`
-			Sidecar             bool                       `json:"sidecar"`
-			Summarize           bool                       `json:"summarize"`
-			OutputMode          string                     `json:"output_mode"`
-			ContextFiles        []string                   `json:"context_files"`
-			Requires            []string                   `json:"requires"`
-			Skills              []string                   `json:"skills"`
-			InjectedSkills      []string                   `json:"injected_skills"`
-			LoadedSkills        []string                   `json:"loaded_skills"`
-			Source              string                     `json:"source"`
-			ParentID            string                     `json:"parent_id"`
-			DependsOn           []string                   `json:"depends_on"`
-			OnFailure           string                     `json:"on_failure"`
-			OnFailureClasses    []TaskFailureClass         `json:"on_failure_classes"`
-			Escalate            bool                       `json:"escalate"`
-			AdversarialVerify   int                        `json:"adversarial_verify"`
-			Verify              string                     `json:"verify"`
-			VerifyMode          string                     `json:"verify_mode"`
-			VerifySpec          *VerificationSpec          `json:"verify_spec"`
-			VerifyResult        *VerificationResult        `json:"verify_result"`
-			WorksetBinding      *WorksetBinding            `json:"workset_binding"`
-			WorksetReceipt      *WorksetExpansionReceipt   `json:"workset_receipt"`
-			TypedResult         *TaskResult                `json:"typed_result"`
-			ExecutionReceipt    *ExecutionReceipt          `json:"execution_receipt"`
-			ExecutionReceipts   []ExecutionReceipt         `json:"execution_receipts"`
-			Kind                TaskKind                   `json:"kind"`
-			Advances            []string                   `json:"advances"`
-			ExpectedStateChange string                     `json:"expected_state_change"`
-			Progress            TaskProgress               `json:"progress"`
-			ProgressCriteria    []string                   `json:"progress_criteria"`
-			FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints"`
-			Execution           ExecutionContract          `json:"execution"`
-			Optional            bool                       `json:"optional"`
-			ResourceClaims      []string                   `json:"resource_claims"`
-			Resources           []ResourceClaim            `json:"resources"`
-			RecoveryHypothesis  *RecoveryHypothesis        `json:"recovery_hypothesis"`
-			SideEffect          SideEffectClass            `json:"side_effect"`
-			Recovery            RecoveryPolicy             `json:"recovery"`
-			ReconcileTool       string                     `json:"reconcile_tool"`
-			RecoveryState       string                     `json:"recovery_state"`
-			RuntimeError        *ExecutionError            `json:"runtime_error"`
-			Resolution          *TaskResolution            `json:"resolution"`
-			DiagnosticHints     []string                   `json:"diagnostic_hints"`
-			LastOperation       string                     `json:"last_operation"`
-			DecisionProfile     string                     `json:"decision_profile"`
-			DecisionOptions     []DecisionOption           `json:"decision_options"`
-			DecisionAssumptions []DecisionAssumption       `json:"decision_assumptions"`
-			DecisionFacts       map[string]any             `json:"decision_facts"`
-			DecisionArtifacts   []ArtifactRef              `json:"decision_artifacts"`
-			DecisionBaseRates   []BaseRateEvidence         `json:"decision_base_rates"`
-			DecisionProvenance  []EvidenceProvenance       `json:"decision_provenance"`
-			MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests"`
-			ContextManifests    []ContextInjectionManifest `json:"context_manifests"`
-			ResetForRetry       bool                       `json:"reset_for_retry"`
-			SubagentProvider    string                     `json:"subagent_provider"`
-			ProviderBinding     *ProviderBinding           `json:"provider_binding"`
-			RemediationContext  *RemediationContext        `json:"remediation_context"`
+			ID                  string                      `json:"id"`
+			Phase               Phase                       `json:"phase"`
+			Action              *Action                     `json:"action"`
+			PlanTaskID          string                      `json:"plan_task_id"`
+			PlanFirst           *bool                       `json:"plan_first"`
+			PlanID              *string                     `json:"plan_id"`
+			ContractID          string                      `json:"contract_id"`
+			ContractHash        string                      `json:"contract_hash"`
+			ContractRevision    int                         `json:"contract_revision"`
+			Description         string                      `json:"description"`
+			Desc                string                      `json:"desc"`
+			Goal                string                      `json:"goal"`
+			Constraints         string                      `json:"constraints"`
+			Status              string                      `json:"status"`
+			Detail              string                      `json:"detail"`
+			CheckpointPause     *bool                       `json:"checkpoint_pause"`
+			OccurrenceRevision  int                         `json:"occurrence_revision"`
+			DispatchID          string                      `json:"dispatch_id"`
+			MaxRetries          int                         `json:"max_retries"`
+			Retries             int                         `json:"retries"`
+			Output              string                      `json:"output"`
+			Summary             string                      `json:"summary"`
+			Agent               string                      `json:"agent"`
+			Model               string                      `json:"model"`
+			ModelTopology       []string                    `json:"model_topology"`
+			ExecutionTarget     execution.ExecutionTarget   `json:"execution_target"`
+			ExecutionTopology   []execution.ExecutionTarget `json:"execution_topology"`
+			Sidecar             bool                        `json:"sidecar"`
+			Summarize           bool                        `json:"summarize"`
+			OutputMode          string                      `json:"output_mode"`
+			ContextFiles        []string                    `json:"context_files"`
+			Requires            []string                    `json:"requires"`
+			Skills              []string                    `json:"skills"`
+			InjectedSkills      []string                    `json:"injected_skills"`
+			LoadedSkills        []string                    `json:"loaded_skills"`
+			Source              string                      `json:"source"`
+			ParentID            string                      `json:"parent_id"`
+			DependsOn           []string                    `json:"depends_on"`
+			OnFailure           string                      `json:"on_failure"`
+			OnFailureClasses    []TaskFailureClass          `json:"on_failure_classes"`
+			Escalate            bool                        `json:"escalate"`
+			AdversarialVerify   int                         `json:"adversarial_verify"`
+			Verify              string                      `json:"verify"`
+			VerifyMode          string                      `json:"verify_mode"`
+			VerifySpec          *VerificationSpec           `json:"verify_spec"`
+			VerifyResult        *VerificationResult         `json:"verify_result"`
+			WorksetBinding      *WorksetBinding             `json:"workset_binding"`
+			WorksetReceipt      *WorksetExpansionReceipt    `json:"workset_receipt"`
+			TypedResult         *TaskResult                 `json:"typed_result"`
+			ExecutionReceipt    *ExecutionReceipt           `json:"execution_receipt"`
+			ExecutionReceipts   []ExecutionReceipt          `json:"execution_receipts"`
+			Kind                TaskKind                    `json:"kind"`
+			Advances            []string                    `json:"advances"`
+			ExpectedStateChange string                      `json:"expected_state_change"`
+			Progress            TaskProgress                `json:"progress"`
+			ProgressCriteria    []string                    `json:"progress_criteria"`
+			FailureFingerprints []FailureFingerprint        `json:"failure_fingerprints"`
+			Execution           ExecutionContract           `json:"execution"`
+			Optional            bool                        `json:"optional"`
+			ResourceClaims      []string                    `json:"resource_claims"`
+			Resources           []ResourceClaim             `json:"resources"`
+			RecoveryHypothesis  *RecoveryHypothesis         `json:"recovery_hypothesis"`
+			SideEffect          SideEffectClass             `json:"side_effect"`
+			Recovery            RecoveryPolicy              `json:"recovery"`
+			ReconcileTool       string                      `json:"reconcile_tool"`
+			RecoveryState       string                      `json:"recovery_state"`
+			RuntimeError        *ExecutionError             `json:"runtime_error"`
+			Resolution          *TaskResolution             `json:"resolution"`
+			DiagnosticHints     []string                    `json:"diagnostic_hints"`
+			LastOperation       string                      `json:"last_operation"`
+			DecisionProfile     string                      `json:"decision_profile"`
+			DecisionOptions     []DecisionOption            `json:"decision_options"`
+			DecisionAssumptions []DecisionAssumption        `json:"decision_assumptions"`
+			DecisionFacts       map[string]any              `json:"decision_facts"`
+			DecisionArtifacts   []ArtifactRef               `json:"decision_artifacts"`
+			DecisionBaseRates   []BaseRateEvidence          `json:"decision_base_rates"`
+			DecisionProvenance  []EvidenceProvenance        `json:"decision_provenance"`
+			MemoryManifests     []MemoryInjectionManifest   `json:"memory_manifests"`
+			ContextManifests    []ContextInjectionManifest  `json:"context_manifests"`
+			ResetForRetry       bool                        `json:"reset_for_retry"`
+			SubagentProvider    string                      `json:"subagent_provider"`
+			ProviderBinding     *ProviderBinding            `json:"provider_binding"`
+			BackendBinding      *BackendBinding             `json:"backend_binding"`
+			RemediationContext  *RemediationContext         `json:"remediation_context"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -593,6 +635,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				Agent:               payload.Agent,
 				Model:               payload.Model,
 				ModelTopology:       cloneModelTopology(payload.ModelTopology),
+				ExecutionTarget:     payload.ExecutionTarget,
+				ExecutionTopology:   cloneExecutionTopology(payload.ExecutionTopology),
 				Sidecar:             payload.Sidecar,
 				Summarize:           payload.Summarize,
 				OutputMode:          payload.OutputMode,
@@ -640,6 +684,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				FailureEvent:        failureEvent,
 				SubagentProvider:    payload.SubagentProvider,
 				ProviderBinding:     cloneProviderBinding(payload.ProviderBinding),
+				BackendBinding:      cloneBackendBinding(payload.BackendBinding),
 				RemediationContext:  cloneRemediationContext(payload.RemediationContext),
 			}
 			taskMap[taskID] = item
@@ -698,6 +743,15 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.ProviderBinding != nil {
 			item.ProviderBinding = cloneProviderBinding(payload.ProviderBinding)
+		}
+		if payload.BackendBinding != nil {
+			item.BackendBinding = cloneBackendBinding(payload.BackendBinding)
+		}
+		if !payload.ExecutionTarget.IsZero() {
+			item.ExecutionTarget = payload.ExecutionTarget
+		}
+		if len(item.ExecutionTopology) == 0 && payload.ExecutionTopology != nil {
+			item.ExecutionTopology = cloneExecutionTopology(payload.ExecutionTopology)
 		}
 		if payload.RemediationContext != nil {
 			item.RemediationContext = cloneRemediationContext(payload.RemediationContext)
@@ -883,6 +937,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			// occurrence. PlanFirst/PlanID remain lifecycle-owned below.
 			restoreTodoOccurrenceContract(item, priorContract)
 		}
+		materializeLegacyIdentityShadow(item)
 		if e.Type == "task_created" {
 			frozenContracts[taskID] = true
 		}

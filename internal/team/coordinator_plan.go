@@ -70,6 +70,10 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 	if err != nil {
 		return nil, fmt.Errorf("resolve plan reviewer provider context: %w", err)
 	}
+	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(modelID)
+	if backendErr != nil {
+		return nil, fmt.Errorf("resolve plan reviewer execution backend: %w", backendErr)
+	}
 	pr := &planReviewer{
 		coordinator:                    c,
 		modelID:                        modelID,
@@ -80,7 +84,7 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
 		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
 	}
-	ag, err := c.createGatedAgent(ctx, c.providerManager.GetProvider(modelID), agent.AgentConfig{
+	ag, err := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, executionTarget), agent.AgentConfig{
 		Def: &agent.AgentDef{
 			Name:       "plan-reviewer",
 			System:     planReviewerSystemPrompt,

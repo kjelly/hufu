@@ -997,13 +997,17 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to resolve subagent provider: %v", canonicalizeErr)), nil
 		}
 		occurrence.ModelTopology = initialTaskModelTopology(agentDef, occurrence.Model)
+		occurrence.ExecutionTopology, canonicalizeErr = t.coordinator.resolveCanonicalTaskTopology(occurrence.ModelTopology, occurrence.ResolvedExecutionTarget, occurrence.SubagentProvider)
+		if canonicalizeErr != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to resolve execution topology: %v", canonicalizeErr)), nil
+		}
 		occurrences[i] = occurrence
 		batch[i] = TodoSpec{
 			Agent: occurrence.Agent, Desc: desc, Goal: occurrence.Goal,
 			Model: occurrence.Model, ModelTopology: cloneModelTopology(occurrence.ModelTopology),
+			ExecutionTarget: occurrence.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
 			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
 			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
-			SubagentProvider: occurrence.SubagentProvider,
 		}
 	}
 	if t.coordinator.hasDurableEventJournal() {

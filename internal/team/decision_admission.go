@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // DecisionAdmissionSchemaVersion versions the immutable decision admission
@@ -246,10 +247,8 @@ func loadDecisionAdmission(ctx context.Context, journal EventJournal, taskID str
 // decision admission, task_created, checkpoint replay, and execution. The
 // caller supplies the model selected at the creation boundary; no later
 // consumer is allowed to re-resolve it from mutable team configuration. The
-// same freeze applies to SubagentProvider: resolution happens exactly once,
-// here, before any TODO/model call
-// (docs/hufu-external-coding-agent-runtime-spec.md §6.4), and an unknown
-// provider fails the whole occurrence closed.
+// canonical target is resolved here, before any TODO/model call; legacy
+// SubagentProvider is retained solely as a dual-write compatibility shadow.
 func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentDef, resolvedModel string) (TaskDef, error) {
 	if def != nil {
 		task.Agent = strings.ToLower(strings.TrimSpace(def.Name))
@@ -258,12 +257,86 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if c != nil {
 		task.SideEffect, task.Recovery, task.ReconcileTool = c.PolicyEngine().ResolveRecoveryPolicy(def, task)
 	}
-	provider, err := c.resolveSubagentProvider(task, def)
+	legacyProvider := strings.TrimSpace(task.SubagentProvider)
+	if legacyProvider == "" && def != nil {
+		legacyProvider = strings.TrimSpace(def.SubagentProvider)
+	}
+	if legacyProvider == "" && c != nil && c.session != nil {
+		legacyProvider = strings.TrimSpace(c.session.Config.SubagentProviderDefault)
+	}
+	target, err := c.resolveCanonicalTaskTarget(task.Model, legacyProvider)
 	if err != nil {
 		return task, err
 	}
-	task.SubagentProvider = provider
+	task.ResolvedExecutionTarget = target
+	if target.Backend == "local" {
+		task.SubagentProvider = localSubagentProviderName
+	} else {
+		task.SubagentProvider = target.Backend
+	}
+	task.ExecutionTopology, err = c.resolveCanonicalTaskTopology(task.ModelTopology, target, task.SubagentProvider)
+	if err != nil {
+		return task, err
+	}
+	if err := c.validateExtraModelExecutionTopology(task); err != nil {
+		return task, err
+	}
 	return task, nil
+}
+
+func (c *Coordinator) resolveCanonicalTaskTarget(model, legacyProvider string) (execution.ExecutionTarget, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return execution.ExecutionTarget{}, nil
+	}
+	selector, err := execution.ParseExecutionSelector(model)
+	if err != nil {
+		return execution.ExecutionTarget{}, err
+	}
+	// A qualified selector is an explicit canonical target. It outranks a
+	// legacy provider marker even when that marker is still present on the
+	// agent or team for compatibility (for example, -m local/qwen with an old
+	// subagent-provider: codex setting).
+	if selector.Backend == "" {
+		// A non-local legacy provider is durable compatibility evidence only for
+		// a bare model. Preserve it without treating the model remainder as a
+		// competing backend prefix.
+		if backend := execution.CanonicalBackendName(legacyProvider); backend != "" && backend != localSubagentProviderName {
+			target := execution.ExecutionTarget{Backend: backend, Model: model}
+			resolved, resolveErr := c.ExecutionRegistry().ResolveBackend(target.Backend)
+			if resolveErr != nil {
+				return execution.ExecutionTarget{}, fmt.Errorf("resolve execution target %q: %w", target, resolveErr)
+			}
+			if validateErr := resolved.ValidateTarget(context.Background(), target); validateErr != nil {
+				return execution.ExecutionTarget{}, fmt.Errorf("validate execution target %q: %w", target, validateErr)
+			}
+			return target, nil
+		}
+	}
+	defaultBackend := "local"
+	if c != nil && c.session != nil && c.session.Config.DefaultLLMBackend != "" {
+		defaultBackend = c.session.Config.DefaultLLMBackend
+	}
+	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+	return target, err
+}
+
+func (c *Coordinator) resolveCanonicalTaskTopology(models []string, primary execution.ExecutionTarget, legacyProvider string) ([]execution.ExecutionTarget, error) {
+	if len(models) == 0 {
+		if primary.IsZero() {
+			return nil, nil
+		}
+		return []execution.ExecutionTarget{primary}, nil
+	}
+	topology := make([]execution.ExecutionTarget, 0, len(models))
+	for _, model := range models {
+		target, err := c.resolveCanonicalTaskTarget(model, legacyProvider)
+		if err != nil {
+			return nil, err
+		}
+		topology = append(topology, target)
+	}
+	return topology, nil
 }
 
 // validateTaskOccurrenceAdmission validates the one durable marker that

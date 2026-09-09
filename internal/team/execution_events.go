@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 const executionEventsFile = "execution-events.jsonl"
@@ -57,6 +58,9 @@ type ExecutionEvent struct {
 	Attempt              int             `json:"attempt"`
 	Status               string          `json:"status"`
 	Model                string          `json:"model,omitempty"`
+	ExecutionTarget      string          `json:"execution_target,omitempty"`
+	Backend              string          `json:"backend,omitempty"`
+	BackendKind          string          `json:"backend_kind,omitempty"`
 	TaskType             string          `json:"task_type,omitempty"`
 	Skills               []string        `json:"skills,omitempty"`
 	TeamRevision         string          `json:"team_revision,omitempty"`
@@ -630,6 +634,8 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	contractID, contractHash, contractRevision := "", "", 0
 	var phase Phase
 	var provider string
+	var target execution.ExecutionTarget
+	var backendKind execution.BackendKind
 	var artifactRefs []ArtifactRef
 	var failureSignature string
 
@@ -637,18 +643,21 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		phase = c.phaseWorkflow.State()
 	}
 
-	if c.providerManager != nil {
-		if p := c.providerManager.GetProvider(model); p != nil {
-			provider = p.Name()
-		}
+	if selector, err := execution.ParseExecutionSelector(model); err == nil && selector.Backend != "" {
+		provider = execution.CanonicalBackendName(selector.Backend)
+	} else {
+		provider = "local"
 	}
-	if provider == "" {
-		if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
-			provider = parts[0]
-		}
+	if item := c.todoItemByID(taskID); item != nil {
+		target = item.ExecutionTarget
 	}
 
 	if item := c.todoItemByID(taskID); item != nil {
+		if !target.IsZero() {
+			if backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend); err == nil {
+				backendKind = backend.Kind()
+			}
+		}
 		contractID, contractHash, contractRevision = item.ContractID, item.ContractHash, item.ContractRevision
 		if item.TypedResult != nil {
 			artifactRefs = append([]ArtifactRef(nil), item.TypedResult.Artifacts...)
@@ -673,6 +682,9 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		Attempt:          attempt,
 		Status:           status,
 		Model:            model,
+		ExecutionTarget:  target.String(),
+		Backend:          target.Backend,
+		BackendKind:      string(backendKind),
 		TaskType:         taskType,
 		Skills:           skills,
 		TeamRevision:     teamRevision,

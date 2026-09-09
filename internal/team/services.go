@@ -7,6 +7,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
@@ -155,6 +156,16 @@ type ModelRuntime interface {
 // model-list silently retarget a resumed or retried occurrence. Ephemeral
 // callers retain the normal model-resolution path.
 func (c *Coordinator) resolveTaskExecutionModel(def *agent.AgentDef, task TaskDef, todoID string) (string, error) {
+	if target := task.ResolvedExecutionTarget; !target.IsZero() {
+		// A canonical target is the durable authority. LLM profile/admission
+		// paths must retain its backend-qualified identity; external agent
+		// backends receive only their protocol model leaf.
+		fallback := task.Model
+		if strings.TrimSpace(task.executionModelOverride) != "" {
+			fallback = task.executionModelOverride
+		}
+		return c.executionModelIDForTarget(target, fallback), nil
+	}
 	if strings.TrimSpace(task.executionModelOverride) != "" {
 		return task.executionModelOverride, nil
 	}
@@ -162,6 +173,36 @@ func (c *Coordinator) resolveTaskExecutionModel(def *agent.AgentDef, task TaskDe
 		return model, nil
 	}
 	return c.ModelRuntime().ResolveTaskModel(def, task)
+}
+
+// executionModelIDForTarget returns the selector representation appropriate
+// for downstream runtime consumers. Language-model admission and context
+// profiling need the complete backend-qualified identity so a replayed
+// named provider cannot fall back to the local provider. External agent
+// protocols receive only the model leaf; their backend is already selected by
+// ExecutionTarget and the adapter supplies the backend binding separately.
+func (c *Coordinator) executionModelIDForTarget(target execution.ExecutionTarget, fallback string) string {
+	if target.IsZero() {
+		return fallback
+	}
+	if c != nil {
+		if backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend); err == nil {
+			if backend.Kind() == execution.BackendKindAgent {
+				return target.Model
+			}
+			if backend.Kind() == execution.BackendKindLLM {
+				// The built-in local backend has no competing provider namespace;
+				// retain its historical leaf model for Fantasy/context telemetry.
+				// Named LLM backends must keep the qualified selector to prevent
+				// provider-profile admission from falling back to local.
+				if target.Backend == "local" {
+					return target.Model
+				}
+				return target.String()
+			}
+		}
+	}
+	return fallback
 }
 
 // initialTaskModelTopology freezes the model leaves selected for a new task
@@ -193,7 +234,7 @@ func (c *Coordinator) frozenTaskOccurrenceModel(todoID string) (string, bool) {
 	if item == nil {
 		return "", false
 	}
-	return item.Model, true
+	return c.executionModelIDForTarget(item.ExecutionTarget, item.Model), true
 }
 
 // setRestoredTodoIDs records which Todo occurrences came from a persisted
@@ -340,6 +381,7 @@ type RuntimeServices struct {
 	ToolResolver        ToolResolver
 	ModelRuntime        ModelRuntime
 	SubagentRegistry    *SubagentRegistry
+	ExecutionRegistry   *ExecutionRegistry
 	ExperienceProcessor ExperienceProcessor
 }
 
@@ -655,9 +697,9 @@ func (r *defaultModelRuntime) ProviderFor(modelID string) (*agent.OpenAICompatib
 	if r == nil || r.c == nil || r.c.providerManager == nil {
 		return nil, fmt.Errorf("model runtime provider is unavailable")
 	}
-	provider := r.c.providerManager.GetProvider(modelID)
-	if provider == nil {
-		return nil, fmt.Errorf("no provider for model %q", modelID)
+	backend, target, err := r.c.gatedAgentBackendForModel(modelID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model runtime execution backend: %w", err)
 	}
-	return provider, nil
+	return backend.AgentProvider(context.Background(), target), nil
 }

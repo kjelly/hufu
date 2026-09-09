@@ -1162,16 +1162,19 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 }
 
 type jsonStatusEvent struct {
-	Type          string                            `json:"type"`
-	Team          string                            `json:"team,omitempty"`
-	Agent         string                            `json:"agent,omitempty"`
-	TodoID        string                            `json:"todo_id,omitempty"`
-	Model         string                            `json:"model,omitempty"`
-	Message       string                            `json:"message,omitempty"`
-	Tool          string                            `json:"tool,omitempty"`
-	Time          string                            `json:"time"`
-	ContextWindow *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
-	ModelProfile  *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
+	Type            string                            `json:"type"`
+	Team            string                            `json:"team,omitempty"`
+	Agent           string                            `json:"agent,omitempty"`
+	TodoID          string                            `json:"todo_id,omitempty"`
+	Model           string                            `json:"model,omitempty"`
+	ExecutionTarget string                            `json:"execution_target,omitempty"`
+	Backend         string                            `json:"backend,omitempty"`
+	BackendKind     string                            `json:"backend_kind,omitempty"`
+	Message         string                            `json:"message,omitempty"`
+	Tool            string                            `json:"tool,omitempty"`
+	Time            string                            `json:"time"`
+	ContextWindow   *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
+	ModelProfile    *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
 }
 
 func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
@@ -1180,7 +1183,7 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
-		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
+		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(os.Stderr).Encode(encoded)
@@ -1764,6 +1767,21 @@ func renderDryRun(result *team.DryRunResult) {
 		)
 	}
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Model:"), result.Model)
+	for _, target := range []struct {
+		role   string
+		target string
+	}{
+		{"Worker", result.WorkerTarget},
+		{"Coordinator", result.CoordinatorTarget},
+		{"Sidecar", result.SidecarTarget},
+		{"Guard", result.GuardTarget},
+		{"Judge", result.JudgeTarget},
+		{"Plan reviewer", result.PlanReviewerTarget},
+	} {
+		if target.target != "" {
+			fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render(target.role+":"), target.target)
+		}
+	}
 	if result.SidecarModel != "" {
 		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel)
 	}

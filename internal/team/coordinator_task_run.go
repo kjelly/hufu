@@ -22,6 +22,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
@@ -150,11 +151,11 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if err != nil || admission.Decision == ContextWindowCannotFit || admission.Messages == nil {
 			continue
 		}
-		provider, err := c.ModelRuntime().ProviderFor(candidateID)
-		if err != nil {
+		languageModelBackend, candidateTarget, backendErr := c.gatedAgentBackendForModel(candidateID)
+		if backendErr != nil {
 			continue
 		}
-		model, err := provider.LanguageModel(ctx, candidateID)
+		model, err := languageModelBackend.LanguageModel(ctx, candidateTarget)
 		if err != nil {
 			continue
 		}
@@ -269,6 +270,12 @@ func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
+	// Extra-model leaves execute against a private Todo projection cloned from
+	// the parent. Preserve the leaf's admitted target before that projection is
+	// reloaded; otherwise replaying the parent item would retarget every leaf
+	// to the primary backend when model names overlap.
+	leafTarget := task.ResolvedExecutionTarget
+	leafTopology := cloneExecutionTopology(task.ExecutionTopology)
 	// Re-resolve the occurrence before any execution branch only when the Todo
 	// is durable. The scheduler's TaskDef is mutable by design for local
 	// coordination, and an ephemeral Todo is only a status carrier; replacing
@@ -281,6 +288,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 				task.executionModelOverride = modelOverlay
 				task.Model = modelOverlay
 				task.ModelTopology = []string{modelOverlay}
+				if !leafTarget.IsZero() {
+					task.ResolvedExecutionTarget = leafTarget
+					task.ExecutionTopology = leafTopology
+				}
 			}
 			if leafExecution && c.workerAgentOverride != nil {
 				task.Execution.RequiresResult = false
@@ -755,7 +766,7 @@ retryLoop:
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("retrying result-contract failure with fallback model %s", resolvedModel)).withTodoID(todoID))
 			} else if escalate {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-					if _, escErr := c.ModelRuntime().ProviderFor(next); escErr == nil {
+					if _, _, escErr := c.gatedAgentBackendForModel(next); escErr == nil {
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("escalating model %s → %s (attempt %d)", resolvedModel, next, attempt)).withTodoID(todoID))
 						resolvedModel = next
 					} else {
@@ -766,7 +777,21 @@ retryLoop:
 		}
 		attemptCtx := parentCtx
 		invocation := providerBoundInvocationContext{ModelID: resolvedModel}
-		if c.workerAgentOverride == nil {
+		// Provider-bound context/profile admission is an LLM capability only.
+		// Agent backends own their protocol and must reach dispatch without an
+		// OpenAI-compatible metadata lookup or provider proxy startup.
+		requiresProviderContext := c.workerAgentOverride == nil
+		if requiresProviderContext && task.ResolvedExecutionTarget.IsZero() {
+			return "", fmt.Errorf("task %q has no admitted execution target", todoID)
+		}
+		if requiresProviderContext {
+			backend, backendErr := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+			if backendErr != nil {
+				return "", backendErr
+			}
+			requiresProviderContext = backend.Kind() == execution.BackendKindLLM
+		}
+		if requiresProviderContext {
 			var bindErr error
 			attemptCtx, invocation, bindErr = c.resolveProviderBoundInvocationContext(parentCtx, resolvedModel, agentDef)
 			if bindErr != nil {
@@ -1015,36 +1040,50 @@ retryLoop:
 			if c.workerAgentOverride != nil {
 				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
 			} else {
-				// task.SubagentProvider is the durable occurrence's frozen provider
-				// (canonicalizeTaskOccurrence resolved and validated it once, at
-				// admission). For a durable Todo, task was just re-derived from the
-				// canonical projection above via taskDefFromTodoItem, so a later
-				// config change can never retarget an in-flight retry/resume
-				// (docs/hufu-external-coding-agent-runtime-spec.md §6.4, §7.3).
-				provider, providerErr := c.SubagentRegistry().Resolve(task.SubagentProvider)
-				if providerErr != nil {
-					err = providerErr
+				// The durable target was admitted before task_created. All normal,
+				// retry, and resume attempts resolve it through the unified registry;
+				// a zero target is a broken admission invariant, never permission to
+				// re-select a provider from legacy fields.
+				target := task.ResolvedExecutionTarget
+				if target.IsZero() {
+					err = fmt.Errorf("task %q has no admitted execution target", todoID)
+					return
+				}
+				backend, backendErr := c.ExecutionRegistry().ResolveBackend(target.Backend)
+				if backendErr != nil {
+					err = backendErr
 				} else {
-					var providerBinding *ProviderBinding
+					var backendBinding *BackendBinding
 					if durable := c.todoItemByID(todoID); durable != nil {
-						providerBinding = durable.ProviderBinding
+						backendBinding = durable.BackendBinding
 					}
-					attemptResult, runErr := provider.RunAttempt(taskCtx, AttemptRequest{
-						RunID:           runID,
-						BranchID:        c.activeBranchID(),
-						TaskID:          todoID,
-						Attempt:         attempt,
-						Agent:           agentDef,
-						Task:            task,
-						Prompt:          currentPrompt,
-						ModelID:         resolvedModel,
-						MaxSteps:        stepBudget,
-						Tools:           resolvedTools,
-						History:         conversationHistory,
-						Provider:        task.SubagentProvider,
-						ProviderBinding: providerBinding,
-						timing:          timing,
-					})
+					attemptResult, runErr := func() (AttemptResult, error) {
+						backendSem, policyErr := c.executionBackendSemaphore(target)
+						if policyErr != nil {
+							return AttemptResult{}, policyErr
+						}
+						backendSlot, acquireErr := acquireSem(taskCtx, backendSem)
+						if acquireErr != nil {
+							return AttemptResult{}, acquireErr
+						}
+						defer backendSlot.release()
+						return backend.RunAttempt(taskCtx, AttemptRequest{
+							RunID:           runID,
+							BranchID:        c.activeBranchID(),
+							TaskID:          todoID,
+							Attempt:         attempt,
+							Agent:           agentDef,
+							Task:            task,
+							Prompt:          currentPrompt,
+							ModelID:         target.Model,
+							MaxSteps:        stepBudget,
+							Tools:           resolvedTools,
+							History:         conversationHistory,
+							ExecutionTarget: target,
+							BackendBinding:  backendBinding,
+							timing:          timing,
+						})
+					}()
 					// An external provider's canonical result is Hufu-owned
 					// Go code's own output (§9.3), not a provider claim —
 					// route it through the same storage path hufu-local's
@@ -1133,15 +1172,15 @@ retryLoop:
 			// "MUST NOT be overloaded as the only provider/session field" means
 			// ProducerID staying the isolated-worker identity is not enough on
 			// its own. SessionID/ExecutionWorldID come from the durable
-			// ProviderBinding (already persisted before any turn ran, §7.4) since
+			// BackendBinding (already persisted before any turn ran, §7.4) since
 			// they outlive any one attempt; ProviderTurnID is this attempt's own,
 			// diagnostic-only, so it comes from the attempt itself.
 			SubagentProvider: task.SubagentProvider,
 			ProviderTurnID:   attemptProviderTurnID,
 		}
-		if durable := c.todoItemByID(todoID); durable != nil && durable.ProviderBinding != nil {
-			receipt.ProviderSessionID = durable.ProviderBinding.SessionID
-			receipt.ExecutionWorldID = durable.ProviderBinding.ExecutionWorldID
+		if durable := c.todoItemByID(todoID); durable != nil && durable.BackendBinding != nil {
+			receipt.ProviderSessionID = durable.BackendBinding.SessionID
+			receipt.ExecutionWorldID = durable.BackendBinding.ExecutionWorldID
 		}
 		if err == nil {
 			zero := 0
@@ -1283,10 +1322,24 @@ retryLoop:
 							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
-								workerCtx, repairInvocation, bindErr := c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
-								if bindErr != nil {
-									c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair provider context: %v", bindErr)).withTodoID(todoID))
-									return nil, fmt.Errorf("resolve protocol repair provider context: %w", bindErr)
+								var repairInvocation providerBoundInvocationContext
+								if c.repairAgentOverride == nil {
+									if task.ResolvedExecutionTarget.IsZero() {
+										return nil, fmt.Errorf("protocol repair requires an admitted execution target")
+									}
+									backend, backendErr := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+									if backendErr != nil {
+										return nil, fmt.Errorf("resolve protocol repair backend: %w", backendErr)
+									}
+									if backend.Kind() != execution.BackendKindLLM {
+										return nil, fmt.Errorf("protocol result repair is unsupported for agent execution backend %q", task.ResolvedExecutionTarget.Backend)
+									}
+									var bindErr error
+									workerCtx, repairInvocation, bindErr = c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
+									if bindErr != nil {
+										c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("failed to resolve protocol repair provider context: %v", bindErr)).withTodoID(todoID))
+										return nil, fmt.Errorf("resolve protocol repair provider context: %w", bindErr)
+									}
 								}
 								if c.repairAgentOverride != nil {
 									repairAg = c.repairAgentOverride
@@ -1300,7 +1353,11 @@ retryLoop:
 										return nil, fmt.Errorf("resolve protocol repair tools: %w", resolveErr)
 									}
 									repairTools = resolvedRepairTools
-									repairAg, rErr = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
+									gatedBackend, executionTarget, gatedErr := c.gatedAgentBackendForTarget(task.ResolvedExecutionTarget)
+									if gatedErr != nil {
+										return nil, fmt.Errorf("resolve protocol repair execution backend: %w", gatedErr)
+									}
+									repairAg, rErr = c.createGatedAgent(workerCtx, gatedBackend.AgentProvider(workerCtx, executionTarget), agent.AgentConfig{
 										Def:               agentDef,
 										TeamConfig:        &c.session.Config,
 										WorkDir:           c.projectDir,
@@ -1756,7 +1813,7 @@ retryLoop:
 			conversationHistory = nil
 			if !frozenOccurrenceModel {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
-					if _, providerErr := c.ModelRuntime().ProviderFor(next); providerErr == nil {
+					if _, _, providerErr := c.gatedAgentBackendForModel(next); providerErr == nil {
 						protocolFallbackModel = next
 					}
 				}
@@ -2636,7 +2693,22 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	}
 
 	workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
-	workerCtx, repairInvocation, bindErr := c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
+	var repairInvocation providerBoundInvocationContext
+	var bindErr error
+	if c.repairAgentOverride == nil {
+		if task.ResolvedExecutionTarget.IsZero() {
+			bindErr = fmt.Errorf("protocol repair requires an admitted execution target")
+		} else {
+			backend, backendErr := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+			if backendErr != nil {
+				bindErr = fmt.Errorf("resolve protocol repair backend: %w", backendErr)
+			} else if backend.Kind() != execution.BackendKindLLM {
+				bindErr = fmt.Errorf("protocol result repair is unsupported for agent execution backend %q", task.ResolvedExecutionTarget.Backend)
+			} else {
+				workerCtx, repairInvocation, bindErr = c.resolveProviderBoundInvocationContext(workerCtx, resolvedModel, agentDef)
+			}
+		}
+	}
 	if bindErr != nil {
 		if receiptErr := c.persistProtocolRepairPreparationFailure(item, agentName, priorAttempts+1, repairPrompt, priorAttempts, repairHistory, bindErr); receiptErr != nil {
 			bindErr = errors.Join(bindErr, receiptErr)
@@ -2657,14 +2729,19 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			err = resolveErr
 		} else {
 			repairTools = resolvedRepairTools
-			repairAgent, err = c.createGatedAgent(workerCtx, c.providerManager.GetProvider(resolvedModel), agent.AgentConfig{
-				Def:               agentDef,
-				TeamConfig:        &c.session.Config,
-				WorkDir:           c.projectDir,
-				MaxSteps:          1,
-				InvocationModelID: resolvedModel,
-				AdmissionContext:  repairInvocation.AdmissionContext,
-			}, resolvedRepairTools.Tools)
+			gatedBackend, executionTarget, gatedErr := c.gatedAgentBackendForTarget(task.ResolvedExecutionTarget)
+			if gatedErr != nil {
+				err = fmt.Errorf("resolve protocol repair execution backend: %w", gatedErr)
+			} else {
+				repairAgent, err = c.createGatedAgent(workerCtx, gatedBackend.AgentProvider(workerCtx, executionTarget), agent.AgentConfig{
+					Def:               agentDef,
+					TeamConfig:        &c.session.Config,
+					WorkDir:           c.projectDir,
+					MaxSteps:          1,
+					InvocationModelID: resolvedModel,
+					AdmissionContext:  repairInvocation.AdmissionContext,
+				}, resolvedRepairTools.Tools)
+			}
 		}
 	}
 	if err != nil {
@@ -2870,19 +2947,30 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 		rescueDef = &agent.AgentDef{Name: agentName, Generation: agent.GenerationParams{Model: resolvedModel}}
 	}
 	rescueDef = c.injectWorkerContext(ctx, rescueDef)
-	ctx, rescueInvocation, bindErr := c.resolveProviderBoundInvocationContext(ctx, resolvedModel, rescueDef)
-	if bindErr != nil {
-		return ""
+	var rescueInvocation providerBoundInvocationContext
+	if c.workerAgentOverride == nil {
+		if task.ResolvedExecutionTarget.IsZero() {
+			return ""
+		}
+		backend, backendErr := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+		if backendErr != nil || backend.Kind() != execution.BackendKindLLM {
+			return ""
+		}
+		var bindErr error
+		ctx, rescueInvocation, bindErr = c.resolveProviderBoundInvocationContext(ctx, resolvedModel, rescueDef)
+		if bindErr != nil {
+			return ""
+		}
 	}
 	// Rebuild the agent with no tools. Merely telling the original agent not to
 	// call tools is insufficient: a model that hit its step limit often makes
 	// another tool call instead of writing the requested summary.
 	if c.workerAgentOverride == nil {
-		provider, providerErr := c.ModelRuntime().ProviderFor(resolvedModel)
-		if providerErr != nil || agentDef == nil {
+		gatedBackend, target, backendErr := c.gatedAgentBackendForTarget(task.ResolvedExecutionTarget)
+		if backendErr != nil || agentDef == nil {
 			return ""
 		}
-		rescueAgent, createErr := c.createGatedAgent(ctx, provider, agent.AgentConfig{
+		rescueAgent, createErr := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
 			Def:               rescueDef,
 			TeamConfig:        &c.session.Config,
 			WorkDir:           c.projectDir,
@@ -4639,15 +4727,25 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 		return nil, nil, err
 	}
 	resolvedTask.Model = modelID
-	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, modelID, def)
-	if err != nil {
-		return nil, nil, err
-	}
 	agentDef := def
 	if overrideModel != "" && !durableOccurrence {
 		overriddenDef := *def
 		overriddenDef.Generation.Model = overrideModel
 		agentDef = &overriddenDef
+	}
+	var gatedBackend GatedAgentBackend
+	var target execution.ExecutionTarget
+	if !resolvedTask.ResolvedExecutionTarget.IsZero() {
+		gatedBackend, target, err = c.gatedAgentBackendForTarget(resolvedTask.ResolvedExecutionTarget)
+	} else {
+		gatedBackend, target, err = c.gatedAgentBackendForModel(modelID)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, modelID, agentDef)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	agentDef = c.injectWorkerContext(ctx, agentDef)
@@ -4659,11 +4757,7 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	if err != nil {
 		return nil, nil, err
 	}
-	provider, err := c.ModelRuntime().ProviderFor(modelID)
-	if err != nil {
-		return nil, nil, err
-	}
-	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
+	ag, err := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
 		Def:               agentDef,
 		TeamConfig:        &c.session.Config,
 		WorkDir:           c.projectDir,

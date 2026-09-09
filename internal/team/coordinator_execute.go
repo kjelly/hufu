@@ -334,6 +334,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if agentDef != nil {
 			t.ModelTopology = initialTaskModelTopology(agentDef, resolvedModel)
 		}
+		t.ExecutionTopology, canonicalizeErr = c.resolveCanonicalTaskTopology(t.ModelTopology, t.ResolvedExecutionTarget, t.SubagentProvider)
+		if canonicalizeErr != nil {
+			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
+		}
+		if canonicalizeErr = c.validateExtraModelExecutionTopology(t); canonicalizeErr != nil {
+			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
+		}
 		tasks[i] = t
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:          t.ID,
@@ -350,6 +357,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			Constraints:         t.Constraints,
 			Model:               resolvedModel,
 			ModelTopology:       cloneModelTopology(t.ModelTopology),
+			ExecutionTarget:     t.ResolvedExecutionTarget,
+			ExecutionTopology:   cloneExecutionTopology(t.ExecutionTopology),
 			Sidecar:             t.Sidecar,
 			Summarize:           t.Summarize,
 			OutputMode:          t.OutputMode,
@@ -384,7 +393,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			DecisionArtifacts:   append([]ArtifactRef(nil), t.DecisionArtifacts...),
 			DecisionBaseRates:   cloneBaseRateEvidence(t.DecisionBaseRates),
 			DecisionProvenance:  cloneEvidenceProvenance(t.DecisionProvenance),
-			SubagentProvider:    t.SubagentProvider,
 		}
 	}
 	// The successful exact initial-policy validation above is the sole point at

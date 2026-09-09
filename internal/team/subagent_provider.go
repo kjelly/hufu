@@ -9,6 +9,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // TaskResultSink is task-scoped: an attempt may submit evidence, but cannot
@@ -28,13 +29,15 @@ type AttemptRequest struct {
 	Timeout                 time.Duration
 	Tools                   ResolvedWorkerTools
 	History                 []fantasy.Message
-	// Provider is the durable occurrence's resolved SubagentProvider name
-	// (task.SubagentProvider at dispatch time). It is an assertion from Hufu,
-	// not a value the provider may set or override
-	// (docs/hufu-external-coding-agent-runtime-spec.md §8.2).
-	Provider string
-	// ProviderBinding carries the durable provider/session identity for this
-	// occurrence, when one exists. Nil for hufu-local.
+	// ExecutionTarget and BackendBinding are the canonical immutable target
+	// and mutable session evidence consumed by ExecutionBackend. They are the
+	// only execution identity fields the scheduler populates.
+	ExecutionTarget execution.ExecutionTarget
+	BackendBinding  *BackendBinding
+	// Provider and ProviderBinding remain adapter-only compatibility fields for
+	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
+	// them from the canonical fields immediately before invoking that interface.
+	Provider        string
 	ProviderBinding *ProviderBinding
 	// timing is package-private so Hufu-local can contribute to the existing
 	// receipt timing accumulator without exposing Fantasy internals in the DTO.

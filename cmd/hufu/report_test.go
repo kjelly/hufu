@@ -9,6 +9,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -152,7 +153,7 @@ func TestReportShowsProviderIdentity(t *testing.T) {
 		StartedAt: time.Now(),
 		Todos: []*team.TodoItem{
 			{ID: "1", Agent: "worker", Desc: "codex task", Status: team.TaskDone, SubagentProvider: "codex",
-				ProviderBinding: &team.ProviderBinding{Provider: "codex", SessionID: "thread-secret-session-id"}},
+				ProviderBinding: &team.ProviderBinding{Provider: "codex", SessionID: "thread-secret-session-id"}, ExecutionTarget: execution.ExecutionTarget{Backend: "codex", Model: "gpt-5.6-luna"}},
 			{ID: "2", Agent: "worker", Desc: "local task", Status: team.TaskDone, SubagentProvider: "hufu-local"},
 			{ID: "3", Agent: "worker", Desc: "legacy task", Status: team.TaskDone},
 		},
@@ -162,6 +163,9 @@ func TestReportShowsProviderIdentity(t *testing.T) {
 
 	if !strings.Contains(report, "| Provider |") {
 		t.Fatalf("report missing Provider column header:\n%s", report)
+	}
+	if !strings.Contains(report, "| Target |") || !strings.Contains(report, "codex/gpt-5.6-luna") {
+		t.Fatalf("report missing canonical execution target:\n%s", report)
 	}
 	if !strings.Contains(report, "| codex |") {
 		t.Fatalf("report missing the codex-backed task's provider identity:\n%s", report)
@@ -205,9 +209,9 @@ func TestCharacterizationReportProjectsGenericChildStates(t *testing.T) {
 	}
 	taskSummary := report[taskSummaryStart : taskSummaryStart+taskSummaryEnd]
 	for _, want := range []string{
-		"| 1 | ● | worker | hufu-local | process alpha |",
-		"| 2 | ✗ | worker | hufu-local | process beta |",
-		"| 3 | ○ | worker | hufu-local | process gamma |",
+		"| 1 | ● | worker |  | hufu-local | process alpha |",
+		"| 2 | ✗ | worker |  | hufu-local | process beta |",
+		"| 3 | ○ | worker |  | hufu-local | process gamma |",
 	} {
 		if !strings.Contains(taskSummary, want) {
 			t.Fatalf("task summary missing canonical task state/description %q:\n%s", want, taskSummary)

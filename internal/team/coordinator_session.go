@@ -942,6 +942,12 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			}
 			break
 		}
+		if err := c.migrateLegacyExecutionTarget(ctx, it); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
 		ensureAdmission := func() bool {
@@ -1243,6 +1249,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	return TaskDef{
 		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
 		Agent: it.Agent, Goal: goal, Constraints: it.Constraints, Model: it.Model, ModelTopology: cloneModelTopology(it.ModelTopology),
+		ResolvedExecutionTarget: it.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(it.ExecutionTopology),
 		Sidecar: it.Sidecar, Summarize: it.Summarize, OutputMode: it.OutputMode,
 		ContextFiles: append([]string(nil), it.ContextFiles...), Requires: append([]string(nil), it.Requires...),
 		Verify: it.Verify, VerifyMode: it.VerifyMode,

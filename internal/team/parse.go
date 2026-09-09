@@ -87,6 +87,9 @@ type teamConfigYAML struct {
 	AutoReport           bool                             `yaml:"auto-report"`
 	AllowFreeTextResults bool                             `yaml:"allow-free-text-results"`
 	Model                string                           `yaml:"model"`
+	WorkerModel          string                           `yaml:"worker-model"`
+	CoordinatorModel     string                           `yaml:"coordinator-model"`
+	DefaultLLMBackend    string                           `yaml:"default-llm-backend"`
 	ContextWindow        int                              `yaml:"context-window"`
 	Temperature          string                           `yaml:"temperature"`
 	MaxTokens            string                           `yaml:"max-tokens"`
@@ -98,6 +101,7 @@ type teamConfigYAML struct {
 	ProviderURL          string                           `yaml:"provider-url"`
 	ProviderAPIKey       string                           `yaml:"provider-api-key"`
 	Providers            map[string]config.ProviderConfig `yaml:"providers"`
+	Backends             map[string]config.BackendConfig  `yaml:"backends"`
 	ModelList            []config.ModelEntry              `yaml:"model-list"`
 	SidecarModel         string                           `yaml:"sidecar-model"`
 	GuardModel           string                           `yaml:"guard-model"`
@@ -887,6 +891,15 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		TopK:            yc.TopK,
 		ReasoningEffort: yc.ReasoningEffort,
 	}
+	if yc.WorkerModel != "" {
+		cfg.WorkerModel = yc.WorkerModel
+	}
+	if yc.CoordinatorModel != "" {
+		cfg.CoordinatorModel = yc.CoordinatorModel
+	}
+	if yc.DefaultLLMBackend != "" {
+		cfg.DefaultLLMBackend = yc.DefaultLLMBackend
+	}
 	if yc.MaxTokens != "" {
 		cfg.Generation.MaxTokens = yc.MaxTokens
 	}
@@ -910,6 +923,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if len(yc.Providers) > 0 {
 		cfg.Providers = yc.Providers
+	}
+	if len(yc.Backends) > 0 {
+		cfg.Backends = yc.Backends
 	}
 	if len(yc.ModelList) > 0 {
 		cfg.ModelList = yc.ModelList
@@ -1232,6 +1248,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 				StartupTimeout: provider.StartupTimeout, InterruptGrace: provider.InterruptGrace, ShutdownGrace: provider.ShutdownGrace,
 				MaxEventBytes: provider.MaxEventBytes, MaxTranscriptBytes: provider.MaxTranscriptBytes,
 				ExecutionWorld: provider.ExecutionWorld, InheritEnv: append([]string(nil), provider.InheritEnv...),
+				MaxConcurrent: provider.MaxConcurrent,
 			}
 		}
 	}

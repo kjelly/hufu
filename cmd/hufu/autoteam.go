@@ -221,14 +221,19 @@ func keywordBestTeam(prompt string, candidates []sidecar.TeamSummary) string {
 func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	_ = ctx // coordinator-sidecar initialization is lazy; generation uses the caller context.
 	cfg := config.LoadConfig()
-	model := firstNonEmpty(opts.sidecarModelOverride, opts.modelOverride, cfg.SidecarModel, cfg.Model)
+	// Team selection is an auxiliary LLM role. It must not silently inherit a
+	// worker or coordinator target, either of which may be an agent backend.
+	model := firstNonEmpty(opts.sidecarModelOverride, cfg.SidecarModel)
 	if model == "" {
 		return nil
 	}
 	url := config.ResolveProviderURL(opts.providerURL, "", "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
-	workspace := getWorkspace()
-	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-team-selection", Providers: cfg.Providers}}
+	session := &team.TeamSession{Config: agent.TeamConfig{Name: "preflight-team-selection", Providers: cfg.Providers}}
+	if err := preflightSidecarTarget(session, cfg, model, nil); err != nil {
+		return nil
+	}
+	session.Workspace = getWorkspace()
 	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil

@@ -7,14 +7,16 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 type DryRunAgentInfo struct {
-	Name   string
-	Role   string
-	Model  string
-	Tools  []string
-	Skills []string
+	Name            string
+	Role            string
+	Model           string
+	ExecutionTarget string
+	Tools           []string
+	Skills          []string
 }
 
 type DryRunSkillInfo struct {
@@ -27,6 +29,12 @@ type DryRunResult struct {
 	TeamName           string
 	Model              string
 	SidecarModel       string
+	WorkerTarget       string
+	CoordinatorTarget  string
+	SidecarTarget      string
+	GuardTarget        string
+	JudgeTarget        string
+	PlanReviewerTarget string
 	ResolvedProfile    ExecutionProfile
 	Agents             []DryRunAgentInfo
 	AllSkills          []DryRunSkillInfo
@@ -40,14 +48,20 @@ type DryRunResult struct {
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
 	orchDef := c.GetOrchestratorDef()
 
-	_ = EnsureWorkspaceDirs(c.session.Workspace)
-
 	result := &DryRunResult{
 		UserPrompt:      userPrompt,
 		ResolvedProfile: c.ExecutionProfile(),
 	}
 	if c.session != nil && c.session.Config.Name != "" {
 		result.TeamName = c.session.Config.Name
+	}
+	if c.session != nil {
+		result.WorkerTarget = canonicalDryRunTarget(c.session.Config.WorkerModel, c.session.Config.DefaultLLMBackend)
+		result.CoordinatorTarget = canonicalDryRunTarget(c.session.Config.CoordinatorModel, c.session.Config.DefaultLLMBackend)
+		result.SidecarTarget = canonicalDryRunTarget(c.session.Config.SidecarModel, c.session.Config.DefaultLLMBackend)
+		result.GuardTarget = canonicalDryRunTarget(c.session.Config.GuardModel, c.session.Config.DefaultLLMBackend)
+		result.JudgeTarget = canonicalDryRunTarget(c.session.Config.JudgeModel, c.session.Config.DefaultLLMBackend)
+		result.PlanReviewerTarget = canonicalDryRunTarget(c.session.Config.PlanReviewerModel, c.session.Config.DefaultLLMBackend)
 	}
 	if orchDef != nil {
 		result.Model = c.resolveAgentModel(orchDef, "")
@@ -119,11 +133,12 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 				tools = []string{"agent", "finish", "load_skill", "save_skill", "ask_user"}
 			}
 			result.Agents = append(result.Agents, DryRunAgentInfo{
-				Name:   def.Name,
-				Role:   role,
-				Model:  model,
-				Tools:  tools,
-				Skills: skills,
+				Name:            def.Name,
+				Role:            role,
+				Model:           model,
+				ExecutionTarget: canonicalDryRunTarget(model, c.session.Config.DefaultLLMBackend),
+				Tools:           tools,
+				Skills:          skills,
 			})
 		}
 	}
@@ -131,6 +146,21 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	c.report(c.newEvent("done").withAgent("coordinator").withMessage("dry-run complete (no LLM calls)").withTodoID(CoordTodoID))
 
 	return result, nil
+}
+
+func canonicalDryRunTarget(raw, defaultBackend string) string {
+	selector, err := execution.ParseExecutionSelector(raw)
+	if err != nil || selector.Model == "" {
+		return raw
+	}
+	backend := selector.Backend
+	if backend == "" {
+		backend = execution.CanonicalBackendName(defaultBackend)
+		if backend == "" {
+			backend = "local"
+		}
+	}
+	return (execution.ExecutionTarget{Backend: backend, Model: selector.Model}).String()
 }
 
 func cloneTaskDef(td TaskDef) TaskDef {

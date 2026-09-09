@@ -14,6 +14,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 type statusProjectionSource struct {
@@ -227,16 +228,21 @@ func (a directTerminationAgentWithResult) Generate(ctx context.Context, call fan
 func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordinator {
 	t.Helper()
 	workspace := t.TempDir()
-	def := &agent.AgentDef{Name: "worker", Role: "worker"}
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatalf("NewProviderManager: %v", err)
+	}
+	def := &agent.AgentDef{Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}}
 	c := &Coordinator{
-		session:      &TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "test", Timeout: 10}},
-		sessionData:  NewSession(),
-		taskTracker:  NewTaskTracker(),
-		agentCache:   make(map[string]fantasy.Agent),
-		agentPool:    &mockAgentPool{resolveDef: def, resolveKey: "worker"},
-		reportStatus: func(StatusEvent) {},
-		projectDir:   workspace,
-		sessionTime:  time.Now(),
+		session:         &TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "test", Timeout: 10}},
+		sessionData:     NewSession(),
+		taskTracker:     NewTaskTracker(),
+		agentCache:      make(map[string]fantasy.Agent),
+		agentPool:       &mockAgentPool{resolveDef: def, resolveKey: "worker"},
+		reportStatus:    func(StatusEvent) {},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		providerManager: providerManager,
 	}
 	c.workerAgentOverride = directTerminationAgentWithResult{worker: worker, coordinator: c}
 	return c
@@ -652,15 +658,20 @@ func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *t
 	}
 	defer repo.Close()
 	c.contextRepo = repo
-	// Empty model configuration makes agent.CreateAgent return its validation
-	// error. An empty cache forces RunDirectAgent through that creation branch.
+	// A language-model backend without the private gated-agent constructor
+	// capability reaches the direct-agent construction failure after canonical
+	// admission. It avoids relying on the forbidden empty-target legacy setup.
 	c.agentCache = map[string]fantasy.Agent{}
 	c.workerAgentOverride = nil
-	providerManager, err := agent.NewProviderManager("", "", nil)
-	if err != nil {
+	c.providerManager = nil
+	registry := NewExecutionRegistry()
+	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{
+		name: "local", kind: execution.BackendKindLLM,
+		caps: execution.BackendCapabilities{DirectLanguageModel: true},
+	}}); err != nil {
 		t.Fatal(err)
 	}
-	c.providerManager = providerManager
+	c.SetExecutionRegistry(registry)
 
 	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
 	if err == nil || result != nil {

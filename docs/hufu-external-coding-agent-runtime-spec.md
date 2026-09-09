@@ -298,17 +298,23 @@ Once a durable occurrence has a provider binding, provider resolution MUST read 
 
 Live team/agent configuration MUST NOT retarget the occurrence.
 
-## INV-04 — Provider identity and model identity are separate
+## INV-04 — Execution target is one immutable worker identity
 
-Hufu MUST distinguish:
+An admitted worker occurrence is identified by its canonical
+`ExecutionTarget`:
 
 ```text
-worker provider: codex
-Codex model: gpt-...
-Hufu coordinator model: ...
+backend: codex
+model: gpt-...
 ```
 
-Provider routing MUST NOT be overloaded into `TaskDef.Model`.
+The scheduler resolves that target only through `ExecutionRegistry` and must
+not reconstruct it from mutable model/provider configuration. Coordinator,
+sidecar, guard, and reviewer targets remain independently resolved LLM-role
+targets; selecting a worker target never changes them. During compatibility
+migration, legacy `Model` and `SubagentProvider` fields are a dual-written
+shadow only and may be read only to synthesize a historical target before an
+occurrence is dispatched.
 
 ## INV-05 — Result proposal is untrusted
 

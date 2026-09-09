@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
@@ -16,25 +18,30 @@ import (
 var ErrTasksUnresolved = errors.New("tasks unresolved")
 
 type StatusEvent struct {
-	Type        string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout", "model_profile_resolved"
-	TeamName    string
-	Agent       string
-	Message     string
-	ToolName    string
-	ToolArgs    string
-	ToolResult  string
-	Step        int
-	Todos       []*TodoItem
-	Decisions   []DecisionIndexEntry
-	SkillName   string
-	Model       string
-	Duration    time.Duration
-	ModelTime   time.Duration
-	ToolTime    time.Duration
-	TodoID      string // ID of the TodoItem this event belongs to (set for worker-task events)
-	Output      string // Final output text (set in done events for task-level events)
-	SSHSessions int
-	Data        map[string]any
+	Type       string // "start", "step", "tool_call", "tool_result", "done", "error", "text", "todos_updated", "skill_used", "loop_warning", "timing", "judge", "skeptic", "memory_learning", "budget_exceeded", "task_timeout", "model_profile_resolved"
+	TeamName   string
+	Agent      string
+	Message    string
+	ToolName   string
+	ToolArgs   string
+	ToolResult string
+	Step       int
+	Todos      []*TodoItem
+	Decisions  []DecisionIndexEntry
+	SkillName  string
+	Model      string
+	Duration   time.Duration
+	ModelTime  time.Duration
+	ToolTime   time.Duration
+	TodoID     string // ID of the TodoItem this event belongs to (set for worker-task events)
+	Output     string // Final output text (set in done events for task-level events)
+	// Execution identity is populated from the durable TodoItem for task-level
+	// events. These are metadata-only canonical values, never credentials.
+	ExecutionTarget string `json:"execution_target,omitempty"`
+	Backend         string `json:"backend,omitempty"`
+	BackendKind     string `json:"backend_kind,omitempty"`
+	SSHSessions     int
+	Data            map[string]any
 	// ContextWindowTelemetry is typed and content-free. It is separate from
 	// Data so admission reporting cannot accidentally carry model content.
 	ContextWindowTelemetry *ContextWindowTelemetryEvent
@@ -242,32 +249,41 @@ type TodoItem struct {
 	// is intentionally different for every dispatch, including resume.
 	OccurrenceRevision int    `json:"occurrence_revision,omitempty"`
 	DispatchID         string `json:"dispatch_id,omitempty"`
-	Model              string
+	// Model is retained in memory as a compatibility shadow for callers that
+	// still build TaskDefs from a TodoItem. Canonical occurrences persist their
+	// typed ExecutionTarget instead; MarshalJSON suppresses this field whenever
+	// that target is present.
+	Model string `json:"model,omitempty"`
 	// ModelTopology is the immutable ordered model topology for this durable
 	// task occurrence. The first model is the primary; remaining models are
 	// explicit initial fanout leaves.
-	ModelTopology  []string `json:"model_topology,omitempty"`
-	Sidecar        bool     `json:"sidecar,omitempty"`
-	Summarize      bool     `json:"summarize,omitempty"`
-	OutputMode     string   `json:"output_mode,omitempty"`
-	ContextFiles   []string `json:"context_files,omitempty"`
-	Requires       []string `json:"requires,omitempty"`
-	Skills         []string
-	InjectedSkills []string
-	LoadedSkills   []string
-	StartedAt      time.Time
-	EndedAt        time.Time
-	ModelTime      time.Duration
-	ToolTime       time.Duration
-	Source         string
-	ParentID       string
-	DependsOn      []string                 // IDs of tasks that must complete before this one starts
-	Verify         string                   // Command to run to verify the task
-	VerifyMode     string                   // success, expected_failure, or observation
-	VerifySpec     *VerificationSpec        `json:"verify_spec,omitempty"`
-	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
-	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
-	VerifyResult   *VerificationResult
+	ModelTopology []string `json:"model_topology,omitempty"`
+	// ExecutionTarget and ExecutionTopology are the canonical, immutable
+	// execution identity admitted for this occurrence. Legacy model/provider
+	// fields are dual-written only during the migration period.
+	ExecutionTarget   execution.ExecutionTarget   `json:"execution_target,omitzero"`
+	ExecutionTopology []execution.ExecutionTarget `json:"execution_topology,omitempty"`
+	Sidecar           bool                        `json:"sidecar,omitempty"`
+	Summarize         bool                        `json:"summarize,omitempty"`
+	OutputMode        string                      `json:"output_mode,omitempty"`
+	ContextFiles      []string                    `json:"context_files,omitempty"`
+	Requires          []string                    `json:"requires,omitempty"`
+	Skills            []string
+	InjectedSkills    []string
+	LoadedSkills      []string
+	StartedAt         time.Time
+	EndedAt           time.Time
+	ModelTime         time.Duration
+	ToolTime          time.Duration
+	Source            string
+	ParentID          string
+	DependsOn         []string                 // IDs of tasks that must complete before this one starts
+	Verify            string                   // Command to run to verify the task
+	VerifyMode        string                   // success, expected_failure, or observation
+	VerifySpec        *VerificationSpec        `json:"verify_spec,omitempty"`
+	WorksetBinding    *WorksetBinding          `json:"workset_binding,omitempty"`
+	WorksetReceipt    *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
+	VerifyResult      *VerificationResult
 	// RuntimeError preserves a structured runtime/provider failure so phase
 	// aggregation does not degrade it into an unclassified worker error.
 	RuntimeError      *ExecutionError      `json:"runtime_error,omitempty"`
@@ -331,6 +347,34 @@ type TodoItem struct {
 	// occurrence. Its SessionID/TurnID MAY transition from empty to populated
 	// as execution progresses; Provider itself does not change.
 	ProviderBinding *ProviderBinding `json:"provider_binding,omitempty"`
+	BackendBinding  *BackendBinding  `json:"backend_binding,omitempty"`
+}
+
+// MarshalJSON keeps historical target-less checkpoints/events readable while
+// ensuring newly admitted typed occurrences do not continue the retired
+// model/provider identity split. Unmarshal remains the ordinary struct
+// decoder, so old checkpoints and event payloads remain decode-compatible.
+func (item TodoItem) MarshalJSON() ([]byte, error) {
+	type todoItemWire TodoItem
+	wire := todoItemWire(item)
+	if !item.ExecutionTarget.IsZero() {
+		wire.Model = ""
+		wire.ModelTopology = nil
+		wire.SubagentProvider = ""
+		wire.ProviderBinding = nil
+	}
+	return json.Marshal(wire)
+}
+
+func (item *TodoItem) UnmarshalJSON(data []byte) error {
+	type todoItemWire TodoItem
+	var wire todoItemWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*item = TodoItem(wire)
+	materializeLegacyIdentityShadow(item)
+	return nil
 }
 
 type TodoList struct {
@@ -355,34 +399,36 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
-	PlanTaskID       string
-	PlanFirst        bool
-	PlanID           string
-	Phase            Phase
-	Action           *Action
-	ContractID       string
-	ContractHash     string
-	ContractRevision int
-	Agent            string
-	Desc             string
-	Goal             string
-	Constraints      string
-	Model            string
-	ModelTopology    []string
-	Sidecar          bool
-	Summarize        bool
-	OutputMode       string
-	ContextFiles     []string
-	Requires         []string
-	Source           string
-	ParentID         string
-	Verify           string
-	VerifyMode       string
-	VerifySpec       *VerificationSpec
-	WorksetBinding   *WorksetBinding
-	WorksetReceipt   *WorksetExpansionReceipt
-	MaxRetries       int
-	OnFailure        string
+	PlanTaskID        string
+	PlanFirst         bool
+	PlanID            string
+	Phase             Phase
+	Action            *Action
+	ContractID        string
+	ContractHash      string
+	ContractRevision  int
+	Agent             string
+	Desc              string
+	Goal              string
+	Constraints       string
+	Model             string
+	ModelTopology     []string
+	ExecutionTarget   execution.ExecutionTarget
+	ExecutionTopology []execution.ExecutionTarget
+	Sidecar           bool
+	Summarize         bool
+	OutputMode        string
+	ContextFiles      []string
+	Requires          []string
+	Source            string
+	ParentID          string
+	Verify            string
+	VerifyMode        string
+	VerifySpec        *VerificationSpec
+	WorksetBinding    *WorksetBinding
+	WorksetReceipt    *WorksetExpansionReceipt
+	MaxRetries        int
+	OnFailure         string
 	// OnFailureClasses mirrors TaskDef.OnFailureClasses (coordinator.go):
 	// which TaskFailureClass values authorize this task's on_failure
 	// back-edge. It must survive the durable TodoSpec/TodoItem round trip
@@ -419,15 +465,39 @@ type TodoSpec struct {
 	// ProviderBinding from it when ProviderBinding is left nil.
 	SubagentProvider string
 	ProviderBinding  *ProviderBinding
+	BackendBinding   *BackendBinding
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
 // It is shared by AddBatch and the event-first CommitTaskCreation boundary so
 // both paths produce byte-identical projection state.
 func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
+	target := item.ExecutionTarget
+	if target.IsZero() {
+		target = targetFromLegacyIdentity(item.Model, item.SubagentProvider)
+	}
+	legacyIdentity := target.IsZero()
 	providerBinding := item.ProviderBinding
-	if providerBinding == nil && strings.TrimSpace(item.SubagentProvider) != "" {
+	if legacyIdentity && providerBinding == nil && strings.TrimSpace(item.SubagentProvider) != "" {
 		providerBinding = &ProviderBinding{Provider: item.SubagentProvider}
+	}
+	topology := item.ExecutionTopology
+	if len(topology) == 0 {
+		topology = topologyFromLegacyIdentity(item.ModelTopology, target, item.SubagentProvider)
+	}
+	backendBinding := item.BackendBinding
+	if backendBinding == nil {
+		backendBinding = backendBindingFromProviderBinding(providerBinding, target)
+	}
+	compatibilityProvider := strings.TrimSpace(item.SubagentProvider)
+	if !legacyIdentity {
+		// Keep a read-only in-memory shadow for old runtime adapters and tests;
+		// TodoItem.MarshalJSON and canonical task events never persist it.
+		compatibilityProvider = target.Backend
+		if target.Backend == "local" {
+			compatibilityProvider = localSubagentProviderName
+		}
+		providerBinding = nil
 	}
 	return &TodoItem{
 		ID:                  id,
@@ -445,6 +515,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		Constraints:         item.Constraints,
 		Model:               item.Model,
 		ModelTopology:       cloneModelTopology(item.ModelTopology),
+		ExecutionTarget:     target,
+		ExecutionTopology:   cloneExecutionTopology(topology),
 		Sidecar:             item.Sidecar,
 		Summarize:           item.Summarize,
 		OutputMode:          item.OutputMode,
@@ -483,8 +555,9 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
 		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
 		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
-		SubagentProvider:    item.SubagentProvider,
+		SubagentProvider:    compatibilityProvider,
 		ProviderBinding:     cloneProviderBinding(providerBinding),
+		BackendBinding:      cloneBackendBinding(backendBinding),
 	}
 }
 
@@ -861,6 +934,28 @@ func (tl *TodoList) SetProviderBinding(id string, binding *ProviderBinding) erro
 	return nil
 }
 
+// SetBackendBinding refreshes the canonical mutable backend session evidence.
+func (tl *TodoList) SetBackendBinding(id string, binding *BackendBinding) error {
+	tl.mu.Lock()
+	updated := false
+	for _, ti := range tl.items {
+		if ti.ID == id {
+			ti.BackendBinding = cloneBackendBinding(binding)
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
 func (tl *TodoList) SetRuntimeError(id string, runtimeErr *ExecutionError) error {
 	tl.mu.Lock()
 	updated := false
@@ -1139,6 +1234,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		DispatchID:          item.DispatchID,
 		Model:               item.Model,
 		ModelTopology:       cloneModelTopology(item.ModelTopology),
+		ExecutionTarget:     item.ExecutionTarget,
+		ExecutionTopology:   cloneExecutionTopology(item.ExecutionTopology),
 		Sidecar:             item.Sidecar,
 		Summarize:           item.Summarize,
 		OutputMode:          item.OutputMode,
@@ -1201,6 +1298,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ContextManifests:    contextManifests,
 		SubagentProvider:    item.SubagentProvider,
 		ProviderBinding:     cloneProviderBinding(item.ProviderBinding),
+		BackendBinding:      cloneBackendBinding(item.BackendBinding),
 	}
 }
 
@@ -1312,6 +1410,8 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.Constraints = src.Constraints
 	dst.Model = src.Model
 	dst.ModelTopology = cloneModelTopology(src.ModelTopology)
+	dst.ExecutionTarget = src.ExecutionTarget
+	dst.ExecutionTopology = cloneExecutionTopology(src.ExecutionTopology)
 	dst.Sidecar = src.Sidecar
 	dst.Summarize = src.Summarize
 	dst.OutputMode = src.OutputMode

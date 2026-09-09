@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
@@ -265,14 +266,58 @@ func buildMemoryStore(resolvedProviderURL string) *memory.MemoryStore {
 	return nil
 }
 
-// resolveAndCheckModel pulls the model from hufu.yaml and validates
-// that something is set, returning a clear actionable error otherwise.
+// resolveAndCheckModel resolves the independent worker/coordinator targets.
+// Legacy model remains a compatibility fallback, but is not overwritten.
 func resolveAndCheckModel(session *team.TeamSession, cfg *config.Config) error {
-	session.Config.Generation.Model = cfg.ResolveModel(session.Config.Generation.Model)
-	if session.Config.Generation.Model == "" {
-		return fmt.Errorf("no model specified for team %q\n  Set --model <name>, add 'model:' to the team's team.yaml, or add 'model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", session.Config.Name)
+	session.Config.WorkerModel = cfg.ResolveWorkerModel(session.Config.WorkerModel, session.Config.Generation.Model)
+	if session.Config.WorkerModel == "" {
+		return fmt.Errorf("no worker execution target specified for team %q\n  Set --model <target>, add 'worker-model:' to the team's team.yaml, or add 'worker-model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", session.Config.Name)
+	}
+	explicitCoordinatorTarget := session.Config.CoordinatorModel != "" || cfg.CoordinatorModel != ""
+	coordinatorTarget := cfg.ResolveCoordinatorModel(session.Config.CoordinatorModel, session.Config.Generation.Model)
+	if !explicitCoordinatorTarget && isAgentExecutionSelector(coordinatorTarget, session) {
+		return fmt.Errorf("no LLM coordinator target specified for team %q: legacy model %q selects an agent backend; configure coordinator-model explicitly", session.Config.Name, coordinatorTarget)
+	}
+	session.Config.CoordinatorModel = coordinatorTarget
+	if session.Config.CoordinatorModel == "" {
+		return fmt.Errorf("no coordinator LLM target specified for team %q\n  Set --coordinator-model <target> or add 'coordinator-model:' to team.yaml", session.Config.Name)
 	}
 	return nil
+}
+
+// resolveExecutionRoleModels resolves the independent worker and coordinator
+// targets before deriving auxiliary LLM roles. Keeping this in one place makes
+// setup and doctor apply exactly the same target hierarchy without allowing an
+// agent worker target to leak into an LLM-only auxiliary role.
+func resolveExecutionRoleModels(session *team.TeamSession, cfg *config.Config) (team.RoleModels, error) {
+	if err := resolveAndCheckModel(session, cfg); err != nil {
+		return team.RoleModels{}, err
+	}
+	sidecar := cfg.ResolveSidecarModel(session.Config.SidecarModel)
+	return team.RoleModels{
+		Sidecar:      sidecar,
+		Guard:        cfg.ResolveGuardModel(session.Config.GuardModel, sidecar),
+		Judge:        cfg.ResolveJudgeModel(session.Config.JudgeModel, sidecar),
+		PlanReviewer: cfg.ResolvePlanReviewerModel(session.Config.PlanReviewerModel, session.Config.CoordinatorModel),
+	}, nil
+}
+
+// isAgentExecutionSelector prevents legacy model compatibility from promoting
+// an agent worker target to the coordinator. New role-specific configuration
+// is checked again against the runtime registry by static preflight.
+func isAgentExecutionSelector(raw string, session *team.TeamSession) bool {
+	selector, err := execution.ParseExecutionSelector(raw)
+	if err != nil || selector.Backend == "" {
+		return false
+	}
+	if selector.Backend == "codex" {
+		return true
+	}
+	if session == nil {
+		return false
+	}
+	_, configured := session.Config.SubagentProviders[selector.Backend]
+	return configured
 }
 
 // registerHooks builds a hook registry and registers any shell hooks

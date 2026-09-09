@@ -40,7 +40,16 @@ import (
 func newDirectTypedCoordinator(t *testing.T, agentTools string, allowed, denied []string) *Coordinator {
 	t.Helper()
 	workspace := t.TempDir()
-	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: agentTools}
+	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
+	if err != nil {
+		t.Fatalf("NewProviderManager: %v", err)
+	}
+	def := &agent.AgentDef{
+		Name:       "worker",
+		Role:       "worker",
+		Tools:      agentTools,
+		Generation: agent.GenerationParams{Model: "test"},
+	}
 	c := &Coordinator{
 		session: &TeamSession{
 			Dir:       workspace,
@@ -52,15 +61,16 @@ func newDirectTypedCoordinator(t *testing.T, agentTools string, allowed, denied 
 			},
 			Agents: map[string]*agent.AgentDef{"worker": def},
 		},
-		sessionData:    NewSession(),
-		taskTracker:    NewTaskTracker(),
-		agentCache:     map[string]fantasy.Agent{},
-		agentPool:      &mockAgentPool{resolveDef: def, resolveKey: "worker"},
-		reportStatus:   func(StatusEvent) {},
-		projectDir:     workspace,
-		sessionTime:    time.Now(),
-		executionRunID: "run-direct-typed",
-		coreTools:      workerInvariantCoreTools(t),
+		sessionData:     NewSession(),
+		taskTracker:     NewTaskTracker(),
+		agentCache:      map[string]fantasy.Agent{},
+		agentPool:       &mockAgentPool{resolveDef: def, resolveKey: "worker"},
+		reportStatus:    func(StatusEvent) {},
+		projectDir:      workspace,
+		sessionTime:     time.Now(),
+		executionRunID:  "run-direct-typed",
+		coreTools:       workerInvariantCoreTools(t),
+		providerManager: providerManager,
 	}
 	return c
 }

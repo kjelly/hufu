@@ -678,7 +678,12 @@ func (c *Coordinator) Sidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
 	}
-	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.sidecarModel), c.sidecarModel, c.providerAdmission(), invocation.AdmissionContext)
+	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(c.sidecarModel)
+	if backendErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, backendErr)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, gatedBackend.AgentProvider(ctx, executionTarget), c.sidecarModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ sidecar model %q unavailable: %v (auto-skills and skill matching disabled — set --sidecar-model to a working model to enable)\n", c.sidecarModel, err)
 		return nil
@@ -706,7 +711,12 @@ func (c *Coordinator) GuardSidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
 	}
-	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.guardModel), c.guardModel, c.providerAdmission(), invocation.AdmissionContext)
+	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(c.guardModel)
+	if backendErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, backendErr)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, gatedBackend.AgentProvider(ctx, executionTarget), c.guardModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ guard model %q unavailable: %v (guard review disabled — tool calls will be denied until a working model is configured)\n", c.guardModel, err)
 		return nil
@@ -737,7 +747,12 @@ func (c *Coordinator) JudgeSidecar() *sidecar.Sidecar {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil
 	}
-	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, c.providerManager.GetProvider(c.judgeModel), c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)
+	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(c.judgeModel)
+	if backendErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, backendErr)
+		return nil
+	}
+	s, err := sidecar.NewSidecarWithAdmissionContext(ctx, gatedBackend.AgentProvider(ctx, executionTarget), c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ judge model %q unavailable: %v (multi-model results fall back to concatenation merge)\n", c.judgeModel, err)
 		return nil

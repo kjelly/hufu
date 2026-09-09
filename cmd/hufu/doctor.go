@@ -104,8 +104,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  %s %d team(s): %s\n", pass, registry.TeamCount(), strings.Join(registry.ListTeams(), ", "))
 	}
 
-	// 5. Verifier contract linting.
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Contract & Verifier Linting:"))
+	// 5. Static execution-target and verifier-contract linting.
+	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Execution Target, Contract & Verifier Linting:"))
 	contractWarnings := 0
 	contractErrors := 0
 
@@ -120,6 +120,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 				contractErrors++
 				ok = false
 				fmt.Fprintf(os.Stderr, "  %s team %s: contract load failed: %v\n", fail, teamName, err)
+				continue
+			}
+			if err := validateDoctorExecutionTargets(session, cfg, nil); err != nil {
+				contractErrors++
+				ok = false
+				fmt.Fprintf(os.Stderr, "  %s team %s execution target: %v\n", fail, teamName, err)
 				continue
 			}
 			projectDir, err := os.Getwd()
@@ -158,6 +164,20 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s Some checks failed — fix the items above before running a task.\n", fail)
 	return fmt.Errorf("doctor: preflight checks failed")
+}
+
+// validateDoctorExecutionTargets performs the same read-only target setup
+// gate used by a real run. It deliberately stops before coordinator creation,
+// provider contact, MCP loading, or workspace lifecycle I/O.
+func validateDoctorExecutionTargets(session *team.TeamSession, cfg *config.Config, lookup targetExecutableLookup) error {
+	if err := applyConfiguredBackends(session, cfg); err != nil {
+		return err
+	}
+	roleModels, err := resolveExecutionRoleModels(session, cfg)
+	if err != nil {
+		return err
+	}
+	return preflightExecutionTargets(session, cfg, roleModels, lookup)
 }
 
 type doctorContractFinding struct {

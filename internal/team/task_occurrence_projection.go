@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // TaskOccurrenceProjection is the immutable execution contract of one Todo
@@ -32,6 +34,8 @@ type TaskOccurrenceProjection struct {
 	Constraints         string
 	Model               string
 	ModelTopology       []string
+	ExecutionTarget     execution.ExecutionTarget
+	ExecutionTopology   []execution.ExecutionTarget
 	Sidecar             bool
 	Summarize           bool
 	OutputMode          string
@@ -81,12 +85,25 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 	if item == nil || strings.TrimSpace(item.ID) == "" {
 		return TaskOccurrenceProjection{}, fmt.Errorf("task occurrence projection requires a Todo ID")
 	}
+	model := item.Model
+	modelTopology := cloneModelTopology(item.ModelTopology)
+	provider := item.SubagentProvider
+	if !item.ExecutionTarget.IsZero() {
+		// Typed execution identity is the only admission input for new
+		// occurrences. Normalize compatibility shadows so replayed checkpoints
+		// and freshly admitted tasks hash the same contract without persisting
+		// the retired model/provider split.
+		model = item.ExecutionTarget.String()
+		modelTopology = modelTopologyFromExecutionTargets(item.ExecutionTopology)
+		provider = ""
+	}
 	return TaskOccurrenceProjection{
 		ID: item.ID, PlanTaskID: item.PlanTaskID, PlanFirst: item.PlanFirst, PlanID: item.PlanID,
 		Phase: item.Phase, Action: cloneActionPtr(item.Action), ContractID: item.ContractID,
 		ContractHash: item.ContractHash, ContractRevision: item.ContractRevision, Agent: item.Agent,
-		Desc: item.Desc, Goal: item.Goal, Constraints: item.Constraints, Model: item.Model,
-		ModelTopology: cloneModelTopology(item.ModelTopology), Source: item.Source, ParentID: item.ParentID,
+		Desc: item.Desc, Goal: item.Goal, Constraints: item.Constraints, Model: model,
+		ModelTopology: modelTopology, Source: item.Source, ParentID: item.ParentID,
+		ExecutionTarget: item.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(item.ExecutionTopology),
 		Sidecar: item.Sidecar, Summarize: item.Summarize, OutputMode: item.OutputMode,
 		ContextFiles: append([]string(nil), item.ContextFiles...), Requires: append([]string(nil), item.Requires...),
 		DependsOn: append([]string(nil), item.DependsOn...), OnFailure: item.OnFailure,
@@ -103,7 +120,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
 		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), item.DecisionArtifacts...),
 		DecisionBaseRates: cloneBaseRateEvidence(item.DecisionBaseRates), DecisionProvenance: cloneEvidenceProvenance(item.DecisionProvenance),
-		SubagentProvider: item.SubagentProvider,
+		SubagentProvider: provider,
 	}, nil
 }
 
@@ -131,6 +148,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		Action: cloneActionPtr(task.Action), ContractID: task.ContractID, ContractHash: task.ContractHash,
 		ContractRevision: task.ContractRevision, Agent: task.Agent, Desc: desc, Goal: goal,
 		Constraints: task.Constraints, Model: task.Model, ModelTopology: cloneModelTopology(task.ModelTopology),
+		ExecutionTarget: task.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(task.ExecutionTopology),
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode,
 		ContextFiles: append([]string(nil), task.ContextFiles...), Requires: append([]string(nil), task.Requires...),
 		Verify: task.Verify, VerifyMode: task.VerifyMode,

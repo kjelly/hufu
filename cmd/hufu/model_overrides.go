@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -9,6 +11,7 @@ import (
 // mean "no override" and the underlying config keeps its current value.
 type ModelCLIOverrides struct {
 	Model             string
+	CoordinatorModel  string
 	ContextWindow     int
 	Temperature       string
 	MaxTokens         string
@@ -25,14 +28,15 @@ type ModelCLIOverrides struct {
 // overrides. This is the highest-priority model configuration layer
 // (above agent .md frontmatter, team.yaml, and hufu.yaml).
 //
-// Sidecar/guard model fallback: if --sidecar-model or --guard-model are
-// not set explicitly but --model is, the sidecar/guard values default to
-// the value of --model. This lets a user set a single --model and have
-// all three roles (main, sidecar, guard) use it without typing the
-// model name three times.
+// --model is a worker-only override. Coordinator and auxiliary role models
+// keep their independently configured targets unless their dedicated flag is
+// supplied.
 func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) {
 	if overrides.Model != "" {
-		cfg.Generation.Model = overrides.Model
+		cfg.WorkerModel = overrides.Model
+	}
+	if overrides.CoordinatorModel != "" {
+		cfg.CoordinatorModel = overrides.CoordinatorModel
 	}
 	if overrides.ContextWindow > 0 {
 		cfg.Generation.ContextWindow = overrides.ContextWindow
@@ -54,13 +58,9 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 	if overrides.SidecarModel != "" {
 		cfg.SidecarModel = overrides.SidecarModel
-	} else if overrides.Model != "" {
-		cfg.SidecarModel = overrides.Model
 	}
 	if overrides.GuardModel != "" {
 		cfg.GuardModel = overrides.GuardModel
-	} else if overrides.Model != "" {
-		cfg.GuardModel = overrides.Model
 	}
 	// Judge deliberately has no --model fallback: it falls back to the
 	// sidecar model at resolve time instead, preserving the cheap-by-default
@@ -70,8 +70,6 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 	if overrides.PlanReviewerModel != "" {
 		cfg.PlanReviewerModel = overrides.PlanReviewerModel
-	} else if overrides.Model != "" {
-		cfg.PlanReviewerModel = overrides.Model
 	}
 }
 
@@ -81,6 +79,7 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 func currentModelOverrides() ModelCLIOverrides {
 	return ModelCLIOverrides{
 		Model:             opts.modelOverride,
+		CoordinatorModel:  opts.coordinatorModelOverride,
 		ContextWindow:     opts.contextWindowOverride,
 		Temperature:       opts.temperatureOverride,
 		MaxTokens:         opts.maxTokensOverride,
@@ -115,7 +114,7 @@ func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides Mo
 		if def == nil {
 			continue
 		}
-		if overrides.Model != "" {
+		if overrides.Model != "" && !strings.EqualFold(def.Role, "coordinator") && !strings.EqualFold(def.Name, "coordinator") {
 			def.Generation.Model = overrides.Model
 		}
 		if overrides.Temperature != "" {

@@ -150,17 +150,18 @@ func admitSubagentBaselineTask(t *testing.T, c *Coordinator, worker *agent.Agent
 	t.Helper()
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	resolvedModel := c.resolveAgentModel(worker, "")
-	provider, err := c.resolveSubagentProvider(TaskDef{Agent: worker.Name}, worker)
+	canonical, err := c.canonicalizeTaskOccurrence(TaskDef{Agent: worker.Name}, worker, resolvedModel)
 	if err != nil {
-		t.Fatalf("resolveSubagentProvider: %v", err)
+		t.Fatalf("canonicalizeTaskOccurrence: %v", err)
 	}
 	spec := TodoSpec{
 		Agent: worker.Name, Desc: "baseline worker task", Goal: "baseline worker task",
-		Model: resolvedModel, ModelTopology: initialTaskModelTopology(worker, resolvedModel),
+		Model: canonical.Model, ModelTopology: initialTaskModelTopology(worker, canonical.Model),
+		ExecutionTarget: canonical.ResolvedExecutionTarget, ExecutionTopology: canonical.ExecutionTopology,
 		Source: TaskSourceCoordinator, Recovery: RecoveryRetry,
 		Execution:        ExecutionContract{RequiresResult: true},
 		VerifySpec:       verify,
-		SubagentProvider: provider,
+		SubagentProvider: canonical.SubagentProvider,
 	}
 	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
 	if err != nil {

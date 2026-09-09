@@ -176,10 +176,18 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to resolve subagent provider: %v", err)), nil
 	}
 	subTask.ModelTopology = []string{subTask.Model}
+	subTask.ExecutionTopology, err = c.resolveCanonicalTaskTopology(subTask.ModelTopology, subTask.ResolvedExecutionTarget, subTask.SubagentProvider)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to resolve execution topology: %v", err)), nil
+	}
+	if err := c.validateExtraModelExecutionTopology(subTask); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("unsafe extra-model execution topology: %v", err)), nil
+	}
 	subSpec.Agent, subSpec.Model = subTask.Agent, subTask.Model
 	subSpec.ModelTopology = cloneModelTopology(subTask.ModelTopology)
+	subSpec.ExecutionTarget = subTask.ResolvedExecutionTarget
+	subSpec.ExecutionTopology = cloneExecutionTopology(subTask.ExecutionTopology)
 	subSpec.SideEffect, subSpec.Recovery, subSpec.ReconcileTool = subTask.SideEffect, subTask.Recovery, subTask.ReconcileTool
-	subSpec.SubagentProvider = subTask.SubagentProvider
 	// request_agent is an executable durable occurrence. Freeze its effective
 	// decision contract before task_created or any child transition.
 	if c.hasDurableEventJournal() {
@@ -320,10 +328,19 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	}
 	agentDef := c.injectWorkerContext(ctx, canonical.Agent)
 	gatedTools := c.gatePolicyTools(resolvedTools.Tools)
-	subAgModelID := canonical.Task.Model
-	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, subAgModelID, agentDef)
-	if err != nil {
-		return "", fmt.Errorf("resolve sub-agent provider context: %w", err)
+	subAgModelID := c.executionModelIDForTarget(canonical.Task.ResolvedExecutionTarget, canonical.Task.Model)
+	var invocation providerBoundInvocationContext
+	if c.workerAgentOverride == nil {
+		if canonical.Task.ResolvedExecutionTarget.IsZero() {
+			return "", fmt.Errorf("cannot create sub-agent: no admitted execution target")
+		}
+		if _, err := c.ExecutionRegistry().LanguageModelBackend(canonical.Task.ResolvedExecutionTarget); err != nil {
+			return "", fmt.Errorf("cannot create sub-agent through non-LLM execution target %q: %w", canonical.Task.ResolvedExecutionTarget, err)
+		}
+		ctx, invocation, err = c.resolveProviderBoundInvocationContext(ctx, subAgModelID, agentDef)
+		if err != nil {
+			return "", fmt.Errorf("resolve sub-agent provider context: %w", err)
+		}
 	}
 	ctx = context.WithValue(ctx, executionAttemptKey{}, 1)
 	ctx = context.WithValue(ctx, taskRequiresResultKey{}, true)
@@ -345,11 +362,16 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
 	} else {
-		provider, providerErr := c.ModelRuntime().ProviderFor(subAgModelID)
-		if providerErr != nil {
-			return "", fmt.Errorf("failed to resolve sub-agent provider %q: %w", name, providerErr)
+		target := canonical.Task.ResolvedExecutionTarget
+		backend, backendErr := c.ExecutionRegistry().LanguageModelBackend(target)
+		if backendErr != nil {
+			return "", fmt.Errorf("failed to resolve sub-agent execution target %q: %w", target, backendErr)
 		}
-		ag, err = c.createGatedAgent(ctx, provider, agent.AgentConfig{
+		gatedBackend, ok := backend.(GatedAgentBackend)
+		if !ok {
+			return "", fmt.Errorf("sub-agent execution backend %q cannot construct a gated Fantasy worker", target.Backend)
+		}
+		ag, err = c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
 			Def:               agentDef,
 			TeamConfig:        &c.session.Config,
 			WorkDir:           c.projectDir,

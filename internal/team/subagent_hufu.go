@@ -84,9 +84,27 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	// Install authorization from the verified concrete surface before the
 	// gated constructor runs. This also preserves agent-specific MCP aliases.
 	ctx = p.coordinator.withEffectiveToolsAllowedForTask(ctx, def, verified.Names, canonical.Task)
-	provider, err := p.coordinator.ModelRuntime().ProviderFor(request.ModelID)
-	if err != nil {
-		return AttemptResult{}, err
+	// The local Fantasy adapter is still a compatibility implementation of the
+	// LLM execution backend, but it must not select a provider through the
+	// retired ModelRuntime seam. Prefer the immutable target carried by the
+	// attempt; targetless direct adapter fixtures are resolved through the same
+	// registry using the request's model for legacy compatibility.
+	var provider *agent.OpenAICompatibleProvider
+	if !request.ExecutionTarget.IsZero() {
+		if !canonical.Task.ResolvedExecutionTarget.IsZero() && request.ExecutionTarget != canonical.Task.ResolvedExecutionTarget {
+			return AttemptResult{}, fmt.Errorf("hufu-local attempt execution target does not match canonical target for Todo %q", request.TaskID)
+		}
+		gatedBackend, target, targetErr := p.coordinator.gatedAgentBackendForTarget(request.ExecutionTarget)
+		if targetErr != nil {
+			return AttemptResult{}, targetErr
+		}
+		provider = gatedBackend.AgentProvider(ctx, target)
+	} else {
+		gatedBackend, target, targetErr := p.coordinator.gatedAgentBackendForModel(request.ModelID)
+		if targetErr != nil {
+			return AttemptResult{}, targetErr
+		}
+		provider = gatedBackend.AgentProvider(ctx, target)
 	}
 	ag, err := p.coordinator.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:               def,

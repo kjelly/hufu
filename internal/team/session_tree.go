@@ -569,8 +569,14 @@ func DiffBranches(workspace string, st *SessionTree, es *EventStore, branchA, br
 	eventsA := FilterEventsForBranch(events, st, bA.ID)
 	eventsB := FilterEventsForBranch(events, st, bB.ID)
 
-	todoA := ReduceToTodoList(eventsA)
-	todoB := ReduceToTodoList(eventsB)
+	todoA, err := ReplayTodoList(eventsA)
+	if err != nil {
+		return nil, fmt.Errorf("replay branch %q: %w", bA.Name, err)
+	}
+	todoB, err := ReplayTodoList(eventsB)
+	if err != nil {
+		return nil, fmt.Errorf("replay branch %q: %w", bB.Name, err)
+	}
 
 	diff := &SessionDiff{
 		BranchA:     bA.Name,
@@ -877,7 +883,10 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 	}
 	lineage := FilterEventsForBranch(events, st, b.ID)
 
-	tasks := ReduceToTodoList(lineage)
+	tasks, err := ReplayTodoList(lineage)
+	if err != nil {
+		return fmt.Errorf("rebuild session: replay execution identity: %w", err)
+	}
 	if len(tasks) == 0 && len(b.State.TaskPlan) > 0 {
 		tasks = make([]*TodoItem, len(b.State.TaskPlan))
 		for i, t := range b.State.TaskPlan {

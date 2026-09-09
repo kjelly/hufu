@@ -335,6 +335,9 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	}
 	url := config.ResolveProviderURL(opts.providerURL, session.Config.ProviderURL, "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, session.Config.ProviderAPIKey)
+	if err := preflightSidecarTarget(session, cfg, model, nil); err != nil {
+		return nil, nil, fmt.Errorf("promotion analyze execution target: %w", err)
+	}
 	// Promotion analysis is a CLI model invocation, but it still needs the
 	// same repository, compiler, redaction, manifest, and event boundary as a
 	// coordinator sidecar. Bind this loaded team to the promotion workspace

@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 func TestProviderSemaphore(t *testing.T) {
@@ -60,6 +61,45 @@ func TestAcquireSemNilChannelAlwaysAvailable(t *testing.T) {
 	}
 	slot.release() // must not block or panic on a nil channel
 	slot.release() // and must be safe to call twice
+}
+
+func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
+	registry := NewExecutionRegistry()
+	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(fakeExecutionBackend{name: "codex", kind: execution.BackendKindAgent}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
+		Providers:         map[string]config.ProviderConfig{"local": {MaxConcurrent: 1}},
+		SubagentProviders: map[string]agent.SubagentProviderConfig{"codex": {MaxConcurrent: 2}},
+	}}}
+	c.SetExecutionRegistry(registry)
+
+	local := execution.ExecutionTarget{Backend: "local", Model: "same-model"}
+	codex := execution.ExecutionTarget{Backend: "codex", Model: "same-model"}
+	localSem, err := c.executionBackendSemaphore(local)
+	if err != nil {
+		t.Fatalf("local policy: %v", err)
+	}
+	codexSem, err := c.executionBackendSemaphore(codex)
+	if err != nil {
+		t.Fatalf("codex policy: %v", err)
+	}
+	if localSem == codexSem {
+		t.Fatal("unrelated canonical backends shared a concurrency bucket")
+	}
+	if cap(localSem) != 1 || cap(codexSem) != 2 {
+		t.Fatalf("backend capacities local=%d codex=%d, want 1 and 2", cap(localSem), cap(codexSem))
+	}
+	if again, err := c.executionBackendSemaphore(codex); err != nil || again != codexSem {
+		t.Fatalf("codex backend bucket was not stable: sem=%p err=%v", again, err)
+	}
+	policy, err := c.ResolveBackendExecutionPolicy(codex)
+	if err != nil || policy.Backend != "codex" || policy.MaxConcurrent != 2 {
+		t.Fatalf("codex backend policy = %#v, err=%v", policy, err)
+	}
 }
 
 func TestAcquireSemLimitsConcurrency(t *testing.T) {

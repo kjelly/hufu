@@ -343,9 +343,12 @@ func TestTaskOccurrenceModelTopologySurvivesEventReplayAndShadow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed := ReduceToTodoList([]RunEvent{{Type: string(EventTaskCreated), TaskID: item.ID, Payload: payload}})
-	if len(replayed) != 1 || !reflect.DeepEqual(replayed[0].ModelTopology, item.ModelTopology) {
-		t.Fatalf("replayed topology = %#v, want %#v", replayed, item.ModelTopology)
+	replayed, err := ReplayTodoList([]RunEvent{{Type: string(EventTaskCreated), TaskID: item.ID, Payload: payload}})
+	if err != nil {
+		t.Fatalf("checked replay rejected matching target dual-write: %v", err)
+	}
+	if len(replayed) != 1 || !reflect.DeepEqual(replayed[0].ModelTopology, item.ModelTopology) || replayed[0].ExecutionTarget != item.ExecutionTarget || !reflect.DeepEqual(replayed[0].ExecutionTopology, item.ExecutionTopology) || !reflect.DeepEqual(replayed[0].BackendBinding, item.BackendBinding) {
+		t.Fatalf("replayed identity = %#v, want model/target topology parity with %#v", replayed, item)
 	}
 	if got := taskDefFromTodoItem(replayed[0]).ModelTopology; !reflect.DeepEqual(got, item.ModelTopology) {
 		t.Fatalf("task definition topology = %#v, want %#v", got, item.ModelTopology)
@@ -395,9 +398,12 @@ func TestTaskOccurrenceRetryKeepsRecordedModelTopology(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed := ReduceToTodoList(events)
-	if len(replayed) != 1 || !reflect.DeepEqual(replayed[0].ModelTopology, item.ModelTopology) {
-		t.Fatalf("replayed retry topology = %#v, want %#v", replayed, item.ModelTopology)
+	replayed, err := ReplayTodoList(events)
+	if err != nil {
+		t.Fatalf("checked replay rejected retry identity: %v", err)
+	}
+	if len(replayed) != 1 || !reflect.DeepEqual(replayed[0].ModelTopology, item.ModelTopology) || replayed[0].ExecutionTarget != item.ExecutionTarget || !reflect.DeepEqual(replayed[0].ExecutionTopology, item.ExecutionTopology) {
+		t.Fatalf("replayed retry identity = %#v, want topology parity with %#v", replayed, item)
 	}
 }
 

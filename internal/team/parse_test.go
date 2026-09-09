@@ -103,6 +103,43 @@ requires:
 	}
 }
 
+func TestParseTeamExecutionTargetConfig(t *testing.T) {
+	dir := t.TempDir()
+	content := `name: target-config
+worker-model: codex/gpt-5.6-luna
+coordinator-model: local/qwen3:8b
+default-llm-backend: lemonade
+backends:
+  lemonade:
+    kind: llm
+    type: openai-compatible
+    base-url: http://127.0.0.1:8000/v1
+  codex:
+    kind: agent
+    type: codex-app-server
+    max-concurrent: 2
+`
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(dir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML: %v", err)
+	}
+	if got, want := cfg.WorkerModel, "codex/gpt-5.6-luna"; got != want {
+		t.Errorf("WorkerModel = %q, want %q", got, want)
+	}
+	if got, want := cfg.CoordinatorModel, "local/qwen3:8b"; got != want {
+		t.Errorf("CoordinatorModel = %q, want %q", got, want)
+	}
+	if got, want := cfg.DefaultLLMBackend, "lemonade"; got != want {
+		t.Errorf("DefaultLLMBackend = %q, want %q", got, want)
+	}
+	if got := cfg.Backends["codex"].MaxConcurrent; got != 2 {
+		t.Errorf("codex backend max concurrency = %d, want 2", got)
+	}
+}
+
 func TestParseTeamContextWindow(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: context-team\nmodel: custom-model\ncontext-window: 24576\n"), 0o644); err != nil {

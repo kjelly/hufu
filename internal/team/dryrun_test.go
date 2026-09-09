@@ -123,6 +123,27 @@ func TestDryRun_NoLLMCall_Structure(t *testing.T) {
 	}
 }
 
+func TestDryRunUsesCanonicalExecutionTargets(t *testing.T) {
+	c := newTestCoordinatorForDryRun(t, map[string]*agent.AgentDef{
+		"developer": {Name: "developer", Role: "worker"},
+	}, nil, agent.TeamConfig{
+		WorkerModel:       "ollama/qwen3:8b",
+		CoordinatorModel:  "local/qwen3:32b",
+		SidecarModel:      "local/qwen3:1b",
+		DefaultLLMBackend: "local",
+	})
+	result, err := c.DryRun(t.Context(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WorkerTarget != "local/qwen3:8b" || result.CoordinatorTarget != "local/qwen3:32b" || result.SidecarTarget != "local/qwen3:1b" {
+		t.Fatalf("dry-run targets = worker %q coordinator %q sidecar %q", result.WorkerTarget, result.CoordinatorTarget, result.SidecarTarget)
+	}
+	if len(result.Agents) != 1 || result.Agents[0].ExecutionTarget != "local/qwen3:8b" {
+		t.Fatalf("dry-run agent target = %#v", result.Agents)
+	}
+}
+
 func TestDryRun_NoLLMCall_UnmatchedPrompt(t *testing.T) {
 	skills := []*skill.SkillDef{
 		{Name: "code-reviewer", Description: "Use this skill to review code"},
