@@ -478,6 +478,21 @@ type BackendExecutionPolicy struct {
 	MaxConcurrent int
 }
 
+// Codex app-server uses shared on-disk session/auth state. Unless a team
+// explicitly opts into another capacity, serialize attempts through that
+// backend so concurrent workers cannot initialize the same state database.
+const codexDefaultMaxConcurrent = 1
+
+// enforceCodexBackendConcurrency keeps the configuration field readable for
+// compatibility, but Codex app-server attempts are never allowed to exceed
+// one concurrent process while they share the configured HOME/CODEX_HOME
+// state. A future per-attempt state-isolation implementation can replace this
+// hard cap at the same admission boundary.
+func enforceCodexBackendConcurrency(config agent.SubagentProviderConfig) agent.SubagentProviderConfig {
+	config.MaxConcurrent = codexDefaultMaxConcurrent
+	return config
+}
+
 // ResolveBackendExecutionPolicy derives the worker-attempt policy only from
 // the target frozen at admission and the backend configuration selected for
 // that target. It does not parse a model prefix or consult live model routing.
@@ -497,7 +512,12 @@ func (c *Coordinator) ResolveBackendExecutionPolicy(target execution.ExecutionTa
 	case execution.BackendKindLLM:
 		policy.MaxConcurrent = c.session.Config.Providers[target.Backend].MaxConcurrent
 	case execution.BackendKindAgent:
-		policy.MaxConcurrent = c.session.Config.SubagentProviders[target.Backend].MaxConcurrent
+		providerConfig := c.session.Config.SubagentProviders[target.Backend]
+		if target.Backend == codexSubagentProviderName || providerConfig.Type == codexAppServerProviderType {
+			policy.MaxConcurrent = codexDefaultMaxConcurrent
+		} else {
+			policy.MaxConcurrent = providerConfig.MaxConcurrent
+		}
 	}
 	return policy, nil
 }

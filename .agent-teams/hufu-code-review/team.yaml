@@ -22,6 +22,9 @@ subagent-providers:
     startup-timeout: "30s"
     interrupt-grace: "5s"
     shutdown-grace: "5s"
+    max-event-bytes: 16777216
+    max-transcript-bytes: 16777216
+    max-concurrent: 1
     inherit-env: [PATH, CODEX_HOME, HOME]
 
 workflow:

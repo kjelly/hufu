@@ -73,7 +73,7 @@ func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
 	}
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
 		Providers:         map[string]config.ProviderConfig{"local": {MaxConcurrent: 1}},
-		SubagentProviders: map[string]agent.SubagentProviderConfig{"codex": {MaxConcurrent: 2}},
+		SubagentProviders: map[string]agent.SubagentProviderConfig{"codex": {MaxConcurrent: 4}},
 	}}}
 	c.SetExecutionRegistry(registry)
 
@@ -90,15 +90,40 @@ func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
 	if localSem == codexSem {
 		t.Fatal("unrelated canonical backends shared a concurrency bucket")
 	}
-	if cap(localSem) != 1 || cap(codexSem) != 2 {
-		t.Fatalf("backend capacities local=%d codex=%d, want 1 and 2", cap(localSem), cap(codexSem))
+	if cap(localSem) != 1 || cap(codexSem) != codexDefaultMaxConcurrent {
+		t.Fatalf("backend capacities local=%d codex=%d, want 1 and %d", cap(localSem), cap(codexSem), codexDefaultMaxConcurrent)
 	}
 	if again, err := c.executionBackendSemaphore(codex); err != nil || again != codexSem {
 		t.Fatalf("codex backend bucket was not stable: sem=%p err=%v", again, err)
 	}
 	policy, err := c.ResolveBackendExecutionPolicy(codex)
-	if err != nil || policy.Backend != "codex" || policy.MaxConcurrent != 2 {
-		t.Fatalf("codex backend policy = %#v, err=%v", policy, err)
+	if err != nil || policy.Backend != "codex" || policy.MaxConcurrent != codexDefaultMaxConcurrent {
+		t.Fatalf("codex backend policy = %#v, err=%v, want hard cap %d", policy, err, codexDefaultMaxConcurrent)
+	}
+}
+
+func TestCodexBackendDefaultsToSerializedConcurrency(t *testing.T) {
+	registry := NewExecutionRegistry()
+	if err := registry.Register(fakeExecutionBackend{name: codexSubagentProviderName, kind: execution.BackendKindAgent}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}}
+	c.SetExecutionRegistry(registry)
+
+	target := execution.ExecutionTarget{Backend: codexSubagentProviderName, Model: "gpt-5-codex"}
+	policy, err := c.ResolveBackendExecutionPolicy(target)
+	if err != nil {
+		t.Fatalf("ResolveBackendExecutionPolicy: %v", err)
+	}
+	if policy.MaxConcurrent != codexDefaultMaxConcurrent {
+		t.Fatalf("Codex default policy = %#v, want max-concurrent=%d", policy, codexDefaultMaxConcurrent)
+	}
+	sem, err := c.executionBackendSemaphore(target)
+	if err != nil {
+		t.Fatalf("executionBackendSemaphore: %v", err)
+	}
+	if cap(sem) != codexDefaultMaxConcurrent {
+		t.Fatalf("Codex semaphore capacity = %d, want %d", cap(sem), codexDefaultMaxConcurrent)
 	}
 }
 

@@ -112,6 +112,7 @@ func NewCodexSubagentProvider(c *Coordinator, name string, config agent.Subagent
 	if name == "" {
 		name = codexSubagentProviderName
 	}
+	config = enforceCodexBackendConcurrency(config)
 	return &CodexSubagentProvider{coordinator: c, name: name, config: config, preflight: &codexPreflightCache{}}
 }
 

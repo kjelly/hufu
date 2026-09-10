@@ -42,6 +42,7 @@ subagent-providers:
     shutdown-grace: 3s
     max-event-bytes: 1048576
     max-transcript-bytes: 16777216
+    max-concurrent: 1
     execution-world: local-sandbox
     inherit-env: [PATH, CODEX_HOME]
 `
@@ -61,7 +62,7 @@ subagent-providers:
 	}
 	if codex.Type != "codex-app-server" || !slices.Equal(codex.Command, []string{"codex", "app-server"}) ||
 		codex.Protocol != "app-server-v2" || codex.StartupTimeout != "15s" || codex.InterruptGrace != "3s" ||
-		codex.ShutdownGrace != "3s" || codex.MaxEventBytes != 1048576 || codex.MaxTranscriptBytes != 16777216 ||
+		codex.ShutdownGrace != "3s" || codex.MaxEventBytes != 1048576 || codex.MaxTranscriptBytes != 16777216 || codex.MaxConcurrent != 1 ||
 		codex.ExecutionWorld != "local-sandbox" || !slices.Equal(codex.InheritEnv, []string{"PATH", "CODEX_HOME"}) {
 		t.Fatalf("codex provider config = %#v, want the full parsed shape", codex)
 	}
@@ -76,6 +77,26 @@ subagent-providers:
 	}
 	if def.SubagentProvider != "codex" {
 		t.Fatalf("AgentDef.SubagentProvider = %q, want %q", def.SubagentProvider, "codex")
+	}
+}
+
+func TestMergeCodexBackendConfigPreservesRuntimeBounds(t *testing.T) {
+	base := agent.SubagentProviderConfig{
+		Type: codexAppServerProviderType, MaxEventBytes: 16 << 20,
+		MaxTranscriptBytes: 16 << 20, MaxConcurrent: codexDefaultMaxConcurrent,
+		InheritEnv: []string{"PATH", "CODEX_HOME"},
+	}
+	override := agent.SubagentProviderConfig{
+		MaxEventBytes: 4 << 20, MaxTranscriptBytes: 8 << 20, MaxConcurrent: 4,
+	}
+	got := mergeCodexBackendConfig(base, override)
+	if got.MaxEventBytes != override.MaxEventBytes || got.MaxTranscriptBytes != override.MaxTranscriptBytes || got.MaxConcurrent != codexDefaultMaxConcurrent {
+		t.Fatalf("merged Codex resource settings = %#v, want bounds preserved and concurrency clamped to %d", got, codexDefaultMaxConcurrent)
+	}
+
+	inherited := mergeCodexBackendConfig(base, agent.SubagentProviderConfig{})
+	if inherited.MaxEventBytes != base.MaxEventBytes || inherited.MaxTranscriptBytes != base.MaxTranscriptBytes || inherited.MaxConcurrent != base.MaxConcurrent {
+		t.Fatalf("merged default Codex resource settings = %#v, want base defaults preserved", inherited)
 	}
 }
 

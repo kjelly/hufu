@@ -2108,6 +2108,7 @@ func configuredAgentProvidersFor(c *Coordinator) map[string]SubagentProvider {
 		Protocol:       "app-server-v2",
 		ExecutionWorld: "local-sandbox",
 		InheritEnv:     []string{"PATH", "CODEX_HOME"},
+		MaxConcurrent:  codexDefaultMaxConcurrent,
 	}
 	if c != nil && c.session != nil {
 		if configured, ok := c.session.Config.SubagentProviders[codexSubagentProviderName]; ok && configured.Type == codexAppServerProviderType {
@@ -2166,13 +2167,22 @@ func mergeCodexBackendConfig(base, override agent.SubagentProviderConfig) agent.
 	if override.ShutdownGrace != "" {
 		result.ShutdownGrace = override.ShutdownGrace
 	}
+	if override.MaxEventBytes > 0 {
+		result.MaxEventBytes = override.MaxEventBytes
+	}
+	if override.MaxTranscriptBytes > 0 {
+		result.MaxTranscriptBytes = override.MaxTranscriptBytes
+	}
 	if override.ExecutionWorld != "" {
 		result.ExecutionWorld = override.ExecutionWorld
 	}
 	if override.InheritEnv != nil {
 		result.InheritEnv = append([]string(nil), override.InheritEnv...)
 	}
-	return result
+	if override.MaxConcurrent > 0 {
+		result.MaxConcurrent = override.MaxConcurrent
+	}
+	return enforceCodexBackendConcurrency(result)
 }
 
 func (c *Coordinator) SubagentRegistry() *SubagentRegistry {
