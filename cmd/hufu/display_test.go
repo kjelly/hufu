@@ -107,6 +107,22 @@ func TestDispatchStatusEventShowsCodexActivity(t *testing.T) {
 	}
 }
 
+func TestDispatchStatusEventWrapsCodexActivityDetails(t *testing.T) {
+	t.Setenv("COLUMNS", "40")
+	w := &testStatusWriter{}
+	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{
+		Type:    "codex_activity",
+		Agent:   "reviewer",
+		Model:   "codex/gpt-5.6-luna",
+		Message: `Codex item completed (commandExecution): command="go test ./..." output="all tests passed"`,
+	})
+
+	out := w.b.String()
+	if !strings.Contains(out, "go test") || !strings.Contains(out, "tests passed") {
+		t.Fatalf("expected wrapped Codex detail in output, got: %q", out)
+	}
+}
+
 func TestWrapPreviewLinesWideEnough(t *testing.T) {
 	got := wrapPreviewLines("go run ./cmd/tool inspect --name host-a -- cat /etc/ssh/sshd_config", 120, 4)
 	if len(got) != 1 {

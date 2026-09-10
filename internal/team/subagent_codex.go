@@ -504,6 +504,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		defer close(turnDone)
 		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
 			ReasoningEffort: request.ReasoningEffort,
+			DetailedOutput:  p.coordinator.verbose,
 			OnTurnStarted:   onTurnStarted,
 			OnActivity:      reportCodexActivity,
 		})
@@ -664,6 +665,7 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 
 	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, codexTurnOptions{
 		ReasoningEffort: request.ReasoningEffort,
+		DetailedOutput:  p.coordinator.verbose,
 		OnActivity:      onActivity,
 	})
 	if turnErr != nil {

@@ -207,11 +207,18 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		))
 
 	case "codex_activity":
-		w.write(fmt.Sprintf("  %s %s %s\n",
-			stepStyle.Render("│"),
-			formatAgentLabel(event),
-			dimStyle.Render(event.Message),
-		))
+		lines := wrapPreviewLines(event.Message, max(width-10, 20), 20)
+		for i, line := range lines {
+			if i == 0 {
+				w.write(fmt.Sprintf("  %s %s %s\n",
+					stepStyle.Render("│"),
+					formatAgentLabel(event),
+					dimStyle.Render(line),
+				))
+				continue
+			}
+			w.write(fmt.Sprintf("  %s    %s\n", stepStyle.Render("│"), dimStyle.Render(line)))
+		}
 
 	case "verify_start":
 		w.write(fmt.Sprintf("  %s %s %s\n",
