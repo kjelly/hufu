@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // This file builds Codex's specific thread/turn vocabulary on top of the
@@ -248,6 +250,7 @@ type codexTurnStartParams struct {
 
 type codexTurnOptions struct {
 	ReasoningEffort string
+	DetailedOutput  bool
 	OnTurnStarted   func(turnID string)
 	OnActivity      func(codexTurnActivity)
 }
@@ -403,7 +406,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 		options.OnTurnStarted(turnID)
 	}
 
-	completed, err := waitForCodexTurnCompleted(ctx, client, threadID, turnID, options.OnActivity)
+	completed, err := waitForCodexTurnCompleted(ctx, client, threadID, turnID, options.OnActivity, options.DetailedOutput)
 	if err != nil {
 		return CodexTurnResult{TurnID: turnID}, err
 	}
@@ -423,8 +426,14 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 
 	proposal, decodeErr := DecodeWorkerResultProposal([]byte(finalText))
 	if decodeErr != nil {
+		if options.DetailedOutput && options.OnActivity != nil {
+			reportCodexFinalResponse(options.OnActivity, finalText, "invalid")
+		}
 		return CodexTurnResult{TurnID: turnID, RawFinalOutput: finalText},
 			&CodexProtocolIncompleteError{Reason: decodeErr, RawFinalOutput: finalText}
+	}
+	if options.DetailedOutput && options.OnActivity != nil {
+		reportCodexFinalResponse(options.OnActivity, finalText, proposal.Status)
 	}
 	return CodexTurnResult{TurnID: turnID, Proposal: proposal, RawFinalOutput: finalText}, nil
 }
@@ -437,7 +446,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 // attempt (§13.1) with exactly one active turn, a turn/completed notification
 // that omits a turn id is unambiguous; one that includes it is still checked
 // for an exact match as a defensive measure.
-func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, threadID, turnID string, onActivity func(codexTurnActivity)) (codexTurn, error) {
+func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, threadID, turnID string, onActivity func(codexTurnActivity), detailed bool) (codexTurn, error) {
 	start := time.Now()
 	var heartbeat <-chan time.Time
 	if onActivity != nil {
@@ -456,7 +465,7 @@ func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, thre
 				}
 				continue
 			}
-			if activity, ok := codexActivityForNotification(notif); ok && onActivity != nil {
+			if activity, ok := codexActivityForNotification(notif, detailed); ok && onActivity != nil {
 				activity.Elapsed = time.Since(start)
 				onActivity(activity)
 			}
@@ -480,7 +489,7 @@ func waitForCodexTurnCompleted(ctx context.Context, client *CodexRPCClient, thre
 	}
 }
 
-func codexActivityForNotification(notif CodexNotification) (codexTurnActivity, bool) {
+func codexActivityForNotification(notif CodexNotification, detailed bool) (codexTurnActivity, bool) {
 	message := ""
 	switch notif.Method {
 	case "turn/started":
@@ -493,9 +502,27 @@ func codexActivityForNotification(notif CodexNotification) (codexTurnActivity, b
 		message = "Codex item started (" + codexNotificationItemType(notif.Params) + ")"
 	case "item/completed":
 		message = "Codex item completed (" + codexNotificationItemType(notif.Params) + ")"
+	case "item/commandExecution/outputDelta":
+		if !detailed {
+			return codexTurnActivity{}, false
+		}
+		message = "Codex command output: " + codexNotificationDelta(notif.Params)
+	case "item/agentMessage/delta":
+		if !detailed {
+			return codexTurnActivity{}, false
+		}
+		message = "Codex response: " + codexNotificationDelta(notif.Params)
 	case "error", "turn/failed":
 		message = "Codex reported an app-server error"
 	default:
+		return codexTurnActivity{}, false
+	}
+	if detailed {
+		if detail := codexNotificationItemDetail(notif.Params); detail != "" {
+			message += ": " + detail
+		}
+	}
+	if strings.HasSuffix(message, ": ") {
 		return codexTurnActivity{}, false
 	}
 	return codexTurnActivity{Method: notif.Method, Message: message}, true
@@ -516,4 +543,120 @@ func codexNotificationItemType(raw json.RawMessage) string {
 	default:
 		return "item"
 	}
+}
+
+const codexActivityDetailMaxRunes = 1600
+
+type codexNotificationItem struct {
+	Type             string          `json:"type"`
+	Phase            string          `json:"phase,omitempty"`
+	Status           string          `json:"status,omitempty"`
+	Command          json.RawMessage `json:"command,omitempty"`
+	ExitCode         *int            `json:"exitCode,omitempty"`
+	LegacyExitCode   *int            `json:"exit_code,omitempty"`
+	AggregatedOutput string          `json:"aggregatedOutput,omitempty"`
+	FormattedOutput  string          `json:"formattedOutput,omitempty"`
+	Stdout           string          `json:"stdout,omitempty"`
+	Stderr           string          `json:"stderr,omitempty"`
+	Text             string          `json:"text,omitempty"`
+	SummaryText      string          `json:"summaryText,omitempty"`
+}
+
+func codexNotificationItemDetail(raw json.RawMessage) string {
+	var envelope struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ""
+	}
+	if len(envelope.Item) == 0 || string(envelope.Item) == "null" {
+		return ""
+	}
+	var item codexNotificationItem
+	if err := json.Unmarshal(envelope.Item, &item); err != nil {
+		return ""
+	}
+	parts := make([]string, 0, 5)
+	if command := codexRawValue(item.Command); command != "" {
+		parts = append(parts, "command="+command)
+	}
+	if item.Phase != "" {
+		parts = append(parts, "phase="+item.Phase)
+	}
+	if item.Status != "" {
+		parts = append(parts, "status="+item.Status)
+	}
+	exitCode := item.ExitCode
+	if exitCode == nil {
+		exitCode = item.LegacyExitCode
+	}
+	if exitCode != nil {
+		parts = append(parts, fmt.Sprintf("exit_code=%d", *exitCode))
+	}
+	output := firstNonEmpty(item.AggregatedOutput, item.FormattedOutput, item.Stdout, item.Stderr, item.Text, item.SummaryText)
+	if output != "" {
+		parts = append(parts, "output="+codexSafeActivityText(output))
+	}
+	return strings.Join(parts, " ")
+}
+
+func codexNotificationDelta(raw json.RawMessage) string {
+	var payload struct {
+		Delta string `json:"delta"`
+		Text  string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	return codexSafeActivityText(firstNonEmpty(payload.Delta, payload.Text))
+}
+
+func codexRawValue(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return codexSafeActivityText(value)
+	}
+	return codexSafeActivityText(string(raw))
+}
+
+func codexSafeActivityText(value string) string {
+	value = utils.RedactSecrets(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "\r", "")
+	return codexQuoteActivityText(utils.TruncateRunes(value, codexActivityDetailMaxRunes))
+}
+
+func codexQuoteActivityText(value string) string {
+	if value == "" {
+		return ""
+	}
+	if strings.ContainsAny(value, " \t\n\"") {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
+func reportCodexFinalResponse(onActivity func(codexTurnActivity), finalText, status string) {
+	if onActivity == nil {
+		return
+	}
+	message := "Codex final response"
+	if status != "" {
+		message += " (status=" + status + ")"
+	}
+	if detail := codexSafeActivityText(finalText); detail != "" {
+		message += ": " + detail
+	}
+	onActivity(codexTurnActivity{Method: codexNotificationTurnCompleted, Message: message})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

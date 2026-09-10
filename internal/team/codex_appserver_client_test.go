@@ -65,6 +65,22 @@ func TestCodexRPCOversizedFrameFails(t *testing.T) {
 	}
 }
 
+// TestCodexRPCDefaultFrameAcceptsLargeCodexEvent proves the production
+// default is still finite but no longer rejects a response merely because it
+// crosses Scanner's historical 1 MiB default. The explicit small-bound test
+// above preserves fail-closed rejection for genuinely oversized frames.
+func TestCodexRPCDefaultFrameAcceptsLargeCodexEvent(t *testing.T) {
+	largeEvent := strings.Repeat("x", (1<<20)+4096)
+	server := startFakeCodexServer(t, []fakeCodexStep{
+		{RawLine: `{"jsonrpc":"2.0","id":1,"result":{"padding":"` + largeEvent + `"}}`},
+	})
+	defer server.Client.Close()
+
+	if err := server.Client.Call(context.Background(), "probe", nil, nil); err != nil {
+		t.Fatalf("large event above the legacy 1 MiB Scanner limit was rejected: %v", err)
+	}
+}
+
 // TestCodexRPCProcessCrashFailsInflightRequests proves that when the
 // app-server process exits without responding, every in-flight Call fails
 // promptly instead of hanging forever.

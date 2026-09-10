@@ -21,12 +21,27 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 		t.Fatalf("schema additionalProperties = %v, want false", schema["additionalProperties"])
 	}
 	required, _ := schema["required"].([]string)
-	if !slices.Contains(required, "status") || !slices.Contains(required, "summary") {
-		t.Fatalf("schema required = %v, want status and summary", required)
+	if !slices.Contains(required, "status") || !slices.Contains(required, "summary") || !slices.Contains(required, "files_read") {
+		t.Fatalf("schema required = %v, want status, summary, and files_read", required)
 	}
 	props, _ := schema["properties"].(map[string]any)
 	if props == nil {
 		t.Fatal("schema has no properties")
+	}
+	filesReadSchema, _ := props["files_read"].(map[string]any)
+	if filesReadSchema == nil {
+		t.Fatal("schema has no files_read property")
+	}
+	filesReadType, _ := filesReadSchema["type"].([]string)
+	if !slices.Equal(filesReadType, []string{"array", "null"}) {
+		t.Fatalf("files_read type = %v, want nullable array", filesReadType)
+	}
+	if filesReadSchema["maxItems"] != workerResultProposalMaxFilesRead {
+		t.Fatalf("files_read maxItems = %v, want %d", filesReadSchema["maxItems"], workerResultProposalMaxFilesRead)
+	}
+	filesReadItems, _ := filesReadSchema["items"].(map[string]any)
+	if filesReadItems == nil || filesReadItems["type"] != "string" {
+		t.Fatalf("files_read items = %v, want non-empty strings", filesReadSchema["items"])
 	}
 	statusSchema, _ := props["status"].(map[string]any)
 	enumVals, _ := statusSchema["enum"].([]string)
@@ -51,12 +66,30 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 	}
 }
 
+// TestCodexFilesReadProposalDecodes proves the new schema field is also
+// accepted by the strict Hufu-side proposal decoder. The Codex app-server
+// schema and the decoder are two separate boundaries; both must agree before
+// a grounded review task can satisfy its /files_read verifier.
+func TestCodexFilesReadProposalDecodes(t *testing.T) {
+	proposal, err := DecodeWorkerResultProposal([]byte(`{"status":"success","summary":"review complete","files_read":["internal/team/coordinator.go"]}`))
+	if err != nil {
+		t.Fatalf("DecodeWorkerResultProposal: %v", err)
+	}
+	if len(proposal.FilesRead) != 1 || proposal.FilesRead[0] != "internal/team/coordinator.go" {
+		t.Fatalf("FilesRead = %#v, want the Codex-reported path", proposal.FilesRead)
+	}
+}
+
 // runCodexTurnWithFinalOutput scripts a fake server that acknowledges
 // turn/start, then signals turn/completed with a Turn whose items embed
 // finalOutput as the terminal agentMessage — mirroring the real protocol,
 // where the completion notification itself carries the schema-constrained
 // final answer (no separate thread/read call).
 func runCodexTurnWithFinalOutput(t *testing.T, finalOutput string, extraNotifications ...fakeCodexNotification) (CodexTurnResult, error) {
+	return runCodexTurnWithOptions(t, finalOutput, codexTurnOptions{}, extraNotifications...)
+}
+
+func runCodexTurnWithOptions(t *testing.T, finalOutput string, options codexTurnOptions, extraNotifications ...fakeCodexNotification) (CodexTurnResult, error) {
 	t.Helper()
 	turn := map[string]any{
 		"id":     "turn-1",
@@ -71,7 +104,7 @@ func runCodexTurnWithFinalOutput(t *testing.T, finalOutput string, extraNotifica
 		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-1"}}), Notifications: notifications},
 	})
 	defer server.Client.Close()
-	return codexRunTurn(context.Background(), server.Client, "thread-1", "do the work", codexTurnOptions{})
+	return codexRunTurn(t.Context(), server.Client, "thread-1", "do the work", options)
 }
 
 // TestCodexMissingProposalIsProtocolIncomplete proves a turn that completes
@@ -133,7 +166,7 @@ func TestCodexActivitySummaryIsSafeAndUseful(t *testing.T) {
 		Params: rawJSON(t, map[string]any{
 			"item": map[string]any{"type": "commandExecution", "command": "secret command"},
 		}),
-	})
+	}, false)
 	if !ok {
 		t.Fatal("expected item/started to produce an activity summary")
 	}
@@ -142,6 +175,65 @@ func TestCodexActivitySummaryIsSafeAndUseful(t *testing.T) {
 	}
 	if strings.Contains(activity.Message, "secret command") {
 		t.Fatalf("activity message exposed command contents: %q", activity.Message)
+	}
+}
+
+func TestCodexActivityDetailIncludesUsefulBoundedContentAndRedactsSecrets(t *testing.T) {
+	activity, ok := codexActivityForNotification(CodexNotification{
+		Method: "item/completed",
+		Params: rawJSON(t, map[string]any{
+			"item": map[string]any{
+				"type":             "commandExecution",
+				"command":          "go test ./...",
+				"status":           "completed",
+				"exitCode":         0,
+				"aggregatedOutput": "all tests passed API_KEY=super-secret",
+			},
+		}),
+	}, true)
+	if !ok {
+		t.Fatal("expected detailed item activity")
+	}
+	for _, want := range []string{"command=", "go test ./...", "status=completed", "exit_code=0", "all tests passed", "[REDACTED]"} {
+		if !strings.Contains(activity.Message, want) {
+			t.Fatalf("activity message = %q, want it to contain %q", activity.Message, want)
+		}
+	}
+	if strings.Contains(activity.Message, "super-secret") {
+		t.Fatalf("activity message exposed secret: %q", activity.Message)
+	}
+}
+
+func TestCodexDetailedActivitySurfacesDeltasOnlyWhenRequested(t *testing.T) {
+	notification := CodexNotification{
+		Method: "item/commandExecution/outputDelta",
+		Params: rawJSON(t, map[string]any{"delta": "go test: PASS"}),
+	}
+	if activity, ok := codexActivityForNotification(notification, false); ok || activity.Message != "" {
+		t.Fatalf("non-detailed activity = %#v, %t; want omitted", activity, ok)
+	}
+	activity, ok := codexActivityForNotification(notification, true)
+	if !ok || !strings.Contains(activity.Message, "go test: PASS") {
+		t.Fatalf("detailed activity = %#v, %t; want command output", activity, ok)
+	}
+}
+
+func TestCodexDetailedTurnReportsFinalResponse(t *testing.T) {
+	var activities []codexTurnActivity
+	result, err := runCodexTurnWithOptions(t, validProposalJSON(`"details":"review complete"`), codexTurnOptions{
+		DetailedOutput: true,
+		OnActivity: func(activity codexTurnActivity) {
+			activities = append(activities, activity)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposal == nil {
+		t.Fatal("expected decoded proposal")
+	}
+	if len(activities) == 0 || !strings.Contains(activities[len(activities)-1].Message, "review complete") {
+		t.Fatalf("activities = %#v, want final response detail", activities)
 	}
 }
 

@@ -294,6 +294,7 @@ func parseDurationOr(raw string, fallback time.Duration) time.Duration {
 // scope this phase actually needs evidence for — and is written to a file
 // under the workspace so a TranscriptRef survives the attempt.
 type codexTranscript struct {
+	mu       sync.Mutex
 	lines    []string
 	maxBytes int64
 	bytes    int64
@@ -307,6 +308,8 @@ func newCodexTranscript(maxBytes int64) *codexTranscript {
 }
 
 func (t *codexTranscript) record(format string, args ...any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339Nano), fmt.Sprintf(format, args...))
 	if t.bytes+int64(len(line)) > t.maxBytes {
 		if len(t.lines) == 0 || t.lines[len(t.lines)-1] != "...[truncated]" {
@@ -319,12 +322,15 @@ func (t *codexTranscript) record(format string, args ...any) {
 }
 
 func (t *codexTranscript) persist(workspace, taskID string, attempt int) (string, error) {
+	t.mu.Lock()
+	content := strings.Join(t.lines, "\n") + "\n"
+	t.mu.Unlock()
+
 	dir := filepath.Join(workspace, logsDir, "codex-transcripts")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("codex transcript: create directory: %w", err)
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-attempt-%d-%d.log", taskID, attempt, time.Now().UnixNano()))
-	content := strings.Join(t.lines, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("codex transcript: write: %w", err)
 	}

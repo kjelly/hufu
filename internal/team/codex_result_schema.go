@@ -78,7 +78,7 @@ func codexWorkerResultProposalSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"required": []string{
-			"status", "summary", "details", "proposed_files", "findings",
+			"status", "summary", "details", "proposed_files", "files_read", "findings",
 			"risks", "open_questions", "facts", "confidence",
 		},
 		"properties": map[string]any{
@@ -92,6 +92,11 @@ func codexWorkerResultProposalSchema() map[string]any {
 			"summary":        map[string]any{"type": "string", "minLength": 1},
 			"details":        map[string]any{"type": nullable("string")},
 			"proposed_files": map[string]any{"type": nullable("array"), "items": proposedFile, "maxItems": workerResultProposalMaxFindings},
+			"files_read": map[string]any{
+				"type":     nullable("array"),
+				"items":    map[string]any{"type": "string", "minLength": 1},
+				"maxItems": workerResultProposalMaxFilesRead,
+			},
 			"findings":       map[string]any{"type": nullable("array"), "items": finding, "maxItems": workerResultProposalMaxFindings},
 			"risks":          map[string]any{"type": nullable("array"), "items": risk, "maxItems": workerResultProposalMaxRisks},
 			"open_questions": map[string]any{"type": nullable("array"), "items": map[string]any{"type": "string"}, "maxItems": workerResultProposalMaxOpenQuestions},

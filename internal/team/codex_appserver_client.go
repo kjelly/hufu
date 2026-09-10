@@ -25,7 +25,7 @@ import (
 // defaultCodexMaxFrameBytes bounds a single JSON-RPC line (§17.2: "A single
 // oversized JSON-RPC frame MUST terminate the provider as a protocol
 // violation").
-const defaultCodexMaxFrameBytes = 1 << 20 // 1 MiB
+const defaultCodexMaxFrameBytes = 16 << 20 // 16 MiB
 
 type jsonRPCError struct {
 	Code    int             `json:"code"`
