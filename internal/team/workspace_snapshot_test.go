@@ -184,6 +184,78 @@ func TestWorkspaceSnapshotFallbackNonGit(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSnapshotKeepsOrdinarySessionJSONFailClosed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "session.json"), []byte(`{"status":"before"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotter := NewWorkspaceSnapshotter()
+	baseline := mustSnapshot(t, snapshotter, root)
+	if _, err := baseline.fileState("session.json"); err != nil {
+		t.Fatalf("ordinary project session.json was omitted from the workspace snapshot: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "session.json"), []byte(`{"status":"after"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after := mustSnapshot(t, snapshotter, root)
+	delta, err := snapshotter.Diff(context.Background(), baseline, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Modified) != 1 || delta.Modified[0].Path != "session.json" {
+		t.Fatalf("delta = %#v, want ordinary session.json modification", delta)
+	}
+	if err := ValidateExecutionWorldDelta(&PreparedExecutionWorld{Root: root}, delta); err == nil {
+		t.Fatal("ordinary session.json change was not rejected for a read-only prepared world")
+	}
+}
+
+func TestExecutionWorldSkipsIdentifiedControlWorkspaceCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	controlWorkspace := filepath.Join(root, "workspace", "hufu-code-review")
+	if err := os.MkdirAll(controlWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(controlWorkspace, sessionFile)
+	if err := os.WriteFile(checkpoint, []byte(`{"status":"before"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	world := NewLocalExecutionWorld()
+	prepared, err := world.Prepare(t.Context(), ExecutionWorldSpec{
+		Root: root, ControlWorkspace: controlWorkspace, SideEffect: SideEffectNone,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
+	if _, err := prepared.Baseline.fileState("workspace/hufu-code-review/session.json"); err == nil {
+		t.Fatal("identified Hufu control-workspace checkpoint was included in the provider snapshot")
+	}
+
+	if err := os.WriteFile(checkpoint, []byte(`{"status":"after"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte("package review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := world.Snapshot(context.Background(), prepared)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	delta, err := NewWorkspaceSnapshotter().Diff(context.Background(), prepared.Baseline, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta.Added) != 1 || delta.Added[0].Path != "source.go" {
+		t.Fatalf("delta = %#v, want only source.go added; identified Hufu checkpoint is bookkeeping", delta)
+	}
+	if err := ValidateExecutionWorldDelta(prepared, delta); err == nil {
+		t.Fatal("source.go change was not rejected for a read-only prepared world")
+	}
+}
+
 // TestWorkspaceSnapshotGitOptimizedMatchesFallback is supplementary (not one
 // of PR-05's named tests): it exercises the Git-assisted candidate-discovery
 // path added alongside the required fallback, proving it produces the same
@@ -278,6 +350,9 @@ func TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, logsDir, "event_store.jsonl"), []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "session.json"), []byte(`{"status":"before"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, ok := gitCandidateFiles(context.Background(), root); !ok {
 		t.Fatal("expected root to be detected as a Git working tree")
@@ -286,8 +361,14 @@ func TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs(t *testing.T) {
 	if _, err := baseline.fileState(logsDir + "/event_store.jsonl"); err == nil {
 		t.Fatalf("Hufu-internal %s/ directory was not skipped by the git-assisted snapshot", logsDir)
 	}
+	if _, err := baseline.fileState("session.json"); err != nil {
+		t.Fatalf("ordinary root session.json was omitted by the git-assisted snapshot: %v", err)
+	}
 
 	if err := os.WriteFile(filepath.Join(root, logsDir, "event_store.jsonl"), []byte(`{"an":"event"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "session.json"), []byte(`{"status":"after"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	after := mustSnapshot(t, NewWorkspaceSnapshotter(), root)
@@ -295,7 +376,7 @@ func TestWorkspaceSnapshotGitOptimizedSkipsInternalDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(delta.Added) != 0 || len(delta.Modified) != 0 || len(delta.Deleted) != 0 {
-		t.Fatalf("delta = %#v, want no changes: Hufu's own %s/ write must never surface as a workspace delta entry", delta, logsDir)
+	if len(delta.Added) != 0 || len(delta.Modified) != 1 || delta.Modified[0].Path != "session.json" || len(delta.Deleted) != 0 {
+		t.Fatalf("delta = %#v, want only ordinary session.json modification; Hufu's own %s/ write must stay excluded", delta, logsDir)
 	}
 }

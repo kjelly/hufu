@@ -69,6 +69,14 @@ type WorkspaceSnapshotter interface {
 	Diff(ctx context.Context, before, after WorkspaceSnapshot) (WorkspaceDelta, error)
 }
 
+// workspaceSnapshotterWithIgnoredFiles is an internal extension used only by
+// the execution-world boundary. It permits that boundary to identify the
+// exact Hufu checkpoint path without making the general-purpose snapshotter
+// ignore every project file with the same basename.
+type workspaceSnapshotterWithIgnoredFiles interface {
+	SnapshotWithIgnoredFiles(ctx context.Context, root string, paths []string) (WorkspaceSnapshot, error)
+}
+
 // workspaceSnapshotMaxFiles bounds a single snapshot (§11.4 "enforce a
 // maximum file count / total metadata budget"). It is deliberately generous
 // for real repositories while still bounding a runaway/unbounded workspace.
@@ -95,6 +103,18 @@ func NewWorkspaceSnapshotter() WorkspaceSnapshotter {
 }
 
 func (s *defaultWorkspaceSnapshotter) Snapshot(ctx context.Context, root string) (WorkspaceSnapshot, error) {
+	return s.snapshot(ctx, root, nil)
+}
+
+func (s *defaultWorkspaceSnapshotter) SnapshotWithIgnoredFiles(ctx context.Context, root string, paths []string) (WorkspaceSnapshot, error) {
+	ignored, err := normalizeWorkspaceSnapshotIgnoredPaths(paths)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	return s.snapshot(ctx, root, ignored)
+}
+
+func (s *defaultWorkspaceSnapshotter) snapshot(ctx context.Context, root string, ignored map[string]bool) (WorkspaceSnapshot, error) {
 	cleanRoot, err := resolveSnapshotRoot(root)
 	if err != nil {
 		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: %w", err)
@@ -106,9 +126,9 @@ func (s *defaultWorkspaceSnapshotter) Snapshot(ctx context.Context, root string)
 
 	var files map[string]WorkspaceFileState
 	if candidates, ok := gitCandidateFiles(ctx, cleanRoot); ok {
-		files, err = hashCandidateFiles(cleanRoot, candidates, maxFiles)
+		files, err = hashCandidateFiles(cleanRoot, candidates, maxFiles, ignored)
 	} else {
-		files, err = walkAndHashWorkspace(ctx, cleanRoot, maxFiles)
+		files, err = walkAndHashWorkspace(ctx, cleanRoot, maxFiles, ignored)
 	}
 	if err != nil {
 		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: %w", err)
@@ -118,6 +138,18 @@ func (s *defaultWorkspaceSnapshotter) Snapshot(ctx context.Context, root string)
 		ID: newWorkspaceSnapshotID(), Root: cleanRoot, CapturedAt: time.Now(),
 		Digest: workspaceManifestDigest(files), files: files,
 	}, nil
+}
+
+func normalizeWorkspaceSnapshotIgnoredPaths(paths []string) (map[string]bool, error) {
+	ignored := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(clean) {
+			return nil, fmt.Errorf("workspace snapshot: ignored path %q is not workspace-relative", path)
+		}
+		ignored[clean] = true
+	}
+	return ignored, nil
 }
 
 func (s *defaultWorkspaceSnapshotter) Diff(_ context.Context, before, after WorkspaceSnapshot) (WorkspaceDelta, error) {
@@ -175,6 +207,27 @@ func isWithinRoot(root, resolved string) bool {
 	return strings.HasPrefix(resolved, root+string(filepath.Separator))
 }
 
+// hufuControlWorkspaceSnapshotPaths returns only the checkpoint path owned by
+// the explicitly identified Hufu control workspace. A project file named
+// session.json is not special unless it is exactly this derived path.
+func hufuControlWorkspaceSnapshotPaths(root, controlWorkspace string) ([]string, error) {
+	if strings.TrimSpace(controlWorkspace) == "" {
+		return nil, nil
+	}
+	controlRoot, err := resolveSnapshotRoot(controlWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("execution world: resolve control workspace: %w", err)
+	}
+	if !isWithinRoot(root, controlRoot) {
+		return nil, nil
+	}
+	rel, err := filepath.Rel(root, controlRoot)
+	if err != nil {
+		return nil, fmt.Errorf("execution world: derive control workspace path: %w", err)
+	}
+	return []string{filepath.ToSlash(filepath.Join(rel, sessionFile))}, nil
+}
+
 // escapingSymlinkState represents a symlink whose target lies outside the
 // workspace root. Its content is never read — that would leak outside-root
 // bytes into the snapshot as if they were legitimately part of the
@@ -210,7 +263,8 @@ var workspaceInternalDirs = map[string]bool{
 // isWorkspaceInternalPath reports whether rel (forward-slash, workspace-
 // relative) falls under any workspaceInternalDirs entry at any depth —
 // gitCandidateFiles' equivalent of walkAndHashWorkspace's fs.SkipDir on a
-// matching directory name.
+// matching directory name. Exact Hufu checkpoint paths are supplied
+// separately by the execution-world boundary.
 //
 // **Fixed 2026-09-08** (found running the real §38 smoke suite against a
 // genuine account for the first time, against a real git-backed scratch
@@ -235,7 +289,11 @@ func isWorkspaceInternalPath(rel string) bool {
 	return false
 }
 
-func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int) (map[string]WorkspaceFileState, error) {
+func isWorkspaceBookkeepingPath(rel string, ignored map[string]bool) bool {
+	return ignored[rel] || isWorkspaceInternalPath(rel)
+}
+
+func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int, ignored map[string]bool) (map[string]WorkspaceFileState, error) {
 	files := make(map[string]WorkspaceFileState)
 	count := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -257,6 +315,9 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int) (map[s
 			if workspaceInternalDirs[d.Name()] {
 				return fs.SkipDir
 			}
+			return nil
+		}
+		if isWorkspaceBookkeepingPath(rel, ignored) {
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -294,13 +355,16 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int) (map[s
 	return files, nil
 }
 
-func hashCandidateFiles(root string, candidates []string, maxFiles int) (map[string]WorkspaceFileState, error) {
+func hashCandidateFiles(root string, candidates []string, maxFiles int, ignored map[string]bool) (map[string]WorkspaceFileState, error) {
 	files := make(map[string]WorkspaceFileState, len(candidates))
 	if len(candidates) > maxFiles {
 		return nil, fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
 	}
 	for _, rel := range candidates {
 		rel = filepath.ToSlash(rel)
+		if isWorkspaceBookkeepingPath(rel, ignored) {
+			continue
+		}
 		full := filepath.Join(root, filepath.FromSlash(rel))
 		info, err := os.Lstat(full)
 		if err != nil {

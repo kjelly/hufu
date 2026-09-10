@@ -380,9 +380,13 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 
 	startupTimeout, interruptGrace, shutdownGrace := p.durations()
 	world := NewLocalExecutionWorld()
+	controlWorkspace := ""
+	if p.coordinator != nil && p.coordinator.session != nil {
+		controlWorkspace = p.coordinator.session.Workspace
+	}
 	prepared, err := world.Prepare(ctx, ExecutionWorldSpec{
 		RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt,
-		Root: workspace, CWD: workspace, SideEffect: request.Task.SideEffect,
+		Root: workspace, CWD: workspace, ControlWorkspace: controlWorkspace, SideEffect: request.Task.SideEffect,
 		EnvironmentAllowlist: p.config.InheritEnv,
 	})
 	if err != nil {

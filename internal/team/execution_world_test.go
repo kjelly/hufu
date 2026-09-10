@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Phase 3 tests (spec.md §36 PR-06): the generic ExecutionWorld contract and
@@ -46,6 +47,7 @@ func TestExecutionWorldSideEffectMapping(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
+			t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
 			if tc.wantWritable && len(prepared.WritableRoots) == 0 {
 				t.Fatalf("WritableRoots = %#v, want the root to be writable", prepared.WritableRoots)
 			}
@@ -74,6 +76,7 @@ func TestExecutionWorldDoesNotInheritSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
 	foundPath := false
 	for _, kv := range prepared.Environment {
 		if strings.HasPrefix(kv, "OPENAI_API_KEY=") || strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
@@ -116,6 +119,7 @@ func TestExecutionWorldRejectsOutsideWritableRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
 
 	if err := ValidateExecutionWorldDelta(prepared, WorkspaceDelta{
 		Modified: []WorkspaceFileState{{Path: "allowed/inside.txt"}},
@@ -133,5 +137,50 @@ func TestExecutionWorldRejectsOutsideWritableRoot(t *testing.T) {
 		Deleted: []string{"elsewhere.txt"},
 	}); err == nil {
 		t.Fatal("expected a deletion outside the writable root to be rejected")
+	}
+}
+
+func TestExecutionWorldSerializesSharedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	firstWorld := NewLocalExecutionWorld()
+	first, err := firstWorld.Prepare(t.Context(), ExecutionWorldSpec{Root: root, SideEffect: SideEffectWorkspaceWrite})
+	if err != nil {
+		t.Fatalf("first Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = firstWorld.Release(context.Background(), first) })
+
+	secondWorld := NewLocalExecutionWorld()
+	secondReady := make(chan *PreparedExecutionWorld, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		prepared, prepareErr := secondWorld.Prepare(context.Background(), ExecutionWorldSpec{Root: root, SideEffect: SideEffectWorkspaceWrite})
+		if prepareErr != nil {
+			secondErr <- prepareErr
+			return
+		}
+		secondReady <- prepared
+	}()
+
+	select {
+	case prepared := <-secondReady:
+		_ = secondWorld.Release(context.Background(), prepared)
+		t.Fatal("second shared-workspace Prepare completed while the first lease was held")
+	case err := <-secondErr:
+		t.Fatalf("second shared-workspace Prepare failed before the first lease was released: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	if err := firstWorld.Release(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case prepared := <-secondReady:
+		if err := secondWorld.Release(context.Background(), prepared); err != nil {
+			t.Fatal(err)
+		}
+	case err := <-secondErr:
+		t.Fatalf("second shared-workspace Prepare after release: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("second shared-workspace Prepare did not proceed after lease release")
 	}
 }

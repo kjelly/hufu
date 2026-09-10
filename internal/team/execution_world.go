@@ -45,6 +45,11 @@ type ExecutionWorldSpec struct {
 	Root string
 	CWD  string
 
+	// ControlWorkspace identifies Hufu's own durable control workspace. When
+	// it is inside Root, only its known session checkpoint is excluded from
+	// provider-effect snapshots; ordinary project files remain observable.
+	ControlWorkspace string
+
 	SideEffect SideEffectClass
 
 	WritableRoots []string
@@ -74,6 +79,16 @@ type PreparedExecutionWorld struct {
 	Environment []string
 
 	Baseline WorkspaceSnapshot
+
+	// snapshotIgnoredPaths contains only Hufu-owned checkpoint paths derived
+	// from ExecutionWorldSpec.ControlWorkspace. It is process-local admission
+	// metadata and is deliberately not persisted as provider evidence.
+	snapshotIgnoredPaths []string
+
+	// releaseLease is process-local coordination state. It is deliberately not
+	// exported or serialized: the lease only protects the live shared working
+	// tree while this prepared attempt is active.
+	releaseLease func()
 }
 
 // sideEffectExecutionRoots implements the side-effect → world-projection
