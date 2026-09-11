@@ -83,6 +83,25 @@ func TestTeamLintFailThreshold(t *testing.T) {
 	if TeamLintReachesThreshold(findings, "none") {
 		t.Fatal("finding reached none threshold")
 	}
+	findings[0].Ignored = true
+	if TeamLintReachesThreshold(findings, FindingSeverityWarning) {
+		t.Fatal("ignored finding reached warning threshold")
+	}
+}
+
+func TestTeamLintIgnoreSelectorValidation(t *testing.T) {
+	selector, err := ParseTeamLintIgnoreSelector("prompt_unknown_tool@agents/reviewer.md:42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selector.Code != FindingPromptUnknownTool || selector.File != "agents/reviewer.md" || selector.Line != 42 {
+		t.Fatalf("selector = %#v", selector)
+	}
+	for _, invalid := range []string{"unknown_code", "prompt_unknown_tool@../reviewer.md", "prompt_unknown_tool@reviewer.md:0", "prompt_unknown_tool@/tmp/reviewer.md"} {
+		if _, err := ParseTeamLintIgnoreSelector(invalid); err == nil {
+			t.Errorf("ParseTeamLintIgnoreSelector(%q) = nil error", invalid)
+		}
+	}
 }
 
 func TestTeamLintUnknownTool(t *testing.T) {

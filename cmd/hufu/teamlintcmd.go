@@ -15,6 +15,7 @@ var (
 	teamLintName   string
 	teamLintFormat string
 	teamLintFailOn string
+	teamLintIgnore []string
 	teamLintPolicy struct {
 		Profile          string
 		ExecutionProfile string
@@ -74,6 +75,7 @@ func init() {
 	teamLintCmd.Flags().StringVar(&teamLintName, "team", "", "Discoverable team name to lint")
 	teamLintCmd.Flags().StringVar(&teamLintFormat, "format", "text", "Output format: text or json")
 	teamLintCmd.Flags().StringVar(&teamLintFailOn, "fail-on", internalteam.FindingSeverityError, "Lowest finding severity that fails: error, warning, info, or none")
+	teamLintCmd.Flags().StringArrayVar(&teamLintIgnore, "ignore", nil, "Ignore CODE, CODE@FILE, or CODE@FILE:LINE for this invocation")
 	teamLintCmd.Flags().StringVar(&teamLintPolicy.Profile, "profile", "", "Apply a named hufu.yaml flag bundle")
 	teamLintCmd.Flags().StringVar(&teamLintPolicy.ExecutionProfile, "execution-profile", "", "Set the effective execution profile")
 	teamLintCmd.Flags().BoolVar(&teamLintPolicy.Unattended, "unattended", false, "Evaluate unattended policy")
@@ -94,6 +96,14 @@ func runTeamLint(cmd *cobra.Command, args []string) error {
 	failOn := strings.ToLower(strings.TrimSpace(teamLintFailOn))
 	if failOn != internalteam.FindingSeverityError && failOn != internalteam.FindingSeverityWarning && failOn != internalteam.FindingSeverityInfo && failOn != "none" {
 		return lintCLIError(cmd, format, "invalid --fail-on: use error, warning, info, or none")
+	}
+	selectors := make([]internalteam.TeamLintIgnoreSelector, 0, len(teamLintIgnore))
+	for _, raw := range teamLintIgnore {
+		selector, err := internalteam.ParseTeamLintIgnoreSelector(raw)
+		if err != nil {
+			return lintCLIError(cmd, format, err.Error())
+		}
+		selectors = append(selectors, selector)
 	}
 	if err := applyNamedProfile(cmd, teamLintPolicy.Profile); err != nil {
 		return lintCLIError(cmd, format, err.Error())
@@ -118,6 +128,7 @@ func runTeamLint(cmd *cobra.Command, args []string) error {
 		cmd.Root().SilenceErrors = true
 		return &teamLintExitError{code: 2, msg: err.Error()}
 	}
+	internalteam.ApplyTeamLintIgnores(result.Findings, selectors)
 	if format == "json" {
 		doc := teamLintJSONDocument{
 			SchemaVersion: 1, Team: result.Team, Complete: result.Complete,
@@ -178,7 +189,11 @@ func writeTeamLintText(w io.Writer, result internalteam.TeamLintResult) error {
 				location += fmt.Sprintf(":%d", finding.Column)
 			}
 		}
-		if _, err := fmt.Fprintf(w, "%s: %s %s: %s\n", location, finding.Severity, finding.Code, finding.Message); err != nil {
+		ignored := ""
+		if finding.Ignored {
+			ignored = " [ignored]"
+		}
+		if _, err := fmt.Fprintf(w, "%s: %s %s%s: %s\n", location, finding.Severity, finding.Code, ignored, finding.Message); err != nil {
 			return err
 		}
 	}
