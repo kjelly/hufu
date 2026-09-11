@@ -192,12 +192,13 @@ func buildGeneratedTeam(name, prompt, model string) generatedTeam {
 	if strings.TrimSpace(model) != "" {
 		modelLine = fmt.Sprintf("  model: %q\n", strings.TrimSpace(model))
 	}
-	// Generated teams use the versioned hufu.io/v1alpha1 schema (docs/
-	// architecture/team-schema-versioning.md §13's rollout: new manifests
-	// prefer v1alpha1). Unlike the legacy flat schema, v1alpha1 has no
-	// directory-basename fallback for the team name, so metadata.name must
-	// be explicit here — name is already validated to lowercase
-	// letters/digits/hyphens (normalizeGeneratedTeamName), always a safe
+	// Generated teams use the versioned hufu.io/v1alpha1 schema
+	// (docs/archive/implementation-plans/team-schema-versioning.md §13's
+	// rollout: new manifests prefer v1alpha1). Unlike the legacy flat
+	// schema, v1alpha1 has no directory-basename fallback for the team
+	// name, so metadata.name must be explicit here — name is already
+	// validated to lowercase letters/digits/hyphens
+	// (normalizeGeneratedTeamName), always a safe
 	// bare YAML scalar. The max-rounds/timeout/max-retries/workspace
 	// defaults stay omitted: each already has an identical built-in
 	// default. max-steps/max-concurrent/acceptance are genuine, non-default

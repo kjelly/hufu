@@ -2,12 +2,12 @@
 
 > Status: draft
 > Authority: reference
-> Verified-Commit: `c5f278a0e7727332a0816963e7837e7246541d55`
+> Verified-Commit: `7c6ef05b123d884cffb3bed81c179a1a4e5b5b14`
 > Supersedes: —
 > Superseded-By: —
 > Priority: P1
 
-## 0. Implementation status
+## 0. Implementation status (archived: implementation landed)
 
 PR-1 through PR-5 below are implemented and merged: `CompatSnapshot`
 covers `required-resources` (PR-1); the `hufu.io/v1alpha1` envelope
@@ -17,10 +17,21 @@ dry-run migrator and `hufu team migrate --dry-run` exist (PR-3); all 11
 bundled teams under `.agent-teams/` now declare `apiVersion:
 hufu.io/v1alpha1` (PR-4 canary + PR-5 wider migration), verified via
 `TestBundledTeamsNormalize`'s golden fixtures matching unchanged; and
-`hufu team validate` reports the detected schema version (§9). Still
-open from §13's rollout: making `hufu team generate` write
-`hufu.io/v1alpha1` by default, and any future legacy-schema deprecation
-timeline — neither is scheduled yet.
+`hufu team validate` reports the detected schema version (§9).
+
+Also landed, beyond the PR-1..5 plan below: the root `README.md` and
+`docs/guides/decision-authoring.md` getting-started examples now show
+the `hufu.io/v1alpha1` schema (§13's "docs/examples prefer v1alpha1"),
+`hufu team generate` writes `hufu.io/v1alpha1` by default (§13's
+"generator writes v1alpha1" — `hufu init`/`hufu team create` were
+deliberately left on the legacy schema; see their own commit for why),
+and a since-fixed independent bug (`.md` files with no frontmatter,
+e.g. a team's `README.md`, becoming phantom worker agents) was found
+and fixed along the way.
+
+Moved here because implementation has landed (docs/README.md's
+archive/implementation-plans/ criterion). Only remaining from §13: a
+legacy-schema deprecation timeline, which is not scheduled.
 
 ## 1. 目標
 

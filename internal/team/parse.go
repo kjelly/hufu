@@ -72,7 +72,7 @@ type agentFrontmatter struct {
 // teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
 // authoring field at the top level (teamManifestSpecFields, shared
 // verbatim with the hufu.io/v1alpha1 `spec:` block — see
-// team_manifest.go and docs/architecture/team-schema-versioning.md §7),
+// team_manifest.go and docs/archive/implementation-plans/team-schema-versioning.md §7),
 // plus the legacy-only `advanced:` alias namespace.
 type teamConfigYAML struct {
 	teamManifestSpecFields `yaml:",inline"`

@@ -15,7 +15,7 @@ import (
 )
 
 // Schema versions a team.yaml/team.yml manifest can declare. See
-// docs/architecture/team-schema-versioning.md.
+// docs/archive/implementation-plans/team-schema-versioning.md.
 const (
 	// SchemaVersionLegacyFlatV0 identifies a manifest with no apiVersion
 	// envelope: the original flat top-level shape (§3 principle 3).

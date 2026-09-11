@@ -1372,7 +1372,7 @@ func TestParseTeamYMLRejectsEmptyCapabilityRoutingRequirement(t *testing.T) {
 
 // TestLoadTeamExcludesREADMEFromAgentDiscovery pins a fix for a real
 // regression found while migrating hufu-coding/strategic-decision to
-// hufu.io/v1alpha1 (docs/architecture/team-schema-versioning.md): both
+// hufu.io/v1alpha1 (docs/archive/implementation-plans/team-schema-versioning.md): both
 // bundled teams' README.md — a plain documentation file with no
 // frontmatter — was silently becoming a phantom "README" worker agent,
 // because a frontmatter-less .md file is deliberately still a valid

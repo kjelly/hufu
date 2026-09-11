@@ -42,7 +42,7 @@ Every `team.yaml` snippet in this guide is shown at its field's own level: a
 legacy flat team puts `decision:` at the top of team.yaml, exactly as shown
 below; a `hufu.io/v1alpha1` team puts the same block under `spec:` instead,
 since v1alpha1 keeps identical field names inside an envelope — see
-[team schema versioning](../architecture/team-schema-versioning.md).
+[team schema versioning](../archive/implementation-plans/team-schema-versioning.md).
 
 ```yaml
 decision:
