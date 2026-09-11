@@ -109,7 +109,11 @@ func runTeamValidate(_ *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "warning: %s: %s (%s)\n", finding.Field, finding.Message, finding.Code)
 		}
 	}
-	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid\n", spec.RuntimeSession().Config.Name)
+	schemaVersion, err := internalteam.DetectTeamSchemaVersion(teamDir, nil)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(os.Stdout, "team %s: contracts valid (schema: %s)\n", spec.RuntimeSession().Config.Name, schemaVersion)
 	return err
 }
 
