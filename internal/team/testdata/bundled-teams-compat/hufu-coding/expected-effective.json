@@ -68,11 +68,6 @@
       "max_retries": -1
     },
     {
-      "name": "README",
-      "role": "worker",
-      "max_retries": -1
-    },
-    {
       "name": "reviewer",
       "role": "worker",
       "side_effect": "none",

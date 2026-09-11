@@ -62,11 +62,6 @@
       "max_retries": -1
     },
     {
-      "name": "README",
-      "role": "worker",
-      "max_retries": -1
-    },
-    {
       "name": "reference",
       "role": "worker",
       "tools": "view,grep,glob,ls",

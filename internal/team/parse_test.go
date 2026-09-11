@@ -1369,3 +1369,39 @@ func TestParseTeamYMLRejectsEmptyCapabilityRoutingRequirement(t *testing.T) {
 		t.Fatalf("parseTeamYML error = %v, want required-capability validation failure", err)
 	}
 }
+
+// TestLoadTeamExcludesREADMEFromAgentDiscovery pins a fix for a real
+// regression found while migrating hufu-coding/strategic-decision to
+// hufu.io/v1alpha1 (docs/architecture/team-schema-versioning.md): both
+// bundled teams' README.md — a plain documentation file with no
+// frontmatter — was silently becoming a phantom "README" worker agent,
+// because a frontmatter-less .md file is deliberately still a valid
+// minimal agent definition (name/role inferred from the filename). That
+// feature stays; only README.md, the one filename with unambiguous
+// documentation-not-agent intent, is now excluded from agent discovery.
+func TestLoadTeamExcludesREADMEFromAgentDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentFileForTest(t, dir, "developer.md", "---\nname: developer\nrole: worker\ntools: view,edit,write,grep,glob,ls\n---\nImplement the change.\n")
+	writeAgentFileForTest(t, dir, "README.md", "# My Team\n\nThis team does X. Not an agent.\n")
+	// A different, deliberately frontmatter-less .md file must still become
+	// an agent: excluding README.md must not regress the general feature.
+	writeAgentFileForTest(t, dir, "reviewer-notes.md", "Review every change for security issues before approval.\n")
+
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if _, ok := session.Agents["readme"]; ok {
+		t.Error(`session.Agents contains "readme"; README.md must be excluded from agent discovery`)
+	}
+	if _, ok := session.Agents["reviewer-notes"]; !ok {
+		t.Error(`session.Agents is missing "reviewer-notes"; a non-README frontmatter-less .md file must still become an agent`)
+	}
+}
+
+func writeAgentFileForTest(t *testing.T, dir, filename, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", filename, err)
+	}
+}

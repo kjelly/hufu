@@ -1359,7 +1359,15 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		// README.md is excluded, not just any frontmatter-less .md: a file
+		// with no frontmatter is deliberately still a valid minimal agent
+		// (name/role inferred from the filename, whole body as the system
+		// prompt — see parseAgentContent), a real feature this must not
+		// break. README.md is the one filename with unambiguous
+		// documentation-not-agent intent by convention, so it is the only
+		// name excluded here rather than skipping every frontmatter-less
+		// file.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") || strings.EqualFold(entry.Name(), "README.md") {
 			continue
 		}
 		path := filepath.Join(absDir, entry.Name())
