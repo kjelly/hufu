@@ -107,91 +107,99 @@ type NormalizedTeamConfig struct {
 // TestLegacyAndV1Alpha1NormalizeIdentically true by construction — there is
 // exactly one field/tag declaration to keep in sync, not two independently
 // maintained structs that could silently drift apart.
+// Every field carries an explicit `omitempty` (added on top of the same
+// tags teamConfigYAML always had): this struct is now also an *encode*
+// target for the migrator (team_manifest_migrate.go), and every zero value
+// here already means "unset, use the built-in default" throughout
+// parseTeamYML's `if x != ""`/`if x > 0`/`if x` mapping below — so omitting
+// a zero field on encode is exactly as meaningful as omitting the key was
+// on the original authored YAML, and changes nothing about strict decode
+// (omitempty only affects marshaling).
 type teamManifestSpecFields struct {
-	Name                     string `yaml:"name"`
-	Description              string `yaml:"description"`
-	MaxRounds                int    `yaml:"max-rounds"`
-	MinimumCoordinatorRounds int    `yaml:"minimum-coordinator-rounds"`
-	MaxSteps                 int    `yaml:"max-steps"`
-	Workspace                string `yaml:"workspace"`
-	Timeout                  int64  `yaml:"timeout"`
-	VerifyTimeout            int64  `yaml:"verify-timeout"`
+	Name                     string `yaml:"name,omitempty"`
+	Description              string `yaml:"description,omitempty"`
+	MaxRounds                int    `yaml:"max-rounds,omitempty"`
+	MinimumCoordinatorRounds int    `yaml:"minimum-coordinator-rounds,omitempty"`
+	MaxSteps                 int    `yaml:"max-steps,omitempty"`
+	Workspace                string `yaml:"workspace,omitempty"`
+	Timeout                  int64  `yaml:"timeout,omitempty"`
+	VerifyTimeout            int64  `yaml:"verify-timeout,omitempty"`
 	// MaxRetries is a pointer so an omitted key (built-in default) can be
 	// distinguished from an explicit "max-retries: 0" override; the zero
 	// value of a plain int is indistinguishable from an explicit 0.
-	MaxRetries           *int                             `yaml:"max-retries"`
-	AutoReport           bool                             `yaml:"auto-report"`
-	AllowFreeTextResults bool                             `yaml:"allow-free-text-results"`
-	Model                string                           `yaml:"model"`
-	WorkerModel          string                           `yaml:"worker-model"`
-	CoordinatorModel     string                           `yaml:"coordinator-model"`
-	DefaultLLMBackend    string                           `yaml:"default-llm-backend"`
-	ContextWindow        int                              `yaml:"context-window"`
-	Temperature          string                           `yaml:"temperature"`
-	MaxTokens            string                           `yaml:"max-tokens"`
-	TopP                 string                           `yaml:"top-p"`
-	TopK                 string                           `yaml:"top-k"`
-	ReasoningEffort      string                           `yaml:"reasoning-effort"`
-	Skills               string                           `yaml:"skills"`
-	SkillsExclude        string                           `yaml:"skills-exclude"`
-	ProviderURL          string                           `yaml:"provider-url"`
-	ProviderAPIKey       string                           `yaml:"provider-api-key"`
-	Providers            map[string]config.ProviderConfig `yaml:"providers"`
-	Backends             map[string]config.BackendConfig  `yaml:"backends"`
-	ModelList            []config.ModelEntry              `yaml:"model-list"`
-	SidecarModel         string                           `yaml:"sidecar-model"`
-	GuardModel           string                           `yaml:"guard-model"`
-	JudgeModel           string                           `yaml:"judge-model"`
-	PlanReviewerModel    string                           `yaml:"plan-reviewer-model"`
-	MaxConcurrent        int                              `yaml:"max-concurrent"`
-	StallThreshold       string                           `yaml:"stall-threshold"`
-	MaxCoordinatorTurns  int                              `yaml:"max-coordinator-turns"`
-	EscalateOnRetry      bool                             `yaml:"escalate-on-retry"`
-	AutoSkills           bool                             `yaml:"auto-skills"`
-	Notify               notify.NotifyConfig              `yaml:"notify"`
-	AllowedPaths         interface{}                      `yaml:"allowed-paths"`
-	RestrictedPath       string                           `yaml:"restricted-path"`
-	NoNet                bool                             `yaml:"no-net"`
-	ForceMCP             bool                             `yaml:"force-mcp"`
-	ProjectContext       bool                             `yaml:"project-context"`
-	Shell                string                           `yaml:"shell"`
-	Vars                 map[string]interface{}           `yaml:"vars"`
+	MaxRetries           *int                             `yaml:"max-retries,omitempty"`
+	AutoReport           bool                             `yaml:"auto-report,omitempty"`
+	AllowFreeTextResults bool                             `yaml:"allow-free-text-results,omitempty"`
+	Model                string                           `yaml:"model,omitempty"`
+	WorkerModel          string                           `yaml:"worker-model,omitempty"`
+	CoordinatorModel     string                           `yaml:"coordinator-model,omitempty"`
+	DefaultLLMBackend    string                           `yaml:"default-llm-backend,omitempty"`
+	ContextWindow        int                              `yaml:"context-window,omitempty"`
+	Temperature          string                           `yaml:"temperature,omitempty"`
+	MaxTokens            string                           `yaml:"max-tokens,omitempty"`
+	TopP                 string                           `yaml:"top-p,omitempty"`
+	TopK                 string                           `yaml:"top-k,omitempty"`
+	ReasoningEffort      string                           `yaml:"reasoning-effort,omitempty"`
+	Skills               string                           `yaml:"skills,omitempty"`
+	SkillsExclude        string                           `yaml:"skills-exclude,omitempty"`
+	ProviderURL          string                           `yaml:"provider-url,omitempty"`
+	ProviderAPIKey       string                           `yaml:"provider-api-key,omitempty"`
+	Providers            map[string]config.ProviderConfig `yaml:"providers,omitempty"`
+	Backends             map[string]config.BackendConfig  `yaml:"backends,omitempty"`
+	ModelList            []config.ModelEntry              `yaml:"model-list,omitempty"`
+	SidecarModel         string                           `yaml:"sidecar-model,omitempty"`
+	GuardModel           string                           `yaml:"guard-model,omitempty"`
+	JudgeModel           string                           `yaml:"judge-model,omitempty"`
+	PlanReviewerModel    string                           `yaml:"plan-reviewer-model,omitempty"`
+	MaxConcurrent        int                              `yaml:"max-concurrent,omitempty"`
+	StallThreshold       string                           `yaml:"stall-threshold,omitempty"`
+	MaxCoordinatorTurns  int                              `yaml:"max-coordinator-turns,omitempty"`
+	EscalateOnRetry      bool                             `yaml:"escalate-on-retry,omitempty"`
+	AutoSkills           bool                             `yaml:"auto-skills,omitempty"`
+	Notify               notify.NotifyConfig              `yaml:"notify,omitempty"`
+	AllowedPaths         interface{}                      `yaml:"allowed-paths,omitempty"`
+	RestrictedPath       string                           `yaml:"restricted-path,omitempty"`
+	NoNet                bool                             `yaml:"no-net,omitempty"`
+	ForceMCP             bool                             `yaml:"force-mcp,omitempty"`
+	ProjectContext       bool                             `yaml:"project-context,omitempty"`
+	Shell                string                           `yaml:"shell,omitempty"`
+	Vars                 map[string]interface{}           `yaml:"vars,omitempty"`
 	// WorkerContextSize is a token budget, not a character count; the YAML
 	// key is kept as-is for backward compatibility.
-	WorkerContextSize       int                                     `yaml:"worker-context-size"`
-	ToolsAllowed            interface{}                             `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Requirements            agent.ContractRequirements              `yaml:"requires"`
-	Delegation              rawDelegationPolicy                     `yaml:"delegation"`
-	Preflight               []agent.CapabilityRequirement           `yaml:"preflight"`
-	RequiredResources       []agent.RequiredResourceSpec            `yaml:"required-resources"`
-	Workflow                agent.WorkflowConfig                    `yaml:"workflow"`
-	Policies                agent.WorkflowPolicies                  `yaml:"policies"`
-	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities"`
-	Verification            agent.VerificationConfig                `yaml:"verification"`
-	Retry                   agent.RetryConfig                       `yaml:"retry"`
-	Decision                agent.DecisionConfig                    `yaml:"decision"`
-	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry"`
-	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy"`
-	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers"`
-	SubagentProviderDefault string                                  `yaml:"subagent-provider-default"`
-	SubagentProviders       map[string]agent.SubagentProviderConfig `yaml:"subagent-providers"`
+	WorkerContextSize       int                                     `yaml:"worker-context-size,omitempty"`
+	ToolsAllowed            interface{}                             `yaml:"tools,omitempty"` // tools.allowed/tools.denied in YAML - string or []string
+	Requirements            agent.ContractRequirements              `yaml:"requires,omitempty"`
+	Delegation              rawDelegationPolicy                     `yaml:"delegation,omitempty"`
+	Preflight               []agent.CapabilityRequirement           `yaml:"preflight,omitempty"`
+	RequiredResources       []agent.RequiredResourceSpec            `yaml:"required-resources,omitempty"`
+	Workflow                agent.WorkflowConfig                    `yaml:"workflow,omitempty"`
+	Policies                agent.WorkflowPolicies                  `yaml:"policies,omitempty"`
+	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities,omitempty"`
+	Verification            agent.VerificationConfig                `yaml:"verification,omitempty"`
+	Retry                   agent.RetryConfig                       `yaml:"retry,omitempty"`
+	Decision                agent.DecisionConfig                    `yaml:"decision,omitempty"`
+	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry,omitempty"`
+	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy,omitempty"`
+	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers,omitempty"`
+	SubagentProviderDefault string                                  `yaml:"subagent-provider-default,omitempty"`
+	SubagentProviders       map[string]agent.SubagentProviderConfig `yaml:"subagent-providers,omitempty"`
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
-	MCPServers       map[string]interface{}  `yaml:"mcp-servers"`
-	Unattended       bool                    `yaml:"unattended"`
-	AutoApprove      bool                    `yaml:"auto-approve"`
-	MaxWallClock     int64                   `yaml:"max-duration"`
-	MaxTotalTokens   int64                   `yaml:"max-total-tokens"`
-	Acceptance       interface{}             `yaml:"acceptance"`
-	Rollback         string                  `yaml:"rollback"`
-	ExecutionProfile string                  `yaml:"execution-profile"`
-	GoalMode         string                  `yaml:"goal-mode"`
-	Reliability      rawReliabilityConfig    `yaml:"reliability"`
-	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory"`
-	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning"`
-	Compaction       rawCompactionPolicy     `yaml:"compaction"`
-	Tasks            []TaskDef               `yaml:"tasks"`
+	MCPServers       map[string]interface{}  `yaml:"mcp-servers,omitempty"`
+	Unattended       bool                    `yaml:"unattended,omitempty"`
+	AutoApprove      bool                    `yaml:"auto-approve,omitempty"`
+	MaxWallClock     int64                   `yaml:"max-duration,omitempty"`
+	MaxTotalTokens   int64                   `yaml:"max-total-tokens,omitempty"`
+	Acceptance       interface{}             `yaml:"acceptance,omitempty"`
+	Rollback         string                  `yaml:"rollback,omitempty"`
+	ExecutionProfile string                  `yaml:"execution-profile,omitempty"`
+	GoalMode         string                  `yaml:"goal-mode,omitempty"`
+	Reliability      rawReliabilityConfig    `yaml:"reliability,omitempty"`
+	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory,omitempty"`
+	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning,omitempty"`
+	Compaction       rawCompactionPolicy     `yaml:"compaction,omitempty"`
+	Tasks            []TaskDef               `yaml:"tasks,omitempty"`
 }
 
 // manifestEnvelope is a minimal, non-strict probe used only to detect
@@ -209,21 +217,31 @@ type manifestEnvelope struct {
 // exists — that is not an error; a team.yaml is optional and callers fall
 // back to defaults.
 func readTeamManifestSource(teamDir string, vars map[string]string) (data []byte, filename string, found bool, err error) {
-	for _, name := range []string{"team.yml", "team.yaml"} {
-		d, readErr := os.ReadFile(filepath.Join(teamDir, name))
-		if readErr == nil {
-			data, filename, found = d, name, true
-			break
-		}
-	}
-	if !found {
-		return nil, "", false, nil
+	data, filename, found, err = findTeamManifestFile(teamDir)
+	if err != nil || !found {
+		return data, filename, found, err
 	}
 	templated, err := applyTemplate(string(data), filename, vars)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("template error in team config: %w", err)
 	}
 	return []byte(templated), filename, true, nil
+}
+
+// findTeamManifestFile locates team.yml/team.yaml under teamDir and returns
+// its raw bytes, without applying templating. Most callers want
+// readTeamManifestSource instead; this exists for the migrator
+// (team_manifest_migrate.go), which must not bake a rendered `{{.Var}}`
+// substitution into the migrated output — it operates on the literal
+// source text.
+func findTeamManifestFile(teamDir string) (data []byte, filename string, found bool, err error) {
+	for _, name := range []string{"team.yml", "team.yaml"} {
+		d, readErr := os.ReadFile(filepath.Join(teamDir, name))
+		if readErr == nil {
+			return d, name, true, nil
+		}
+	}
+	return nil, "", false, nil
 }
 
 // DetectTeamSchemaVersion reports which schema a team.yaml/team.yml
