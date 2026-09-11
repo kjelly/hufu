@@ -82,6 +82,48 @@ func TestReportRendersContentFreeContextRoutingAggregate(t *testing.T) {
 	}
 }
 
+func TestReportRendersRequiredResourceLocksMetadataOnly(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now(), SessionData: &team.SessionData{
+		RequiredResourceLockSet: &team.LockedResourceSet{
+			SchemaVersion: 1,
+			Digest:        "deadbeef",
+			Resources: []team.LockedResource{
+				{Name: "team-rules", Kind: agent.ResourceProjectRules, SHA256: "abc123", ByteSize: 42, InjectInto: []string{"coordinator", "coder"}},
+			},
+		},
+	}}, "demo", "")
+	for _, want := range []string{"## Required Resource Locks", "`deadbeef`", "`team-rules`", "`project_rules`", "`abc123`", "| 42 |", "coordinator, coder"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q: %s", want, report)
+		}
+	}
+}
+
+func TestReportOmitsRequiredResourceLockSectionWhenNoneDeclared(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now()}, "demo", "")
+	if strings.Contains(report, "Required Resource Locks") {
+		t.Fatalf("report unexpectedly includes Required Resource Locks section: %s", report)
+	}
+}
+
+func TestReportRequiredResourceLocksAreContentFree(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("super secret rules content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, _, err := team.ResolveRequiredResources(dir, []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := buildReportMD(&reportData{StartedAt: time.Now(), SessionData: &team.SessionData{RequiredResourceLockSet: set}}, "demo", "")
+	if strings.Contains(report, "super secret rules content") {
+		t.Fatalf("report leaked required-resource content: %s", report)
+	}
+	if !strings.Contains(report, "## Required Resource Locks") {
+		t.Fatalf("report missing Required Resource Locks section: %s", report)
+	}
+}
+
 func TestReportRendersModelProfilesWithoutTransportSecrets(t *testing.T) {
 	secretURL := "https://provider.example/v1"
 	report := buildReportMD(&reportData{StartedAt: time.Now(), ModelProfiles: []modelprofile.TelemetryProjection{{

@@ -2,7 +2,7 @@
 
 > Status: draft
 > Authority: reference
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `13ad29f`
 > Supersedes: —
 > Superseded-By: —
 
@@ -17,7 +17,7 @@
 >
 > 文件狀態：設計草稿／reference。凡標示「目標 schema」的 YAML/Go 欄位，目前不一定已被 hufu parser 支援，需先以 code/tests 核對再使用。
 >
-> 分析基準：**HEAD `6ab9951`（2026-09-11）**。本文件仍描述設計與驗收案例，不取代 runtime 的 current-state documentation。
+> 分析基準：**HEAD `13ad29f`（2026-09-11）**。本文件仍描述設計與驗收案例，不取代 runtime 的 current-state documentation。§8 已依 `internal/agent/resource_lock.go`、`internal/team/resource_lock*.go` 的實作核對並更新（`RequiredResourceSpec`/`LockedResource`/`resource_locked` 事件命名與此文件完全一致）。
 >
 > 實作狀態速記：部分機制已落地，部分仍是設計目標；請以 code、tests、accepted ADR 及 `docs/roadmap.md` 核對。本文件各章節描述的是**設計／驗收案例**，不代表現況。
 >
@@ -424,8 +424,27 @@ type LockedResource struct {
     ByteSize      int64
     LoadedAt      time.Time
     SnapshotRef   ArtifactRef
+    InjectInto    []string
 }
 ```
+
+`InjectInto` 是相對本節原始模型新增的欄位（複製自 `RequiredResourceSpec`）：
+讓 bind/inject 步驟只靠 `LockedResource` 本身就能決定注入目標，不必回頭 join
+原始宣告清單。
+
+`LockedResource` 是 durable、metadata-only 記錄（見 8.5 驗收條件：event/report
+只記 metadata，不記 content）。實際內容只存在單次 run 的記憶體中：
+
+```go
+type LoadedResource struct {
+    LockedResource
+    Content string
+}
+```
+
+`LoadedResource` never persisted、never 放進 event payload；bind/inject
+一律用這裡的 `Content` 注入，不得在 inject 階段重新讀檔案——這是「lock 後
+source 改動不影響本 run」的落地方式。
 
 ## 8.3 啟動流程
 
@@ -439,6 +458,31 @@ resolve path
 → inject locked snapshot
 → write resource_locked event
 ```
+
+## 8.3.1 Durable persistence 與 resume
+
+單次啟動鎖定之外，required resource lock 還需要在 resume 時證明「這次沒有
+偷偷換掉鎖定內容」，做法比照既有的 `ExecutionPolicySnapshot` 機制：
+
+```go
+type LockedResourceSet struct {
+    SchemaVersion int
+    Resources     []LockedResource
+    Digest        string
+}
+```
+
+- `Digest` 是排序後（依 `Name`）對 `kind,name,canonical_path,sha256,byte_size,
+  inject_targets` 算出的 deterministic 雜湊，刻意不含 `LoadedAt`（時間本質
+  不 deterministic，納入會讓每次 resume 都算出不同 digest）。
+- 持久化到既有的 session checkpoint（`SessionData.RequiredResourceLockSet`）
+  與 event journal（`resource_locked` event，payload 就是整個
+  `LockedResourceSet`，只有 metadata）。
+- Resume 時重新 resolve 一次宣告的 required resources，比對新 digest 跟
+  persisted digest：不同就直接 fail closed（drift detected），不會靜默
+  用新內容重新鎖定。
+- 沒有宣告 `required-resources` 的 team 完全不受影響（zero behavior
+  change）。
 
 ## 8.4 Skill discovery 改善
 

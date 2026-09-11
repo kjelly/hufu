@@ -686,6 +686,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	writeMemoryLearningReport(&b, data.MemoryLearning)
 	writeDeprecatedMemoryToolReport(&b, data.DeprecatedMemory)
 	writeContextRoutingReport(&b, data.ContextRouting)
+	if data.SessionData != nil {
+		writeRequiredResourceLockReport(&b, data.SessionData.RequiredResourceLockSet)
+	}
 
 	if len(data.Todos) > 0 {
 		b.WriteString("## Task Summary\n\n")
@@ -909,6 +912,25 @@ func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestS
 		for _, purpose := range keys {
 			fmt.Fprintf(b, "  - `%s`: %d\n", purpose, summary.Purposes[purpose])
 		}
+	}
+	b.WriteString("\n---\n\n")
+}
+
+// writeRequiredResourceLockReport surfaces the durable, metadata-only
+// record of every required resource locked before dispatch (spec.md
+// "Generic Required Resource Lock" runtime invariant 9: event/report
+// record metadata, never content).
+func writeRequiredResourceLockReport(b *strings.Builder, set *team.LockedResourceSet) {
+	if set == nil || len(set.Resources) == 0 {
+		return
+	}
+	b.WriteString("## Required Resource Locks\n\n")
+	fmt.Fprintf(b, "- **Set digest:** `%s`\n\n", set.Digest)
+	b.WriteString("| Name | Kind | SHA-256 | Bytes | Inject into |\n| --- | --- | --- | ---: | --- |\n")
+	resources := append([]team.LockedResource(nil), set.Resources...)
+	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
+	for _, r := range resources {
+		fmt.Fprintf(b, "| `%s` | `%s` | `%s` | %d | %s |\n", r.Name, r.Kind, r.SHA256, r.ByteSize, strings.Join(r.InjectInto, ", "))
 	}
 	b.WriteString("\n---\n\n")
 }
