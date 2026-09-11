@@ -49,6 +49,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.
+- [Team schema versioning](architecture/team-schema-versioning.md) — a draft
+  plan for a versioned, migratable `apiVersion` envelope over `team.yaml`;
+  not yet implemented.
 
 ### Guides and references
 
