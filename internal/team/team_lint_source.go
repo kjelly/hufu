@@ -118,6 +118,14 @@ func indexYAMLNode(target map[string]TeamSourceLocation, file, prefix string, no
 		indexYAMLNode(target, file, prefix, node.Content[0], status)
 		return
 	}
+	if node.Kind == yaml.SequenceNode {
+		for index, child := range node.Content {
+			path := fmt.Sprintf("%s[%d]", prefix, index)
+			target[path] = TeamSourceLocation{File: file, Line: child.Line, Column: child.Column, Status: status}
+			indexYAMLNode(target, file, path, child, status)
+		}
+		return
+	}
 	if node.Kind != yaml.MappingNode {
 		return
 	}

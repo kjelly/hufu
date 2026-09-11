@@ -1348,7 +1348,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		if coordinatorPath != "" {
 			err := fmt.Errorf("team has more than one coordinator agent: %s and %s both resolve to role \"coordinator\"", coordinatorPath, path)
 			if mode == TeamCompileLint {
-				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingMultipleCoordinators, Field: "agents", Message: err.Error()})
+				*diagnostics = append(*diagnostics, ContractFinding{
+					Severity: FindingSeverityError, Code: FindingMultipleCoordinators,
+					Field:   fmt.Sprintf("agents.%s.role", normalizedName(def.FileAlias)),
+					Message: fmt.Sprintf("team has more than one coordinator agent: %s and %s", filepath.Base(coordinatorPath), filepath.Base(path)),
+				})
 				return nil
 			}
 			return err
@@ -1361,7 +1365,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		if key == "helper" {
 			err := fmt.Errorf("agent identity %q is reserved by the built-in Helper (agent %q from %s)", identity, def.Name, path)
 			if mode == TeamCompileLint {
-				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingDuplicateAgent, Field: "agents", Message: err.Error()})
+				*diagnostics = append(*diagnostics, ContractFinding{
+					Severity: FindingSeverityError, Code: FindingDuplicateAgent,
+					Field:   fmt.Sprintf("agents.%s.name", normalizedName(def.FileAlias)),
+					Message: fmt.Sprintf("agent identity %q is reserved by the built-in Helper (agent %q from %s)", identity, def.Name, filepath.Base(path)),
+				})
 				return lintIdentityCollision
 			}
 			return err
@@ -1369,7 +1377,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		if previous, exists := identityOwners[key]; exists && previous.def != def {
 			err := fmt.Errorf("agent identity collision for %q: agent %q from %s conflicts with agent %q from %s", key, previous.def.Name, previous.path, def.Name, path)
 			if mode == TeamCompileLint {
-				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingDuplicateAgent, Field: "agents", Message: err.Error()})
+				*diagnostics = append(*diagnostics, ContractFinding{
+					Severity: FindingSeverityError, Code: FindingDuplicateAgent,
+					Field:   fmt.Sprintf("agents.%s.name", normalizedName(def.FileAlias)),
+					Message: fmt.Sprintf("agent identity collision for %q: agent %q from %s conflicts with agent %q from %s", key, previous.def.Name, filepath.Base(previous.path), def.Name, filepath.Base(path)),
+				})
 				return lintIdentityCollision
 			}
 			return err
