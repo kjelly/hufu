@@ -1,34 +1,38 @@
-name: hufu-dev
-description: "Hufu-specific development team with domain analysis, single-writer implementation, and independent verification"
-max-rounds: 14
-max-steps: 100
-timeout: 3300
-max-retries: 1
-max-concurrent: 2
-workspace: workspace
-temperature: "0.2"
-max-tokens: "8192"
-unattended: false
-# This is a code-changing team: completion must be an objective outcome, not
-# the default exploratory/profile-advisory result.
-goal-mode: outcome
-delegation:
-  # LoadTeam always provides a general-purpose Helper. Keep it unreachable so
-  # implementation-engineer remains the only worker with write authority.
-  allowed-workers:
-    - runtime-engineer
-    - integration-engineer
-    - implementation-engineer
-    - verifier
-  no-redispatch-after-success:
-    - runtime-engineer
-    - integration-engineer
-    - implementation-engineer
-    - verifier
-acceptance:
-  mode: blocking
-  require-no-unresolved-tasks: true
-  commands:
-    - go test ./...
-    - go vet ./...
-    - golangci-lint run
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: hufu-dev
+spec:
+  description: "Hufu-specific development team with domain analysis, single-writer implementation, and independent verification"
+  max-rounds: 14
+  max-steps: 100
+  timeout: 3300
+  max-retries: 1
+  max-concurrent: 2
+  workspace: workspace
+  temperature: "0.2"
+  max-tokens: "8192"
+  unattended: false
+  # This is a code-changing team: completion must be an objective outcome, not
+  # the default exploratory/profile-advisory result.
+  goal-mode: outcome
+  delegation:
+    # LoadTeam always provides a general-purpose Helper. Keep it unreachable so
+    # implementation-engineer remains the only worker with write authority.
+    allowed-workers:
+      - runtime-engineer
+      - integration-engineer
+      - implementation-engineer
+      - verifier
+    no-redispatch-after-success:
+      - runtime-engineer
+      - integration-engineer
+      - implementation-engineer
+      - verifier
+  acceptance:
+    mode: blocking
+    require-no-unresolved-tasks: true
+    commands:
+      - go test ./...
+      - go vet ./...
+      - golangci-lint run

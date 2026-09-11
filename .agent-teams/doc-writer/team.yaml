@@ -1,5 +1,9 @@
-name: doc-writer
-description: "Starter team for user-facing documentation: README, API reference, and CHANGELOG entries."
-max-rounds: 5
-timeout: 1800
-max-retries: 2
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: doc-writer
+spec:
+  description: "Starter team for user-facing documentation: README, API reference, and CHANGELOG entries."
+  max-rounds: 5
+  timeout: 1800
+  max-retries: 2

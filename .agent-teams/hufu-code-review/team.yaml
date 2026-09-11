@@ -1,111 +1,115 @@
-name: hufu-code-review
-description: "Read-only, artifact-backed review of the Hufu Go codebase"
-max-rounds: 64
-max-steps: 80
-timeout: 3600
-verify-timeout: 120
-max-retries: 1
-max-concurrent: 1
-workspace: workspace
-goal-mode: outcome
-execution-profile: fresh-session
-unattended: true
-max-duration: 86400
-max-total-tokens: 0
-no-net: true
-allow-free-text-results: false
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: hufu-code-review
+spec:
+  description: "Read-only, artifact-backed review of the Hufu Go codebase"
+  max-rounds: 64
+  max-steps: 80
+  timeout: 3600
+  verify-timeout: 120
+  max-retries: 1
+  max-concurrent: 1
+  workspace: workspace
+  goal-mode: outcome
+  execution-profile: fresh-session
+  unattended: true
+  max-duration: 86400
+  max-total-tokens: 0
+  no-net: true
+  allow-free-text-results: false
 
-subagent-providers:
-  codex:
-    type: codex-app-server
-    command: [codex, app-server]
-    startup-timeout: "30s"
-    interrupt-grace: "5s"
-    shutdown-grace: "5s"
-    max-event-bytes: 16777216
-    max-transcript-bytes: 16777216
-    max-concurrent: 1
-    inherit-env: [PATH, CODEX_HOME, HOME]
+  subagent-providers:
+    codex:
+      type: codex-app-server
+      command: [codex, app-server]
+      startup-timeout: "30s"
+      interrupt-grace: "5s"
+      shutdown-grace: "5s"
+      max-event-bytes: 16777216
+      max-transcript-bytes: 16777216
+      max-concurrent: 1
+      inherit-env: [PATH, CODEX_HOME, HOME]
 
-workflow:
-  phases: [prepare, verify]
-policies:
-  require_phase_success: true
-  allow_phase_skip: true
-  fail_fast: true
-capabilities:
-  required: [produce-workset]
-verification:
-  required: true
-retry:
-  transient:
-    max_attempts: 1
-  repair:
-    max_attempts_per_failure_signature: 1
+  workflow:
+    phases: [prepare, verify]
+  policies:
+    require_phase_success: true
+    allow_phase_skip: true
+    fail_fast: true
+  capabilities:
+    required: [produce-workset]
+  verification:
+    required: true
+  retry:
+    transient:
+      max_attempts: 1
+    repair:
+      max_attempts_per_failure_signature: 1
 
-action-providers:
-  produce-workset:
-    command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
-    dir: .
-    timeout: 300
+  action-providers:
+    produce-workset:
+      command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
+      dir: .
+      timeout: 300
 
-delegation:
-  bind-task-goal-contracts: true
-  allowed-workers: [reviewer, critic]
-  no-redispatch-after-success: [reviewer, critic]
+  delegation:
+    bind-task-goal-contracts: true
+    allowed-workers: [reviewer, critic]
+    no-redispatch-after-success: [reviewer, critic]
 
-acceptance:
-  mode: blocking
-  require-no-unresolved-tasks: true
-  verifications:
-    - type: workset_complete
-      source-task: review-workset
-      require-all-terminal: true
-      require-all-verified: true
-      accepted-statuses: [success, completed_with_gaps]
+  acceptance:
+    mode: blocking
+    require-no-unresolved-tasks: true
+    verifications:
+      - type: workset_complete
+        source-task: review-workset
+        require-all-terminal: true
+        require-all-verified: true
+        accepted-statuses: [success, completed_with_gaps]
 
-# The producer is deterministic. The optional critic is authorized in VERIFY
-# but does not block a clean review.
-tasks:
-  - id: produce-workset
-    agent: reviewer
-    when-goal-contains: produce workset
-    phase: prepare
-    side_effect: none
-    recovery: retry
-    action:
-      capability: produce-workset
-      type: prepare_review_workset
-      payload: '{"since":"1970-01-01","max_commits":1,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
+  # The producer is deterministic. The optional critic is authorized in VERIFY
+  # but does not block a clean review.
+  tasks:
+    - id: produce-workset
+      agent: reviewer
+      when-goal-contains: produce workset
+      phase: prepare
+      side_effect: none
+      recovery: retry
+      action:
+        capability: produce-workset
+        type: prepare_review_workset
+        payload: '{"since":"1970-01-01","max_commits":1,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}'
 
-  - id: review-workset
-    agent: reviewer
-    when-goal-contains: review workset
-    phase: verify
-    fan_out:
-      source-artifact:
-        task_id: produce-workset
-        artifact: workset manifest
-      goal-template: "Review workset item {key} with the {lens} lens."
-    execution:
-      requires-result: true
-      requires-grounded-result: true
-      forbid-artifacts: true
-    verify-spec:
-      type: task_result_assert
-      task-result-assertions:
-        - { pointer: /summary, op: non_empty }
-        - { pointer: /files_read, op: min_items, value: 1 }
+    - id: review-workset
+      agent: reviewer
+      when-goal-contains: review workset
+      phase: verify
+      fan_out:
+        source-artifact:
+          task_id: produce-workset
+          artifact: workset manifest
+        goal-template: "Review workset item {key} with the {lens} lens."
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+        forbid-artifacts: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /summary, op: non_empty }
+          - { pointer: /files_read, op: min_items, value: 1 }
 
-  - id: critic-review
-    agent: critic
-    when-goal-contains: critic review
-    phase: verify
-    optional: true
-    execution:
-      requires-result: true
-      requires-grounded-result: true
-    verify-spec:
-      type: task_result_assert
-      task-result-assertions:
-        - { pointer: /summary, op: non_empty }
+    - id: critic-review
+      agent: critic
+      when-goal-contains: critic review
+      phase: verify
+      optional: true
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /summary, op: non_empty }

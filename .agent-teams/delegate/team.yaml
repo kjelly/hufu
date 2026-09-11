@@ -1,5 +1,9 @@
-name: delegate
-description: "Demo team that demonstrates multi-level agent delegation — coordinator delegates to planner, who delegates to researcher and writer"
-max-rounds: 5
-timeout: 9120
-tools: [bash]
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: delegate
+spec:
+  description: "Demo team that demonstrates multi-level agent delegation — coordinator delegates to planner, who delegates to researcher and writer"
+  max-rounds: 5
+  timeout: 9120
+  tools: [bash]

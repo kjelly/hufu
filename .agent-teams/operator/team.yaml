@@ -1,7 +1,11 @@
-name: operator
-description: "Strict plan-execution team — decomposes a user plan into sub-tasks and executes them faithfully without deviation"
-max-rounds: 30
-max-steps: 50
-timeout: 1800
-temperature: "0.2"
-max-tokens: "4096"
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: operator
+spec:
+  description: "Strict plan-execution team — decomposes a user plan into sub-tasks and executes them faithfully without deviation"
+  max-rounds: 30
+  max-steps: 50
+  timeout: 1800
+  temperature: "0.2"
+  max-tokens: "4096"

@@ -1,13 +1,17 @@
-name: dev-team
-description: "A full-stack development team for building features"
-max-rounds: 10
-timeout: 3300
-tools:
-  allowed:
-    - view
-    - edit
-    - write
-    - bash
-    - grep
-    - glob
-    - ls
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: dev-team
+spec:
+  description: "A full-stack development team for building features"
+  max-rounds: 10
+  timeout: 3300
+  tools:
+    allowed:
+      - view
+      - edit
+      - write
+      - bash
+      - grep
+      - glob
+      - ls
