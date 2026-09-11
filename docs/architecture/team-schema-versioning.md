@@ -2,10 +2,25 @@
 
 > Status: draft
 > Authority: reference
-> Verified-Commit: `deee6bd298069e49132f64da959ff754f92498d5`
+> Verified-Commit: `c5f278a0e7727332a0816963e7837e7246541d55`
 > Supersedes: —
 > Superseded-By: —
 > Priority: P1
+
+## 0. Implementation status
+
+PR-1 through PR-5 below are implemented and merged: `CompatSnapshot`
+covers `required-resources` (PR-1); the `hufu.io/v1alpha1` envelope
+parser with strict unknown-field rejection and shared normalize exists
+(PR-2, plus a task-contract envelope-awareness fix it surfaced); the
+dry-run migrator and `hufu team migrate --dry-run` exist (PR-3); all 11
+bundled teams under `.agent-teams/` now declare `apiVersion:
+hufu.io/v1alpha1` (PR-4 canary + PR-5 wider migration), verified via
+`TestBundledTeamsNormalize`'s golden fixtures matching unchanged; and
+`hufu team validate` reports the detected schema version (§9). Still
+open from §13's rollout: making `hufu team generate` write
+`hufu.io/v1alpha1` by default, and any future legacy-schema deprecation
+timeline — neither is scheduled yet.
 
 ## 1. 目標
 
