@@ -261,3 +261,47 @@ spec:
 		t.Errorf("legacy and v1alpha1 normalize differently:\n--- legacy ---\n%s\n--- v1alpha1 ---\n%s", legacyJSON, v1JSON)
 	}
 }
+
+// TestV1Alpha1TeamTasksResolve pins a regression found while canary-migrating
+// a real bundled team: session.ContractTasks (and therefore
+// CompatSnapshot.Tasks) comes from loadTeamContractTasks, a second,
+// independent decode of team.yaml separate from parseTeamYML/cfg. Before
+// this fix it always looked for a bare top-level `tasks:` key, so a
+// hufu.io/v1alpha1 team's `spec.tasks:` silently resolved to zero tasks
+// instead of failing loudly or resolving correctly.
+func TestV1Alpha1TeamTasksResolve(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: v1alpha1-tasks-team
+spec:
+  tasks:
+    - agent: developer
+      when-goal-contains: IMPLEMENT
+      side_effect: workspace_write
+      recovery: retry
+`)
+	if err := os.WriteFile(filepath.Join(dir, "developer.md"), []byte("---\nname: developer\nrole: worker\ntools: view,edit,write,grep,glob,ls\n---\nImplement the change.\n"), 0o644); err != nil {
+		t.Fatalf("write developer.md: %v", err)
+	}
+
+	tasks, err := loadTeamContractTasks(dir, nil)
+	if err != nil {
+		t.Fatalf("loadTeamContractTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1 (spec.tasks: must resolve for a v1alpha1 team)", len(tasks))
+	}
+	if tasks[0].Agent != "developer" || tasks[0].WhenGoalContains != "IMPLEMENT" {
+		t.Errorf("tasks[0] = %+v, want agent=developer when-goal-contains=IMPLEMENT", tasks[0])
+	}
+
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if len(session.ContractTasks) != 1 {
+		t.Fatalf("len(session.ContractTasks) = %d, want 1", len(session.ContractTasks))
+	}
+}

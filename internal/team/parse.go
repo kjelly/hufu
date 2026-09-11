@@ -126,6 +126,12 @@ func mergeAdvancedNamespace(yc *teamConfigYAML) error {
 		}
 		yc.Retry = yc.Advanced.Retry
 	}
+	if len(yc.Advanced.Tasks) > 0 {
+		if len(yc.Tasks) > 0 {
+			return errors.New("\"tasks\" is defined both at the top level and under \"advanced\"; remove one")
+		}
+		yc.Tasks = yc.Advanced.Tasks
+	}
 	return nil
 }
 
@@ -1225,37 +1231,29 @@ func validateMemoryLearningPolicy(p agent.MemoryLearningPolicy) error {
 // loadTeamContractTasks reads optional static task contracts from team YAML.
 // A team may opt in to binding the initial batch or goal-selected later tasks;
 // otherwise these remain available only to preflight tooling.
+// loadTeamContractTasks re-reads and re-decodes team.yml/team.yaml
+// (readTeamManifestSource + decodeTeamManifestYAML — the same envelope-aware
+// pipeline parseTeamYML uses) to recover the authored Tasks contract.
+// agent.TeamConfig has no Tasks field, so parseTeamYML's own decode result
+// is not reused here; the redundant decode is cheap and this function is
+// only ever reached once parseTeamYML has already validated the same file
+// successfully. Using decodeTeamManifestYAML (rather than re-implementing a
+// second, envelope-unaware raw decode) is what makes a hufu.io/v1alpha1
+// team's `spec.tasks:` resolve at all: a bespoke top-level-only decode here
+// would silently see no `tasks:` key and return an empty contract.
 func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, error) {
-	for _, name := range []string{"team.yml", "team.yaml"} {
-		data, err := os.ReadFile(filepath.Join(teamDir, name))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read team task contracts: %w", err)
-		}
-		text, err := applyTemplate(string(data), name, vars)
-		if err != nil {
-			return nil, fmt.Errorf("template team task contracts: %w", err)
-		}
-		var config struct {
-			Tasks    []TaskDef `yaml:"tasks"`
-			Advanced struct {
-				Tasks []TaskDef `yaml:"tasks"`
-			} `yaml:"advanced"`
-		}
-		if err := yaml.Unmarshal([]byte(text), &config); err != nil {
-			return nil, fmt.Errorf("parse team task contracts: %w", err)
-		}
-		if len(config.Tasks) > 0 && len(config.Advanced.Tasks) > 0 {
-			return nil, errors.New("\"tasks\" is defined both at the top level and under \"advanced\"; remove one")
-		}
-		if len(config.Advanced.Tasks) > 0 {
-			return config.Advanced.Tasks, nil
-		}
-		return config.Tasks, nil
+	data, filename, found, err := readTeamManifestSource(teamDir, vars)
+	if err != nil {
+		return nil, fmt.Errorf("read team task contracts: %w", err)
 	}
-	return nil, nil
+	if !found {
+		return nil, nil
+	}
+	yc, _, err := decodeTeamManifestYAML(filename, data)
+	if err != nil {
+		return nil, fmt.Errorf("parse team task contracts: %w", err)
+	}
+	return yc.Tasks, nil
 }
 
 func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (*TeamSession, error) {
