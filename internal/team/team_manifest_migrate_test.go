@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -148,6 +149,50 @@ func TestTeamMigrateDryRunRoundTrips(t *testing.T) {
 	}
 	if string(migrated) != string(migratedAgain) {
 		t.Errorf("re-migrating an already-v1alpha1 manifest is not stable:\n--- first ---\n%s\n--- second ---\n%s", migrated, migratedAgain)
+	}
+}
+
+// TestTeamMigrateExpandsAdvancedNamespaceAlias pins §7's migrator
+// requirement directly: a legacy source using the `advanced:` alias
+// namespace must never produce an `advanced:` block in the migrated
+// v1alpha1 output (v1alpha1 has no such alias — §7), and the value must
+// still be present under its canonical field name.
+func TestTeamMigrateExpandsAdvancedNamespaceAlias(t *testing.T) {
+	dir := t.TempDir()
+	// verification only takes effect alongside a phased workflow
+	// (parseTeamYML gates Verification/Policies/Capabilities/Retry on
+	// len(yc.Workflow.Phases) > 0), so this fixture needs one to actually
+	// observe the expanded value downstream, not just in the raw YAML text.
+	writeTeamManifest(t, dir, `name: advanced-alias-migrate-fixture
+workflow:
+  phases: [plan, implement]
+advanced:
+  verification:
+    required: true
+`)
+
+	migrated, _, err := MigrateTeamManifestToV1Alpha1(dir)
+	if err != nil {
+		t.Fatalf("MigrateTeamManifestToV1Alpha1: %v", err)
+	}
+
+	if strings.Contains(string(migrated), "advanced:") {
+		t.Errorf("migrated output still contains an advanced: block:\n%s", migrated)
+	}
+	if !strings.Contains(string(migrated), "verification:") {
+		t.Errorf("migrated output is missing the expanded verification: field:\n%s", migrated)
+	}
+
+	roundTripDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(roundTripDir, "team.yaml"), migrated, 0o644); err != nil {
+		t.Fatalf("write round-tripped team.yaml: %v", err)
+	}
+	cfg, err := parseTeamYML(roundTripDir, nil)
+	if err != nil {
+		t.Fatalf("parseTeamYML(round-tripped): %v", err)
+	}
+	if !cfg.Verification.Required {
+		t.Errorf("cfg.Verification.Required = false after migration, want true (expanded from advanced.verification.required)")
 	}
 }
 
