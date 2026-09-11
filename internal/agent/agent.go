@@ -332,6 +332,11 @@ type TeamConfig struct {
 	Requirements      ContractRequirements
 	Delegation        DelegationPolicy
 	Preflight         []CapabilityRequirement
+	// RequiredResources are hash-locked skill/prompt/project_rules/schema
+	// declarations resolved before the first provider/model call (spec.md
+	// "Generic Required Resource Lock"). An empty list is a no-op — legacy
+	// teams that never declare any keep today's behavior unchanged.
+	RequiredResources []RequiredResourceSpec `yaml:"required-resources" json:"required_resources,omitempty"`
 	// Workflow, Policies, and Verification describe an optional runtime-owned
 	// phase contract. When configured, Hufu—not coordinator prose—controls the
 	// PREPARE → AUDIT → EXECUTE → VERIFY progression.

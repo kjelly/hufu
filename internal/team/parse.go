@@ -127,6 +127,7 @@ type teamConfigYAML struct {
 	Requirements            agent.ContractRequirements              `yaml:"requires"`
 	Delegation              rawDelegationPolicy                     `yaml:"delegation"`
 	Preflight               []agent.CapabilityRequirement           `yaml:"preflight"`
+	RequiredResources       []agent.RequiredResourceSpec            `yaml:"required-resources"`
 	Workflow                agent.WorkflowConfig                    `yaml:"workflow"`
 	Policies                agent.WorkflowPolicies                  `yaml:"policies"`
 	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities"`
@@ -1178,6 +1179,12 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight
+	}
+	if len(yc.RequiredResources) > 0 {
+		if err := agent.ValidateRequiredResources(yc.RequiredResources); err != nil {
+			return cfg, fmt.Errorf("invalid team config: %w", err)
+		}
+		cfg.RequiredResources = yc.RequiredResources
 	}
 	if len(yc.Workflow.Phases) > 0 {
 		cfg.Workflow = agent.WorkflowConfig{Phases: append([]string(nil), yc.Workflow.Phases...)}
