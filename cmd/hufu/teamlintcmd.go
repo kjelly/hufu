@@ -15,6 +15,14 @@ var (
 	teamLintName   string
 	teamLintFormat string
 	teamLintFailOn string
+	teamLintPolicy struct {
+		Profile          string
+		ExecutionProfile string
+		Unattended       bool
+		NoNet            bool
+		ForceMCP         bool
+		PlanFirst        bool
+	}
 )
 
 type teamLintExitError struct {
@@ -66,6 +74,12 @@ func init() {
 	teamLintCmd.Flags().StringVar(&teamLintName, "team", "", "Discoverable team name to lint")
 	teamLintCmd.Flags().StringVar(&teamLintFormat, "format", "text", "Output format: text or json")
 	teamLintCmd.Flags().StringVar(&teamLintFailOn, "fail-on", internalteam.FindingSeverityError, "Lowest finding severity that fails: error, warning, info, or none")
+	teamLintCmd.Flags().StringVar(&teamLintPolicy.Profile, "profile", "", "Apply a named hufu.yaml flag bundle")
+	teamLintCmd.Flags().StringVar(&teamLintPolicy.ExecutionProfile, "execution-profile", "", "Set the effective execution profile")
+	teamLintCmd.Flags().BoolVar(&teamLintPolicy.Unattended, "unattended", false, "Evaluate unattended policy")
+	teamLintCmd.Flags().BoolVar(&teamLintPolicy.NoNet, "no-net", false, "Evaluate with network tools disabled")
+	teamLintCmd.Flags().BoolVar(&teamLintPolicy.ForceMCP, "force-mcp", false, "Evaluate with built-in execution tools disabled")
+	teamLintCmd.Flags().BoolVar(&teamLintPolicy.PlanFirst, "plan", false, "Evaluate with plan-first enabled")
 	teamLintCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		cmd.Root().SilenceErrors = true
 		return &teamLintExitError{code: 2, msg: err.Error()}
@@ -81,11 +95,19 @@ func runTeamLint(cmd *cobra.Command, args []string) error {
 	if failOn != internalteam.FindingSeverityError && failOn != internalteam.FindingSeverityWarning && failOn != internalteam.FindingSeverityInfo && failOn != "none" {
 		return lintCLIError(cmd, format, "invalid --fail-on: use error, warning, info, or none")
 	}
+	if err := applyNamedProfile(cmd, teamLintPolicy.Profile); err != nil {
+		return lintCLIError(cmd, format, err.Error())
+	}
 	teamDir, err := resolveTeamDirArg(args, teamLintName)
 	if err != nil {
 		return lintCLIError(cmd, format, err.Error())
 	}
-	result, err := internalteam.LintTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
+	options := internalteam.TeamLintOptions{Registry: internalteam.DefaultProviderRegistry, ExecutionProfile: teamLintPolicy.ExecutionProfile}
+	options.Unattended = changedBoolFlag(cmd, "unattended", teamLintPolicy.Unattended)
+	options.NoNet = changedBoolFlag(cmd, "no-net", teamLintPolicy.NoNet)
+	options.ForceMCP = changedBoolFlag(cmd, "force-mcp", teamLintPolicy.ForceMCP)
+	options.PlanFirst = changedBoolFlag(cmd, "plan", teamLintPolicy.PlanFirst)
+	result, err := internalteam.LintTeamWithOptions(teamDir, options)
 	if err != nil {
 		if format == "json" {
 			_ = writeTeamLintJSON(cmd.OutOrStdout(), teamLintJSONDocument{
@@ -114,6 +136,13 @@ func runTeamLint(cmd *cobra.Command, args []string) error {
 		return &teamLintExitError{code: 1, msg: "team lint findings reached the configured threshold"}
 	}
 	return nil
+}
+
+func changedBoolFlag(cmd *cobra.Command, name string, value bool) *bool {
+	if cmd == nil || cmd.Flags().Lookup(name) == nil || !cmd.Flags().Changed(name) {
+		return nil
+	}
+	return new(value)
 }
 
 func lintCLIError(cmd *cobra.Command, format, message string) error {

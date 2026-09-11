@@ -18,6 +18,8 @@ type EffectiveTeamContractContext struct {
 	ForceMCP          bool
 	NoNet             bool
 	PlanFirst         *bool
+	ExecutionProfile  ExecutionProfile
+	Resolved          bool
 	AllowedPaths      []string
 	EnvironmentLookup func(string) (string, bool)
 }
@@ -282,9 +284,12 @@ func LintEffectiveTeamContracts(session *TeamSession, ctx EffectiveTeamContractC
 		return nil
 	}
 	var findings []ContractFinding
-	forceMCP := ctx.ForceMCP || session.Config.ForceMCP
-	noNet := ctx.NoNet || session.Config.NoNet
-	unattended := ctx.Unattended || session.Config.Unattended
+	forceMCP, noNet, unattended := ctx.ForceMCP, ctx.NoNet, ctx.Unattended
+	if !ctx.Resolved {
+		forceMCP = forceMCP || session.Config.ForceMCP
+		noNet = noNet || session.Config.NoNet
+		unattended = unattended || session.Config.Unattended
+	}
 	findings = append(findings, lintEffectiveRequirements("requires", session.Config.Requirements, nil, unattended, noNet, ctx.PlanFirst, forceMCP, ctx)...)
 	for _, def := range reachableWorkers(session) {
 		field := fmt.Sprintf("agents.%s.requires", normalizedName(def.Name))

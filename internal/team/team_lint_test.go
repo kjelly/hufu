@@ -1,6 +1,7 @@
 package team
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -82,6 +83,187 @@ func TestTeamLintFailThreshold(t *testing.T) {
 	if TeamLintReachesThreshold(findings, "none") {
 		t.Fatal("finding reached none threshold")
 	}
+}
+
+func TestTeamLintUnknownTool(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Use `definitely_missing` tool.")
+	assertLintCode(t, dir, FindingPromptUnknownTool)
+}
+
+func TestTeamLintDeniedTool(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: [view, bash]", "Use `bash` tool.")
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\ntools:\n  denied: [bash]\n")
+	assertLintCode(t, dir, FindingPromptDeniedTool)
+}
+
+func TestTeamLintToolNotGranted(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Call `bash` tool.")
+	assertLintCode(t, dir, FindingPromptToolNotGranted)
+}
+
+func TestTeamLintKnownToolNoFinding(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Use the `view` tool.")
+	assertLintNoCode(t, dir, FindingPromptUnknownTool, FindingPromptToolNotGranted, FindingPromptDeniedTool)
+}
+
+func TestTeamLintDeclaredToolMissing(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: imaginary_tool", "Work.")
+	assertLintCode(t, dir, FindingDeclaredToolMissing)
+}
+
+func TestTeamLintToolAliasUsesRuntimeNormalization(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: read", "Use `read` tool.")
+	assertLintNoCode(t, dir, FindingPromptUnknownTool, FindingPromptToolNotGranted, FindingDeclaredToolMissing)
+}
+
+func TestTeamLintMCPMissingServer(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `ghost__search` tool.")
+	assertLintCode(t, dir, FindingMCPToolMissing)
+}
+
+func TestTeamLintMCPMetadataUnknown(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `catalog__search` tool.")
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nmcp-servers:\n  catalog:\n    type: remote\n    url: https://invalid.example.test/mcp\n")
+	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(result.Findings, func(f TeamLintFinding) bool {
+		return f.Code == FindingMCPToolUnknown && f.Resolution == "unknown"
+	}) {
+		t.Fatalf("findings = %#v", result.Findings)
+	}
+}
+
+func TestTeamLintDoesNotStartMCPOrNetwork(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `probe__ping` tool.")
+	sentinel := filepath.Join(dir, "mcp-started")
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nmcp-servers:\n  probe:\n    type: local\n    command: [sh, -c, 'touch "+sentinel+"']\n")
+	if _, err := LintTeam(dir, nil, nil, DefaultProviderRegistry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("MCP command started during lint: %v", err)
+	}
+}
+
+func TestTeamLintUnknownSkill(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "Load `missing-skill-xyz` skill.")
+	assertLintCode(t, dir, FindingPromptUnknownSkill)
+}
+
+func TestTeamLintDraftSkillIsNotProductionRequirement(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view\nskills: draft-skill", "Work.")
+	writeSkillFixture(t, filepath.Join(dir, "skills", "drafts", "draft-skill"), "draft-skill", "Draft.")
+	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(result.Findings, func(f TeamLintFinding) bool {
+		return f.Code == FindingRequiredSkillMissing && f.Resolution == "draft_only"
+	}) {
+		t.Fatalf("findings = %#v", result.Findings)
+	}
+}
+
+func TestTeamLintSkillOutOfScope(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view\nskills: hidden-skill", "Work.")
+	writeSkillFixture(t, filepath.Join(dir, "skills", "hidden-skill"), "hidden-skill", "Hidden.")
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nskills: another-skill\n")
+	assertLintCode(t, dir, FindingSkillNotAvailable)
+}
+
+func TestTeamLintSkillDependencyUsesRuntimeExpansion(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view\nskills: root-skill", "Use `dep-skill` skill.")
+	writeSkillFixture(t, filepath.Join(dir, "skills", "dep-skill"), "dep-skill", "Dependency.")
+	writeSkillFixture(t, filepath.Join(dir, "skills", "root-skill"), "root-skill", "Read skills/dep-skill/SKILL.md.")
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nskills: root-skill\n")
+	assertLintNoCode(t, dir, FindingPromptUnknownSkill, FindingSkillNotAvailable, FindingRequiredSkillMissing)
+}
+
+func TestPromptExampleDoesNotTriggerFalseUnknownTool(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "`kubectl` is an example command.")
+	assertLintNoCode(t, dir, FindingPromptUnknownTool)
+}
+
+func TestPromptFencedCodeDoesNotTrigger(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "```text\nuse `ghost-tool` tool\n```")
+	assertLintNoCode(t, dir, FindingPromptUnknownTool)
+}
+
+func TestPromptDirectiveSourceLine(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: view", "First line.\nUse `ghost-tool` tool.")
+	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding, ok := findLintCode(result.Findings, FindingPromptUnknownTool)
+	if !ok || finding.File != "worker.md" || finding.Line != 7 || finding.Column != 6 || finding.LocationStatus != LocationExact {
+		t.Fatalf("finding = %#v", finding)
+	}
+}
+
+func TestTemplatedFieldLocationFallback(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: templated\n    agent: worker\n    goal: '{@ .goal @}'\n")
+	result, err := LintTeam(dir, map[string]string{"goal": "Use `ghost-template-tool` tool."}, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding, ok := findLintCode(result.Findings, FindingPromptUnknownTool)
+	if !ok || finding.LocationStatus != LocationRendered || finding.Line == 0 {
+		t.Fatalf("finding = %#v", finding)
+	}
+}
+
+func TestTeamLintProfileMatchesRuntimePolicyProjection(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: fetch", "Use `fetch` tool.")
+	noNet := true
+	result, err := LintTeamWithOptions(dir, TeamLintOptions{Registry: DefaultProviderRegistry, NoNet: &noNet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findLintCode(result.Findings, FindingPromptDeniedTool); !ok {
+		t.Fatalf("findings = %#v", result.Findings)
+	}
+}
+
+func lintTeamWithAgentBody(t *testing.T, frontmatter, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\n")
+	writeLintTestFile(t, filepath.Join(dir, "coordinator.md"), lintAgent("coordinator", "coordinator"))
+	writeLintTestFile(t, filepath.Join(dir, "worker.md"), "---\nname: worker\nrole: worker\n"+frontmatter+"\n---\n"+body+"\n")
+	return dir
+}
+
+func writeSkillFixture(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeLintTestFile(t, filepath.Join(dir, "SKILL.md"), "---\nname: "+name+"\ndescription: test skill\n---\n"+body+"\n")
+}
+
+func assertLintNoCode(t *testing.T, dir string, codes ...string) {
+	t.Helper()
+	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range codes {
+		if finding, ok := findLintCode(result.Findings, code); ok {
+			t.Fatalf("unexpected %s finding: %#v; all=%#v", code, finding, result.Findings)
+		}
+	}
+}
+
+func findLintCode(findings []TeamLintFinding, code string) (TeamLintFinding, bool) {
+	for _, finding := range findings {
+		if finding.Code == code {
+			return finding, true
+		}
+	}
+	return TeamLintFinding{}, false
 }
 
 func lintTeamWithCoordinator(t *testing.T, manifest string) string {

@@ -19,11 +19,15 @@ import (
 // A flag named in the profile that this command does not define is reported as
 // an error rather than silently ignored, so typos surface early.
 func applyProfile(cmd *cobra.Command) error {
-	if opts.profileName == "" {
+	return applyNamedProfile(cmd, opts.profileName)
+}
+
+func applyNamedProfile(cmd *cobra.Command, profileName string) error {
+	if profileName == "" {
 		return nil
 	}
 	cfg := config.LoadConfig()
-	profile, ok := cfg.Profiles[opts.profileName]
+	profile, ok := cfg.Profiles[profileName]
 	if !ok {
 		var names []string
 		for name := range cfg.Profiles {
@@ -31,9 +35,9 @@ func applyProfile(cmd *cobra.Command) error {
 		}
 		sort.Strings(names)
 		if len(names) == 0 {
-			return fmt.Errorf("profile %q not found: no profiles defined in hufu.yaml", opts.profileName)
+			return fmt.Errorf("profile %q not found: no profiles defined in hufu.yaml", profileName)
 		}
-		return fmt.Errorf("profile %q not found. Available: %s", opts.profileName, strings.Join(names, ", "))
+		return fmt.Errorf("profile %q not found. Available: %s", profileName, strings.Join(names, ", "))
 	}
 
 	// Resolve a flag by name against this command, then its root (for flags
@@ -57,15 +61,15 @@ func applyProfile(cmd *cobra.Command) error {
 	for _, name := range keys {
 		fs := lookup(name)
 		if fs == nil {
-			return fmt.Errorf("profile %q sets unknown flag %q", opts.profileName, name)
+			return fmt.Errorf("profile %q sets unknown flag %q", profileName, name)
 		}
 		if fs.Changed(name) {
 			continue // explicit CLI flag wins
 		}
 		if err := fs.Set(name, profile[name]); err != nil {
-			return fmt.Errorf("profile %q: invalid value for --%s: %w", opts.profileName, name, err)
+			return fmt.Errorf("profile %q: invalid value for --%s: %w", profileName, name, err)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(opts.profileName))
+	fmt.Fprintf(os.Stderr, "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(profileName))
 	return nil
 }

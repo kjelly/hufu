@@ -37,23 +37,75 @@ type TeamLintResult struct {
 	Findings []TeamLintFinding
 }
 
-// LintTeam runs the deterministic rules available through PR-1. Later rule
-// groups append to this same package-owned projection.
+// TeamLintOptions carries invocation-scoped policy overrides. Pointer booleans
+// preserve an explicit --flag=false, which must override a true manifest value.
+type TeamLintOptions struct {
+	Vars             map[string]string
+	ForcedSkills     []string
+	Registry         *ProviderRegistry
+	Unattended       *bool
+	NoNet            *bool
+	ForceMCP         *bool
+	PlanFirst        *bool
+	ExecutionProfile string
+}
+
+// LintTeam runs the deterministic offline rules with manifest policy only.
 func LintTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (TeamLintResult, error) {
-	inspection, err := InspectTeam(teamDir, vars, forcedSkills, registry, TeamCompileLint)
+	return LintTeamWithOptions(teamDir, TeamLintOptions{Vars: vars, ForcedSkills: forcedSkills, Registry: registry})
+}
+
+// LintTeamWithOptions runs the complete offline lint pipeline with resolved
+// invocation policy and without creating runtime services.
+func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResult, error) {
+	registry := options.Registry
+	if registry == nil {
+		registry = DefaultProviderRegistry
+	}
+	inspection, err := InspectTeam(teamDir, options.Vars, options.ForcedSkills, registry, TeamCompileLint)
 	if err != nil {
 		return TeamLintResult{}, err
 	}
-	result := TeamLintResult{Team: filepath.Base(filepath.Clean(teamDir)), Complete: inspection.Complete}
+	result := TeamLintResult{Team: filepath.Base(filepath.Clean(teamDir)), Complete: inspection.Complete, Findings: make([]TeamLintFinding, 0)}
 	if inspection.Session != nil {
+		policy, policyErr := resolveTeamLintPolicy(inspection.Session, options)
+		if policyErr != nil {
+			return TeamLintResult{}, policyErr
+		}
 		result.Team = inspection.Session.Config.Name
 		inspection.Diagnostics = append(inspection.Diagnostics, LintTeamContracts(inspection.Session)...)
+		inspection.Diagnostics = append(inspection.Diagnostics, LintEffectiveTeamContracts(inspection.Session, policy)...)
 		inspection.Diagnostics = append(inspection.Diagnostics, lintStaticTopology(inspection.Session, inspection.Diagnostics)...)
 		inspection.Diagnostics = append(inspection.Diagnostics, lintLegacyExecutionFields(inspection)...)
+		directives := scanTeamPromptDirectives(inspection.Session, inspection.Sources)
+		result.Findings = append(result.Findings, lintOfflineTools(inspection.Session, inspection.Sources, policy, directives)...)
+		result.Findings = append(result.Findings, lintOfflineSkills(inspection.Session, inspection.Sources, directives)...)
 	}
-	result.Findings = ProjectContractFindings(inspection.Diagnostics, inspection.Sources, inspection.Session)
+	result.Findings = append(result.Findings, ProjectContractFindings(inspection.Diagnostics, inspection.Sources, inspection.Session)...)
 	SortTeamLintFindings(result.Findings)
 	return result, nil
+}
+
+func resolveTeamLintPolicy(session *TeamSession, options TeamLintOptions) (EffectiveTeamContractContext, error) {
+	profile, err := ResolveExecutionProfile(options.ExecutionProfile, session.Config.ExecutionProfile)
+	if err != nil {
+		return EffectiveTeamContractContext{}, err
+	}
+	policy := EffectiveTeamContractContext{
+		Unattended: session.Config.Unattended || profile.IsUnattended(),
+		NoNet:      session.Config.NoNet, ForceMCP: session.Config.ForceMCP,
+		PlanFirst: options.PlanFirst, ExecutionProfile: profile, Resolved: true,
+	}
+	if options.Unattended != nil {
+		policy.Unattended = *options.Unattended
+	}
+	if options.NoNet != nil {
+		policy.NoNet = *options.NoNet
+	}
+	if options.ForceMCP != nil {
+		policy.ForceMCP = *options.ForceMCP
+	}
+	return policy, nil
 }
 
 // ProjectContractFindings is the sole adapter from runtime diagnostics to the

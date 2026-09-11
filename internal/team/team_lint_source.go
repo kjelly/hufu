@@ -26,10 +26,22 @@ type TeamSourceLocation struct {
 
 // AgentSource preserves the authored prompt body and its line offset.
 type AgentSource struct {
-	File     string
-	Body     string
-	BodyLine int
-	Fields   map[string]TeamSourceLocation
+	File       string
+	Body       string
+	BodyLine   int
+	BodyStatus string
+	Fields     map[string]TeamSourceLocation
+}
+
+// TeamSourceText preserves a rendered scalar together with the authored
+// position from which its first character was decoded.
+type TeamSourceText struct {
+	Text   string
+	File   string
+	Line   int
+	Column int
+	Status string
+	Block  bool
 }
 
 // TeamSourceIndex is a side-effect-free source map for lint projection.
@@ -37,6 +49,7 @@ type TeamSourceIndex struct {
 	TeamDir       string
 	ManifestFile  string
 	Manifest      map[string]TeamSourceLocation
+	ManifestText  map[string]TeamSourceText
 	Agents        map[string]AgentSource
 	SchemaVersion string
 }
@@ -48,7 +61,7 @@ func BuildTeamSourceIndex(teamDir string, vars map[string]string) (*TeamSourceIn
 	if err != nil {
 		return nil, fmt.Errorf("resolve team directory: %w", err)
 	}
-	index := &TeamSourceIndex{TeamDir: absDir, Manifest: make(map[string]TeamSourceLocation), Agents: make(map[string]AgentSource)}
+	index := &TeamSourceIndex{TeamDir: absDir, Manifest: make(map[string]TeamSourceLocation), ManifestText: make(map[string]TeamSourceText), Agents: make(map[string]AgentSource)}
 	rawManifest, manifestFile, found, err := findTeamManifestFile(absDir)
 	if err != nil {
 		return nil, err
@@ -63,7 +76,19 @@ func BuildTeamSourceIndex(teamDir string, vars map[string]string) (*TeamSourceIn
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse team source index: %w", parseErr)
 		}
-		indexYAMLNode(index.Manifest, manifestFile, "", root, status)
+		indexYAMLNode(index.Manifest, index.ManifestText, manifestFile, "", root, status)
+		if rendered != string(rawManifest) && status == LocationExact {
+			var renderedRoot yaml.Node
+			if err := yaml.NewDecoder(strings.NewReader(rendered)).Decode(&renderedRoot); err == nil {
+				renderedTexts := make(map[string]TeamSourceText)
+				indexYAMLNode(make(map[string]TeamSourceLocation), renderedTexts, manifestFile, "", &renderedRoot, LocationRendered)
+				for field, renderedText := range renderedTexts {
+					if authoredText, ok := index.ManifestText[field]; !ok || authoredText.Text != renderedText.Text {
+						index.ManifestText[field] = renderedText
+					}
+				}
+			}
+		}
 		var envelope manifestEnvelope
 		if err := yaml.Unmarshal([]byte(rendered), &envelope); err != nil {
 			return nil, fmt.Errorf("detect team manifest envelope: %w", err)
@@ -110,19 +135,19 @@ func parseSourceYAML(authored, rendered []byte) (*yaml.Node, string, error) {
 	return &root, LocationRendered, nil
 }
 
-func indexYAMLNode(target map[string]TeamSourceLocation, file, prefix string, node *yaml.Node, status string) {
+func indexYAMLNode(target map[string]TeamSourceLocation, texts map[string]TeamSourceText, file, prefix string, node *yaml.Node, status string) {
 	if node == nil {
 		return
 	}
 	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
-		indexYAMLNode(target, file, prefix, node.Content[0], status)
+		indexYAMLNode(target, texts, file, prefix, node.Content[0], status)
 		return
 	}
 	if node.Kind == yaml.SequenceNode {
 		for index, child := range node.Content {
 			path := fmt.Sprintf("%s[%d]", prefix, index)
 			target[path] = TeamSourceLocation{File: file, Line: child.Line, Column: child.Column, Status: status}
-			indexYAMLNode(target, file, path, child, status)
+			indexYAMLNode(target, texts, file, path, child, status)
 		}
 		return
 	}
@@ -136,7 +161,13 @@ func indexYAMLNode(target map[string]TeamSourceLocation, file, prefix string, no
 			path = prefix + "." + path
 		}
 		target[path] = TeamSourceLocation{File: file, Line: key.Line, Column: key.Column, Status: status}
-		indexYAMLNode(target, file, path, value, status)
+		if texts != nil && value.Kind == yaml.ScalarNode {
+			texts[path] = TeamSourceText{
+				Text: value.Value, File: file, Line: value.Line, Column: value.Column,
+				Status: status, Block: value.Style == yaml.LiteralStyle || value.Style == yaml.FoldedStyle,
+			}
+		}
+		indexYAMLNode(target, texts, file, path, value, status)
 	}
 }
 
@@ -145,9 +176,12 @@ func indexAgentSource(file string, authored []byte, vars map[string]string) (Age
 	if err != nil {
 		return AgentSource{}, fmt.Errorf("template error in agent file %s: %w", file, err)
 	}
-	source := AgentSource{File: file, Body: rendered, BodyLine: 1, Fields: make(map[string]TeamSourceLocation)}
+	source := AgentSource{File: file, Body: rendered, BodyLine: 1, BodyStatus: LocationExact, Fields: make(map[string]TeamSourceLocation)}
 	text := string(authored)
 	if !strings.HasPrefix(text, "---\n") {
+		if rendered != text {
+			source.BodyStatus = LocationRendered
+		}
 		return source, nil
 	}
 	rest := text[4:]
@@ -164,9 +198,12 @@ func indexAgentSource(file string, authored []byte, vars map[string]string) (Age
 	if err != nil {
 		return AgentSource{}, fmt.Errorf("parse agent frontmatter %s: %w", file, err)
 	}
-	indexYAMLNode(source.Fields, file, "", root, status)
+	indexYAMLNode(source.Fields, nil, file, "", root, status)
 	source.Body = renderedRest[renderedEnd+5:]
 	source.BodyLine = 1 + strings.Count(rendered[:len(rendered)-len(source.Body)], "\n")
+	if source.Body != rest[end+5:] {
+		source.BodyStatus = LocationRendered
+	}
 	return source, nil
 }
 

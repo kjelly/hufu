@@ -1256,6 +1256,33 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 	return yc.Tasks, nil
 }
 
+func loadTeamMCPServers(teamDir string, vars map[string]string) (map[string]mcp.MCPServerConfig, error) {
+	data, filename, found, err := readTeamManifestSource(teamDir, vars)
+	if err != nil {
+		return nil, fmt.Errorf("read team MCP declarations: %w", err)
+	}
+	if !found {
+		return map[string]mcp.MCPServerConfig{}, nil
+	}
+	yc, _, err := decodeTeamManifestYAML(filename, data)
+	if err != nil {
+		return nil, fmt.Errorf("parse team MCP declarations: %w", err)
+	}
+	servers := make(map[string]mcp.MCPServerConfig, len(yc.MCPServers))
+	for name, raw := range yc.MCPServers {
+		encoded, err := yaml.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("encode MCP server %q: %w", name, err)
+		}
+		var cfg mcp.MCPServerConfig
+		if err := yaml.Unmarshal(encoded, &cfg); err != nil {
+			return nil, fmt.Errorf("decode MCP server %q: %w", name, err)
+		}
+		servers[name] = cfg
+	}
+	return servers, nil
+}
+
 func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (*TeamSession, error) {
 	return loadTeamWithMode(teamDir, vars, forcedSkills, registry, TeamCompileRuntime, nil)
 }
@@ -1281,6 +1308,10 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		cfg.Name = filepath.Base(absDir)
 	}
 	contractTasks, err := loadTeamContractTasks(absDir, vars)
+	if err != nil {
+		return nil, err
+	}
+	mcpServers, err := loadTeamMCPServers(absDir, vars)
 	if err != nil {
 		return nil, err
 	}
@@ -1319,7 +1350,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		Dir:              absDir,
 		Workspace:        workspace,
 		Agents:           make(map[string]*agent.AgentDef),
-		MCPServers:       make(map[string]mcp.MCPServerConfig),
+		MCPServers:       mcpServers,
 		ContractTasks:    contractTasks,
 		ProviderRegistry: effectiveRegistry,
 	}
@@ -1505,11 +1536,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	// session.Config.Vars see the populated template vars.
 	session.Config.Vars = interfaceVars
 
-	skillDirs := []string{filepath.Join(absDir, "skills")}
-	if cwd, err := os.Getwd(); err == nil && cwd != "" {
-		skillDirs = append(skillDirs, filepath.Join(cwd, ".agents", "skills"))
-	}
-	skillDirs = append(skillDirs, filepath.Join(os.Getenv("HOME"), ".agents", "skills"))
+	skillDirs := teamSkillSearchPaths(absDir)
 
 	allSkills := skill.DiscoverSkills(skillDirs, false)
 
@@ -1549,6 +1576,14 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	session.Skills = skill.ExpandSkillDependenciesForSet(session.Skills, allSkills, excludeSkills)
 
 	return session, nil
+}
+
+func teamSkillSearchPaths(teamDir string) []string {
+	dirs := []string{filepath.Join(teamDir, "skills")}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		dirs = append(dirs, filepath.Join(cwd, ".agents", "skills"))
+	}
+	return append(dirs, filepath.Join(os.Getenv("HOME"), ".agents", "skills"))
 }
 
 // normalizeMemoryID lowercases and trims the input, then validates it

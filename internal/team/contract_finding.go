@@ -92,6 +92,17 @@ const (
 	FindingMissingCoordinator = "missing_coordinator"
 	// FindingMultipleCoordinators reports more than one authored coordinator.
 	FindingMultipleCoordinators = "multiple_coordinators"
+	// Prompt/tool drift codes are emitted only for the explicit directive
+	// grammar documented by team lint; ordinary prose is never inferred.
+	FindingPromptUnknownTool    = "prompt_unknown_tool"
+	FindingPromptDeniedTool     = "prompt_denied_tool"
+	FindingPromptToolNotGranted = "prompt_tool_not_granted"
+	FindingDeclaredToolMissing  = "declared_tool_missing"
+	FindingMCPToolMissing       = "mcp_tool_missing"
+	FindingMCPToolUnknown       = "mcp_tool_unknown"
+	FindingPromptUnknownSkill   = "prompt_unknown_skill"
+	FindingRequiredSkillMissing = "required_skill_missing"
+	FindingSkillNotAvailable    = "skill_not_available_to_agent"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.
