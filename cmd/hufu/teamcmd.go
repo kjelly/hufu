@@ -190,19 +190,29 @@ func buildGeneratedTeam(name, prompt, model string) generatedTeam {
 	description := fmt.Sprintf("Task-specific %s team generated for: %s", category, strings.TrimSpace(prompt))
 	modelLine := ""
 	if strings.TrimSpace(model) != "" {
-		modelLine = fmt.Sprintf("model: %q\n", strings.TrimSpace(model))
+		modelLine = fmt.Sprintf("  model: %q\n", strings.TrimSpace(model))
 	}
-	// name and the max-rounds/timeout/max-retries/workspace defaults are
-	// intentionally omitted: the directory basename already supplies the
-	// team name, and each of those settings already has an identical
-	// built-in default. max-steps/max-concurrent/acceptance are genuine,
-	// non-default choices for a task-specific generated team, so they stay.
+	// Generated teams use the versioned hufu.io/v1alpha1 schema (docs/
+	// architecture/team-schema-versioning.md §13's rollout: new manifests
+	// prefer v1alpha1). Unlike the legacy flat schema, v1alpha1 has no
+	// directory-basename fallback for the team name, so metadata.name must
+	// be explicit here — name is already validated to lowercase
+	// letters/digits/hyphens (normalizeGeneratedTeamName), always a safe
+	// bare YAML scalar. The max-rounds/timeout/max-retries/workspace
+	// defaults stay omitted: each already has an identical built-in
+	// default. max-steps/max-concurrent/acceptance are genuine, non-default
+	// choices for a task-specific generated team, so they stay.
 	files := map[string]string{
-		"team.yaml": fmt.Sprintf(`description: %q
-acceptance: 'true'
-max-steps: 30
-max-concurrent: 4
-%s`, description, modelLine),
+		"team.yaml": fmt.Sprintf(`apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: %s
+spec:
+  description: %q
+  acceptance: 'true'
+  max-steps: 30
+  max-concurrent: 4
+%s`, name, description, modelLine),
 		"coordinator.md": generatedAgentMarkdown("coordinator", "Task coordinator", "coordinator", "ask_user", `You coordinate this task-specific team.
 
 Analyze the request, delegate independent work to the appropriate workers, and synthesize a concise final answer. Do not implement work yourself when a worker can perform it.`),
