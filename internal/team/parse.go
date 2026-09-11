@@ -14,9 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/mcp"
-	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -71,92 +69,14 @@ type agentFrontmatter struct {
 	Memory           rawWorkerMemoryPolicy             `yaml:"memory"`
 }
 
+// teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
+// authoring field at the top level (teamManifestSpecFields, shared
+// verbatim with the hufu.io/v1alpha1 `spec:` block — see
+// team_manifest.go and docs/architecture/team-schema-versioning.md §7),
+// plus the legacy-only `advanced:` alias namespace.
 type teamConfigYAML struct {
-	Name                     string `yaml:"name"`
-	Description              string `yaml:"description"`
-	MaxRounds                int    `yaml:"max-rounds"`
-	MinimumCoordinatorRounds int    `yaml:"minimum-coordinator-rounds"`
-	MaxSteps                 int    `yaml:"max-steps"`
-	Workspace                string `yaml:"workspace"`
-	Timeout                  int64  `yaml:"timeout"`
-	VerifyTimeout            int64  `yaml:"verify-timeout"`
-	// MaxRetries is a pointer so an omitted key (built-in default) can be
-	// distinguished from an explicit "max-retries: 0" override; the zero
-	// value of a plain int is indistinguishable from an explicit 0.
-	MaxRetries           *int                             `yaml:"max-retries"`
-	AutoReport           bool                             `yaml:"auto-report"`
-	AllowFreeTextResults bool                             `yaml:"allow-free-text-results"`
-	Model                string                           `yaml:"model"`
-	WorkerModel          string                           `yaml:"worker-model"`
-	CoordinatorModel     string                           `yaml:"coordinator-model"`
-	DefaultLLMBackend    string                           `yaml:"default-llm-backend"`
-	ContextWindow        int                              `yaml:"context-window"`
-	Temperature          string                           `yaml:"temperature"`
-	MaxTokens            string                           `yaml:"max-tokens"`
-	TopP                 string                           `yaml:"top-p"`
-	TopK                 string                           `yaml:"top-k"`
-	ReasoningEffort      string                           `yaml:"reasoning-effort"`
-	Skills               string                           `yaml:"skills"`
-	SkillsExclude        string                           `yaml:"skills-exclude"`
-	ProviderURL          string                           `yaml:"provider-url"`
-	ProviderAPIKey       string                           `yaml:"provider-api-key"`
-	Providers            map[string]config.ProviderConfig `yaml:"providers"`
-	Backends             map[string]config.BackendConfig  `yaml:"backends"`
-	ModelList            []config.ModelEntry              `yaml:"model-list"`
-	SidecarModel         string                           `yaml:"sidecar-model"`
-	GuardModel           string                           `yaml:"guard-model"`
-	JudgeModel           string                           `yaml:"judge-model"`
-	PlanReviewerModel    string                           `yaml:"plan-reviewer-model"`
-	MaxConcurrent        int                              `yaml:"max-concurrent"`
-	StallThreshold       string                           `yaml:"stall-threshold"`
-	MaxCoordinatorTurns  int                              `yaml:"max-coordinator-turns"`
-	EscalateOnRetry      bool                             `yaml:"escalate-on-retry"`
-	AutoSkills           bool                             `yaml:"auto-skills"`
-	Notify               notify.NotifyConfig              `yaml:"notify"`
-	AllowedPaths         interface{}                      `yaml:"allowed-paths"`
-	RestrictedPath       string                           `yaml:"restricted-path"`
-	NoNet                bool                             `yaml:"no-net"`
-	ForceMCP             bool                             `yaml:"force-mcp"`
-	ProjectContext       bool                             `yaml:"project-context"`
-	Shell                string                           `yaml:"shell"`
-	Vars                 map[string]interface{}           `yaml:"vars"`
-	// WorkerContextSize is a token budget, not a character count (spec.md
-	// item 7); the YAML key is kept as-is for backward compatibility.
-	WorkerContextSize       int                                     `yaml:"worker-context-size"`
-	ToolsAllowed            interface{}                             `yaml:"tools"` // tools.allowed/tools.denied in YAML - string or []string
-	Requirements            agent.ContractRequirements              `yaml:"requires"`
-	Delegation              rawDelegationPolicy                     `yaml:"delegation"`
-	Preflight               []agent.CapabilityRequirement           `yaml:"preflight"`
-	RequiredResources       []agent.RequiredResourceSpec            `yaml:"required-resources"`
-	Workflow                agent.WorkflowConfig                    `yaml:"workflow"`
-	Policies                agent.WorkflowPolicies                  `yaml:"policies"`
-	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities"`
-	Verification            agent.VerificationConfig                `yaml:"verification"`
-	Retry                   agent.RetryConfig                       `yaml:"retry"`
-	Decision                agent.DecisionConfig                    `yaml:"decision"`
-	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry"`
-	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy"`
-	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers"`
-	SubagentProviderDefault string                                  `yaml:"subagent-provider-default"`
-	SubagentProviders       map[string]agent.SubagentProviderConfig `yaml:"subagent-providers"`
-	// Kept as an opaque map here because MCP server loading is owned by the
-	// session layer; declaring the key preserves this long-standing manifest
-	// field while strict validation still rejects unknown top-level keys.
-	MCPServers       map[string]interface{}  `yaml:"mcp-servers"`
-	Unattended       bool                    `yaml:"unattended"`
-	AutoApprove      bool                    `yaml:"auto-approve"`
-	MaxWallClock     int64                   `yaml:"max-duration"`
-	MaxTotalTokens   int64                   `yaml:"max-total-tokens"`
-	Acceptance       interface{}             `yaml:"acceptance"`
-	Rollback         string                  `yaml:"rollback"`
-	ExecutionProfile string                  `yaml:"execution-profile"`
-	GoalMode         string                  `yaml:"goal-mode"`
-	Reliability      rawReliabilityConfig    `yaml:"reliability"`
-	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory"`
-	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning"`
-	Compaction       rawCompactionPolicy     `yaml:"compaction"`
-	Tasks            []TaskDef               `yaml:"tasks"`
-	Advanced         rawAdvancedSection      `yaml:"advanced"`
+	teamManifestSpecFields `yaml:",inline"`
+	Advanced               rawAdvancedSection `yaml:"advanced"`
 }
 
 // rawAdvancedSection is the authoring-time `advanced:` namespace (spec.md
@@ -815,17 +735,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		},
 	}
 
-	var data []byte
-	var dataFilename string
-	var found bool
-	for _, name := range []string{"team.yml", "team.yaml"} {
-		d, err := os.ReadFile(filepath.Join(teamDir, name))
-		if err == nil {
-			data = d
-			dataFilename = name
-			found = true
-			break
-		}
+	data, dataFilename, found, err := readTeamManifestSource(teamDir, vars)
+	if err != nil {
+		return cfg, err
 	}
 	if !found {
 		// team.yml/team.yaml is optional. Return defaults; LoadTeam will
@@ -833,21 +745,9 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		return cfg, nil
 	}
 
-	text := string(data)
-	templated, err := applyTemplate(text, dataFilename, vars)
+	yc, _, err := decodeTeamManifestYAML(dataFilename, data)
 	if err != nil {
-		return cfg, fmt.Errorf("template error in team config: %w", err)
-	}
-	data = []byte(templated)
-
-	var yc teamConfigYAML
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&yc); err != nil {
-		return cfg, fmt.Errorf("failed to parse team config: %w", err)
-	}
-	if err := mergeAdvancedNamespace(&yc); err != nil {
-		return cfg, fmt.Errorf("invalid team config: %w", err)
+		return cfg, err
 	}
 
 	if yc.Name != "" {
