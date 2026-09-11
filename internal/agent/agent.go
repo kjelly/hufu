@@ -1739,26 +1739,65 @@ func ExpandImpliedTools(toolNames string) string {
 }
 
 func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.AgentTool {
-	if toolNames == "" || toolNames == "all" {
-		return allTools
-	}
-	requested := map[string]bool{}
-	for _, name := range strings.Split(toolNames, ",") {
-		n := strings.TrimSpace(name)
-		requested[n] = true
-	}
-
-	var selected []fantasy.AgentTool
+	available := make([]string, 0, len(allTools))
 	for _, t := range allTools {
-		if requested[t.Info().Name] || alwaysIncludeTools[t.Info().Name] {
-			selected = append(selected, t)
-		} else if t.Info().Name == "view" && requested["read"] {
-			selected = append(selected, t)
-		} else if t.Info().Name == "glob" && requested["find"] {
+		if t != nil {
+			available = append(available, t.Info().Name)
+		}
+	}
+	selectedNames := SelectToolNames(available, toolNames)
+	selectedSet := make(map[string]bool, len(selectedNames))
+	for _, name := range selectedNames {
+		selectedSet[name] = true
+	}
+	selected := make([]fantasy.AgentTool, 0, len(selectedNames))
+	for _, t := range allTools {
+		if t != nil && selectedSet[t.Info().Name] {
 			selected = append(selected, t)
 		}
 	}
 	return selected
+}
+
+// SelectToolNames is the handler-free counterpart of SelectTools. Keeping the
+// declaration, implicit alias, and always-included behavior here lets offline
+// contract inspection use exactly the same grant semantics as runtime tool
+// construction without instantiating a tool implementation.
+func SelectToolNames(available []string, toolNames string) []string {
+	if toolNames == "" || toolNames == "all" {
+		return dedupeNames(available)
+	}
+	requested := make(map[string]bool)
+	for name := range strings.SplitSeq(toolNames, ",") {
+		requested[strings.TrimSpace(name)] = true
+	}
+	selected := make([]string, 0, len(available))
+	seen := make(map[string]bool, len(available))
+	for _, name := range available {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		if requested[name] || alwaysIncludeTools[name] || name == "view" && requested["read"] || name == "glob" && requested["find"] {
+			seen[name] = true
+			selected = append(selected, name)
+		}
+	}
+	return selected
+}
+
+func dedupeNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		result = append(result, name)
+	}
+	return result
 }
 
 // EffectiveToolNames returns the names of the tools SelectTools would hand to a

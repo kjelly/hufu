@@ -590,30 +590,13 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if mode == "" {
 		mode = WorkerToolResolutionNormal
 	}
-	if mode != WorkerToolResolutionNormal && mode != WorkerToolResolutionInitialPlan && mode != WorkerToolResolutionApprovedPlan && mode != WorkerToolResolutionResultRepair && mode != WorkerToolResolutionResume {
+	if !validWorkerToolResolutionMode(mode) {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: unsupported worker lifecycle mode %q", mode)
 	}
 
-	resultRequired := task.Execution.RequiresResult
-	planRequired := false
+	resultRequired := task.Execution.RequiresResult || mode == WorkerToolResolutionApprovedPlan || mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
+	planRequired := mode == WorkerToolResolutionInitialPlan
 	resultOnly := mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
-	switch mode {
-	case WorkerToolResolutionInitialPlan:
-		planRequired = true
-		resultRequired = false
-	case WorkerToolResolutionApprovedPlan:
-		resultRequired = true
-	case WorkerToolResolutionResultRepair, WorkerToolResolutionResume:
-		resultRequired = true
-		resultOnly = true
-	}
-	// A closed sequence is a literal task contract, not a base sequence to
-	// widen for another lifecycle phase. Initial planning requires submit_plan,
-	// so reject a non-empty sequence before constructing any task-bound tools or
-	// reaching provider construction.
-	if mode == WorkerToolResolutionInitialPlan && len(task.Execution.ToolSequence) > 0 {
-		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: initial-plan mode is incompatible with closed execution tool_sequence; remove tool_sequence or disable plan-first")
-	}
 	if resultOnly || planRequired || resultRequired {
 		if strings.TrimSpace(req.TodoID) == "" {
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %s requires a Todo ID", mode)
@@ -623,48 +606,60 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		}
 	}
 
-	var workerTools []fantasy.AgentTool
+	var baseTools []fantasy.AgentTool
 	if !resultOnly {
-		workerTools = r.c.selectWorkerToolsForTask(def, task)
+		baseTools = r.c.selectWorkerToolsForTask(def, task)
 	}
-	tools := workerTools
+	var supplementalTools []fantasy.AgentTool
 	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
 	if !resultOnly && r.c.mcpManager != nil && mcpAllowed {
-		tools = append(tools, r.c.mcpManager.AsAgentTools()...)
+		supplementalTools = append(supplementalTools, r.c.mcpManager.AsAgentTools()...)
 		if len(def.MCPTools) > 0 {
 			if err := r.c.mcpManager.LoadAgentMCPServer(def.Name, def.MCPTools, def.Shell); err != nil {
 				return ResolvedWorkerTools{}, fmt.Errorf("load MCP server for agent %s: %w", def.Name, err)
 			}
-			tools = append(tools, r.c.mcpManager.GetAgentMCPTools(def.Name, def.Shell)...)
+			supplementalTools = append(supplementalTools, r.c.mcpManager.GetAgentMCPTools(def.Name, def.Shell)...)
 		}
 	}
-	// MCP and custom registries are also untrusted sources for a worker
-	// surface. Apply the same final boundary after all providers have been
-	// merged; filtering only the built-in core would still expose a
-	// coordinator capability under an MCP/custom tool implementation.
-	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
-	// Never accept a caller-supplied implementation of a task-bound protocol
-	// tool. The resolver owns these bindings and recreates them per Todo.
-	tools = removeToolNames(tools, submitResultToolName, "submit_plan")
-	if resultRequired {
-		if r.c.toolDeniedByTeam(submitResultToolName) {
-			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: required protocol tool %q is denied by team policy", submitResultToolName)
+
+	phase := PhaseExecute
+	workflowEnabled := r.c.phaseWorkflow != nil && r.c.phaseWorkflow.Enabled()
+	if workflowEnabled {
+		phase = r.c.phaseWorkflow.State()
+	}
+	static, err := ResolveStaticWorkerTools(StaticToolResolutionInput{
+		Session: r.c.session, Agent: def, Task: task, LifecycleMode: mode,
+		Policy:    EffectiveTeamContractContext{NoNet: r.c.noNet || def.NoNet, ForceMCP: r.c.forceMCP || def.ForceMCP},
+		BaseTools: agentToolNames(baseTools), SupplementalTools: agentToolNames(supplementalTools),
+		TrustedTaskGrants: r.c.taskToolGrants(def, task), WorkflowEnabled: workflowEnabled, WorkflowPhase: phase,
+	})
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+	}
+
+	// The pure result is authoritative. Concrete handlers are projected onto
+	// that ordered surface only after all static policy decisions are complete.
+	concrete := append(append([]fantasy.AgentTool(nil), baseTools...), supplementalTools...)
+	concrete = removeToolNames(concrete, submitResultToolName, "submit_plan")
+	if static.ResultRequired {
+		concrete = append(concrete, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
+	}
+	if static.PlanRequired {
+		concrete = append(concrete, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
+	}
+	concrete = filterConcreteToolsByNames(concrete, static.Names)
+	return r.finalizeTaskTools(ctx, def, task, req.TodoID, concrete, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+}
+
+func filterConcreteToolsByNames(candidate []fantasy.AgentTool, names []string) []fantasy.AgentTool {
+	allowed := toolNameSet(names)
+	filtered := make([]fantasy.AgentTool, 0, len(names))
+	for _, tool := range candidate {
+		if tool != nil && allowed[tool.Info().Name] {
+			filtered = append(filtered, tool)
 		}
-		tools = append(tools, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
 	}
-	if planRequired {
-		if r.c.toolDeniedByTeam("submit_plan") {
-			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: required protocol tool %q is denied by team policy", "submit_plan")
-		}
-		tools = append(tools, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
-	}
-	effectiveSequence := task.Execution.ToolSequence
-	if resultOnly {
-		effectiveSequence = []string{submitResultToolName}
-	}
-	tools = r.c.filterDeniedWorkerToolsWithGrants(tools, r.c.taskToolGrants(def, task))
-	tools = r.c.filterCoordinatorOnlyWorkerTools(tools)
-	return r.finalizeTaskTools(ctx, def, task, req.TodoID, tools, resultOnly, resultRequired, planRequired, effectiveSequence)
+	return filtered
 }
 
 func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, tools []fantasy.AgentTool, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {

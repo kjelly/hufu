@@ -82,6 +82,16 @@ const (
 	FindingWorksetCommandBinding   = "workset_binding_command_injection"
 	FindingLegacyFanOutDeprecated  = "legacy_fanout_deprecated"
 	FindingDecisionEvidenceInvalid = "decision_evidence_invalid"
+	// FindingUnsupportedSchemaVersion reports a readable manifest envelope
+	// whose apiVersion is not supported by this build.
+	FindingUnsupportedSchemaVersion = "unsupported_schema_version"
+	// FindingDuplicateAgent reports two authored files that claim the same
+	// normalized file alias or agent identity.
+	FindingDuplicateAgent = "duplicate_agent"
+	// FindingMissingCoordinator reports a team with no authored coordinator.
+	FindingMissingCoordinator = "missing_coordinator"
+	// FindingMultipleCoordinators reports more than one authored coordinator.
+	FindingMultipleCoordinators = "multiple_coordinators"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.

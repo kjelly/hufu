@@ -1,6 +1,7 @@
 package team
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,26 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// TeamCompileMode selects fail-closed runtime compilation or recoverable
+// authoring inspection.
+type TeamCompileMode string
+
+const (
+	TeamCompileRuntime TeamCompileMode = "runtime"
+	TeamCompileLint    TeamCompileMode = "lint"
+)
+
+// TeamInspection carries every safe product of the shared compile pipeline.
+// Session and Spec may be nil when an early semantic diagnostic prevents
+// normalization; load and internal failures are still returned as errors.
+type TeamInspection struct {
+	Spec        *EffectiveTeamSpec
+	Session     *TeamSession
+	Sources     *TeamSourceIndex
+	Diagnostics []ContractFinding
+	Complete    bool
+}
 
 // ValueSource identifies where a resolved value on an EffectiveTeamSpec
 // came from (spec.md Specification 02 §4/§8).
@@ -99,15 +120,68 @@ func (e *EffectiveTeamSpec) RuntimeSession() *TeamSession {
 // EffectiveTeamSpec. It performs no model call — compile failure surfaces
 // exactly the same errors LoadTeam already would, before any dispatch.
 func CompileTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (*EffectiveTeamSpec, error) {
-	session, err := LoadTeam(teamDir, vars, forcedSkills, registry)
+	inspection, err := InspectTeam(teamDir, vars, forcedSkills, registry, TeamCompileRuntime)
 	if err != nil {
+		return nil, err
+	}
+	return inspection.Spec, nil
+}
+
+// InspectTeam is the shared read/parse/normalize entry point for runtime and
+// lint. Lint mode converts explicitly recoverable authoring failures into
+// diagnostics while preserving ordinary parse, template, and I/O errors.
+func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode) (*TeamInspection, error) {
+	if mode != TeamCompileRuntime && mode != TeamCompileLint {
+		return nil, fmt.Errorf("unsupported team compile mode %q", mode)
+	}
+	var sources *TeamSourceIndex
+	if mode == TeamCompileLint {
+		var err error
+		sources, err = BuildTeamSourceIndex(teamDir, vars)
+		if err != nil {
+			return nil, err
+		}
+	}
+	inspection := &TeamInspection{Sources: sources}
+	var diagnostics []ContractFinding
+	session, err := loadTeamWithMode(teamDir, vars, forcedSkills, registry, mode, &diagnostics)
+	if err != nil {
+		if mode == TeamCompileLint {
+			if schemaErr, ok := errors.AsType[*UnsupportedSchemaVersionError](err); ok {
+				inspection.Diagnostics = []ContractFinding{{
+					Severity: FindingSeverityError,
+					Code:     FindingUnsupportedSchemaVersion,
+					Field:    "apiVersion",
+					Message:  schemaErr.Error(),
+					Hint:     "use " + SchemaVersionV1Alpha1 + " or remove apiVersion for the legacy schema",
+				}}
+				return inspection, nil
+			}
+		}
 		return nil, err
 	}
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve team directory: %w", err)
 	}
-	return newEffectiveTeamSpec(absDir, session)
+	spec, err := newEffectiveTeamSpec(absDir, session)
+	if err != nil {
+		return nil, err
+	}
+	inspection.Spec = spec
+	inspection.Session = session
+	inspection.Diagnostics = diagnostics
+	inspection.Complete = !hasErrorContractFinding(diagnostics)
+	return inspection, nil
+}
+
+func hasErrorContractFinding(findings []ContractFinding) bool {
+	for _, finding := range findings {
+		if finding.Severity == FindingSeverityError {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateEffectiveTeam runs the same static contract/policy/verifier lint

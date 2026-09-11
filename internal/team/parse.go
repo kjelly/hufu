@@ -1257,6 +1257,10 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 }
 
 func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry) (*TeamSession, error) {
+	return loadTeamWithMode(teamDir, vars, forcedSkills, registry, TeamCompileRuntime, nil)
+}
+
+func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode, diagnostics *[]ContractFinding) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
@@ -1334,6 +1338,7 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		def  *agent.AgentDef
 		path string
 	}
+	lintIdentityCollision := errors.New("lint agent identity collision")
 	identityOwners := make(map[string]agentIdentityOwner)
 	var coordinatorPath string
 	registerCoordinator := func(def *agent.AgentDef, path string) error {
@@ -1341,7 +1346,12 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 			return nil
 		}
 		if coordinatorPath != "" {
-			return fmt.Errorf("team has more than one coordinator agent: %s and %s both resolve to role \"coordinator\"", coordinatorPath, path)
+			err := fmt.Errorf("team has more than one coordinator agent: %s and %s both resolve to role \"coordinator\"", coordinatorPath, path)
+			if mode == TeamCompileLint {
+				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingMultipleCoordinators, Field: "agents", Message: err.Error()})
+				return nil
+			}
+			return err
 		}
 		coordinatorPath = path
 		return nil
@@ -1349,15 +1359,24 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 	registerIdentity := func(identity string, def *agent.AgentDef, path string) error {
 		key := normalizedName(identity)
 		if key == "helper" {
-			return fmt.Errorf("agent identity %q is reserved by the built-in Helper (agent %q from %s)", identity, def.Name, path)
+			err := fmt.Errorf("agent identity %q is reserved by the built-in Helper (agent %q from %s)", identity, def.Name, path)
+			if mode == TeamCompileLint {
+				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingDuplicateAgent, Field: "agents", Message: err.Error()})
+				return lintIdentityCollision
+			}
+			return err
 		}
 		if previous, exists := identityOwners[key]; exists && previous.def != def {
-			return fmt.Errorf("agent identity collision for %q: agent %q from %s conflicts with agent %q from %s", key, previous.def.Name, previous.path, def.Name, path)
+			err := fmt.Errorf("agent identity collision for %q: agent %q from %s conflicts with agent %q from %s", key, previous.def.Name, previous.path, def.Name, path)
+			if mode == TeamCompileLint {
+				*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingDuplicateAgent, Field: "agents", Message: err.Error()})
+				return lintIdentityCollision
+			}
+			return err
 		}
 		identityOwners[key] = agentIdentityOwner{def: def, path: path}
 		return nil
 	}
-
 	for _, entry := range entries {
 		// README.md is excluded, not just any frontmatter-less .md: a file
 		// with no frontmatter is deliberately still a valid minimal agent
@@ -1387,9 +1406,15 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		fileAlias := strings.TrimSuffix(entry.Name(), ".md")
 		def.FileAlias = fileAlias
 		if err := registerIdentity(fileAlias, def, path); err != nil {
+			if mode == TeamCompileLint && errors.Is(err, lintIdentityCollision) {
+				continue
+			}
 			return nil, err
 		}
 		if err := registerIdentity(def.Name, def, path); err != nil {
+			if mode == TeamCompileLint && errors.Is(err, lintIdentityCollision) {
+				continue
+			}
 			return nil, err
 		}
 		if err := registerCoordinator(def, path); err != nil {
@@ -1405,6 +1430,9 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 				session.Agents[nameKey] = def
 			}
 		}
+	}
+	if mode == TeamCompileLint && coordinatorPath == "" {
+		*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingMissingCoordinator, Field: "agents", Message: "team has no authored coordinator agent"})
 	}
 
 	builtInHelper := &agent.AgentDef{
@@ -1428,7 +1456,9 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 		return nil, err
 	}
 	loadFindings := append(ValidateTeamTaskContracts(session), ValidateTeamPolicyContracts(session)...)
-	if messages := sortedContractFindingMessages(loadFindings); len(messages) > 0 {
+	if mode == TeamCompileLint {
+		*diagnostics = append(*diagnostics, loadFindings...)
+	} else if messages := sortedContractFindingMessages(loadFindings); len(messages) > 0 {
 		return nil, fmt.Errorf("team contract validation failed: %s", strings.Join(messages, "; "))
 	}
 

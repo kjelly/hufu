@@ -1224,32 +1224,59 @@ func validatedPathInAllowedDirs(evaluatedPath string, allowedPaths []string) (st
 	return "", fmt.Errorf("path is outside allowed directories")
 }
 
+type builtinToolFactory struct {
+	name  string
+	build func(...ToolOption) fantasy.AgentTool
+}
+
+var builtinToolFactories = []builtinToolFactory{
+	{"bash", func(opts ...ToolOption) fantasy.AgentTool { return NewBashTool(opts...) }},
+	{"sudo", func(opts ...ToolOption) fantasy.AgentTool { return NewSudoTool(opts...) }},
+	{"wait_for", func(opts ...ToolOption) fantasy.AgentTool { return NewWaitForTool(opts...) }},
+	{"ssh", func(opts ...ToolOption) fantasy.AgentTool { return NewSshTool(opts...) }},
+	{"scp", func(opts ...ToolOption) fantasy.AgentTool { return NewScpTool(opts...) }},
+	{"ssh_disconnect", func(opts ...ToolOption) fantasy.AgentTool { return NewSSHDisconnectTool(opts...) }},
+	{"view", func(opts ...ToolOption) fantasy.AgentTool { return NewViewTool(opts...) }},
+	{"write", func(opts ...ToolOption) fantasy.AgentTool { return NewWriteTool(opts...) }},
+	{"edit", func(opts ...ToolOption) fantasy.AgentTool { return NewEditTool(opts...) }},
+	{"multiedit", func(opts ...ToolOption) fantasy.AgentTool { return NewMultiEditTool(opts...) }},
+	{"grep", func(opts ...ToolOption) fantasy.AgentTool { return NewGrepTool(opts...) }},
+	{"glob", func(opts ...ToolOption) fantasy.AgentTool { return NewGlobTool(opts...) }},
+	{"ls", func(opts ...ToolOption) fantasy.AgentTool { return NewLsTool(opts...) }},
+	{"lua", func(opts ...ToolOption) fantasy.AgentTool { return NewLuaTool(opts...) }},
+	{"golang", func(opts ...ToolOption) fantasy.AgentTool { return NewGolangTool(opts...) }},
+	{"javascript", func(opts ...ToolOption) fantasy.AgentTool { return NewJavascriptTool(opts...) }},
+	{"ask_user", func(opts ...ToolOption) fantasy.AgentTool { return NewAskUserTool(opts...) }},
+	{"download", func(opts ...ToolOption) fantasy.AgentTool { return NewDownloadTool(opts...) }},
+	{"fetch", func(opts ...ToolOption) fantasy.AgentTool { return NewFetchTool(opts...) }},
+	{"agentic_fetch", func(opts ...ToolOption) fantasy.AgentTool { return NewAgenticFetchTool(opts...) }},
+	{"random", func(opts ...ToolOption) fantasy.AgentTool { return NewRandomTool(opts...) }},
+	{"math", func(opts ...ToolOption) fantasy.AgentTool { return NewMathTool(opts...) }},
+	{"create_skill", func(opts ...ToolOption) fantasy.AgentTool { return NewCreateSkillTool(opts...) }},
+}
+
+// BuiltinToolNames reports the model-visible built-in registry without
+// constructing handlers. It is safe for offline validation and mirrors the
+// policy filtering performed by AllTools.
+func BuiltinToolNames(noNet, forceMCP bool) []string {
+	names := make([]string, 0, len(builtinToolFactories))
+	for _, factory := range builtinToolFactories {
+		if noNet && (factory.name == "fetch" || factory.name == "download" || factory.name == "agentic_fetch") {
+			continue
+		}
+		if forceMCP && ForceMCPBlockedTools[factory.name] {
+			continue
+		}
+		names = append(names, factory.name)
+	}
+	return names
+}
+
 func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
-	tools := []fantasy.AgentTool{
-		NewBashTool(opts...),
-		NewSudoTool(opts...),
-		NewWaitForTool(opts...),
-		NewSshTool(opts...),
-		NewScpTool(opts...),
-		NewSSHDisconnectTool(opts...),
-		NewViewTool(opts...),
-		NewWriteTool(opts...),
-		NewEditTool(opts...),
-		NewMultiEditTool(opts...),
-		NewGrepTool(opts...),
-		NewGlobTool(opts...),
-		NewLsTool(opts...),
-		NewLuaTool(opts...),
-		NewGolangTool(opts...),
-		NewJavascriptTool(opts...),
-		NewAskUserTool(opts...),
-		NewDownloadTool(opts...),
-		NewFetchTool(opts...),
-		NewAgenticFetchTool(opts...),
-		NewRandomTool(opts...),
-		NewMathTool(opts...),
-		NewCreateSkillTool(opts...),
+	tools := make([]fantasy.AgentTool, 0, len(builtinToolFactories))
+	for _, factory := range builtinToolFactories {
+		tools = append(tools, factory.build(opts...))
 	}
 	if cfg.NetworkBlock {
 		netTools := map[string]bool{"fetch": true, "download": true, "agentic_fetch": true}
