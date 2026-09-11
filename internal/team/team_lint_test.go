@@ -227,6 +227,77 @@ func TestTeamLintProfileMatchesRuntimePolicyProjection(t *testing.T) {
 	}
 }
 
+func TestTeamLintSideEffectRetryNeedsRecovery(t *testing.T) {
+	dir := lintTeamWithAgentBody(t, "tools: ssh\nside_effect: external_write\nrecovery: retry", "Work.")
+	assertLintCode(t, dir, FindingSideEffectRetryWithoutReconcile)
+}
+
+func TestTeamLintStrictTaskWithoutTypedResult(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "execution-profile: strict-verification\nacceptance:\n  mode: blocking\n  require-no-unresolved-tasks: true\ntasks:\n  - agent: worker\n    goal: verify carefully\n")
+	assertLintCode(t, dir, FindingStrictTaskWithoutTypedResult)
+}
+
+func TestTeamLintAcceptanceMissingForUnattended(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "unattended: true\n")
+	assertLintCode(t, dir, FindingAcceptanceMissingUnattended)
+}
+
+func TestTeamLintVerifierMissingReusesExistingCode(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: verify\n    execution:\n      requires-verification: true\n")
+	assertLintCode(t, dir, FindingVerifierMissing)
+}
+
+func TestTeamLintStructuredVerifierMissingReusesExistingCode(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: execute\n    execution:\n      kind: process\n      requires-verification: true\n      steps:\n        - id: inspect\n          tool: view\n          effect: read\n")
+	assertLintCode(t, dir, FindingExecutionStepsVerifierMissing)
+}
+
+func TestTeamLintResourceClaimConflict(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: first\n    resources: [{resource: repo, mode: write}]\n  - agent: worker\n    goal: second\n    resources: [{resource: repo, mode: read}]\n")
+	assertLintCode(t, dir, FindingResourceClaimConflict)
+}
+
+func TestTeamLintTimeoutImpossible(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "timeout: 60\nverify-timeout: 60\ntasks:\n  - agent: worker\n    goal: verify\n    verify: test -f result.txt\n")
+	assertLintCode(t, dir, FindingTimeoutImpossible)
+}
+
+func TestTeamLintLegacyFanoutReusesExistingCode(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items.tsv\n      goal-template: process {key}\n")
+	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
+}
+
+func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			result, err := LintTeam(filepath.Join(root, entry.Name()), nil, nil, DefaultProviderRegistry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var blocking []TeamLintFinding
+			for _, finding := range result.Findings {
+				if finding.Severity == FindingSeverityError && !finding.Ignored {
+					blocking = append(blocking, finding)
+				}
+			}
+			if len(blocking) > 0 {
+				t.Fatalf("blocking findings = %#v", blocking)
+			}
+		})
+	}
+}
+
 func lintTeamWithAgentBody(t *testing.T, frontmatter, body string) string {
 	t.Helper()
 	dir := t.TempDir()

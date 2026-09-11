@@ -77,6 +77,7 @@ func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResul
 		inspection.Diagnostics = append(inspection.Diagnostics, LintEffectiveTeamContracts(inspection.Session, policy)...)
 		inspection.Diagnostics = append(inspection.Diagnostics, lintStaticTopology(inspection.Session, inspection.Diagnostics)...)
 		inspection.Diagnostics = append(inspection.Diagnostics, lintLegacyExecutionFields(inspection)...)
+		inspection.Diagnostics = append(inspection.Diagnostics, lintRuntimeSemantics(inspection.Session, policy, inspection.Diagnostics)...)
 		directives := scanTeamPromptDirectives(inspection.Session, inspection.Sources)
 		result.Findings = append(result.Findings, lintOfflineTools(inspection.Session, inspection.Sources, policy, directives)...)
 		result.Findings = append(result.Findings, lintOfflineSkills(inspection.Session, inspection.Sources, directives)...)
