@@ -126,7 +126,22 @@ Create an `.agent-teams/` directory in your project root and add a team definiti
 mkdir -p .agent-teams/my-team
 ```
 
-Create `team.yaml` (optional — the directory name is used as the team name when the file is absent):
+Create `team.yaml` (optional — the directory name is used as the team name when the file is absent). Team manifests can use the versioned `hufu.io/v1alpha1` schema (shown below, and used by every bundled team under `.agent-teams/`) or the older flat schema with no `apiVersion`; both are fully supported and use identical field names — see [docs/architecture/team-schema-versioning.md](docs/architecture/team-schema-versioning.md) for the full schema and a `hufu team migrate --dry-run` command that converts a flat team.yaml for you:
+
+```yaml
+apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: my-team
+spec:
+  description: "My development team"
+  model: ollama/qwen3:8b
+  temperature: "0.2"
+  max-tokens: "16384"
+  skills: code-review,git-commit
+```
+
+The flat schema is the same fields with no envelope:
 
 ```yaml
 name: my-team

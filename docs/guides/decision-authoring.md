@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: guide
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `1e9f1e4`
 > Supersedes: —
 > Superseded-By: —
 
@@ -37,6 +37,12 @@ existing team.
 
 Profiles live under `decision.profiles` in `team.yaml`. A profile is a rigor
 level, not a topic: name them for how much scrutiny they buy.
+
+Every `team.yaml` snippet in this guide is shown at its field's own level: a
+legacy flat team puts `decision:` at the top of team.yaml, exactly as shown
+below; a `hufu.io/v1alpha1` team puts the same block under `spec:` instead,
+since v1alpha1 keeps identical field names inside an envelope — see
+[team schema versioning](../architecture/team-schema-versioning.md).
 
 ```yaml
 decision:
