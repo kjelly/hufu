@@ -378,6 +378,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
+	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	agentDef, _, err := c.AgentPool().ResolveAgentName(agentName)
 	if err != nil {
 		c.finalizePublicInvocationFailure(err)
@@ -2089,6 +2093,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
+	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	if err := c.startProviderExecutionBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
@@ -2240,6 +2248,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	defer endExecutionRun()
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
+	}
+	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
 	}
 	// Capture before resetRoundState clears the flag, or the wrap-up branch
 	// below can never trigger and wrap-up requests silently degrade into an

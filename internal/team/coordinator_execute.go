@@ -154,6 +154,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if err := c.ValidateResourceLocks(ctx); err != nil {
 		return "", err
 	}
+	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+		return "", err
+	}
 	if c.IsWrapUp() && !c.acceptanceRecovery.Load() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
 		// A bare error here becomes errCoordinatorToolFailure (coordinator_task_run.go
