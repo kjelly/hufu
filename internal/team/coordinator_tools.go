@@ -817,10 +817,10 @@ func (t *loadSkillTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			var b strings.Builder
 			for i, expanded := range skill.ExpandSkillDependencies(s, skills) {
 				if i == 0 {
-					fmt.Fprintf(&b, "Skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, expanded.Content)
+					fmt.Fprintf(&b, "Skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, t.coordinator.resolvedSkillContent(expanded))
 					continue
 				}
-				fmt.Fprintf(&b, "\n\nReferenced skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, expanded.Content)
+				fmt.Fprintf(&b, "\n\nReferenced skill: %s\nFile: %s\n\n%s", expanded.Name, expanded.Path, t.coordinator.resolvedSkillContent(expanded))
 			}
 			return fantasy.NewTextResponse(b.String()), nil
 		}

@@ -248,7 +248,7 @@ func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName
 	injectedNames := make([]string, 0, len(ordered))
 	for _, definition := range ordered {
 		injectedNames = append(injectedNames, definition.Name)
-		content, level := definition.Content, "full"
+		content, level := c.resolvedSkillContent(definition), "full"
 		if granted["load_skill"] {
 			level = "summary"
 			content = fmt.Sprintf("Skill: %s\nSummary: %s\nPath: %s\nMandatory: call `load_skill` for `%s` before doing any task work.", definition.Name, definition.Description, definition.Path, definition.Name)
@@ -292,7 +292,7 @@ func (c *Coordinator) buildSkillPromptPrefix(agentDef *agent.AgentDef, granted m
 			if granted["load_skill"] {
 				fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nCall `load_skill` before task work to read the full instructions.\n\n", expanded.Name, expanded.Path, expanded.Description)
 			} else {
-				fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nFull skill instructions are already supplied above; proceed with the task.\n\n", expanded.Name, expanded.Path, expanded.Content)
+				fmt.Fprintf(&b, "### %s\n*File: %s*\n\n%s\n\nFull skill instructions are already supplied above; proceed with the task.\n\n", expanded.Name, expanded.Path, c.resolvedSkillContent(expanded))
 			}
 			foundMap[strings.ToLower(expanded.Name)] = true
 		}
@@ -334,7 +334,7 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 			fmt.Fprintf(&b, "- **%s**: %s\n", s.Name, desc)
 			continue
 		}
-		fmt.Fprintf(&b, "### %s\n\n%s\n\n", s.Name, s.Content)
+		fmt.Fprintf(&b, "### %s\n\n%s\n\n", s.Name, c.resolvedSkillContent(s))
 	}
 	b.WriteString("\n")
 	return b.String(), names

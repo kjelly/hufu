@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/skill"
 )
 
 // LockedResourceContextItems converts every locked resource injectable into
@@ -88,4 +89,22 @@ func LockedSkillContent(loaded []*LoadedResource, skillName string) (string, boo
 		}
 	}
 	return "", false
+}
+
+// resolvedSkillContent returns def's content, substituting the hash-locked
+// snapshot when team.yaml declared a required resource of kind: skill under
+// the same name (LockedSkillContent). Without that substitution, a
+// declared-but-unwired skill lock and ordinary skill discovery
+// (internal/skill, cached once in c.skills at team-load time) read the same
+// file independently and can silently disagree; every disclosure call site
+// that reads a skill's full body should go through this instead of
+// def.Content directly.
+func (c *Coordinator) resolvedSkillContent(def *skill.SkillDef) string {
+	if def == nil {
+		return ""
+	}
+	if content, ok := LockedSkillContent(c.LoadedRequiredResources(), def.Name); ok {
+		return content
+	}
+	return def.Content
 }
