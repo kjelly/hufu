@@ -5,7 +5,7 @@ max-steps: 80
 timeout: 3600
 verify-timeout: 120
 max-retries: 1
-max-concurrent: 4
+max-concurrent: 1
 workspace: workspace
 goal-mode: outcome
 execution-profile: fresh-session
