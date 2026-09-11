@@ -148,7 +148,10 @@ func (c *Coordinator) invokeCapabilityRoutedAgent(ctx context.Context, def *agen
 	if backendErr != nil {
 		return "", "", fmt.Errorf("resolve execution backend: %w", backendErr)
 	}
-	provider := gatedBackend.AgentProvider(ctx, executionTarget)
+	provider, providerErr := gatedBackend.AgentProvider(ctx, executionTarget)
+	if providerErr != nil {
+		return "", "", fmt.Errorf("admit capability-routed provider access: %w", providerErr)
+	}
 	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:               def,
 		TeamConfig:        &c.session.Config,

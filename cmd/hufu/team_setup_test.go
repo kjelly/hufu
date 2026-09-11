@@ -68,6 +68,44 @@ func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
 	}
 }
 
+func TestLoadTeamCommonAdmitsExecutionPolicyBeforeProviderPreflight(t *testing.T) {
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+	opts = runOptions{}
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	checkpoint := team.NewSession()
+	checkpoint.Tasks = []*team.TodoItem{{ID: "legacy-task", Agent: "worker", Desc: "interrupted", Model: "warm-admission-model", Status: team.TaskInProgress}}
+	if err := team.SaveSession(workspace, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	session := &team.TeamSession{
+		Dir:       t.TempDir(),
+		Workspace: workspace,
+		Config: agent.TeamConfig{
+			Name:        "admission-before-probe",
+			WorkerModel: "warm-admission-model",
+		},
+		Agents: map[string]*agent.AgentDef{
+			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "warm-admission-model"}},
+		},
+	}
+
+	_, err := loadTeamCommon(t.Context(), "admission-before-probe", session, server.URL+"/v1", "", nil, nil, nil, false, false, false)
+	if err == nil || !strings.Contains(err.Error(), "legacy session has interrupted tasks") {
+		t.Fatalf("loadTeamCommon error = %v, want execution-policy migration barrier", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("provider profile/capability requests before admission = %d, want 0", got)
+	}
+}
+
 func TestConfiguredContextWindowIsAppliedWhenNoNet(t *testing.T) {
 	modelID := "no-net-configured-context-model"
 	team.RegisterConfiguredContextWindow([]string{modelID}, 16384)

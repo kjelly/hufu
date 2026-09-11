@@ -435,10 +435,9 @@ func (c *Coordinator) resolveAgentMaxOutputTokens(def *agent.AgentDef) int {
 	return n
 }
 
-// providerSemaphore lazily builds (once per effective provider) and returns
-// the concurrency-limiting channel for modelID, or nil when the effective
-// provider has no configured max-concurrent. ProviderManager owns model-to-
-// provider resolution; Coordinator owns the semaphore lifecycle and cache.
+// providerSemaphore lazily builds (once per snapshotted provider) and returns
+// the concurrency-limiting channel for modelID, or nil when its immutable
+// policy has no configured max-concurrent.
 func (c *Coordinator) providerSemaphore(modelID string) chan struct{} {
 	if modelID == "" || c.session == nil || c.providerManager == nil {
 		return nil
@@ -449,6 +448,20 @@ func (c *Coordinator) providerSemaphore(modelID string) chan struct{} {
 	if state.sem == nil {
 		state.sem = make(map[string]chan struct{})
 	}
+	if c.executionPolicy != nil {
+		policy, ok := c.executionPolicy.providerPolicyForModel(modelID)
+		if !ok || policy.ProviderKey == "" || policy.MaxConcurrent <= 0 {
+			return nil
+		}
+		sem, ok := state.sem[policy.ProviderKey]
+		if !ok {
+			sem = make(chan struct{}, policy.MaxConcurrent)
+			state.sem[policy.ProviderKey] = sem
+		}
+		return sem
+	}
+	// Compatibility for minimal unit-test coordinators. NewCoordinator always
+	// initializes executionPolicy before any production provider can start.
 	policy, err := c.providerManager.ResolveProviderExecutionPolicy(modelID)
 	if err != nil || policy.ProviderKey == "" || policy.MaxConcurrent <= 0 {
 		return nil
@@ -505,6 +518,15 @@ func (c *Coordinator) ResolveBackendExecutionPolicy(target execution.ExecutionTa
 		return BackendExecutionPolicy{}, err
 	}
 	policy := BackendExecutionPolicy{Backend: execution.CanonicalTargetBackendName(target.Backend)}
+	if c != nil && c.executionPolicy != nil {
+		snapshotPolicy, ok := c.executionPolicy.backendPolicy(target)
+		if !ok {
+			return BackendExecutionPolicy{}, fmt.Errorf("execution policy snapshot has no backend %q", policy.Backend)
+		}
+		return BackendExecutionPolicy{Backend: snapshotPolicy.Backend, MaxConcurrent: snapshotPolicy.MaxConcurrent}, nil
+	}
+	// Compatibility for minimal unit-test coordinators. NewCoordinator always
+	// initializes executionPolicy before any production worker can start.
 	if c == nil || c.session == nil {
 		return policy, nil
 	}

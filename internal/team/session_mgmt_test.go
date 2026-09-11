@@ -193,6 +193,12 @@ func TestSaveSession(t *testing.T) {
 	}
 }
 
+func TestSaveSessionRejectsEmptyWorkspace(t *testing.T) {
+	if err := SaveSession(" \t", NewSession()); err == nil {
+		t.Fatal("SaveSession should reject an empty workspace")
+	}
+}
+
 func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
 	workspace := t.TempDir()
 	session := &SessionData{Entries: []SessionEntry{{Role: "user", Content: "api_token: top-secret-value"}}}

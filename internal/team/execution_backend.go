@@ -42,7 +42,7 @@ type ModelCatalogBackend interface {
 // the same canonical LLM backend selected by ExecutionRegistry.
 type GatedAgentBackend interface {
 	LanguageModelBackend
-	AgentProvider(context.Context, execution.ExecutionTarget) *agent.OpenAICompatibleProvider
+	AgentProvider(context.Context, execution.ExecutionTarget) (*agent.OpenAICompatibleProvider, error)
 }
 
 func (c *Coordinator) gatedAgentBackendForModel(model string) (GatedAgentBackend, execution.ExecutionTarget, error) {
@@ -68,12 +68,17 @@ func (c *Coordinator) gatedAgentBackendForTarget(target execution.ExecutionTarge
 // LLMExecutionBackend adapts the existing OpenAI-compatible provider manager
 // and Hufu/Fantasy worker runner behind the unified execution boundary.
 type LLMExecutionBackend struct {
-	name    string
-	manager *agent.ProviderManager
-	runner  AttemptRunner
+	name           string
+	manager        *agent.ProviderManager
+	runner         AttemptRunner
+	admitExecution func() error
 }
 
-func NewLLMExecutionBackend(name string, manager *agent.ProviderManager, runner AttemptRunner) (*LLMExecutionBackend, error) {
+// NewLLMExecutionBackend binds every transport-capable accessor to the
+// coordinator's execution-policy admission boundary. A nil admission function
+// is rejected so a new backend cannot accidentally reintroduce a raw provider
+// escape hatch.
+func NewLLMExecutionBackend(name string, manager *agent.ProviderManager, runner AttemptRunner, admitExecution func() error) (*LLMExecutionBackend, error) {
 	name = execution.CanonicalTargetBackendName(name)
 	if name == "" {
 		return nil, fmt.Errorf("LLM execution backend name is required")
@@ -84,7 +89,10 @@ func NewLLMExecutionBackend(name string, manager *agent.ProviderManager, runner 
 	if runner == nil {
 		return nil, fmt.Errorf("LLM execution backend %q requires an attempt runner", name)
 	}
-	return &LLMExecutionBackend{name: name, manager: manager, runner: runner}, nil
+	if admitExecution == nil {
+		return nil, fmt.Errorf("LLM execution backend %q requires execution-policy admission", name)
+	}
+	return &LLMExecutionBackend{name: name, manager: manager, runner: runner, admitExecution: admitExecution}, nil
 }
 
 func (b *LLMExecutionBackend) Name() string { return b.name }
@@ -109,24 +117,33 @@ func (b *LLMExecutionBackend) ValidateTarget(_ context.Context, target execution
 }
 
 func (b *LLMExecutionBackend) LanguageModel(ctx context.Context, target execution.ExecutionTarget) (fantasy.LanguageModel, error) {
-	if err := b.ValidateTarget(ctx, target); err != nil {
+	provider, err := b.AgentProvider(ctx, target)
+	if err != nil {
 		return nil, err
 	}
-	return b.AgentProvider(ctx, target).LanguageModel(ctx, target.Model)
+	return provider.LanguageModel(ctx, target.Model)
 }
 
 func (b *LLMExecutionBackend) ListModelNames(ctx context.Context, target execution.ExecutionTarget) ([]string, error) {
-	if err := b.ValidateTarget(ctx, target); err != nil {
+	provider, err := b.AgentProvider(ctx, target)
+	if err != nil {
 		return nil, err
 	}
-	return b.AgentProvider(ctx, target).ListModelNames(ctx)
+	return provider.ListModelNames(ctx)
 }
 
 // AgentProvider exposes the existing gated-agent constructor dependency only
-// after unified target validation has selected this LLM backend.
-func (b *LLMExecutionBackend) AgentProvider(ctx context.Context, target execution.ExecutionTarget) *agent.OpenAICompatibleProvider {
-	_ = ctx
-	return b.manager.GetProvider(b.providerModelID(target))
+// after unified target validation and execution-policy admission have both
+// succeeded. Returning an error, rather than a nil provider, keeps the
+// fail-closed boundary observable to every caller.
+func (b *LLMExecutionBackend) AgentProvider(ctx context.Context, target execution.ExecutionTarget) (*agent.OpenAICompatibleProvider, error) {
+	if err := b.ValidateTarget(ctx, target); err != nil {
+		return nil, err
+	}
+	if err := b.admit(); err != nil {
+		return nil, fmt.Errorf("admit execution policy before provider access: %w", err)
+	}
+	return b.manager.GetProvider(b.providerModelID(target)), nil
 }
 
 func (b *LLMExecutionBackend) RunAttempt(ctx context.Context, request AttemptRequest) (AttemptResult, error) {
@@ -136,8 +153,18 @@ func (b *LLMExecutionBackend) RunAttempt(ctx context.Context, request AttemptReq
 	if err := b.ValidateTarget(ctx, request.ExecutionTarget); err != nil {
 		return AttemptResult{}, err
 	}
+	if err := b.admit(); err != nil {
+		return AttemptResult{}, fmt.Errorf("admit execution policy before LLM attempt: %w", err)
+	}
 	request.ModelID = b.providerModelID(request.ExecutionTarget)
 	return b.runner.RunAttempt(ctx, request)
+}
+
+func (b *LLMExecutionBackend) admit() error {
+	if b == nil || b.admitExecution == nil {
+		return fmt.Errorf("LLM execution backend is missing execution-policy admission")
+	}
+	return b.admitExecution()
 }
 
 func (b *LLMExecutionBackend) providerModelID(target execution.ExecutionTarget) string {

@@ -135,6 +135,19 @@ func newResumedProtocolTelemetryCoordinator(t *testing.T) (*Coordinator, *TodoIt
 		reportStatus:            provider.recordStatus,
 		providerBoundaryStarted: true,
 	}
+	// This fixture deliberately drives a protocol-incomplete task through the
+	// low-level event boundary. Establish the same execution-policy snapshot a
+	// production coordinator persists before its first task, so the resumed
+	// provider path remains an admissible execution rather than a legacy
+	// compatibility bypass.
+	executionPolicy, err := newExecutionPolicyState(c)
+	if err != nil {
+		t.Fatalf("new execution policy state: %v", err)
+	}
+	c.executionPolicy = executionPolicy
+	if err := c.AdmitExecutionPolicy(); err != nil {
+		t.Fatalf("admit execution policy: %v", err)
+	}
 	// The task is created through the durable admission boundary, then driven
 	// to protocol_incomplete the way an interrupted run leaves it. A restored
 	// item without an admission marker is a shape the runtime never produces
@@ -274,24 +287,31 @@ func TestResumeProtocolRepairSecondProfileAppendFailureMakesNoProviderRequest(t 
 func TestResumeProtocolRepairSeparatesOccurrenceAndInvocationRuns(t *testing.T) {
 	first, _, provider, firstStore := newResumedProtocolTelemetryCoordinator(t)
 	workspace := first.session.Workspace
+	const occurrenceRunID = "run-resumed-protocol-telemetry"
+	if err := first.taskTracker.TodoList().SetExecutionReceipt("1", &ExecutionReceipt{
+		RunID:   occurrenceRunID,
+		TaskID:  "1",
+		Attempt: 1,
+	}); err != nil {
+		t.Fatalf("set durable run-A receipt: %v", err)
+	}
 	first.saveCheckpoint()
+	events, err := firstStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("read run-A events: %v", err)
+	}
+	checkpoint := ReduceToSessionData(events)
+	if err := SaveSession(workspace, checkpoint); err != nil {
+		t.Fatalf("save canonical run-A checkpoint: %v", err)
+	}
 	if err := firstStore.Close(); err != nil {
 		t.Fatalf("close run-A event store: %v", err)
 	}
 	first.eventStore = nil
 
-	checkpoint := LoadSession(workspace)
+	checkpoint = LoadSession(workspace)
 	if checkpoint == nil || len(checkpoint.Tasks) != 1 || checkpoint.Tasks[0].Status != TaskProtocolIncomplete {
 		t.Fatalf("checkpoint = %#v, want one protocol-incomplete task", checkpoint)
-	}
-	const occurrenceRunID = "run-resumed-protocol-telemetry"
-	checkpoint.Tasks[0].ExecutionReceipt = &ExecutionReceipt{
-		RunID:   occurrenceRunID,
-		TaskID:  checkpoint.Tasks[0].ID,
-		Attempt: 1,
-	}
-	if err := SaveSession(workspace, checkpoint); err != nil {
-		t.Fatalf("save durable run-A receipt: %v", err)
 	}
 	second := &Coordinator{
 		session:                 first.session,
@@ -305,6 +325,11 @@ func TestResumeProtocolRepairSeparatesOccurrenceAndInvocationRuns(t *testing.T) 
 		providerBoundaryAbort:   func() error { return nil },
 		providerBoundaryStarted: true,
 	}
+	executionPolicy, err := newExecutionPolicyState(second)
+	if err != nil {
+		t.Fatalf("new resumed execution policy state: %v", err)
+	}
+	second.executionPolicy = executionPolicy
 	second.SetSessionData(checkpoint)
 	ctx, end, err := second.beginPublicInvocationExecutionRun(context.Background())
 	if err != nil {
@@ -340,7 +365,7 @@ func TestResumeProtocolRepairSeparatesOccurrenceAndInvocationRuns(t *testing.T) 
 		t.Fatalf("run-B metrics = %d/%d, want 2/1", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
 	}
 
-	events, err := second.eventStore.ReadEvents()
+	events, err = second.eventStore.ReadEvents()
 	if err != nil {
 		t.Fatalf("read run events: %v", err)
 	}

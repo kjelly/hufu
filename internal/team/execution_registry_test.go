@@ -41,6 +41,8 @@ type capturingAttemptRunner struct {
 	request AttemptRequest
 }
 
+func admitExecutionPolicyForTest() error { return nil }
+
 func (r *capturingAttemptRunner) RunAttempt(_ context.Context, request AttemptRequest) (AttemptResult, error) {
 	r.request = request
 	return AttemptResult{}, nil
@@ -52,7 +54,7 @@ func TestLLMExecutionBackendUsesCanonicalTargetForTransportModel(t *testing.T) {
 		t.Fatalf("NewProviderManager: %v", err)
 	}
 	runner := &capturingAttemptRunner{}
-	backend, err := NewLLMExecutionBackend("openrouter", manager, runner)
+	backend, err := NewLLMExecutionBackend("openrouter", manager, runner, admitExecutionPolicyForTest)
 	if err != nil {
 		t.Fatalf("NewLLMExecutionBackend: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestOllamaExecutionBackendRoutesCloudModelToOllamaLeaf(t *testing.T) {
 		t.Fatalf("NewProviderManager: %v", err)
 	}
 	runner := &capturingAttemptRunner{}
-	backend, err := NewLLMExecutionBackend(execution.OllamaBackendName, manager, runner)
+	backend, err := NewLLMExecutionBackend(execution.OllamaBackendName, manager, runner, admitExecutionPolicyForTest)
 	if err != nil {
 		t.Fatalf("NewLLMExecutionBackend: %v", err)
 	}
@@ -99,7 +101,7 @@ func TestLLMExecutionBackendRejectsLegacyModelOnlyAttempt(t *testing.T) {
 		t.Fatalf("NewProviderManager: %v", err)
 	}
 	runner := &capturingAttemptRunner{}
-	backend, err := NewLLMExecutionBackend("local", manager, runner)
+	backend, err := NewLLMExecutionBackend("local", manager, runner, admitExecutionPolicyForTest)
 	if err != nil {
 		t.Fatalf("NewLLMExecutionBackend: %v", err)
 	}
@@ -170,7 +172,7 @@ func TestGatedAgentBackendUsesNamedLLMAndRejectsAgentTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderManager: %v", err)
 	}
-	backend, err := NewLLMExecutionBackend("named", manager, &capturingAttemptRunner{})
+	backend, err := NewLLMExecutionBackend("named", manager, &capturingAttemptRunner{}, admitExecutionPolicyForTest)
 	if err != nil {
 		t.Fatalf("NewLLMExecutionBackend: %v", err)
 	}

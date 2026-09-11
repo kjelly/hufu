@@ -606,6 +606,9 @@ func (c *Coordinator) ReviewPlanRevisionWithContext(ctx context.Context, revisio
 		review.Status = "rejected"
 		review.Reason = "plan review rejected: " + err.Error()
 	} else if c.planReviewerModel != "" && c.providerManager != nil {
+		if err := c.AdmitExecutionPolicy(); err != nil {
+			return PlanReviewResult{}, err
+		}
 		review, err = c.reviewPlanRevisionWithReviewer(ctx, *revision, review)
 		if err != nil {
 			return PlanReviewResult{}, err
@@ -867,6 +870,9 @@ func planContainsString(values []string, want string) bool {
 // ExecutePlanRevision persists and validates a revision, then dispatches only
 // its approved DAG diff. Callers must perform plan review before invoking it.
 func (c *Coordinator) ExecutePlanRevision(ctx context.Context, revision PlanRevision) (string, error) {
+	if err := c.AdmitExecutionPolicy(); err != nil {
+		return "", err
+	}
 	// Caller-provided CompletedTaskIDs and Review fields are deliberately
 	// ignored. Both are audit inputs, not authorization.
 	if err := normalizePlanTaskIDs(revision.TaskDAG); err != nil {

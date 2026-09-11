@@ -85,6 +85,9 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	if err := c.AdmitExecutionPolicy(); err != nil {
+		return "", err
+	}
 	var err error
 	// Bind once before expansion so a static contract can contribute its
 	// artifact-backed FanOut definition to the coordinator's minimal goal

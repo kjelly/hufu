@@ -371,7 +371,11 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		if !ok {
 			return "", fmt.Errorf("sub-agent execution backend %q cannot construct a gated Fantasy worker", target.Backend)
 		}
-		ag, err = c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
+		provider, providerErr := gatedBackend.AgentProvider(ctx, target)
+		if providerErr != nil {
+			return "", fmt.Errorf("admit sub-agent provider access: %w", providerErr)
+		}
+		ag, err = c.createGatedAgent(ctx, provider, agent.AgentConfig{
 			Def:               agentDef,
 			TeamConfig:        &c.session.Config,
 			WorkDir:           c.projectDir,

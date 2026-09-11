@@ -73,6 +73,18 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp
 			}
+		case string(EventExecutionPolicySnapshot):
+			// Execution-policy snapshots were introduced with the current
+			// event-store schema. Older envelopes cannot establish the
+			// immutable execution boundary: the authoritative lineage reader
+			// deliberately ignores them, so replay must do the same.
+			if e.SchemaVersion < eventStoreSchemaVersion {
+				continue
+			}
+			var snapshot ExecutionPolicySnapshot
+			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
+				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
+			}
 		case "context_manifest":
 			var manifest ContextInjectionManifest
 			if err := json.Unmarshal(e.Payload, &manifest); err == nil && manifest.RequestID != "" {

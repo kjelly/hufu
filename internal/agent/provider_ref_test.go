@@ -57,6 +57,64 @@ func TestProviderManagerResolvesCanonicalExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestProviderManagerExecutionIdentityCoversTransportAndCredential(t *testing.T) {
+	first, err := NewProviderManager("https://first.example/v1", "first-secret", map[string]config.ProviderConfig{
+		"remote": {ProviderURL: "https://remote.example/v1", ProviderAPIKey: "remote-secret", IntrospectionType: "openai-compatible"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstIdentity, err := first.ResolveProviderExecutionIdentity("remote/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstIdentity.ProviderKey != "remote" || firstIdentity.ConfigurationHash == "" {
+		t.Fatalf("first execution identity = %#v", firstIdentity)
+	}
+
+	changedURL, err := NewProviderManager("https://first.example/v1", "first-secret", map[string]config.ProviderConfig{
+		"remote": {ProviderURL: "https://other.example/v1", ProviderAPIKey: "remote-secret", IntrospectionType: "openai-compatible"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedURLIdentity, err := changedURL.ResolveProviderExecutionIdentity("remote/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedURLIdentity.ConfigurationHash == firstIdentity.ConfigurationHash {
+		t.Fatal("changed upstream URL retained the same execution identity")
+	}
+
+	changedCredential, err := NewProviderManager("https://first.example/v1", "first-secret", map[string]config.ProviderConfig{
+		"remote": {ProviderURL: "https://remote.example/v1", ProviderAPIKey: "rotated-secret", IntrospectionType: "openai-compatible"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedCredentialIdentity, err := changedCredential.ResolveProviderExecutionIdentity("remote/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedCredentialIdentity.ConfigurationHash == firstIdentity.ConfigurationHash {
+		t.Fatal("changed credential retained the same execution identity")
+	}
+
+	changedAdapter, err := NewProviderManager("https://first.example/v1", "first-secret", map[string]config.ProviderConfig{
+		"remote": {ProviderURL: "https://remote.example/v1", ProviderAPIKey: "remote-secret", IntrospectionType: "ollama"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedAdapterIdentity, err := changedAdapter.ResolveProviderExecutionIdentity("remote/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedAdapterIdentity.ConfigurationHash == firstIdentity.ConfigurationHash {
+		t.Fatal("changed adapter retained the same execution identity")
+	}
+}
+
 func TestProviderManagerPreservesLocalhostProviderRefAndNormalizesIdentity(t *testing.T) {
 	manager, err := NewProviderManager("http://localhost:11434/v1", "", nil)
 	if err != nil {

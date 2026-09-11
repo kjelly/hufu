@@ -89,18 +89,19 @@ func (c *Coordinator) executionTargetHasLanguageModelCapability(raw string) bool
 		return true
 	}
 	backend := selector.Backend
-	if backend == "" && c != nil && c.session != nil {
-		backend = execution.CanonicalTargetBackendName(c.session.Config.DefaultLLMBackend)
+	if backend == "" {
+		backend = c.executionPolicyDefaultLLMBackend()
 	}
 	if backend == "" {
 		backend = execution.OllamaBackendName
 	}
-	if backend == "codex" {
-		return false
-	}
-	if c != nil && c.session != nil {
-		if _, agentBackend := c.session.Config.SubagentProviders[backend]; agentBackend {
-			return false
+	if c != nil {
+		// The registry is built before the execution-policy snapshot and is not
+		// rebuilt during a run. Do not consult mutable TeamConfig here: that
+		// could make a later model-profile path reinterpret a frozen selector as
+		// an external backend (or vice versa).
+		if registered, resolveErr := c.ExecutionRegistry().ResolveBackend(backend); resolveErr == nil {
+			return registered.Kind() == execution.BackendKindLLM
 		}
 	}
 	return true

@@ -1363,7 +1363,11 @@ retryLoop:
 									if gatedErr != nil {
 										return nil, fmt.Errorf("resolve protocol repair execution backend: %w", gatedErr)
 									}
-									repairAg, rErr = c.createGatedAgent(workerCtx, gatedBackend.AgentProvider(workerCtx, executionTarget), agent.AgentConfig{
+									provider, providerErr := gatedBackend.AgentProvider(workerCtx, executionTarget)
+									if providerErr != nil {
+										return nil, fmt.Errorf("admit protocol repair provider access: %w", providerErr)
+									}
+									repairAg, rErr = c.createGatedAgent(workerCtx, provider, agent.AgentConfig{
 										Def:               agentDef,
 										TeamConfig:        &c.session.Config,
 										WorkDir:           c.projectDir,
@@ -2739,14 +2743,19 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			if gatedErr != nil {
 				err = fmt.Errorf("resolve protocol repair execution backend: %w", gatedErr)
 			} else {
-				repairAgent, err = c.createGatedAgent(workerCtx, gatedBackend.AgentProvider(workerCtx, executionTarget), agent.AgentConfig{
-					Def:               agentDef,
-					TeamConfig:        &c.session.Config,
-					WorkDir:           c.projectDir,
-					MaxSteps:          1,
-					InvocationModelID: resolvedModel,
-					AdmissionContext:  repairInvocation.AdmissionContext,
-				}, resolvedRepairTools.Tools)
+				provider, providerErr := gatedBackend.AgentProvider(workerCtx, executionTarget)
+				if providerErr != nil {
+					err = fmt.Errorf("admit protocol repair provider access: %w", providerErr)
+				} else {
+					repairAgent, err = c.createGatedAgent(workerCtx, provider, agent.AgentConfig{
+						Def:               agentDef,
+						TeamConfig:        &c.session.Config,
+						WorkDir:           c.projectDir,
+						MaxSteps:          1,
+						InvocationModelID: resolvedModel,
+						AdmissionContext:  repairInvocation.AdmissionContext,
+					}, resolvedRepairTools.Tools)
+				}
 			}
 		}
 	}
@@ -2976,7 +2985,11 @@ func (c *Coordinator) rescueFinalSummary(ctx context.Context, ag fantasy.Agent, 
 		if backendErr != nil || agentDef == nil {
 			return ""
 		}
-		rescueAgent, createErr := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
+		provider, providerErr := gatedBackend.AgentProvider(ctx, target)
+		if providerErr != nil {
+			return ""
+		}
+		rescueAgent, createErr := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 			Def:               rescueDef,
 			TeamConfig:        &c.session.Config,
 			WorkDir:           c.projectDir,
@@ -4820,7 +4833,11 @@ func (c *Coordinator) createTaskAgentWithResultTool(ctx context.Context, def *ag
 	if err != nil {
 		return nil, nil, err
 	}
-	ag, err := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, target), agent.AgentConfig{
+	provider, providerErr := gatedBackend.AgentProvider(ctx, target)
+	if providerErr != nil {
+		return nil, nil, fmt.Errorf("admit worker provider access: %w", providerErr)
+	}
+	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:               agentDef,
 		TeamConfig:        &c.session.Config,
 		WorkDir:           c.projectDir,

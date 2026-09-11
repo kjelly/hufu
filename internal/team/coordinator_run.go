@@ -125,6 +125,19 @@ func (e *recoveryAdmissionError) Error() string {
 }
 
 func (c *Coordinator) checkRunAdmission() error {
+	if err := c.ensureExecutionPolicySnapshot(); err != nil {
+		return &recoveryAdmissionError{
+			reason: err.Error(),
+			blockedTaskRef: TaskReference{
+				ID:           "<invocation>",
+				Agent:        "coordinator",
+				Desc:         "freeze execution policy before invocation",
+				Status:       string(TaskBlocked),
+				Error:        err.Error(),
+				FailureClass: FailurePolicy,
+			},
+		}
+	}
 	if c.sessionData != nil && c.sessionData.RecoveryRequired {
 		reason := c.sessionData.RecoveryReason
 		if reason == "" {
@@ -143,6 +156,40 @@ func (c *Coordinator) checkRunAdmission() error {
 		}
 	}
 	return nil
+}
+
+// AdmitExecutionPolicy establishes the durable execution-policy boundary for
+// callers that may invoke provider work without going through Run. It is safe
+// to call repeatedly: the event snapshot is idempotent and every call checks
+// that the live configuration still matches the admitted record.
+func (c *Coordinator) AdmitExecutionPolicy() error {
+	if c == nil {
+		return fmt.Errorf("execution policy admission requires a coordinator")
+	}
+	if c.executionPolicy != nil && c.eventStore == nil {
+		c.initEventStore()
+	}
+	return c.checkRunAdmission()
+}
+
+// FreezeExecutionPolicyAtStartup persists the execution policy before CLI
+// setup performs provider-backed profile or capability probes. Unlike the
+// task-dispatch admission path, it releases the temporary event-store handle
+// once the event-first snapshot and its checkpoint are durable. A later
+// preflight or invocation opens its own run-scoped journal instead of
+// inheriting a setup-time run identity.
+func (c *Coordinator) FreezeExecutionPolicyAtStartup() error {
+	if c == nil {
+		return fmt.Errorf("execution policy startup freeze requires a coordinator")
+	}
+	openedJournal := c.eventStore == nil
+	err := c.AdmitExecutionPolicy()
+	if openedJournal && c.eventStore != nil {
+		_ = c.eventStore.Close()
+		c.eventStore = nil
+		c.SetEventJournal(eventStoreJournal{})
+	}
+	return err
 }
 
 // finalizePublicInvocationFailure is the shared terminal owner for failures
@@ -258,11 +305,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
 	}
-	defaultBackend := execution.OllamaBackendName
-	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
-		defaultBackend = c.session.Config.DefaultLLMBackend
-	}
-	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: c.executionPolicyDefaultLLMBackend()})
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
 	}
@@ -274,7 +317,10 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	if !ok {
 		return nil, ResolvedWorkerTools{}, fmt.Errorf("direct worker target %q has no gated-agent provider", target)
 	}
-	provider := llmBackend.AgentProvider(ctx, target)
+	provider, err := llmBackend.AgentProvider(ctx, target)
+	if err != nil {
+		return nil, ResolvedWorkerTools{}, fmt.Errorf("admit direct worker provider access: %w", err)
+	}
 	ctx, invocation, err := c.resolveProviderBoundInvocationContext(ctx, directModel, agentDef)
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
@@ -1221,7 +1267,11 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	}
 	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
-	orch, err := c.createGatedAgent(orchCtx, gatedBackend.AgentProvider(orchCtx, executionTarget), agent.AgentConfig{
+	provider, providerErr := gatedBackend.AgentProvider(orchCtx, executionTarget)
+	if providerErr != nil {
+		return "", nil, fmt.Errorf("admit coordinator provider access: %w", providerErr)
+	}
+	orch, err := c.createGatedAgent(orchCtx, provider, agent.AgentConfig{
 		AdmissionContext:  orchInvocation.AdmissionContext,
 		Def:               orchDef,
 		TeamConfig:        &c.session.Config,

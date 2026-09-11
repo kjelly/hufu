@@ -701,5 +701,9 @@ func (r *defaultModelRuntime) ProviderFor(modelID string) (*agent.OpenAICompatib
 	if err != nil {
 		return nil, fmt.Errorf("resolve model runtime execution backend: %w", err)
 	}
-	return backend.AgentProvider(context.Background(), target), nil
+	provider, err := backend.AgentProvider(context.Background(), target)
+	if err != nil {
+		return nil, fmt.Errorf("admit model runtime provider access: %w", err)
+	}
+	return provider, nil
 }

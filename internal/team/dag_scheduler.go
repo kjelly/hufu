@@ -106,8 +106,8 @@ type dagScheduler struct {
 
 func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, duplicates map[int]bool) *dagScheduler {
 	var sem chan struct{}
-	if c != nil && c.maxConcurrent > 0 {
-		sem = make(chan struct{}, c.maxConcurrent)
+	if c != nil && c.teamConcurrencyLimit() > 0 {
+		sem = make(chan struct{}, c.teamConcurrencyLimit())
 	}
 	s := &dagScheduler{
 		coord:                c,

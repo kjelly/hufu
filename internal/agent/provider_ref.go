@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -14,6 +16,68 @@ import (
 type ProviderExecutionPolicy struct {
 	ProviderKey   string
 	MaxConcurrent int
+}
+
+// ProviderExecutionIdentity is the redacted identity of the effective
+// provider transport used for a model. ConfigurationHash deliberately covers
+// the upstream URL, adapter type, credential revision, and transport security
+// setting without exposing any of them to callers.
+type ProviderExecutionIdentity struct {
+	ProviderKey       string
+	ConfigurationHash string
+}
+
+// ResolveProviderExecutionIdentity resolves the exact effective transport
+// selected for modelID and returns a secret-free digest suitable for durable
+// execution admission. It must remain aligned with both invocation and
+// introspection selection: changing an upstream, adapter, credential, or TLS
+// mode must not allow an interrupted run to resume against a new backend.
+func (pm *ProviderManager) ResolveProviderExecutionIdentity(modelID string) (ProviderExecutionIdentity, error) {
+	if pm == nil {
+		return ProviderExecutionIdentity{}, fmt.Errorf("provider manager unavailable")
+	}
+	providerName := pm.effectiveProviderKey(modelID)
+	provider := pm.GetProvider(modelID)
+	if provider == nil {
+		return ProviderExecutionIdentity{}, fmt.Errorf("no provider for model %q", modelID)
+	}
+	if providerName != "local" && provider.Name() == "local" {
+		providerName = "local"
+	}
+
+	pm.mu.RLock()
+	target := pm.effectiveProviderTargetLocked(providerName)
+	providerType := "openai-compatible"
+	insecure := false
+	if providerName == "local" {
+		providerType = "ollama"
+	}
+	if cfg, ok := pm.configs[providerName]; ok {
+		if strings.TrimSpace(cfg.IntrospectionType) != "" {
+			providerType = strings.ToLower(strings.TrimSpace(cfg.IntrospectionType))
+		}
+		insecure = cfg.Insecure
+	}
+	pm.mu.RUnlock()
+	if target.upstreamURL == "" {
+		return ProviderExecutionIdentity{}, fmt.Errorf("provider %q has no upstream URL", providerName)
+	}
+
+	// Each input is length-delimited by a NUL byte before hashing. The API key
+	// participates only in-memory so credential rotation is detected without
+	// persisting the credential or a separately reusable secret digest.
+	input := strings.Join([]string{
+		providerName,
+		providerType,
+		target.upstreamURL,
+		target.apiKey,
+		strconv.FormatBool(insecure),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(input))
+	return ProviderExecutionIdentity{
+		ProviderKey:       providerName,
+		ConfigurationHash: fmt.Sprintf("%x", sum),
+	}, nil
 }
 
 // ResolveProviderExecutionPolicy resolves the same effective provider target

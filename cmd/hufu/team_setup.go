@@ -280,6 +280,16 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
+	// The execution policy is durable before any provider profile/capability
+	// probe. Those probes can open provider transports, so a legacy interrupted
+	// session or configuration drift must fail here rather than after a model
+	// boundary has already been crossed.
+	coordinator.SetExecutionProfile(execProfile)
+	coordinator.SetFreshSession(startsFresh)
+	coordinator.SetSessionData(sessionData)
+	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
+		return nil, fmt.Errorf("freeze execution policy before provider preflight: %w", err)
+	}
 	// Warm provider-bound profiles after the coordinator owns the exact
 	// ProviderManager used for invocation. This covers configured agents,
 	// extra models, model-list candidates, and all auxiliary role models.
@@ -292,9 +302,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 
-	coordinator.SetExecutionProfile(execProfile)
-	coordinator.SetSessionData(sessionData)
-	coordinator.SetFreshSession(startsFresh)
 	if stallThreshold := cfg.ResolveStallThreshold(session.Config.StallThreshold); stallThreshold > 0 {
 		coordinator.SetStallWatchdog(stallThreshold, 0)
 	}

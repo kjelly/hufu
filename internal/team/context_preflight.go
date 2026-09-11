@@ -77,6 +77,15 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 		}
 		return fmt.Errorf("context preflight failed: %s", reason)
 	}
+	// CLI-owned sidecars are provider calls too. A preflight without a sidecar
+	// remains read-only: defer freezing until Run admits the first task. When a
+	// sidecar is configured, however, its provider boundary must use the same
+	// durably frozen policy as worker execution.
+	if c.sidecarModel != "" {
+		if err := c.checkRunAdmission(); err != nil {
+			return fmt.Errorf("context preflight execution policy admission failed: %w", err)
+		}
+	}
 	c.preflightMu.Lock()
 	if c.preflightLease != nil {
 		c.preflightMu.Unlock()

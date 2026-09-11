@@ -618,6 +618,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 			CreatedAt:                   orig.sessionData.CreatedAt,
 			UpdatedAt:                   orig.sessionData.UpdatedAt,
 			Rounds:                      orig.sessionData.Rounds,
+			ExecutionPolicySnapshot:     cloneExecutionPolicySnapshot(orig.sessionData.ExecutionPolicySnapshot),
 			Entries:                     entriesCopy,
 			CoordinatorContextManifests: append([]ContextInjectionManifest(nil), orig.sessionData.CoordinatorContextManifests...),
 		}
@@ -722,6 +723,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		autoLoadedSkills:                   autoLoadedSkillsClone,
 		forcedSkillNames:                   forcedSkillNamesClone,
 		maxConcurrent:                      orig.maxConcurrent,
+		executionPolicy:                    orig.executionPolicy,
 		providerSemState:                   providerSemState,
 		backendSemState:                    backendSemState,
 		sessionTime:                        orig.sessionTime,

@@ -221,7 +221,11 @@ func codexRunCheapPreflightChecks(p *CodexSubagentProvider, environment []string
 	}
 	workspace := ""
 	if p.coordinator != nil {
-		workspace = p.coordinator.projectDir
+		var err error
+		workspace, _, err = p.coordinator.codexExecutionWorld(p.name, nil)
+		if err != nil {
+			return fmt.Errorf("resolve frozen Codex execution world: %w", err)
+		}
 	}
 	if _, err := resolveSnapshotRoot(workspace); err != nil {
 		return fmt.Errorf("workspace root invalid: %w", err)
@@ -364,11 +368,21 @@ func acquireCodexHomeStateLock(ctx context.Context, home string) (func(), error)
 }
 
 func (p *CodexSubagentProvider) acquireSharedCodexStateLock(ctx context.Context) (func(), error) {
-	return p.acquireSharedCodexStateLockWithEnvironment(ctx, buildAllowlistedEnvironment(p.config.InheritEnv), nil)
+	return p.acquireSharedCodexStateLockWithEnvironment(ctx, p.childEnvironment(), nil)
 }
 
 func (p *CodexSubagentProvider) acquireSharedCodexStateLockWithHomeResolver(ctx context.Context, resolveHome func() (string, error)) (func(), error) {
-	return p.acquireSharedCodexStateLockWithEnvironment(ctx, buildAllowlistedEnvironment(p.config.InheritEnv), resolveHome)
+	return p.acquireSharedCodexStateLockWithEnvironment(ctx, p.childEnvironment(), resolveHome)
+}
+
+func (p *CodexSubagentProvider) childEnvironment() []string {
+	if p == nil {
+		return nil
+	}
+	if p.coordinator != nil {
+		return p.coordinator.executionEnvironmentForBackend(p.name, p.config.InheritEnv)
+	}
+	return buildAllowlistedEnvironment(p.config.InheritEnv)
 }
 
 func (p *CodexSubagentProvider) acquireSharedCodexStateLockWithEnvironment(ctx context.Context, environment []string, resolveHome func() (string, error)) (func(), error) {
@@ -581,6 +595,13 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("codex attempt requires a coordinator")
 	}
+	// RunAttempt is also a public provider entrypoint used by direct callers
+	// and focused integrations. It must establish the same event-first policy
+	// boundary as Coordinator.Run/ExecuteTasks before it validates a request,
+	// runs preflight, or can start a child process.
+	if err := p.coordinator.AdmitExecutionPolicy(); err != nil {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("admit execution policy before Codex attempt: %w", err))
+	}
 	// ArtifactScope is the provider's immutable evidence capability for this
 	// exact attempt. Reject an absent or mismatched capability before even
 	// running preflight, resolving shared state, preparing an execution world,
@@ -595,7 +616,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		return AttemptResult{}, codexFail(CodexFailureProtocolError, err)
 	}
 	request.ReasoningEffort = normalizedReasoningEffort
-	childEnvironment := buildAllowlistedEnvironment(p.config.InheritEnv)
+	childEnvironment := p.childEnvironment()
 	// §25: preflight failure MUST occur before the task enters provider
 	// execution — this runs (or reuses a cached result) before any process,
 	// workspace, or protocol activity below.
@@ -618,17 +639,16 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	}
 
 	transcript := newCodexTranscript(p.config.MaxTranscriptBytes)
-	workspace := p.coordinator.projectDir
+	workspace, networkDisabled, worldPolicyErr := p.coordinator.codexExecutionWorld(p.name, request.Agent)
+	if worldPolicyErr != nil {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("resolve frozen Codex execution world: %w", worldPolicyErr))
+	}
 	artifactWorkspace := p.coordinator.artifactStoreRootPath()
 	if artifactWorkspace == "" {
 		artifactWorkspace = workspace
 	}
 	transcript.record("attempt start task=%s attempt=%d model=%s", request.TaskID, request.Attempt, request.ModelID)
 
-	networkDisabled := p.coordinator != nil && p.coordinator.noNet
-	if request.Agent != nil && request.Agent.NoNet {
-		networkDisabled = true
-	}
 	// The local execution world owns workspace preparation, leases, and
 	// post-turn effect verification. It intentionally does not claim network
 	// control: the Codex app-server is the provider control plane and must be
@@ -930,7 +950,7 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 		defer startCancel()
 	}
 	repairProc, err := StartCodexAppServer(startCtx, sup, CodexProcessConfig{
-		Argv: p.config.Command, Dir: p.coordinator.projectDir, Env: prepared.Environment,
+		Argv: p.config.Command, Dir: prepared.CWD, Env: prepared.Environment,
 		MaxFrameBytes: int(p.config.MaxEventBytes), StartupTimeout: startupTimeout,
 	})
 	if err != nil {

@@ -951,6 +951,15 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
 		ensureAdmission := func() bool {
+			if err := c.ensureExecutionPolicySnapshot(); err != nil {
+				detail := fmt.Sprintf("task recovery blocked by execution policy admission: %v", err)
+				c.PersistFailureWithClassAndStatus(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
+				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				if firstErr == nil {
+					firstErr = err
+				}
+				return false
+			}
 			_, _, err := c.validateTaskOccurrenceAdmission(ctx, task, it.ID, it.Retries+1)
 			if err == nil {
 				return true
@@ -983,6 +992,16 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			return nil, false
 		}
 		if it.Status == TaskProtocolIncomplete {
+			if err := c.ensureExecutionPolicySnapshot(); err != nil {
+				detail := fmt.Sprintf("task recovery blocked by execution policy admission: %v", err)
+				c.PersistFailureWithClassAndStatusAndOutput(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked, it.Output)
+				c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(it.ID))
+				if firstErr == nil {
+					firstErr = err
+				}
+				count++
+				continue
+			}
 			if _, _, err := c.validateTaskOccurrenceAdmission(ctx, task, it.ID, it.Retries+1); err != nil {
 				detail := fmt.Sprintf("task recovery blocked by decision admission validation: %v", err)
 				c.PersistFailureWithClassAndStatusAndOutput(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked, it.Output)
@@ -1272,6 +1291,7 @@ func (c *Coordinator) SessionData() *SessionData {
 	var snapshot *SessionData
 	c.viewSessionData(func(sd *SessionData) {
 		copySD := *sd
+		copySD.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(sd.ExecutionPolicySnapshot)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)
 		copySD.Tasks = append([]*TodoItem(nil), sd.Tasks...)
 		snapshot = &copySD

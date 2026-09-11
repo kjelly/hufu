@@ -84,7 +84,11 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 		&reviewerApprovePlanTool{coordinator: c, todoID: todoID},
 		&reviewerRejectPlanTool{coordinator: c, todoID: todoID},
 	}
-	ag, err := c.createGatedAgent(ctx, gatedBackend.AgentProvider(ctx, executionTarget), agent.AgentConfig{
+	provider, providerErr := gatedBackend.AgentProvider(ctx, executionTarget)
+	if providerErr != nil {
+		return nil, fmt.Errorf("admit plan reviewer provider access: %w", providerErr)
+	}
+	ag, err := c.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def: &agent.AgentDef{
 			Name:       "plan-reviewer",
 			System:     planReviewerSystemPrompt,

@@ -15,8 +15,9 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 )
 
-// collectConfiguredModels gathers every model ID the run can use: per-agent
-// models, the escalation model list, and the sidecar model.
+// collectConfiguredModels gathers every model ID the run can use, including
+// all coordinator-side auxiliary roles. Execution-policy admission relies on
+// this complete set to freeze routing before the first provider call.
 func (c *Coordinator) collectConfiguredModels() []string {
 	seen := make(map[string]bool)
 	var ids []string
@@ -36,6 +37,15 @@ func (c *Coordinator) collectConfiguredModels() []string {
 		add(m.ID)
 	}
 	add(c.sidecarModel)
+	add(c.guardModel)
+	add(c.judgeModel)
+	add(c.planReviewerModel)
+	add(c.session.Config.WorkerModel)
+	add(c.session.Config.CoordinatorModel)
+	add(c.session.Config.SidecarModel)
+	add(c.session.Config.GuardModel)
+	add(c.session.Config.JudgeModel)
+	add(c.session.Config.PlanReviewerModel)
 	add(c.session.Config.Generation.Model)
 	sort.Strings(ids)
 	return ids
@@ -62,10 +72,7 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 	cache := make(map[string]*providerModels)
 	var problems []string
 
-	defaultBackend := execution.OllamaBackendName
-	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
-		defaultBackend = c.session.Config.DefaultLLMBackend
-	}
+	defaultBackend := c.executionPolicyDefaultLLMBackend()
 	for _, id := range ids {
 		selector, parseErr := execution.ParseExecutionSelector(id)
 		if parseErr != nil {

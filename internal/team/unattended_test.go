@@ -172,6 +172,7 @@ func TestRunRollback_Git(t *testing.T) {
 
 func TestSelfHealingAndRollback(t *testing.T) {
 	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
 	c.SetUnattended(true)
 	c.SetAcceptance("false") // always fails
 	c.SetRollback("true")    // rollback succeeds

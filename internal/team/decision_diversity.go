@@ -102,6 +102,13 @@ func (c *Coordinator) canonicalProviderKey(modelID string) (string, error) {
 	if c == nil || c.providerManager == nil {
 		return "", fmt.Errorf("provider manager unavailable")
 	}
+	if c.executionPolicy != nil {
+		policy, ok := c.executionPolicy.providerPolicyForModel(modelID)
+		if !ok || strings.TrimSpace(policy.ProviderKey) == "" {
+			return "", fmt.Errorf("execution policy has no provider identity for model %q", modelID)
+		}
+		return strings.TrimSpace(policy.ProviderKey), nil
+	}
 	policy, err := c.providerManager.ResolveProviderExecutionPolicy(modelID)
 	if err != nil {
 		return "", err

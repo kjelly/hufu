@@ -28,6 +28,12 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt requires a coordinator")
 	}
+	// RunAttempt is a public provider entrypoint. Keep it behind the same
+	// event-first admission boundary as coordinator dispatch and other
+	// providers, before any request validation can progress to an LLM call.
+	if err := p.coordinator.AdmitExecutionPolicy(); err != nil {
+		return AttemptResult{}, fmt.Errorf("admit execution policy before hufu-local attempt: %w", err)
+	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	if request.TaskID == "" || request.Attempt < 1 || request.ModelID == "" {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt has an incomplete contract")
@@ -102,13 +108,19 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 		if targetErr != nil {
 			return AttemptResult{}, targetErr
 		}
-		provider = gatedBackend.AgentProvider(ctx, target)
+		provider, targetErr = gatedBackend.AgentProvider(ctx, target)
+		if targetErr != nil {
+			return AttemptResult{}, targetErr
+		}
 	} else {
 		gatedBackend, target, targetErr := p.coordinator.gatedAgentBackendForModel(request.ModelID)
 		if targetErr != nil {
 			return AttemptResult{}, targetErr
 		}
-		provider = gatedBackend.AgentProvider(ctx, target)
+		provider, targetErr = gatedBackend.AgentProvider(ctx, target)
+		if targetErr != nil {
+			return AttemptResult{}, targetErr
+		}
 	}
 	ag, err := p.coordinator.createGatedAgent(ctx, provider, agent.AgentConfig{
 		Def:               def,

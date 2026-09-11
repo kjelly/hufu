@@ -313,11 +313,7 @@ func (c *Coordinator) resolveCanonicalTaskTarget(model, legacyProvider string) (
 			return target, nil
 		}
 	}
-	defaultBackend := execution.OllamaBackendName
-	if c != nil && c.session != nil && c.session.Config.DefaultLLMBackend != "" {
-		defaultBackend = c.session.Config.DefaultLLMBackend
-	}
-	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: defaultBackend})
+	target, _, err := c.ExecutionRegistry().ResolveTarget(selector, execution.TargetDefaults{DefaultLLMBackend: c.executionPolicyDefaultLLMBackend()})
 	return target, err
 }
 

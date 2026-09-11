@@ -71,9 +71,13 @@ type PendingTerminalCommit struct {
 }
 
 type SessionData struct {
-	CreatedAt                          string                    `json:"created_at"`
-	UpdatedAt                          string                    `json:"updated_at"`
-	Rounds                             int                       `json:"rounds"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Rounds    int    `json:"rounds"`
+	// ExecutionPolicySnapshot is the durable, redacted admission record that
+	// freezes scheduler limits, model routing, execution worlds, and inherited
+	// environment values before any task or provider call can begin.
+	ExecutionPolicySnapshot            *ExecutionPolicySnapshot  `json:"execution_policy_snapshot,omitempty"`
 	ConversationHistorySourceOffset    int                       `json:"conversation_history_source_offset"`
 	ConversationHistorySourceCounts    []int                     `json:"conversation_history_source_counts"`
 	ConversationHistorySourceRanges    [][]CompactionRange       `json:"conversation_history_source_ranges,omitempty"`
@@ -152,6 +156,9 @@ func loadSessionQuiet(workspace string) (*SessionData, error) {
 func SaveSession(workspace string, session *SessionData) error {
 	if session == nil {
 		return errors.New("session is nil")
+	}
+	if strings.TrimSpace(workspace) == "" {
+		return errors.New("session workspace is empty")
 	}
 	session.UpdatedAt = time.Now().Format(time.RFC3339)
 	data, err := json.MarshalIndent(session, "", "  ")

@@ -306,6 +306,10 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	if !hasCurrentCanonicalProjectionEvents(lineage) {
 		return
 	}
+	if _, err := executionPolicySnapshotFromEvents(lineage); err != nil {
+		c.markSessionRecovery("canonical execution policy replay rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 
 	replayedSD := ReduceToSessionData(lineage)
 	replayedTasks, err := ReplayTodoList(lineage)
@@ -316,7 +320,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 
 	var emptyProjection bool
 	c.viewSessionData(func(sd *SessionData) {
-		emptyProjection = len(sd.Entries) == 0 && len(sd.Tasks) == 0
+		emptyProjection = len(sd.Entries) == 0 && len(sd.Tasks) == 0 && sd.ExecutionPolicySnapshot == nil
 	})
 	if emptyProjection {
 		c.replaceCanonicalProjection(replayedSD, replayedTasks)
@@ -399,6 +403,7 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 		return
 	}
 	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayedSD.ExecutionPolicySnapshot)
 		sd.Entries = replayedSD.Entries
 		sd.Tasks = replayedTasks
 		sd.WorksetReceipts = append([]WorksetExpansionReceipt(nil), replayedSD.WorksetReceipts...)
@@ -420,6 +425,18 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {
 	if live == nil || replayedSD == nil {
 		return false
+	}
+	// The event journal is canonical. It may safely repair a missing or stale
+	// checkpoint snapshot only when it actually contains a valid policy; a
+	// checkpoint-only policy is unsafe because it cannot prove the policy was
+	// durably admitted before any recorded task.
+	if live.ExecutionPolicySnapshot != nil && replayedSD.ExecutionPolicySnapshot == nil {
+		return false
+	}
+	if replayedSD.ExecutionPolicySnapshot != nil {
+		if err := validateExecutionPolicySnapshot(replayedSD.ExecutionPolicySnapshot); err != nil {
+			return false
+		}
 	}
 	if len(live.Entries) > len(replayedSD.Entries) {
 		return false

@@ -18,7 +18,13 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if live == nil {
 		return fmt.Errorf("live session projection is nil")
 	}
+	if _, err := executionPolicySnapshotFromEvents(events); err != nil {
+		return err
+	}
 	replayed := ReduceToSessionData(events)
+	if err := compareExecutionPolicySnapshotProjection(live.ExecutionPolicySnapshot, replayed.ExecutionPolicySnapshot); err != nil {
+		return err
+	}
 	if !sameConversationProjection(live.Entries, replayed.Entries) {
 		return fmt.Errorf("conversation entries differ")
 	}
@@ -27,6 +33,54 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	}
 	if !reflect.DeepEqual(live.CriterionResults, replayed.CriterionResults) || !reflect.DeepEqual(live.CriterionCheckpoints, replayed.CriterionCheckpoints) || live.LastCriterionProgressAt != replayed.LastCriterionProgressAt {
 		return fmt.Errorf("criterion projection differs")
+	}
+	return nil
+}
+
+// executionPolicySnapshotFromEvents returns the single immutable policy
+// snapshot visible in an event lineage. A current-schema lineage may not
+// change its policy after it has been admitted: accepting the last value would
+// make a later append silently rewrite the scheduling and execution boundary
+// for tasks already recorded in the same lineage.
+func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnapshot, error) {
+	var admitted *ExecutionPolicySnapshot
+	for _, event := range events {
+		if event.SchemaVersion < eventStoreSchemaVersion || EventType(event.Type) != EventExecutionPolicySnapshot {
+			continue
+		}
+		var candidate ExecutionPolicySnapshot
+		if err := json.Unmarshal(event.Payload, &candidate); err != nil {
+			return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
+		}
+		if err := validateExecutionPolicySnapshot(&candidate); err != nil {
+			return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
+		}
+		if admitted != nil && admitted.ConfigurationHash != candidate.ConfigurationHash {
+			return nil, fmt.Errorf("execution policy snapshot events disagree: %s != %s", admitted.ConfigurationHash, candidate.ConfigurationHash)
+		}
+		admitted = cloneExecutionPolicySnapshot(&candidate)
+	}
+	return admitted, nil
+}
+
+func compareExecutionPolicySnapshotProjection(live, replayed *ExecutionPolicySnapshot) error {
+	if live == nil && replayed == nil {
+		return nil
+	}
+	if live == nil {
+		return fmt.Errorf("execution policy snapshot missing from checkpoint")
+	}
+	if replayed == nil {
+		return fmt.Errorf("execution policy snapshot missing from event store")
+	}
+	if err := validateExecutionPolicySnapshot(live); err != nil {
+		return fmt.Errorf("checkpoint execution policy snapshot is invalid: %w", err)
+	}
+	if err := validateExecutionPolicySnapshot(replayed); err != nil {
+		return fmt.Errorf("event-store execution policy snapshot is invalid: %w", err)
+	}
+	if live.ConfigurationHash != replayed.ConfigurationHash {
+		return fmt.Errorf("execution policy snapshot differs: checkpoint=%s event_store=%s", live.ConfigurationHash, replayed.ConfigurationHash)
 	}
 	return nil
 }
@@ -368,7 +422,7 @@ func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 			continue
 		}
 		switch EventType(event.Type) {
-		case EventUserMessageAdded, EventAssistantMessageAdded, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
+		case EventExecutionPolicySnapshot, EventUserMessageAdded, EventAssistantMessageAdded, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
 			return true
 		}
 	}

@@ -563,6 +563,11 @@ type Coordinator struct {
 	autoLoadedSkillsMu      sync.RWMutex
 	forcedSkillNames        map[string]bool // set of skill names specified via --skill
 	maxConcurrent           int
+	// executionPolicy is constructed once after all execution backends have
+	// been registered. Its public snapshot is persisted at run admission; all
+	// scheduler and backend semaphores consume this immutable state instead of
+	// reading live team/provider configuration.
+	executionPolicy *executionPolicyState
 	// providerSemState holds a lazily-created concurrency-limiting channel per
 	// canonical effective provider key, sized from ProviderManager's execution
 	// policy. It is shared with isolated extra-model clones.
@@ -1333,6 +1338,12 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.modelRuntime = &defaultModelRuntime{c: c}
 	c.subagentRegistry = newSubagentRegistryFor(c)
 	c.executionRegistry = newExecutionRegistryFor(c)
+	executionPolicy, err := newExecutionPolicyState(c)
+	if err != nil {
+		_ = repo.Close()
+		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
+	}
+	c.executionPolicy = executionPolicy
 	c.experienceProcessor = &defaultExperienceProcessor{c: c}
 
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
@@ -2104,36 +2115,8 @@ func (c *Coordinator) SetModelRuntime(runtime ModelRuntime) {
 // compatibility facade for callers that still resolve providers by name.
 func configuredAgentProvidersFor(c *Coordinator) map[string]SubagentProvider {
 	providers := make(map[string]SubagentProvider)
-	// Codex is a built-in agent backend. A team may specialize its process
-	// settings through the legacy provider map during migration, but selecting
-	// codex/<model> never requires a team-local declaration.
-	codexConfig := agent.SubagentProviderConfig{
-		Type:           codexAppServerProviderType,
-		Command:        []string{"codex", "app-server"},
-		Protocol:       "app-server-v2",
-		ExecutionWorld: "local-sandbox",
-		InheritEnv:     []string{"PATH", "CODEX_HOME"},
-		MaxConcurrent:  codexDefaultMaxConcurrent,
-	}
-	if c != nil && c.session != nil {
-		if configured, ok := c.session.Config.SubagentProviders[codexSubagentProviderName]; ok && configured.Type == codexAppServerProviderType {
-			codexConfig = mergeCodexBackendConfig(codexConfig, configured)
-		}
-		providers[codexSubagentProviderName] = NewCodexSubagentProvider(c, codexSubagentProviderName, codexConfig)
-		for name, cfg := range c.session.Config.SubagentProviders {
-			if name == codexSubagentProviderName {
-				continue
-			}
-			if execution.IsOllamaBackend(name) {
-				continue // reserved built-in LLM backend; preflight rejects this configuration
-			}
-			if cfg.Type != codexAppServerProviderType {
-				continue
-			}
-			providers[name] = NewCodexSubagentProvider(c, name, cfg)
-		}
-	} else {
-		providers[codexSubagentProviderName] = NewCodexSubagentProvider(c, codexSubagentProviderName, codexConfig)
+	for name, cfg := range configuredCodexProviderConfigs(c) {
+		providers[name] = NewCodexSubagentProvider(c, name, cfg)
 	}
 	return providers
 }
@@ -2210,7 +2193,7 @@ func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
 	if registry != nil && c.executionRegistry == nil {
 		canonical := NewExecutionRegistry()
 		if c.providerManager != nil {
-			_ = registerLLMExecutionBackend(canonical, execution.OllamaBackendName, c.providerManager, NewHufuLocalSubagentProvider(c))
+			_ = registerLLMExecutionBackend(canonical, execution.OllamaBackendName, c.providerManager, NewHufuLocalSubagentProvider(c), c.AdmitExecutionPolicy)
 		}
 		for name, provider := range registry.Snapshot() {
 			if name == localSubagentProviderName {
@@ -2236,14 +2219,14 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 	if c.providerManager != nil {
 		runner := NewHufuLocalSubagentProvider(c)
 		registered := map[string]bool{execution.OllamaBackendName: true, execution.LegacyLocalBackendName: true}
-		_ = registerLLMExecutionBackend(registry, execution.OllamaBackendName, c.providerManager, runner)
+		_ = registerLLMExecutionBackend(registry, execution.OllamaBackendName, c.providerManager, runner, c.AdmitExecutionPolicy)
 		if c.session != nil {
 			for name := range c.session.Config.Providers {
 				name = execution.CanonicalTargetBackendName(name)
 				if name == "" || registered[name] {
 					continue // registered once below as the built-in local LLM backend
 				}
-				if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner); registerErr == nil {
+				if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner, c.AdmitExecutionPolicy); registerErr == nil {
 					registered[name] = true
 				}
 			}
@@ -2259,7 +2242,7 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 			if name == "" || registered[name] {
 				continue
 			}
-			if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner); registerErr == nil {
+			if registerErr := registerLLMExecutionBackend(registry, name, c.providerManager, runner, c.AdmitExecutionPolicy); registerErr == nil {
 				registered[name] = true
 			}
 		}
@@ -2274,8 +2257,8 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 	return registry
 }
 
-func registerLLMExecutionBackend(registry *ExecutionRegistry, name string, manager *agent.ProviderManager, runner AttemptRunner) error {
-	backend, err := NewLLMExecutionBackend(name, manager, runner)
+func registerLLMExecutionBackend(registry *ExecutionRegistry, name string, manager *agent.ProviderManager, runner AttemptRunner, admitExecution func() error) error {
+	backend, err := NewLLMExecutionBackend(name, manager, runner, admitExecution)
 	if err != nil {
 		return err
 	}
