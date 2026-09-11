@@ -1,0 +1,46 @@
+{
+  "team": {
+    "name": "delegate",
+    "description": "Demo team that demonstrates multi-level agent delegation — coordinator delegates to planner, who delegates to researcher and writer",
+    "max_rounds": 5,
+    "timeout": 9120,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "tools_allowed": [
+      "bash",
+      "wait_for"
+    ]
+  },
+  "agents": [
+    {
+      "name": "checker",
+      "role": "worker",
+      "tools": "read,bash,grep,find,ls,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "researcher",
+      "role": "worker",
+      "tools": "read,write,bash,grep,find,ls,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "writer",
+      "role": "worker",
+      "tools": "read,write,edit",
+      "max_retries": -1
+    }
+  ]
+}

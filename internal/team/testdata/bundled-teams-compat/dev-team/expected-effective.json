@@ -1,0 +1,58 @@
+{
+  "team": {
+    "name": "dev-team",
+    "description": "A full-stack development team for building features",
+    "max_rounds": 10,
+    "timeout": 3300,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "tools_allowed": [
+      "view",
+      "edit",
+      "write",
+      "bash",
+      "grep",
+      "glob",
+      "ls",
+      "wait_for"
+    ]
+  },
+  "agents": [
+    {
+      "name": "architect",
+      "role": "worker",
+      "tools": "read,write,edit,bash,grep,find,ls,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user,read",
+      "max_retries": -1
+    },
+    {
+      "name": "developer",
+      "role": "worker",
+      "tools": "read,write,edit,bash,grep,find,ls,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user,read",
+      "max_retries": -1
+    },
+    {
+      "name": "reviewer",
+      "role": "worker",
+      "tools": "view,write,edit,bash,grep,glob,ls,wait_for",
+      "max_retries": -1
+    }
+  ]
+}

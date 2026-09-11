@@ -1,0 +1,43 @@
+{
+  "team": {
+    "name": "operator",
+    "description": "Strict plan-execution team — decomposes a user plan into sub-tasks and executes them faithfully without deviation",
+    "max_rounds": 30,
+    "max_steps": 50,
+    "timeout": 1800,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "executor",
+      "role": "worker",
+      "tools": "read,write,edit,bash,grep,glob,ls,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "plan-parser",
+      "role": "worker",
+      "tools": "read",
+      "max_retries": -1
+    },
+    {
+      "name": "verifier",
+      "role": "worker",
+      "tools": "read,bash,grep,glob,ls,wait_for",
+      "max_retries": -1
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "team": {
+    "name": "hufu-dev",
+    "description": "Hufu-specific development team with domain analysis, single-writer implementation, and independent verification",
+    "max_rounds": 14,
+    "max_steps": 100,
+    "timeout": 3300,
+    "verify_timeout": 120,
+    "max_retries": 1,
+    "max_concurrent": 2,
+    "acceptance": "go test ./...",
+    "acceptance_spec": {
+      "commands": [
+        "go test ./...",
+        "go vet ./...",
+        "golangci-lint run"
+      ],
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking"
+    },
+    "goal_mode": "outcome",
+    "delegation": {
+      "AllowedWorkers": [
+        "runtime-engineer",
+        "integration-engineer",
+        "implementation-engineer",
+        "verifier"
+      ],
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": false,
+      "NoRedispatchAfterSuccess": [
+        "runtime-engineer",
+        "integration-engineer",
+        "implementation-engineer",
+        "verifier"
+      ],
+      "ForbidContextFiles": false,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null
+    }
+  },
+  "agents": [
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "implementation-engineer",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,bash,grep,glob,ls,lua,wait_for",
+      "side_effect": "workspace_write",
+      "recovery": "manual",
+      "max_retries": -1
+    },
+    {
+      "name": "integration-engineer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls,bash,wait_for",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1,
+      "max_steps": 48
+    },
+    {
+      "name": "maintainer",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "runtime-engineer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls,bash,wait_for",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1,
+      "max_steps": 48
+    },
+    {
+      "name": "verifier",
+      "role": "worker",
+      "tools": "view,bash,grep,glob,ls,wait_for",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    }
+  ]
+}

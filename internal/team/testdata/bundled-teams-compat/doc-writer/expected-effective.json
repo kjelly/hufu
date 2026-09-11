@@ -1,0 +1,36 @@
+{
+  "team": {
+    "name": "doc-writer",
+    "description": "Starter team for user-facing documentation: README, API reference, and CHANGELOG entries.",
+    "max_rounds": 5,
+    "timeout": 1800,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "doc-reviewer",
+      "role": "worker",
+      "tools": "view,bash,grep,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "doc-writer",
+      "role": "worker",
+      "tools": "view,write,edit,bash,grep,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    }
+  ]
+}

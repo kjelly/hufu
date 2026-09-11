@@ -1,0 +1,42 @@
+{
+  "team": {
+    "name": "security-audit",
+    "description": "Starter team for security review: dependency vulnerabilities, secret leaks, and unsafe code patterns.",
+    "max_rounds": 5,
+    "timeout": 1800,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "code-reviewer",
+      "role": "worker",
+      "tools": "view,bash,grep,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "dep-scanner",
+      "role": "worker",
+      "tools": "view,bash,grep,glob,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "secret-scanner",
+      "role": "worker",
+      "tools": "view,bash,grep,glob,wait_for",
+      "max_retries": -1
+    }
+  ]
+}

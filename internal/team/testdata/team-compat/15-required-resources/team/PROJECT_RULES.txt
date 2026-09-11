@@ -1,0 +1,6 @@
+# Project rules
+
+Fixture content for the required-resources compat-snapshot test. Not read by
+`TestTeamCompatFixtures` itself (that only exercises `LoadTeam`'s declaration
+validation, not `ResolveRequiredResource`'s file read), but kept realistic so
+this fixture can double as an input for later resolve/lock tests.

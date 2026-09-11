@@ -1,0 +1,84 @@
+{
+  "team": {
+    "name": "strategic-decision",
+    "description": "Evidence-first decision team with outside view, isolated judgments, deterministic aggregation, premortem, no-go alternatives, and explicit dissent. Adapted from spec.md against Hufu's actual decision-aware runtime schema (internal/agent/decision_config.go, internal/team/parse.go) — see README.md in this directory for every point where spec.md's proposed team.yaml did not match the real, strict (KnownFields) parser and had to be corrected.\n",
+    "max_rounds": 10,
+    "max_steps": 20,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "max_concurrent": 5,
+    "max_wall_clock": 3600,
+    "max_total_tokens": 200000,
+    "tools_allowed": [
+      "view",
+      "grep",
+      "glob",
+      "ls"
+    ],
+    "delegation": {
+      "AllowedWorkers": [
+        "reference",
+        "reference-specialist",
+        "juror",
+        "challenger"
+      ],
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": false,
+      "NoRedispatchAfterSuccess": null,
+      "ForbidContextFiles": false,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null
+    }
+  },
+  "agents": [
+    {
+      "name": "challenger",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "juror",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "max_retries": -1
+    },
+    {
+      "name": "README",
+      "role": "worker",
+      "max_retries": -1
+    },
+    {
+      "name": "reference",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "max_retries": -1
+    },
+    {
+      "name": "reference-specialist",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "max_retries": -1
+    }
+  ]
+}

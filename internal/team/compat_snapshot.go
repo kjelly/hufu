@@ -27,36 +27,37 @@ type CompatSnapshot struct {
 
 // TeamSnapshot captures the resolved team-level configuration.
 type TeamSnapshot struct {
-	Name                     string                   `json:"name"`
-	Description              string                   `json:"description,omitempty"`
-	MaxRounds                int                      `json:"max_rounds"`
-	MinimumCoordinatorRounds int                      `json:"minimum_coordinator_rounds,omitempty"`
-	MaxSteps                 int                      `json:"max_steps,omitempty"`
-	Timeout                  int64                    `json:"timeout"`
-	VerifyTimeout            int64                    `json:"verify_timeout"`
-	MaxRetries               int                      `json:"max_retries"`
-	MaxConcurrent            int                      `json:"max_concurrent,omitempty"`
-	AutoReport               bool                     `json:"auto_report,omitempty"`
-	AllowFreeTextResults     bool                     `json:"allow_free_text_results,omitempty"`
-	NoNet                    bool                     `json:"no_net,omitempty"`
-	ForceMCP                 bool                     `json:"force_mcp,omitempty"`
-	Unattended               bool                     `json:"unattended,omitempty"`
-	AutoApprove              bool                     `json:"auto_approve,omitempty"`
-	MaxWallClock             int64                    `json:"max_wall_clock,omitempty"`
-	MaxTotalTokens           int64                    `json:"max_total_tokens,omitempty"`
-	Acceptance               string                   `json:"acceptance,omitempty"`
-	AcceptanceSpec           *agent.AcceptanceSpec    `json:"acceptance_spec,omitempty"`
-	Rollback                 string                   `json:"rollback,omitempty"`
-	ExecutionProfile         string                   `json:"execution_profile,omitempty"`
-	GoalMode                 string                   `json:"goal_mode,omitempty"`
-	ToolsAllowed             []string                 `json:"tools_allowed,omitempty"`
-	ToolsDenied              []string                 `json:"tools_denied,omitempty"`
-	Workflow                 agent.WorkflowConfig     `json:"workflow,omitzero"`
-	Policies                 agent.WorkflowPolicies   `json:"policies,omitzero"`
-	Capabilities             agent.CapabilityConfig   `json:"capabilities,omitzero"`
-	Verification             agent.VerificationConfig `json:"verification,omitzero"`
-	Retry                    agent.RetryConfig        `json:"retry,omitzero"`
-	Delegation               agent.DelegationPolicy   `json:"delegation,omitzero"`
+	Name                     string                       `json:"name"`
+	Description              string                       `json:"description,omitempty"`
+	MaxRounds                int                          `json:"max_rounds"`
+	MinimumCoordinatorRounds int                          `json:"minimum_coordinator_rounds,omitempty"`
+	MaxSteps                 int                          `json:"max_steps,omitempty"`
+	Timeout                  int64                        `json:"timeout"`
+	VerifyTimeout            int64                        `json:"verify_timeout"`
+	MaxRetries               int                          `json:"max_retries"`
+	MaxConcurrent            int                          `json:"max_concurrent,omitempty"`
+	AutoReport               bool                         `json:"auto_report,omitempty"`
+	AllowFreeTextResults     bool                         `json:"allow_free_text_results,omitempty"`
+	NoNet                    bool                         `json:"no_net,omitempty"`
+	ForceMCP                 bool                         `json:"force_mcp,omitempty"`
+	Unattended               bool                         `json:"unattended,omitempty"`
+	AutoApprove              bool                         `json:"auto_approve,omitempty"`
+	MaxWallClock             int64                        `json:"max_wall_clock,omitempty"`
+	MaxTotalTokens           int64                        `json:"max_total_tokens,omitempty"`
+	Acceptance               string                       `json:"acceptance,omitempty"`
+	AcceptanceSpec           *agent.AcceptanceSpec        `json:"acceptance_spec,omitempty"`
+	Rollback                 string                       `json:"rollback,omitempty"`
+	ExecutionProfile         string                       `json:"execution_profile,omitempty"`
+	GoalMode                 string                       `json:"goal_mode,omitempty"`
+	ToolsAllowed             []string                     `json:"tools_allowed,omitempty"`
+	ToolsDenied              []string                     `json:"tools_denied,omitempty"`
+	Workflow                 agent.WorkflowConfig         `json:"workflow,omitzero"`
+	Policies                 agent.WorkflowPolicies       `json:"policies,omitzero"`
+	Capabilities             agent.CapabilityConfig       `json:"capabilities,omitzero"`
+	Verification             agent.VerificationConfig     `json:"verification,omitzero"`
+	Retry                    agent.RetryConfig            `json:"retry,omitzero"`
+	Delegation               agent.DelegationPolicy       `json:"delegation,omitzero"`
+	RequiredResources        []agent.RequiredResourceSpec `json:"required_resources,omitempty"`
 }
 
 // AgentSnapshot captures one agent's resolved (post-inference, post-expansion)
@@ -130,6 +131,7 @@ func BuildCompatSnapshot(session *TeamSession) (*CompatSnapshot, error) {
 			Verification:             cfg.Verification,
 			Retry:                    cfg.Retry,
 			Delegation:               cfg.Delegation,
+			RequiredResources:        append([]agent.RequiredResourceSpec(nil), cfg.RequiredResources...),
 		},
 	}
 

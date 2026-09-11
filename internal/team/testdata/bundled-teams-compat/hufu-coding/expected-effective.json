@@ -1,0 +1,129 @@
+{
+  "team": {
+    "name": "hufu-coding",
+    "description": "Hufu-owned SA -\u003e Codex coder -\u003e verify -\u003e review -\u003e final-SA coding workflow",
+    "max_rounds": 64,
+    "max_steps": 96,
+    "timeout": 3600,
+    "verify_timeout": 1800,
+    "max_retries": 2,
+    "max_concurrent": 1,
+    "unattended": true,
+    "max_wall_clock": 21600,
+    "acceptance_spec": {
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking"
+    },
+    "execution_profile": "fresh-session",
+    "goal_mode": "outcome",
+    "delegation": {
+      "AllowedWorkers": [
+        "sa",
+        "coder",
+        "verifier",
+        "reviewer",
+        "final-sa"
+      ],
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": [
+        "sa"
+      ],
+      "ForbidContextFiles": false,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null
+    }
+  },
+  "agents": [
+    {
+      "name": "coder",
+      "role": "worker",
+      "side_effect": "workspace_write",
+      "recovery": "retry",
+      "max_retries": 2
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user,view",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1,
+      "max_steps": 80
+    },
+    {
+      "name": "final-sa",
+      "role": "worker",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 2
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "README",
+      "role": "worker",
+      "max_retries": -1
+    },
+    {
+      "name": "reviewer",
+      "role": "worker",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 4
+    },
+    {
+      "name": "sa",
+      "role": "worker",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 2
+    },
+    {
+      "name": "verifier",
+      "role": "worker",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 4
+    }
+  ],
+  "tasks": [
+    {
+      "agent": "sa",
+      "when_goal_contains": "SA_ANALYZE",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "agent": "coder",
+      "when_goal_contains": "CODER_IMPLEMENT",
+      "side_effect": "workspace_write",
+      "recovery": "retry"
+    },
+    {
+      "agent": "verifier",
+      "when_goal_contains": "VERIFY_IMPLEMENTATION",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "agent": "reviewer",
+      "when_goal_contains": "REVIEW_CODE",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "agent": "final-sa",
+      "when_goal_contains": "FINAL_SA_GATE",
+      "side_effect": "none",
+      "recovery": "retry"
+    }
+  ]
+}

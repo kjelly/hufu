@@ -1,0 +1,48 @@
+{
+  "team": {
+    "name": "tether",
+    "description": "Team dedicated to exploring and learning from open-source codebases with strict peer-review auditing to prevent AI hallucinations.",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2
+  },
+  "agents": [
+    {
+      "name": "architecture-mapper",
+      "role": "worker",
+      "tools": "read,bash,grep,glob,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "fact-auditor",
+      "role": "worker",
+      "tools": "read,bash,grep,glob,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "knowledge-extractor",
+      "role": "worker",
+      "tools": "read,write,bash,grep,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "logic-analyzer",
+      "role": "worker",
+      "tools": "read,bash,grep,wait_for",
+      "max_retries": -1
+    },
+    {
+      "name": "study-coordinator",
+      "role": "coordinator",
+      "tools": "read,write",
+      "max_retries": -1
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "team": {
+    "name": "required-resources-fixture",
+    "description": "Team with a declared required-resources lock",
+    "max_rounds": 10,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 2,
+    "required_resources": [
+      {
+        "name": "project-rules",
+        "kind": "project_rules",
+        "path": "PROJECT_RULES.txt",
+        "inject_into": [
+          "developer"
+        ],
+        "required": true
+      }
+    ]
+  },
+  "agents": [
+    {
+      "name": "developer",
+      "role": "worker",
+      "tools": "view,edit,write,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    }
+  ]
+}

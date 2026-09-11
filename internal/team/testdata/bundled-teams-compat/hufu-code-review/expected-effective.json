@@ -1,0 +1,136 @@
+{
+  "team": {
+    "name": "hufu-code-review",
+    "description": "Read-only, artifact-backed review of the Hufu Go codebase",
+    "max_rounds": 64,
+    "max_steps": 80,
+    "timeout": 3600,
+    "verify_timeout": 120,
+    "max_retries": 1,
+    "max_concurrent": 1,
+    "no_net": true,
+    "unattended": true,
+    "max_wall_clock": 86400,
+    "acceptance_spec": {
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking",
+      "verifications": [
+        {
+          "type": "workset_complete",
+          "source_task": "review-workset",
+          "require_all_terminal": true,
+          "require_all_verified": true,
+          "accepted_statuses": [
+            "success",
+            "completed_with_gaps"
+          ]
+        }
+      ]
+    },
+    "execution_profile": "fresh-session",
+    "goal_mode": "outcome",
+    "workflow": {
+      "phases": [
+        "prepare",
+        "verify"
+      ]
+    },
+    "policies": {
+      "require_phase_success": true,
+      "allow_phase_skip": true,
+      "fail_fast": true
+    },
+    "capabilities": {
+      "required": [
+        "produce-workset"
+      ]
+    },
+    "verification": {
+      "required": true
+    },
+    "retry": {
+      "transient": {
+        "max_attempts": 1
+      },
+      "repair": {
+        "max_attempts_per_failure_signature": 1
+      }
+    },
+    "delegation": {
+      "AllowedWorkers": [
+        "reviewer",
+        "critic"
+      ],
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": [
+        "reviewer",
+        "critic"
+      ],
+      "ForbidContextFiles": false,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null
+    }
+  },
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user,view",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1,
+      "max_steps": 80
+    },
+    {
+      "name": "critic",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 1,
+      "max_steps": 20
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "reviewer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 1,
+      "max_steps": 64
+    }
+  ],
+  "tasks": [
+    {
+      "id": "produce-workset",
+      "agent": "reviewer",
+      "phase": "PREPARE",
+      "when_goal_contains": "produce workset",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "review-workset",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "when_goal_contains": "review workset"
+    },
+    {
+      "id": "critic-review",
+      "agent": "critic",
+      "phase": "VERIFY",
+      "when_goal_contains": "critic review",
+      "optional": true
+    }
+  ]
+}

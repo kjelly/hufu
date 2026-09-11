@@ -1,0 +1,9 @@
+name: required-resources-fixture
+description: Team with a declared required-resources lock
+required-resources:
+  - name: project-rules
+    kind: project_rules
+    path: PROJECT_RULES.txt
+    inject-into:
+      - developer
+    required: true
