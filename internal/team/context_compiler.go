@@ -89,6 +89,13 @@ type CoordinatorContextInput struct {
 	DisableMemory    bool
 	ProjectContext   string
 	CanonicalMemory  *CanonicalContextBundle
+	// LockedResourceItems are pre-built ContextItems for required resources
+	// declared under team.yaml's required-resources with "coordinator" in
+	// their inject-into list (spec.md "Generic Required Resource Lock").
+	// defaultContextCompiler.CompileCoordinatorContext (services.go)
+	// populates this via LockedResourceContextItems before forwarding here;
+	// nil for teams that declare none.
+	LockedResourceItems []ContextItem
 }
 
 type WorkerContextInput struct {
@@ -116,6 +123,14 @@ type WorkerContextInput struct {
 	DisableMemory        bool
 	WorkerMemory         *WorkerMemoryBundle
 	CanonicalMemory      *CanonicalContextBundle
+	// LockedResourceItems are pre-built ContextItems for required resources
+	// declared under team.yaml's required-resources whose inject-into list
+	// names this worker (spec.md "Generic Required Resource Lock").
+	// defaultContextCompiler.CompileWorkerContext (services.go) populates
+	// this via LockedResourceContextItems before forwarding here; nil for
+	// teams that declare none, or when no agent identity is available to
+	// match against (e.g. an isolated auxiliary/sidecar prompt).
+	LockedResourceItems []ContextItem
 }
 
 // CanonicalContextBundle is the compiler's authorized historical-memory
@@ -720,6 +735,8 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
+	items = append(items, input.LockedResourceItems...)
+
 	assignTokenCounts(input.ModelContext, items)
 	compiled, err := compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
 	if err != nil {
@@ -751,6 +768,7 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 		items = append(items, ContextItem{ID: "retry_failure_context", Kind: "failure_context", Content: input.FailureContext, Priority: PriorityAgentCoreInstructions, Required: true, DedupKey: hashContentKey(input.FailureContext), Authority: ContextAuthorityNormative, ConflictKey: "retry_failure_context"})
 	}
 	items = append(items, input.SkillContext...)
+	items = append(items, input.LockedResourceItems...)
 	if strings.TrimSpace(input.VerificationCriteria) != "" {
 		items = append(items, ContextItem{ID: "verification_criteria", Kind: "verification_criteria", Content: "## Verification Criteria\n\n" + input.VerificationCriteria, Priority: PriorityVerificationCriteria, Required: true, DedupKey: hashContentKey(input.VerificationCriteria), Authority: ContextAuthorityNormative, ConflictKey: "verification_criteria"})
 	}

@@ -2,6 +2,7 @@ package team
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -45,9 +46,16 @@ func LockedResourceContextItems(loaded []*LoadedResource, forAgent string) []Con
 	return items
 }
 
+// sliceContainsString matches case-insensitively and trims whitespace,
+// following the same normalization every other agent-name list in this
+// codebase already applies at its comparison site (e.g.
+// DelegationPolicy.AllowedWorkers in coordinator_agents.go, TaskGoalInvariants
+// in delegation_policy.go) — so `inject-into: [Coordinator]` and
+// `inject-into: [coordinator]` behave identically.
 func sliceContainsString(list []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
 	for _, v := range list {
-		if v == want {
+		if strings.ToLower(strings.TrimSpace(v)) == want {
 			return true
 		}
 	}
@@ -55,11 +63,10 @@ func sliceContainsString(list []string, want string) bool {
 }
 
 // InjectLockedRequiredResources appends every locked resource injectable
-// into forAgent to items. It is the join point a future context-assembly
-// call site (CompileCoordinatorContext / CompileWorkerContext) wires in;
-// nothing calls it yet — which call sites need it, and in what order
-// relative to other context sources, is left as a follow-up decision
-// (spec.md §10) rather than guessed at here.
+// into forAgent to items. defaultContextCompiler (services.go) calls this
+// with a nil items slice to populate CoordinatorContextInput/WorkerContextInput's
+// LockedResourceItems field before CompileCoordinatorContext/CompileWorkerContext
+// (context_compiler.go) merge it into the compiled prompt.
 func (c *Coordinator) InjectLockedRequiredResources(items []ContextItem, forAgent string) []ContextItem {
 	if c == nil {
 		return items

@@ -507,11 +507,33 @@ func (cc *defaultContextCompiler) FormatDependencyResults(dependencies []TaskRes
 	return FormatDependencyResults(dependencies)
 }
 
+// coordinatorAgentIdentity is the fixed literal every existing convention in
+// this codebase already uses when runtime-owned data needs to label the
+// coordinator itself (e.g. ContextRequest{AgentName: "coordinator", ...} in
+// context_request_runtime.go, c.recordShadowTrace(ctx, "coordinator", ...)
+// in coordinator_run.go) — and what spec.md's own `inject-into: [coordinator, ...]`
+// example assumes. There is no struct field identifying "this call is for
+// the coordinator" because CompileCoordinatorContext is only ever called
+// for the coordinator, so hardcoding it here is correct, not a guess.
+const coordinatorAgentIdentity = "coordinator"
+
 func (cc *defaultContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	if cc.c != nil {
+		input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, coordinatorAgentIdentity)
+	}
 	return CompileCoordinatorContext(ctx, input)
 }
 
 func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	if cc.c != nil {
+		forAgent := input.TaskDef.Agent
+		if input.AgentDef != nil && input.AgentDef.Name != "" {
+			forAgent = input.AgentDef.Name
+		}
+		if forAgent != "" {
+			input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, forAgent)
+		}
+	}
 	return CompileWorkerContext(ctx, input)
 }
 
