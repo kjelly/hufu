@@ -139,7 +139,7 @@ func (e *decisionEngine) runFinalization(
 }
 
 // Post-aggregate decision stages
-// (docs/hufu-decision-aware-runtime-spec.md §22-§26).
+// (docs/architecture/decision-runtime.md §22-§26).
 //
 // These run in a fixed order: premortem before the evidence is sealed,
 // challenge only after deterministic aggregation, and at most one independent

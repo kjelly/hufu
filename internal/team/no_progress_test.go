@@ -16,7 +16,7 @@ import (
 
 // TestDecideNoProgress_TableDriven drives the pure enforcement function
 // across the §8.1 disposition ladder. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestDecideNoProgress_TableDriven(t *testing.T) {
 	limits := NoProgressLimits{MaxTokens: 1000, MaxTurns: 4, MaxTasks: 3}
 
@@ -122,7 +122,7 @@ func TestDecideNoProgress_TableDriven(t *testing.T) {
 
 // TestDecideNoProgress_DisabledCounterIgnored asserts that a 0 limit
 // disables that one counter (the YAML `0` override) while the other two
-// remain enforced. Refs: docs/hufu-generic-task-reliability-mechanisms.md
+// remain enforced. Refs: docs/archive/implementation-plans/generic-task-reliability.md
 // §8.1, WP-12
 func TestDecideNoProgress_DisabledCounterIgnored(t *testing.T) {
 	// MaxTokens disabled (0), turns and tasks enforced.
@@ -158,7 +158,7 @@ func TestDecideNoProgress_DisabledCounterIgnored(t *testing.T) {
 // counters return to 0 after resetAfterCriterionProgress is driven by an
 // advancing criterion, and stay non-zero after a done-only task completion
 // (task done does NOT reset the counters). Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressCounters_ResetOnlyByCriterionProgress(t *testing.T) {
 	c := newNoProgressTestCoordinator(t)
 
@@ -207,7 +207,7 @@ func TestNoProgressCounters_ResetOnlyByCriterionProgress(t *testing.T) {
 
 // TestDefaultReliabilityConfig_NoProgressLimitsPopulated asserts
 // DefaultReliabilityConfig() populates all three no-progress limits with
-// non-zero values. Refs: docs/hufu-generic-task-reliability-mechanisms.md
+// non-zero values. Refs: docs/archive/implementation-plans/generic-task-reliability.md
 // §8.1, WP-12
 func TestDefaultReliabilityConfig_NoProgressLimitsPopulated(t *testing.T) {
 	def := agent.DefaultReliabilityConfig()
@@ -225,7 +225,7 @@ func TestDefaultReliabilityConfig_NoProgressLimitsPopulated(t *testing.T) {
 // TestNoProgressYAML_ExplicitZeroDisablesOneCounter asserts a team YAML with
 // explicit max-tokens-without-progress: 0 disables that one counter while the
 // other two remain enforced. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_ExplicitZeroDisablesOneCounter(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: no-progress-zero\nacceptance: 'true'\nreliability:\n  max-tokens-without-progress: 0\n"
@@ -265,7 +265,7 @@ func TestNoProgressYAML_ExplicitZeroDisablesOneCounter(t *testing.T) {
 
 // TestNoProgressYAML_ExplicitValuesOverrideDefaults asserts explicit non-zero
 // values override the defaults, and unset restores the default. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_ExplicitValuesOverrideDefaults(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: no-progress-override\nacceptance: 'true'\nreliability:\n  max-turns-without-progress: 2\n  max-tasks-without-progress: 5\n"
@@ -294,7 +294,7 @@ func TestNoProgressYAML_ExplicitValuesOverrideDefaults(t *testing.T) {
 
 // TestNoProgressYAML_UnsetRestoresDefaults asserts that a team YAML with no
 // no-progress fields receives all three defaults. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_UnsetRestoresDefaults(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: no-progress-unset\nacceptance: 'true'\n"

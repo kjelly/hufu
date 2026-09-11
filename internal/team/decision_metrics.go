@@ -7,7 +7,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Decision observability (docs/hufu-decision-aware-runtime-spec.md §40).
+// Decision observability (docs/architecture/decision-runtime.md §40).
 //
 // Every counter here is a projection over state the runtime already persisted:
 // the append-only event log and the cross-run index. Nothing is counted twice

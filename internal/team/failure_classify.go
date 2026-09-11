@@ -12,7 +12,7 @@ import (
 // task failure. Structured inputs take precedence over text matching, which
 // is retained only as a fallback for errors that carry no structured metadata.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, WP-05
 type FailureClassificationInput struct {
 	// Err is the failure error. When nil, the class defaults to
 	// FailureExecution (a nil error reaching the classifier is itself a bug,
@@ -92,7 +92,7 @@ const (
 // the context error and the interactive-abort flag and never fall through to
 // the text-matching path.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, WP-05
 func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureClass {
 	// §5.3: cancelled must be detected and separated from execution before
 	// any text matching, and must never be counted as a retry/fingerprint.
@@ -227,7 +227,7 @@ func classFromFailureDetailSource(err error) (TaskFailureClass, bool) {
 // the fallback path for errors that carry no structured metadata. It must not
 // classify cancellations (those are intercepted before this path).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-02, WP-05
 func classifyTaskFailureByText(err error) TaskFailureClass {
 	if err == nil {
 		return FailureExecution
@@ -239,7 +239,7 @@ func classifyTaskFailureByText(err error) TaskFailureClass {
 	// Structured failure detail begins with `source=<label>` (FailureDetail).
 	// Recognize the contract source so preflight failures are recorded with
 	// the contract class rather than falling through to execution.
-	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02
+	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-02
 	if strings.HasPrefix(msg, "source=contract") || strings.Contains(msg, "| source=contract") {
 		return FailureContract
 	}
@@ -266,7 +266,7 @@ func classifyTaskFailureByText(err error) TaskFailureClass {
 // structured inputs available. New call sites should build a
 // FailureClassificationInput and call ClassifyTaskFailureStructured directly.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-05
 func classifyTaskFailure(err error) TaskFailureClass {
 	return ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
 }

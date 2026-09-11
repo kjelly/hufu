@@ -13,7 +13,7 @@ import (
 // FailureExecution), satisfying the WP-02 requirement that error findings be
 // recorded with the contract class before dispatch (reviewer P1).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-02
 func TestClassifyTaskFailure_ContractClass(t *testing.T) {
 	tests := []struct {
 		name string
@@ -62,7 +62,7 @@ func TestClassifyTaskFailure_ContractClass(t *testing.T) {
 // contract class (reviewer P1). It uses a real EventStore to capture the
 // failure_fingerprint event and inspects the recorded class.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §9, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §9, WP-02
 func TestRecordContractFailure_PersistsContractClass(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -140,7 +140,7 @@ func TestRecordContractFailure_PersistsContractClass(t *testing.T) {
 // the preflight and executeTask run, and ensures the warn-mode task reaches
 // executeTask before any warning is emitted (reviewer P2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCoordinatorExecuteTasks_WarnModeEmitsNoWarningAtPreflight(t *testing.T) {
 	var warnCount int
 	c := &Coordinator{}
@@ -182,7 +182,7 @@ func TestCoordinatorExecuteTasks_WarnModeEmitsNoWarningAtPreflight(t *testing.T)
 // contract_warning emitter: it emits exactly one event for a warn-mode finding
 // and deduplicates on repeated calls for the same todoID (reviewer P2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestValidateContractStructural_EmitsSingleWarning(t *testing.T) {
 	var warnCount int
 	c := &Coordinator{}
@@ -233,7 +233,7 @@ func TestValidateContractStructural_EmitsSingleWarning(t *testing.T) {
 // TestValidateContractStructural_BlocksOnError verifies the structural check
 // still blocks error-severity findings (defense-in-depth on the execution path).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestValidateContractStructural_BlocksOnError(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	c.session = &TeamSession{

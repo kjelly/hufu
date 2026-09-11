@@ -9,7 +9,7 @@ import (
 )
 
 // ProviderBinding is the durable provider/session identity for one task
-// occurrence (docs/hufu-external-coding-agent-runtime-spec.md §7.1). It MUST
+// occurrence (docs/architecture/execution-runtime.md). It MUST
 // NOT contain credentials or secrets. Provider is immutable once set;
 // SessionID/TurnID/EffectiveModel MAY transition from empty to populated as
 // a later external-provider phase establishes a persistent session — no

@@ -16,7 +16,7 @@ import (
 )
 
 // The cross-run decision index
-// (docs/hufu-decision-aware-runtime-spec.md §49.2 entry condition).
+// (docs/architecture/decision-runtime.md §49.2 entry condition).
 //
 // A decision's own record lives in the run that formed it, and its events live
 // in that run's event log. Neither is reachable once the process exits, which

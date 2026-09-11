@@ -11,7 +11,7 @@ import (
 )
 
 // Production stage runners for the decision engine
-// (docs/hufu-decision-aware-runtime-spec.md Phase 3.5).
+// (docs/architecture/decision-runtime.md Phase 3.5).
 //
 // Every decision stage runs on the judge sidecar. That choice does real work:
 // the sidecar has no tool surface, so "decision workers are read-only by

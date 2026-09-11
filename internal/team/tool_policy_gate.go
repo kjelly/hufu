@@ -326,7 +326,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	}
 	call.Input = effectiveInput
 
-	// Execution discipline (docs/hufu-decision-aware-runtime-spec.md §29-§32).
+	// Execution discipline (docs/architecture/decision-runtime.md §29-§32).
 	// Both checks are no-ops unless the task armed a discipline, which only
 	// happens under a decision profile, so every other task is unaffected.
 	disciplineTodoID, _ := ctx.Value(todoIDKey{}).(string)

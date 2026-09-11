@@ -8,7 +8,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// First-round context isolation (docs/hufu-decision-aware-runtime-spec.md §16).
+// First-round context isolation (docs/architecture/decision-runtime.md §16).
 //
 // Independence is enforced structurally: a judge's context is built only from
 // the sealed packet and its own role, so there is no code path by which another

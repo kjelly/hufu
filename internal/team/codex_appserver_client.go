@@ -11,7 +11,7 @@ import (
 )
 
 // This file implements a generic JSON-RPC 2.0 client over stdio
-// (docs/hufu-external-coding-agent-runtime-spec.md §12, PR-08). It knows
+// (docs/architecture/execution-runtime.md). It knows
 // nothing about Codex-specific methods — codex_appserver_protocol.go builds
 // the typed thread/turn vocabulary on top of it.
 //

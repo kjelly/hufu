@@ -4,7 +4,7 @@ package team
 // failed task attempt. It is the single decision point that determines
 // whether the retry loop retries, stops, or blocks for reconciliation.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07
 type RetryDisposition string
 
 const (
@@ -42,7 +42,7 @@ const (
 // PreviousFingerprint) are read by DecideRecovery and influence the
 // disposition.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-07, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07, WP-08
 type RecoveryDecisionInput struct {
 	// FailureClass is the structured classification of the current attempt's
 	// failure (§5).
@@ -160,7 +160,7 @@ func retrySuppressionReason(in RecoveryDecisionInput, disposition RetryDispositi
 // RecoveryPolicy and EvidenceComplete gate RetryWorker to ensure profile
 // policies are not bypassed (§6.1).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.3, §6.1, WP-07, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, §6.1, WP-07, WP-08
 func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 	// §5.3: cancellation is never a worker failure. Whether it originated
 	// from SIGINT, a parent deadline/budget, or a child that observed its

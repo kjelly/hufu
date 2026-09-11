@@ -10,7 +10,7 @@ import (
 )
 
 // Evidence provenance and independence grouping
-// (docs/hufu-decision-aware-runtime-spec.md §28).
+// (docs/architecture/decision-runtime.md §28).
 //
 // V1 is deliberately advisory. The runtime groups only what it can derive
 // itself — identical content, a shared registrable domain, and parent links a

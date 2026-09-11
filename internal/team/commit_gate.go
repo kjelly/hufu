@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// The commit gate (docs/hufu-decision-aware-runtime-spec.md §30).
+// The commit gate (docs/architecture/decision-runtime.md §30).
 //
 // A decision does not imply permission to execute. For a task that can change
 // state, the runtime checks the commit prerequisites before the tool process

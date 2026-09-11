@@ -16,7 +16,7 @@ import (
 
 // WorkerResultProposal is the untrusted, schema-limited final response an
 // external SubagentProvider (Codex) returns for one attempt
-// (docs/hufu-external-coding-agent-runtime-spec.md §9.1). It has no field for
+// (docs/architecture/execution-runtime.md). It has no field for
 // TaskID/RunID/Attempt/Agent/Provider/hashes/receipt IDs/verification: a
 // provider cannot populate trusted TaskResult state, only propose one.
 //
@@ -107,7 +107,7 @@ const ExternalProviderProposalSource = "external_provider_proposal"
 
 // ExternalResultCanonicalizer turns an external provider's untrusted
 // AttemptResult into a Hufu-owned canonical TaskResult
-// (docs/hufu-external-coding-agent-runtime-spec.md §9.3, §19).
+// (docs/architecture/execution-runtime.md).
 //
 // The workspaceRoot parameter is not in the specification's original
 // signature. It exists because distinguishing "proposed file was not part of

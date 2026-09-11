@@ -11,7 +11,7 @@ import (
 // isolated coordinator (extra-models) does not re-emit contract_warning
 // events for the same todoID that the parent already emitted (reviewer P2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCloneCoordinator_SharesContractWarningDedup(t *testing.T) {
 	var warnCount int
 	c := &Coordinator{taskTracker: NewTaskTracker()}
@@ -72,7 +72,7 @@ func TestCloneCoordinator_SharesContractWarningDedup(t *testing.T) {
 // the parent has a nil contractWarnings (e.g., never emitted), cloneCoordinator
 // initializes a shared set and both parent and clone use it.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCloneCoordinator_NilContractWarningsInitializesShared(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	c.session = &TeamSession{
@@ -109,7 +109,7 @@ func TestCloneCoordinator_NilContractWarningsInitializesShared(t *testing.T) {
 // This test drives cloneCoordinator + emitContractWarnings directly to model
 // the exact sequence without requiring a real provider/agent.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestExecuteSingleAgentWithModel_NoDuplicateWarning(t *testing.T) {
 	var warnCount int
 	c := &Coordinator{taskTracker: NewTaskTracker()}

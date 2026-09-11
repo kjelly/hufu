@@ -75,7 +75,7 @@ type TaskOccurrenceProjection struct {
 	DecisionProvenance  []EvidenceProvenance
 
 	// SubagentProvider is part of the immutable admission-time contract
-	// (docs/hufu-external-coding-agent-runtime-spec.md §7.3). ProviderBinding
+	// (docs/architecture/execution-runtime.md). ProviderBinding
 	// is deliberately absent here: it carries mutable runtime session state,
 	// analogous to why ExecutionReceipt/VerifyResult are also absent.
 	SubagentProvider string

@@ -10,7 +10,7 @@ import (
 )
 
 // The deferred phases must not start before their entry gates
-// (docs/hufu-decision-aware-runtime-spec.md §49; plan Stages 8 and 9).
+// (docs/architecture/decision-runtime.md §49; plan Stages 8 and 9).
 //
 // Phase 5 is still fully deferred: it has no sample large enough for a Brier
 // score to mean anything. Phase 4 (capability-aware routing) opened a scoped

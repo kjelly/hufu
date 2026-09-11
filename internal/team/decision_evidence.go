@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Sealed decision evidence (docs/hufu-decision-aware-runtime-spec.md §15).
+// Sealed decision evidence (docs/architecture/decision-runtime.md §15).
 //
 // The packet is the first critical runtime primitive: every first-round judge
 // must see the same evidence, and "the same" has to mean something byte-exact.

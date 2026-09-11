@@ -17,7 +17,7 @@ import (
 )
 
 // hufu decision — the cross-run entry point for decisions
-// (docs/hufu-decision-aware-runtime-spec.md §49.2).
+// (docs/architecture/decision-runtime.md §49.2).
 //
 // A decision's record and events live in the run that formed it, and that run
 // exits. These commands exist so a decision can still be found, read and

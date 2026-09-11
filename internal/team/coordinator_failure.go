@@ -303,7 +303,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 	// from the immutable verify/reconcile/kind config) instead of
 	// failureOperation. The full failureOperation is still available in
 	// the task/run fingerprints for non-systemic anti-thrashing. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	fp := NewFailureFingerprint(criterion, agentName, stableOperation(item), class, failureDetailWithoutCoordinatorFields(detail))
 	strategy := RecoveryStrategy("")
 	// §5.3: cancelled failures must not be counted in retry, failure-class
@@ -311,7 +311,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 	// recording and anti-thrashing state mutation; the task status update
 	// and workspace error file below still run so the todo list and
 	// forensics reflect the cancellation.
-	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 	cancelled := IsCancelledClass(class)
 	var repeated, limited, systemic bool
 	var hypothesisInvalid bool
@@ -357,7 +357,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 			// environment / contract → needs_human; any other → replan_required)
 			// and dispatch to that scope is blocked. The visible, actionable
 			// behavior is the event + the hard block + the status message.
-			// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+			// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 			disposition := SystemicDispositionForClass(class)
 			_ = c.emitEvent("systemic_escalation", "coordinator", todoID, map[string]interface{}{
 				"fingerprint":    fp,
@@ -494,7 +494,7 @@ func failureOperation(item *TodoItem) string {
 // future un-fingerprinted candidate (which has not run and therefore has
 // no LastOperation) derive the SAME operation, letting the systemic
 // prefix block match post-escalation dispatch (§6.2: 停止對該 scope 派工).
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func stableOperation(item *TodoItem) string {
 	if item == nil {
 		return ""
@@ -613,7 +613,7 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 		if sessCfg.MaxSystemicFailureTasksSet {
 			// Honor an explicit YAML zero (disables the feature) rather
 			// than restoring the default. Refs:
-			// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+			// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 			cfg.MaxSystemicFailureTasks = sessCfg.MaxSystemicFailureTasks
 		} else if sessCfg.MaxSystemicFailureTasks > 0 {
 			cfg.MaxSystemicFailureTasks = sessCfg.MaxSystemicFailureTasks

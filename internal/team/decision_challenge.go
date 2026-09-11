@@ -10,7 +10,7 @@ import (
 )
 
 // Challenge and premortem stages
-// (docs/hufu-decision-aware-runtime-spec.md §23, §24).
+// (docs/architecture/decision-runtime.md §23, §24).
 //
 // Challenge runs only after deterministic aggregation, sees anonymized
 // opinions, and cannot mutate the sealed evidence. Judge identity is withheld

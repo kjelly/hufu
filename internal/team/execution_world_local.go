@@ -11,7 +11,7 @@ import (
 )
 
 // localExecutionWorldName is the reserved "local-sandbox" world
-// (docs/hufu-external-coding-agent-runtime-spec.md §10.4).
+// (docs/architecture/execution-runtime.md).
 const localExecutionWorldName = "local-sandbox"
 
 var localExecutionWorldSeq atomic.Uint64

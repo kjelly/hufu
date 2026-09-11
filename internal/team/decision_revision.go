@@ -10,7 +10,7 @@ import (
 )
 
 // The single bounded revision round
-// (docs/hufu-decision-aware-runtime-spec.md §25).
+// (docs/architecture/decision-runtime.md §25).
 //
 // Round 1 is independent judgment. After the challenge, each original judge may
 // revise once, on its own. It sees the aggregate, the challenge and its own

@@ -9,7 +9,7 @@ import (
 )
 
 // Decision configuration surface for the decision-aware runtime. See
-// docs/hufu-decision-aware-runtime-spec.md §10-§13.
+// docs/architecture/decision-runtime.md §10-§13.
 //
 // These types live in the agent package because that is where TeamConfig and
 // every other declarative team-configuration type already lives

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Decision outcomes (docs/hufu-decision-aware-runtime-spec.md §40, §49.2).
+// Decision outcomes (docs/architecture/decision-runtime.md §40, §49.2).
 //
 // Recording an outcome is the entry point Phase 5 needs; it is not Phase 5.
 // Nothing here computes a Brier score, reweights a judge, or updates a

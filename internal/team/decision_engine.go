@@ -10,7 +10,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// The decision engine (docs/hufu-decision-aware-runtime-spec.md §43 Phase 1).
+// The decision engine (docs/architecture/decision-runtime.md §43 Phase 1).
 //
 // The engine owns procedure: it seals evidence, dispatches N isolated judges,
 // validates their structured output, aggregates deterministically in Go, and

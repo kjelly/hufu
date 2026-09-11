@@ -18,7 +18,7 @@ import (
 //   - When the form is structurally known to be non-asserting, severity is "error".
 //   - When the analysis is genuinely undecidable, severity is "warning".
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3
 func LintVerifier(spec VerificationSpec, legacyCommand string) []ContractFinding {
 	return LintVerifierWithMode(spec, legacyCommand, "")
 }

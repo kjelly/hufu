@@ -15,7 +15,7 @@ import (
 )
 
 // Decision persistence and resume projection
-// (docs/hufu-decision-aware-runtime-spec.md §35, §38).
+// (docs/architecture/decision-runtime.md §35, §38).
 //
 // Decision state is reconstructed from the append-only event log rather than a
 // separate mutable store, so a crash mid-round resumes by dispatching only what

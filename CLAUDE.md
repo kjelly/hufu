@@ -1,6 +1,6 @@
 # CLAUDE.md (AI Agent Development Guide)
 
-This file contains quick development commands and style rules for AI coding assistants. For full details on package structure, architecture, CLI flags, and TUI system, see [AGENTS.md](file:///home/ubuntu/nfs/github/hufu/AGENTS.md).
+This file contains quick development commands and style rules for AI coding assistants. For full details on package structure, architecture, CLI flags, and TUI system, see [AGENTS.md](AGENTS.md).
 
 ## Quick Commands
 

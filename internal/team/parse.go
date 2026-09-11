@@ -286,7 +286,7 @@ type rawReliabilityConfig struct {
 	// MaxSystemicFailureTasks is a pointer so an explicit YAML zero
 	// (max-systemic-failure-tasks: 0) is distinguishable from unset and
 	// can override the default (3) to disable the feature. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	MaxSystemicFailureTasks *int   `yaml:"max-systemic-failure-tasks"`
 	HardEnforcement         *bool  `yaml:"hard-enforcement"`
 	WarnOnly                bool   `yaml:"warn-only"`
@@ -1083,7 +1083,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		// 0 disables systemic counting entirely. MaxSystemicFailureTasksSet
 		// records that the value was explicitly set so reliabilityConfig()
 		// honors the zero override instead of restoring the default. Refs:
-		// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+		// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 		cfg.Reliability.MaxSystemicFailureTasks = *yc.Reliability.MaxSystemicFailureTasks
 		cfg.Reliability.MaxSystemicFailureTasksSet = true
 	}
@@ -1235,7 +1235,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	cfg.SubagentProviderDefault = strings.ToLower(strings.TrimSpace(yc.SubagentProviderDefault))
 	// The reserved "hufu-local" provider is always the built-in local
 	// SubagentProvider; a team must not shadow it with its own external
-	// provider configuration (docs/hufu-external-coding-agent-runtime-spec.md §6.1).
+	// provider configuration (docs/architecture/execution-runtime.md).
 	if len(yc.SubagentProviders) > 0 {
 		cfg.SubagentProviders = make(map[string]agent.SubagentProviderConfig, len(yc.SubagentProviders))
 		for name, provider := range yc.SubagentProviders {

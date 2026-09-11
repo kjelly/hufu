@@ -286,7 +286,7 @@ type TaskResult struct {
 	// AssumptionChecks reports the decision assumptions this task actually
 	// checked. It is one of the three sources allowed to change an
 	// assumption's status; the runtime never infers one
-	// (docs/hufu-decision-aware-runtime-spec.md §18.1).
+	// (docs/architecture/decision-runtime.md §18.1).
 	AssumptionChecks []AssumptionCheck `json:"assumption_checks,omitempty"`
 	// Facts are named JSON values a plain (non-steps) task result declares for
 	// a later flat task to reference by name via TaskDef.FactRefs, instead of

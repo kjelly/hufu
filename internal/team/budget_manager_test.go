@@ -10,7 +10,7 @@ import (
 
 // The ledger must reproduce the pre-extraction budgetExceeded judgment exactly,
 // including the message text other layers surface to users
-// (docs/hufu-decision-aware-runtime-spec.md Phase 0.5).
+// (docs/architecture/decision-runtime.md Phase 0.5).
 func TestBudgetLedgerExceeded(t *testing.T) {
 	tests := []struct {
 		name        string

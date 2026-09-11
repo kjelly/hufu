@@ -18,7 +18,7 @@ import (
 // true, SystemicEscalations increments, and the contributing task's
 // subsequent dispatch is blocked via blocksTask.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_AcrossDistinctTasks_EscalatesAtThreshold(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -86,7 +86,7 @@ func TestWP10_SystemicCount_AcrossDistinctTasks_EscalatesAtThreshold(t *testing.
 // distinct-task count. The systemic scope counts distinct tasks, not
 // occurrences (§6.2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_SameTaskRepeatedDoesNotEscalate(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -113,7 +113,7 @@ func TestWP10_SystemicCount_SameTaskRepeatedDoesNotEscalate(t *testing.T) {
 // (SystemicEscalations counts it for observability) but the scope is not
 // hard-blocked and dispatch is not blocked.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_WarnOnlyDoesNotHardBlock(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: false}
@@ -138,7 +138,7 @@ func TestWP10_SystemicCount_WarnOnlyDoesNotHardBlock(t *testing.T) {
 // TestWP10_SystemicCount_DefaultThresholdIsThree verifies the default
 // ReliabilityConfig applies MaxSystemicFailureTasks=3 when YAML is unset.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_DefaultThresholdIsThree(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: systemic-default\nacceptance: 'true'\n"), 0o644); err != nil {
@@ -156,7 +156,7 @@ func TestWP10_SystemicCount_DefaultThresholdIsThree(t *testing.T) {
 // TestWP10_SystemicCount_YAMLOverrideRespected verifies a YAML override of
 // max-systemic-failure-tasks is parsed and applied.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_YAMLOverrideRespected(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: systemic-override\nacceptance: 'true'\nreliability:\n  max-systemic-failure-tasks: 5\n"
@@ -176,7 +176,7 @@ func TestWP10_SystemicCount_YAMLOverrideRespected(t *testing.T) {
 // MaxSystemicFailureTasks=0 disables systemic counting entirely (no
 // escalation even across many distinct tasks).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_ZeroThresholdDisablesFeature(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 0, HardEnforcement: true}
@@ -199,7 +199,7 @@ func TestWP10_SystemicCount_ZeroThresholdDisablesFeature(t *testing.T) {
 // so resetAfterCriterionProgress must not clear BlockedSystemicScopes
 // (§6.2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_EscalationIsIrreversibleAcrossCriterionProgress(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -230,7 +230,7 @@ func TestWP10_SystemicCount_EscalationIsIrreversibleAcrossCriterionProgress(t *t
 // blocked scopes from persisted fingerprints across distinct task IDs,
 // so a crash-resume cannot silently reset systemic enforcement.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_RebuildRestoresEscalation(t *testing.T) {
 	fp := NewFailureFingerprint("build", "worker", "go test", FailureVerify, "exit code 1")
 	saved := []*TodoItem{
@@ -267,7 +267,7 @@ func TestWP10_SystemicCount_RebuildRestoresEscalation(t *testing.T) {
 // rebuild does not escalate when the distinct-task count is below the
 // threshold, but the count is still reconstructed.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_RebuildBelowThresholdNoEscalation(t *testing.T) {
 	fp := NewFailureFingerprint("build", "worker", "go test", FailureVerify, "exit code 1")
 	saved := []*TodoItem{
@@ -293,7 +293,7 @@ func TestWP10_SystemicCount_RebuildBelowThresholdNoEscalation(t *testing.T) {
 // tasks with equivalent fingerprints trigger a systemic_escalation event,
 // block the contributing task, and surface in RunMetrics.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_PersistFailureEmitsEventAndBlocks(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -366,7 +366,7 @@ func TestWP10_SystemicCount_PersistFailureEmitsEventAndBlocks(t *testing.T) {
 // protocol / environment / contract → needs_human; any other →
 // replan_required.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_DispositionByClass(t *testing.T) {
 	tests := []struct {
 		class TaskFailureClass
@@ -392,7 +392,7 @@ func TestWP10_SystemicCount_DispositionByClass(t *testing.T) {
 // the record() call for cancelled failures (§5.3), so they cannot trip
 // the systemic threshold.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, §6.2, WP-10
 func TestWP10_SystemicCount_CancelledExcluded(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -429,7 +429,7 @@ func TestWP10_SystemicCount_CancelledExcluded(t *testing.T) {
 // SystemicEscalations and BlockedSystemicScopes as rebuilding from the
 // persisted session.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_LiveMatchesReplay(t *testing.T) {
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "wp10-parity", Reliability: agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}}}
@@ -479,7 +479,7 @@ func TestWP10_SystemicCount_LiveMatchesReplay(t *testing.T) {
 // already-escalated scope must NOT re-increment SystemicEscalations or
 // re-emit. The escalation is one-time per scope.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_WarnOnlyFourthFailureNoReEmit(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: false}
@@ -520,7 +520,7 @@ func TestWP10_SystemicCount_WarnOnlyFourthFailureNoReEmit(t *testing.T) {
 // live run (reviewer P1: rebuild was guarded by HardEnforcement and
 // reported 0 in warn-only).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_WarnOnlyReplayParity(t *testing.T) {
 	fp := NewFailureFingerprint("build", "worker", "go test", FailureVerify, "exit code 1")
 	saved := []*TodoItem{
@@ -556,7 +556,7 @@ func TestWP10_SystemicCount_WarnOnlyReplayParity(t *testing.T) {
 // team YAML must override the default (3) and disable systemic counting
 // end-to-end through reliabilityConfig() (not just parseTeamYML).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_ExplicitYAMLZeroDisablesViaCoordinator(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: systemic-zero\nacceptance: 'true'\nreliability:\n  max-systemic-failure-tasks: 0\n"
@@ -617,7 +617,7 @@ func TestWP10_SystemicCount_ExplicitYAMLZeroDisablesViaCoordinator(t *testing.T)
 // MaxSystemicFailureTasksSet marker survives because it is part of the
 // parsed TeamConfig used by the replayed Coordinator).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_ExplicitYAMLZeroReplayStable(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "name: systemic-zero-replay\nacceptance: 'true'\nreliability:\n  max-systemic-failure-tasks: 0\n"
@@ -650,7 +650,7 @@ func TestWP10_SystemicCount_ExplicitYAMLZeroReplayStable(t *testing.T) {
 // event for a fourth distinct-task failure in an already-escalated scope
 // (reviewer P1: live re-emission).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_PersistFailureFourthFailureNoReEmit(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -697,7 +697,7 @@ func TestWP10_SystemicCount_PersistFailureFourthFailureNoReEmit(t *testing.T) {
 // task (not yet failed) with matching (component, operation) must be
 // blocked by antiThrashingBlocksTask.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_BlocksFutureUnFingerprintedTaskViaPersistFailure(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{

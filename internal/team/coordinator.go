@@ -144,7 +144,7 @@ type TaskDef struct {
 	// cannot bypass reliability policy by omitting or widening it. Nil/empty
 	// preserves legacy behavior: any terminal failure triggers on_failure.
 	//
-	// Refs: docs/hufu-external-coding-agent-runtime-spec.md, spec.md §10.2
+	// Refs: docs/architecture/execution-runtime.md
 	OnFailureClasses []TaskFailureClass `json:"-" yaml:"on-failure-classes,omitempty"`
 	// Escalate makes each retry after a failure re-run the task on the next
 	// stronger model in the model-list (ordered weakest→strongest).
@@ -197,7 +197,7 @@ type TaskDef struct {
 	// configuration-only: the `json:"-"` tag keeps it out of the coordinator's
 	// task payload so an LLM can never lower configured rigor, exactly as
 	// Phase and Action are protected
-	// (docs/hufu-decision-aware-runtime-spec.md §9).
+	// (docs/architecture/decision-runtime.md §9).
 	DecisionProfile string `json:"-" yaml:"decision-profile,omitempty"`
 	// DecisionOptions are the alternatives a decision task weighs. They are
 	// configuration-only for the same reason DecisionProfile is: if the model
@@ -223,7 +223,7 @@ type TaskDef struct {
 	// SubagentProvider is configuration-owned. The coordinator model cannot
 	// choose or lower it at dispatch time, exactly as DecisionProfile, Action
 	// and Phase are protected
-	// (docs/hufu-external-coding-agent-runtime-spec.md §6.3).
+	// (docs/architecture/execution-runtime.md).
 	SubagentProvider string `json:"-" yaml:"subagent-provider,omitempty"`
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 // Per-tool recovery declarations
-// (docs/hufu-decision-aware-runtime-spec.md §30.1).
+// (docs/architecture/decision-runtime.md §30.1).
 //
 // A task's side-effect class says how dangerous its mutation is. It does not
 // say whether that mutation can be undone: that is a property of the specific

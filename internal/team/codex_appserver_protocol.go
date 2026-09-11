@@ -13,8 +13,7 @@ import (
 )
 
 // This file builds Codex's specific thread/turn vocabulary on top of the
-// generic CodexRPCClient (docs/hufu-external-coding-agent-runtime-spec.md
-// §12, §13.3, §14).
+// generic CodexRPCClient (docs/architecture/execution-runtime.md).
 //
 // Field shapes here are verified against the real, installed codex CLI
 // (codex-cli 0.153.4, `codex app-server`, JSON Schema dumped via

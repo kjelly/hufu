@@ -363,7 +363,7 @@ func ValidateExecutionContract(task TaskDef) error {
 // It remains a pure function: no I/O, no global state. The caller is
 // responsible for emitting warning events for non-blocking findings.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.1, §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.1, §4.3, WP-02
 func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPreflightResult {
 	mode := agent.NormalizeVerifierLintMode(lintMode)
 	c := DefaultExecutionContract(task.Execution)

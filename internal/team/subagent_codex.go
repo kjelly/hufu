@@ -20,7 +20,7 @@ import (
 
 // codexSubagentProviderName is the conventional external provider name used
 // when a config entry doesn't otherwise imply one
-// (docs/hufu-external-coding-agent-runtime-spec.md §12).
+// (docs/architecture/execution-runtime.md).
 const codexSubagentProviderName = "codex"
 
 // codexAppServerProviderType is the only agent.SubagentProviderConfig.Type
@@ -95,7 +95,7 @@ func codexFail(class CodexProviderFailureClass, err error) error {
 }
 
 // CodexSubagentProvider is a "codex-app-server" SubagentProvider
-// (docs/hufu-external-coding-agent-runtime-spec.md §12, PR-11). It executes
+// (docs/architecture/execution-runtime.md). It executes
 // exactly one already-authorized attempt through one app-server process
 // (§13.1) and reports evidence; Hufu retains retry, recovery, verification,
 // receipts, completion, and memory policy — this provider never decides any

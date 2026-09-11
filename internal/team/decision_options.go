@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Option proposal (docs/hufu-decision-aware-runtime-spec.md §19.1).
+// Option proposal (docs/architecture/decision-runtime.md §19.1).
 //
 // Hand-writing three or more options per decision task is usable but tedious.
 // The proposal stage produces candidates from the task's goal instead.

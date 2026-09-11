@@ -4,7 +4,7 @@ import "github.com/kjelly/hufu/internal/agent"
 
 // Canonical decision reason codes and event type names, re-exported from
 // internal/agent so runtime call sites read naturally while a single list
-// stays authoritative (docs/hufu-decision-aware-runtime-spec.md §36-§37).
+// stays authoritative (docs/architecture/decision-runtime.md §36-§37).
 
 // Failure reason codes (spec §37).
 const (

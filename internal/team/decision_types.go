@@ -8,7 +8,7 @@ import (
 )
 
 // Runtime data model for the decision-aware runtime
-// (docs/hufu-decision-aware-runtime-spec.md §13-§27).
+// (docs/architecture/decision-runtime.md §13-§27).
 //
 // Configuration-shaped types live in internal/agent next to TeamConfig; they
 // are re-exported here so runtime call sites read naturally.

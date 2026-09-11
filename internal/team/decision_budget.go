@@ -9,7 +9,7 @@ import (
 )
 
 // Decision budget admission and explicit degradation
-// (docs/hufu-decision-aware-runtime-spec.md §34).
+// (docs/architecture/decision-runtime.md §34).
 //
 // The default is fail-closed: a profile that cannot be run at its configured
 // rigor does not quietly run at less. A team may opt into degradation, but the

@@ -459,7 +459,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// binding, execution-world policy, canonicalization, receipt,
 	// verification, and finalization byte-for-byte identical to the
 	// coordinated case, not merely similar, which is the actual parity
-	// requirement (docs/hufu-external-coding-agent-runtime-spec.md §28).
+	// requirement (docs/architecture/execution-runtime.md).
 	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr

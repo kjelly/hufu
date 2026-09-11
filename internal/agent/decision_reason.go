@@ -1,7 +1,7 @@
 package agent
 
 // Canonical failure reason codes and runtime event type names for the
-// decision-aware runtime (docs/hufu-decision-aware-runtime-spec.md §36-§37).
+// decision-aware runtime (docs/architecture/decision-runtime.md §36-§37).
 //
 // They are defined in the agent package so both the configuration layer (this
 // package) and the runtime layer (internal/team) can reference one list;

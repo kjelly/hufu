@@ -6,7 +6,7 @@ import "strings"
 // (component, operation, class, digest). The criterion is deliberately
 // excluded so a defect that manifests under different criteria still
 // aggregates (§6.2). Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func systemicScopeKey(fp FailureFingerprint) string {
 	return strings.Join([]string{fp.Component, fp.Operation, string(fp.Class), fp.Digest}, "\x00")
 }
@@ -17,7 +17,7 @@ func systemicScopeKey(fp FailureFingerprint) string {
 // are failure-time properties). Used to block future un-fingerprinted
 // tasks whose component+operation matches an escalated systemic scope
 // (§6.2: 停止對該 scope 派工). Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func systemicScopePrefixKey(component, operation string) string {
 	return component + "\x00" + operation
 }
@@ -36,7 +36,7 @@ func splitSystemicScopePrefix(scopeKey string) (component, operation string, ok 
 // SystemicDispositionForClass returns the escalation disposition for a
 // systemic failure of the given class (§6.2): protocol / environment /
 // contract → needs_human; any other → replan_required. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func SystemicDispositionForClass(class TaskFailureClass) string {
 	switch class {
 	case FailureProtocol, FailureEnvironment, FailureContract:
@@ -49,7 +49,7 @@ func SystemicDispositionForClass(class TaskFailureClass) string {
 // systemicTaskCount returns the number of distinct task IDs that have
 // observed a failure in the given systemic scope. Used for event payload
 // and metrics. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) systemicTaskCount(scopeKey string) int {
 	if s == nil || s.SystemicCounts == nil {
 		return 0
@@ -73,7 +73,7 @@ func (s *AntiThrashingState) systemicTaskCount(scopeKey string) int {
 // declared, dispatch to that scope is blocked even if one of the
 // contributing tasks later makes criterion progress (a systemic defect
 // is a property of the system, not of a single criterion). Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) recordSystemic(item *TodoItem, fp FailureFingerprint, limits ReliabilityConfig) bool {
 	if limits.MaxSystemicFailureTasks <= 0 {
 		return false
@@ -115,7 +115,7 @@ func (s *AntiThrashingState) recordSystemic(item *TodoItem, fp FailureFingerprin
 
 // ensureSystemicMaps lazily initializes the systemic-scope maps so callers
 // do not need to repeat the nil checks. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) ensureSystemicMaps() {
 	if s.SystemicCounts == nil {
 		s.SystemicCounts = make(map[string]map[string]bool)
@@ -145,7 +145,7 @@ func (s *AntiThrashingState) ensureSystemicMaps() {
 //     (component, operation), and we conservatively block any candidate
 //     whose prefix matches.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) blockReasonSystemic(task TaskDef, item *TodoItem) bool {
 	if len(s.BlockedSystemicScopes) == 0 {
 		return false
@@ -164,7 +164,7 @@ func (s *AntiThrashingState) blockReasonSystemic(task TaskDef, item *TodoItem) b
 		// failed task that escalated the scope, even though the failed
 		// task's LastOperation was populated during execution and the
 		// candidate's is empty. Refs:
-		// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+		// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 		operation := stableOperation(item)
 		if component != "" && operation != "" {
 			if s.BlockedSystemicScopePrefixes[systemicScopePrefixKey(component, operation)] {
@@ -182,7 +182,7 @@ func (s *AntiThrashingState) blockReasonSystemic(task TaskDef, item *TodoItem) b
 // stable and the metric matches live behavior; the hard block
 // (BlockedSystemicScopes + prefix map + HardBlocked) only applies under
 // HardEnforcement. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) applySystemicThreshold(limits ReliabilityConfig) {
 	if limits.MaxSystemicFailureTasks <= 0 {
 		return

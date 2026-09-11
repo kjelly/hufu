@@ -11,8 +11,8 @@ import (
 )
 
 // This file starts one codex app-server process and wires it to a
-// CodexRPCClient (docs/hufu-external-coding-agent-runtime-spec.md §13.2, one
-// process per Hufu attempt per §13.1). It builds on ProcessSupervisor
+// CodexRPCClient (docs/architecture/execution-runtime.md). It builds on
+// ProcessSupervisor
 // (Phase 3) rather than calling os/exec directly, so cancellation/cleanup
 // share the same process-tree guarantees every other external-provider
 // process gets.

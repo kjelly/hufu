@@ -21,7 +21,7 @@ import (
 // that the five pre-refactoring early-break paths produce the same observable
 // behaviour (worker call count, task status, error) as before.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-08
 
 // --- Mock agents ---
 
@@ -131,7 +131,7 @@ func newWP08TestCoordinator(t *testing.T, worker fantasy.Agent, maxRetries int) 
 // active, the retry loop stops immediately after the first attempt without
 // retrying (path 1: terminalBlocked).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -201,7 +201,7 @@ func TestWP08_Path1_TerminalBlocked(t *testing.T) {
 // on a non-replayable task (external_write) blocks for reconciliation without
 // retrying the worker (path 2: protocolFailure && !IsTaskReplayable).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_Path2_ProtocolFailureNonReplayable(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -232,7 +232,7 @@ func TestWP08_Path2_ProtocolFailureNonReplayable(t *testing.T) {
 // non-replayable task (non-protocol) blocks for reconciliation without
 // retrying (path 3: !CanAutomaticallyReplay).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_Path3_NonReplayableTask(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -261,7 +261,7 @@ func TestWP08_Path3_NonReplayableTask(t *testing.T) {
 // isUnfixableVerifyFailure). The verify command is set by the coordinator and
 // the worker cannot fix it by retrying.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_Path4_UnfixableVerifyFailure(t *testing.T) {
 	worker := &alwaysFailAgent{err: errWrongVerificationPolarity}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -286,7 +286,7 @@ func TestWP08_Path4_UnfixableVerifyFailure(t *testing.T) {
 // TestWP08_Path5_SameFailureRepeated verifies that when the same error occurs
 // on consecutive attempts, the retry loop stops early (path 5: sameFailure).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_Path5_SameFailureRepeated(t *testing.T) {
 	worker := &alwaysFailAgent{err: errors.New("worker failed: identical error")}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -310,7 +310,7 @@ func TestWP08_Path5_SameFailureRepeated(t *testing.T) {
 // replayable task retries the worker (the fallthrough path that became
 // RetryWorker in the refactored loop).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_NormalRetry(t *testing.T) {
 	worker := &succeedOnSecondAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -355,7 +355,7 @@ func TestWP08_NormalRetry(t *testing.T) {
 // cancelled, the retry loop stops after the first attempt without retrying
 // (matching the pre-refactoring parentCtx.Err() check).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-08
 func TestWP08_ParentContextCancelled(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -403,7 +403,7 @@ func (a *varyingErrorAgent) Stream(ctx context.Context, call fantasy.AgentStream
 // TestWP08_BudgetExhausted verifies that when the retry budget is exhausted,
 // the loop stops after maxRetries attempts.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestWP08_BudgetExhausted(t *testing.T) {
 	worker := &varyingErrorAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -428,7 +428,7 @@ func TestWP08_BudgetExhausted(t *testing.T) {
 // replan_required). This is a NEW behaviour introduced by routing the loop
 // through DecideRecovery's class-based disposition.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-08
 func TestWP08_ClassBased_ContractFailure(t *testing.T) {
 	worker := &alwaysFailAgent{err: fmt.Errorf("contract preflight failed: verify (verifier_not_asserting): tail || echo")}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -451,7 +451,7 @@ func TestWP08_ClassBased_ContractFailure(t *testing.T) {
 // on a replayable task stops retrying (new behaviour from §5: environment →
 // replan_required).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-08
 func TestWP08_ClassBased_EnvironmentFailure(t *testing.T) {
 	worker := &alwaysFailAgent{err: errors.New("bash: nonexistent-cmd: command not found")}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -476,7 +476,7 @@ func TestWP08_ClassBased_EnvironmentFailure(t *testing.T) {
 // the reviewer's P1 finding: the resolved profile recovery policy must not
 // be bypassed by the raw task.Recovery field.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_ProfilePolicyNotBypassed_Unattended(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -509,7 +509,7 @@ func TestWP08_ProfilePolicyNotBypassed_Unattended(t *testing.T) {
 // TestWP08_ProfilePolicyNotBypassed_StrictVerification verifies the same
 // invariant under the strict-verification profile.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_ProfilePolicyNotBypassed_StrictVerification(t *testing.T) {
 	worker := &alwaysFailAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -539,7 +539,7 @@ func TestWP08_ProfilePolicyNotBypassed_StrictVerification(t *testing.T) {
 // setting lastErr = err before the sameFailure check, making the comparison
 // always true.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P2)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P2)
 func TestWP08_FirstContractFailureNotRecordedAsRepeated(t *testing.T) {
 	worker := &alwaysFailAgent{err: fmt.Errorf("contract preflight failed: verify (verifier_not_asserting): tail || echo")}
 	c, events := newWP08TestCoordinator(t, worker, 3)
@@ -571,7 +571,7 @@ func TestWP08_FirstContractFailureNotRecordedAsRepeated(t *testing.T) {
 // TestWP08_FirstEnvironmentFailureNotRecordedAsRepeated is the same
 // regression test for environment failures.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P2)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P2)
 func TestWP08_FirstEnvironmentFailureNotRecordedAsRepeated(t *testing.T) {
 	worker := &alwaysFailAgent{err: errors.New("bash: nonexistent-cmd: command not found")}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -626,7 +626,7 @@ func (a *promptCaptureAgent) Stream(ctx context.Context, call fantasy.AgentStrea
 // with an execution error (no verify), the retry context includes class,
 // evidence (error), and change guidance.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_RetryContextContainsRequiredFields(t *testing.T) {
 	worker := &promptCaptureAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -674,7 +674,7 @@ func TestWP08_RetryContextContainsRequiredFields(t *testing.T) {
 // exit code. This uses a worker that always produces output (so verify runs)
 // and a verify command that always fails (so the task fails and retries).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_RetryContextContainsVerifyCommand(t *testing.T) {
 	// Worker that always produces output (so err==nil and verify runs)
 	worker := &mockWorkerTextAgent{text: "work output"}
@@ -709,7 +709,7 @@ func TestWP08_RetryContextContainsVerifyCommand(t *testing.T) {
 // TestWP08_RetryContextContainsExecutionClass verifies that the retry context
 // correctly reports the failure class from the previous attempt.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_RetryContextContainsExecutionClass(t *testing.T) {
 	worker := &promptCaptureAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -737,7 +737,7 @@ func TestWP08_RetryContextContainsExecutionClass(t *testing.T) {
 // not captured (the production EvidenceComplete gate is meaningful, not
 // hard-coded true).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_ComputeEvidenceComplete_TranscriptRequired(t *testing.T) {
 	// Task requires a transcript (RequiresResult) but transcriptRef is empty
 	// (manifest creation failed). Evidence should be incomplete.
@@ -781,7 +781,7 @@ func TestWP08_ComputeEvidenceComplete_TranscriptRequired(t *testing.T) {
 // IS created in this case, so we instead verify the logic by directly testing
 // that computeEvidenceComplete=false leads to no retry via DecideRecovery.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestWP08_EvidenceIncompleteBlocksRetry(t *testing.T) {
 	// Unit test: when EvidenceComplete=false, DecideRecovery returns
 	// ReplanRequired (not RetryWorker), which stops the retry loop.
@@ -811,7 +811,7 @@ func TestWP08_EvidenceIncompleteBlocksRetry(t *testing.T) {
 // appears in the second attempt's retry context. The reviewer required that
 // the evidence used by the gate must appear in the retry prompt.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1a)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1a)
 func TestWP08_RetryContextContainsPartialOutput(t *testing.T) {
 	worker := &promptCaptureAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 3)
@@ -843,7 +843,7 @@ func TestWP08_RetryContextContainsPartialOutput(t *testing.T) {
 // (no Messages, no content) does NOT authorize retry. The reviewer required
 // that the evidence gate check for substantive content, not just slice length.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1a)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1a)
 func TestWP08_EmptyStepDoesNotAuthorizeRetry(t *testing.T) {
 	// Empty StepResult{} with no Messages → EvidenceComplete=false
 	if computeEvidenceComplete(TaskDef{}, "", []fantasy.StepResult{{}}, "") {
@@ -868,7 +868,7 @@ func TestWP08_EmptyStepDoesNotAuthorizeRetry(t *testing.T) {
 // The reviewer required that the "Previous command/exit" field contain the
 // actual previous command/input for tool-driven work.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1b)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1b)
 func TestWP08_RetryContextContainsToolInput(t *testing.T) {
 	// Direct unit test of buildRetryContext with tool call info
 	ctx := buildRetryContext(
@@ -909,7 +909,7 @@ func TestWP08_RetryContextContainsToolInput(t *testing.T) {
 // redaction by passing credential-shaped input through the redaction
 // pipeline and checking the retry context output.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, §9, WP-08 (reviewer P1b)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, §9, WP-08 (reviewer P1b)
 func TestWP08_RetryContextRedactsCredentials(t *testing.T) {
 	// Simulate what the OnToolCall callback does: redact then truncate
 	credentialInput := `export API_KEY=sk-secret-1234567890abcdef && curl -H "Authorization: Bearer sk-secret-1234567890abcdef" https://api.example.com`
@@ -1118,7 +1118,7 @@ func TestWP08_ToolCallEvidencePerAttempt(t *testing.T) {
 // per-attempt struct (not coordinator-global) by checking that two instances
 // are independent and don't share state.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1b)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1b)
 func TestWP08_ToolCallEvidenceStruct(t *testing.T) {
 	ev1 := &toolCallEvidence{toolName: "bash", toolInput: "echo task1"}
 	ev2 := &toolCallEvidence{toolName: "grep", toolInput: "echo task2"}
@@ -1144,7 +1144,7 @@ func TestWP08_ToolCallEvidenceStruct(t *testing.T) {
 // TestWP08_RedactSecretsOnToolInput verifies that utils.RedactSecrets
 // redacts common credential patterns that could appear in tool input.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §9, WP-08 (reviewer P1b)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §9, WP-08 (reviewer P1b)
 func TestWP08_RedactSecretsOnToolInput(t *testing.T) {
 	tests := []struct {
 		name  string

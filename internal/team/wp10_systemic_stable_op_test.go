@@ -17,7 +17,7 @@ import (
 // the STABLE operation (verify/reconcile/kind-derived, ignoring
 // LastOperation), so a fresh candidate with no LastOperation derives the
 // same operation and is blocked. Refs:
-// docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_BlocksFutureUnFingerprintedTask(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -79,7 +79,7 @@ func TestWP10_SystemicCount_BlocksFutureUnFingerprintedTask(t *testing.T) {
 // Kind (the common case for outcome tasks with no verify/last-op). The
 // escalated scope's operation must match "task:outcome" for this to block.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func TestWP10_SystemicCount_BlocksFutureTaskViaKindDerivedOperation(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -113,7 +113,7 @@ func TestWP10_SystemicCount_BlocksFutureTaskViaKindDerivedOperation(t *testing.T
 // and the fresh candidate is blocked. This test reproduces the minimal
 // failing scenario the reviewer described.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_FailedTaskWithLastOperationBlocksFreshCandidate(t *testing.T) {
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true}
@@ -154,7 +154,7 @@ func TestWP10_SystemicCount_FailedTaskWithLastOperationBlocksFreshCandidate(t *t
 // LastOperation was set to "bash" during execution, then a fresh
 // candidate (no LastOperation) must be blocked by antiThrashingBlocksTask.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.2, §11, WP-10
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.2, §11, WP-10
 func TestWP10_SystemicCount_FailedTaskWithLastOperationBlocksFreshCandidatePersistFailure(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{

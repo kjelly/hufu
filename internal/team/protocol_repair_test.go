@@ -1464,7 +1464,7 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 	// is blocked for reconciliation instead of retrying the worker.
 	// This replaces the old replayable-retry behaviour (WP-08).
 	//
-	// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-08
+	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-08
 	workspace := t.TempDir()
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0

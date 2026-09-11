@@ -7,7 +7,7 @@ import (
 )
 
 // ProcessSpec describes one external-provider process to start
-// (docs/hufu-external-coding-agent-runtime-spec.md §16.2). Argv is executed
+// (docs/architecture/execution-runtime.md). Argv is executed
 // directly, never through a shell.
 type ProcessSpec struct {
 	Argv []string
@@ -35,7 +35,7 @@ type ProcessHandle interface {
 
 // ProcessSupervisor provides reliable process-TREE cleanup, not just cleanup
 // of the single directly-started process
-// (docs/hufu-external-coding-agent-runtime-spec.md §16.2). Interrupt sends a
+// (docs/architecture/execution-runtime.md). Interrupt sends a
 // graceful, catchable request (SIGINT on Unix); TerminateTree requests
 // graceful shutdown (SIGTERM); KillTree forces termination (SIGKILL) and
 // MUST reach every descendant, not only the direct child.

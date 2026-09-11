@@ -14,7 +14,7 @@ import (
 // WP-02's transitional verifier-lint switch (§4.3). It verifies that the lint
 // mode controls whether non-asserting verifier findings block dispatch.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, §11, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, §11, WP-02
 func TestValidateExecutionContractFull_LintModes(t *testing.T) {
 	// A verifier with `|| echo FAIL` — structurally non-asserting (§4.3 row 1).
 	nonAssertingVerify := "test -f artifact || echo FAIL"
@@ -146,7 +146,7 @@ func containsCode(codes []string, code string) bool {
 // ExecutionKinds, not only interactive/external (WP-02 spec: "inline kind 的
 // malformed spec 也必須在派工前被攔下").
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §11, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §11, WP-02
 func TestValidateExecutionContractFull_MalformedTypedVerifierAllKinds(t *testing.T) {
 	kinds := []ExecutionKind{
 		ExecutionKindInline,
@@ -183,7 +183,7 @@ func TestValidateExecutionContractFull_MalformedTypedVerifierAllKinds(t *testing
 // a verifier whose last pipeline stage is a pure-output command (echo/cat)
 // is rejected as non-asserting.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, §11, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, §11, WP-02
 func TestValidateExecutionContractFull_LastStagePrinter(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -216,7 +216,7 @@ func TestValidateExecutionContractFull_LastStagePrinter(t *testing.T) {
 // block dispatch regardless of lintMode, since lintMode only governs the
 // verifier assertiveness lint (§4.3).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestValidateExecutionContractFull_StructuralErrorsIgnoreLintMode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -262,7 +262,7 @@ func TestValidateExecutionContractFull_StructuralErrorsIgnoreLintMode(t *testing
 // observation-mode verifiers remain exempt from the assertiveness lint across
 // all lint modes.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestValidateExecutionContractFull_ObservationExempt(t *testing.T) {
 	for _, mode := range []string{agent.VerifierLintError, agent.VerifierLintWarn, agent.VerifierLintOff} {
 		t.Run("mode="+mode, func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestValidateExecutionContractFull_ObservationExempt(t *testing.T) {
 // preserves the original API contract: error mode, returns error on
 // non-asserting verifier.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestValidateExecutionContractLegacy_Wrapper(t *testing.T) {
 	task := TaskDef{
 		Agent:  "worker",
@@ -323,7 +323,7 @@ func TestValidateExecutionContractLegacy_Wrapper(t *testing.T) {
 // execution-path contract check (validateContractStructural) emits a
 // contract_warning event for warning-severity findings in warn mode.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCoordinatorValidateAndReportContract_WarnEmitsEvent(t *testing.T) {
 	var events []string
 	c := &Coordinator{}
@@ -363,7 +363,7 @@ func TestCoordinatorValidateAndReportContract_WarnEmitsEvent(t *testing.T) {
 // when lintMode=error (default), error-severity lint findings block dispatch
 // and record a contract-class failure.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, §5, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, §5, WP-02
 func TestCoordinatorValidateAndReportContract_ErrorBlocksDispatch(t *testing.T) {
 	var events []string
 	c := &Coordinator{}
@@ -404,7 +404,7 @@ func TestCoordinatorValidateAndReportContract_ErrorBlocksDispatch(t *testing.T) 
 // TestCoordinatorValidateAndReportContract_OffMode verifies that lintMode=off
 // discards lint findings and dispatches without events.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCoordinatorValidateAndReportContract_OffMode(t *testing.T) {
 	var events []string
 	c := &Coordinator{}
@@ -441,7 +441,7 @@ func TestCoordinatorValidateAndReportContract_OffMode(t *testing.T) {
 // that ExecuteTasks honors the verifier-lint transitional switch: warn mode
 // allows dispatch of non-asserting verifier tasks rather than rejecting them.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestCoordinatorExecuteTasks_RejectsNonAssertingVerifier_WarnMode(t *testing.T) {
 	c := &Coordinator{}
 	c.session = &TeamSession{
@@ -471,7 +471,7 @@ func TestCoordinatorExecuteTasks_RejectsNonAssertingVerifier_WarnMode(t *testing
 
 // TestNormalizeVerifierLintMode verifies the normalization function.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestNormalizeVerifierLintMode(t *testing.T) {
 	tests := []struct {
 		input string
@@ -497,7 +497,7 @@ func TestNormalizeVerifierLintMode(t *testing.T) {
 // TestParseReliabilityConfig_VerifierLintMode verifies the YAML parser
 // threads the verifier-lint transitional switch through to the config.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestParseReliabilityConfig_VerifierLintMode(t *testing.T) {
 	tests := []struct {
 		name     string

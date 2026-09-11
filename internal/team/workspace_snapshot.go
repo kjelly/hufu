@@ -16,7 +16,7 @@ import (
 )
 
 // WorkspaceFileState is one file's observed identity at snapshot time
-// (docs/hufu-external-coding-agent-runtime-spec.md §11.2). Path is always a
+// (docs/architecture/execution-runtime.md). Path is always a
 // workspace-relative, forward-slash-normalized path.
 type WorkspaceFileState struct {
 	Path   string `json:"path"`
@@ -58,7 +58,7 @@ type WorkspaceDelta struct {
 }
 
 // WorkspaceSnapshotter captures and diffs workspace state
-// (docs/hufu-external-coding-agent-runtime-spec.md §11.1). Snapshot takes a
+// (docs/architecture/execution-runtime.md). Snapshot takes a
 // plain root path rather than *PreparedExecutionWorld: that type does not
 // exist until the ExecutionWorld phase (§10, PR-06). When it lands, callers
 // pass prepared.Root/CWD here unchanged; this signature is expected to gain

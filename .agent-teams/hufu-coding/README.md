@@ -1,12 +1,21 @@
 # hufu-coding
 
+> Status: active
+> Authority: team contract
+> Verified-Commit: `6ab9951`
+> Supersedes: the former standalone coding-team implementation spec
+> Superseded-By: —
+
 A reliability-oriented coding team: Hufu owns the control plane (task
 admission, retry, failure classification, recovery, and final acceptance);
 every worker's actual reasoning turn executes through the `codex`
-subagent-provider. See `../../spec.md` for the full design rationale
-(gitignored; ask the operator if you need the original document; the original
-design scoped Codex to just the coder leaf — see "All five roles are
-codex-bound" below for why every role uses it here instead).
+subagent-provider. This README is the canonical contract and operator guide
+for the team. The generic runtime boundary is documented in
+[`docs/architecture/execution-runtime.md`](../../docs/architecture/execution-runtime.md);
+the former standalone coding-team implementation spec is archived.
+
+The original design scoped Codex to just the coder leaf — see "All five roles
+are codex-bound" below for why every role uses it here instead.
 
 Binding a worker to a subagent-provider changes only *which process executes
 its model call* — Hufu's own control plane (task admission, the typed

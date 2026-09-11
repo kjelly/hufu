@@ -44,7 +44,7 @@ const (
 	// EventProviderSessionBound records an external SubagentProvider's
 	// durable session identity (e.g. a Codex thread_id) established mid-attempt,
 	// after task_created but before the first turn that depends on it
-	// (docs/hufu-external-coding-agent-runtime-spec.md §7.4, §14.1: "persist
+	// (docs/architecture/execution-runtime.md: "persist
 	// provider_session_bound" happens between thread/start and turn/start).
 	// EventProviderSessionBound remains a legacy replay-only event name.
 	EventProviderSessionBound EventType = "provider_session_bound"

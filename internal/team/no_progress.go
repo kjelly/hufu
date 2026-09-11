@@ -33,7 +33,7 @@ import (
 // mode (HardEnforcement == false) never returns stop/replan — the coordinator
 // emits the event but does not stop or replan.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 
 // NoProgressDisposition is the enforcement outcome for the no-progress budget.
 type NoProgressDisposition string
@@ -274,7 +274,7 @@ func (c *Coordinator) noProgressStopPending() bool {
 // normally. warn-only mode (HardEnforcement == false) emits the event but never
 // stops or replans (decideNoProgress returns continue).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func (c *Coordinator) enforceNoProgressBudget() (bool, string) {
 	counters := c.noProgressCounters()
 	limits := c.noProgressLimits()

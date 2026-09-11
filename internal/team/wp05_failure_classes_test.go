@@ -15,7 +15,7 @@ import (
 // the environment and cancelled failure classes, and that structured inputs
 // (context error, resolve findings) take precedence over text matching.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, WP-05
 func TestClassifyTaskFailureStructured_NewClasses(t *testing.T) {
 	tests := []struct {
 		name string
@@ -192,7 +192,7 @@ func TestClassifyTaskFailureStructured_NewClasses(t *testing.T) {
 // message contains timeout-like text, because §5.3 requires cancelled to be
 // separated before any other classification.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestClassifyTaskFailure_CancelledTakesPrecedenceOverTimeout(t *testing.T) {
 	// A wrapped context.Canceled whose message mentions "deadline" must still
 	// be cancelled, not timeout — the structured errors.Is check wins.
@@ -208,7 +208,7 @@ func TestClassifyTaskFailure_CancelledTakesPrecedenceOverTimeout(t *testing.T) {
 // classifier and produces the fallback (text-matching) result for errors with
 // no structured metadata.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-05
 func TestClassifyTaskFailure_LegacyWrapperMatchesFallback(t *testing.T) {
 	tests := []struct {
 		err  error
@@ -234,7 +234,7 @@ func TestClassifyTaskFailure_LegacyWrapperMatchesFallback(t *testing.T) {
 // TestWP02ContractCasesStillPass verifies the WP-02 test cases (which pin the
 // contract classification) still pass through the new structured classifier.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, WP-02, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-02, WP-05
 func TestWP02ContractCasesStillPass(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -260,7 +260,7 @@ func TestWP02ContractCasesStillPass(t *testing.T) {
 // satisfying §5.3's requirement that cancelled failures be excluded from
 // retry, failure-class statistics and the anti-thrashing fingerprint.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestPersistFailure_CancelledExcludedFromFingerprint(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -326,7 +326,7 @@ func TestPersistFailure_CancelledExcludedFromFingerprint(t *testing.T) {
 // directly and asserting the counter reflects only non-cancelled calls; the
 // guard lives in the retry-loop call site (coordinator_task_run.go).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestRecordRetry_CancelledNotCounted(t *testing.T) {
 	c := &Coordinator{}
 	// Simulate the guarded call site: only non-cancelled classes reach
@@ -349,7 +349,7 @@ func TestRecordRetry_CancelledNotCounted(t *testing.T) {
 // TestIsCancelledClass verifies the helper used by the retry loop and
 // PersistFailure to gate fingerprint/retry statistics.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestIsCancelledClass(t *testing.T) {
 	if !IsCancelledClass(FailureCancelled) {
 		t.Errorf("IsCancelledClass(FailureCancelled) = false, want true")
@@ -367,7 +367,7 @@ func TestIsCancelledClass(t *testing.T) {
 // shell output, so an environment failure is not misclassified as execution
 // when no structured findings are available.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.1, §11, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.1, §11, WP-05
 func TestClassifyTaskFailure_EnvironmentFromTextFallback(t *testing.T) {
 	err := errors.New("bash: nonexistent-cmd: command not found")
 	got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
@@ -382,7 +382,7 @@ func TestClassifyTaskFailure_EnvironmentFromTextFallback(t *testing.T) {
 // structured exit-code evidence takes precedence over the text fallback
 // (§5, §5.2, WP-05 reviewer P1).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.2, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.2, WP-05
 func TestClassifyTaskFailure_ExitCodePrecedence(t *testing.T) {
 	// The error text says "exit code 1" (execution-like), but the structured
 	// verify exit code is non-zero. Evidence wins → verification.
@@ -481,7 +481,7 @@ func newWP05RetryTestCoordinator(t *testing.T, worker fantasy.Agent) (*Coordinat
 // Cancellation has disposition none, so the task must stop after the first
 // call and must not record a cancelled retry statistic.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled(t *testing.T) {
 	worker := &cancellableWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
@@ -513,7 +513,7 @@ func TestExecuteTask_CancelledPreviousAttempt_NoRetryRecordedForCancelled(t *tes
 // enter retry statistics even if a future call site accidentally calls
 // recordRetry.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestExecuteTask_CancelledPreviousAttempt_GuardBlocksRecordRetry(t *testing.T) {
 	// The metric helper itself rejects cancelled classes so every caller keeps
 	// the §5.3 invariant.
@@ -542,7 +542,7 @@ func TestExecuteTask_CancelledPreviousAttempt_GuardBlocksRecordRetry(t *testing.
 // recorded as a retry (reviewer P2: "ideally no subsequent dispatch after
 // parent cancellation").
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 func TestExecuteTask_ParentContextCancelled_NoSubsequentDispatch(t *testing.T) {
 	worker := &alwaysCancelWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
@@ -577,7 +577,7 @@ func TestExecuteTask_ParentContextCancelled_NoSubsequentDispatch(t *testing.T) {
 // FailureClassificationInput read the stored VerificationResult from the todo
 // item, returning -1 / nil when absent.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.1, §5.2, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.1, §5.2, WP-05
 func TestVerifyResultForTodo_ReadsStoredVerificationResult(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
@@ -628,7 +628,7 @@ func TestVerifyResultForTodo_ReadsStoredVerificationResult(t *testing.T) {
 // output and must remain FailureVerify (§5.1: distinguish command/shell
 // failures from assertion failures before classifying).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.1, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.1, WP-05
 func TestEnvironmentFindingsFromVerifyResult_CommandNotFound(t *testing.T) {
 	tests := []struct {
 		name string
@@ -704,7 +704,7 @@ func TestEnvironmentFindingsFromVerifyResult_CommandNotFound(t *testing.T) {
 // classifies as FailureEnvironment (environment evidence wins over exit code,
 // §5.1), not FailureVerify.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.1, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.1, WP-05
 func TestClassifyTaskFailure_ExitCodeDoesNotOverrideEnvironment(t *testing.T) {
 	envFindings := environmentFindingsFromVerifyResult(&VerificationResult{
 		ExitCode: 127,
@@ -738,7 +738,7 @@ func TestClassifyTaskFailure_ExitCodeDoesNotOverrideEnvironment(t *testing.T) {
 // exit code and misclassify "connection reset" as FailureVerify, inflating
 // the FailureVerify retry count to 2.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.1, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.1, WP-05
 func TestExecuteTask_ClearsStaleVerifyResultBetweenRetries(t *testing.T) {
 	worker := &staleVerifyWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
@@ -824,7 +824,7 @@ func (a *staleVerifyWorkerAgent) Stream(ctx context.Context, call fantasy.AgentS
 // then simulating the retry-classification path via the coordinator's
 // recordRetry-classify-clear sequence (reviewer P2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §5.1, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.1, WP-05
 func TestVerifyResultClearedAfterRetryClassification(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
@@ -868,7 +868,7 @@ func TestVerifyResultClearedAfterRetryClassification(t *testing.T) {
 // attempt 2 fails before verification, attempt 3 runs verification. After the
 // run, the attempt-1 ExecutionReceipt must carry the attempt-1 VerifyResult.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §9, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §9, WP-05
 func TestExecuteTask_RetainsVerificationEvidenceOnReceiptAfterClear(t *testing.T) {
 	worker := &staleVerifyWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
@@ -924,7 +924,7 @@ func TestExecuteTask_RetainsVerificationEvidenceOnReceiptAfterClear(t *testing.T
 // the receipt matching (runID, taskID, attempt) and leaves other attempts
 // unchanged.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §9, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §9, WP-05
 func TestUpdateReceiptVerifyResult_AttachesToMatchingAttempt(t *testing.T) {
 	tl := NewTaskTracker().TodoList()
 	items := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
@@ -982,7 +982,7 @@ func TestUpdateReceiptVerifyResult_AttachesToMatchingAttempt(t *testing.T) {
 // so attaching the new run's verification evidence updates the new run's
 // receipt, not the prior run's.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §9, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §9, WP-05
 func TestUpdateReceiptVerifyResult_MatchesRunIDNotJustAttempt(t *testing.T) {
 	tl := NewTaskTracker().TodoList()
 	items := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
@@ -1023,7 +1023,7 @@ func TestUpdateReceiptVerifyResult_MatchesRunIDNotJustAttempt(t *testing.T) {
 // whose ExecutionReceipts[].VerifyResult pointers are independent deep copies,
 // so mutating a snapshot's verify result does not affect the canonical item.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §9, WP-05
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §9, WP-05
 func TestCloneTodoItem_DeepCopiesExecutionReceiptVerifyResult(t *testing.T) {
 	tl := NewTaskTracker().TodoList()
 	items := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})

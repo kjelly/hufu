@@ -30,7 +30,7 @@ import (
 const CanonicalFormVersion = 1
 
 // Canonical encoding for decision evidence
-// (docs/hufu-decision-aware-runtime-spec.md §15.3).
+// (docs/architecture/decision-runtime.md §15.3).
 //
 // encoding/json is not used directly for the sealed form: struct field order,
 // HTML escaping and float formatting are all implementation details that could

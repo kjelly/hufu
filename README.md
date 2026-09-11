@@ -647,8 +647,11 @@ hufu context promotion apply promo-abc123 --workspace workspace --project my-pro
 
 Analysis never changes team Markdown or installed skills, approval never applies a draft, and `apply` fails closed if its source evidence or target changed. Use `reject --reason ...` to close a proposal or `edit --draft-file ...` while it is still proposed. Team-policy promotion appends policy only to the team's single coordinator/orchestrator; it is not a team-wide runtime security contract. Proposed and rejected drafts are never loaded by the runtime.
 
-See the [L3/L4 outcome-driven memory implementation specification](docs/hufu-outcome-driven-memory-hf-mem4-implementation-spec.md) for contracts, rollout gates, and acceptance criteria.
-See the [LTM promotion specification](docs/hufu-ltm-promotion-spec.md) for the promotion lifecycle, safety boundaries, and acceptance matrix.
+See the [documentation map](docs/README.md) for the authority order and
+current architecture references. In particular, use the [L3/L4 outcome-driven
+memory specification](docs/architecture/memory-learning.md) for contracts and
+rollout gates, and the [LTM promotion specification](docs/architecture/memory-promotion.md)
+for promotion lifecycle and safety boundaries.
 
 ---
 

@@ -9,7 +9,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Assumption lifecycle and replan (docs/hufu-decision-aware-runtime-spec.md
+// Assumption lifecycle and replan (docs/architecture/decision-runtime.md
 // §18, §31).
 //
 // The invariant that shapes this file: a decision that turns out to rest on a

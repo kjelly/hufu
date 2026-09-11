@@ -7,7 +7,7 @@ import (
 )
 
 // Per-tool recovery resolution for the commit gate
-// (docs/hufu-decision-aware-runtime-spec.md §30.1).
+// (docs/architecture/decision-runtime.md §30.1).
 //
 // EvaluateCommitGate decides require-rollback from the invoked tool's
 // ToolRecoverySpec. This file is the only place that spec is produced, so

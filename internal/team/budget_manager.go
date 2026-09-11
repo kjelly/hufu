@@ -8,7 +8,7 @@ import (
 )
 
 // Budget ownership for the decision-aware runtime
-// (docs/hufu-decision-aware-runtime-spec.md §29, Phase 0.5).
+// (docs/architecture/decision-runtime.md §29, Phase 0.5).
 //
 // budgetLedger is the single owner of the run's resource counters. Nothing else
 // increments or decrements them: StopPolicy, diagnosis, plan revision and the

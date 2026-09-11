@@ -150,7 +150,7 @@ type AntiThrashingState struct {
 	// distinct task count reaches MaxSystemicFailureTasks the scope is
 	// escalated (§6.2): protocol / environment / contract → needs_human,
 	// any other class → replan_required. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	SystemicCounts        map[string]map[string]bool // scope key → task ID set
 	BlockedSystemicScopes map[string]bool
 	// BlockedSystemicScopePrefixes maps the (component, operation) prefix
@@ -160,7 +160,7 @@ type AntiThrashingState struct {
 	// before execution, not the class or digest. When any escalated scope
 	// shares the candidate's (component, operation), §6.2 requires
 	// "停止對該 scope 派工" and we conservatively block dispatch. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	BlockedSystemicScopePrefixes map[string]bool
 	// EscalatedSystemicScopes records scopes whose threshold crossing has
 	// already been counted (in SystemicEscalations) and whose
@@ -170,7 +170,7 @@ type AntiThrashingState struct {
 	// event without hard-blocking, and so a subsequent failure in the same
 	// scope does not re-emit. It is reconstructed by rebuild() so replay
 	// is stable. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	EscalatedSystemicScopes map[string]bool
 	SystemicEscalations     int
 }
@@ -343,7 +343,7 @@ func (s *AntiThrashingState) blocksTask(task TaskDef, item *TodoItem) bool {
 	// Systemic scope (§6.2): block dispatch to the escalated scope,
 	// including future un-fingerprinted candidate tasks whose
 	// (component, operation) prefix matches. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	if s.blockReasonSystemic(task, item) {
 		return true
 	}
@@ -622,7 +622,7 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 	// reached the distinct-task threshold. The one-time escalation count
 	// and hard-block are applied via applySystemicThreshold (see
 	// systemic_scope.go). Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	s.applySystemicThreshold(limits)
 }
 

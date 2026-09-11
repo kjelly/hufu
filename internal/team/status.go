@@ -341,7 +341,7 @@ type TodoItem struct {
 	MemoryManifests     []MemoryInjectionManifest  `json:"memory_manifests,omitempty"`
 	ContextManifests    []ContextInjectionManifest `json:"context_manifests,omitempty"`
 	// SubagentProvider is immutable after task admission
-	// (docs/hufu-external-coding-agent-runtime-spec.md §7.2).
+	// (docs/architecture/execution-runtime.md).
 	SubagentProvider string `json:"subagent_provider,omitempty"`
 	// ProviderBinding carries the durable provider/session identity for this
 	// occurrence. Its SessionID/TurnID MAY transition from empty to populated
@@ -460,7 +460,7 @@ type TodoSpec struct {
 	DecisionBaseRates   []BaseRateEvidence
 	DecisionProvenance  []EvidenceProvenance
 	// SubagentProvider and ProviderBinding follow TaskDef's field of the same
-	// name (docs/hufu-external-coding-agent-runtime-spec.md §7.2). Callers
+	// name (docs/architecture/execution-runtime.md). Callers
 	// normally only set SubagentProvider; todoItemFromSpec derives a minimal
 	// ProviderBinding from it when ProviderBinding is left nil.
 	SubagentProvider string

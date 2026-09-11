@@ -11,7 +11,7 @@ import (
 )
 
 // The decision run envelope: the durable admission boundary for judge
-// execution (docs/hufu-decision-aware-runtime-spec.md §39).
+// execution (docs/architecture/decision-runtime.md §39).
 //
 // The envelope artifact must reach the content-addressed store before its
 // anchor event, and the anchor must reach the journal before the first judge

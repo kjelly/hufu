@@ -9,7 +9,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Dispatch integration (docs/hufu-decision-aware-runtime-spec.md Phase 3.5).
+// Dispatch integration (docs/architecture/decision-runtime.md Phase 3.5).
 //
 // This is the wiring that makes `decision-profile` mean something. Without it
 // the whole subsystem parses, validates and then does nothing.

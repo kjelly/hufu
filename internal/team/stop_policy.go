@@ -9,7 +9,7 @@ import (
 )
 
 // Stop policy and checkpoint evaluation
-// (docs/hufu-decision-aware-runtime-spec.md §29, §32).
+// (docs/architecture/decision-runtime.md §29, §32).
 //
 // A checkpoint is evaluated after a completed tool call and makes zero LLM
 // calls. That bound is deliberate: re-asking a model whether its assumptions

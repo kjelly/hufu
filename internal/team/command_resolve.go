@@ -17,7 +17,7 @@ import (
 // file under workDir, an executable_unresolved finding is produced with a hint
 // suggesting an explicit relative path (e.g. ./tool).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.1, WP-04
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.1, WP-04
 func ResolveStageExecutables(stages []string, workDir string) []ContractFinding {
 	var findings []ContractFinding
 

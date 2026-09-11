@@ -7,7 +7,7 @@ import (
 )
 
 // Numeric semantics for the decision runtime
-// (docs/hufu-decision-aware-runtime-spec.md §14).
+// (docs/architecture/decision-runtime.md §14).
 //
 // Every rule here exists because "deterministic aggregation" is otherwise not
 // decidable: without a fixed scale, weight normalization, missing-value

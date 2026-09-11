@@ -9,7 +9,7 @@ import (
 // gitCandidateFiles uses Git to discover which paths matter in root quickly —
 // tracked files plus untracked-but-not-ignored files — respecting
 // .gitignore automatically instead of hand-rolled skip rules
-// (docs/hufu-external-coding-agent-runtime-spec.md §11.3). The caller still
+// (docs/architecture/execution-runtime.md). The caller still
 // hashes every candidate's actual bytes from disk: Git only accelerates
 // candidate discovery, it is never trusted for content integrity.
 //

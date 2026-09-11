@@ -14,7 +14,7 @@ import (
 )
 
 // Runtime mount for execution discipline
-// (docs/hufu-decision-aware-runtime-spec.md §29-§32).
+// (docs/architecture/decision-runtime.md §29-§32).
 //
 // Discipline is armed per task before EXECUTE and read at the tool boundary.
 // When no discipline is armed — every task under the reserved "off" profile,

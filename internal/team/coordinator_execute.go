@@ -331,7 +331,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if canonicalizeErr != nil {
 			// An unknown subagent provider fails the whole dispatch before any
 			// TODO/model call, exactly like the other admission-time contract
-			// errors above (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+			// errors above (docs/architecture/execution-runtime.md).
 			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
 		}
 		if agentDef != nil {

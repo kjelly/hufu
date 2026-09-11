@@ -173,7 +173,7 @@ type AgentDef struct {
 	ExtraModels []string
 	// SubagentProvider is this agent's default SubagentProvider (e.g.
 	// "codex"). Empty defers to the team default, then "hufu-local"
-	// (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+	// (docs/architecture/execution-runtime.md).
 	SubagentProvider string
 }
 
@@ -383,7 +383,7 @@ type TeamConfig struct {
 	// Decision configures the decision-aware runtime's rigor profiles. An
 	// absent block resolves every task to the reserved "off" profile, which
 	// preserves pre-decision behavior exactly
-	// (docs/hufu-decision-aware-runtime-spec.md §8, §10).
+	// (docs/architecture/decision-runtime.md §8, §10).
 	Decision DecisionConfig
 	// CapabilityRegistry holds maintainer-authored capability claims per
 	// configured agent name, keyed by agent name (plan.md Stage 8; spec1.md
@@ -399,7 +399,7 @@ type TeamConfig struct {
 	RoutingPolicy RoutingPolicyConfig
 	// SubagentProviderDefault names the team-wide default SubagentProvider
 	// for tasks/agents that do not pin one explicitly. Empty resolves to
-	// "hufu-local" (docs/hufu-external-coding-agent-runtime-spec.md §6.4).
+	// "hufu-local" (docs/architecture/execution-runtime.md).
 	SubagentProviderDefault string
 	// SubagentProviders declares external SubagentProvider configurations by
 	// name. The reserved name "hufu-local" cannot be overridden here.
@@ -570,7 +570,7 @@ type ActionProviderConfig struct {
 }
 
 // SubagentProviderConfig configures one external SubagentProvider driver
-// (docs/hufu-external-coding-agent-runtime-spec.md §6.1). Structural
+// (docs/architecture/execution-runtime.md). Structural
 // validation only happens at parse time; constructing/registering the
 // actual provider (and any process/model call) is a later runtime phase.
 type SubagentProviderConfig struct {
@@ -741,7 +741,7 @@ type ReliabilityConfig struct {
 	// feature; MaxSystemicFailureTasksSet records whether the value was
 	// explicitly set (so reliabilityConfig() can honor a zero override
 	// rather than restoring the default). Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
+	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	MaxSystemicFailureTasks    int  `yaml:"max-systemic-failure-tasks" json:"max_systemic_failure_tasks,omitempty"`
 	MaxSystemicFailureTasksSet bool `yaml:"-" json:"-"`
 	HardEnforcement            bool `yaml:"hard-enforcement" json:"hard_enforcement,omitempty"`
@@ -749,7 +749,7 @@ type ReliabilityConfig struct {
 	// VerifierLintMode controls the pre-dispatch verifier assertiveness
 	// lint (§4.3). "error" (default) rejects non-asserting verifiers before
 	// dispatch; "warn" emits a warning event but still dispatches; "off"
-	// disables the lint entirely. Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+	// disables the lint entirely. Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 	VerifierLintMode string `yaml:"verifier-lint" json:"verifier_lint,omitempty"`
 	// MaxTokensWithoutProgress is the no-progress budget on cumulative LLM
 	// tokens consumed since the last objective criterion advancement (§8.1).
@@ -757,7 +757,7 @@ type ReliabilityConfig struct {
 	// default. MaxTokensWithoutProgressSet records whether the value was
 	// explicitly set so reliabilityConfig() honors a zero override rather
 	// than restoring the default. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 	MaxTokensWithoutProgress    int  `yaml:"max-tokens-without-progress" json:"max_tokens_without_progress,omitempty"`
 	MaxTokensWithoutProgressSet bool `yaml:"-" json:"-"`
 	// MaxTokensPerAttempt bounds a single worker attempt before it can consume
@@ -772,13 +772,13 @@ type ReliabilityConfig struct {
 	// MaxTurnsWithoutProgress is the no-progress budget on coordinator turns
 	// since the last objective criterion advancement (§8.1). Same 0-disables
 	// semantics as MaxTokensWithoutProgress. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 	MaxTurnsWithoutProgress    int  `yaml:"max-turns-without-progress" json:"max_turns_without_progress,omitempty"`
 	MaxTurnsWithoutProgressSet bool `yaml:"-" json:"-"`
 	// MaxTasksWithoutProgress is the no-progress budget on tasks created
 	// since the last objective criterion advancement (§8.1). Same 0-disables
 	// semantics as MaxTokensWithoutProgress. Refs:
-	// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+	// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 	MaxTasksWithoutProgress    int  `yaml:"max-tasks-without-progress" json:"max_tasks_without_progress,omitempty"`
 	MaxTasksWithoutProgressSet bool `yaml:"-" json:"-"`
 }
@@ -796,7 +796,7 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 		// No-progress budget defaults (§8.1). Sized generously so a healthy
 		// run is never tripped, but a run that burns tokens/turns/tasks
 		// without any objective criterion advancement is bounded. Refs:
-		// docs/hufu-generic-task-reliability-mechanisms.md §8.1, WP-12
+		// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 		MaxTokensWithoutProgress: 2_000_000,
 		MaxTurnsWithoutProgress:  8,
 		MaxTasksWithoutProgress:  12,
@@ -807,7 +807,7 @@ func DefaultReliabilityConfig() ReliabilityConfig {
 }
 
 // VerifierLintMode constants for ReliabilityConfig.VerifierLintMode.
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 const (
 	VerifierLintError = "error"
 	VerifierLintWarn  = "warn"
@@ -853,7 +853,7 @@ type VerificationSpec struct {
 	// AssumptionRefs names the decision assumptions this verification checks.
 	// It makes the verification a status source for them: passing supports
 	// them, failing contradicts them
-	// (docs/hufu-decision-aware-runtime-spec.md §18.1).
+	// (docs/architecture/decision-runtime.md §18.1).
 	AssumptionRefs []string `json:"assumption_refs,omitempty" yaml:"assumption-refs,omitempty"`
 }
 

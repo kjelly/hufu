@@ -141,7 +141,7 @@ type StructuredExecutionRequest struct {
 	// AdmitStep is the commitment boundary for a structured step. It is a
 	// callback rather than a direct commit-gate call so this file stays free
 	// of coordinator state; a non-nil error means the step's process must not
-	// start (docs/hufu-decision-aware-runtime-spec.md §30).
+	// start (docs/architecture/decision-runtime.md §30).
 	AdmitStep func(ExecutionStep) error
 }
 

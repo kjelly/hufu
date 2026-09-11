@@ -1,8 +1,8 @@
 package team
 
 // codexWorkerResultProposalSchema builds the strict JSON Schema Codex's
-// turn/start.outputSchema must enforce (docs/hufu-external-coding-agent-runtime-spec.md
-// §14.5). It must: set required status and summary; enumerate allowed status
+// turn/start.outputSchema must enforce (docs/architecture/execution-runtime.md).
+// It must: set required status and summary; enumerate allowed status
 // values; disallow unknown fields; bound nested structures where JSON Schema
 // permits; and never expose a trusted Hufu field (TaskID/RunID/Attempt/
 // Agent/Provider/hashes/receipt IDs/verification) — this schema is generated

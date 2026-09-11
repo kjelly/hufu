@@ -33,7 +33,7 @@ type runOptions struct {
 	workspace string
 	// decisionProfile is the run-scoped --decision-profile override, the top
 	// layer of the decision profile precedence chain
-	// (docs/hufu-decision-aware-runtime-spec.md §8).
+	// (docs/architecture/decision-runtime.md §8).
 	decisionProfile string
 	newSession      bool
 	tempWorkspace   bool

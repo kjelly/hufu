@@ -12,7 +12,7 @@ import (
 // error, the resumed TODO is marked terminal (TaskError) rather than left
 // pending and re-driven forever on the next crash-resume (reviewer P1).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, §5, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, §5, WP-02
 func TestExecuteTask_ContractErrorMarksTodoTerminal(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
@@ -63,7 +63,7 @@ func TestExecuteTask_ContractErrorMarksTodoTerminal(t *testing.T) {
 // path (executeTask called directly, bypassing ExecuteTasks preflight) still
 // emits a contract_warning event for warn-mode findings (reviewer P2).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, WP-02
 func TestExecuteTask_WarnModeEmitsWarningOnResume(t *testing.T) {
 	var warnCount int
 	workspace := t.TempDir()
@@ -107,7 +107,7 @@ func TestExecuteTask_WarnModeEmitsWarningOnResume(t *testing.T) {
 // terminal (TaskError), so isInterruptedStatus returns false and
 // ResumeInterruptedTasks does NOT select it for re-execution (reviewer P1).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §4.3, §5, WP-02
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §4.3, §5, WP-02
 func TestResumeInterruptedTasks_ContractErrorNotRedriven(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{

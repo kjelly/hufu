@@ -1,5 +1,11 @@
 # Runtime integrity improvements
 
+> Status: accepted
+> Authority: normative
+> Verified-Commit: `6ab9951`
+> Supersedes: —
+> Superseded-By: —
+
 ## Status
 
 Accepted

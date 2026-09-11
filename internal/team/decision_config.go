@@ -7,7 +7,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Decision profile resolution (docs/hufu-decision-aware-runtime-spec.md §8).
+// Decision profile resolution (docs/architecture/decision-runtime.md §8).
 //
 // Precedence, highest first:
 //

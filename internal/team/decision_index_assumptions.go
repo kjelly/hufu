@@ -11,7 +11,7 @@ import (
 )
 
 // The operator assumption-check entry point, the third of the three status
-// sources (docs/hufu-decision-aware-runtime-spec.md §18.1).
+// sources (docs/architecture/decision-runtime.md §18.1).
 //
 // It appends a superseding row; the DecisionRecord the row points at is never
 // edited. Split out of decision_index.go unchanged.

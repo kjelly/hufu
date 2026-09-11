@@ -8,11 +8,10 @@ import (
 	"strings"
 )
 
-// ExecutionWorld is the Hufu-owned execution boundary an external provider
-// that can run native shell/filesystem operations MUST run inside
-// (docs/hufu-external-coding-agent-runtime-spec.md §10.1). Still no Codex at
-// this phase (PR-06): only the generic contract and its local-sandbox
-// implementation exist.
+// ExecutionWorld is the Hufu-owned execution boundary that an external
+// provider capable of native shell/filesystem operations must run inside.
+// Hufu keeps the workspace/effect boundary separate from the provider
+// transport so local and external execution use the same admission contract.
 type ExecutionWorld interface {
 	Name() string
 	Capabilities() ExecutionWorldCapabilities
@@ -35,8 +34,7 @@ type ExecutionWorldCapabilities struct {
 	SupportsNativeSandbox bool
 }
 
-// ExecutionWorldSpec requests one prepared world for one attempt
-// (docs/hufu-external-coding-agent-runtime-spec.md §10.2).
+// ExecutionWorldSpec requests one prepared world for one attempt.
 type ExecutionWorldSpec struct {
 	RunID   string
 	TaskID  string

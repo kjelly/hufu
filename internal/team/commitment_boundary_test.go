@@ -13,7 +13,7 @@ import (
 )
 
 // Commitment is bound to the tool that actually mutates
-// (docs/hufu-decision-aware-runtime-spec.md §30, plan Stage 6).
+// (docs/architecture/decision-runtime.md §30, plan Stage 6).
 //
 // These tests exercise the real tool boundary rather than the gate function,
 // because the guarantee is about tool processes that never start.

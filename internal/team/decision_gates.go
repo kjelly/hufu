@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Decision quality gates (docs/hufu-decision-aware-runtime-spec.md §17, §19,
+// Decision quality gates (docs/architecture/decision-runtime.md §17, §19,
 // §40 forecast validation).
 //
 // Every gate here is deterministic and runs before judgment starts, so a

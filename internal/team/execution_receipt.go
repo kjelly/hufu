@@ -146,7 +146,7 @@ type ExecutionReceipt struct {
 	ProviderTranscriptRef string `json:"provider_transcript_ref,omitempty"`
 	// SubagentProvider/ProviderSessionID/ProviderTurnID/ExecutionWorldID/
 	// WorkspaceBefore/WorkspaceAfter are Hufu-written provider provenance
-	// (docs/hufu-external-coding-agent-runtime-spec.md §20). ProducerID may
+	// (docs/architecture/execution-runtime.md). ProducerID may
 	// continue to carry the isolated-worker identity, but these are the
 	// dedicated provider/session fields — never overloaded onto ProducerID.
 	// Reports/TUI/debug bundle (§37 PR-16) read these to show provider

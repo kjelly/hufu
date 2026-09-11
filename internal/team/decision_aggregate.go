@@ -7,7 +7,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Deterministic aggregation (docs/hufu-decision-aware-runtime-spec.md §19-§22).
+// Deterministic aggregation (docs/architecture/decision-runtime.md §19-§22).
 //
 // Aggregation makes zero LLM calls. Given the same opinions it must produce a
 // byte-identical DecisionAggregate on any machine, so every collection is

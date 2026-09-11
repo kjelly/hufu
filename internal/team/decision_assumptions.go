@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Assumption status sources (docs/hufu-decision-aware-runtime-spec.md §18.1).
+// Assumption status sources (docs/architecture/decision-runtime.md §18.1).
 //
 // The runtime never infers an assumption's status. Exactly three things may
 // change one, and each has its own contract here:

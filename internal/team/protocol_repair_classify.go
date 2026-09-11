@@ -39,7 +39,7 @@ const submitResultToolName = "submit_result"
 //     "completed_with_gaps") or a
 //     progress update (partial/failed/blocked)?
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §7
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §7
 func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (reason RepairFailureReason, reclassifyExecution bool) {
 	// A successful repair produces a valid submitted result; nothing to classify.
 	if typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil {

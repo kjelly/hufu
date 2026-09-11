@@ -9,7 +9,7 @@ import (
 // separate if-statements in the retry loop. These are the characterization
 // tests required by WP-08 ("確保重構前後行為等價").
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-07, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07, WP-08
 func TestDecideRecovery_FiveEarlyBreakPaths(t *testing.T) {
 	tests := []struct {
 		name string
@@ -117,7 +117,7 @@ func TestDecideRecovery_AllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t 
 // disposition mapping for replayable tasks where none of the five early-break
 // paths trigger.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5, §6.1, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07
 func TestDecideRecovery_ClassBasedDisposition(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -170,7 +170,7 @@ func TestDecideRecovery_ClassBasedDisposition(t *testing.T) {
 // (context cancellation or FailureCancelled class) are separated from
 // execution failures and produce RetryNone, not a retry.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §5.3, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-07
 func TestDecideRecovery_CancelledPrecedence(t *testing.T) {
 	tests := []struct {
 		name string
@@ -217,7 +217,7 @@ func TestDecideRecovery_CancelledPrecedence(t *testing.T) {
 // returns RetryNone when attempt >= maxRetries and none of the five paths
 // trigger.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07
 func TestDecideRecovery_BudgetExhausted(t *testing.T) {
 	in := RecoveryDecisionInput{
 		Replayable:       true,
@@ -258,7 +258,7 @@ func TestDecideRecovery_NonRetryClassesPreserveDispositionAfterBudget(t *testing
 // non-empty for every disposition, so the retry loop can use it in report
 // messages.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §9, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §9, WP-07
 func TestDecideRecovery_ReasonNonEmpty(t *testing.T) {
 	inputs := []RecoveryDecisionInput{
 		{TerminalBlocked: true, Replayable: true, Attempt: 1, MaxRetries: 3},
@@ -295,7 +295,7 @@ func TestDecideRecovery_ReasonNonEmpty(t *testing.T) {
 // protocolFailure before replayable, etc. — matching the pre-refactoring
 // loop's if-statement order.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
 func TestDecideRecovery_PathOrdering(t *testing.T) {
 	// terminalBlocked takes precedence over protocolFailure + non-replayable.
 	in := RecoveryDecisionInput{
@@ -402,7 +402,7 @@ func TestShouldBlockTask(t *testing.T) {
 // cases that are relevant to DecideRecovery. Each case maps a scenario to the
 // expected RetryDisposition.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §11, WP-07
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §11, WP-07
 func TestDecideRecovery_S11AcceptanceMatrix(t *testing.T) {
 	tests := []struct {
 		name string
@@ -486,7 +486,7 @@ func TestDecideRecovery_S11AcceptanceMatrix(t *testing.T) {
 // formatted errors that normalize to the same fingerprint must be detected
 // as a repeat.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-07 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
 func TestDecideRecovery_FingerprintRepeatDetection(t *testing.T) {
 	// Two errors with different formatting but the same normalized
 	// fingerprint (the "attempt N" part is volatile and normalized away).
@@ -557,7 +557,7 @@ func TestDecideRecovery_FingerprintRepeatDetection(t *testing.T) {
 // unit tests that fail if each required input is ignored, including
 // differently formatted errors with the same normalized fingerprint."
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-07 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
 func TestDecideRecovery_DifferentlyFormattedErrorsSameFingerprint(t *testing.T) {
 	// Simulate the actual normalization: "attempt 1 failed: timeout" and
 	// "attempt 2 failed: timeout" both normalize to "attempt=<volatile>
@@ -603,7 +603,7 @@ func TestDecideRecovery_DifferentlyFormattedErrorsSameFingerprint(t *testing.T) 
 // (§6.1). This is the reviewer's P1 finding about profile recovery policy
 // bypass.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestDecideRecovery_RecoveryPolicyGatesRetry(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -638,7 +638,7 @@ func TestDecideRecovery_RecoveryPolicyGatesRetry(t *testing.T) {
 // EvidenceComplete is false, DecideRecovery does not prescribe RetryWorker
 // (§6.1: retry prompt must include class, evidence, last command/exit).
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-08 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
 func TestDecideRecovery_EvidenceCompleteGatesRetry(t *testing.T) {
 	in := RecoveryDecisionInput{
 		Replayable:       true,
@@ -658,7 +658,7 @@ func TestDecideRecovery_EvidenceCompleteGatesRetry(t *testing.T) {
 // specified by §6.1 is actually read by DecideRecovery. Each sub-test changes
 // one input and verifies the disposition changes accordingly.
 //
-// Refs: docs/hufu-generic-task-reliability-mechanisms.md §6.1, WP-07 (reviewer P1)
+// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
 func TestDecideRecovery_AllRequiredInputsUsed(t *testing.T) {
 	base := RecoveryDecisionInput{
 		Replayable:       true,
