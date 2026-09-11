@@ -15,11 +15,12 @@ import (
 // LockedResource is the durable, metadata-only record of one resolved
 // required resource (runtime invariant 9: event/report record metadata,
 // never content). SnapshotRef points at the full-content snapshot in the
-// existing ArtifactStore (internal/team/evidence_store.go); resolving and
-// writing that snapshot is PR-2 scope, so ResolveRequiredResource leaves it
-// zero-valued for now. InjectInto is copied from the originating
-// RequiredResourceSpec so bind/inject can act on a LockedResource alone,
-// without joining back to the original declared-spec list.
+// existing ArtifactStore (internal/team/evidence_store.go); no code path
+// writes that snapshot yet, so ResolveRequiredResource leaves it
+// zero-valued — a later PR wires actual artifact-store snapshotting.
+// InjectInto is copied from the originating RequiredResourceSpec so
+// bind/inject can act on a LockedResource alone, without joining back to
+// the original declared-spec list.
 type LockedResource struct {
 	Name          string
 	Kind          agent.RequiredResourceKind
@@ -131,4 +132,16 @@ func ResolveRequiredResources(rootDir string, specs []agent.RequiredResourceSpec
 		Digest:        ComputeLockedResourceSetDigest(locked),
 	}
 	return set, loaded, nil
+}
+
+func cloneLockedResourceSet(set *LockedResourceSet) *LockedResourceSet {
+	if set == nil {
+		return nil
+	}
+	clone := *set
+	clone.Resources = append([]LockedResource(nil), set.Resources...)
+	for i := range clone.Resources {
+		clone.Resources[i].InjectInto = append([]string(nil), set.Resources[i].InjectInto...)
+	}
+	return &clone
 }

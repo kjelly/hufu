@@ -1,6 +1,8 @@
 package team
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,27 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+// newResourceLockTestCoordinator builds a minimal Coordinator with a real
+// on-disk event store (matching the pattern other coordinator tests use,
+// e.g. TestPhase1DiagnosticEventAppendFailureRetriesAtCheckpoint), so
+// ValidateRequiredResourceLocks can durably append and persist.
+func newResourceLockTestCoordinator(t *testing.T, dir string, specs []agent.RequiredResourceSpec) *Coordinator {
+	t.Helper()
+	session := &TeamSession{
+		Dir:       dir,
+		Workspace: dir,
+		Config:    agent.TeamConfig{Name: "locked-team", RequiredResources: specs},
+	}
+	c := &Coordinator{session: session, sessionData: NewSession(), executionRunID: "run-1"}
+	es, err := NewEventStore(dir, "run-1", "session-1")
+	if err != nil {
+		t.Fatalf("NewEventStore: %v", err)
+	}
+	t.Cleanup(func() { _ = es.Close() })
+	c.eventStore = es
+	return c
+}
 
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -228,5 +251,121 @@ required-resources:
 
 	if _, err := parseTeamYML(dir, nil); err == nil {
 		t.Fatal("parseTeamYML() = nil error, want validation failure for unknown kind")
+	}
+}
+
+func TestValidateRequiredResourceLocksNoOpWithoutDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	// Deliberately no event store attached: if the no-op short-circuit ever
+	// regressed to touching EventJournal() first, this would fail with
+	// "event journal is unavailable" instead of returning nil.
+	c := &Coordinator{session: &TeamSession{Dir: dir, Workspace: dir, Config: agent.TeamConfig{Name: "legacy-team"}}, sessionData: NewSession()}
+
+	if err := c.ValidateRequiredResourceLocks(context.Background(), dir); err != nil {
+		t.Fatalf("ValidateRequiredResourceLocks() = %v, want nil for a team with no required-resources", err)
+	}
+}
+
+func TestResourceLockEventContainsNoContent(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "secret rules content")
+	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
+	c := newResourceLockTestCoordinator(t, dir, specs)
+
+	if err := c.ValidateRequiredResourceLocks(context.Background(), dir); err != nil {
+		t.Fatalf("ValidateRequiredResourceLocks() error = %v", err)
+	}
+
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents() error = %v", err)
+	}
+	var found bool
+	for _, e := range events {
+		if e.Type != string(EventResourceLocked) {
+			continue
+		}
+		found = true
+		if strings.Contains(string(e.Payload), "secret rules content") {
+			t.Fatalf("resource_locked payload contains raw content: %s", e.Payload)
+		}
+		var set LockedResourceSet
+		if err := json.Unmarshal(e.Payload, &set); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if len(set.Resources) != 1 || set.Resources[0].SHA256 == "" {
+			t.Fatalf("payload set = %+v, want one locked resource with a digest", set)
+		}
+	}
+	if !found {
+		t.Fatal("no resource_locked event was appended")
+	}
+}
+
+func TestLockedResourceSetSurvivesResume(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "rules content")
+	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
+	c := newResourceLockTestCoordinator(t, dir, specs)
+
+	if err := c.ValidateRequiredResourceLocks(context.Background(), dir); err != nil {
+		t.Fatalf("ValidateRequiredResourceLocks() error = %v", err)
+	}
+
+	resumed := LoadSession(dir)
+	if resumed == nil || resumed.RequiredResourceLockSet == nil {
+		t.Fatalf("LoadSession() RequiredResourceLockSet = %+v, want a persisted set", resumed)
+	}
+	if resumed.RequiredResourceLockSet.Digest == "" {
+		t.Fatal("resumed RequiredResourceLockSet.Digest is empty")
+	}
+}
+
+func TestLockedResourceReplayRejectsConflict(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "original content")
+	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
+	c := newResourceLockTestCoordinator(t, dir, specs)
+
+	if err := c.ValidateRequiredResourceLocks(context.Background(), dir); err != nil {
+		t.Fatalf("first ValidateRequiredResourceLocks() error = %v", err)
+	}
+
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "mutated content")
+
+	err := c.ValidateRequiredResourceLocks(context.Background(), dir)
+	if err == nil {
+		t.Fatal("second ValidateRequiredResourceLocks() = nil error, want drift-detected failure")
+	}
+	if !strings.Contains(err.Error(), "drift detected") {
+		t.Fatalf("error = %v, want it to mention drift detected", err)
+	}
+}
+
+func TestLockedResourceMutationDoesNotChangeRunInput(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "original content")
+	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
+	c := newResourceLockTestCoordinator(t, dir, specs)
+
+	if err := c.ValidateRequiredResourceLocks(context.Background(), dir); err != nil {
+		t.Fatalf("ValidateRequiredResourceLocks() error = %v", err)
+	}
+	originalDigest := c.LoadedRequiredResources()[0].SHA256
+	originalContent := c.LoadedRequiredResources()[0].Content
+
+	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "mutated content")
+
+	// The already-locked in-memory content and persisted metadata must not
+	// change just because the underlying file changed after locking
+	// (invariant 5); only a fresh admission attempt (tested separately)
+	// detects and rejects the drift.
+	if c.LoadedRequiredResources()[0].Content != originalContent {
+		t.Fatalf("LoadedRequiredResources content changed after mutation: %q", c.LoadedRequiredResources()[0].Content)
+	}
+	var persisted *LockedResourceSet
+	c.viewSessionData(func(sd *SessionData) { persisted = sd.RequiredResourceLockSet })
+	if persisted.Resources[0].SHA256 != originalDigest {
+		t.Fatalf("persisted SHA256 = %q, want unchanged %q", persisted.Resources[0].SHA256, originalDigest)
 	}
 }

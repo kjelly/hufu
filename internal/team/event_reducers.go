@@ -85,6 +85,11 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
 				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
 			}
+		case string(EventResourceLocked):
+			var set LockedResourceSet
+			if err := json.Unmarshal(e.Payload, &set); err == nil {
+				session.RequiredResourceLockSet = &set
+			}
 		case "context_manifest":
 			var manifest ContextInjectionManifest
 			if err := json.Unmarshal(e.Payload, &manifest); err == nil && manifest.RequestID != "" {

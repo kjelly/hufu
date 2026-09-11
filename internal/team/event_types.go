@@ -51,6 +51,11 @@ const (
 	// EventBackendSessionBound is the canonical mutable backend-session event.
 	EventBackendSessionBound     EventType = "backend_session_bound"
 	EventExecutionTargetMigrated EventType = "execution_target_migrated"
+	// EventResourceLocked records a durably admitted LockedResourceSet
+	// (spec.md "Generic Required Resource Lock"). The payload is
+	// metadata-only — canonical path, sha256, byte size — never content
+	// (runtime invariant 9).
+	EventResourceLocked EventType = "resource_locked"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -73,7 +78,8 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
-		EventModelProfileResolved, EventExecutionPolicySnapshot, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated:
+		EventModelProfileResolved, EventExecutionPolicySnapshot, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
+		EventResourceLocked:
 		return true
 	default:
 		return false

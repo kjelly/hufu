@@ -77,7 +77,13 @@ type SessionData struct {
 	// ExecutionPolicySnapshot is the durable, redacted admission record that
 	// freezes scheduler limits, model routing, execution worlds, and inherited
 	// environment values before any task or provider call can begin.
-	ExecutionPolicySnapshot            *ExecutionPolicySnapshot  `json:"execution_policy_snapshot,omitempty"`
+	ExecutionPolicySnapshot *ExecutionPolicySnapshot `json:"execution_policy_snapshot,omitempty"`
+	// RequiredResourceLockSet is the durable, metadata-only record of every
+	// required resource (skill/prompt/project_rules/schema) resolved and
+	// hash-locked before dispatch (spec.md "Generic Required Resource
+	// Lock"). Nil for teams that declare no required-resources — runtime
+	// invariant 10, zero behavior change.
+	RequiredResourceLockSet            *LockedResourceSet        `json:"required_resource_lock_set,omitempty"`
 	ConversationHistorySourceOffset    int                       `json:"conversation_history_source_offset"`
 	ConversationHistorySourceCounts    []int                     `json:"conversation_history_source_counts"`
 	ConversationHistorySourceRanges    [][]CompactionRange       `json:"conversation_history_source_ranges,omitempty"`

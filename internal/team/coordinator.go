@@ -442,6 +442,12 @@ type Coordinator struct {
 	// extra-model coordinators change session.Workspace, but must continue to
 	// resolve the parent run's immutable artifact capabilities from this root.
 	artifactStoreRoot string
+	// loadedRequiredResourcesMu guards loadedRequiredResources, the in-memory
+	// content ValidateRequiredResourceLocks resolved for this run
+	// (resource_lock_replay.go). PR-3's bind/inject step is the first real
+	// consumer; nothing reads it yet.
+	loadedRequiredResourcesMu sync.Mutex
+	loadedRequiredResources   []*LoadedResource
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
