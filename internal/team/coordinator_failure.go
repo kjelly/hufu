@@ -100,6 +100,76 @@ func (c *Coordinator) FailureDetail(err error, source string) string {
 	return strings.Join(parts, " | ")
 }
 
+// bindTaskFailureDetail replaces coordinator-global activity fields with the
+// immutable task identity supplied by the persistence boundary. Worker tasks
+// run concurrently, so currentSnapshot and its last tool are diagnostic
+// signals for TUI/SIGINT only; they cannot identify the task that owns a
+// failure record. The identity is placed first so bounded diagnostic
+// truncation cannot discard the ownership fields.
+func bindTaskFailureDetail(detail, agentName, _ string, todoID string, attempt ...int) string {
+	// taskDesc is deliberately not copied into the durable detail. The task
+	// description is already stored on the todo item, and embedding it here
+	// would both duplicate untrusted prompt text and make failure summaries
+	// exceed their bounded diagnostic budget.
+	identity := []string{"task"}
+	if agentName = strings.TrimSpace(agentName); agentName != "" {
+		identity = append(identity, "agent="+failureDetailField(agentName, 120))
+	}
+	if todoID = strings.TrimSpace(todoID); todoID != "" {
+		identity = append(identity, "todo_id="+failureDetailField(todoID, 120))
+	}
+	if len(attempt) > 0 && attempt[0] > 0 {
+		identity = append(identity, fmt.Sprintf("attempt=%d", attempt[0]))
+	}
+	bound := "current=" + strings.Join(identity, " ")
+	diagnostic := failureDetailWithoutCoordinatorFields(detail)
+	if diagnostic == "" {
+		return boundedFailureDetail(bound)
+	}
+	return boundedFailureDetail(bound + " | " + diagnostic)
+}
+
+// taskFailureDetailForPersistence always binds a durable task detail to the
+// immutable todo identity carried by the persistence call. The detail may not
+// contain coordinator-global fields at all (for example a terminal recovery
+// error), but it still needs an explicit task identity for concurrent workers.
+func (c *Coordinator) taskFailureDetailForPersistence(detail, agentName, taskDesc, todoID string, attempt int) string {
+	if strings.TrimSpace(todoID) == "" {
+		return boundedFailureDetail(detail)
+	}
+	// Coordinator.current is an observation surface, not an immutable
+	// ownership proof. Even matching agent/task text can describe two
+	// concurrent Todo IDs, so shared current/last_tool fields are always removed
+	// from durable task records. Raw details with no such fields are also bound
+	// here rather than relying on the caller's agent/task text.
+	return bindTaskFailureDetail(detail, agentName, taskDesc, todoID, attempt)
+}
+
+func boundedFailureDetail(detail string) string {
+	return utils.TruncateString(detail, 500)
+}
+
+// failureDetailWithoutCoordinatorFields is the stable diagnostic input for
+// failure fingerprints. It removes process-wide activity fields without
+// adding task identity, so identical failures on different tasks still join
+// the same systemic/anti-thrashing scope.
+func failureDetailWithoutCoordinatorFields(detail string) string {
+	parts := make([]string, 0, 6)
+	for _, part := range strings.Split(detail, " | ") {
+		if strings.HasPrefix(part, "current=") || strings.HasPrefix(part, "last_tool=") {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func failureDetailField(value string, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.ReplaceAll(value, "|", "/")
+	return utils.TruncateString(value, limit)
+}
+
 // PersistFailure writes the structured failure detail to the active task's
 // todo/status/workspace records and remembers it for later CLI-level reporting.
 // It is safe to call even when some metadata is unavailable.
@@ -119,6 +189,13 @@ func (c *Coordinator) PersistFailureWithDisposition(agentName, taskDesc, todoID,
 // never used to override this class when building fingerprints or events.
 func (c *Coordinator) PersistFailureWithClass(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass) {
 	c.persistFailure(agentName, taskDesc, todoID, detail, disposition, class, nil)
+}
+
+// PersistFailureWithClassAndOutput preserves bounded worker evidence while
+// retaining the caller-selected recovery disposition. Unlike the
+// status-forcing variant, this does not change retry-loop status semantics.
+func (c *Coordinator) PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, output string) {
+	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, nil, output)
 }
 
 // terminalizeTaskErrorIfUnresolved is the scheduler/worker error postcondition.
@@ -195,7 +272,14 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 	if c == nil || detail == "" {
 		return nil
 	}
-	c.rememberFailureContext(agentName, taskDesc, todoID, detail)
+	// Keep the process-wide last-failure projection as the caller-supplied
+	// diagnostic for CLI/TUI reporting. It is intentionally not used for the
+	// durable task record: that record must be rebound to the immutable task
+	// identity before a concurrent worker can overwrite the coordinator's
+	// current snapshot.
+	rawDetail := detail
+	persistedDetail := c.taskFailureDetailForPersistence(detail, agentName, taskDesc, todoID, c.currentTaskAttempt(todoID))
+	c.rememberFailureContext(agentName, taskDesc, todoID, rawDetail)
 	var item *TodoItem
 	if c.taskTracker != nil && todoID != "" {
 		for _, candidate := range c.taskTracker.TodoList().Items() {
@@ -206,7 +290,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		}
 	}
 	if class == "" {
-		class = classifyTaskFailure(errors.New(detail))
+		class = classifyTaskFailure(errors.New(failureDetailWithoutCoordinatorFields(detail)))
 	}
 	var failureEvent *FailureEventPayload
 	var persistedFailureOutput string
@@ -220,7 +304,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 	// failureOperation. The full failureOperation is still available in
 	// the task/run fingerprints for non-systemic anti-thrashing. Refs:
 	// docs/hufu-generic-task-reliability-mechanisms.md §6.2, WP-10
-	fp := NewFailureFingerprint(criterion, agentName, stableOperation(item), class, detail)
+	fp := NewFailureFingerprint(criterion, agentName, stableOperation(item), class, failureDetailWithoutCoordinatorFields(detail))
 	strategy := RecoveryStrategy("")
 	// §5.3: cancelled failures must not be counted in retry, failure-class
 	// statistics or the anti-thrashing fingerprint. Skip the fingerprint
@@ -262,7 +346,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 			}
 			_ = c.emitEvent(kind, "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "repeated": repeated, "limited": limited, "warning": true})
 			if forcedStatus == nil && limited && c.reliabilityConfig().HardEnforcement && item != nil {
-				detail += " | anti-thrashing limit reached; strategy change or human review required"
+				persistedDetail += " | anti-thrashing limit reached; strategy change or human review required"
 			}
 		}
 		_ = c.emitEvent("failure_fingerprint", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "count": c.failureFingerprintCount(fp.Digest), "repeated": repeated})
@@ -284,7 +368,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 				"class":          string(class),
 				"warning":        true,
 			})
-			detail += " | systemic defect escalated: " + disposition + " (scope blocked)"
+			persistedDetail += " | systemic defect escalated: " + disposition + " (scope blocked)"
 		}
 		if repeated && item != nil && item.Kind == TaskKindRepair {
 			hypothesisInvalid = item.RecoveryHypothesis == nil || item.RecoveryHypothesis.ValidateForTask(fp.CriterionID, true, priorStrategy, taskDefFromTodoItem(item)) != nil
@@ -309,13 +393,14 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 			c.recordRetrySuppression(todoID, fp.Digest, disposition, reason)
 		}
 	}
+	persistedDetail = boundedFailureDetail(persistedDetail)
 
 	if todoID != "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		if disposition == "" {
 			disposition = RetryNone
 		}
-		disposition = c.recordDiagnosticPacket(item, class, disposition, detail, fp, repeated, systemic)
-		failureEvent = c.failureEventForItem(item, class, disposition, detail, fp, todoID)
+		disposition = c.recordDiagnosticPacket(item, class, disposition, persistedDetail, fp, repeated, systemic)
+		failureEvent = c.failureEventForItem(item, class, disposition, persistedDetail, fp, todoID)
 		persistedFailureOutput = utils.TruncateString(utils.RedactSecrets(output), 2000)
 		if c.reportStatus != nil {
 			data := map[string]any{
@@ -334,7 +419,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		if forcedStatus != nil {
 			status = *forcedStatus
 		}
-		if isPermissionBlockedFailureDetail(detail) {
+		if isPermissionBlockedFailureDetail(persistedDetail) {
 			status = TaskBlocked
 		}
 		if disposition == NeedsHuman && forcedStatus == nil {
@@ -361,7 +446,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		if persistedFailureOutput != "" {
 			metadata["failure_output"] = persistedFailureOutput
 		}
-		if err := c.commitTaskTransitionFromCurrent(context.Background(), todoID, status, detail, persistedFailureOutput, metadata); err != nil {
+		if err := c.commitTaskTransitionFromCurrent(context.Background(), todoID, status, persistedDetail, persistedFailureOutput, metadata); err != nil {
 			log.Printf("warning: persist failure transition for task %s: %v", todoID, err)
 			terminalizationErr = fmt.Errorf("persist failure transition for task %s: %w", todoID, err)
 		} else if failureEvent != nil {
@@ -381,12 +466,12 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		if failureOutput == "" && item != nil {
 			failureOutput = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
 		}
-		_ = writeTaskFileWithFailureEvent(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, failureOutput, detail, failureEvent)
+		_ = writeTaskFileWithFailureEvent(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "error", taskDesc, failureOutput, persistedDetail, failureEvent)
 		var fingerprints []FailureFingerprint
 		if item != nil {
 			fingerprints = item.FailureFingerprints
 		}
-		c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, detail, failureEvent, failureOutput, fingerprints)
+		c.recordTaskFailureWithEventAndOutput(agentName, taskDesc, persistedDetail, failureEvent, failureOutput, fingerprints)
 	}
 	return terminalizationErr
 }

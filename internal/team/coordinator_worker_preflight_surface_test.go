@@ -15,6 +15,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/tools"
@@ -198,6 +199,75 @@ func TestHufuLocalSubagentUsesWorkerSurfaceAfterInheritedCoordinatorPreflight(t 
 		if slices.Contains(requests[0], forbidden) {
 			t.Fatalf("sub-agent provider tools=%v contains forbidden tool %q", requests[0], forbidden)
 		}
+	}
+}
+
+func TestHufuLocalAcceptsProviderModelForCanonicalOllamaTarget(t *testing.T) {
+	modelID := "sub-agent-local-alias-test"
+	c, def, capture := newWorkerProviderSurfaceCoordinator(t, modelID, "sub-agent")
+	target := execution.ExecutionTarget{Backend: "ollama", Model: modelID}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: def.Name, Desc: "perform aliased delegated work", Goal: "perform aliased delegated work",
+		Model: "ollama/" + modelID, ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target},
+		Execution: ExecutionContract{RequiresResult: true},
+	}})[0]
+	identity := submitResultRuntimeIdentity{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: def.Name}
+	c.openTaskOccurrence(identity)
+	ctx := context.WithValue(oversizedCoordinatorPreflightContext(t, modelID), todoIDKey{}, item.ID)
+	ctx = withSubmitResultRuntimeIdentity(ctx, identity)
+	if err := c.startProviderExecutionBoundary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer c.stopProviderExecutionBoundary()
+
+	task := taskDefFromTodoItem(item)
+	resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskTools: %v", err)
+	}
+	result, err := NewHufuLocalSubagentProvider(c).RunAttempt(ctx, AttemptRequest{
+		RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: def, Task: task,
+		Prompt: task.Goal, ModelID: modelID, ExecutionTarget: target, MaxSteps: agent.DefaultMaxSteps, Tools: resolved,
+	})
+	if err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if result.TypedResult == nil || result.TypedResult.Status != TaskResultStatusSuccess {
+		t.Fatalf("sub-agent typed result=%#v, want successful submit_result", result.TypedResult)
+	}
+	if requests := capture.providerRequests(); len(requests) == 0 {
+		t.Fatal("sub-agent made no provider request")
+	}
+}
+
+func TestHufuLocalRejectsMismatchedProviderModelForCanonicalOllamaTarget(t *testing.T) {
+	modelID := "sub-agent-local-model-assertion-test"
+	c, def, capture := newWorkerProviderSurfaceCoordinator(t, modelID, "sub-agent")
+	target := execution.ExecutionTarget{Backend: "ollama", Model: modelID}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: def.Name, Desc: "reject an aliased model mismatch", Goal: "reject an aliased model mismatch",
+		Model: "ollama/" + modelID, ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target},
+		Execution: ExecutionContract{RequiresResult: true},
+	}})[0]
+	task := taskDefFromTodoItem(item)
+	resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+		Task: task, TodoID: item.ID, Mode: WorkerToolResolutionNormal,
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskTools: %v", err)
+	}
+	_, err = NewHufuLocalSubagentProvider(c).RunAttempt(t.Context(), AttemptRequest{
+		TaskID: item.ID, Attempt: 1, Agent: def, Task: task,
+		Prompt: task.Goal, ModelID: "wrong-provider-model", ExecutionTarget: target,
+		MaxSteps: agent.DefaultMaxSteps, Tools: resolved,
+	})
+	if err == nil || !strings.Contains(err.Error(), "model assertion") {
+		t.Fatalf("RunAttempt error = %v, want canonical model assertion denial", err)
+	}
+	if requests := capture.providerRequests(); len(requests) != 0 {
+		t.Fatalf("provider requests = %v, want no provider call after model denial", requests)
 	}
 }
 

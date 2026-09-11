@@ -74,7 +74,7 @@ type LLMExecutionBackend struct {
 }
 
 func NewLLMExecutionBackend(name string, manager *agent.ProviderManager, runner AttemptRunner) (*LLMExecutionBackend, error) {
-	name = execution.CanonicalBackendName(name)
+	name = execution.CanonicalTargetBackendName(name)
 	if name == "" {
 		return nil, fmt.Errorf("LLM execution backend name is required")
 	}
@@ -102,7 +102,7 @@ func (b *LLMExecutionBackend) ValidateTarget(_ context.Context, target execution
 	if err := target.Validate(); err != nil {
 		return err
 	}
-	if target.Backend != b.name {
+	if !execution.BackendNamesEqual(target.Backend, b.name) {
 		return fmt.Errorf("execution target %q does not belong to LLM backend %q", target, b.name)
 	}
 	return nil
@@ -141,7 +141,7 @@ func (b *LLMExecutionBackend) RunAttempt(ctx context.Context, request AttemptReq
 }
 
 func (b *LLMExecutionBackend) providerModelID(target execution.ExecutionTarget) string {
-	if b.name == "local" {
+	if execution.IsOllamaBackend(target.Backend) {
 		return target.Model
 	}
 	return b.name + "/" + target.Model

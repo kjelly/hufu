@@ -195,12 +195,13 @@ func (c *Coordinator) appendSkillContext(prompt string, agentDef *agent.AgentDef
 // required fallback so dispatch can never proceed without its instructions.
 // Only the summary path records InjectedSkills, because that state means a
 // full skill load is still pending.
-func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName, goal, todoID string, granted map[string]bool) ([]ContextItem, error) {
+func (c *Coordinator) selectedSkillDefinitions(agentDef *agent.AgentDef, goal string) ([]*skill.SkillDef, error) {
 	if agentDef == nil {
 		return nil, nil
 	}
+	catalog := c.getSkills()
 	byName := make(map[string]*skill.SkillDef)
-	for _, definition := range c.getSkills() {
+	for _, definition := range catalog {
 		byName[strings.ToLower(definition.Name)] = definition
 	}
 	ordered := make([]*skill.SkillDef, 0)
@@ -209,7 +210,7 @@ func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName
 		if definition == nil || seen[strings.ToLower(definition.Name)] {
 			return
 		}
-		for _, expanded := range skill.ExpandSkillDependencies(definition, c.getSkills()) {
+		for _, expanded := range skill.ExpandSkillDependencies(definition, catalog) {
 			key := strings.ToLower(expanded.Name)
 			if !seen[key] {
 				seen[key] = true
@@ -227,12 +228,25 @@ func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName
 	for _, definition := range c.computeRelevantSkills(agentDef, goal) {
 		appendSkill(definition)
 	}
+	for _, definition := range ordered {
+		if missing := skill.UnresolvedSkillDependencies(definition, catalog); len(missing) > 0 {
+			return nil, fmt.Errorf("skill %q has unavailable dependencies: %s", definition.Name, strings.Join(missing, ", "))
+		}
+	}
+	return ordered, nil
+}
+
+func (c *Coordinator) buildSkillContextItems(agentDef *agent.AgentDef, agentName, goal, todoID string, granted map[string]bool) ([]ContextItem, error) {
+	if agentDef == nil {
+		return nil, nil
+	}
+	ordered, err := c.selectedSkillDefinitions(agentDef, goal)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]ContextItem, 0, len(ordered))
 	injectedNames := make([]string, 0, len(ordered))
 	for _, definition := range ordered {
-		if missing := skill.UnresolvedSkillDependencies(definition, c.getSkills()); len(missing) > 0 {
-			return nil, fmt.Errorf("skill %q has unavailable dependencies: %s", definition.Name, strings.Join(missing, ", "))
-		}
 		injectedNames = append(injectedNames, definition.Name)
 		content, level := definition.Content, "full"
 		if granted["load_skill"] {

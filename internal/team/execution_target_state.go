@@ -88,7 +88,7 @@ func materializeLegacyIdentityShadow(item *TodoItem) {
 	}
 	if strings.TrimSpace(item.SubagentProvider) == "" {
 		item.SubagentProvider = item.ExecutionTarget.Backend
-		if item.ExecutionTarget.Backend == "local" {
+		if execution.IsOllamaBackend(item.ExecutionTarget.Backend) {
 			item.SubagentProvider = localSubagentProviderName
 		}
 	}
@@ -116,7 +116,7 @@ func targetFromLegacyIdentity(model, subagentProvider string) execution.Executio
 	if model == "" {
 		return execution.ExecutionTarget{}
 	}
-	backend := execution.CanonicalBackendName(subagentProvider)
+	backend := execution.CanonicalTargetBackendName(subagentProvider)
 	if backend != "" && backend != localSubagentProviderName {
 		return execution.ExecutionTarget{Backend: backend, Model: model}
 	}
@@ -124,7 +124,7 @@ func targetFromLegacyIdentity(model, subagentProvider string) execution.Executio
 	if err == nil && selector.Backend != "" {
 		return execution.ExecutionTarget{Backend: selector.Backend, Model: selector.Model}
 	}
-	return execution.ExecutionTarget{Backend: "local", Model: model}
+	return execution.ExecutionTarget{Backend: execution.OllamaBackendName, Model: model}
 }
 
 func topologyFromLegacyIdentity(modelTopology []string, primary execution.ExecutionTarget, subagentProvider string) []execution.ExecutionTarget {
@@ -156,14 +156,14 @@ func validateExecutionIdentity(target execution.ExecutionTarget, topology []exec
 		if err := candidate.Validate(); err != nil {
 			return err
 		}
-		if candidate == target {
+		if execution.TargetsEqual(candidate, target) {
 			found = true
 		}
 	}
 	if !found {
 		return fmt.Errorf("execution target %q is absent from its frozen topology", target)
 	}
-	if binding != nil && execution.CanonicalBackendName(binding.Backend) != target.Backend {
+	if binding != nil && !execution.BackendNamesEqual(binding.Backend, target.Backend) {
 		return fmt.Errorf("backend binding %q does not match execution target backend %q", binding.Backend, target.Backend)
 	}
 	return nil

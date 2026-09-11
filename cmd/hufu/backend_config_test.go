@@ -112,8 +112,8 @@ func TestApplyConfiguredBackendsCanonicalizesAliasesAndRejectsDuplicates(t *test
 	if err := applyConfiguredBackends(session, &config.Config{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := session.Config.Providers["local"]; !ok {
-		t.Fatalf("canonical local provider missing: %#v", session.Config.Providers)
+	if _, ok := session.Config.Providers["ollama"]; !ok {
+		t.Fatalf("canonical Ollama provider missing: %#v", session.Config.Providers)
 	}
 	err := applyConfiguredBackends(&team.TeamSession{Config: agent.TeamConfig{Backends: map[string]config.BackendConfig{
 		"ollama": {Kind: "llm", Type: "ollama"},

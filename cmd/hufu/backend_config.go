@@ -36,8 +36,8 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 	if err != nil {
 		return err
 	}
-	if _, exists := agentBackends["local"]; exists {
-		return fmt.Errorf("reserved backend name %q is the built-in LLM backend and cannot be configured as an agent backend", "local")
+	if _, exists := agentBackends[execution.OllamaBackendName]; exists {
+		return fmt.Errorf("reserved backend name %q is the built-in LLM backend and cannot be configured as an agent backend", execution.OllamaBackendName)
 	}
 	for name := range providers {
 		if _, exists := agentBackends[name]; exists {
@@ -49,13 +49,16 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 	if global != nil {
 		maps.Copy(backends, global.Backends)
 		if session.Config.DefaultLLMBackend == "" && global.DefaultLLMBackend != "" {
-			session.Config.DefaultLLMBackend = execution.CanonicalBackendName(global.DefaultLLMBackend)
+			session.Config.DefaultLLMBackend = execution.CanonicalTargetBackendName(global.DefaultLLMBackend)
 		}
+	}
+	if session.Config.DefaultLLMBackend != "" {
+		session.Config.DefaultLLMBackend = execution.CanonicalTargetBackendName(session.Config.DefaultLLMBackend)
 	}
 	maps.Copy(backends, session.Config.Backends)
 	canonicalBackends := make(map[string]config.BackendConfig, len(backends))
 	for rawName, backend := range backends {
-		name := execution.CanonicalBackendName(rawName)
+		name := execution.CanonicalTargetBackendName(rawName)
 		if name == "" {
 			return fmt.Errorf("backend name is required")
 		}
@@ -65,8 +68,8 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 		canonicalBackends[name] = backend
 	}
 	for name, backend := range canonicalBackends {
-		if name == "local" && strings.EqualFold(strings.TrimSpace(backend.Kind), "agent") {
-			return fmt.Errorf("reserved backend name %q is the built-in LLM backend and cannot be configured as an agent backend", name)
+		if execution.IsOllamaBackend(name) && strings.EqualFold(strings.TrimSpace(backend.Kind), "agent") {
+			return fmt.Errorf("reserved backend name %q is the built-in LLM backend and cannot be configured as an agent backend", execution.OllamaBackendName)
 		}
 		if _, exists := providers[name]; exists {
 			return fmt.Errorf("backend name %q is defined by both backends and legacy providers", name)
@@ -120,7 +123,7 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 func canonicalLegacyProviders(source map[string]config.ProviderConfig) (map[string]config.ProviderConfig, error) {
 	result := make(map[string]config.ProviderConfig, len(source))
 	for rawName, provider := range source {
-		name := execution.CanonicalBackendName(rawName)
+		name := execution.CanonicalTargetBackendName(rawName)
 		if name == "" {
 			return nil, fmt.Errorf("legacy provider name is required")
 		}
@@ -135,7 +138,7 @@ func canonicalLegacyProviders(source map[string]config.ProviderConfig) (map[stri
 func canonicalLegacyAgentBackends(source map[string]agent.SubagentProviderConfig) (map[string]agent.SubagentProviderConfig, error) {
 	result := make(map[string]agent.SubagentProviderConfig, len(source))
 	for rawName, backend := range source {
-		name := execution.CanonicalBackendName(rawName)
+		name := execution.CanonicalTargetBackendName(rawName)
 		if name == "" {
 			return nil, fmt.Errorf("legacy subagent-provider name is required")
 		}

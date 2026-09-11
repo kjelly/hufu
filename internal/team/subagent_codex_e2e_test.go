@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,28 @@ import (
 // fast path) use this directly.
 func newCodexE2ECoordinatorBase(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef) *Coordinator {
 	t.Helper()
+	codexHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the full-dispatch harness away from the developer account. RunAttempt
+	// snapshots this exact allowlisted value for preflight, locking, and process
+	// launch, so the test must exercise the same child-state path as production.
+	t.Setenv("CODEX_HOME", codexHome)
+	childEnvironment := buildAllowlistedEnvironment([]string{"CODEX_HOME"})
+	resolvedHome, err := codexHomePathFromEnvironment(childEnvironment)
+	if err != nil || resolvedHome != codexHome {
+		t.Fatalf("Codex E2E child CODEX_HOME = %q, want %q (err=%v)", resolvedHome, codexHome, err)
+	}
+	release, err := acquireCodexHomeStateLock(t.Context(), resolvedHome)
+	if err != nil {
+		t.Fatalf("acquire isolated Codex E2E state lock: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(codexHome, ".hufu-app-server.lock")); err != nil {
+		release()
+		t.Fatalf("isolated Codex E2E state lock was not created under %q: %v", codexHome, err)
+	}
+	release()
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "script.json")
 	rawLogPath := filepath.Join(scriptDir, "raw_calls.log")
@@ -58,7 +81,7 @@ func newCodexE2ECoordinatorBase(t *testing.T, workspace string, steps []fakeCode
 			SubagentProviders: map[string]agent.SubagentProviderConfig{
 				"codex": {
 					Type: codexAppServerProviderType, Command: []string{os.Args[0]},
-					InheritEnv:     []string{fakeCodexServerScriptEnvVar},
+					InheritEnv:     []string{fakeCodexServerScriptEnvVar, "CODEX_HOME"},
 					StartupTimeout: "5s", InterruptGrace: "200ms", ShutdownGrace: "200ms",
 				},
 			},
@@ -76,10 +99,10 @@ func newCodexE2ECoordinatorBase(t *testing.T, workspace string, steps []fakeCode
 // admitCodexE2ETask below — so the resulting Todo is a genuine durable task
 // occurrence, not an ephemeral in-memory one, ready for a direct
 // c.executeTask call.
-func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef, verify *VerificationSpec) (*Coordinator, *TodoItem) {
+func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCodexStep, worker *agent.AgentDef, verify *VerificationSpec, grounded ...bool) (*Coordinator, *TodoItem) {
 	t.Helper()
 	c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
-	item := admitCodexE2ETask(t, c, worker, verify)
+	item := admitCodexE2ETask(t, c, worker, verify, grounded...)
 	return c, item
 }
 
@@ -91,7 +114,7 @@ func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCod
 // codexStartOrResumeThread fails closed on any sandbox mismatch (§14.1) — an
 // admitted task whose SideEffect defaults to none/read-only would never
 // reach a scripted turn at all.
-func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, verify *VerificationSpec) *TodoItem {
+func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, verify *VerificationSpec, grounded ...bool) *TodoItem {
 	t.Helper()
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	resolvedModel := c.resolveAgentModel(worker, "")
@@ -99,12 +122,16 @@ func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, ver
 	if err != nil {
 		t.Fatalf("canonicalizeTaskOccurrence: %v", err)
 	}
+	execution := ExecutionContract{RequiresResult: true}
+	if len(grounded) > 0 && grounded[0] {
+		execution.RequiresGroundedResult = true
+	}
 	spec := TodoSpec{
 		Agent: worker.Name, Desc: "baseline worker task", Goal: "baseline worker task",
 		Model: canonical.Model, ModelTopology: initialTaskModelTopology(worker, canonical.Model),
 		ExecutionTarget: canonical.ResolvedExecutionTarget, ExecutionTopology: canonical.ExecutionTopology,
 		Source: TaskSourceCoordinator, Recovery: RecoveryRetry, SideEffect: SideEffectWorkspaceWrite,
-		Execution:        ExecutionContract{RequiresResult: true},
+		Execution:        execution,
 		VerifySpec:       verify,
 		SubagentProvider: canonical.SubagentProvider,
 	}
@@ -150,6 +177,67 @@ func TestCodexSuccessStillNeedsCompletionGate(t *testing.T) {
 	}
 	if got := c.taskTracker.TodoList().Items()[0].Status; got == TaskDone {
 		t.Fatalf("task status = %s, want anything but done — Codex's self-reported success must not bypass Hufu's verify gate", got)
+	}
+}
+
+// TestCodexRejectedProposalPersistsFailureEvidence proves the full
+// coordinator path retains a rejected provider response as bounded diagnostic
+// evidence. The proposal is never accepted as a TaskResult, but its output
+// reaches the Hufu task transcript, failure projection, and the distinct
+// provider transcript reference on the terminal receipt.
+func TestCodexRejectedProposalPersistsFailureEvidence(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	worker := &agent.AgentDef{
+		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 0,
+		Generation: agent.GenerationParams{Model: "gpt-5-codex"},
+	}
+	c, item := newCodexEndToEndCoordinator(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-rejected-e2e", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-rejected-e2e", validProposalJSON(`"files_read":["unauthorized.txt"]`)),
+	}, worker, nil, true)
+
+	task := TaskDef{
+		Agent: worker.Name, Goal: "baseline worker task", SideEffect: SideEffectWorkspaceWrite,
+		Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: true},
+	}
+	_, runErr := c.executeTask(context.Background(), task, item.ID)
+	if runErr == nil {
+		t.Fatal("expected executeTask to reject the unauthorized files_read proposal")
+	}
+	got := c.todoItemByID(item.ID)
+	if got.Status == TaskDone {
+		t.Fatal("rejected provider proposal must not make the task done")
+	}
+	if !strings.Contains(got.Output, "unauthorized.txt") {
+		t.Fatalf("executeTask err=%v, todo output = %q, want the rejected provider response retained as evidence", runErr, got.Output)
+	}
+	if got.ExecutionReceipt == nil {
+		t.Fatal("expected a terminal execution receipt")
+	}
+	if got.ExecutionReceipt.ProviderTranscriptRef == "" {
+		t.Fatal("provider transcript reference was dropped from the terminal receipt")
+	}
+	providerTranscript, providerTranscriptData := readCodexTranscriptArtifact(t, workspace, got.ExecutionReceipt.ProviderTranscriptRef)
+	if providerTranscript.RunID != got.ExecutionReceipt.RunID || providerTranscript.TaskID != got.ExecutionReceipt.TaskID || providerTranscript.Attempt != got.ExecutionReceipt.Attempt {
+		t.Fatalf("provider transcript ref = %#v, want the terminal receipt's exact run/task/attempt scope", providerTranscript)
+	}
+	if strings.Contains(string(providerTranscriptData), "super-secret") {
+		t.Fatalf("provider transcript leaked a secret: %s", providerTranscriptData)
+	}
+	receiptJSON, marshalErr := json.Marshal(got.ExecutionReceipt)
+	if marshalErr != nil {
+		t.Fatalf("marshal execution receipt: %v", marshalErr)
+	}
+	if strings.Contains(string(receiptJSON), "super-secret") {
+		t.Fatalf("execution receipt leaked provider transcript content: %s", receiptJSON)
+	}
+	if got.ExecutionReceipt.TranscriptRef == "" {
+		t.Fatal("expected the Hufu task transcript reference")
+	}
+	transcript := readStoredArtifact(t, workspace, got.ExecutionReceipt.TranscriptRef)
+	if !strings.Contains(string(transcript), "unauthorized.txt") {
+		t.Fatalf("task transcript = %s, want rejected provider output", transcript)
 	}
 }
 

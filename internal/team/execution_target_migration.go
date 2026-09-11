@@ -64,7 +64,7 @@ func migratableLegacyExecutionTarget(item *TodoItem) (execution.ExecutionTarget,
 	if err != nil {
 		return execution.ExecutionTarget{}, err
 	}
-	if selector.Backend != "" && selector.Backend != "local" {
+	if selector.Backend != "" && !execution.IsOllamaBackend(selector.Backend) {
 		return execution.ExecutionTarget{}, &LegacyExecutionTargetAmbiguousError{TaskID: item.ID, Model: item.Model}
 	}
 	return targetFromLegacyIdentity(item.Model, provider), nil
@@ -102,7 +102,7 @@ func targetFromHistoricalProfileEvidence(item *TodoItem, events []RunEvent) (exe
 		if json.Unmarshal(event.Payload, &profile) != nil || strings.TrimSpace(profile.ModelID) != model {
 			continue
 		}
-		provider := execution.CanonicalBackendName(profile.Provider)
+		provider := execution.CanonicalTargetBackendName(profile.Provider)
 		if provider == "" || provider == localSubagentProviderName {
 			continue
 		}
@@ -119,7 +119,7 @@ func targetFromHistoricalProfileEvidence(item *TodoItem, events []RunEvent) (exe
 }
 
 func targetFromLegacyProviderEvidence(model, provider string) execution.ExecutionTarget {
-	provider = execution.CanonicalBackendName(provider)
+	provider = execution.CanonicalTargetBackendName(provider)
 	model = strings.TrimSpace(model)
 	if selector, err := execution.ParseExecutionSelector(model); err == nil && selector.Backend != "" {
 		model = selector.Model

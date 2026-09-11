@@ -42,7 +42,7 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 // funcs so the caller can defer them.
 func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef *agent.AgentDef, resolvedName, task, todoID, directModel string, exposedToolNames []string) (context.Context, context.CancelFunc, context.CancelFunc, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
-	artifactScope, err := c.buildArtifactAccessScope(todoID, 1)
+	artifactScope, err := c.buildArtifactAccessScope(todoID, 1, task)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -211,7 +211,7 @@ func (c *Coordinator) directAgentWorkflowPrompt(task string, agentDef *agent.Age
 	}
 	prompt += c.sharedKnowledgeInstructions(granted)
 	if granted["submit_result"] {
-		prompt += resultProtocolInstructions(syntheticTask, granted)
+		prompt += c.resultProtocolInstructions(syntheticTask, granted)
 	}
 	prompt += toolUsageNotes(granted)
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
@@ -258,7 +258,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 	if err != nil {
 		return nil, ResolvedWorkerTools{}, err
 	}
-	defaultBackend := "local"
+	defaultBackend := execution.OllamaBackendName
 	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
 		defaultBackend = c.session.Config.DefaultLLMBackend
 	}
@@ -540,7 +540,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Execution: ExecutionContract{RequiresResult: true}}
 	instructions := c.sharedKnowledgeInstructions(granted)
 	if granted["submit_result"] {
-		instructions += resultProtocolInstructions(syntheticTask, granted)
+		instructions += c.resultProtocolInstructions(syntheticTask, granted)
 	}
 	instructions += toolUsageNotes(granted)
 	skillContext, skillErr := c.buildSkillContextItems(agentDef, resolvedName, task, todoID, granted)

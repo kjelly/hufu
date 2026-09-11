@@ -62,7 +62,7 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 	cache := make(map[string]*providerModels)
 	var problems []string
 
-	defaultBackend := "local"
+	defaultBackend := execution.OllamaBackendName
 	if c.session != nil && c.session.Config.DefaultLLMBackend != "" {
 		defaultBackend = c.session.Config.DefaultLLMBackend
 	}

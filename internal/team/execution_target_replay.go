@@ -159,7 +159,7 @@ func validateReplayExecutionIdentities(events []RunEvent) error {
 		// provider marker is present. Historical dual-write events include both.
 		if payload.SubagentProvider != "" && payload.Model != "" {
 			legacy := targetFromLegacyIdentity(payload.Model, payload.SubagentProvider)
-			if legacy != target {
+			if !execution.TargetsEqual(legacy, target) {
 				return executionIdentityConflict(event, taskID, "legacy model/provider fields disagree with execution target")
 			}
 		}
@@ -172,18 +172,18 @@ func validateReplayExecutionIdentities(events []RunEvent) error {
 		}
 		if payload.SubagentProvider != "" && payload.ModelTopology != nil {
 			legacyTopology := topologyFromLegacyIdentity(payload.ModelTopology, target, payload.SubagentProvider)
-			if !slices.Equal(legacyTopology, topology) {
+			if !execution.TargetSlicesEqual(legacyTopology, topology) {
 				return executionIdentityConflict(event, taskID, "legacy model topology disagrees with execution topology")
 			}
 		}
 		if payload.ProviderBinding != nil && payload.BackendBinding != nil && !equivalentBackendBinding(payload.ProviderBinding, payload.BackendBinding, target) {
 			return executionIdentityConflict(event, taskID, "provider binding disagrees with backend binding")
 		}
-		if previous, ok := seenTargets[taskID]; ok && previous != target {
+		if previous, ok := seenTargets[taskID]; ok && !execution.TargetsEqual(previous, target) {
 			return executionIdentityConflict(event, taskID, "execution target changed after task creation")
 		}
 		seenTargets[taskID] = target
-		if previous, ok := seenTopologies[taskID]; ok && !slices.Equal(previous, topology) {
+		if previous, ok := seenTopologies[taskID]; ok && !execution.TargetSlicesEqual(previous, topology) {
 			return executionIdentityConflict(event, taskID, "execution topology changed after task creation")
 		}
 		seenTopologies[taskID] = cloneExecutionTopology(topology)
@@ -236,11 +236,11 @@ func validateReplayExecutionTargetMigration(event RunEvent, preceding []RunEvent
 	if err := validateLegacyExecutionMigrationPayload(payload, expectation); err != nil {
 		return executionIdentityConflict(event, event.TaskID, err.Error())
 	}
-	if previous, ok := seenTargets[event.TaskID]; ok && previous != payload.ExecutionTarget {
+	if previous, ok := seenTargets[event.TaskID]; ok && !execution.TargetsEqual(previous, payload.ExecutionTarget) {
 		return executionIdentityConflict(event, event.TaskID, "repeated execution target migrations disagree")
 	}
 	seenTargets[event.TaskID] = payload.ExecutionTarget
-	if previous, ok := seenTopologies[event.TaskID]; ok && !slices.Equal(previous, topology) {
+	if previous, ok := seenTopologies[event.TaskID]; ok && !execution.TargetSlicesEqual(previous, topology) {
 		return executionIdentityConflict(event, event.TaskID, "repeated execution target migrations disagree on topology")
 	}
 	seenTopologies[event.TaskID] = cloneExecutionTopology(topology)
@@ -294,10 +294,10 @@ func validateLegacyExecutionMigrationPayload(payload ExecutionTargetMigratedPayl
 	if payload.LegacySubagentProvider != "" && strings.TrimSpace(payload.LegacySubagentProvider) != strings.TrimSpace(expectation.legacySubagentProvider) {
 		return fmt.Errorf("legacy migration provider disagrees with preceding occurrence")
 	}
-	if payload.ExecutionTarget != expectation.target {
+	if !execution.TargetsEqual(payload.ExecutionTarget, expectation.target) {
 		return fmt.Errorf("migrated execution target %q disagrees with preceding legacy occurrence target %q", payload.ExecutionTarget, expectation.target)
 	}
-	if len(payload.ExecutionTopology) > 0 && !slices.Equal(payload.ExecutionTopology, expectation.topology) {
+	if len(payload.ExecutionTopology) > 0 && !execution.TargetSlicesEqual(payload.ExecutionTopology, expectation.topology) {
 		return fmt.Errorf("migrated execution topology disagrees with preceding legacy occurrence")
 	}
 	if !slices.Equal(payload.EvidenceEventIDs, expectation.evidenceEventIDs) {
@@ -338,12 +338,12 @@ func validateReplayBackendSessionBindings(events []RunEvent, targets map[string]
 			if err := json.Unmarshal(event.Payload, &payload); err != nil {
 				continue
 			}
-			if !payload.ExecutionTarget.IsZero() && payload.ExecutionTarget != target {
+			if !payload.ExecutionTarget.IsZero() && !execution.TargetsEqual(payload.ExecutionTarget, target) {
 				return executionIdentityConflict(event, event.TaskID, "backend session target disagrees with task execution target")
 			}
 			binding = BackendBinding{Backend: payload.Backend, SessionID: payload.SessionID, ExecutionWorldID: payload.ExecutionWorldID, CWD: payload.CWD}
 		}
-		if execution.CanonicalBackendName(binding.Backend) != target.Backend {
+		if !execution.BackendNamesEqual(binding.Backend, target.Backend) {
 			return executionIdentityConflict(event, event.TaskID, "backend session binding disagrees with task execution target")
 		}
 		key := fmt.Sprintf("%s:%d:%s", event.TaskID, event.Attempt, binding.SessionID)
@@ -364,7 +364,7 @@ func equivalentBackendBinding(provider *ProviderBinding, backend *BackendBinding
 		return provider == nil && backend == nil
 	}
 	expected := backendBindingFromProviderBinding(provider, target)
-	return expected.Backend == execution.CanonicalBackendName(backend.Backend) &&
+	return execution.BackendNamesEqual(expected.Backend, backend.Backend) &&
 		expected.SessionID == backend.SessionID &&
 		expected.TurnID == backend.TurnID &&
 		expected.BackendVersion == backend.BackendVersion &&

@@ -345,7 +345,7 @@ func TestMigrateLegacyExecutionTargetPersistsOrderedTopology(t *testing.T) {
 	if err := coordinator.migrateLegacyExecutionTarget(t.Context(), item); err != nil {
 		t.Fatalf("migrateLegacyExecutionTarget() error = %v", err)
 	}
-	wantTopology := []execution.ExecutionTarget{{Backend: "local", Model: "primary"}, {Backend: "local", Model: "extra"}}
+	wantTopology := []execution.ExecutionTarget{{Backend: "ollama", Model: "primary"}, {Backend: "ollama", Model: "extra"}}
 	if !reflect.DeepEqual(item.ExecutionTopology, wantTopology) {
 		t.Fatalf("migrated topology = %#v, want %#v", item.ExecutionTopology, wantTopology)
 	}
@@ -442,8 +442,8 @@ func TestLegacyExecutionMigrationIsBranchScoped(t *testing.T) {
 		if err != nil {
 			t.Fatalf("replay %q lineage: %v", branch.ID, err)
 		}
-		if len(tasks) != 1 || tasks[0].ExecutionTarget != (execution.ExecutionTarget{Backend: "local", Model: "primary"}) {
-			t.Fatalf("branch %q replay = %#v, want frozen local target", branch.ID, tasks)
+		if len(tasks) != 1 || !execution.TargetsEqual(tasks[0].ExecutionTarget, execution.ExecutionTarget{Backend: "ollama", Model: "primary"}) {
+			t.Fatalf("branch %q replay = %#v, want frozen Ollama target", branch.ID, tasks)
 		}
 	}
 }

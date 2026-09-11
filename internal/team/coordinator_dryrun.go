@@ -155,9 +155,9 @@ func canonicalDryRunTarget(raw, defaultBackend string) string {
 	}
 	backend := selector.Backend
 	if backend == "" {
-		backend = execution.CanonicalBackendName(defaultBackend)
+		backend = execution.CanonicalTargetBackendName(defaultBackend)
 		if backend == "" {
-			backend = "local"
+			backend = execution.OllamaBackendName
 		}
 	}
 	return (execution.ExecutionTarget{Backend: backend, Model: selector.Model}).String()

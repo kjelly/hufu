@@ -504,13 +504,19 @@ func (c *Coordinator) ResolveBackendExecutionPolicy(target execution.ExecutionTa
 	if err != nil {
 		return BackendExecutionPolicy{}, err
 	}
-	policy := BackendExecutionPolicy{Backend: target.Backend}
+	policy := BackendExecutionPolicy{Backend: execution.CanonicalTargetBackendName(target.Backend)}
 	if c == nil || c.session == nil {
 		return policy, nil
 	}
 	switch backend.Kind() {
 	case execution.BackendKindLLM:
-		policy.MaxConcurrent = c.session.Config.Providers[target.Backend].MaxConcurrent
+		providerConfig, ok := c.session.Config.Providers[policy.Backend]
+		if !ok && execution.IsOllamaBackend(policy.Backend) {
+			// Older in-memory/test configurations may still use the local key;
+			// it is the compatibility spelling of the canonical Ollama backend.
+			providerConfig = c.session.Config.Providers[execution.LegacyLocalBackendName]
+		}
+		policy.MaxConcurrent = providerConfig.MaxConcurrent
 	case execution.BackendKindAgent:
 		providerConfig := c.session.Config.SubagentProviders[target.Backend]
 		if target.Backend == codexSubagentProviderName || providerConfig.Type == codexAppServerProviderType {

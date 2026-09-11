@@ -12,8 +12,8 @@ func TestParseExecutionSelector(t *testing.T) {
 	}{
 		{name: "codex", raw: "codex/gpt-5.6-luna", backend: "codex", model: "gpt-5.6-luna"},
 		{name: "nested model", raw: "openrouter/meta-llama/llama-3.3", backend: "openrouter", model: "meta-llama/llama-3.3"},
-		{name: "ollama alias", raw: "ollama/qwen3:8b", backend: "local", model: "qwen3:8b"},
-		{name: "local", raw: "local/qwen3:8b", backend: "local", model: "qwen3:8b"},
+		{name: "ollama", raw: "ollama/qwen3:8b", backend: "ollama", model: "qwen3:8b"},
+		{name: "legacy local", raw: "local/qwen3:8b", backend: "ollama", model: "qwen3:8b"},
 		{name: "bare", raw: "qwen3:8b", model: "qwen3:8b"},
 		{name: "mixed backend", raw: "CoDeX/GPT-5", backend: "codex", model: "GPT-5"},
 		{name: "empty", raw: "", shouldError: true},
@@ -53,7 +53,7 @@ func TestExecutionTargetValidateAndString(t *testing.T) {
 	for _, target := range []ExecutionTarget{
 		{},
 		{Backend: "", Model: "model"},
-		{Backend: "ollama", Model: "model"},
+		{Backend: "Ollama", Model: "model"},
 		{Backend: "codex", Model: "model name"},
 	} {
 		if err := target.Validate(); err == nil {

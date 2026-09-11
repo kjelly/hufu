@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +35,14 @@ func newCodexWorkspace(t *testing.T) string {
 
 func newCodexHarness(t *testing.T, workspace string, steps []fakeCodexStep) (*Coordinator, *CodexSubagentProvider, *TodoItem, string) {
 	t.Helper()
+	codexHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// RunAttempt snapshots the exact environment that the fake app-server
+	// receives. Keep the harness independent of the developer account's real
+	// ~/.codex and of the platform-home fallback used by production code.
+	t.Setenv("CODEX_HOME", codexHome)
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "script.json")
 	rawLogPath := filepath.Join(scriptDir, "raw_calls.log")
@@ -63,17 +74,98 @@ func newCodexHarness(t *testing.T, workspace string, steps []fakeCodexStep) (*Co
 
 	provider := NewCodexSubagentProvider(c, "codex", agent.SubagentProviderConfig{
 		Type: codexAppServerProviderType, Command: []string{os.Args[0]},
-		InheritEnv:     []string{fakeCodexServerScriptEnvVar},
+		InheritEnv:     []string{fakeCodexServerScriptEnvVar, "CODEX_HOME"},
 		StartupTimeout: "5s", InterruptGrace: "200ms", ShutdownGrace: "200ms",
 	})
 	return c, provider, item, rawLogPath
 }
 
 func codexAttemptRequest(item *TodoItem, prompt string) AttemptRequest {
+	const runID = "codex-attempt-run"
+	const attempt = 1
 	return AttemptRequest{
-		RunID: "codex-attempt-run", TaskID: item.ID, Attempt: 1,
+		RunID: runID, TaskID: item.ID, Attempt: attempt,
 		Task:   TaskDef{Agent: "worker", Goal: "codex attempt", SideEffect: SideEffectWorkspaceWrite},
 		Prompt: prompt, ModelID: "gpt-5-codex", Provider: "codex",
+		ArtifactScope: &ArtifactAccessScope{RunID: runID, TaskID: item.ID, Attempt: attempt},
+	}
+}
+
+func setCodexAttempt(request *AttemptRequest, attempt int) {
+	request.Attempt = attempt
+	if request.ArtifactScope != nil {
+		request.ArtifactScope.Attempt = attempt
+	}
+}
+
+func mustCodexTranscriptStore(t *testing.T, workspace string) *FileArtifactStore {
+	t.Helper()
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatalf("open provider transcript artifact store: %v", err)
+	}
+	return store
+}
+
+func readCodexTranscriptArtifact(t *testing.T, workspace, id string) (ArtifactRef, []byte) {
+	t.Helper()
+	if filepath.IsAbs(id) || strings.ContainsAny(id, `/\\`) {
+		t.Fatalf("provider transcript reference %q is a path, want an opaque CAS ID", id)
+	}
+	store := mustCodexTranscriptStore(t, workspace)
+	var err error
+	ref, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get provider transcript artifact %q: %v", id, err)
+	}
+	if err := store.Verify(context.Background(), ref); err != nil {
+		t.Fatalf("verify provider transcript artifact %q: %v", id, err)
+	}
+	reader, err := store.Open(context.Background(), id)
+	if err != nil {
+		t.Fatalf("open provider transcript artifact %q: %v", id, err)
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read provider transcript artifact %q: %v", id, err)
+	}
+	return ref, content
+}
+
+func TestCodexTranscriptPersistsRedactedScopedCASArtifact(t *testing.T) {
+	workspace := t.TempDir()
+	const secret = "provider-activity-secret-123"
+	transcript := newCodexTranscript(512)
+	transcript.record("provider activity api_token=%s output=inspected", secret)
+
+	refID, err := transcript.persist(workspace, "codex", "run-transcript", "task-transcript", 2)
+	if err != nil {
+		t.Fatalf("persist provider transcript: %v", err)
+	}
+	ref, content := readCodexTranscriptArtifact(t, workspace, refID)
+	if ref.Kind != codexProviderTranscriptKind || ref.Role != codexProviderTranscriptRole || ref.Provider != "codex" ||
+		ref.RunID != "run-transcript" || ref.TaskID != "task-transcript" || ref.Attempt != 2 {
+		t.Fatalf("provider transcript ref = %#v, want exact CAS scope metadata", ref)
+	}
+	if strings.Contains(string(content), secret) {
+		t.Fatalf("provider transcript leaked activity secret: %s", content)
+	}
+	if !strings.Contains(string(content), "[REDACTED]") {
+		t.Fatalf("provider transcript = %q, want a redaction marker", content)
+	}
+	if _, err := verifyCodexTranscriptArtifact(context.Background(), mustCodexTranscriptStore(t, workspace), refID, "codex", "other-run", "task-transcript", 2); err == nil {
+		t.Fatal("provider transcript scope verification accepted a mismatched run")
+	}
+	if _, err := os.Stat(filepath.Join(workspace, logsDir, "codex-transcripts")); !os.IsNotExist(err) {
+		t.Fatalf("legacy mutable provider transcript directory exists: err=%v", err)
+	}
+	receiptJSON, err := json.Marshal(ExecutionReceipt{RunID: ref.RunID, TaskID: ref.TaskID, Attempt: ref.Attempt, ProviderTranscriptRef: refID})
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+	if strings.Contains(string(receiptJSON), secret) {
+		t.Fatalf("execution receipt leaked provider activity secret: %s", receiptJSON)
 	}
 }
 
@@ -206,6 +298,442 @@ func TestCodexProviderResultBecomesCanonical(t *testing.T) {
 	}
 }
 
+func TestCodexSuccessfulResultFailsClosedWhenTranscriptCASUnavailable(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, workspace string) string
+	}{
+		{
+			name: "artifact root is a file",
+			setup: func(t *testing.T, workspace string) string {
+				t.Helper()
+				root := filepath.Join(workspace, "artifact-root")
+				if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+		},
+		{
+			name: "artifact data directory is a file",
+			setup: func(t *testing.T, workspace string) string {
+				t.Helper()
+				root := filepath.Join(workspace, "artifact-root")
+				if err := os.MkdirAll(filepath.Join(root, logsDir, "artifacts"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, logsDir, "artifacts", "data"), []byte("corrupt"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return root
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+				codexInitializeStep(t),
+				codexThreadStartStep(t, "thread-transcript-failure", workspace),
+				fakeCodexTurnCompletedStep(t, "turn-transcript-failure", validProposalJSON("")),
+			})
+			c.artifactStoreRoot = tc.setup(t, workspace)
+
+			result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+			if err == nil {
+				t.Fatal("RunAttempt succeeded despite unavailable transcript CAS")
+			}
+			var providerErr *CodexProviderError
+			if !errors.As(err, &providerErr) || providerErr.Class != CodexFailureUnavailable {
+				t.Fatalf("RunAttempt error = %v, want provider_unavailable", err)
+			}
+			if result.CanonicalResult != nil {
+				t.Fatalf("CanonicalResult = %#v, want nil when transcript sealing fails", result.CanonicalResult)
+			}
+			if result.ResultProposal != nil {
+				t.Fatalf("ResultProposal = %#v, want nil when transcript sealing fails", result.ResultProposal)
+			}
+			if result.TranscriptRef != "" {
+				t.Fatalf("TranscriptRef = %q, want empty when transcript sealing fails", result.TranscriptRef)
+			}
+			if result.Output != "" {
+				t.Fatalf("Output = %q, want no successful summary when transcript sealing fails", result.Output)
+			}
+		})
+	}
+}
+
+func TestCodexNoNetPolicyUsesVerifiedCodexSandbox(t *testing.T) {
+	cases := []struct {
+		name       string
+		teamNoNet  bool
+		agentNoNet bool
+	}{
+		{name: "team no-net", teamNoNet: true},
+		{name: "agent no-net", agentNoNet: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			c, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
+				codexInitializeStep(t),
+				fakeCodexThreadStartStepWithNetwork("thread-1", workspace, "gpt-5.6-luna", "read-only", false, t),
+				fakeCodexTurnCompletedStep(t, "turn-1", validProposalJSON("")),
+			})
+			c.noNet = tc.teamNoNet
+			c.session.Config.CoordinatorModel = "ollama/minimax-m2.7:cloud"
+			if got := c.coordinatorModelID(); got != "ollama/minimax-m2.7:cloud" {
+				t.Fatalf("coordinator model = %q, want %q", got, "ollama/minimax-m2.7:cloud")
+			}
+			request := codexAttemptRequest(item, "do the work")
+			request.ModelID = "gpt-5.6-luna"
+			request.Task.SideEffect = SideEffectNone
+			if tc.agentNoNet {
+				request.Agent = &agent.AgentDef{Name: "worker", NoNet: true}
+			}
+
+			result, err := provider.RunAttempt(context.Background(), request)
+			if err != nil {
+				t.Fatalf("RunAttempt: %v", err)
+			}
+			if result.CanonicalResult == nil || result.CanonicalResult.Status != TaskResultStatusSuccess {
+				t.Fatalf("CanonicalResult = %#v, want a successful result after verified no-net admission", result.CanonicalResult)
+			}
+			calls := readRawCalls(t, rawLogPath)
+			if got, want := rawCallMethods(t, calls), []string{"initialize", "thread/start", "turn/start"}; !slices.Equal(got, want) {
+				t.Fatalf("Codex calls = %v, want bootstrap, effective-policy verification, then one turn", got)
+			}
+			threadStart := findRawCall(t, calls, "thread/start")
+			var params struct {
+				Model   string `json:"model"`
+				Sandbox string `json:"sandbox"`
+			}
+			if err := json.Unmarshal(threadStart["params"], &params); err != nil {
+				t.Fatalf("decode thread/start params: %v", err)
+			}
+			if params.Model != "gpt-5.6-luna" || params.Sandbox != "read-only" {
+				t.Fatalf("thread/start params = %#v, want Codex worker model and read-only sandbox", params)
+			}
+		})
+	}
+}
+
+func TestCodexNoNetRejectsUnverifiedEffectiveSandboxBeforeTurn(t *testing.T) {
+	cases := []struct {
+		name       string
+		sandbox    json.RawMessage
+		wantPhrase string
+	}{
+		{
+			name:       "network access enabled",
+			sandbox:    rawJSON(t, fakeCodexSandboxPolicyWithNetwork("workspace-write", true)),
+			wantPhrase: "permits network access",
+		},
+		{
+			name: "network access omitted",
+			sandbox: rawJSON(t, map[string]any{
+				"type": "workspaceWrite",
+			}),
+			wantPhrase: "omitted networkAccess",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			c, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
+				codexInitializeStep(t),
+				{Result: rawJSON(t, map[string]any{
+					"thread":  map[string]any{"id": "thread-1"},
+					"cwd":     workspace,
+					"model":   "gpt-5.6-luna",
+					"sandbox": tc.sandbox,
+				})},
+			})
+			c.noNet = true
+			request := codexAttemptRequest(item, "do the work")
+			request.ModelID = "gpt-5.6-luna"
+
+			result, err := provider.RunAttempt(context.Background(), request)
+			if err == nil || !strings.Contains(err.Error(), tc.wantPhrase) {
+				t.Fatalf("RunAttempt error = %v, want %q", err, tc.wantPhrase)
+			}
+			if result.CanonicalResult != nil || result.ResultProposal != nil {
+				t.Fatalf("result = %#v, want no trusted or raw result after effective-policy rejection", result)
+			}
+			if binding := c.todoItemByID(item.ID).ProviderBinding; binding != nil {
+				t.Fatalf("ProviderBinding = %#v, want no session binding before effective-policy proof", binding)
+			}
+			calls := readRawCalls(t, rawLogPath)
+			if got, want := rawCallMethods(t, calls), []string{"initialize", "thread/start"}; !slices.Equal(got, want) {
+				t.Fatalf("Codex calls = %v, want no turn/start after effective-policy rejection", got)
+			}
+		})
+	}
+}
+
+func TestCodexSharedStateLockSerializesSeparateCoordinators(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	config := agent.SubagentProviderConfig{InheritEnv: []string{"CODEX_HOME"}}
+	first := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+	second := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+
+	releaseFirst, err := first.acquireSharedCodexStateLock(context.Background())
+	if err != nil {
+		t.Fatalf("first coordinator state lock: %v", err)
+	}
+	defer func() { releaseFirst() }()
+
+	secondAcquired := make(chan func(), 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		release, lockErr := second.acquireSharedCodexStateLock(context.Background())
+		if lockErr != nil {
+			secondErr <- lockErr
+			return
+		}
+		secondAcquired <- release
+	}()
+
+	select {
+	case release := <-secondAcquired:
+		release()
+		t.Fatal("separate coordinator acquired the same CODEX_HOME lock concurrently")
+	case err := <-secondErr:
+		t.Fatalf("second coordinator state lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseFirst()
+	releaseFirst = func() {}
+	select {
+	case release := <-secondAcquired:
+		release()
+	case err := <-secondErr:
+		t.Fatalf("second coordinator state lock after release: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("second coordinator did not acquire CODEX_HOME lock after first release")
+	}
+}
+
+func TestCodexSharedStateLockUsesPlatformHomeFallback(t *testing.T) {
+	parentHome := t.TempDir()
+	accountHome := t.TempDir()
+	stateHome := filepath.Join(accountHome, ".codex")
+	if err := os.MkdirAll(stateHome, 0o755); err != nil {
+		t.Fatalf("create fallback Codex home: %v", err)
+	}
+	t.Setenv("HOME", parentHome)
+	t.Setenv("CODEX_HOME", "")
+	config := agent.SubagentProviderConfig{}
+	if inherited := buildAllowlistedEnvironment(config.InheritEnv); len(inherited) != 0 {
+		t.Fatalf("default Codex lock test inherited environment = %v, want neither HOME nor CODEX_HOME", inherited)
+	}
+	actualAccountHome, err := codexPlatformUserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve current account home: %v", err)
+	}
+	if actualAccountHome == parentHome {
+		t.Fatalf("platform account home = %q, unexpectedly followed parent HOME override", actualAccountHome)
+	}
+	resolveAccountHome := func() (string, error) { return accountHome, nil }
+	resolved, err := codexHomePathFromEnvironmentWithHomeResolver(nil, resolveAccountHome)
+	if err != nil {
+		t.Fatalf("resolve platform Codex home: %v", err)
+	}
+	if resolved != stateHome {
+		t.Fatalf("resolved Codex home = %q, want platform fallback %q", resolved, stateHome)
+	}
+	first := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+	second := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+
+	releaseFirst, err := first.acquireSharedCodexStateLockWithHomeResolver(context.Background(), resolveAccountHome)
+	if err != nil {
+		t.Fatalf("first fallback state lock: %v", err)
+	}
+	defer func() { releaseFirst() }()
+
+	secondAcquired := make(chan func(), 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		release, lockErr := second.acquireSharedCodexStateLockWithHomeResolver(context.Background(), resolveAccountHome)
+		if lockErr != nil {
+			secondErr <- lockErr
+			return
+		}
+		secondAcquired <- release
+	}()
+
+	select {
+	case release := <-secondAcquired:
+		release()
+		t.Fatal("separate coordinator acquired the platform fallback lock concurrently")
+	case err := <-secondErr:
+		t.Fatalf("second fallback state lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseFirst()
+	releaseFirst = func() {}
+	select {
+	case release := <-secondAcquired:
+		release()
+	case err := <-secondErr:
+		t.Fatalf("second fallback state lock after release: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("second coordinator did not acquire platform fallback lock after first release")
+	}
+}
+
+func TestCodexHomePathPreservesChildEnvironmentCase(t *testing.T) {
+	accountHome := t.TempDir()
+	wrongLowercaseHome := t.TempDir()
+	exactHome := t.TempDir()
+	resolveAccountHome := func() (string, error) { return accountHome, nil }
+
+	got, err := codexHomePathFromEnvironmentWithHomeResolver(
+		[]string{"home=" + wrongLowercaseHome}, resolveAccountHome,
+	)
+	if err != nil {
+		t.Fatalf("resolve lower-case child environment: %v", err)
+	}
+	wantFallback := filepath.Join(accountHome, ".codex")
+	if got != wantFallback {
+		t.Fatalf("lower-case child environment resolved Codex home = %q, want platform fallback %q", got, wantFallback)
+	}
+
+	got, err = codexHomePathFromEnvironmentWithHomeResolver(
+		[]string{"HOME=" + exactHome}, resolveAccountHome,
+	)
+	if err != nil {
+		t.Fatalf("resolve exact child HOME: %v", err)
+	}
+	wantExact := filepath.Join(exactHome, ".codex")
+	if got != wantExact {
+		t.Fatalf("exact child HOME resolved Codex home = %q, want %q", got, wantExact)
+	}
+}
+
+func TestCodexSharedStateLockUsesOneChildEnvironmentSnapshot(t *testing.T) {
+	firstHome := t.TempDir()
+	secondHome := t.TempDir()
+	firstState := filepath.Join(firstHome, ".codex")
+	secondState := filepath.Join(secondHome, ".codex")
+	if err := os.MkdirAll(firstState, 0o755); err != nil {
+		t.Fatalf("create first Codex state directory: %v", err)
+	}
+	if err := os.MkdirAll(secondState, 0o755); err != nil {
+		t.Fatalf("create second Codex state directory: %v", err)
+	}
+	config := agent.SubagentProviderConfig{InheritEnv: []string{"HOME"}}
+	first := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+	second := &CodexSubagentProvider{coordinator: &Coordinator{projectDir: t.TempDir()}, config: config}
+	childEnvironment := []string{"HOME=" + firstHome}
+
+	// Change the parent environment after the child snapshot was captured. The
+	// provider must continue to lock the same state directory the child will
+	// receive, rather than resnapshotting the parent's HOME.
+	t.Setenv("HOME", secondHome)
+	releaseFirst, err := first.acquireSharedCodexStateLockWithEnvironment(context.Background(), childEnvironment, nil)
+	if err != nil {
+		t.Fatalf("first child-snapshot state lock: %v", err)
+	}
+	defer func() { releaseFirst() }()
+
+	secondAcquired := make(chan func(), 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		release, lockErr := second.acquireSharedCodexStateLockWithEnvironment(context.Background(), childEnvironment, nil)
+		if lockErr != nil {
+			secondErr <- lockErr
+			return
+		}
+		secondAcquired <- release
+	}()
+
+	// The parent HOME is unrelated to the held child state lock. Prove that a
+	// lock on the parent-selected state remains available while the child
+	// snapshot lock is held.
+	releaseSecond, err := acquireCodexHomeStateLock(context.Background(), secondState)
+	if err != nil {
+		t.Fatalf("parent-selected state lock: %v", err)
+	}
+	releaseSecond()
+
+	select {
+	case release := <-secondAcquired:
+		release()
+		t.Fatal("second coordinator acquired the same child-snapshot lock concurrently")
+	case err := <-secondErr:
+		t.Fatalf("second child-snapshot state lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseFirst()
+	releaseFirst = func() {}
+	select {
+	case release := <-secondAcquired:
+		release()
+	case err := <-secondErr:
+		t.Fatalf("second child-snapshot state lock after release: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("second coordinator did not acquire the child-snapshot lock after first release")
+	}
+}
+
+// TestCodexCanonicalizationFailurePreservesUntrustedEvidence proves that a
+// structurally valid provider proposal can still be rejected by Hufu's
+// evidence boundary without losing the proposal, bounded raw output, or the
+// provider-owned transcript reference needed by the coordinator's failure
+// and retry paths.
+func TestCodexCanonicalizationFailurePreservesUntrustedEvidence(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	secret := "super-secret-value-123456"
+	details := "api_token=" + secret + " " + strings.Repeat("oversized-diagnostic ", codexFailureEvidenceMaxRunes)
+	proposal := `{"status":"success","summary":"did the work","files_read":["unauthorized.txt"],"details":` + strconv.Quote(details) + `}`
+	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
+		codexInitializeStep(t),
+		codexThreadStartStep(t, "thread-rejected", workspace),
+		fakeCodexTurnCompletedStep(t, "turn-rejected", proposal),
+	})
+
+	request := codexAttemptRequest(item, "do the work")
+	request.Task.Execution.RequiresGroundedResult = true
+	result, err := provider.RunAttempt(context.Background(), request)
+	if err == nil {
+		t.Fatal("RunAttempt succeeded for an unauthorized files_read claim")
+	}
+	if result.CanonicalResult != nil {
+		t.Fatalf("CanonicalResult = %#v, want nil after evidence rejection", result.CanonicalResult)
+	}
+	if result.ResultProposal != nil {
+		t.Fatalf("ResultProposal = %#v, want rejected untrusted proposal dropped from the returned attempt", result.ResultProposal)
+	}
+	if !strings.Contains(result.Output, "unauthorized.txt") {
+		t.Fatalf("Output = %q, want bounded raw proposal evidence", result.Output)
+	}
+	if strings.Contains(result.Output, secret) {
+		t.Fatalf("Output contains the rejected proposal secret: %q", result.Output)
+	}
+	if len([]rune(result.Output)) > codexFailureEvidenceMaxRunes+3 {
+		t.Fatalf("Output has %d runes, want at most the bounded evidence budget", len([]rune(result.Output)))
+	}
+	if result.TranscriptRef == "" {
+		t.Fatal("TranscriptRef is empty, want the provider transcript reference preserved")
+	}
+	ref, transcript := readCodexTranscriptArtifact(t, workspace, result.TranscriptRef)
+	if ref.Kind != codexProviderTranscriptKind || ref.Role != codexProviderTranscriptRole || ref.RunID != request.RunID || ref.TaskID != request.TaskID || ref.Attempt != request.Attempt {
+		t.Fatalf("provider transcript ref = %#v, want exact attempt-scoped CAS metadata", ref)
+	}
+	if _, err := verifyCodexTranscriptArtifact(context.Background(), mustCodexTranscriptStore(t, workspace), result.TranscriptRef, provider.name, request.RunID, request.TaskID, request.Attempt); err != nil {
+		t.Fatalf("provider transcript scope verification: %v", err)
+	}
+	if !strings.Contains(string(transcript), "rejected provider turn output") || strings.Contains(string(transcript), secret) {
+		t.Fatalf("provider transcript = %q, want labeled redacted rejection evidence", transcript)
+	}
+}
+
 func TestCodexProviderForwardsReasoningEffortToTurnStart(t *testing.T) {
 	workspace := newCodexWorkspace(t)
 	_, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
@@ -261,8 +789,9 @@ func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 	if result.TranscriptRef == "" {
 		t.Fatal("TranscriptRef is empty, want a preserved transcript reference")
 	}
-	if content, readErr := os.ReadFile(result.TranscriptRef); readErr != nil || len(content) == 0 {
-		t.Fatalf("transcript file = (err=%v, len=%d), want a non-empty preserved transcript", readErr, len(content))
+	_, content := readCodexTranscriptArtifact(t, workspace, result.TranscriptRef)
+	if len(content) == 0 {
+		t.Fatal("provider transcript artifact is empty, want a non-empty preserved transcript")
 	}
 	binding := c.todoItemByID(item.ID).ProviderBinding
 	if binding == nil || binding.SessionID != "thread-cancel" {
@@ -428,6 +957,44 @@ func TestCodexSecondInvalidResultBecomesProtocolIncomplete(t *testing.T) {
 	}
 }
 
+func TestCodexRepairFailureRetainsOriginalAndRepairEvidence(t *testing.T) {
+	workspace := newCodexWorkspace(t)
+	original := `{"status":"success","summary":"original","api_token":"original-secret","unknown":"` + strings.Repeat("original-evidence ", codexFailureEvidenceMaxRunes) + `"}`
+	repair := `{"status":"success","summary":"repair","api_token":"repair-secret","unknown":"` + strings.Repeat("repair-evidence ", codexFailureEvidenceMaxRunes) + `"}`
+	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-evidence",
+		original, repair, fakeCodexStep{}, fakeCodexStep{}))
+
+	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+	if err == nil {
+		t.Fatal("expected RunAttempt to fail when both the original and repair proposals are invalid")
+	}
+	if result.CanonicalResult != nil || result.ResultProposal != nil {
+		t.Fatalf("result = %#v, want no trusted or raw proposal after failed repair", result)
+	}
+	for _, marker := range []string{"original provider turn output", "repair provider turn output", "original-evidence", "repair-evidence"} {
+		if !strings.Contains(result.Output, marker) {
+			t.Fatalf("Output = %q, want marker %q from both bounded repair evidences", result.Output, marker)
+		}
+	}
+	for _, secret := range []string{"original-secret", "repair-secret"} {
+		if strings.Contains(result.Output, secret) {
+			t.Fatalf("Output contains rejected proposal secret %q", secret)
+		}
+	}
+	if len([]rune(result.Output)) > codexFailureEvidenceMaxRunes+3 {
+		t.Fatalf("Output has %d runes, want at most the combined evidence budget", len([]rune(result.Output)))
+	}
+	if result.TranscriptRef == "" {
+		t.Fatal("TranscriptRef is empty, want the provider transcript reference preserved")
+	}
+	_, transcript := readCodexTranscriptArtifact(t, workspace, result.TranscriptRef)
+	for _, marker := range []string{"original provider turn output", "repair provider turn output"} {
+		if !strings.Contains(string(transcript), marker) {
+			t.Fatalf("provider transcript = %q, want marker %q", transcript, marker)
+		}
+	}
+}
+
 // TestResumeDoesNotReplayUnsafeSideEffect proves §22.4/§33: an existing
 // provider session binding never bypasses the side-effect admission gate —
 // a credential-mutation task is rejected before any process or RPC activity,
@@ -475,7 +1042,7 @@ func TestCrashAfterProviderSessionBeforeTurnTerminal(t *testing.T) {
 	})
 
 	request := codexAttemptRequest(item, "continue the work")
-	request.Attempt = 2
+	setCodexAttempt(&request, 2)
 	request.ProviderBinding = &ProviderBinding{Provider: "codex", SessionID: "thread-precrash", ResumeSupported: true}
 
 	result, err := provider.RunAttempt(context.Background(), request)
@@ -525,7 +1092,7 @@ func TestCrashAfterWorkspaceMutationBeforeVerification(t *testing.T) {
 		secondStep,
 	})
 	request2 := codexAttemptRequest(item2, "continue the work")
-	request2.Attempt = 2
+	setCodexAttempt(&request2, 2)
 	request2.ProviderBinding = &ProviderBinding{Provider: "codex", SessionID: result1.ProviderSessionID, ResumeSupported: true}
 
 	result2, err := provider2.RunAttempt(context.Background(), request2)
@@ -607,7 +1174,7 @@ func TestCodexResumeAfterHufuRestart(t *testing.T) {
 		fakeCodexTurnCompletedStep(t, "turn-2", validProposalJSON("")),
 	})
 	request := codexAttemptRequest(item2, "continue the work")
-	request.Attempt = 2
+	setCodexAttempt(&request, 2)
 	request.ProviderBinding = binding
 
 	result, err := provider2.RunAttempt(context.Background(), request)
@@ -660,6 +1227,54 @@ func TestCodexRejectsExtraModelFanout(t *testing.T) {
 	}
 	if calls := readRawCalls(t, rawLogPath); len(calls) != 0 {
 		t.Fatalf("recorded calls = %v, want no process/RPC activity before rejection", rawCallMethods(t, calls))
+	}
+}
+
+// TestCodexRejectsInvalidArtifactScopeBeforeLaunch proves that the provider
+// admission boundary enforces the same immutable attempt identity that later
+// canonicalization requires. Invalid capabilities must not reach preflight,
+// execution-world preparation, shared-state locking, or the app-server.
+func TestCodexRejectsInvalidArtifactScopeBeforeLaunch(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*AttemptRequest)
+	}{
+		{name: "missing", mutate: func(request *AttemptRequest) {
+			request.ArtifactScope = nil
+		}},
+		{name: "run mismatch", mutate: func(request *AttemptRequest) {
+			request.ArtifactScope.RunID = "different-run"
+		}},
+		{name: "task mismatch", mutate: func(request *AttemptRequest) {
+			request.ArtifactScope.TaskID = "different-task"
+		}},
+		{name: "attempt mismatch", mutate: func(request *AttemptRequest) {
+			request.ArtifactScope.Attempt = 2
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			_, provider, item, rawLogPath := newCodexHarness(t, workspace, nil)
+			request := codexAttemptRequest(item, "do the work")
+			tc.mutate(&request)
+
+			result, err := provider.RunAttempt(context.Background(), request)
+			if err == nil {
+				t.Fatal("expected RunAttempt to reject an invalid artifact scope")
+			}
+			var providerErr *CodexProviderError
+			if !errors.As(err, &providerErr) || providerErr.Class != CodexFailureUnavailable {
+				t.Fatalf("RunAttempt error = %v, want provider_unavailable", err)
+			}
+			if result.CanonicalResult != nil || result.ResultProposal != nil {
+				t.Fatalf("result = %#v, want no result for an invalid artifact scope", result)
+			}
+			if calls := readRawCalls(t, rawLogPath); len(calls) != 0 {
+				t.Fatalf("recorded calls = %v, want no process/RPC activity before scope admission", rawCallMethods(t, calls))
+			}
+		})
 	}
 }
 
@@ -820,11 +1435,7 @@ func TestCodexPreflightCachesAcrossAttempts(t *testing.T) {
 	}
 
 	item2 := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "codex attempt 2", Goal: "codex attempt 2"}})[0]
-	request2 := AttemptRequest{
-		RunID: "codex-attempt-run", TaskID: item2.ID, Attempt: 1,
-		Task:   TaskDef{Agent: "worker", Goal: "codex attempt", SideEffect: SideEffectWorkspaceWrite},
-		Prompt: "do the work", ModelID: "gpt-5-codex", Provider: "codex",
-	}
+	request2 := codexAttemptRequest(item2, "do the work")
 	result2, err := provider.RunAttempt(context.Background(), request2)
 	if err != nil {
 		t.Fatalf("second RunAttempt (expected cached preflight to skip auth.json re-check): %v", err)
@@ -834,14 +1445,11 @@ func TestCodexPreflightCachesAcrossAttempts(t *testing.T) {
 	}
 }
 
-// TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset proves a fix
+// TestCodexHomeLooksAuthenticatedUsesChildHomeWhenProvided proves the
 // found by actually running the §38 live smoke suite against a real
-// account: every scenario failed preflight with "CODEX_HOME is not set"
-// even though a real, authenticated CODEX_HOME existed at the real CLI's own
-// default location — because the environment simply never exported
-// CODEX_HOME explicitly. The real codex CLI itself defaults to
-// $HOME/.codex, so preflight must apply the same fallback rather than
-// treating an unset CODEX_HOME as an outright failure.
+// account: preflight must resolve the state directory from the exact child
+// environment snapshot, including an explicitly inherited HOME, rather than
+// reading the mutable parent environment a second time.
 func TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset(t *testing.T) {
 	fakeHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(fakeHome, ".codex"), 0o755); err != nil {
@@ -853,20 +1461,17 @@ func TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset(t *testing.T) {
 	t.Setenv("HOME", fakeHome)
 	t.Setenv("CODEX_HOME", "")
 
-	if err := codexHomeLooksAuthenticated(); err != nil {
-		t.Fatalf("codexHomeLooksAuthenticated() = %v, want it to fall back to $HOME/.codex and succeed", err)
+	if err := codexHomeLooksAuthenticated([]string{"HOME=" + fakeHome}); err != nil {
+		t.Fatalf("codexHomeLooksAuthenticated() = %v, want it to use the child HOME and succeed", err)
 	}
 }
 
 // TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile proves the
-// fallback still fails closed — it is a real check, not a bypass — when the
-// default $HOME/.codex has no auth.json either.
+// exact child HOME path still fails closed when it has no auth.json.
 func TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile(t *testing.T) {
 	fakeHome := t.TempDir()
-	t.Setenv("HOME", fakeHome)
-	t.Setenv("CODEX_HOME", "")
 
-	if err := codexHomeLooksAuthenticated(); err == nil {
-		t.Fatal("codexHomeLooksAuthenticated() = nil, want an error when the default $HOME/.codex has no auth.json")
+	if err := codexHomeLooksAuthenticated([]string{"HOME=" + fakeHome}); err == nil {
+		t.Fatal("codexHomeLooksAuthenticated() = nil, want an error when the child HOME/.codex has no auth.json")
 	}
 }

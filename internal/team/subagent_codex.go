@@ -2,16 +2,20 @@ package team
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // codexSubagentProviderName is the conventional external provider name used
@@ -29,6 +33,9 @@ const (
 	codexDefaultInterruptGrace = 3 * time.Second
 	codexDefaultShutdownGrace  = 3 * time.Second
 	codexDefaultMaxTranscript  = 16 << 20
+	// Failure evidence is diagnostic only: it must remain bounded and redacted
+	// before it enters task output, retry context, or durable failure records.
+	codexFailureEvidenceMaxRunes = 12000
 	// codexSandboxReadOnly/codexSandboxWorkspaceWrite are the only two
 	// sandbox modes this provider ever requests (§10.5's mapping never
 	// produces a third); danger-full-access (INV-08) is structurally
@@ -44,8 +51,10 @@ const (
 // nonetheless attempts a write gains nothing — canonicalization never
 // re-observes the workspace after this point (see attemptResultRepair).
 const (
-	codexResultRepairPrompt      = "Report the outcome of your previous turn as a structured result. Do not perform any further work."
-	codexResultRepairInstruction = "This is a read-only repair turn. The workspace state from your previous turn is already frozen and will not be re-observed, so any further file changes will not be recorded or credited. Do not modify any files. Respond only with a WorkerResultProposal matching the required schema, describing the final status of the work you already attempted."
+	codexResultRepairPrompt          = "Report the outcome of your previous turn as a structured result. Do not perform any further work."
+	codexResultEncodingInstruction   = "For this Codex app-server response, `files_read` MUST be a JSON array of non-empty strings (workspace-relative paths or authorized opaque artifact IDs), never objects. The Hufu-local `submit_result` object form does not apply to this response; follow the supplied strict WorkerResultProposal schema."
+	codexWorkerDeveloperInstructions = "Work only inside the provided workspace. Produce the final response matching the supplied JSON schema. Do not claim verification or receipt authority. " + codexResultEncodingInstruction
+	codexResultRepairInstruction     = "This is a read-only repair turn. The workspace state from your previous turn is already frozen and will not be re-observed, so any further file changes will not be recorded or credited. Do not modify any files. Respond only with a WorkerResultProposal matching the required schema, describing the final status of the work you already attempted. " + codexResultEncodingInstruction
 )
 
 // CodexProviderFailureClass classifies a RunAttempt failure so recovery
@@ -103,6 +112,18 @@ type CodexSubagentProvider struct {
 	preflight   *codexPreflightCache
 }
 
+func codexPlatformUserHomeDir() (string, error) {
+	current, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("resolve current account: %w", err)
+	}
+	home := strings.TrimSpace(current.HomeDir)
+	if home == "" {
+		return "", fmt.Errorf("current account has no home directory")
+	}
+	return home, nil
+}
+
 // NewCodexSubagentProvider builds a codex-app-server provider from its
 // parsed team config (§6.1), registered under name. Construction performs no
 // process/model call — only structural readiness for later per-attempt
@@ -147,8 +168,8 @@ type codexPreflightCache struct {
 }
 
 // run executes (or reuses a cached result of) p's cheap preflight checks.
-func (c *codexPreflightCache) run(p *CodexSubagentProvider) error {
-	key, keyErr := codexPreflightCacheKey(p.config.Command)
+func (c *codexPreflightCache) run(p *CodexSubagentProvider, environment []string) error {
+	key, keyErr := codexPreflightCacheKey(p.config.Command, environment)
 	c.mu.Lock()
 	if c.valid && keyErr == nil && key == c.key {
 		err := c.err
@@ -157,7 +178,7 @@ func (c *codexPreflightCache) run(p *CodexSubagentProvider) error {
 	}
 	c.mu.Unlock()
 
-	err := codexRunCheapPreflightChecks(p)
+	err := codexRunCheapPreflightChecks(p, environment)
 	if keyErr == nil {
 		c.mu.Lock()
 		c.key, c.err, c.valid = key, err, true
@@ -169,7 +190,7 @@ func (c *codexPreflightCache) run(p *CodexSubagentProvider) error {
 // codexPreflightCacheKey resolves argv[0] to an absolute path and combines
 // it with the resolved file's size/mtime, so replacing the binary at the
 // same configured path is detected without any explicit version string.
-func codexPreflightCacheKey(argv []string) (string, error) {
+func codexPreflightCacheKey(argv, environment []string) (string, error) {
 	if len(argv) == 0 {
 		return "", fmt.Errorf("no command configured")
 	}
@@ -181,13 +202,14 @@ func codexPreflightCacheKey(argv []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s:%d:%d", resolved, info.Size(), info.ModTime().UnixNano()), nil
+	environmentDigest := sha256.Sum256([]byte(strings.Join(environment, "\x00")))
+	return fmt.Sprintf("%s:%d:%d:%s", resolved, info.Size(), info.ModTime().UnixNano(), hex.EncodeToString(environmentDigest[:])), nil
 }
 
 // codexRunCheapPreflightChecks implements the local, no-subprocess-needed
 // half of §25's preflight list. See codexPreflightCache's doc comment for
 // which checks are deliberately not included and why.
-func codexRunCheapPreflightChecks(p *CodexSubagentProvider) error {
+func codexRunCheapPreflightChecks(p *CodexSubagentProvider, environment []string) error {
 	if len(p.config.Command) == 0 {
 		return fmt.Errorf("codex provider has no configured command")
 	}
@@ -205,7 +227,7 @@ func codexRunCheapPreflightChecks(p *CodexSubagentProvider) error {
 		return fmt.Errorf("workspace root invalid: %w", err)
 	}
 	if codexHomeInherited(p.config.InheritEnv) {
-		if err := codexHomeLooksAuthenticated(); err != nil {
+		if err := codexHomeLooksAuthenticated(environment); err != nil {
 			return err
 		}
 	}
@@ -214,7 +236,8 @@ func codexRunCheapPreflightChecks(p *CodexSubagentProvider) error {
 
 func codexHomeInherited(inheritEnv []string) bool {
 	for _, name := range inheritEnv {
-		if strings.EqualFold(strings.TrimSpace(name), "CODEX_HOME") {
+		switch strings.TrimSpace(name) {
+		case "CODEX_HOME", "HOME":
 			return true
 		}
 	}
@@ -238,14 +261,10 @@ func codexHomeInherited(inheritEnv []string) bool {
 // explicitly exported". Every live smoke scenario failed preflight with
 // "CODEX_HOME is not set" until this fallback was added to match the real
 // CLI's own default resolution.
-func codexHomeLooksAuthenticated() error {
-	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("CODEX_HOME is not set and the default ($HOME/.codex) could not be resolved: %w", err)
-		}
-		home = filepath.Join(userHome, ".codex")
+func codexHomeLooksAuthenticated(environment []string) error {
+	home, err := codexHomePathFromEnvironment(environment)
+	if err != nil {
+		return fmt.Errorf("CODEX_HOME is not set and the default ($HOME/.codex) could not be resolved: %w", err)
 	}
 	info, err := os.Stat(home)
 	if err != nil || !info.IsDir() {
@@ -255,6 +274,120 @@ func codexHomeLooksAuthenticated() error {
 		return fmt.Errorf("CODEX_HOME %q has no auth.json (codex login required): %w", home, err)
 	}
 	return nil
+}
+
+// codexHomePathFromEnvironment resolves the state directory that the child
+// app-server can actually see. The environment passed to an external
+// provider is allowlisted, so this must not use os.Environ or silently assume
+// that the Hufu process's full environment is inherited. A CODEX_HOME value
+// wins; otherwise an allowlisted HOME, or the platform user-home fallback
+// used by Codex when neither variable is inherited, determines ~/.codex.
+func codexHomePathFromEnvironment(environment []string) (string, error) {
+	return codexHomePathFromEnvironmentWithHomeResolver(environment, codexPlatformUserHomeDir)
+}
+
+func codexHomePathFromEnvironmentWithHomeResolver(environment []string, resolveHome func() (string, error)) (string, error) {
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+	home := values["CODEX_HOME"]
+	if home == "" {
+		home = values["HOME"]
+	}
+	if home == "" {
+		if resolveHome == nil {
+			return "", fmt.Errorf("resolve Codex platform user home: no resolver configured")
+		}
+		var err error
+		home, err = resolveHome()
+		if err != nil {
+			return "", fmt.Errorf("resolve Codex platform user home: %w", err)
+		}
+	}
+	if strings.TrimSpace(home) == "" {
+		return "", fmt.Errorf("resolve Codex platform user home: resolved home is empty")
+	}
+	if values["CODEX_HOME"] == "" {
+		home = filepath.Join(home, ".codex")
+	}
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return "", fmt.Errorf("resolve Codex state directory %q: %w", home, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return filepath.Clean(abs), nil
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// acquireCodexHomeStateLock serializes app-server lifetimes for one resolved
+// CODEX_HOME across both coordinators in this process and independent Hufu
+// processes. The kernel file lock is released automatically if a process
+// crashes, unlike a lock-directory protocol that could strand a future run.
+func acquireCodexHomeStateLock(ctx context.Context, home string) (func(), error) {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return func() {}, nil
+	}
+	lockPath := filepath.Join(home, ".hufu-app-server.lock")
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open Codex state lock %q: %w", lockPath, err)
+	}
+	release := func() {
+		_ = unlockEventStoreFile(file)
+		_ = file.Close()
+	}
+	for {
+		if err := lockEventStoreFile(file); err == nil {
+			return sync.OnceFunc(release), nil
+		} else if !errors.Is(err, ErrEventStoreWriterUnavailable) {
+			release()
+			return nil, fmt.Errorf("lock Codex state %q: %w", home, err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			release()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (p *CodexSubagentProvider) acquireSharedCodexStateLock(ctx context.Context) (func(), error) {
+	return p.acquireSharedCodexStateLockWithEnvironment(ctx, buildAllowlistedEnvironment(p.config.InheritEnv), nil)
+}
+
+func (p *CodexSubagentProvider) acquireSharedCodexStateLockWithHomeResolver(ctx context.Context, resolveHome func() (string, error)) (func(), error) {
+	return p.acquireSharedCodexStateLockWithEnvironment(ctx, buildAllowlistedEnvironment(p.config.InheritEnv), resolveHome)
+}
+
+func (p *CodexSubagentProvider) acquireSharedCodexStateLockWithEnvironment(ctx context.Context, environment []string, resolveHome func() (string, error)) (func(), error) {
+	if p == nil {
+		return nil, fmt.Errorf("codex provider is unavailable")
+	}
+	var (
+		home string
+		err  error
+	)
+	if resolveHome == nil {
+		home, err = codexHomePathFromEnvironment(environment)
+	} else {
+		home, err = codexHomePathFromEnvironmentWithHomeResolver(environment, resolveHome)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return acquireCodexHomeStateLock(ctx, home)
 }
 
 func (p *CodexSubagentProvider) Name() string { return p.name }
@@ -291,8 +424,8 @@ func parseDurationOr(raw string, fallback time.Duration) time.Duration {
 // protocol milestones (§17.1: "JSON-RPC traffic and relevant provider
 // activities SHOULD be persisted as an opaque, bounded artifact"). It
 // intentionally records milestones rather than every raw frame — the
-// scope this phase actually needs evidence for — and is written to a file
-// under the workspace so a TranscriptRef survives the attempt.
+// scope this phase actually needs evidence for — and is sealed directly into
+// Hufu's CAS so its reference is opaque, immutable, and task-scoped.
 type codexTranscript struct {
 	mu       sync.Mutex
 	lines    []string
@@ -311,6 +444,7 @@ func (t *codexTranscript) record(format string, args ...any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339Nano), fmt.Sprintf(format, args...))
+	line = utils.RedactSecrets(line)
 	if t.bytes+int64(len(line)) > t.maxBytes {
 		if len(t.lines) == 0 || t.lines[len(t.lines)-1] != "...[truncated]" {
 			t.lines = append(t.lines, "...[truncated]")
@@ -321,20 +455,120 @@ func (t *codexTranscript) record(format string, args ...any) {
 	t.bytes += int64(len(line))
 }
 
-func (t *codexTranscript) persist(workspace, taskID string, attempt int) (string, error) {
+func (t *codexTranscript) persist(workspace, provider, runID, taskID string, attempt int) (string, error) {
 	t.mu.Lock()
 	content := strings.Join(t.lines, "\n") + "\n"
 	t.mu.Unlock()
 
-	dir := filepath.Join(workspace, logsDir, "codex-transcripts")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("codex transcript: create directory: %w", err)
+	if strings.TrimSpace(workspace) == "" || strings.TrimSpace(provider) == "" ||
+		strings.TrimSpace(runID) == "" || strings.TrimSpace(taskID) == "" || attempt <= 0 {
+		return "", fmt.Errorf("codex transcript: complete run, provider, task, and attempt identity is required")
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s-attempt-%d-%d.log", taskID, attempt, time.Now().UnixNano()))
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("codex transcript: write: %w", err)
+	content = boundCodexTranscriptContent(content, t.maxBytes)
+	store, err := NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		return "", fmt.Errorf("codex transcript: open artifact store: %w", err)
 	}
-	return path, nil
+	id := codexTranscriptArtifactID(provider, runID, taskID, attempt, content)
+	putResult, err := store.Put(context.Background(), PutArtifactRequest{
+		ID:          id,
+		Kind:        codexProviderTranscriptKind,
+		Role:        codexProviderTranscriptRole,
+		Path:        "provider-transcripts/" + id + ".log",
+		Description: "Bounded redacted Codex provider transcript",
+		MediaType:   "text/plain",
+		Content:     []byte(content),
+		RunID:       runID,
+		TaskID:      taskID,
+		Attempt:     attempt,
+		Provider:    provider,
+	})
+	if err != nil {
+		return "", fmt.Errorf("codex transcript: persist artifact: %w", err)
+	}
+	if _, err := verifyCodexTranscriptArtifact(context.Background(), store, putResult.ID, provider, runID, taskID, attempt); err != nil {
+		return "", fmt.Errorf("codex transcript: verify artifact: %w", err)
+	}
+	return putResult.ID, nil
+}
+
+const (
+	codexProviderTranscriptKind = "provider_transcript"
+	codexProviderTranscriptRole = "diagnostic"
+)
+
+func codexTranscriptArtifactID(provider, runID, taskID string, attempt int, content string) string {
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", provider, runID, taskID, attempt, content)))
+	return "provider-transcript-" + hex.EncodeToString(digest[:])
+}
+
+// verifyCodexTranscriptArtifact is the read-after-write boundary for provider
+// diagnostics. The receipt stores only the returned opaque ID, so the CAS
+// metadata must prove the exact provider/run/task/attempt occurrence before
+// the ID can cross that boundary.
+func verifyCodexTranscriptArtifact(ctx context.Context, store *FileArtifactStore, id, provider, runID, taskID string, attempt int) (ArtifactRef, error) {
+	if store == nil || !validArtifactID(id) {
+		return ArtifactRef{}, fmt.Errorf("provider transcript reference %q is invalid", id)
+	}
+	ref, err := store.Get(ctx, id)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if ref.Kind != codexProviderTranscriptKind || ref.Role != codexProviderTranscriptRole || ref.Type != codexProviderTranscriptKind ||
+		ref.Provider != provider || ref.RunID != runID || ref.TaskID != taskID || ref.Attempt != attempt ||
+		ref.SHA256 == "" || ref.Bytes < 0 || ref.ByteSize != ref.Bytes {
+		return ArtifactRef{}, fmt.Errorf("provider transcript %q has mismatched immutable scope metadata", id)
+	}
+	if _, err := store.Resolve(ctx, ref); err != nil {
+		return ArtifactRef{}, err
+	}
+	return ref, nil
+}
+
+func boundCodexTranscriptContent(content string, maxBytes int64) string {
+	content = utils.RedactSecrets(content)
+	if maxBytes <= 0 || int64(len(content)) <= maxBytes {
+		return content
+	}
+	limit := int(maxBytes)
+	const marker = "...[truncated]"
+	if limit <= len(marker) {
+		return marker[:limit]
+	}
+	cut := limit - len(marker)
+	for cut > 0 && cut < len(content) && (content[cut]&0xc0) == 0x80 {
+		cut--
+	}
+	return content[:cut] + marker
+}
+
+// finishCodexAttempt seals the provider transcript before any attempt result
+// crosses the provider boundary. A successful result without a verified
+// transcript is not auditable, so all trusted and untrusted result fields are
+// cleared when sealing fails.
+func (p *CodexSubagentProvider) finishCodexAttempt(
+	transcript *codexTranscript, artifactWorkspace string, request AttemptRequest,
+	res AttemptResult, err error,
+) (AttemptResult, error) {
+	ref, persistErr := transcript.persist(artifactWorkspace, p.name, request.RunID, request.TaskID, request.Attempt)
+	if persistErr == nil {
+		res.TranscriptRef = ref
+		return res, err
+	}
+	hadCanonicalResult := res.CanonicalResult != nil
+	res.TranscriptRef = ""
+	res.CanonicalResult = nil
+	res.ResultProposal = nil
+	if hadCanonicalResult {
+		res.Output = ""
+	}
+	transcriptErr := codexFail(CodexFailureUnavailable, fmt.Errorf("persist provider transcript: %w", persistErr))
+	if err != nil {
+		err = errors.Join(err, transcriptErr)
+	} else {
+		err = transcriptErr
+	}
+	return res, err
 }
 
 // RunAttempt implements §13.2/§14/§16's production flow for one attempt:
@@ -347,11 +581,21 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("codex attempt requires a coordinator")
 	}
+	// ArtifactScope is the provider's immutable evidence capability for this
+	// exact attempt. Reject an absent or mismatched capability before even
+	// running preflight, resolving shared state, preparing an execution world,
+	// or starting the app-server. Otherwise a malformed request could still
+	// perform workspace/process side effects before canonicalization rejects
+	// its result.
+	if err := validateAttemptArtifactScope(request); err != nil {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex attempt artifact scope: %w", err))
+	}
 	normalizedReasoningEffort, err := normalizeCodexReasoningEffort(request.ReasoningEffort)
 	if err != nil {
 		return AttemptResult{}, codexFail(CodexFailureProtocolError, err)
 	}
 	request.ReasoningEffort = normalizedReasoningEffort
+	childEnvironment := buildAllowlistedEnvironment(p.config.InheritEnv)
 	// §25: preflight failure MUST occur before the task enters provider
 	// execution — this runs (or reuses a cached result) before any process,
 	// workspace, or protocol activity below.
@@ -359,7 +603,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if preflight == nil {
 		preflight = &codexPreflightCache{}
 	}
-	if err := preflight.run(p); err != nil {
+	if err := preflight.run(p, childEnvironment); err != nil {
 		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex preflight: %w", err))
 	}
 	// §29: Hufu's ModelTopology (local extra-model fanout) is a separate
@@ -375,17 +619,32 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 
 	transcript := newCodexTranscript(p.config.MaxTranscriptBytes)
 	workspace := p.coordinator.projectDir
+	artifactWorkspace := p.coordinator.artifactStoreRootPath()
+	if artifactWorkspace == "" {
+		artifactWorkspace = workspace
+	}
 	transcript.record("attempt start task=%s attempt=%d model=%s", request.TaskID, request.Attempt, request.ModelID)
 
-	finish := func(res AttemptResult, err error) (AttemptResult, error) {
-		if ref, perr := transcript.persist(workspace, request.TaskID, request.Attempt); perr == nil {
-			res.TranscriptRef = ref
-		}
-		return res, err
+	networkDisabled := p.coordinator != nil && p.coordinator.noNet
+	if request.Agent != nil && request.Agent.NoNet {
+		networkDisabled = true
 	}
+	// The local execution world owns workspace preparation, leases, and
+	// post-turn effect verification. It intentionally does not claim network
+	// control: the Codex app-server is the provider control plane and must be
+	// able to bootstrap and reach its model. For a no-net task, the task-plane
+	// network boundary is Codex's native sandbox. codexStartOrResumeThread
+	// verifies its effective networkAccess=false before any turn/start and
+	// fails closed when that proof is missing or permits network access.
+	world := NewLocalExecutionWorld()
+	stateLock, lockErr := p.acquireSharedCodexStateLockWithEnvironment(ctx, childEnvironment, nil)
+	if lockErr != nil {
+		transcript.record("Codex shared state lock failed: %v", lockErr)
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("acquire Codex shared state lock: %w", lockErr)))
+	}
+	defer stateLock()
 
 	startupTimeout, interruptGrace, shutdownGrace := p.durations()
-	world := NewLocalExecutionWorld()
 	controlWorkspace := ""
 	if p.coordinator != nil && p.coordinator.session != nil {
 		controlWorkspace = p.coordinator.session.Workspace
@@ -393,11 +652,12 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	prepared, err := world.Prepare(ctx, ExecutionWorldSpec{
 		RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt,
 		Root: workspace, CWD: workspace, ControlWorkspace: controlWorkspace, SideEffect: request.Task.SideEffect,
-		EnvironmentAllowlist: p.config.InheritEnv,
+		NetworkAllowed: !networkDisabled, EnvironmentAllowlist: p.config.InheritEnv,
+		Environment: childEnvironment,
 	})
 	if err != nil {
 		transcript.record("execution world prepare failed: %v", err)
-		return finish(AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("prepare execution world: %w", err)))
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("prepare execution world: %w", err)))
 	}
 	defer func() { _ = world.Release(context.Background(), prepared) }()
 
@@ -418,7 +678,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	})
 	if err != nil {
 		transcript.record("start app-server failed: %v", err)
-		return finish(AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server: %w", err)))
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server: %w", err)))
 	}
 	sup := NewProcessSupervisor()
 	processStopped := make(chan struct{})
@@ -443,7 +703,8 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	}
 	threadCfg := CodexThreadConfig{
 		CWD: prepared.CWD, Model: request.ModelID, Sandbox: sandbox,
-		DeveloperInstructions: "Work only inside the provided workspace. Produce the final response matching the supplied JSON schema. Do not claim verification or receipt authority.",
+		NetworkDisabled:       networkDisabled,
+		DeveloperInstructions: codexWorkerDeveloperInstructions,
 	}
 	effective, err := codexStartOrResumeThread(ctx, proc.Client, existingThreadID, threadCfg, func(state CodexEffectiveThreadState) error {
 		transcript.record("session bound thread_id=%s", state.ThreadID)
@@ -455,7 +716,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	})
 	if err != nil {
 		transcript.record("thread start/resume failed: %v", err)
-		return finish(AttemptResult{ProviderSessionID: existingThreadID}, p.classifyThreadError(ctx, err))
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: existingThreadID}, p.classifyThreadError(ctx, err))
 	}
 	result.ProviderSessionID = effective.ThreadID
 
@@ -541,7 +802,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		stopProcess()
 		<-turnDone // codexRunTurn observes the same ctx and returns once the process/context closes
 		delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
-		return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, codexFail(class, ctx.Err()))
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, codexFail(class, ctx.Err()))
 	}
 
 	if turnErr != nil {
@@ -549,7 +810,9 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		var protoErr *CodexProtocolIncompleteError
 		if !errors.As(turnErr, &protoErr) {
 			delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
-			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, p.classifyTurnError(turnErr))
+			output := boundedCodexFailureEvidence(turnResult.RawFinalOutput)
+			recordCodexFailureEvidence(transcript, "provider turn output", output)
+			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta, Output: output}, p.classifyTurnError(turnErr))
 		}
 
 		// §23: an invalid/missing proposal MUST NOT immediately rerun the
@@ -557,62 +820,88 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		// before attempting exactly one read-only, schema-only repair — a
 		// repair proposal can never retroactively change what Hufu already
 		// observed here.
+		originalEvidence := boundedCodexFailureEvidence(turnResult.RawFinalOutput)
 		stopProcess()
 		frozen, snapErr := world.Snapshot(context.Background(), prepared)
 		if snapErr != nil {
 			transcript.record("repair: freeze snapshot failed: %v", snapErr)
-			return finish(AttemptResult{ProviderSessionID: effective.ThreadID}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace snapshot: %w", snapErr)))
+			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
+			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace snapshot: %w", snapErr)))
 		}
 		frozenDelta, diffErr := NewWorkspaceSnapshotter().Diff(context.Background(), prepared.Baseline, frozen)
 		if diffErr != nil {
 			transcript.record("repair: freeze diff failed: %v", diffErr)
-			return finish(AttemptResult{ProviderSessionID: effective.ThreadID}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace diff: %w", diffErr)))
+			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
+			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace diff: %w", diffErr)))
 		}
 		if err := ValidateExecutionWorldDelta(prepared, frozenDelta); err != nil {
 			transcript.record("repair: workspace violation before repair: %v", err)
-			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta}, codexFail(CodexFailureWorkspaceViolation, err))
+			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
+			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, err))
 		}
 
-		canonical, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
+		canonical, repairOutput, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
 		if repairErr != nil {
 			transcript.record("repair failed: %v", repairErr)
-			return finish(AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID}, repairErr)
+			failureOutput := combineCodexFailureEvidence(originalEvidence, repairOutput)
+			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
+			recordCodexFailureEvidence(transcript, "repair provider turn output", repairOutput)
+			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{
+				ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta,
+				ProviderTurnID: repairTurnID, Output: failureOutput,
+			}, repairErr)
 		}
-		return finish(AttemptResult{
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{
 			ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID,
 			CanonicalResult: canonical, Output: canonical.Summary,
 		}, nil)
 	}
 	transcript.record("turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
 	result.ProviderTurnID = turnResult.TurnID
+	// Keep only bounded/redacted provider text in a failed AttemptResult. The
+	// decoded proposal is still used locally for canonicalization, but it is
+	// never returned as a durable diagnostic object: proposal fields are
+	// untrusted and DecodeWorkerResultProposal intentionally does not impose
+	// every canonical storage bound.
+	result.Output = boundedCodexFailureEvidence(turnResult.RawFinalOutput)
 
 	stopProcess()
+	result, err = finalizeCodexTurn(context.Background(), request, world, prepared, turnResult, result, transcript)
+	return p.finishCodexAttempt(transcript, artifactWorkspace, request, result, err)
+}
 
-	final, snapErr := world.Snapshot(context.Background(), prepared)
+func finalizeCodexTurn(
+	ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld,
+	turnResult CodexTurnResult, result AttemptResult, transcript *codexTranscript,
+) (AttemptResult, error) {
+	final, snapErr := world.Snapshot(ctx, prepared)
 	if snapErr != nil {
 		transcript.record("final snapshot failed: %v", snapErr)
-		return finish(result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("final workspace snapshot: %w", snapErr)))
+		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
+		return result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("final workspace snapshot: %w", snapErr))
 	}
-	wdelta, diffErr := NewWorkspaceSnapshotter().Diff(context.Background(), prepared.Baseline, final)
+	wdelta, diffErr := NewWorkspaceSnapshotter().Diff(ctx, prepared.Baseline, final)
 	if diffErr != nil {
 		transcript.record("workspace diff failed: %v", diffErr)
-		return finish(result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("workspace diff: %w", diffErr)))
+		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
+		return result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("workspace diff: %w", diffErr))
 	}
 	result.WorkspaceDelta = wdelta
 	if err := ValidateExecutionWorldDelta(prepared, wdelta); err != nil {
 		transcript.record("workspace violation: %v", err)
-		return finish(result, codexFail(CodexFailureWorkspaceViolation, err))
+		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
+		return result, codexFail(CodexFailureWorkspaceViolation, err)
 	}
 
-	canonical, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, wdelta, prepared.Root)
+	canonical, err := NewExternalResultCanonicalizer().Canonicalize(ctx, request, AttemptResult{ResultProposal: turnResult.Proposal}, wdelta, prepared.Root)
 	if err != nil {
 		transcript.record("canonicalize failed: %v", err)
-		return finish(result, fmt.Errorf("canonicalize codex result: %w", err))
+		recordCodexFailureEvidence(transcript, "rejected provider turn output", result.Output)
+		return result, fmt.Errorf("canonicalize codex result: %w", err)
 	}
-	result.ResultProposal = turnResult.Proposal
 	result.CanonicalResult = canonical
 	result.Output = canonical.Summary
-	return finish(result, nil)
+	return result, nil
 }
 
 // attemptResultRepair implements §23's repair flow: start a fresh app-server
@@ -623,13 +912,15 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 // canonicalization always uses frozenDelta, the delta the caller captured
 // before calling this — so a repair turn cannot retroactively change
 // observed workspace history even if the app-server disobeys the read-only
-// instruction. Returns the canonical result, the repair turn's ID
-// (diagnostic only, may be empty on failure), and an error.
+// instruction. Returns the canonical result, bounded/redacted repair output,
+// the repair turn's ID (diagnostic only, may be empty on failure), and an
+// error. The untrusted decoded proposal remains local to this function and
+// is never returned on a failed attempt.
 func (p *CodexSubagentProvider) attemptResultRepair(
 	ctx context.Context, sup ProcessSupervisor, request AttemptRequest,
 	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta,
 	transcript *codexTranscript, onActivity func(codexTurnActivity), startupTimeout, interruptGrace, shutdownGrace time.Duration,
-) (canonical *TaskResult, turnID string, resultErr error) {
+) (canonical *TaskResult, output, turnID string, resultErr error) {
 	transcript.record("attempting result-only repair thread_id=%s", threadID)
 
 	startCtx := ctx
@@ -644,7 +935,7 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	})
 	if err != nil {
 		transcript.record("repair: start app-server failed: %v", err)
-		return nil, "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
+		return nil, "", "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
 	}
 	defer p.stopCodexProcess(sup, repairProc, interruptGrace, shutdownGrace, transcript)
 
@@ -655,12 +946,13 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	// bound to this resumed thread, not passed per-turn.
 	threadCfg := CodexThreadConfig{
 		CWD: prepared.CWD, Model: request.ModelID, Sandbox: codexSandboxReadOnly,
+		NetworkDisabled:       !prepared.NetworkAllowed,
 		DeveloperInstructions: codexResultRepairInstruction,
 	}
 	effective, err := codexStartOrResumeThread(ctx, repairProc.Client, threadID, threadCfg, nil)
 	if err != nil {
 		transcript.record("repair: thread/resume failed: %v", err)
-		return nil, "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
+		return nil, "", "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
 	}
 
 	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, codexTurnOptions{
@@ -670,16 +962,60 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	})
 	if turnErr != nil {
 		transcript.record("repair: turn failed: %v", turnErr)
-		return nil, turnResult.TurnID, p.classifyTurnError(turnErr)
+		return nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, p.classifyTurnError(turnErr)
 	}
 	transcript.record("repair: turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
 
 	canonical, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, frozenDelta, prepared.Root)
 	if err != nil {
 		transcript.record("repair: canonicalize failed: %v", err)
-		return nil, turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
+		return nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
 	}
-	return canonical, turnResult.TurnID, nil
+	return canonical, "", turnResult.TurnID, nil
+}
+
+// boundedCodexFailureEvidence preserves only diagnostic provider output. It
+// is intentionally separate from canonical result summaries: a response that
+// fails Hufu validation must never be promoted to trusted task output.
+func boundedCodexFailureEvidence(raw string) string {
+	return utils.TruncateRunes(utils.RedactSecrets(raw), codexFailureEvidenceMaxRunes)
+}
+
+// combineCodexFailureEvidence keeps both sides of a protocol repair failure
+// visible without allowing either untrusted provider response to dominate the
+// bounded task diagnostic. Each side is redacted/bounded before being labeled,
+// and the combined result remains within the same overall budget.
+func combineCodexFailureEvidence(original, repair string) string {
+	type evidencePart struct {
+		label string
+		text  string
+	}
+	parts := make([]evidencePart, 0, 2)
+	if strings.TrimSpace(original) != "" {
+		parts = append(parts, evidencePart{label: "original provider turn output", text: original})
+	}
+	if strings.TrimSpace(repair) != "" {
+		parts = append(parts, evidencePart{label: "repair provider turn output", text: repair})
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	partBudget := (codexFailureEvidenceMaxRunes - 64) / len(parts)
+	var b strings.Builder
+	for i, part := range parts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "%s:\n%s", part.label, utils.TruncateRunes(boundedCodexFailureEvidence(part.text), partBudget))
+	}
+	return utils.TruncateRunes(b.String(), codexFailureEvidenceMaxRunes)
+}
+
+func recordCodexFailureEvidence(transcript *codexTranscript, label, evidence string) {
+	if transcript == nil || strings.TrimSpace(evidence) == "" {
+		return
+	}
+	transcript.record("%s: %s", label, evidence)
 }
 
 func proposalStatusForLog(p *WorkerResultProposal) string {

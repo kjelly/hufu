@@ -32,7 +32,7 @@ func TestMigratableLegacyExecutionTargetIgnoresLocalBindingMarker(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := target.String(), "local/qwen3:8b"; got != want {
+	if got, want := target.String(), "ollama/qwen3:8b"; got != want {
 		t.Fatalf("target = %q, want %q", got, want)
 	}
 }

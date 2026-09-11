@@ -9,6 +9,15 @@ import (
 
 var backendNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
+const (
+	// OllamaBackendName is the canonical execution identity for the built-in
+	// Ollama language-model backend.
+	OllamaBackendName = "ollama"
+	// LegacyLocalBackendName is retained only so targets persisted by older
+	// Hufu versions can be read and resumed. New selectors resolve to ollama.
+	LegacyLocalBackendName = "local"
+)
+
 // ExecutionSelector is an untrusted user or configuration input. A selector
 // may be bare and therefore is not suitable for durable state.
 type ExecutionSelector struct {
@@ -44,22 +53,64 @@ func ParseExecutionSelector(raw string) (ExecutionSelector, error) {
 	if model == "" {
 		return ExecutionSelector{}, fmt.Errorf("execution selector %q has no model", raw)
 	}
-	backend = CanonicalBackendName(backend)
+	backend = CanonicalTargetBackendName(backend)
 	if !backendNamePattern.MatchString(backend) {
 		return ExecutionSelector{}, fmt.Errorf("invalid execution backend %q", backend)
 	}
 	return ExecutionSelector{Raw: raw, Backend: backend, Model: model}, nil
 }
 
-// CanonicalBackendName returns the stable backend identity used in durable
-// targets. Callers that accept a configured backend must still validate that it
-// exists in their registry.
+// CanonicalBackendName normalizes a backend name without changing its
+// identity. In particular, ollama is not rewritten to local: execution
+// targets use ollama as their durable identity.
 func CanonicalBackendName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "ollama" {
-		return "local"
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// CanonicalTargetBackendName resolves the only execution-backend alias. The
+// local spelling is accepted as historical input, while all newly parsed and
+// derived execution targets use ollama.
+func CanonicalTargetBackendName(name string) string {
+	name = CanonicalBackendName(name)
+	if name == LegacyLocalBackendName {
+		return OllamaBackendName
 	}
 	return name
+}
+
+// IsOllamaBackend reports whether name is the canonical Ollama backend or its
+// historical local alias.
+func IsOllamaBackend(name string) bool {
+	name = CanonicalBackendName(name)
+	return name == OllamaBackendName || name == LegacyLocalBackendName
+}
+
+// BackendNamesEqual compares execution backend identities while accepting the
+// historical local spelling for Ollama. It must not be used to equate named
+// providers with one another.
+func BackendNamesEqual(left, right string) bool {
+	return CanonicalTargetBackendName(left) == CanonicalTargetBackendName(right)
+}
+
+// TargetsEqual compares target identity while accepting the historical local
+// spelling for Ollama. Model strings remain exact because a model leaf is part
+// of the durable execution identity.
+func TargetsEqual(left, right ExecutionTarget) bool {
+	return BackendNamesEqual(left.Backend, right.Backend) && left.Model == right.Model
+}
+
+// TargetSlicesEqual compares ordered execution topologies using the same
+// legacy Ollama alias rules as TargetsEqual.
+func TargetSlicesEqual(left, right []ExecutionTarget) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !TargetsEqual(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 // String returns the canonical human-facing representation.

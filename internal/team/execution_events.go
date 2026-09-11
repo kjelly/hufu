@@ -644,9 +644,9 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	}
 
 	if selector, err := execution.ParseExecutionSelector(model); err == nil && selector.Backend != "" {
-		provider = execution.CanonicalBackendName(selector.Backend)
+		provider = execution.CanonicalTargetBackendName(selector.Backend)
 	} else {
-		provider = "local"
+		provider = execution.OllamaBackendName
 	}
 	if item := c.todoItemByID(taskID); item != nil {
 		target = item.ExecutionTarget

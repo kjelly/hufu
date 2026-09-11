@@ -494,7 +494,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		// Keep a read-only in-memory shadow for old runtime adapters and tests;
 		// TodoItem.MarshalJSON and canonical task events never persist it.
 		compatibilityProvider = target.Backend
-		if target.Backend == "local" {
+		if execution.IsOllamaBackend(target.Backend) {
 			compatibilityProvider = localSubagentProviderName
 		}
 		providerBinding = nil

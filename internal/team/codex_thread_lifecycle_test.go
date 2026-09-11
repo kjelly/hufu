@@ -17,22 +17,30 @@ import (
 // plain request-side mode string — see codexSandboxPolicyMode's doc comment
 // for why the response shape differs from the request shape.
 func fakeCodexSandboxPolicy(mode string) map[string]any {
+	return fakeCodexSandboxPolicyWithNetwork(mode, false)
+}
+
+func fakeCodexSandboxPolicyWithNetwork(mode string, networkAccess bool) map[string]any {
 	switch mode {
 	case "read-only":
-		return map[string]any{"type": "readOnly", "networkAccess": false}
+		return map[string]any{"type": "readOnly", "networkAccess": networkAccess}
 	case "workspace-write":
-		return map[string]any{"type": "workspaceWrite", "networkAccess": false}
+		return map[string]any{"type": "workspaceWrite", "networkAccess": networkAccess}
 	default:
-		return map[string]any{"type": "dangerFullAccess"}
+		return map[string]any{"type": "dangerFullAccess", "networkAccess": networkAccess}
 	}
 }
 
 func fakeCodexThreadStartStep(threadID, cwd, model, sandbox string, t *testing.T) fakeCodexStep {
+	return fakeCodexThreadStartStepWithNetwork(threadID, cwd, model, sandbox, false, t)
+}
+
+func fakeCodexThreadStartStepWithNetwork(threadID, cwd, model, sandbox string, networkAccess bool, t *testing.T) fakeCodexStep {
 	return fakeCodexStep{Result: rawJSON(t, map[string]any{
 		"thread":  map[string]any{"id": threadID},
 		"cwd":     cwd,
 		"model":   model,
-		"sandbox": fakeCodexSandboxPolicy(sandbox),
+		"sandbox": fakeCodexSandboxPolicyWithNetwork(sandbox, networkAccess),
 	})}
 }
 
@@ -164,6 +172,40 @@ func TestCodexSandboxMismatchFails(t *testing.T) {
 	_, err := codexStartOrResumeThread(context.Background(), server.Client, "", cfg, nil)
 	if err == nil || !strings.Contains(err.Error(), "widens") {
 		t.Fatalf("err = %v, want a sandbox-widening rejection", err)
+	}
+}
+
+func TestCodexNoNetRejectsEffectiveNetworkAccess(t *testing.T) {
+	server := startFakeCodexServer(t, []fakeCodexStep{
+		fakeCodexThreadStartStepWithNetwork("thread-1", "/workspace", "gpt-5-codex", "workspace-write", true, t),
+	})
+	defer server.Client.Close()
+
+	cfg := CodexThreadConfig{CWD: "/workspace", Model: "gpt-5-codex", Sandbox: "workspace-write", NetworkDisabled: true}
+	_, err := codexStartOrResumeThread(context.Background(), server.Client, "", cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "network access") {
+		t.Fatalf("err = %v, want a no-net network-access rejection", err)
+	}
+	if got := server.CallLog(t); !slices.Equal(got, []string{"thread/start"}) {
+		t.Fatalf("call log = %v, want no turn/start after the no-net rejection", got)
+	}
+}
+
+func TestCodexNoNetRejectsMissingEffectiveNetworkAccess(t *testing.T) {
+	server := startFakeCodexServer(t, []fakeCodexStep{
+		{Result: rawJSON(t, map[string]any{
+			"thread":  map[string]any{"id": "thread-1"},
+			"cwd":     "/workspace",
+			"model":   "gpt-5-codex",
+			"sandbox": map[string]any{"type": "workspaceWrite"},
+		})},
+	})
+	defer server.Client.Close()
+
+	cfg := CodexThreadConfig{CWD: "/workspace", Model: "gpt-5-codex", Sandbox: "workspace-write", NetworkDisabled: true}
+	_, err := codexStartOrResumeThread(context.Background(), server.Client, "", cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "omitted networkAccess") {
+		t.Fatalf("err = %v, want a missing-network-access rejection", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 
@@ -207,17 +208,25 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		))
 
 	case "codex_activity":
-		lines := wrapPreviewLines(event.Message, max(width-10, 20), 20)
+		firstPrefix := codexActivityPrefix(width, false)
+		continuationPrefix := codexActivityPrefix(width, true)
+		label := fitCodexActivityLabel(event, max(width-lipgloss.Width(firstPrefix)-2, 0))
+		firstPayloadWidth := width - lipgloss.Width(firstPrefix)
+		if label != "" {
+			firstPayloadWidth -= lipgloss.Width(label) + 1
+		}
+		continuationPayloadWidth := width - lipgloss.Width(continuationPrefix)
+		lines := wrapPreviewLinesWithWidths(event.Message, firstPayloadWidth, continuationPayloadWidth, 20)
 		for i, line := range lines {
 			if i == 0 {
-				w.write(fmt.Sprintf("  %s %s %s\n",
-					stepStyle.Render("│"),
-					formatAgentLabel(event),
-					dimStyle.Render(line),
-				))
+				if label != "" {
+					w.write(firstPrefix + label + " " + dimStyle.Render(line) + "\n")
+				} else {
+					w.write(firstPrefix + dimStyle.Render(line) + "\n")
+				}
 				continue
 			}
-			w.write(fmt.Sprintf("  %s    %s\n", stepStyle.Render("│"), dimStyle.Render(line)))
+			w.write(continuationPrefix + dimStyle.Render(line) + "\n")
 		}
 
 	case "verify_start":
@@ -705,6 +714,37 @@ func formatAgentLabel(event team.StatusEvent) string {
 	return agent
 }
 
+func codexActivityPrefix(width int, continuation bool) string {
+	prefix := "  " + stepStyle.Render("│") + " "
+	if continuation {
+		prefix += "   "
+	}
+	if width > lipgloss.Width(prefix) {
+		return prefix
+	}
+	compactPrefix := stepStyle.Render("│ ")
+	if width > lipgloss.Width(compactPrefix) {
+		return compactPrefix
+	}
+	marker := stepStyle.Render("│")
+	if width > lipgloss.Width(marker) {
+		return marker
+	}
+	return ""
+}
+
+func fitCodexActivityLabel(event team.StatusEvent, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if label := formatAgentLabel(event); lipgloss.Width(label) <= width {
+		return label
+	}
+	withoutModel := event
+	withoutModel.Model = ""
+	return ansi.Truncate(formatAgentLabel(withoutModel), width, "…")
+}
+
 func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp *taskDisplay, skillDisp *skillDisplay, idleTimer *idleWarningTimer, notifier *notify.Notifier) {
 	var mu sync.Mutex
 	st := reporterState{}
@@ -878,87 +918,113 @@ func previewTerminalWidth(fallback int) int {
 }
 
 func wrapPreviewLines(text string, width, maxLines int) []string {
+	return wrapPreviewLinesWithWidths(text, width, width, maxLines)
+}
+
+func wrapPreviewLinesWithWidths(text string, firstWidth, continuationWidth, maxLines int) []string {
 	text = strings.TrimSpace(text)
-	if text == "" || width <= 0 || maxLines <= 0 {
+	if text == "" || firstWidth <= 0 || continuationWidth <= 0 || maxLines <= 0 {
 		return nil
 	}
 
 	var lines []string
-	for _, src := range strings.Split(text, "\n") {
-		words := strings.Fields(src)
-		if len(words) == 0 {
-			if len(lines) >= maxLines {
-				return truncatePreviewLines(lines)
-			}
-			lines = append(lines, "")
-			continue
+	lineWidth := func(lineIndex int) int {
+		if lineIndex == 0 {
+			return firstWidth
 		}
-
+		return continuationWidth
+	}
+	for src := range strings.SplitSeq(text, "\n") {
+		hasWord := false
 		cur := ""
-		curLen := 0
+		curWidth := 0
 		flush := func() bool {
-			if curLen == 0 {
+			if cur == "" {
 				return false
 			}
 			lines = append(lines, cur)
 			cur = ""
-			curLen = 0
+			curWidth = 0
 			return len(lines) >= maxLines
 		}
 
-		for _, word := range words {
-			runes := []rune(word)
-			for len(runes) > 0 {
-				if curLen == 0 && len(runes) <= width {
-					cur = string(runes)
-					curLen = len(runes)
-					runes = nil
+		for word := range strings.FieldsSeq(src) {
+			hasWord = true
+			wordWidth := ansi.StringWidth(word)
+			wordOffset := 0
+			for wordOffset < wordWidth {
+				width := lineWidth(len(lines))
+				if width <= 0 {
+					return truncatePreviewLines(lines, lineWidth)
+				}
+				if cur == "" {
+					remainingWidth := wordWidth - wordOffset
+					if remainingWidth <= width {
+						cur = ansi.Cut(word, wordOffset, wordWidth)
+						curWidth = remainingWidth
+						wordOffset = wordWidth
+						break
+					}
+					chunk := ansi.Cut(word, wordOffset, wordOffset+width)
+					chunkWidth := ansi.StringWidth(chunk)
+					if chunk == "" {
+						wideChunk := ansi.Cut(word, wordOffset, wordOffset+2)
+						wideWidth := ansi.StringWidth(wideChunk)
+						if wideWidth == 0 {
+							break
+						}
+						chunk = "?"
+						chunkWidth = 1
+						wordOffset += wideWidth
+					} else {
+						wordOffset += chunkWidth
+					}
+					cur = chunk
+					curWidth = chunkWidth
+					if wordOffset < wordWidth && flush() {
+						return truncatePreviewLines(lines, lineWidth)
+					}
 					continue
 				}
-				if curLen > 0 && curLen+1+len(runes) <= width {
-					cur += " " + string(runes)
-					curLen += 1 + len(runes)
-					runes = nil
-					continue
+				remainingWidth := wordWidth - wordOffset
+				if curWidth+1+remainingWidth <= width {
+					cur += " " + ansi.Cut(word, wordOffset, wordWidth)
+					curWidth += 1 + remainingWidth
+					wordOffset = wordWidth
+					break
 				}
-				if curLen > 0 && flush() {
-					return truncatePreviewLines(lines)
-				}
-				chunk := width
-				if chunk > len(runes) {
-					chunk = len(runes)
-				}
-				cur = string(runes[:chunk])
-				curLen = chunk
-				runes = runes[chunk:]
-				if len(runes) > 0 && flush() {
-					return truncatePreviewLines(lines)
+				if flush() {
+					return truncatePreviewLines(lines, lineWidth)
 				}
 			}
 		}
-		if curLen > 0 && flush() {
-			return truncatePreviewLines(lines)
+
+		if !hasWord {
+			if len(lines) >= maxLines {
+				return truncatePreviewLines(lines, lineWidth)
+			}
+			lines = append(lines, "")
+			continue
+		}
+		if flush() {
+			return truncatePreviewLines(lines, lineWidth)
 		}
 	}
 
 	return lines
 }
 
-func truncatePreviewLines(lines []string) []string {
+func truncatePreviewLines(lines []string, lineWidth func(int) int) []string {
 	if len(lines) == 0 {
 		return nil
 	}
-	last := lines[len(lines)-1]
-	if last == "" {
-		lines[len(lines)-1] = "..."
+	lastIndex := len(lines) - 1
+	width := lineWidth(lastIndex)
+	if width <= 0 {
 		return lines
 	}
-	runes := []rune(last)
-	if len(runes) <= 3 {
-		lines[len(lines)-1] = "..."
-		return lines
-	}
-	lines[len(lines)-1] = string(runes[:len(runes)-3]) + "..."
+	tail := ansi.Truncate("...", width, "")
+	lines[lastIndex] = ansi.Truncate(lines[lastIndex], width-ansi.StringWidth(tail), "") + tail
 	return lines
 }
 

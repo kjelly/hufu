@@ -77,8 +77,9 @@ func TestFinalizeNormalCompletionMarksIncompleteTasksAsErrors(t *testing.T) {
 		if item.Status != TaskError {
 			t.Fatalf("task %s status = %s, want error", item.ID, item.Status)
 		}
-		if item.Detail != "coordinator finished before task completed" {
-			t.Fatalf("task %s detail = %q", item.ID, item.Detail)
+		wantDetail := "current=task agent=worker todo_id=" + item.ID + " | coordinator finished before task completed"
+		if item.Detail != wantDetail {
+			t.Fatalf("task %s detail = %q, want %q", item.ID, item.Detail, wantDetail)
 		}
 	}
 }
@@ -313,8 +314,12 @@ func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read status file: %v", err)
 	}
-	if !strings.Contains(string(statusData), "detail: "+detail) {
-		t.Fatalf("status file missing detail: %s", statusData)
+	statusText := string(statusData)
+	if !strings.Contains(statusText, "todo_id="+items[0].ID) || !strings.Contains(statusText, "error=context deadline exceeded") {
+		t.Fatalf("status file missing task-bound failure detail: %s", statusData)
+	}
+	if strings.Contains(statusText, "last_tool=bash") {
+		t.Fatalf("status file retained coordinator-global tool identity: %s", statusData)
 	}
 
 	taskFiles, err := filepath.Glob(filepath.Join(workspace, tasksDir, "delegate", "researcher", "*.md"))
@@ -328,7 +333,8 @@ func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read task file: %v", err)
 	}
-	if !strings.Contains(string(taskData), "## Failure Detail") || !strings.Contains(string(taskData), detail) {
+	taskText := string(taskData)
+	if !strings.Contains(taskText, "## Failure Detail") || !strings.Contains(taskText, "todo_id="+items[0].ID) || !strings.Contains(taskText, "error=context deadline exceeded") {
 		t.Fatalf("task file missing structured failure detail: %s", taskData)
 	}
 }

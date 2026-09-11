@@ -192,8 +192,8 @@ func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T)
 	t.Run("defaults to hufu-local", func(t *testing.T) {
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}}
 		got := admit(t, c, TaskDef{}, &agent.AgentDef{Name: "worker"})
-		if got.Backend != "local" {
-			t.Fatalf("target=%q, want local/model-x", got)
+		if got.Backend != "ollama" {
+			t.Fatalf("target=%q, want ollama/model-x", got)
 		}
 	})
 	t.Run("team default overrides hufu-local", func(t *testing.T) {
@@ -216,8 +216,8 @@ func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T)
 		c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{SubagentProviderDefault: "codex"}}}
 		c.SetSubagentRegistry(newPrecedenceRegistry("codex", "shadow"))
 		got := admit(t, c, TaskDef{SubagentProvider: "hufu-local"}, &agent.AgentDef{Name: "worker", SubagentProvider: "shadow"})
-		if got.Backend != "local" {
-			t.Fatalf("target=%q, want the task-pinned local/model-x", got)
+		if got.Backend != "ollama" {
+			t.Fatalf("target=%q, want the task-pinned ollama/model-x", got)
 		}
 	})
 	t.Run("qualified model overrides agent and team defaults", func(t *testing.T) {
@@ -237,7 +237,7 @@ func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := execution.ExecutionTarget{Backend: "local", Model: "qwen3"}
+		want := execution.ExecutionTarget{Backend: "ollama", Model: "qwen3"}
 		if canonical.ResolvedExecutionTarget != want {
 			t.Fatalf("target = %#v, want %#v", canonical.ResolvedExecutionTarget, want)
 		}

@@ -91,6 +91,33 @@ func TestExecutionWorldDoesNotInheritSecrets(t *testing.T) {
 	}
 }
 
+func TestExecutionWorldUsesProvidedEnvironmentSnapshot(t *testing.T) {
+	firstHome := t.TempDir()
+	secondHome := t.TempDir()
+	t.Setenv("HOME", secondHome)
+	childEnvironment := []string{"HOME=" + firstHome}
+
+	world := NewLocalExecutionWorld()
+	prepared, err := world.Prepare(context.Background(), ExecutionWorldSpec{
+		Root:                 t.TempDir(),
+		SideEffect:           SideEffectWorkspaceWrite,
+		EnvironmentAllowlist: []string{"HOME"},
+		Environment:          childEnvironment,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
+
+	if len(prepared.Environment) != 1 || prepared.Environment[0] != childEnvironment[0] {
+		t.Fatalf("prepared environment = %v, want the provided child snapshot %v", prepared.Environment, childEnvironment)
+	}
+	childEnvironment[0] = "HOME=" + secondHome
+	if prepared.Environment[0] != "HOME="+firstHome {
+		t.Fatalf("prepared environment changed after caller mutation: %v", prepared.Environment)
+	}
+}
+
 // TestExecutionWorldRejectsCredentialMutation proves admission for a
 // credential_mutation task fails before any workspace side effect (§10.5's
 // last row: "reject provider admission").

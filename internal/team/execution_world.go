@@ -58,6 +58,10 @@ type ExecutionWorldSpec struct {
 	NetworkAllowed bool
 
 	EnvironmentAllowlist []string
+	// Environment is an optional immutable snapshot already resolved from the
+	// allowlist. When provided, Prepare must use this exact child environment
+	// rather than taking a second os.LookupEnv snapshot.
+	Environment []string
 
 	MaxOutputBytes int64
 }

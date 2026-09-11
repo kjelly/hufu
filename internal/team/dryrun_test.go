@@ -136,10 +136,10 @@ func TestDryRunUsesCanonicalExecutionTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.WorkerTarget != "local/qwen3:8b" || result.CoordinatorTarget != "local/qwen3:32b" || result.SidecarTarget != "local/qwen3:1b" {
+	if result.WorkerTarget != "ollama/qwen3:8b" || result.CoordinatorTarget != "ollama/qwen3:32b" || result.SidecarTarget != "ollama/qwen3:1b" {
 		t.Fatalf("dry-run targets = worker %q coordinator %q sidecar %q", result.WorkerTarget, result.CoordinatorTarget, result.SidecarTarget)
 	}
-	if len(result.Agents) != 1 || result.Agents[0].ExecutionTarget != "local/qwen3:8b" {
+	if len(result.Agents) != 1 || result.Agents[0].ExecutionTarget != "ollama/qwen3:8b" {
 		t.Fatalf("dry-run agent target = %#v", result.Agents)
 	}
 }

@@ -3,9 +3,14 @@ package team
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // Phase 4 tests (spec.md §36 PR-10): the Codex output schema and the final
@@ -77,6 +82,101 @@ func TestCodexFilesReadProposalDecodes(t *testing.T) {
 	}
 	if len(proposal.FilesRead) != 1 || proposal.FilesRead[0] != "internal/team/coordinator.go" {
 		t.Fatalf("FilesRead = %#v, want the Codex-reported path", proposal.FilesRead)
+	}
+}
+
+func TestCodexHufuCodeReviewPromptMatchesExternalFilesReadSchema(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	promptBytes, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "..", "..", ".agent-teams", "hufu-code-review", "reviewer.md"))
+	if err != nil {
+		t.Fatalf("read hufu-code-review reviewer prompt: %v", err)
+	}
+	prompt := string(promptBytes)
+	for _, required := range []string{
+		"Hufu's local `submit_result` tool",
+		"external structured result provider such as the Codex app-server",
+		"`files_read` is an array of non-empty strings",
+		"`files_read` object",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("reviewer prompt omitted backend-specific contract marker %q", required)
+		}
+	}
+
+	schema := codexWorkerResultProposalSchema()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Codex result schema has no properties")
+	}
+	filesRead, ok := properties["files_read"].(map[string]any)
+	if !ok {
+		t.Fatal("Codex result schema has no files_read property")
+	}
+	items, ok := filesRead["items"].(map[string]any)
+	if !ok || items["type"] != "string" {
+		t.Fatalf("Codex files_read schema = %#v, want string items", filesRead)
+	}
+
+	task := TaskDef{
+		ResolvedExecutionTarget: execution.ExecutionTarget{Backend: "codex", Model: "gpt-5-codex"},
+		Execution:               ExecutionContract{RequiresResult: true},
+		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
+			{Pointer: "/files_read", Op: "min_items", Value: 1},
+		}},
+	}
+	protocol := resultProtocolInstructionsForBackendKind(task, map[string]bool{"submit_result": true}, execution.BackendKindAgent)
+	for _, required := range []string{
+		"External Provider Result Protocol",
+		"Do not call Hufu-local `submit_result`",
+		codexResultEncodingInstruction,
+		"required non-empty `files_read` string array",
+	} {
+		if !strings.Contains(protocol, required) {
+			t.Fatalf("external result protocol omitted %q: %s", required, protocol)
+		}
+	}
+	if strings.Contains(protocol, "each containing a non-empty `path`") {
+		t.Fatalf("external result protocol retained the local object-shaped files_read rule: %s", protocol)
+	}
+}
+
+func TestNamedLLMResultProtocolRemainsLocal(t *testing.T) {
+	registry := NewExecutionRegistry()
+	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{
+		name: "openrouter", kind: execution.BackendKindLLM,
+		caps: execution.BackendCapabilities{DirectLanguageModel: true},
+	}}); err != nil {
+		t.Fatalf("register named LLM: %v", err)
+	}
+	c := &Coordinator{}
+	c.SetExecutionRegistry(registry)
+	task := TaskDef{
+		ResolvedExecutionTarget: execution.ExecutionTarget{Backend: "openrouter", Model: "meta/llama"},
+		Execution:               ExecutionContract{RequiresResult: true},
+		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
+			{Pointer: "/files_read", Op: "min_items", Value: 1},
+		}},
+	}
+	protocol := c.resultProtocolInstructions(task, map[string]bool{"submit_result": true})
+	for _, required := range []string{
+		"This task is not complete until you call `submit_result`",
+		"`files_read` with at least 1 object(s), each containing a non-empty `path`",
+	} {
+		if !strings.Contains(protocol, required) {
+			t.Fatalf("named LLM local protocol omitted %q: %s", required, protocol)
+		}
+	}
+	for _, forbidden := range []string{
+		"External Provider Result Protocol",
+		"Do not call Hufu-local `submit_result`",
+		"string array",
+	} {
+		if strings.Contains(protocol, forbidden) {
+			t.Fatalf("named LLM local protocol contained external marker %q: %s", forbidden, protocol)
+		}
 	}
 }
 

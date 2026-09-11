@@ -78,6 +78,11 @@ type CodexThreadConfig struct {
 	CWD     string
 	Model   string
 	Sandbox string // "read-only" | "workspace-write" | "danger-full-access"
+	// NetworkDisabled requires the effective sandbox response to explicitly
+	// report networkAccess=false before Hufu permits turn/start. It is kept
+	// separate from the default-allowed case so older protocol fixtures and
+	// providers that do not request no-net do not gain an implicit denial.
+	NetworkDisabled bool
 	// DeveloperInstructions is thread-scoped in the real protocol (there is
 	// no per-turn developer-instruction field) — it applies to every turn
 	// run on this thread for as long as the thread lives.
@@ -87,10 +92,12 @@ type CodexThreadConfig struct {
 // CodexEffectiveThreadState is what the app-server actually reports for a
 // (newly started or resumed) thread.
 type CodexEffectiveThreadState struct {
-	ThreadID string
-	CWD      string
-	Model    string
-	Sandbox  string
+	ThreadID           string
+	CWD                string
+	Model              string
+	Sandbox            string
+	NetworkAccess      bool
+	NetworkAccessKnown bool
 }
 
 type codexThreadRef struct {
@@ -172,6 +179,16 @@ func codexSandboxPolicyMode(raw json.RawMessage) string {
 	}
 }
 
+func codexSandboxPolicyNetworkAccess(raw json.RawMessage) (allowed, known bool) {
+	var policy struct {
+		NetworkAccess *bool `json:"networkAccess"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil || policy.NetworkAccess == nil {
+		return false, false
+	}
+	return *policy.NetworkAccess, true
+}
+
 func validateCodexEffectiveThreadState(cfg CodexThreadConfig, effective CodexEffectiveThreadState) error {
 	if effective.CWD != cfg.CWD {
 		return fmt.Errorf("codex effective cwd %q does not match requested %q", effective.CWD, cfg.CWD)
@@ -189,6 +206,14 @@ func validateCodexEffectiveThreadState(cfg CodexThreadConfig, effective CodexEff
 	}
 	if gotRank > wantRank {
 		return fmt.Errorf("codex effective sandbox %q widens requested %q", effective.Sandbox, cfg.Sandbox)
+	}
+	if cfg.NetworkDisabled {
+		if !effective.NetworkAccessKnown {
+			return fmt.Errorf("codex effective sandbox omitted networkAccess while no-net is required")
+		}
+		if effective.NetworkAccess {
+			return fmt.Errorf("codex effective sandbox permits network access while no-net is required")
+		}
 	}
 	return nil
 }
@@ -209,7 +234,8 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 		if err := client.Call(ctx, codexMethodThreadResume, params, &result); err != nil {
 			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/resume: %w", err)
 		}
-		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox)}
+		networkAccess, networkKnown := codexSandboxPolicyNetworkAccess(result.Sandbox)
+		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox), NetworkAccess: networkAccess, NetworkAccessKnown: networkKnown}
 	} else {
 		var result codexThreadStartResult
 		params := codexThreadStartParams{
@@ -219,7 +245,8 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 		if err := client.Call(ctx, codexMethodThreadStart, params, &result); err != nil {
 			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/start: %w", err)
 		}
-		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox)}
+		networkAccess, networkKnown := codexSandboxPolicyNetworkAccess(result.Sandbox)
+		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox), NetworkAccess: networkAccess, NetworkAccessKnown: networkKnown}
 	}
 
 	if err := validateCodexEffectiveThreadState(cfg, effective); err != nil {

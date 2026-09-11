@@ -22,7 +22,7 @@ func (b fakeExecutionBackend) Name() string                                { ret
 func (b fakeExecutionBackend) Kind() execution.BackendKind                 { return b.kind }
 func (b fakeExecutionBackend) Capabilities() execution.BackendCapabilities { return b.caps }
 func (b fakeExecutionBackend) ValidateTarget(_ context.Context, target execution.ExecutionTarget) error {
-	if target.Backend != b.name {
+	if !execution.BackendNamesEqual(target.Backend, b.name) {
 		return fmt.Errorf("wrong backend")
 	}
 	return target.Validate()
@@ -68,6 +68,31 @@ func TestLLMExecutionBackendUsesCanonicalTargetForTransportModel(t *testing.T) {
 	}
 }
 
+func TestOllamaExecutionBackendRoutesCloudModelToOllamaLeaf(t *testing.T) {
+	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", nil)
+	if err != nil {
+		t.Fatalf("NewProviderManager: %v", err)
+	}
+	runner := &capturingAttemptRunner{}
+	backend, err := NewLLMExecutionBackend(execution.OllamaBackendName, manager, runner)
+	if err != nil {
+		t.Fatalf("NewLLMExecutionBackend: %v", err)
+	}
+	target := execution.ExecutionTarget{Backend: execution.OllamaBackendName, Model: "glm-5.3-flash:cloud"}
+	if _, err := backend.RunAttempt(t.Context(), AttemptRequest{ModelID: "wrong", ExecutionTarget: target}); err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if backend.Name() != execution.OllamaBackendName {
+		t.Fatalf("backend name = %q, want %q", backend.Name(), execution.OllamaBackendName)
+	}
+	if runner.request.ExecutionTarget != target {
+		t.Fatalf("execution target = %#v, want %#v", runner.request.ExecutionTarget, target)
+	}
+	if runner.request.ModelID != "glm-5.3-flash:cloud" {
+		t.Fatalf("transport model = %q, want Ollama leaf model", runner.request.ModelID)
+	}
+}
+
 func TestLLMExecutionBackendRejectsLegacyModelOnlyAttempt(t *testing.T) {
 	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", nil)
 	if err != nil {
@@ -103,7 +128,7 @@ func TestExecutionRegistryResolvesCanonicalTargetsFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve alias: %v", err)
 	}
-	if target.String() != "local/qwen3:8b" || backend.Name() != "local" {
+	if target.String() != "ollama/qwen3:8b" || backend.Name() != "local" {
 		t.Fatalf("resolved target=%q backend=%q", target, backend.Name())
 	}
 

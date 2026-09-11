@@ -438,6 +438,10 @@ type Coordinator struct {
 	executionAttemptSeq    atomic.Uint64
 	initialToolCorrections atomic.Int32
 	projectDir             string
+	// artifactStoreRoot is the coordinator-owned CAS root. Isolated
+	// extra-model coordinators change session.Workspace, but must continue to
+	// resolve the parent run's immutable artifact capabilities from this root.
+	artifactStoreRoot string
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
@@ -1208,6 +1212,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		admittedTodoIDs:           make(map[string]struct{}),
 		skills:                    session.Skills,
 		projectDir:                projectDir,
+		artifactStoreRoot:         session.Workspace,
 		skillUsage:                make(map[string]*skillUsageState),
 		delegatedTasks:            make(map[string]int),
 		pendingPlans:              make(map[string]*PlanEntry),
@@ -2119,7 +2124,7 @@ func configuredAgentProvidersFor(c *Coordinator) map[string]SubagentProvider {
 			if name == codexSubagentProviderName {
 				continue
 			}
-			if execution.CanonicalBackendName(name) == "local" {
+			if execution.IsOllamaBackend(name) {
 				continue // reserved built-in LLM backend; preflight rejects this configuration
 			}
 			if cfg.Type != codexAppServerProviderType {
@@ -2205,7 +2210,7 @@ func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
 	if registry != nil && c.executionRegistry == nil {
 		canonical := NewExecutionRegistry()
 		if c.providerManager != nil {
-			_ = registerLLMExecutionBackend(canonical, "local", c.providerManager, NewHufuLocalSubagentProvider(c))
+			_ = registerLLMExecutionBackend(canonical, execution.OllamaBackendName, c.providerManager, NewHufuLocalSubagentProvider(c))
 		}
 		for name, provider := range registry.Snapshot() {
 			if name == localSubagentProviderName {
@@ -2230,11 +2235,11 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 	}
 	if c.providerManager != nil {
 		runner := NewHufuLocalSubagentProvider(c)
-		registered := map[string]bool{"local": true}
-		_ = registerLLMExecutionBackend(registry, "local", c.providerManager, runner)
+		registered := map[string]bool{execution.OllamaBackendName: true, execution.LegacyLocalBackendName: true}
+		_ = registerLLMExecutionBackend(registry, execution.OllamaBackendName, c.providerManager, runner)
 		if c.session != nil {
 			for name := range c.session.Config.Providers {
-				name = execution.CanonicalBackendName(name)
+				name = execution.CanonicalTargetBackendName(name)
 				if name == "" || registered[name] {
 					continue // registered once below as the built-in local LLM backend
 				}
@@ -2250,7 +2255,7 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 		// bypass registry admission. Production scheduler code still resolves
 		// through this registry; ProviderManager remains an adapter detail.
 		for _, provider := range c.providerManager.EffectiveProviderRefs() {
-			name := execution.CanonicalBackendName(provider.Name)
+			name := execution.CanonicalTargetBackendName(provider.Name)
 			if name == "" || registered[name] {
 				continue
 			}

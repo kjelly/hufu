@@ -90,10 +90,10 @@ func (c *Coordinator) executionTargetHasLanguageModelCapability(raw string) bool
 	}
 	backend := selector.Backend
 	if backend == "" && c != nil && c.session != nil {
-		backend = execution.CanonicalBackendName(c.session.Config.DefaultLLMBackend)
+		backend = execution.CanonicalTargetBackendName(c.session.Config.DefaultLLMBackend)
 	}
 	if backend == "" {
-		backend = "local"
+		backend = execution.OllamaBackendName
 	}
 	if backend == "codex" {
 		return false

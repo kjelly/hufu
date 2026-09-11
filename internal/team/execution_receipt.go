@@ -139,6 +139,11 @@ type ExecutionReceipt struct {
 	ProducerID       string               `json:"producer_id,omitempty"`
 	ArtifactScope    *ArtifactAccessScope `json:"artifact_scope,omitempty"`
 	TranscriptRef    string               `json:"transcript_ref,omitempty"`
+	// ProviderTranscriptRef is the opaque ID of the external provider's
+	// bounded/redacted diagnostic artifact in Hufu's CAS. It is deliberately
+	// separate from TranscriptRef, which is Hufu's task transcript used by
+	// evidence manifests; it is never a filesystem path.
+	ProviderTranscriptRef string `json:"provider_transcript_ref,omitempty"`
 	// SubagentProvider/ProviderSessionID/ProviderTurnID/ExecutionWorldID/
 	// WorkspaceBefore/WorkspaceAfter are Hufu-written provider provenance
 	// (docs/hufu-external-coding-agent-runtime-spec.md §20). ProducerID may

@@ -39,6 +39,12 @@ type AttemptRequest struct {
 	// only execution identity fields the scheduler populates.
 	ExecutionTarget execution.ExecutionTarget
 	BackendBinding  *BackendBinding
+	// ArtifactScope is the coordinator-owned, immutable capability snapshot
+	// for this exact attempt. External providers may return opaque evidence
+	// references, but canonicalization may accept them only when this scope
+	// authorizes and integrity-verifies the reference. The scope is copied into
+	// every initial, retry, and result-repair request.
+	ArtifactScope *ArtifactAccessScope
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.
@@ -58,9 +64,10 @@ type AttemptResult struct {
 	// the AttemptResult an external provider returns.
 	Output      string
 	TypedResult *TaskResult
-	// ResultProposal is an external provider's untrusted raw final response,
-	// kept for diagnostics/audit (spec.md §8.3, §9.1). It is nil for
-	// hufu-local.
+	// ResultProposal is an external provider's untrusted raw final response.
+	// Providers must drop it before returning a rejected attempt; it is only
+	// populated transiently while Hufu canonicalizes a successful response.
+	// It is nil for hufu-local.
 	ResultProposal *WorkerResultProposal
 	// CanonicalResult is the Hufu-owned result an external provider computed
 	// via ExternalResultCanonicalizer from ResultProposal and its own
@@ -84,9 +91,11 @@ type AttemptResult struct {
 	// ProviderTurnID is the last active provider turn, diagnostic only
 	// (mirrors ProviderBinding.TurnID's doc comment).
 	ProviderTurnID string
-	TranscriptRef  string
-	steps          []fantasy.StepResult
-	agent          fantasy.Agent
+	// TranscriptRef is an opaque Hufu CAS artifact ID for an external
+	// provider's bounded/redacted diagnostic transcript, never a path.
+	TranscriptRef string
+	steps         []fantasy.StepResult
+	agent         fantasy.Agent
 }
 
 type AttemptRunner interface {

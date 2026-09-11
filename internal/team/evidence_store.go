@@ -58,6 +58,17 @@ func sameArtifactRef(left, right ArtifactRef) bool {
 	return left.CreatedAt.IsZero() || left.CreatedAt.Equal(right.CreatedAt)
 }
 
+// sameArtifactContentMetadata compares the fields retained as immutable CAS
+// metadata. Occurrence fields are deliberately excluded because a later
+// publication of identical content retains the first writer's CAS metadata
+// while the current scope carries the later producer occurrence.
+func sameArtifactContentMetadata(left, right ArtifactRef) bool {
+	return left.ID == right.ID && left.Kind == right.Kind && left.Role == right.Role &&
+		left.Path == right.Path && left.Description == right.Description && left.Type == right.Type &&
+		left.SHA256 == right.SHA256 && left.Bytes == right.Bytes && left.ByteSize == right.ByteSize &&
+		left.MediaType == right.MediaType
+}
+
 // ArtifactOriginMetadata is trusted only when returned by the artifact store
 // for an immutable artifact reference. Model-declared URLs and parents use a
 // different advisory provenance field and never enter this type.

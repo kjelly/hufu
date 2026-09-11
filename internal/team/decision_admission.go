@@ -269,7 +269,7 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 		return task, err
 	}
 	task.ResolvedExecutionTarget = target
-	if target.Backend == "local" {
+	if execution.IsOllamaBackend(target.Backend) {
 		task.SubagentProvider = localSubagentProviderName
 	} else {
 		task.SubagentProvider = target.Backend
@@ -301,7 +301,7 @@ func (c *Coordinator) resolveCanonicalTaskTarget(model, legacyProvider string) (
 		// A non-local legacy provider is durable compatibility evidence only for
 		// a bare model. Preserve it without treating the model remainder as a
 		// competing backend prefix.
-		if backend := execution.CanonicalBackendName(legacyProvider); backend != "" && backend != localSubagentProviderName {
+		if backend := execution.CanonicalTargetBackendName(legacyProvider); backend != "" && backend != localSubagentProviderName {
 			target := execution.ExecutionTarget{Backend: backend, Model: model}
 			resolved, resolveErr := c.ExecutionRegistry().ResolveBackend(target.Backend)
 			if resolveErr != nil {
@@ -313,7 +313,7 @@ func (c *Coordinator) resolveCanonicalTaskTarget(model, legacyProvider string) (
 			return target, nil
 		}
 	}
-	defaultBackend := "local"
+	defaultBackend := execution.OllamaBackendName
 	if c != nil && c.session != nil && c.session.Config.DefaultLLMBackend != "" {
 		defaultBackend = c.session.Config.DefaultLLMBackend
 	}

@@ -65,7 +65,7 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	stepCtx = context.WithValue(stepCtx, tools.AgentNameKey, strings.ToLower(agentDef.Name))
 	stepCtx = tools.SetSSHSessionManager(stepCtx, r.c.sshSessionMgr)
 	stepCtx = r.c.withEffectiveToolsAllowed(stepCtx, agentDef, exposed)
-	artifactScope, scopeErr := r.c.buildArtifactAccessScope(request.TaskID, request.Attempt)
+	artifactScope, scopeErr := r.c.buildArtifactAccessScope(request.TaskID, request.Attempt, taskDefFromTodoItem(item).Goal)
 	if scopeErr != nil {
 		return ExecutionStepResult{}, fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
 	}

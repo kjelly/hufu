@@ -22,6 +22,15 @@ func validProposalJSON(extra string) string {
 	return base + "}"
 }
 
+func scopedAttemptRequest(provider, taskID string) AttemptRequest {
+	const runID = "run-test"
+	const attempt = 1
+	return AttemptRequest{
+		Provider: provider, RunID: runID, TaskID: taskID, Attempt: attempt,
+		ArtifactScope: &ArtifactAccessScope{RunID: runID, TaskID: taskID, Attempt: attempt},
+	}
+}
+
 // TestExternalProviderCannotSetTaskID proves TaskID (and RunID/Attempt/Agent)
 // have no field on WorkerResultProposal at all: supplying one fails strict
 // decode, and the canonical result's identity always comes from
@@ -38,8 +47,12 @@ func TestExternalProviderCannotSetTaskID(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	request := scopedAttemptRequest("codex", "real-task")
+	request.Attempt = 3
+	request.ArtifactScope.Attempt = 3
+	request.Task = TaskDef{Agent: "real-agent"}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "real-task", RunID: "real-run", Attempt: 3, Task: TaskDef{Agent: "real-agent"}},
+		request,
 		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +75,7 @@ func TestExternalProviderCannotForgeReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +95,7 @@ func TestExternalProviderCannotForgeEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +116,7 @@ func TestExternalProviderCannotForgeVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,13 +148,14 @@ func TestExternalProviderCannotForgeArtifactHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	delta := WorkspaceDelta{Added: []WorkspaceFileState{realState}}
+	request := scopedAttemptRequest("codex", "t")
 
 	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"proposed_files":[{"path":"out.txt"}]`)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, delta, root)
+		request, AttemptResult{ResultProposal: proposal}, delta, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +192,7 @@ func TestExternalResultCanonicalUsesActualWorkspaceDelta(t *testing.T) {
 	if len(delta.Modified) != 1 || delta.Modified[0].Path != "real-change.txt" {
 		t.Fatalf("test setup delta = %#v, want exactly real-change.txt modified", delta)
 	}
+	request := scopedAttemptRequest("codex", "t")
 
 	// The proposal omits the real change entirely and instead claims a file
 	// that was never touched.
@@ -186,7 +201,7 @@ func TestExternalResultCanonicalUsesActualWorkspaceDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, delta, root)
+		request, AttemptResult{ResultProposal: proposal}, delta, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,8 +225,10 @@ func TestExternalResultRejectsOutsideWorkspaceArtifact(t *testing.T) {
 	}
 
 	t.Run("grounded result task fails closed", func(t *testing.T) {
+		request := scopedAttemptRequest("codex", "t")
+		request.Task = TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}}
 		_, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-			AttemptRequest{Provider: "codex", TaskID: "t", Task: TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}}},
+			request,
 			AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 		if err == nil || !strings.Contains(err.Error(), "outside") {
 			t.Fatalf("Canonicalize error = %v, want an outside-workspace rejection", err)
@@ -219,8 +236,9 @@ func TestExternalResultRejectsOutsideWorkspaceArtifact(t *testing.T) {
 	})
 
 	t.Run("non-grounded task drops the claim instead of trusting it", func(t *testing.T) {
+		request := scopedAttemptRequest("codex", "t")
 		result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-			AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+			request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +271,7 @@ func TestExternalResultCanonicalizesFilesReadFromDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, delta, root)
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, delta, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,12 +295,59 @@ func TestExternalResultCanonicalizesFilesReadFromLiveWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.FilesRead) != 1 || result.FilesRead[0].Path != "unchanged.go" {
 		t.Fatalf("FilesRead = %#v, want exactly unchanged.go verified against the live workspace", result.FilesRead)
+	}
+}
+
+func TestExternalResultRejectsMissingOrMismatchedScopeForWorkspaceFilesRead(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "reviewed.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["reviewed.go"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := scopedAttemptRequest("codex", "consumer")
+	cases := []struct {
+		name    string
+		request AttemptRequest
+	}{
+		{name: "missing scope", request: func() AttemptRequest {
+			request := base
+			request.ArtifactScope = nil
+			return request
+		}()},
+		{name: "missing request run", request: func() AttemptRequest {
+			request := base
+			request.RunID = ""
+			return request
+		}()},
+		{name: "mismatched scope task", request: func() AttemptRequest {
+			request := base
+			request.ArtifactScope = cloneArtifactAccessScope(base.ArtifactScope)
+			request.ArtifactScope.TaskID = "other-task"
+			return request
+		}()},
+		{name: "mismatched scope attempt", request: func() AttemptRequest {
+			request := base
+			request.ArtifactScope = cloneArtifactAccessScope(base.ArtifactScope)
+			request.ArtifactScope.Attempt = 2
+			return request
+		}()},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), test.request,
+				AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root); err == nil {
+				t.Fatal("canonicalization accepted workspace evidence without an exact attempt scope")
+			}
+		})
 	}
 }
 
@@ -297,7 +362,11 @@ func TestExternalResultRejectsFabricatedFilesReadUnderGroundedResult(t *testing.
 		t.Fatal(err)
 	}
 	_, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t", Task: TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}}},
+		func() AttemptRequest {
+			request := scopedAttemptRequest("codex", "t")
+			request.Task = TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}}
+			return request
+		}(),
 		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("Canonicalize error = %v, want a does-not-exist rejection", err)
@@ -313,11 +382,245 @@ func TestExternalResultDropsFabricatedFilesReadWhenNotGrounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewExternalResultCanonicalizer().Canonicalize(context.Background(),
-		AttemptRequest{Provider: "codex", TaskID: "t"}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+		scopedAttemptRequest("codex", "t"), AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.FilesRead) != 0 {
 		t.Fatalf("FilesRead = %#v, want none: an unverifiable claim must never become a trusted FilesRead entry", result.FilesRead)
+	}
+}
+
+func TestExternalResultCanonicalizesOnlyAttemptScopedArtifactReferences(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileArtifactStore(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Put(t.Context(), PutArtifactRequest{
+		Kind: "workset_input", Role: "input", Path: "runtime/input.md", Content: []byte("assigned evidence"),
+		RunID: "run-1", TaskID: "producer", Attempt: 1, Agent: "producer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := stored.ArtifactRef
+
+	canonicalize := func(t *testing.T, request AttemptRequest, claimed string) (*TaskResult, error) {
+		t.Helper()
+		proposal, decodeErr := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["` + claimed + `"]`)))
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		return NewExternalResultCanonicalizer().Canonicalize(t.Context(), request,
+			AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	}
+
+	request := AttemptRequest{
+		Provider: "codex", RunID: "run-1", TaskID: "consumer", Attempt: 1,
+		ArtifactScope: &ArtifactAccessScope{
+			RunID: "run-1", TaskID: "consumer", Attempt: 1, StoreRoot: root,
+			AuthorizedRefs: []ArtifactRef{ref},
+		},
+	}
+	result, err := canonicalize(t, request, ref.ID)
+	if err != nil {
+		t.Fatalf("authorized opaque ref rejected: %v", err)
+	}
+	if len(result.FilesRead) != 1 || result.FilesRead[0] != (FileRef{Path: ref.ID, Purpose: "artifact"}) {
+		t.Fatalf("FilesRead = %#v, want the authorized opaque artifact ref", result.FilesRead)
+	}
+
+	tests := []struct {
+		name    string
+		request AttemptRequest
+		claimed string
+	}{
+		{name: "unknown", request: request, claimed: ref.ID + "-unknown"},
+		{name: "wrong task scope", request: func() AttemptRequest {
+			wrong := request
+			wrong.TaskID = "other-consumer"
+			return wrong
+		}(), claimed: ref.ID},
+		{name: "tampered digest", request: func() AttemptRequest {
+			tampered := ref
+			tampered.SHA256 = strings.Repeat("0", 64)
+			wrong := request
+			wrong.ArtifactScope = cloneArtifactAccessScope(request.ArtifactScope)
+			wrong.ArtifactScope.AuthorizedRefs = []ArtifactRef{tampered}
+			return wrong
+		}(), claimed: ref.ID},
+		{name: "missing request run", request: func() AttemptRequest {
+			missing := request
+			missing.RunID = ""
+			return missing
+		}(), claimed: ref.ID},
+		{name: "missing scope run", request: func() AttemptRequest {
+			missing := request
+			missing.ArtifactScope = cloneArtifactAccessScope(request.ArtifactScope)
+			missing.ArtifactScope.RunID = ""
+			return missing
+		}(), claimed: ref.ID},
+		{name: "wrong run scope", request: func() AttemptRequest {
+			wrong := request
+			wrong.ArtifactScope = cloneArtifactAccessScope(request.ArtifactScope)
+			wrong.ArtifactScope.RunID = "run-other"
+			return wrong
+		}(), claimed: ref.ID},
+		{name: "stale path provenance", request: func() AttemptRequest {
+			stale := ref
+			stale.Path = "runtime/old-input.md"
+			wrong := request
+			wrong.ArtifactScope = cloneArtifactAccessScope(request.ArtifactScope)
+			wrong.ArtifactScope.AuthorizedRefs = []ArtifactRef{stale}
+			return wrong
+		}(), claimed: ref.ID},
+		{name: "stale run provenance", request: func() AttemptRequest {
+			stale := ref
+			stale.RunID = "run-old"
+			wrong := request
+			wrong.ArtifactScope = cloneArtifactAccessScope(request.ArtifactScope)
+			wrong.ArtifactScope.AuthorizedRefs = []ArtifactRef{stale}
+			return wrong
+		}(), claimed: ref.ID},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := canonicalize(t, test.request, test.claimed); err == nil {
+				t.Fatal("canonicalization accepted an unauthorized or tampered opaque ref")
+			}
+		})
+	}
+}
+
+func TestExternalResultCanonicalizesCrossRunDuplicateArtifactReference(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileArtifactStore(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("assigned evidence")
+	first, err := store.Put(t.Context(), PutArtifactRequest{
+		Kind: "workset_input", Role: "input", Path: "runtime/input.md", Description: "assigned evidence",
+		Content: content, RunID: "run-old", TaskID: "producer-old", Attempt: 1, Agent: "producer",
+		Provider: "command:go",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Put(t.Context(), PutArtifactRequest{
+		Kind: "workset_input", Role: "input", Path: "runtime/input.md", Description: "assigned evidence",
+		Content: content, RunID: "run-current", TaskID: "producer-current", Attempt: 2, Agent: "producer",
+		Provider: "command:go",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != current.ID {
+		t.Fatalf("duplicate content IDs = %q and %q, want one content-addressed ID", first.ID, current.ID)
+	}
+	storedMetadata, err := store.Get(t.Context(), first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedMetadata.RunID != "run-old" || storedMetadata.TaskID != "producer-old" {
+		t.Fatalf("CAS metadata occurrence = %q/%q, want first writer occurrence", storedMetadata.RunID, storedMetadata.TaskID)
+	}
+
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["` + current.ID + `"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := AttemptRequest{
+		Provider: "codex", RunID: "run-current", TaskID: "consumer", Attempt: 1,
+		ArtifactScope: &ArtifactAccessScope{
+			RunID: "run-current", TaskID: "consumer", Attempt: 1, StoreRoot: root,
+			AuthorizedRefs: []ArtifactRef{current.ArtifactRef},
+		},
+	}
+	result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request,
+		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err != nil {
+		t.Fatalf("same-content artifact from current occurrence rejected: %v", err)
+	}
+	if len(result.FilesRead) != 1 || result.FilesRead[0] != (FileRef{Path: current.ID, Purpose: "artifact"}) {
+		t.Fatalf("FilesRead = %#v, want the current authorized opaque artifact ref", result.FilesRead)
+	}
+}
+
+func TestExternalResultRejectsUnscopedCustomArtifactIDThatCollidesWithWorkspacePath(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileArtifactStore(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const customID = "review.md"
+	if err := os.WriteFile(filepath.Join(root, customID), []byte("workspace file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(t.Context(), PutArtifactRequest{
+		ID: customID, Kind: "task_output", Role: "evidence", Path: customID, Content: []byte("artifact bytes"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["` + customID + `"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewExternalResultCanonicalizer().Canonicalize(t.Context(), AttemptRequest{
+		Provider: "codex", RunID: "run-1", TaskID: "consumer", Attempt: 1,
+		Task:          TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}},
+		ArtifactScope: &ArtifactAccessScope{RunID: "run-1", TaskID: "consumer", Attempt: 1, StoreRoot: root},
+	}, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err == nil || !strings.Contains(err.Error(), "unauthorized artifact") {
+		t.Fatalf("custom CAS ID collision error = %v, want fail-closed unauthorized artifact", err)
+	}
+}
+
+func TestExternalResultCanonicalizesOnlyAttemptScopedManagedSkill(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileArtifactStore(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(t.TempDir(), "hufu-runtime-code-review", "SKILL.md")
+	content := []byte("immutable review instructions")
+	stored, err := store.Put(t.Context(), PutArtifactRequest{
+		ID: "skill-" + strings.Repeat("a", 64) + "-path", Kind: "skill", Role: "instruction", Path: skillPath,
+		Description: "hufu-runtime-code-review", Content: content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := stored.ArtifactRef
+	request := AttemptRequest{
+		Provider: "codex", RunID: "run-1", TaskID: "consumer", Attempt: 1,
+		Task: TaskDef{Execution: ExecutionContract{RequiresGroundedResult: true}},
+		ArtifactScope: &ArtifactAccessScope{
+			RunID: "run-1", TaskID: "consumer", Attempt: 1, StoreRoot: root,
+			ManagedSkillRefs: []ArtifactRef{ref},
+		},
+	}
+
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["` + skillPath + `"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request,
+		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	if err != nil {
+		t.Fatalf("authorized managed skill rejected: %v", err)
+	}
+	if len(result.FilesRead) != 1 || result.FilesRead[0] != (FileRef{Path: ref.ID, Purpose: "skill"}) {
+		t.Fatalf("FilesRead = %#v, want the opaque managed-skill ref", result.FilesRead)
+	}
+
+	proposal, err = DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["` + filepath.Join(t.TempDir(), "unregistered", "SKILL.md") + `"]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request,
+		AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root); err == nil {
+		t.Fatal("canonicalization accepted an arbitrary absolute skill path")
 	}
 }

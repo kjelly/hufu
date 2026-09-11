@@ -30,6 +30,11 @@ func (r *ExecutionRegistry) Register(backend ExecutionBackend) error {
 	if r.backends == nil {
 		r.backends = make(map[string]ExecutionBackend)
 	}
+	for existingName := range r.backends {
+		if execution.BackendNamesEqual(existingName, name) {
+			return fmt.Errorf("register execution backend: %q already registered", existingName)
+		}
+	}
 	if _, exists := r.backends[name]; exists {
 		return fmt.Errorf("register execution backend: %q already registered", name)
 	}
@@ -47,6 +52,12 @@ func (r *ExecutionRegistry) ResolveBackend(name string) (ExecutionBackend, error
 	}
 	r.mu.RLock()
 	backend := r.backends[name]
+	if backend == nil && execution.IsOllamaBackend(name) {
+		backend = r.backends[execution.OllamaBackendName]
+		if backend == nil {
+			backend = r.backends[execution.LegacyLocalBackendName]
+		}
+	}
 	r.mu.RUnlock()
 	if backend == nil {
 		return nil, fmt.Errorf("unknown execution backend %q", name)
@@ -57,7 +68,7 @@ func (r *ExecutionRegistry) ResolveBackend(name string) (ExecutionBackend, error
 func (r *ExecutionRegistry) ResolveTarget(selector execution.ExecutionSelector, defaults execution.TargetDefaults) (execution.ExecutionTarget, ExecutionBackend, error) {
 	backendName := selector.Backend
 	if backendName == "" {
-		backendName = execution.CanonicalBackendName(defaults.DefaultLLMBackend)
+		backendName = execution.CanonicalTargetBackendName(defaults.DefaultLLMBackend)
 		if backendName == "" {
 			return execution.ExecutionTarget{}, nil, fmt.Errorf("default LLM backend is required for bare execution selector %q", selector.Raw)
 		}
@@ -69,7 +80,7 @@ func (r *ExecutionRegistry) ResolveTarget(selector execution.ExecutionSelector, 
 	if selector.Backend == "" && backend.Kind() != execution.BackendKindLLM {
 		return execution.ExecutionTarget{}, nil, fmt.Errorf("default LLM backend %q is not a language-model backend", backendName)
 	}
-	target := execution.ExecutionTarget{Backend: execution.CanonicalBackendName(backend.Name()), Model: selector.Model}
+	target := execution.ExecutionTarget{Backend: execution.CanonicalTargetBackendName(backend.Name()), Model: selector.Model}
 	if err := backend.ValidateTarget(context.Background(), target); err != nil {
 		return execution.ExecutionTarget{}, nil, fmt.Errorf("resolve execution target %q: %w", target, err)
 	}

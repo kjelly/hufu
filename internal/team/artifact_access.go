@@ -2,10 +2,15 @@ package team
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // ArtifactAccessScope is the immutable, attempt-local capability set for
@@ -14,11 +19,20 @@ import (
 // backing/source paths from path-capable tools. The scope is coordinator-owned
 // and is also committed on the task's execution receipt.
 type ArtifactAccessScope struct {
-	RunID          string        `json:"run_id"`
-	TaskID         string        `json:"task_id"`
-	Attempt        int           `json:"attempt"`
+	RunID   string `json:"run_id"`
+	TaskID  string `json:"task_id"`
+	Attempt int    `json:"attempt"`
+	// StoreRoot identifies the Hufu-owned CAS for this runtime. It is a
+	// process-local path used while canonicalizing an external result; the
+	// authorization decision still comes from the exact refs below.
+	StoreRoot      string        `json:"store_root,omitempty"`
 	AuthorizedRefs []ArtifactRef `json:"authorized_refs,omitempty"`
 	DeniedRefs     []ArtifactRef `json:"denied_refs,omitempty"`
+	// ManagedSkillRefs are immutable snapshots of skill instructions that were
+	// disclosed to this attempt. They are deliberately separate from task
+	// output refs: a provider may claim that it read a selected skill, but it
+	// cannot turn an arbitrary absolute path into evidence.
+	ManagedSkillRefs []ArtifactRef `json:"managed_skill_refs,omitempty"`
 }
 
 type artifactAccessScopeKeyType struct{}
@@ -32,12 +46,105 @@ func cloneArtifactAccessScope(scope *ArtifactAccessScope) *ArtifactAccessScope {
 	copyScope := *scope
 	copyScope.AuthorizedRefs = append([]ArtifactRef(nil), scope.AuthorizedRefs...)
 	copyScope.DeniedRefs = append([]ArtifactRef(nil), scope.DeniedRefs...)
+	copyScope.ManagedSkillRefs = append([]ArtifactRef(nil), scope.ManagedSkillRefs...)
 	return &copyScope
 }
 
 func artifactAccessScopeFromContext(ctx context.Context) (*ArtifactAccessScope, bool) {
 	scope, ok := ctx.Value(artifactAccessScopeKey).(*ArtifactAccessScope)
 	return scope, ok && scope != nil
+}
+
+func (c *Coordinator) artifactStoreRootPath() string {
+	if c == nil {
+		return ""
+	}
+	if root := strings.TrimSpace(c.artifactStoreRoot); root != "" {
+		return root
+	}
+	if c.session != nil {
+		return strings.TrimSpace(c.session.Workspace)
+	}
+	return ""
+}
+
+// managedSkillArtifactRefs snapshots the exact skill instructions disclosed
+// to an attempt into the Hufu CAS. The provider-facing path remains only a
+// lookup key; the canonical result records the opaque CAS ID after the
+// snapshot is verified. This lets a skill live outside the execution-world
+// root without granting the provider an arbitrary absolute-path capability.
+func (c *Coordinator) managedSkillArtifactRefs(agentDef *agent.AgentDef, goal string) ([]ArtifactRef, error) {
+	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" || agentDef == nil {
+		return nil, nil
+	}
+	definitions, err := c.selectedSkillDefinitions(agentDef, goal)
+	if err != nil {
+		return nil, err
+	}
+	storeRoot := c.artifactStoreRootPath()
+	store, err := NewFileArtifactStore(storeRoot, c.projectDir)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]ArtifactRef, 0, len(definitions))
+	for _, definition := range definitions {
+		if definition == nil {
+			continue
+		}
+		content := []byte(definition.Content)
+		if len(content) == 0 && strings.TrimSpace(definition.Path) != "" {
+			content, err = os.ReadFile(definition.Path)
+			if err != nil {
+				return nil, fmt.Errorf("read skill %q: %w", definition.Name, err)
+			}
+		}
+		if len(content) == 0 {
+			return nil, fmt.Errorf("skill %q has no immutable content", definition.Name)
+		}
+		path := strings.TrimSpace(definition.Path)
+		if path == "" {
+			return nil, fmt.Errorf("skill %q has no source path", definition.Name)
+		}
+		if !filepath.IsAbs(path) {
+			base := c.projectDir
+			if base == "" {
+				base = c.session.Workspace
+			}
+			path = filepath.Join(base, path)
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve skill %q path: %w", definition.Name, err)
+		}
+		digestBytes := sha256.Sum256(content)
+		digest := hex.EncodeToString(digestBytes[:])
+		pathDigest := sha256.Sum256([]byte(path))
+		id := "skill-" + digest + "-" + hex.EncodeToString(pathDigest[:8])
+
+		if existing, getErr := store.Get(context.Background(), id); getErr == nil {
+			if existing.Kind != "skill" || existing.Role != "instruction" || existing.Path != path || existing.SHA256 != digest || existing.ByteSize != int64(len(content)) {
+				return nil, fmt.Errorf("skill artifact %q has conflicting immutable metadata", id)
+			}
+			if err := store.Verify(context.Background(), existing); err != nil {
+				return nil, fmt.Errorf("verify skill artifact %q: %w", id, err)
+			}
+			refs = append(refs, existing)
+			continue
+		}
+		stored, putErr := store.Put(context.Background(), PutArtifactRequest{
+			ID:          id,
+			Kind:        "skill",
+			Role:        "instruction",
+			Path:        path,
+			Description: definition.Name,
+			Content:     content,
+		})
+		if putErr != nil {
+			return nil, fmt.Errorf("persist skill %q: %w", definition.Name, putErr)
+		}
+		refs = append(refs, stored.ArtifactRef)
+	}
+	return refs, nil
 }
 
 // openArtifactRef is the only bridge from a model-visible opaque artifact ID
@@ -60,7 +167,11 @@ func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCl
 		return nil, fmt.Errorf("artifact reference %q has mismatched producer ownership", id)
 	}
 
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	storeRoot := c.artifactStoreRootPath()
+	if scope, scoped := artifactAccessScopeFromContext(ctx); scoped && strings.TrimSpace(scope.StoreRoot) != "" {
+		storeRoot = scope.StoreRoot
+	}
+	store, err := NewFileArtifactStore(storeRoot, c.projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("open artifact store: %w", err)
 	}
@@ -92,6 +203,11 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 			if ref.ID == id {
 				producerTaskID := ref.TaskID
 				return ref, producerTaskID, true
+			}
+		}
+		for _, ref := range scope.ManagedSkillRefs {
+			if ref.ID == id {
+				return ref, "", true
 			}
 		}
 		return ArtifactRef{}, "", false
@@ -142,7 +258,12 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 // buildArtifactAccessScope snapshots the task's artifact capabilities at
 // dispatch. Bound children receive only receipt-authorized inputs. Unbound
 // dependents retain the historical dependency-result capability set.
-func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int) (*ArtifactAccessScope, error) {
+//
+// The optional goal is the exact prompt-selection goal used by the caller.
+// Durable projections remain the fallback for resume/declared-step paths, but
+// a live worker must bind managed skills from the same goal that selected the
+// skills in its prompt.
+func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals ...string) (*ArtifactAccessScope, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, fmt.Errorf("artifact scope requires task state")
 	}
@@ -158,6 +279,7 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int) (*Art
 		runID = strings.TrimSpace(c.taskTracker.TodoList().RunID())
 	}
 	scope := &ArtifactAccessScope{RunID: runID, TaskID: todoID, Attempt: attempt}
+	scope.StoreRoot = c.artifactStoreRootPath()
 	addUnique := func(target *[]ArtifactRef, ref ArtifactRef) {
 		if strings.TrimSpace(ref.ID) == "" {
 			return
@@ -200,6 +322,19 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int) (*Art
 	}
 	for _, ref := range scope.AuthorizedRefs {
 		addUnique(&scope.DeniedRefs, ref)
+	}
+	if c.session != nil {
+		if agentDef, _, resolveErr := c.AgentPool().ResolveAgentName(item.Agent); resolveErr == nil && agentDef != nil {
+			goal := taskDefFromTodoItem(item).Goal
+			if len(goals) > 0 && strings.TrimSpace(goals[0]) != "" {
+				goal = goals[0]
+			}
+			managed, skillErr := c.managedSkillArtifactRefs(agentDef, goal)
+			if skillErr != nil {
+				return nil, fmt.Errorf("bind managed skill scope: %w", skillErr)
+			}
+			scope.ManagedSkillRefs = managed
+		}
 	}
 	// Every worker attempt receives a scope, including unbound workers. An
 	// empty authorization set is meaningful: the policy blocks the opaque
@@ -286,7 +421,11 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 			paths = append(paths, path)
 		}
 	}
-	artifactRoot := filepath.Join(c.session.Workspace, logsDir, "artifacts")
+	storeRoot := strings.TrimSpace(scope.StoreRoot)
+	if storeRoot == "" {
+		storeRoot = c.artifactStoreRootPath()
+	}
+	artifactRoot := filepath.Join(storeRoot, logsDir, "artifacts")
 	add(filepath.Join(artifactRoot, "data"))
 	add(filepath.Join(artifactRoot, "meta"))
 	for _, ref := range scope.DeniedRefs {
@@ -301,8 +440,8 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 			add(filepath.Clean(ref.Path))
 			continue
 		}
-		add(filepath.Join(c.session.Workspace, ref.Path))
-		if c.projectDir != "" && filepath.Clean(c.projectDir) != filepath.Clean(c.session.Workspace) {
+		add(filepath.Join(storeRoot, ref.Path))
+		if c.projectDir != "" && filepath.Clean(c.projectDir) != filepath.Clean(storeRoot) {
 			add(filepath.Join(c.projectDir, ref.Path))
 		}
 	}

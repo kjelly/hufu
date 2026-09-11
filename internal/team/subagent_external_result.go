@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -127,9 +128,12 @@ func NewExternalResultCanonicalizer() ExternalResultCanonicalizer {
 	return defaultExternalResultCanonicalizer{}
 }
 
-func (defaultExternalResultCanonicalizer) Canonicalize(_ context.Context, request AttemptRequest, result AttemptResult, delta WorkspaceDelta, workspaceRoot string) (*TaskResult, error) {
+func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, request AttemptRequest, result AttemptResult, delta WorkspaceDelta, workspaceRoot string) (*TaskResult, error) {
 	if strings.TrimSpace(request.Provider) == "" {
 		return nil, fmt.Errorf("canonicalize external result: attempt request has no provider binding")
+	}
+	if err := validateAttemptArtifactScope(request); err != nil {
+		return nil, fmt.Errorf("canonicalize external result: %w", err)
 	}
 	proposal := result.ResultProposal
 	if proposal == nil {
@@ -214,7 +218,7 @@ func (defaultExternalResultCanonicalizer) Canonicalize(_ context.Context, reques
 	sort.Slice(filesModified, func(i, j int) bool { return filesModified[i].Path < filesModified[j].Path })
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 
-	filesRead, err := canonicalFilesRead(proposal, addedOrModified, deleted, workspaceRoot, requiresGrounded)
+	filesRead, err := canonicalFilesReadForAttempt(ctx, request, proposal, addedOrModified, deleted, workspaceRoot, requiresGrounded)
 	if err != nil {
 		return nil, err
 	}
@@ -252,17 +256,21 @@ func canonicalArtifactRef(request AttemptRequest, proposed ProposedFile, cleanPa
 	}
 }
 
-// canonicalFilesRead verifies proposal.FilesRead against the same truth
-// sources canonicalArtifactRef's ProposedFiles loop uses — the observed
-// delta first, then a live-filesystem existence check for a path the delta
-// doesn't mention — and turns each verified claim into a canonical FileRef.
+// canonicalFilesReadForAttempt verifies proposal.FilesRead against the same
+// truth sources canonicalArtifactRef's ProposedFiles loop uses — attempt-scoped
+// opaque evidence first, then the observed delta and a live-filesystem
+// existence check for a path the delta doesn't mention — and turns each
+// verified claim into a canonical FileRef.
 // A claim that resolves outside the workspace, or names a path that never
 // existed, is dropped silently unless requiresGrounded, in which case it
 // fails the whole attempt closed (the same provider_claimed_outside_workspace
 // / provider_claimed_missing_file treatment §9.4 already gives
 // ProposedFiles). Deduplicated and bounded by workerResultProposalMaxFilesRead
 // so an untrusted provider cannot inflate canonical TaskResult storage.
-func canonicalFilesRead(proposal *WorkerResultProposal, addedOrModified map[string]WorkspaceFileState, deleted map[string]bool, workspaceRoot string, requiresGrounded bool) ([]FileRef, error) {
+func canonicalFilesReadForAttempt(ctx context.Context, request AttemptRequest, proposal *WorkerResultProposal, addedOrModified map[string]WorkspaceFileState, deleted map[string]bool, workspaceRoot string, requiresGrounded bool) ([]FileRef, error) {
+	if err := validateAttemptArtifactScope(request); err != nil {
+		return nil, fmt.Errorf("canonicalize external result: %w", err)
+	}
 	claims := proposal.FilesRead
 	if len(claims) > workerResultProposalMaxFilesRead {
 		claims = claims[:workerResultProposalMaxFilesRead]
@@ -270,6 +278,18 @@ func canonicalFilesRead(proposal *WorkerResultProposal, addedOrModified map[stri
 	seen := make(map[string]bool, len(claims))
 	var refs []FileRef
 	for _, raw := range claims {
+		raw = strings.TrimSpace(raw)
+		if scoped, handled, err := canonicalScopedFileRef(ctx, request, raw, workspaceRoot); handled {
+			if err != nil {
+				return nil, err
+			}
+			if seen[scoped.Path] {
+				continue
+			}
+			seen[scoped.Path] = true
+			refs = append(refs, scoped)
+			continue
+		}
 		cleanPath, err := sanitizeWorkspaceRelativePath(raw)
 		if err != nil {
 			if requiresGrounded {
@@ -303,6 +323,144 @@ func canonicalFilesRead(proposal *WorkerResultProposal, addedOrModified map[stri
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Path < refs[j].Path })
 	return refs, nil
+}
+
+func validateAttemptArtifactScope(request AttemptRequest) error {
+	scope := request.ArtifactScope
+	if scope == nil {
+		return fmt.Errorf("attempt artifact scope is unavailable")
+	}
+	if request.RunID == "" || scope.RunID == "" || request.RunID != scope.RunID {
+		return fmt.Errorf("attempt artifact scope run mismatch")
+	}
+	if request.TaskID == "" || scope.TaskID == "" || request.TaskID != scope.TaskID {
+		return fmt.Errorf("attempt artifact scope task mismatch")
+	}
+	if request.Attempt <= 0 || scope.Attempt <= 0 || request.Attempt != scope.Attempt {
+		return fmt.Errorf("attempt artifact scope attempt mismatch")
+	}
+	return nil
+}
+
+// canonicalScopedFileRef resolves provider claims that are not workspace
+// paths. Opaque task artifacts and explicitly disclosed skills are accepted
+// only through the immutable attempt scope and a fresh CAS integrity check.
+// An unrecognized opaque-looking ID is rejected rather than being interpreted
+// as a relative workspace path, preventing path/ID confusion.
+func canonicalScopedFileRef(ctx context.Context, request AttemptRequest, raw, workspaceRoot string) (FileRef, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return FileRef{}, true, fmt.Errorf("canonicalize external result: claimed files_read entry is empty")
+	}
+	scope := request.ArtifactScope
+	if scope != nil {
+		for _, ref := range scope.AuthorizedRefs {
+			if ref.ID != raw {
+				continue
+			}
+			if err := verifyScopedArtifactEvidence(ctx, request, scope, ref, workspaceRoot, "artifact"); err != nil {
+				return FileRef{}, true, err
+			}
+			return FileRef{Path: ref.ID, Purpose: "artifact"}, true, nil
+		}
+		for _, ref := range scope.ManagedSkillRefs {
+			if ref.ID == raw {
+				if err := verifyScopedArtifactEvidence(ctx, request, scope, ref, workspaceRoot, "skill"); err != nil {
+					return FileRef{}, true, err
+				}
+				return FileRef{Path: ref.ID, Purpose: "skill"}, true, nil
+			}
+			if managedSkillPathMatches(raw, ref.Path) {
+				if err := verifyScopedArtifactEvidence(ctx, request, scope, ref, workspaceRoot, "skill"); err != nil {
+					return FileRef{}, true, err
+				}
+				return FileRef{Path: ref.ID, Purpose: "skill"}, true, nil
+			}
+		}
+	}
+	if strings.HasPrefix(raw, "sha256-") || strings.HasPrefix(raw, "skill-") {
+		return FileRef{}, true, fmt.Errorf("canonicalize external result: opaque files_read reference %q is unknown or not authorized for this attempt", raw)
+	}
+	if artifactIDMetadataExists(raw, scope, workspaceRoot) {
+		return FileRef{}, true, fmt.Errorf("canonicalize external result: files_read reference %q resolves to an unauthorized artifact", raw)
+	}
+	return FileRef{}, false, nil
+}
+
+func artifactIDMetadataExists(id string, scope *ArtifactAccessScope, workspaceRoot string) bool {
+	if !validArtifactID(id) {
+		return false
+	}
+	storeRoot := strings.TrimSpace(workspaceRoot)
+	if scope != nil && strings.TrimSpace(scope.StoreRoot) != "" {
+		storeRoot = strings.TrimSpace(scope.StoreRoot)
+	}
+	if storeRoot == "" {
+		return false
+	}
+	metadataPath := filepath.Join(storeRoot, logsDir, "artifacts", "meta", id+".json")
+	info, err := os.Stat(metadataPath)
+	if err == nil {
+		return !info.IsDir()
+	}
+	// An unreadable metadata path is treated as present. Falling through to
+	// workspace path grounding would turn an integrity/authorization failure
+	// into an apparently ordinary relative file claim.
+	return !os.IsNotExist(err)
+}
+
+func managedSkillPathMatches(raw, registered string) bool {
+	if !filepath.IsAbs(raw) || !filepath.IsAbs(registered) {
+		return filepath.ToSlash(filepath.Clean(raw)) == filepath.ToSlash(filepath.Clean(registered))
+	}
+	return filepath.Clean(raw) == filepath.Clean(registered)
+}
+
+func verifyScopedArtifactEvidence(ctx context.Context, request AttemptRequest, scope *ArtifactAccessScope, ref ArtifactRef, workspaceRoot, kind string) error {
+	if scope == nil {
+		return fmt.Errorf("canonicalize external result: %s evidence scope is unavailable", kind)
+	}
+	if err := validateAttemptArtifactScope(request); err != nil {
+		return fmt.Errorf("canonicalize external result: %s evidence scope invalid: %w", kind, err)
+	}
+	if ref.ID == "" || ref.SHA256 == "" || !validArtifactID(ref.ID) {
+		return fmt.Errorf("canonicalize external result: %s evidence reference %q is not immutable", kind, ref.ID)
+	}
+	storeRoot := strings.TrimSpace(scope.StoreRoot)
+	if storeRoot == "" {
+		storeRoot = workspaceRoot
+	}
+	store, err := NewFileArtifactStore(storeRoot, storeRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize external result: open %s evidence store: %w", kind, err)
+	}
+	canonical, err := store.Get(ctx, ref.ID)
+	if err != nil {
+		return fmt.Errorf("canonicalize external result: %s evidence reference %q is unavailable: %w", kind, ref.ID, err)
+	}
+	if kind == "artifact" {
+		// The occurrence is supplied by the current, coordinator-owned scope;
+		// it must not be recovered from the first writer's CAS metadata.
+		if strings.TrimSpace(ref.RunID) == "" || ref.RunID != request.RunID {
+			return fmt.Errorf("canonicalize external result: artifact evidence reference %q has stale current-run provenance", ref.ID)
+		}
+		if strings.TrimSpace(ref.TaskID) == "" || ref.Attempt <= 0 || strings.TrimSpace(ref.Agent) == "" {
+			return fmt.Errorf("canonicalize external result: artifact evidence reference %q has incomplete current occurrence provenance", ref.ID)
+		}
+	}
+	// The CAS is authoritative for immutable content metadata, while the
+	// current scope is authoritative for occurrence provenance. Comparing the
+	// complete reference here would reject legitimate same-content publications
+	// from later runs because the CAS intentionally retains first-writer fields.
+	if !sameArtifactContentMetadata(canonical, ref) {
+		return fmt.Errorf("canonicalize external result: %s evidence reference %q conflicts with immutable scope metadata", kind, ref.ID)
+	}
+	if kind == "skill" && (canonical.Kind != "skill" || canonical.Role != "instruction" || canonical.Path != ref.Path) {
+		return fmt.Errorf("canonicalize external result: skill evidence reference %q has unexpected immutable metadata", ref.ID)
+	}
+	if err := store.Verify(ctx, canonical); err != nil {
+		return fmt.Errorf("canonicalize external result: %s evidence reference %q failed integrity verification: %w", kind, ref.ID, err)
+	}
+	return nil
 }
 
 func canonicalAttemptAgentName(request AttemptRequest) string {

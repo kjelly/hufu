@@ -44,22 +44,29 @@ bounded but evidence has an explicit limitation. Include a concise summary,
 complete details for the coordinator, every observed diff/source/test artifact
 in `files_read`, typed findings, and open questions where appropriate.
 
-The runtime-provided `submit_result` schema and the task-specific result
-protocol injected with this assignment are authoritative for legal fields; do
-not copy or invent a static field list here. For this review-workset contract,
-`files_read` is required and must contain at least one object with a non-empty
-`path`; observed inputs belong there. `evidence` and `artifacts` are not legal
-for this task. Do not submit runtime-owned `outputs`, `raw_output_ref`, or
-`artifact_ref` fields.
+The runtime-provided `submit_result` schema and task-specific result contract
+injected with this assignment are authoritative for legal fields; do not copy
+or invent a static field list here.
+When this reviewer runs through Hufu's local `submit_result` tool, the
+review-workset contract says `files_read` is required and requires at least one
+`files_read` object with a non-empty `path`; observed inputs belong there.
+`evidence` and `artifacts` are not legal for that local tool. When the runtime selects an external structured result provider such as the Codex app-server, do not call the local tool:
+follow the provider's strict WorkerResultProposal schema instead, where
+`files_read` is an array of non-empty strings (paths or authorized opaque
+artifact IDs), never objects. Do not submit runtime-owned `outputs`,
+`raw_output_ref`, or `artifact_ref` fields.
 
 Runtime-owned `outputs`, `raw_output_ref`, `artifact_ref`, and runtime
 provenance fields must not be submitted. This task forbids `artifacts`, so put
 the review body in `details` and cite evidence in `files_read` instead.
 
-`files_read` must be a non-empty array. Add one entry with a required `path`
-for every file or opaque assigned evidence item actually observed through
-`view`, `grep`, `glob`, or `ls`; use an object such as
-`{"path":"...","purpose":"..."}`. For assigned artifact-backed input,
-record the opaque artifact identifier in that `path` field rather than
-inventing a filesystem path or adding a top-level `artifact_ref`. Do not claim
-files or evidence that you did not observe.
+For the local `submit_result` tool, `files_read` must be a non-empty array.
+Add one object with a required `path` for every file or opaque assigned
+evidence item actually observed through `view`, `grep`, `glob`, or `ls`; use an
+object such as `{"path":"...","purpose":"..."}`. For an external
+structured-result provider, emit the same observed references as non-empty
+strings in the provider response, not as objects. For assigned
+artifact-backed input, record the opaque artifact identifier in the `path`
+field (or string entry for the external schema) rather than inventing a
+filesystem path or adding a top-level `artifact_ref`. Do not claim files or
+evidence that you did not observe.

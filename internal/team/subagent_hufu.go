@@ -36,8 +36,12 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if err != nil {
 		return AttemptResult{}, err
 	}
-	if canonical.Task.Model != "" && strings.TrimSpace(request.ModelID) != strings.TrimSpace(canonical.Task.Model) {
-		return AttemptResult{}, fmt.Errorf("hufu-local attempt model assertion does not match canonical model %q for Todo %q", canonical.Task.Model, request.TaskID)
+	expectedModelID := canonical.Task.Model
+	if !canonical.Task.ResolvedExecutionTarget.IsZero() {
+		expectedModelID = p.coordinator.executionModelIDForTarget(canonical.Task.ResolvedExecutionTarget, expectedModelID)
+	}
+	if strings.TrimSpace(expectedModelID) != "" && strings.TrimSpace(request.ModelID) != strings.TrimSpace(expectedModelID) {
+		return AttemptResult{}, fmt.Errorf("hufu-local attempt model assertion does not match canonical model %q for Todo %q", expectedModelID, request.TaskID)
 	}
 	if !workerAgentResolutionAssertionMatches(request.Agent, canonical.Agent) {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt agent assertion does not match canonical agent for Todo %q", request.TaskID)

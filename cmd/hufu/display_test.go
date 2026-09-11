@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -118,8 +120,94 @@ func TestDispatchStatusEventWrapsCodexActivityDetails(t *testing.T) {
 	})
 
 	out := w.b.String()
-	if !strings.Contains(out, "go test") || !strings.Contains(out, "tests passed") {
+	if !strings.Contains(out, "Codex") || !strings.Contains(out, "command=") || !strings.Contains(out, "passed") {
 		t.Fatalf("expected wrapped Codex detail in output, got: %q", out)
+	}
+	assertPhysicalLineWidths(t, out, 40)
+}
+
+func TestDispatchStatusEventCodexActivityFitsTerminalWidth(t *testing.T) {
+	const width = 40
+	t.Setenv("COLUMNS", "40")
+
+	tests := []struct {
+		name      string
+		event     team.StatusEvent
+		wantInOut string
+	}{
+		{
+			name:      "dynamic agent and model label",
+			wantInOut: "Codex",
+			event: team.StatusEvent{
+				Type: "codex_activity", Agent: "reviewer", Model: "codex/gpt-5.6-luna",
+				Message: `Codex item completed (commandExecution): command="go test ./..." output="all tests passed"`,
+			},
+		},
+		{
+			name:      "overlong label",
+			wantInOut: "…",
+			event: team.StatusEvent{
+				Type: "codex_activity", TeamName: "very-long-team-name", Agent: "very-long-agent-name-that-needs-truncation", Model: "codex/gpt-5.6-luna",
+				Message: "activity",
+			},
+		},
+		{
+			name:      "wide unicode payload",
+			wantInOut: "界",
+			event: team.StatusEvent{
+				Type: "codex_activity", Agent: "reviewer", Model: "codex/gpt-5.6-luna",
+				Message: strings.Repeat("界", 40),
+			},
+		},
+		{
+			name:      "unbroken payload",
+			wantInOut: "unbroken",
+			event: team.StatusEvent{
+				Type: "codex_activity", Agent: "reviewer", Model: "codex/gpt-5.6-luna",
+				Message: strings.Repeat("unbroken-token-", 20),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &testStatusWriter{}
+			dispatchStatusEvent(w, &reporterState{}, tt.event)
+			if out := w.b.String(); out == "" {
+				t.Fatal("expected Codex activity output")
+			} else {
+				if !strings.Contains(out, tt.wantInOut) {
+					t.Fatalf("expected output to contain %q, got: %q", tt.wantInOut, out)
+				}
+				assertPhysicalLineWidths(t, out, width)
+			}
+		})
+	}
+}
+
+func TestDispatchStatusEventAdvancesANSIStyledCodexActivity(t *testing.T) {
+	const width = 40
+	t.Setenv("COLUMNS", "40")
+
+	message := "\x1b[31m" + strings.Repeat("x", 90) + "FINISHED" + "\x1b[0m"
+	w := &testStatusWriter{}
+	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{
+		Type: "codex_activity", Agent: "reviewer", Model: "codex/gpt-5.6-luna", Message: message,
+	})
+
+	out := w.b.String()
+	if !strings.Contains(ansi.Strip(out), "FINISHED") {
+		t.Fatalf("expected ANSI-styled activity to advance through its final content, got: %q", out)
+	}
+	assertPhysicalLineWidths(t, out, width)
+}
+
+func assertPhysicalLineWidths(t *testing.T, output string, width int) {
+	t.Helper()
+	for lineNumber, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d: %q", lineNumber+1, got, width, line)
+		}
 	}
 }
 
@@ -143,6 +231,36 @@ func TestWrapPreviewLinesWrapsWithoutPrematureEllipsis(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(got, "\n"), "...") {
 		t.Fatalf("did not expect ellipsis while within max lines: %#v", got)
+	}
+}
+
+func TestWrapPreviewLinesTruncatesWithinDisplayWidth(t *testing.T) {
+	got := wrapPreviewLines(strings.Repeat("overflow ", 10), 5, 2)
+	if len(got) != 2 {
+		t.Fatalf("expected two truncated lines, got %#v", got)
+	}
+	if !strings.HasSuffix(got[len(got)-1], "...") {
+		t.Fatalf("expected truncation marker, got %#v", got)
+	}
+	for lineNumber, line := range got {
+		if width := lipgloss.Width(line); width > 5 {
+			t.Fatalf("line %d width = %d, want <= 5: %q", lineNumber+1, width, line)
+		}
+	}
+}
+
+func TestWrapPreviewLinesTruncatesANSIStyledUnbrokenToken(t *testing.T) {
+	got := wrapPreviewLines("\x1b[31m"+strings.Repeat("x", 200)+"\x1b[0m", 5, 20)
+	if len(got) != 20 {
+		t.Fatalf("expected 20 lines, got %#v", got)
+	}
+	if !strings.HasSuffix(ansi.Strip(got[len(got)-1]), "...") {
+		t.Fatalf("expected truncation marker, got %#v", got)
+	}
+	for lineNumber, line := range got {
+		if width := lipgloss.Width(line); width > 5 {
+			t.Fatalf("line %d width = %d, want <= 5: %q", lineNumber+1, width, line)
+		}
 	}
 }
 

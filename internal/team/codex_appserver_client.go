@@ -210,7 +210,7 @@ func (c *CodexRPCClient) removePending(id int64) {
 	c.mu.Unlock()
 }
 
-func (c *CodexRPCClient) deliverResponse(id int64, resp jsonRPCResponse) {
+func (c *CodexRPCClient) deliverResponse(id int64, resp jsonRPCResponse) bool {
 	c.mu.Lock()
 	var ch chan jsonRPCResponse
 	if c.pending != nil {
@@ -220,7 +220,9 @@ func (c *CodexRPCClient) deliverResponse(id int64, resp jsonRPCResponse) {
 	c.mu.Unlock()
 	if ch != nil {
 		ch <- resp
+		return true
 	}
+	return false
 }
 
 // dispatchNotification is always run in its own goroutine so a slow or
@@ -253,8 +255,17 @@ func (c *CodexRPCClient) readLoop(stdout io.Reader, maxFrameBytes int) {
 		switch {
 		case len(envelope.ID) > 0 && envelope.Method == "":
 			var id int64
-			_ = json.Unmarshal(envelope.ID, &id)
-			c.deliverResponse(id, jsonRPCResponse{Result: envelope.Result, Error: envelope.Error})
+			if err := json.Unmarshal(envelope.ID, &id); err != nil || id <= 0 {
+				if err == nil {
+					err = fmt.Errorf("response id must be a positive integer, got %s", string(envelope.ID))
+				}
+				c.closeWithError(fmt.Errorf("codex app-server sent a response with an invalid id: %w", err))
+				return
+			}
+			if !c.deliverResponse(id, jsonRPCResponse{Result: envelope.Result, Error: envelope.Error}) {
+				c.closeWithError(fmt.Errorf("codex app-server sent a response for unknown request id %d", id))
+				return
+			}
 		case envelope.Method != "" && len(envelope.ID) == 0:
 			go c.dispatchNotification(CodexNotification{Method: envelope.Method, Params: envelope.Params})
 		default:

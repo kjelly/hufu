@@ -143,6 +143,11 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 		return nil, ctxErr
 	}
 
+	environment := buildAllowlistedEnvironment(spec.EnvironmentAllowlist)
+	if spec.Environment != nil {
+		environment = append([]string(nil), spec.Environment...)
+	}
+
 	return &PreparedExecutionWorld{
 		ID:                   fmt.Sprintf("localworld-%d-%d", time.Now().UnixNano(), localExecutionWorldSeq.Add(1)),
 		Provider:             localExecutionWorldName,
@@ -151,7 +156,7 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 		WritableRoots:        writable,
 		ReadOnlyRoots:        readOnly,
 		NetworkAllowed:       spec.NetworkAllowed,
-		Environment:          buildAllowlistedEnvironment(spec.EnvironmentAllowlist),
+		Environment:          environment,
 		Baseline:             baseline,
 		snapshotIgnoredPaths: ignoredSnapshotPaths,
 		releaseLease:         releaseLease,

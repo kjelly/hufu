@@ -36,22 +36,22 @@ func preflightExecutionTargets(session *team.TeamSession, cfg *config.Config, ro
 		lookup = exec.LookPath
 	}
 
-	llmBackends := map[string]struct{}{"local": {}}
+	llmBackends := map[string]struct{}{execution.OllamaBackendName: {}, execution.LegacyLocalBackendName: {}}
 	agentBackends := map[string]agent.SubagentProviderConfig{"codex": {
 		Type:    "codex-app-server",
 		Command: []string{"codex", "app-server"},
 	}}
 	for name := range session.Config.Providers {
-		name = execution.CanonicalBackendName(name)
+		name = execution.CanonicalTargetBackendName(name)
 		if _, exists := agentBackends[name]; exists {
 			return fmt.Errorf("backend name %q is defined as both an LLM provider and an agent provider", name)
 		}
 		llmBackends[name] = struct{}{}
 	}
 	for name, backend := range session.Config.SubagentProviders {
-		name = execution.CanonicalBackendName(name)
-		if name == "local" {
-			return fmt.Errorf("reserved backend name %q cannot be configured as an agent backend", name)
+		name = execution.CanonicalTargetBackendName(name)
+		if execution.IsOllamaBackend(name) {
+			return fmt.Errorf("reserved backend name %q cannot be configured as an agent backend", execution.OllamaBackendName)
 		}
 		if strings.TrimSpace(backend.Type) != "codex-app-server" {
 			return fmt.Errorf("legacy agent backend %q has unsupported type %q", name, backend.Type)
@@ -74,9 +74,9 @@ func preflightExecutionTargets(session *team.TeamSession, cfg *config.Config, ro
 		defaultLLM = cfg.DefaultLLMBackend
 	}
 	if defaultLLM == "" {
-		defaultLLM = "local"
+		defaultLLM = execution.OllamaBackendName
 	}
-	defaultLLM = execution.CanonicalBackendName(defaultLLM)
+	defaultLLM = execution.CanonicalTargetBackendName(defaultLLM)
 	if _, ok := llmBackends[defaultLLM]; !ok {
 		return fmt.Errorf("default LLM backend %q is not a registered language-model backend", defaultLLM)
 	}
@@ -134,7 +134,7 @@ func preflightExecutionTargets(session *team.TeamSession, cfg *config.Config, ro
 		// model inherits the legacy provider only for compatibility, matching
 		// Coordinator.canonicalizeTaskOccurrence exactly.
 		if selector.Backend == "" {
-			legacyProvider := execution.CanonicalBackendName(candidate.legacyProvider)
+			legacyProvider := execution.CanonicalTargetBackendName(candidate.legacyProvider)
 			if legacyProvider != "" && legacyProvider != "hufu-local" {
 				effectiveRaw = legacyProvider + "/" + selector.Model
 				selector, err = execution.ParseExecutionSelector(effectiveRaw)

@@ -195,7 +195,7 @@ func (c *Coordinator) executionModelIDForTarget(target execution.ExecutionTarget
 				// retain its historical leaf model for Fantasy/context telemetry.
 				// Named LLM backends must keep the qualified selector to prevent
 				// provider-profile admission from falling back to local.
-				if target.Backend == "local" {
+				if execution.IsOllamaBackend(target.Backend) {
 					return target.Model
 				}
 				return target.String()

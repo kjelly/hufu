@@ -249,7 +249,7 @@ func (c *Coordinator) validateExtraModelExecutionTopology(task TaskDef) error {
 		if backend.Kind() == execution.BackendKindAgent {
 			return fmt.Errorf("state-changing extra-model fanout cannot use external agent backend %q without an isolated execution world", target.Backend)
 		}
-		backends[target.Backend] = struct{}{}
+		backends[execution.CanonicalTargetBackendName(target.Backend)] = struct{}{}
 	}
 	if len(backends) > 1 {
 		names := make([]string, 0, len(backends))
@@ -684,6 +684,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		compactionRecoveryErr:              compactionRecoveryErrCopy,
 		initialPrompt:                      orig.initialPrompt,
 		projectDir:                         orig.projectDir,
+		artifactStoreRoot:                  orig.artifactStoreRootPath(),
 		auditLogger:                        orig.auditLogger,
 		sshSessionMgr:                      orig.sshSessionMgr,
 		skillUsage:                         skillUsageClone,

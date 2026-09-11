@@ -536,7 +536,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// be stated. A worker that ends its turn with prose fails the contract, and
 	// the failure is indistinguishable from real non-completion.
 	if !task.PlanFirst || task.PlanID != "" {
-		instructions += resultProtocolInstructions(task, granted)
+		instructions += c.resultProtocolInstructions(task, granted)
 	}
 	if taskUsesVerbatimTranscript(task) {
 		instructions += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
@@ -800,7 +800,7 @@ retryLoop:
 			}
 		}
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
-		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt)
+		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt, task.Goal)
 		if scopeErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
@@ -883,9 +883,10 @@ retryLoop:
 		// An empty unbound scope is still installed in the task context so
 		// artifact backing roots are denied, but it is not a separate execution
 		// attempt and must not create a placeholder receipt. Persist a scope
-		// receipt only when the attempt has authorized artifact capabilities or a
-		// bound workset contract.
-		persistScopeReceipt := attemptArtifactScope != nil && (len(attemptArtifactScope.AuthorizedRefs) > 0 || (c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil))
+		// receipt when the attempt has an authorized artifact, managed-skill
+		// capability, or bound workset contract so repair/resume can inspect the
+		// exact immutable capability snapshot.
+		persistScopeReceipt := attemptArtifactScope != nil && (len(attemptArtifactScope.AuthorizedRefs) > 0 || len(attemptArtifactScope.ManagedSkillRefs) > 0 || (c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil))
 		if persistScopeReceipt {
 			committedScopeReceipt := &ExecutionReceipt{
 				RunID: runID, TaskID: todoID, Attempt: attempt, ProducerID: agentName,
@@ -906,6 +907,7 @@ retryLoop:
 		// SubagentProvider — reset each attempt so a retry's receipt never
 		// carries a stale prior turn id.
 		var attemptProviderTurnID string
+		var attemptProviderTranscriptRef string
 		checkpointStopped := false
 		// attemptTokens is assigned inside the closure below and read after it
 		// returns, so its growth-based snapshot (see attempt_budget.go) can
@@ -1082,6 +1084,7 @@ retryLoop:
 							History:         conversationHistory,
 							ExecutionTarget: target,
 							BackendBinding:  backendBinding,
+							ArtifactScope:   cloneArtifactAccessScope(attemptArtifactScope),
 							timing:          timing,
 						})
 					}()
@@ -1096,6 +1099,7 @@ retryLoop:
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
 					ag = attemptResult.agent
 					attemptProviderTurnID = attemptResult.ProviderTurnID
+					attemptProviderTranscriptRef = attemptResult.TranscriptRef
 				}
 			}
 			if _, stopped := asCheckpointControlError(err); stopped {
@@ -1176,8 +1180,9 @@ retryLoop:
 			// BackendBinding (already persisted before any turn ran, §7.4) since
 			// they outlive any one attempt; ProviderTurnID is this attempt's own,
 			// diagnostic-only, so it comes from the attempt itself.
-			SubagentProvider: task.SubagentProvider,
-			ProviderTurnID:   attemptProviderTurnID,
+			SubagentProvider:      task.SubagentProvider,
+			ProviderTurnID:        attemptProviderTurnID,
+			ProviderTranscriptRef: attemptProviderTranscriptRef,
 		}
 		if durable := c.todoItemByID(todoID); durable != nil && durable.BackendBinding != nil {
 			receipt.ProviderSessionID = durable.BackendBinding.SessionID
@@ -1888,7 +1893,7 @@ retryLoop:
 			// the failure and stop — retrying is unsafe.
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass)
+			c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass, output)
 			closeTranscript()
 			break retryLoop
 
@@ -1909,7 +1914,7 @@ retryLoop:
 				blockedMsg = fmt.Sprintf("protocol failure; worker tools must not be replayed (side_effect=%s, recovery=%s); reconcile before retry: %v", task.SideEffect, task.Recovery, err)
 			}
 			failureDetail := c.FailureDetail(err, source) + " | " + blockedMsg
-			c.PersistFailureWithClassAndStatus(agentName, taskDesc, todoID, failureDetail, ReconcileOnly, currentClass, TaskBlocked)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, failureDetail, ReconcileOnly, currentClass, TaskBlocked, output)
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
 			closeTranscript()
 			break retryLoop
@@ -1928,13 +1933,13 @@ retryLoop:
 			lastErr = err
 			if isUnfixableVerifyFailure(err) && attempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
-				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"), ReplanRequired, currentClass)
+				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"), ReplanRequired, currentClass, output)
 			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
-				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"), ReplanRequired, currentClass)
+				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"), ReplanRequired, currentClass, output)
 			} else {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-				c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), ReplanRequired, currentClass)
+				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), ReplanRequired, currentClass, output)
 			}
 			closeTranscript()
 			break retryLoop
@@ -1948,7 +1953,7 @@ retryLoop:
 				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			}
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass)
+			c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass, output)
 			closeTranscript()
 			break retryLoop
 
@@ -1973,7 +1978,7 @@ retryLoop:
 				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
 			}
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
-			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryWorker, currentClass)
+			c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryWorker, currentClass, output)
 			if parentCtx.Err() != nil {
 				closeTranscript()
 				break retryLoop
@@ -4507,13 +4512,40 @@ func (c *Coordinator) sharedKnowledgeInstructions(granted map[string]bool) strin
 	return b.String()
 }
 
-// resultProtocolInstructions states the result contract the runner enforces.
+// resultProtocolInstructions states the local result contract the runner
+// enforces for legacy callers and unit tests that do not have a backend
+// registry. Runtime prompt assembly uses the Coordinator method below so it
+// can resolve the admitted backend kind instead of guessing from its name.
 // ExecuteTasks sets RequiresResult on every non-sidecar task, so a worker that
 // finishes with prose alone fails the task — and that failure is
 // indistinguishable from genuine non-completion. Stating the contract is the
 // only thing that makes the enforcement fair.
 func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
-	if !task.Execution.RequiresResult || !granted["submit_result"] {
+	return resultProtocolInstructionsForBackendKind(task, granted, execution.BackendKindLLM)
+}
+
+// resultProtocolInstructions resolves the immutable admitted backend through
+// the execution registry. Named LLM providers such as openrouter still run
+// Hufu's local submit_result protocol; only an agent-kind backend such as the
+// Codex app-server consumes the external WorkerResultProposal protocol.
+func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
+	backendKind := execution.BackendKindLLM
+	if c != nil && !task.ResolvedExecutionTarget.IsZero() {
+		if backend, err := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend); err == nil {
+			backendKind = backend.Kind()
+		}
+	}
+	return resultProtocolInstructionsForBackendKind(task, granted, backendKind)
+}
+
+func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]bool, backendKind execution.BackendKind) string {
+	if !task.Execution.RequiresResult {
+		return ""
+	}
+	if taskUsesExternalResultProtocol(task, backendKind) {
+		return externalResultProtocolInstructions(task)
+	}
+	if !granted["submit_result"] {
 		return ""
 	}
 	b := &strings.Builder{}
@@ -4561,6 +4593,36 @@ func resultProtocolInstructions(task TaskDef, granted map[string]bool) string {
 			fmt.Fprintf(b, "- At sequence position %d (`%s`), exit code(s) %s are expected observations, not failures. Preserve their output and continue to the next sequence slot.\n", index+1, task.Execution.ToolSequence[index], formatExpectedExitCodes(codes))
 		}
 	}
+	return b.String()
+}
+
+// taskUsesExternalResultProtocol identifies attempts whose backend consumes a
+// provider-owned structured response instead of invoking Hufu's local
+// submit_result tool. The canonical execution target is the admission-time
+// source of truth; a zero target is retained for legacy/local prompt tests and
+// therefore keeps the Hufu-local protocol.
+func taskUsesExternalResultProtocol(task TaskDef, backendKind execution.BackendKind) bool {
+	return !task.ResolvedExecutionTarget.IsZero() && backendKind == execution.BackendKindAgent
+}
+
+// externalResultProtocolInstructions is the prompt contract for an external
+// AgentExecutionBackend such as Codex. It deliberately does not mention the
+// Hufu-local submit_result tool or its object-shaped files_read entries: the
+// external provider returns a WorkerResultProposal through its own strict
+// response schema, and Hufu canonicalizes that untrusted response afterward.
+func externalResultProtocolInstructions(task TaskDef) string {
+	b := &strings.Builder{}
+	b.WriteString("\n\n## External Provider Result Protocol\n\n")
+	b.WriteString("This task is not complete until the external provider returns one structured WorkerResultProposal matching its supplied strict schema. Do not call Hufu-local `submit_result`; the provider response is canonicalized by the runtime after the turn.\n\n")
+	b.WriteString("- Follow the provider-supplied WorkerResultProposal schema exactly, including its required nullable fields and allowed status values. Do not add runtime-owned fields such as task IDs, run IDs, receipts, verification, or evidence.\n")
+	b.WriteString("- Set `status` truthfully and put the useful review or handoff in `summary`, `details`, `findings`, `risks`, and `open_questions`.\n")
+	b.WriteString("- ")
+	b.WriteString(codexResultEncodingInstruction)
+	b.WriteString("\n")
+	if taskResultSubmissionContractForTask(task).FilesReadMinItems > 0 {
+		b.WriteString("- A successful response must include the required non-empty `files_read` string array; report observed paths or authorized opaque artifact IDs there.\n")
+	}
+	b.WriteString("- Return the structured response as the final provider answer, without a prose wrapper or claims of Hufu receipt/verification authority.\n")
 	return b.String()
 }
 

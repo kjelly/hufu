@@ -50,6 +50,36 @@ func TestCodexRPCUnknownNotificationIgnored(t *testing.T) {
 	}
 }
 
+// TestCodexRPCInvalidResponseIDsFailClosed proves that a response cannot
+// strand a pending request by carrying a non-integer or unknown ID. JSON-RPC
+// response IDs are part of the transport correlation invariant: malformed
+// and unmatched IDs must terminate the client rather than being ignored.
+func TestCodexRPCInvalidResponseIDsFailClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "string", id: `"1"`, want: "invalid id"},
+		{name: "fractional", id: "1.5", want: "invalid id"},
+		{name: "null", id: "null", want: "invalid id"},
+		{name: "unknown integer", id: "999", want: "unknown request id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := startFakeCodexServer(t, []fakeCodexStep{
+				{RawLine: `{"jsonrpc":"2.0","id":` + tc.id + `,"result":{}}`},
+			})
+			defer server.Client.Close()
+
+			err := server.Client.Call(context.Background(), "probe", nil, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Call error = %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // TestCodexRPCOversizedFrameFails proves a single JSON-RPC line larger than
 // the configured frame bound terminates the client as a protocol violation
 // (§17.2) rather than hanging or silently truncating.
