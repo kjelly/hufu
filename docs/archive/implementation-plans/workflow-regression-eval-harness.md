@@ -7,9 +7,13 @@
 ## 0. Implementation status (archived: implementation landed)
 
 Runner、assertion DSL、10 個 critical semantic cases、1 個 core lifecycle
-baseline 與 blocking CI gate 均已完成。主要實作 commit：`d7406dd`、
+baseline 與 blocking CI gate 均已完成。2026-09-12 的 completion audit 亦補齊
+原先漏掉的 terminal lifecycle、task verification、BackendBinding、禁止未授權
+fallback、event cardinality/fields、EvidenceManifest/CAS hash、artifact membership、
+`auditverify` 重播與 improve benchmark revision。主要實作 commit：`d7406dd`、
 `f8515ae`、`bdc2726`、`643bc51`、`11c2f07`、`c8c849c`、`0714055`、
-`c55fbd2`、`5cc6ba9`、`f19b12f`、`f4947eb`、`2808f6f`；non-blocking
+`c55fbd2`、`5cc6ba9`、`f19b12f`、`f4947eb`、`2808f6f`、`aa0ce10`、
+`e0036fe`、`89bc526`、`d4bd8c6`；non-blocking
 CI 起點為 `47d25b7`，本次封存同時將 `eval-core` 納入 `ci-success.needs`。
 此文件保留為設計與實作歷史；目前程式碼、tests 與 CLI help 為準。
 
@@ -172,6 +176,17 @@ artifact refs
 ### Event
 只比 critical type/order/cardinality/fields，不 golden 整個 timestamp/id JSON。
 
+實作 DSL 使用 `required`、`order`、`counts` 與 `matches`；`matches` 以事件
+type + 1-based occurrence 選取，再以 dotted path 比對明列欄位。Task/evidence
+關聯一律用建立順序的 `task-index`，不把 opaque Todo ID 寫死進 fixture。
+`no-unauthorized-fallback` 會 fail-closed 比對 immutable `ExecutionTarget`、
+mutable `BackendBinding` 與每個 `ExecutionReceipt.Backend`。
+
+Evidence assertions 直接呼叫 `EvidenceManifest.Verify` 與 workspace 的
+`FileArtifactStore`；`audit-verdict` 再透過 `auditverify.VerifyWorkspaceRun`
+獨立驗證 event hash chain、terminal projection、receipt provenance、evidence、
+acceptance 與 completion justification，沒有重寫第二套判定器。
+
 ## 6. Canonical result
 
 ```go
@@ -297,6 +312,21 @@ evals/core-lifecycle/fixtures/single-task-unverified.json
 ### PR-4 CI gate — done
 
 新增 `.github/workflows/ci.yml` 的 `eval-core` job：`go build -o /tmp/hufu ./cmd/hufu`，接著對 `evals/*/` 每個 suite 目錄各跑一次 `hufu eval run <suite> --format json`，各自寫成 `eval-reports/<suite>.json` 並用 `actions/upload-artifact`（`v4.6.2`）上傳成 artifact；`timeout-minutes: 5` 控制總時間。起初以 `47d25b7` 採 non-blocking rollout；10 個 critical cases 全部穩定通過後，已將 `eval-core` 加入 `ci-success.needs`，成為 blocking merge gate。
+
+### Post-archive completion audit — done
+
+- `aa0ce10`：補齊 Run/Task/Execution/Event assertion dimensions，並讓既有
+  cases 實際執行 terminal lifecycle、verification、BackendBinding、fallback、
+  cardinality 與 field assertions。
+- `e0036fe`：補齊 EvidenceManifest hash、required evidence、artifact refs，並
+  重用 `internal/auditverify` 對完成後 workspace 做 canonical audit。
+- `89bc526`：將 suite prompts 投影成既有 `improve.BenchmarkFixture`，報告攜帶
+  canonical benchmark revision；`hufu eval list` 無參數預設探索 `./evals`；
+  JSON artifact 排除 wall-clock duration，保持 deterministic。
+- `d4bd8c6`：offline 從測試慣例升級成 fail-closed runtime contract：拒絕
+  fixture 自訂 provider/backend/Codex selector，worker tool policy 強制
+  `no-net`，workspace seed 拒絕 path escape，provider fixtures 嚴格驗證
+  單一 response shape、JSON object arguments 與 trailing documents。
 
 ## 11. 首批必測 cases
 
