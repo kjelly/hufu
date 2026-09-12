@@ -47,12 +47,31 @@ type CaseFixture struct {
 	// remains fixture evidence: recomputing it from live code would hide a
 	// compatibility regression in the very contract this case exercises.
 	PriorRunDecisionAdmissionDigests map[string]string `yaml:"prior-run-decision-admission-digests,omitempty"`
+	// SeedMemoryPolicy records the team's configured learning policy as the
+	// active canonical policy before Coordinator construction. NewCoordinator
+	// deliberately loads only an adopted policy from context.sqlite, so team
+	// YAML alone is not sufficient runtime arrangement for memory evals.
+	SeedMemoryPolicy bool `yaml:"seed-memory-policy,omitempty"`
 	// WorkspaceFiles seeds files into the case's ephemeral workspace before
 	// the run starts, keyed by path relative to the workspace root, e.g. a
 	// fan_out source manifest a task's tool_call references by a
 	// workspace-relative path. Written verbatim (already-formatted content,
 	// no templating).
 	WorkspaceFiles map[string]string `yaml:"workspace-files,omitempty"`
+	// ContextItems seeds confirmed shared-persistent context into the case's
+	// canonical SQLite store before coordinator construction. The harness owns
+	// project/team scoping so fixtures cannot accidentally seed an item that the
+	// real runtime would never be allowed to retrieve.
+	ContextItems []ContextItemFixture `yaml:"context-items,omitempty"`
+}
+
+// ContextItemFixture is the minimal stable surface needed to arrange a
+// deterministic canonical-memory retrieval. Runtime-owned defaults supply
+// kind, authority, trust, priority, confidence, lifecycle, and scope.
+type ContextItemFixture struct {
+	ID       string `yaml:"id"`
+	Content  string `yaml:"content"`
+	MustKeep bool   `yaml:"must-keep,omitempty"`
 }
 
 // ExpectSpec is the subset of RunResult dimensions a case asserts on. A zero
@@ -70,12 +89,29 @@ type ExpectSpec struct {
 	// and compatibility boundaries such as execution_target_migrated are
 	// durable-only and must be checked at their canonical source.
 	DurableEvents EventsExpect `yaml:"durable-events"`
+	// MemoryAggregates asserts durable post-run learning projections by
+	// reopening context.sqlite after Coordinator.Run returns. Pointer fields
+	// distinguish an explicit expected zero from an omitted assertion.
+	MemoryAggregates []MemoryAggregateExpect `yaml:"memory-aggregates,omitempty"`
 	// ExecutionTargetFrozen, when true, asserts that every StatusEvent
 	// carrying a non-empty ExecutionTarget across the whole run reports the
 	// SAME value -- the resolved backend/model must be admitted once per
 	// task occurrence and never re-resolved on retry (see
 	// internal/team/services.go's frozenTaskOccurrenceModel).
 	ExecutionTargetFrozen *bool `yaml:"execution-target-frozen,omitempty"`
+}
+
+// MemoryAggregateExpect describes the durable learning counters and credit
+// for one seeded/retrieved context item under one policy revision.
+type MemoryAggregateExpect struct {
+	ContextItemID    string   `yaml:"context-item-id"`
+	PolicyVersion    string   `yaml:"policy-version"`
+	MinExposureCount *int     `yaml:"min-exposure-count,omitempty"`
+	ConsultedCount   *int     `yaml:"consulted-count,omitempty"`
+	AppliedCount     *int     `yaml:"applied-count,omitempty"`
+	RejectedCount    *int     `yaml:"rejected-count,omitempty"`
+	PositiveWeight   *float64 `yaml:"positive-weight,omitempty"`
+	NegativeWeight   *float64 `yaml:"negative-weight,omitempty"`
 }
 
 // TaskExpect asserts on one task by position: Tasks[i] in the fixture is

@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Calibrate the quartz beacon safely.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"Quartz beacon calibrated safely.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Quartz beacon calibration is complete.\"}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

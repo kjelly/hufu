@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -150,5 +151,57 @@ func TestEvalNeverCallsNetworkDriverInOfflineMode(t *testing.T) {
 	// per-case httptest.Server.
 	if len(session.Config.Providers) != 0 {
 		t.Errorf("fixture team %s declares %d named provider(s); an offline eval team must rely solely on the harness's scripted default provider URL", fixture.TeamDir(), len(session.Config.Providers))
+	}
+}
+
+func TestAssertMemoryAggregatesDistinguishesExposureFromCredit(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	item := contextstore.ContextItem{
+		ID:         "retrieved-only",
+		Kind:       contextstore.ContextPattern,
+		Content:    "calibrate quartz beacon safely",
+		Scope:      contextstore.Scope{ProjectID: "project", TeamID: "team"},
+		Authority:  contextstore.AuthorityRepository,
+		TrustLevel: contextstore.TrustTrusted,
+		Priority:   contextstore.PriorityHigh,
+		Confidence: 1,
+		Lifecycle:  contextstore.LifecycleConfirmed,
+	}
+	if err := repo.Append(t.Context(), item); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := repo.ApplyExperienceObservation(t.Context(), contextstore.ExperienceObservation{
+		IdempotencyKey: "retrieval-1",
+		ContextItemID:  item.ID,
+		PolicyVersion:  "memory-policy-v1",
+		ExposureDelta:  1,
+	}); err != nil {
+		t.Fatalf("ApplyExperienceObservation: %v", err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	expect := MemoryAggregateExpect{
+		ContextItemID:    item.ID,
+		PolicyVersion:    "memory-policy-v1",
+		MinExposureCount: new(1),
+		ConsultedCount:   new(0),
+		AppliedCount:     new(0),
+		PositiveWeight:   new(0.0),
+		NegativeWeight:   new(0.0),
+	}
+	if findings := assertMemoryAggregates(t.Context(), workspace, []MemoryAggregateExpect{expect}); len(findings) != 0 {
+		t.Fatalf("assertMemoryAggregates returned findings for retrieved-only memory: %+v", findings)
+	}
+
+	expect.PositiveWeight = new(1.0)
+	findings := assertMemoryAggregates(t.Context(), workspace, []MemoryAggregateExpect{expect})
+	if len(findings) != 1 || findings[0].Dimension != "memory-aggregate.retrieved-only.positive-weight" {
+		t.Fatalf("credit mismatch findings = %+v, want positive-weight finding", findings)
 	}
 }

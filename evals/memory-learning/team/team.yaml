@@ -1,0 +1,5 @@
+name: eval-memory-learning
+description: Minimal coordinator and worker for memory learning evals
+memory-learning:
+  mode: observe
+  policy-version: memory-policy-v1

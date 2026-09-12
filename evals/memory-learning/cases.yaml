@@ -1,0 +1,35 @@
+version: 1
+name: memory-learning
+team: ./team
+mode: deterministic
+cases:
+  - id: retrieved-only-memory-gets-zero-credit
+    prompt: "Calibrate the quartz beacon safely."
+    provider-fixture: fixtures/retrieved-only-memory-gets-zero-credit.json
+    seed-memory-policy: true
+    context-items:
+      - id: retrieved-only-pattern
+        content: "Calibrate the quartz beacon safely using the established procedure."
+        must-keep: true
+    expect:
+      run-outcome: unverified
+      acceptance: not_configured
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+      events:
+        required: [memory_learning, start, done]
+        order: [start, memory_learning, done]
+      durable-events:
+        required: [memory_retrieved]
+        order: [memory_retrieved, task_completed, run_finished]
+      memory-aggregates:
+        - context-item-id: retrieved-only-pattern
+          policy-version: memory-policy-v1
+          min-exposure-count: 1
+          consulted-count: 0
+          applied-count: 0
+          rejected-count: 0
+          positive-weight: 0
+          negative-weight: 0

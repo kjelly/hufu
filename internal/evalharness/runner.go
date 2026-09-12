@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -87,6 +90,13 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err := seedWorkspaceFiles(workspace, c.WorkspaceFiles); err != nil {
 		return EvalCaseResult{}, err
 	}
+	projectDir, err := canonicalWorkingDirectory()
+	if err != nil {
+		return EvalCaseResult{}, err
+	}
+	if err := seedCanonicalContext(context.WithoutCancel(ctx), workspace, projectDir, session.Config.Name, c.ContextItems, c.SeedMemoryPolicy, session.Config.MemoryLearning); err != nil {
+		return EvalCaseResult{}, err
+	}
 
 	coordinator, err := team.NewCoordinator(
 		session,
@@ -161,6 +171,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	} else {
 		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents)...)
 	}
+	findings = append(findings, assertMemoryAggregates(context.WithoutCancel(caseCtx), workspace, c.Expect.MemoryAggregates)...)
 	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {
 		findings = append(findings, EvalFinding{
 			Dimension: "timeout",
@@ -201,6 +212,128 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Findings:   findings,
 		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: runID},
 	}, nil
+}
+
+func canonicalWorkingDirectory() (string, error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve project directory: %w", err)
+	}
+	abs, err := filepath.Abs(workingDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute project directory: %w", err)
+	}
+	if evaluated, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+		return filepath.Clean(evaluated), nil
+	}
+	return filepath.Clean(abs), nil
+}
+
+func seedCanonicalContext(ctx context.Context, workspace, projectDir, teamID string, fixtures []ContextItemFixture, seedMemoryPolicy bool, policy agent.MemoryLearningPolicy) (returnErr error) {
+	if len(fixtures) == 0 && !seedMemoryPolicy {
+		return nil
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		return fmt.Errorf("open context store for seed: %w", err)
+	}
+	defer func() {
+		if closeErr := repo.Close(); returnErr == nil && closeErr != nil {
+			returnErr = fmt.Errorf("close seeded context store: %w", closeErr)
+		}
+	}()
+
+	if seedMemoryPolicy {
+		if policy.Mode == agent.MemoryLearningOff {
+			return errors.New("seed memory policy requires a non-off team memory-learning mode")
+		}
+		revision := "eval-" + policy.PolicyVersion
+		snapshot := map[string]any{
+			"id": policy.PolicyVersion, "revision_hash": revision, "learning": policy,
+			"retrieval": map[string]any{
+				"top_k": 20, "minimum_relevance": 0.05,
+				"utility_weight": 0.5, "freshness_weight": 1.0,
+			},
+		}
+		raw, marshalErr := json.Marshal(snapshot)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal active memory policy: %w", marshalErr)
+		}
+		if err := repo.SaveMemoryPolicyVersion(ctx, policy.PolicyVersion, raw, revision, "active", time.Unix(1, 0).UTC()); err != nil {
+			return fmt.Errorf("seed active memory policy: %w", err)
+		}
+	}
+
+	items := make([]contextstore.ContextItem, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		items = append(items, contextstore.ContextItem{
+			ID:         fixture.ID,
+			Kind:       contextstore.ContextPattern,
+			Content:    fixture.Content,
+			Scope:      contextstore.Scope{ProjectID: projectDir, TeamID: teamID},
+			Authority:  contextstore.AuthorityRepository,
+			TrustLevel: contextstore.TrustTrusted,
+			Priority:   contextstore.PriorityHigh,
+			MustKeep:   fixture.MustKeep,
+			Confidence: 1,
+			Source:     contextstore.SourceRef{Type: "eval_fixture", Ref: fixture.ID},
+			Lifecycle:  contextstore.LifecycleConfirmed,
+		})
+	}
+	if len(items) > 0 {
+		if err := repo.Append(ctx, items...); err != nil {
+			return fmt.Errorf("seed context items: %w", err)
+		}
+	}
+	return nil
+}
+
+func assertMemoryAggregates(ctx context.Context, workspace string, expects []MemoryAggregateExpect) []EvalFinding {
+	if len(expects) == 0 {
+		return nil
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		return []EvalFinding{{Dimension: "memory-aggregates", Expected: "readable context.sqlite learning projection", Actual: err.Error()}}
+	}
+	defer func() { _ = repo.Close() }()
+
+	var findings []EvalFinding
+	for _, expect := range expects {
+		aggregate, aggregateErr := repo.ExperienceAggregate(ctx, expect.ContextItemID, expect.PolicyVersion)
+		if aggregateErr != nil {
+			findings = append(findings, EvalFinding{
+				Dimension: "memory-aggregate." + expect.ContextItemID,
+				Expected:  "aggregate for policy " + expect.PolicyVersion,
+				Actual:    aggregateErr.Error(),
+			})
+			continue
+		}
+		prefix := "memory-aggregate." + expect.ContextItemID + "."
+		if expect.MinExposureCount != nil && aggregate.ExposureCount < *expect.MinExposureCount {
+			findings = append(findings, EvalFinding{Dimension: prefix + "exposure-count", Expected: fmt.Sprintf(">= %d", *expect.MinExposureCount), Actual: fmt.Sprintf("%d", aggregate.ExposureCount)})
+		}
+		findings = append(findings, compareMemoryAggregateInt(prefix+"consulted-count", expect.ConsultedCount, aggregate.ConsultedCount)...)
+		findings = append(findings, compareMemoryAggregateInt(prefix+"applied-count", expect.AppliedCount, aggregate.AppliedCount)...)
+		findings = append(findings, compareMemoryAggregateInt(prefix+"rejected-count", expect.RejectedCount, aggregate.RejectedCount)...)
+		findings = append(findings, compareMemoryAggregateFloat(prefix+"positive-weight", expect.PositiveWeight, aggregate.PositiveWeight)...)
+		findings = append(findings, compareMemoryAggregateFloat(prefix+"negative-weight", expect.NegativeWeight, aggregate.NegativeWeight)...)
+	}
+	return findings
+}
+
+func compareMemoryAggregateInt(dimension string, expected *int, actual int) []EvalFinding {
+	if expected == nil || actual == *expected {
+		return nil
+	}
+	return []EvalFinding{{Dimension: dimension, Expected: fmt.Sprintf("%d", *expected), Actual: fmt.Sprintf("%d", actual)}}
+}
+
+func compareMemoryAggregateFloat(dimension string, expected *float64, actual float64) []EvalFinding {
+	if expected == nil || math.Abs(actual-*expected) <= 1e-9 {
+		return nil
+	}
+	return []EvalFinding{{Dimension: dimension, Expected: fmt.Sprintf("%g", *expected), Actual: fmt.Sprintf("%g", actual)}}
 }
 
 // seedPriorRunPolicyAndTasks creates the event-first half of a historical
