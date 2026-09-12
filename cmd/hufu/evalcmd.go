@@ -29,7 +29,7 @@ var evalCmd = &cobra.Command{
 	Short: "Run the offline deterministic workflow regression harness",
 	Long: `hufu eval runs deterministic, offline regression suites against a real
 team.Coordinator driven by a scripted model provider -- see
-docs/tmp/now/06-workflow-regression-eval-harness.md. It asserts on runtime
+docs/archive/implementation-plans/workflow-regression-eval-harness.md. It asserts on runtime
 semantics (routing, task lifecycle, retry, recovery, acceptance, events,
 artifacts, outcome), never on model output quality, and never calls a live
 model or the network.`,

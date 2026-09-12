@@ -15,7 +15,7 @@ import (
 const evalModelDriverName = "eval-harness-model"
 
 // scriptedProvider is the EvalModelDriver from
-// docs/tmp/now/06-workflow-regression-eval-harness.md §4: an
+// docs/archive/implementation-plans/workflow-regression-eval-harness.md §4: an
 // OpenAI-compatible HTTP fake serving scripted chat completions, following
 // internal/team's fixedAnswerProvider/fakeJudge pattern. One instance backs
 // every model call -- worker, judge, and coordinator alike -- for a single

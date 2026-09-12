@@ -1,5 +1,5 @@
 // Package evalharness implements the offline deterministic workflow
-// regression harness described in docs/tmp/now/06-workflow-regression-eval-harness.md.
+// regression harness described in docs/archive/implementation-plans/workflow-regression-eval-harness.md.
 // It runs a real team.Coordinator end-to-end against a scripted
 // OpenAI-compatible provider fake and asserts on the resulting RunResult,
 // never against model output quality.
@@ -143,7 +143,7 @@ type EventsExpect struct {
 }
 
 // ProviderFixture is the scripted response program for one case's model
-// driver (see docs/tmp/now/06-workflow-regression-eval-harness.md §4.1).
+// driver (see docs/archive/implementation-plans/workflow-regression-eval-harness.md §4.1).
 type ProviderFixture struct {
 	Steps []ProviderStep `json:"steps"`
 }
