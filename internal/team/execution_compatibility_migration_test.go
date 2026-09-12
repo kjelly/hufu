@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +84,51 @@ func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing
 	}
 	if !bytes.Equal(beforeRepeat, afterRepeat) {
 		t.Fatal("repeat apply appended a duplicate migration")
+	}
+}
+
+func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
+	workspace := t.TempDir()
+	legacy := &SessionData{Tasks: []*TodoItem{{ID: "session-only", Status: TaskPending, Model: "qwen3:8b", SubagentProvider: "hufu-local"}}}
+	if err := SaveSession(workspace, legacy); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	openWithAppendFailure := func(path string) (*EventStore, error) {
+		store, err := OpenEventStore(path)
+		if err != nil {
+			return nil, err
+		}
+		configureEventStoreSyncFailureForEventType(t, store, string(EventExecutionCompatibilityMigrated), 1, errors.New("injected migration sync failure"))
+		return store, nil
+	}
+	if _, err := applyExecutionCompatibility(t.Context(), workspace, "", openWithAppendFailure); err == nil {
+		t.Fatal("migration append failure was accepted")
+	}
+	afterFailure, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, afterFailure) {
+		t.Fatal("session projection advanced after migration append failure")
+	}
+
+	result, err := ApplyExecutionCompatibility(t.Context(), workspace, "")
+	if err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+	if result.TaskMigrationEvents != 0 || !result.ProjectionRebuilt {
+		t.Fatalf("retry result = %#v", result)
+	}
+	projected := LoadSession(workspace)
+	if projected == nil {
+		t.Fatal("retried projection is missing")
+	}
+	if len(projected.Tasks) != 1 || projected.Tasks[0].ExecutionTarget != (execution.ExecutionTarget{Backend: "ollama", Model: "qwen3:8b"}) {
+		t.Fatalf("retried projection = %#v", projected.Tasks)
 	}
 }
 
@@ -243,6 +289,46 @@ func TestApplyExecutionCompatibilityRefusesAmbiguousTaskWithoutAppending(t *test
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("ambiguous preflight appended an event")
+	}
+}
+
+func TestAmbiguousLegacyPolicySnapshotAppendsNothing(t *testing.T) {
+	workspace := t.TempDir()
+	snapshot := &ExecutionPolicySnapshot{
+		Version:           executionPolicyLegacySnapshotVersion,
+		DefaultLLMBackend: "local",
+		Backends:          []ExecutionBackendPolicySnapshot{{Backend: "local", Kind: "llm", IdentityHash: "identity"}},
+		ModelRoutes:       []ExecutionModelRouteSnapshot{{Model: "qwen3:8b", Backend: "local", LegacyProvider: "hufu-local"}},
+	}
+	var err error
+	snapshot.ConfigurationHash, err = executionPolicyConfigurationHash(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventExecutionPolicySnapshot), RunID: "run-1", SessionID: "session-1", Actor: "coordinator", Timestamp: "2026-01-01T00:00:00Z", Payload: compatibilityPayload(t, snapshot),
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err == nil {
+		t.Fatal("ambiguous policy snapshot was materialized")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("ambiguous policy preflight appended an event")
 	}
 }
 

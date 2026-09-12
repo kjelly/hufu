@@ -80,8 +80,15 @@ type executionCompatibilityPolicyPlan struct {
 // partial append is intentionally recoverable: deterministic idempotency keys
 // make a later invocation continue from the exact durable chain head.
 func ApplyExecutionCompatibility(ctx context.Context, workspace, requestedBranch string) (*ExecutionCompatibilityApplyResult, error) {
+	return applyExecutionCompatibility(ctx, workspace, requestedBranch, OpenEventStore)
+}
+
+func applyExecutionCompatibility(ctx context.Context, workspace, requestedBranch string, openEventStore func(string) (*EventStore, error)) (*ExecutionCompatibilityApplyResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if openEventStore == nil {
+		return nil, fmt.Errorf("apply execution compatibility: event store opener is nil")
 	}
 	report, err := InspectExecutionCompatibility(ctx, workspace, requestedBranch)
 	if err != nil {
@@ -100,14 +107,19 @@ func ApplyExecutionCompatibility(ctx context.Context, workspace, requestedBranch
 		return nil, err
 	}
 	result := &ExecutionCompatibilityApplyResult{SchemaVersion: executionCompatibilityMigrationSchemaVersion, Scope: scope}
-	if len(taskPlans) == 0 && len(policyPlans) == 0 {
+	// A prior append may have reached the durable log just before its sync
+	// reported failure. Its migration event is then authoritative while the
+	// derived session projection remains stale. An explicit retry rebuilds that
+	// projection without adding another event.
+	needsProjectionRebuild := len(taskPlans) != 0 || len(policyPlans) != 0 || report.MigratedTasks != 0 || report.MigratedPolicySnapshots != 0
+	if !needsProjectionRebuild {
 		return result, nil
 	}
 
 	// Opening the writer happens strictly after all inspection and derivation.
 	// EventStore validates the existing chain and acquires its interprocess
 	// exclusive lock for every atomic append; no prior byte can be rewritten.
-	store, err := OpenEventStore(workspace)
+	store, err := openEventStore(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("apply execution compatibility open event store: %w", err)
 	}

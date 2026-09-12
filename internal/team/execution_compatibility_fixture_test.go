@@ -162,8 +162,12 @@ func assertCompatibilityFixtureApplyOutcome(t *testing.T, workspace string, repo
 	}
 	migratable := report.MigratableTasks != 0 || report.MigratablePolicySnapshots != 0
 	if !migratable {
-		if result.TaskMigrationEvents != 0 || result.PolicyMigrationEvents != 0 || result.ProjectionRebuilt {
+		if result.TaskMigrationEvents != 0 || result.PolicyMigrationEvents != 0 {
 			t.Fatalf("non-migratable fixture changed by apply: %#v", result)
+		}
+		migrated := report.MigratedTasks != 0 || report.MigratedPolicySnapshots != 0
+		if result.ProjectionRebuilt != migrated {
+			t.Fatalf("non-migratable fixture projection rebuild = %t, want %t: %#v", result.ProjectionRebuilt, migrated, result)
 		}
 		if err := replayTodoListFromFixtureWorkspace(workspace); err != nil {
 			t.Fatalf("canonical replay fixture: %v", err)
