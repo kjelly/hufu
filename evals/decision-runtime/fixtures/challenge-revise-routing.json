@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "match": {"contains": "Propose the distinct courses of action"},
+      "content": "{\"options\":[{\"id\":\"opt-a\",\"kind\":\"primary\",\"title\":\"Option A\",\"description\":\"Do it directly.\"},{\"id\":\"opt-b\",\"kind\":\"alternative\",\"title\":\"Option B\",\"description\":\"Do it differently.\"}]}"
+    },
+    {
+      "match": {"contains": "forming an independent judgment"},
+      "content": "{\"option_scores\":[{\"option_id\":\"opt-a\",\"criteria\":{},\"overall\":8},{\"option_id\":\"opt-b\",\"criteria\":{},\"overall\":5}],\"preferred_option\":\"opt-a\",\"success_probability\":0.7,\"key_assumptions\":[],\"disconfirming_evidence\":[],\"missing_information\":[],\"confidence\":0.8}"
+    },
+    {
+      "match": {"contains": "You are challenging a candidate decision"},
+      "content": "{\"target_option\":\"opt-a\",\"strongest_countercase\":\"Option B might be safer.\",\"fragile_assumptions\":[],\"missing_evidence\":[],\"falsification_tests\":[],\"severity\":0.6}"
+    },
+    {
+      "match": {"contains": "revising your own judgment once"},
+      "content": "{\"revised_scores\":[{\"option_id\":\"opt-a\",\"criteria\":{},\"overall\":8},{\"option_id\":\"opt-b\",\"criteria\":{},\"overall\":5}],\"revised_probability\":0.7,\"changed\":false,\"reason\":\"Challenge did not change the preferred option.\"}"
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Decide and report a status flag.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"Decided and reported.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Decision made and task complete.\"}"
+      }
+    },
+    { "content": "(run ends here)" }
+  ]
+}

@@ -1,0 +1,23 @@
+version: 1
+name: workset
+team: ./team
+mode: deterministic
+cases:
+  - id: workset-partial-blocks-completion
+    prompt: "Process the workset."
+    provider-fixture: fixtures/workset-partial.json
+    workspace-files:
+      workset.json: |
+        {"schema_version":1,"items":[{"key":"alpha","bindings":{"name":"alpha-item"}},{"key":"beta","bindings":{"name":"beta-item"}}]}
+    expect:
+      # A worker's own "failed" self-report on submit_result classifies the
+      # child task as blocked (not error), so the aggregate RunResult.Outcome
+      # is "blocked" (StopReason external_blockage), not "partial" -- verified
+      # empirically, not assumed.
+      run-outcome: blocked
+      task-count: 2
+      tasks:
+        - agent: worker
+          status: done
+        - agent: worker
+          status: blocked

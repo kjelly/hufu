@@ -1,7 +1,21 @@
 name: eval-decision-runtime
-description: Minimal coordinator + one worker fixture team with a non-off team-level decision default, for the off-profile-compatibility eval case
+description: Minimal coordinator + one worker fixture team with a non-off team-level decision default, for the off-profile-compatibility and challenge/revise-routing eval cases
 decision:
   default-profile: minimal
+  request-contract:
+    enabled: true
+    objective: "Decide the best course of action for the delegated task."
+    success-criteria:
+      - id: sc-1
+        statement: "A course of action is chosen and reported."
   profiles:
     minimal:
       independent-judgments: 1
+      option-proposal:
+        enabled: true
+      challenge:
+        enabled: true
+        count: 1
+      revision:
+        enabled: true
+      max-rounds: 2

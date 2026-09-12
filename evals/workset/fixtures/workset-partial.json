@@ -1,0 +1,35 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Process the workset.\"}]}"
+      }
+    },
+    {
+      "match": {"contains": "handle alpha-item"},
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"handled alpha-item\"}"
+      }
+    },
+    {
+      "match": {"contains": "handle beta-item"},
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"failed\",\"summary\":\"could not handle beta-item\"}"
+      }
+    },
+    {
+      "match": {"contains": "handle beta-item"},
+      "content": "(worker beta-item done)"
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Workset partially completed.\",\"acknowledge_failed_tasks\":true}"
+      }
+    },
+    { "content": "(run ends here)" }
+  ]
+}

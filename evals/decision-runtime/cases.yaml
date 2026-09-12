@@ -17,3 +17,16 @@ cases:
       events:
         required: [start, todos_updated, done]
         order: [start, todos_updated, done]
+
+  - id: challenge-revise-routing
+    prompt: "Decide and report a status flag."
+    provider-fixture: fixtures/challenge-revise-routing.json
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+      events:
+        required: [sidecar_call, done]
+        order: [sidecar_call, sidecar_call, sidecar_call, sidecar_call, done]

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -82,28 +83,36 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
 	session.Workspace = workspace
+	if err := seedWorkspaceFiles(workspace, c.WorkspaceFiles); err != nil {
+		return EvalCaseResult{}, err
+	}
 
 	coordinator, err := team.NewCoordinator(
 		session,
 		server.URL+"/v1", "eval-harness-key",
-		nil,               // mcpManager
-		nil,               // memoryStore
-		nil,               // modelList
-		team.RoleModels{}, // roleModels
-		1,                 // maxConcurrent
-		false,             // verbose
-		false,             // think
-		false,             // direnv
-		nil,               // allowedPaths
-		nil,               // pathConsent
-		nil,               // hookRegistry
-		false,             // rbashMode
-		"",                // restrictedPath
-		false,             // noNet
-		false,             // forceMCP
-		nil,               // forcedSkillNames
-		false,             // planMode
-		false,             // autoSkillsMode
+		nil, // mcpManager
+		nil, // memoryStore
+		nil, // modelList
+		// Judge is set unconditionally: a case whose team.yaml enables a
+		// decision profile needs a judge model configured or the decision
+		// engine fails closed with "decision_budget_insufficient" before
+		// ever reaching the scripted provider. Harmless for every other
+		// case -- the "off" profile never calls RunJudge.
+		team.RoleModels{Judge: evalModelDriverName},
+		1,     // maxConcurrent
+		false, // verbose
+		false, // think
+		false, // direnv
+		nil,   // allowedPaths
+		nil,   // pathConsent
+		nil,   // hookRegistry
+		false, // rbashMode
+		"",    // restrictedPath
+		false, // noNet
+		false, // forceMCP
+		nil,   // forcedSkillNames
+		false, // planMode
+		false, // autoSkillsMode
 	)
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("construct coordinator: %w", err)
@@ -167,4 +176,20 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Findings:   findings,
 		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: runID},
 	}, nil
+}
+
+// seedWorkspaceFiles writes a case's WorkspaceFiles into its ephemeral
+// workspace before the run starts, e.g. a fan_out source manifest a
+// scripted tool_call references by workspace-relative path.
+func seedWorkspaceFiles(workspace string, files map[string]string) error {
+	for relPath, content := range files {
+		absPath := filepath.Join(workspace, relPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return fmt.Errorf("create directory for workspace file %s: %w", relPath, err)
+		}
+		if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write workspace file %s: %w", relPath, err)
+		}
+	}
+	return nil
 }

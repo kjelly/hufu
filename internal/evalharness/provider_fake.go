@@ -80,19 +80,64 @@ func (p *scriptedProvider) serveChatCompletion(w http.ResponseWriter, r *http.Re
 		delta.Content = step.Content
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	writeSSEChunk(w, sseChunk{
-		ID: "eval", Object: "chat.completion.chunk", Created: 1, Model: evalModelDriverName,
-		Choices: []sseChoice{{Index: 0, Delta: delta}},
-	})
-	writeSSEChunk(w, sseChunk{
-		ID: "eval", Object: "chat.completion.chunk", Created: 1, Model: evalModelDriverName,
-		Choices: []sseChoice{{Index: 0, Delta: sseDelta{}, FinishReason: &finishReason}},
-	})
-	_, _ = io.WriteString(w, "data: [DONE]\n\n")
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
+	// The worker/coordinator dispatch loop (fantasy) always streams
+	// ("stream":true), but the decision engine's sidecar client ("ask" in
+	// internal/team/decision_runners.go, used for options/judge/challenge/
+	// revision stages) sends a plain, non-streaming request and errors
+	// ("expected destination type of 'string' or '[]byte' for responses
+	// with content-type 'text/event-stream'") if answered with SSE. Detect
+	// which shape the caller wants from its own request instead of always
+	// answering one way.
+	if requestWantsStream(body) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSEChunk(w, sseChunk{
+			ID: "eval", Object: "chat.completion.chunk", Created: 1, Model: evalModelDriverName,
+			Choices: []sseChoice{{Index: 0, Delta: delta}},
+		})
+		writeSSEChunk(w, sseChunk{
+			ID: "eval", Object: "chat.completion.chunk", Created: 1, Model: evalModelDriverName,
+			Choices: []sseChoice{{Index: 0, Delta: sseDelta{}, FinishReason: &finishReason}},
+		})
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encoded, err := json.Marshal(chatCompletion{
+		ID: "eval", Object: "chat.completion", Created: 1, Model: evalModelDriverName,
+		Choices: []chatCompletionChoice{{Index: 0, Message: delta, FinishReason: finishReason}},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("evalharness: marshal scripted chat completion: %v", err))
+	}
+	_, _ = w.Write(encoded)
+}
+
+func requestWantsStream(body []byte) bool {
+	var request struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return false
+	}
+	return request.Stream
+}
+
+type chatCompletion struct {
+	ID      string                 `json:"id"`
+	Object  string                 `json:"object"`
+	Created int64                  `json:"created"`
+	Model   string                 `json:"model"`
+	Choices []chatCompletionChoice `json:"choices"`
+}
+
+type chatCompletionChoice struct {
+	Index        int      `json:"index"`
+	Message      sseDelta `json:"message"`
+	FinishReason string   `json:"finish_reason"`
 }
 
 // nextStep picks the next scripted step for an incoming request: a matched,

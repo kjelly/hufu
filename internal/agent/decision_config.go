@@ -185,8 +185,16 @@ type DecisionPolicy struct {
 
 	Discipline DisciplinePolicy `yaml:"discipline,omitempty"`
 
-	MaxRounds         int    `yaml:"max-rounds,omitempty"`
-	MaxTokens         int64  `yaml:"max-tokens,omitempty"`
+	MaxRounds int `yaml:"max-rounds,omitempty"`
+	// MaxTokens needs an explicit snake_case json tag: without one,
+	// encoding/json falls back to the Go field name "MaxTokens", and
+	// event-journal redaction's numericTelemetryKeys allowlist
+	// (internal/utils/redact.go) only recognizes lowercase "max_tokens" --
+	// a mismatched key here means this legitimate numeric field matches the
+	// generic secret-key regex (it contains "token") and gets redacted into
+	// a string on every durable admission event, so a later
+	// json.Unmarshal(..., &DecisionPolicy{}) fails on this field.
+	MaxTokens         int64  `yaml:"max-tokens,omitempty" json:"max_tokens,omitempty"`
 	BudgetDegradation string `yaml:"budget-degradation,omitempty"`
 }
 

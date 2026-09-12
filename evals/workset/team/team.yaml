@@ -1,0 +1,10 @@
+name: eval-workset
+description: Minimal coordinator + one worker fixture team for the workset eval suite
+delegation:
+  bind-task-goal-contracts: true
+tasks:
+  - agent: worker
+    when-goal-contains: "workset"
+    fan_out:
+      source: workset.json
+      goal-template: "handle {name}"

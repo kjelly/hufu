@@ -35,6 +35,12 @@ type CaseFixture struct {
 	// team.yaml decision.default-profile (or the built-in "off" default)
 	// applies unmodified.
 	DecisionProfileOverride string `yaml:"decision-profile-override,omitempty"`
+	// WorkspaceFiles seeds files into the case's ephemeral workspace before
+	// the run starts, keyed by path relative to the workspace root, e.g. a
+	// fan_out source manifest a task's tool_call references by a
+	// workspace-relative path. Written verbatim (already-formatted content,
+	// no templating).
+	WorkspaceFiles map[string]string `yaml:"workspace-files,omitempty"`
 }
 
 // ExpectSpec is the subset of RunResult dimensions a case asserts on. A zero
