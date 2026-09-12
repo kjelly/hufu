@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestMigrateInspectExecutionCommandUsesRootWorkspaceAndStableJSON(t *testing.T) {
@@ -71,5 +73,46 @@ func TestMigrateApplyExecutionCommandIsRegistered(t *testing.T) {
 	}
 	if command == nil || command.Name() != "apply-execution" {
 		t.Fatalf("migrate apply command = %#v", command)
+	}
+}
+
+func TestInspectorDoesNotEmitCompatibilityObservation(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := team.NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	previousOpts := opts
+	previousBranch := migrateInspectExecutionBranch
+	previousJSON := migrateInspectExecutionJSON
+	t.Cleanup(func() {
+		opts = previousOpts
+		migrateInspectExecutionBranch = previousBranch
+		migrateInspectExecutionJSON = previousJSON
+	})
+	root := newRootCommand()
+	root.SetArgs([]string{"--workspace", workspace, "migrate", "inspect-execution"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute inspect command: %v", err)
+	}
+	store, err = team.OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == string(team.EventExecutionCompatibilityObserved) {
+			t.Fatal("inspector emitted an execution compatibility observation")
+		}
 	}
 }

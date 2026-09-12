@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -17,10 +18,11 @@ type executionCompatibilityWarningState struct {
 	workspaceArgument string
 	workspaceWarned   bool
 	authoredWarned    bool
+	warningWriter     io.Writer
 }
 
 func newExecutionCompatibilityWarningState(workspaceArgument string) *executionCompatibilityWarningState {
-	return &executionCompatibilityWarningState{workspaceArgument: strings.TrimSpace(workspaceArgument)}
+	return &executionCompatibilityWarningState{workspaceArgument: strings.TrimSpace(workspaceArgument), warningWriter: os.Stderr}
 }
 
 func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc *teamContext) {
@@ -51,7 +53,7 @@ func (s *executionCompatibilityWarningState) warnWorkspaceState() {
 	}
 	s.workspaceWarned = true
 	for _, line := range s.workspaceWarningLines() {
-		fmt.Fprintln(os.Stderr, line)
+		s.writeWarning(line)
 	}
 }
 
@@ -60,7 +62,20 @@ func (s *executionCompatibilityWarningState) warnAuthoredAlias() {
 		return
 	}
 	s.authoredWarned = true
-	fmt.Fprintln(os.Stderr, "warning: execution backend alias `local` is deprecated; use `ollama`")
+	s.writeWarning("warning: execution backend alias `local` is deprecated; use `ollama`")
+}
+
+func (s *executionCompatibilityWarningState) writer() io.Writer {
+	if s == nil || s.warningWriter == nil {
+		return os.Stderr
+	}
+	return s.warningWriter
+}
+
+func (s *executionCompatibilityWarningState) writeWarning(line string) {
+	if _, err := fmt.Fprintln(s.writer(), line); err != nil {
+		return
+	}
 }
 
 func (s *executionCompatibilityWarningState) workspaceWarningLines() []string {

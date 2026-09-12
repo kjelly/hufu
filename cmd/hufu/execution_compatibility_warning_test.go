@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -21,6 +24,41 @@ func TestExecutionCompatibilityWorkspaceWarningUsesOnlyExplicitArgument(t *testi
 	}
 	if got, want := explicitLines[2], "`hufu migrate apply-execution --workspace ../legacy workspace --apply`"; got != want {
 		t.Fatalf("explicit apply warning = %q, want %q", got, want)
+	}
+}
+
+func TestCompatibilityWarningOncePerInvocation(t *testing.T) {
+	state := newExecutionCompatibilityWarningState("")
+	var warnings bytes.Buffer
+	state.warningWriter = &warnings
+	state.warnWorkspaceState()
+	state.warnWorkspaceState()
+	state.warnAuthoredAlias()
+	state.warnAuthoredAlias()
+	got := warnings.String()
+	if count := strings.Count(got, "warning: workspace contains deprecated execution identity state"); count != 1 {
+		t.Fatalf("workspace warning count = %d, want 1: %q", count, got)
+	}
+	if count := strings.Count(got, "warning: execution backend alias `local` is deprecated"); count != 1 {
+		t.Fatalf("authored alias warning count = %d, want 1: %q", count, got)
+	}
+}
+
+func TestCompatibilityWarningDoesNotPolluteJSONStdout(t *testing.T) {
+	state := newExecutionCompatibilityWarningState("")
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	state.warningWriter = &stderr
+	state.warnWorkspaceState()
+	fmt.Fprintln(&stdout, `{"result":"ok"}`)
+	if got, want := stdout.String(), "{\"result\":\"ok\"}\n"; got != want {
+		t.Fatalf("JSON stdout = %q, want %q", got, want)
+	}
+	if strings.Contains(stdout.String(), "warning:") {
+		t.Fatalf("warning polluted JSON stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: workspace contains deprecated execution identity state") {
+		t.Fatalf("warning was not emitted to stderr: %q", stderr.String())
 	}
 }
 
