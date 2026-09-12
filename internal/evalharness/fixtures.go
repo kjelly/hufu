@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,13 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 	var fixture SuiteFixture
 	if err := dec.Decode(&fixture); err != nil {
 		return nil, fmt.Errorf("decode suite fixture %s: %w", path, err)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("decode suite fixture %s: multiple YAML documents are not allowed", path)
+		}
+		return nil, fmt.Errorf("decode suite fixture %s trailing document: %w", path, err)
 	}
 	if fixture.Version != 1 {
 		return nil, fmt.Errorf("suite fixture %s: unsupported version %d (want 1)", path, fixture.Version)
@@ -187,6 +195,36 @@ func LoadProviderFixture(path string) (*ProviderFixture, error) {
 	var fixture ProviderFixture
 	if err := dec.Decode(&fixture); err != nil {
 		return nil, fmt.Errorf("decode provider fixture %s: %w", path, err)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("decode provider fixture %s: trailing JSON value is not allowed", path)
+		}
+		return nil, fmt.Errorf("decode provider fixture %s trailing value: %w", path, err)
+	}
+	if len(fixture.Steps) == 0 {
+		return nil, fmt.Errorf("provider fixture %s: at least one step is required", path)
+	}
+	for index, step := range fixture.Steps {
+		hasContent := step.Content != ""
+		hasToolCall := step.ToolCall != nil
+		if hasContent == hasToolCall {
+			return nil, fmt.Errorf("provider fixture %s: steps[%d] requires exactly one non-empty content or tool_call", path, index)
+		}
+		if step.Match != nil && strings.TrimSpace(step.Match.Contains) == "" {
+			return nil, fmt.Errorf("provider fixture %s: steps[%d].match.contains is required", path, index)
+		}
+		if step.ToolCall == nil {
+			continue
+		}
+		if strings.TrimSpace(step.ToolCall.Name) == "" {
+			return nil, fmt.Errorf("provider fixture %s: steps[%d].tool_call.name is required", path, index)
+		}
+		var arguments map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(step.ToolCall.Arguments), &arguments); err != nil || arguments == nil {
+			return nil, fmt.Errorf("provider fixture %s: steps[%d].tool_call.arguments must be one JSON object", path, index)
+		}
 	}
 	return &fixture, nil
 }

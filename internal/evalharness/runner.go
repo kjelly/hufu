@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -85,6 +89,9 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("load team %s: %w", teamDir, err)
 	}
+	if err := validateOfflineSession(session); err != nil {
+		return EvalCaseResult{}, fmt.Errorf("offline eval team %s: %w", teamDir, err)
+	}
 	workspace, err := os.MkdirTemp("", "hufu-eval-*")
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("create case workspace: %w", err)
@@ -123,7 +130,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		nil,   // hookRegistry
 		false, // rbashMode
 		"",    // restrictedPath
-		false, // noNet
+		true,  // noNet: eval workers may not use network-capable tools
 		false, // forceMCP
 		nil,   // forcedSkillNames
 		false, // planMode
@@ -222,6 +229,99 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Findings:   findings,
 		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: normalizedRunID},
 	}, nil
+}
+
+func validateOfflineSession(session *team.TeamSession) error {
+	if session == nil {
+		return errors.New("team session is nil")
+	}
+	cfg := session.Config
+	if strings.TrimSpace(cfg.ProviderURL) != "" || strings.TrimSpace(cfg.ProviderAPIKey) != "" {
+		return errors.New("team-level provider-url/provider-api-key is forbidden; the harness owns the only provider endpoint")
+	}
+	if len(cfg.Providers) > 0 {
+		return errors.New("named providers are forbidden; the harness owns the only provider endpoint")
+	}
+	if len(cfg.Backends) > 0 {
+		return errors.New("configured execution backends are forbidden in offline evals")
+	}
+	if len(cfg.SubagentProviders) > 0 {
+		return errors.New("external subagent providers are forbidden in offline evals")
+	}
+	if provider := strings.TrimSpace(cfg.SubagentProviderDefault); provider != "" && provider != "hufu-local" {
+		return fmt.Errorf("team default subagent provider %q is not offline", provider)
+	}
+	teamSelectors := map[string]string{
+		"team generation model": cfg.Generation.Model,
+		"worker model":          cfg.WorkerModel,
+		"coordinator model":     cfg.CoordinatorModel,
+		"sidecar model":         cfg.SidecarModel,
+		"guard model":           cfg.GuardModel,
+		"judge model":           cfg.JudgeModel,
+		"plan reviewer model":   cfg.PlanReviewerModel,
+	}
+	for _, label := range slices.Sorted(maps.Keys(teamSelectors)) {
+		if err := validateOfflineSelector(label, teamSelectors[label]); err != nil {
+			return err
+		}
+	}
+	for index, model := range cfg.ModelList {
+		if err := validateOfflineSelector(fmt.Sprintf("model-list[%d]", index), model.ID); err != nil {
+			return err
+		}
+	}
+
+	seen := make(map[*agent.AgentDef]bool)
+	for _, name := range slices.Sorted(maps.Keys(session.Agents)) {
+		definition := session.Agents[name]
+		if definition == nil || seen[definition] {
+			continue
+		}
+		seen[definition] = true
+		if strings.TrimSpace(definition.ProviderURL) != "" {
+			return fmt.Errorf("agent %q declares provider-url; the harness owns the only provider endpoint", definition.Name)
+		}
+		if provider := strings.TrimSpace(definition.SubagentProvider); provider != "" && provider != "hufu-local" {
+			return fmt.Errorf("agent %q subagent provider %q is not offline", definition.Name, provider)
+		}
+		if err := validateOfflineSelector("agent "+definition.Name+" model", definition.Generation.Model); err != nil {
+			return err
+		}
+		for index, model := range definition.ExtraModels {
+			if err := validateOfflineSelector(fmt.Sprintf("agent %s extra-models[%d]", definition.Name, index), model); err != nil {
+				return err
+			}
+		}
+	}
+	for index, task := range session.ContractTasks {
+		if provider := strings.TrimSpace(task.SubagentProvider); provider != "" && provider != "hufu-local" {
+			return fmt.Errorf("contract task %d subagent provider %q is not offline", index, provider)
+		}
+		if err := validateOfflineSelector(fmt.Sprintf("contract task %d model", index), task.Model); err != nil {
+			return err
+		}
+		for modelIndex, model := range task.ModelTopology {
+			if err := validateOfflineSelector(fmt.Sprintf("contract task %d model-topology[%d]", index, modelIndex), model); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateOfflineSelector(label, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	selector, err := execution.ParseExecutionSelector(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	if selector.Backend != "" && !execution.IsOllamaBackend(selector.Backend) {
+		return fmt.Errorf("%s selects non-offline backend %q", label, selector.Backend)
+	}
+	return nil
 }
 
 func canonicalWorkingDirectory() (string, error) {
@@ -469,14 +569,28 @@ func legacyTaskCreatedPayload(task *team.TodoItem) (json.RawMessage, error) {
 // workspace before the run starts, e.g. a fan_out source manifest a
 // scripted tool_call references by workspace-relative path.
 func seedWorkspaceFiles(workspace string, files map[string]string) error {
-	for relPath, content := range files {
-		absPath := filepath.Join(workspace, relPath)
+	for _, relPath := range slices.Sorted(maps.Keys(files)) {
+		absPath, err := resolveWorkspaceSeedPath(workspace, relPath)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 			return fmt.Errorf("create directory for workspace file %s: %w", relPath, err)
 		}
-		if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(absPath, []byte(files[relPath]), 0o644); err != nil {
 			return fmt.Errorf("write workspace file %s: %w", relPath, err)
 		}
 	}
 	return nil
+}
+
+func resolveWorkspaceSeedPath(workspace, relPath string) (string, error) {
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("workspace file %q must be relative", relPath)
+	}
+	cleaned := filepath.Clean(relPath)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace file %q escapes the case workspace", relPath)
+	}
+	return filepath.Join(workspace, cleaned), nil
 }

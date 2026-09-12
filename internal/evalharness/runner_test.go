@@ -144,13 +144,27 @@ func TestEvalNeverCallsNetworkDriverInOfflineMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load team: %v", err)
 	}
-	// A bundled eval team must never declare its own named providers: those
-	// are resolved independently of the scripted default provider URL
-	// runCase wires in, so one could route a "deterministic" case at a real
-	// network host. The harness's only sanctioned egress point is the
-	// per-case httptest.Server.
-	if len(session.Config.Providers) != 0 {
-		t.Errorf("fixture team %s declares %d named provider(s); an offline eval team must rely solely on the harness's scripted default provider URL", fixture.TeamDir(), len(session.Config.Providers))
+	if err := validateOfflineSession(session); err != nil {
+		t.Fatalf("bundled offline fixture was rejected: %v", err)
+	}
+	session.Config.ProviderURL = "https://remote.example/v1"
+	if err := validateOfflineSession(session); err == nil {
+		t.Fatal("team provider URL was allowed to bypass the scripted localhost provider")
+	}
+	session.Config.ProviderURL = ""
+	for _, definition := range session.Agents {
+		definition.Generation.Model = "codex/gpt-5"
+		break
+	}
+	if err := validateOfflineSession(session); err == nil {
+		t.Fatal("non-offline agent execution selector was accepted")
+	}
+}
+
+func TestSeedWorkspaceFilesRejectsEscape(t *testing.T) {
+	workspace := t.TempDir()
+	if err := seedWorkspaceFiles(workspace, map[string]string{"../outside": "forbidden"}); err == nil {
+		t.Fatal("seedWorkspaceFiles accepted a path outside the case workspace")
 	}
 }
 

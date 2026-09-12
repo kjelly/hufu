@@ -169,3 +169,33 @@ cases:
 		t.Fatal("LoadSuiteFixture: expected error for ambiguous evidence selector, got nil")
 	}
 }
+
+func TestProviderFixtureRequiresExactlyOneValidStepResult(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "provider.json")
+	const invalid = `{"steps":[{"content":"text","tool_call":{"name":"finish","arguments":"{}"}}]}`
+	if err := os.WriteFile(path, []byte(invalid), 0o644); err != nil {
+		t.Fatalf("write provider fixture: %v", err)
+	}
+	if _, err := LoadProviderFixture(path); err == nil {
+		t.Fatal("LoadProviderFixture accepted a step with both content and tool_call")
+	}
+
+	const invalidArguments = `{"steps":[{"tool_call":{"name":"finish","arguments":"[]"}}]}`
+	if err := os.WriteFile(path, []byte(invalidArguments), 0o644); err != nil {
+		t.Fatalf("rewrite provider fixture: %v", err)
+	}
+	if _, err := LoadProviderFixture(path); err == nil {
+		t.Fatal("LoadProviderFixture accepted non-object tool arguments")
+	}
+}
+
+func TestProviderFixtureRejectsTrailingJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provider.json")
+	if err := os.WriteFile(path, []byte(`{"steps":[{"content":"done"}]} {}`), 0o644); err != nil {
+		t.Fatalf("write provider fixture: %v", err)
+	}
+	if _, err := LoadProviderFixture(path); err == nil {
+		t.Fatal("LoadProviderFixture accepted a trailing JSON value")
+	}
+}
