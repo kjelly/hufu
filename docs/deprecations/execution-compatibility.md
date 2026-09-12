@@ -1,13 +1,14 @@
 # Execution Compatibility Sunset
 
-> Status: draft
+> Status: active, warning release pending
 > Authority: normative
-> Verified-Commit: `2026-09-12`
+> Verified-Commit: `8fd1802`
 > Supersedes: —
 > Superseded-By: —
 > Scope: durable execution identity only
 > Canonical architecture: [execution runtime](../architecture/execution-runtime.md)
 > Warning-Introduced-In: pending PR-4 release
+> Earliest-Removal: blocked until one later published release has also carried the warning
 
 ## Decision
 
@@ -32,7 +33,7 @@ availability.
 
 ## User migration contract
 
-Before the removal release, users will be able to run:
+Before the removal release, users can run:
 
 ```bash
 hufu migrate inspect-execution --workspace <path>
@@ -60,3 +61,23 @@ following are true:
 the `SubagentProvider` protocol are not part of this deprecation. They have
 different transport or configuration semantics and require a separate public
 deprecation before removal.
+
+## Release-owner handoff
+
+The coding portion of the warning release is complete at the verified commit
+above. A release owner must supply the remaining evidence in this order:
+
+1. On the warning release branch, replace `Warning-Introduced-In` with the
+   actual release tag and publish that tag. A pending marker must not ship.
+2. Publish at least one later release carrying the same warning before
+   calculating the earliest semver-appropriate removal release.
+3. Include both migration commands and the append-only rollback semantics in
+   the release notes.
+4. Run `inspect-execution` against maintainer-designated production
+   workspaces and retain only aggregate task and policy classification
+   counters.
+5. Attach the warning tag, later release tag, release-notes reference, and
+   sanitized zero-actionable inventory to the removal PR.
+
+Release or production evidence cannot be replaced by a local build, an
+untagged commit, fixture results, or edits to this record.
