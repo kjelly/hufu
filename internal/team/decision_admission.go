@@ -385,7 +385,13 @@ func (c *Coordinator) validateTaskOccurrenceAdmission(ctx context.Context, task 
 			return DecisionAdmission{}, false, fmt.Errorf("compute decision admission digest: %w", err)
 		}
 		if digest != admission.TaskInputDigest {
-			return DecisionAdmission{}, false, fmt.Errorf("decision admission task input does not match task %s", taskID)
+			matchesLegacyMigration, migrationErr := legacyMigratedDecisionAdmissionMatches(ctx, journal, item, admission)
+			if migrationErr != nil {
+				return DecisionAdmission{}, false, fmt.Errorf("validate migrated decision admission for task %s: %w", taskID, migrationErr)
+			}
+			if !matchesLegacyMigration {
+				return DecisionAdmission{}, false, fmt.Errorf("decision admission task input does not match task %s", taskID)
+			}
 		}
 		return admission, true, nil
 	}
@@ -397,6 +403,60 @@ func (c *Coordinator) validateTaskOccurrenceAdmission(ctx context.Context, task 
 		return DecisionAdmission{}, false, fmt.Errorf("durable task %s attempt %d has no decision admission", taskID, attempt)
 	}
 	return DecisionAdmission{}, false, nil
+}
+
+// legacyMigratedDecisionAdmissionMatches preserves an admission that was
+// hashed before ExecutionTarget became the canonical identity. It accepts only
+// the one field-family changed by a validated, durable migration event; every
+// other current task contract field still participates in the legacy digest.
+func legacyMigratedDecisionAdmissionMatches(ctx context.Context, journal EventJournal, current *TodoItem, admission DecisionAdmission) (bool, error) {
+	if journal == nil || current == nil || current.ExecutionTarget.IsZero() {
+		return false, nil
+	}
+	events, err := journal.ReadEvents(ctx)
+	if err != nil {
+		return false, err
+	}
+	for index, event := range events {
+		if event.Type != string(EventExecutionTargetMigrated) || event.TaskID != current.ID {
+			continue
+		}
+		if err := validateReplayExecutionTargetMigration(event, events[:index], make(map[string]legacyExecutionMigrationExpectation), make(map[string]execution.ExecutionTarget), make(map[string][]execution.ExecutionTarget)); err != nil {
+			return false, err
+		}
+		var migration ExecutionTargetMigratedPayload
+		if err := json.Unmarshal(event.Payload, &migration); err != nil {
+			return false, err
+		}
+		topology := migration.ExecutionTopology
+		if len(topology) == 0 {
+			topology = []execution.ExecutionTarget{migration.ExecutionTarget}
+		}
+		if !execution.TargetsEqual(current.ExecutionTarget, migration.ExecutionTarget) || !execution.TargetSlicesEqual(current.ExecutionTopology, topology) {
+			return false, nil
+		}
+		legacyItems, err := ReplayTodoList(events[:index])
+		if err != nil {
+			return false, err
+		}
+		legacy := todoItemByID(legacyItems, current.ID)
+		if legacy == nil || !legacy.ExecutionTarget.IsZero() {
+			return false, nil
+		}
+		candidate := cloneTodoItem(current)
+		candidate.ExecutionTarget = execution.ExecutionTarget{}
+		candidate.ExecutionTopology = nil
+		candidate.Model = legacy.Model
+		candidate.ModelTopology = cloneModelTopology(legacy.ModelTopology)
+		candidate.SubagentProvider = legacy.SubagentProvider
+		candidate.ProviderBinding = cloneProviderBinding(legacy.ProviderBinding)
+		digest, err := decisionTaskInputDigest(candidate)
+		if err != nil {
+			return false, err
+		}
+		return digest == admission.TaskInputDigest, nil
+	}
+	return false, nil
 }
 
 // occurrenceGoalText mirrors the legacy fallback in taskDefFromTodoItem:

@@ -2,11 +2,13 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 func admissionForTest(t *testing.T, enabled bool) DecisionAdmission {
@@ -166,6 +168,55 @@ func TestDecisionAdmissionDigestBindsExecutableTaskContract(t *testing.T) {
 	}
 	if planIDDigest != want {
 		t.Fatalf("PlanID-only digest changed: got %q, want %q", planIDDigest, want)
+	}
+}
+
+func TestDecisionAdmissionAcceptsOnlyValidatedLegacyExecutionTargetMigration(t *testing.T) {
+	legacy := &TodoItem{
+		ID: "legacy-1", Agent: "worker", Desc: "resume legacy work", Goal: "resume legacy work",
+		Status: TaskInProgress, Model: "legacy-model", SubagentProvider: localSubagentProviderName,
+		SideEffect: SideEffectNone, Recovery: RecoveryRetry, Execution: ExecutionContract{RequiresResult: true},
+	}
+	digest, err := decisionTaskInputDigest(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := DecisionAdmission{
+		SchemaVersion: DecisionAdmissionSchemaVersion, RunID: "run-legacy", TaskID: legacy.ID, Attempt: 1,
+		Profile: DecisionProfileOff, Source: DecisionProfileSourceDefault, TaskInputDigest: digest,
+	}
+	admissionPayload, err := json.Marshal(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := execution.ExecutionTarget{Backend: "ollama", Model: "legacy-model"}
+	migrationPayload, err := json.Marshal(ExecutionTargetMigratedPayload{
+		TaskID: legacy.ID, LegacyModel: legacy.Model, LegacySubagentProvider: legacy.SubagentProvider,
+		ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target},
+		MigrationVersion: executionTargetMigrationVersion, BranchID: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &uniqueRecordingJournal{events: []RunEvent{
+		{ID: "admission", Type: string(EventDecisionAdmitted), RunID: admission.RunID, TaskID: legacy.ID, Attempt: 1, Payload: admissionPayload},
+		{ID: "created", Type: string(EventTaskCreated), RunID: admission.RunID, TaskID: legacy.ID, Payload: mustJSON(t, taskTransitionPayload(legacy))},
+		{ID: "migration", Type: string(EventExecutionTargetMigrated), RunID: "run-resume", BranchID: "main", TaskID: legacy.ID, Payload: migrationPayload},
+	}}
+	current := cloneTodoItem(legacy)
+	current.ExecutionTarget = target
+	current.ExecutionTopology = []execution.ExecutionTarget{target}
+	tracker := NewTaskTracker()
+	tracker.TodoList().Restore([]*TodoItem{current})
+	coordinator := &Coordinator{taskTracker: tracker, eventJournal: journal}
+
+	if _, found, err := coordinator.validateTaskOccurrenceAdmission(t.Context(), current, current.ID, 1); err != nil || !found {
+		t.Fatalf("validated legacy migration admission = found %v, err %v", found, err)
+	}
+	current.Goal = "tampered goal"
+	tracker.TodoList().Restore([]*TodoItem{current})
+	if _, _, err := coordinator.validateTaskOccurrenceAdmission(t.Context(), current, current.ID, 1); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("tampered task admission error = %v, want digest mismatch", err)
 	}
 }
 

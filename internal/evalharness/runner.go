@@ -2,6 +2,7 @@ package evalharness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -120,6 +121,20 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if c.DecisionProfileOverride != "" {
 		coordinator.SetDecisionProfile(c.DecisionProfileOverride)
 	}
+	// Follow the production CLI's crash-resume path when a fixture seeds a
+	// session.json checkpoint. Loading it after coordinator construction and
+	// before policy freeze makes ResumeInterruptedTasks exercise the same
+	// durable Todo projection instead of treating the file as inert input.
+	if restored := team.LoadSession(workspace); restored != nil {
+		if c.SeedExecutionPolicySnapshot {
+			if seedErr := seedPriorRunPolicyAndTasks(context.WithoutCancel(ctx), workspace, coordinator, restored, c.PriorRunDecisionAdmissionDigests); seedErr != nil {
+				return EvalCaseResult{}, seedErr
+			}
+		}
+		coordinator.SetSessionData(restored)
+	} else if c.SeedExecutionPolicySnapshot {
+		return EvalCaseResult{}, errors.New("seed execution policy snapshot requires workspace-files session.json")
+	}
 	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
 		return EvalCaseResult{}, fmt.Errorf("freeze execution policy: %w", err)
 	}
@@ -136,6 +151,16 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	tasks := coordinator.TaskTracker().TodoList().Items()
 
 	findings := assertRun(c.Expect, runResult, events, tasks)
+	durableEvents, durableEventsErr := coordinator.EventJournal().ReadEvents(context.WithoutCancel(caseCtx))
+	if durableEventsErr != nil {
+		findings = append(findings, EvalFinding{
+			Dimension: "durable-events",
+			Expected:  "readable append-only event journal",
+			Actual:    durableEventsErr.Error(),
+		})
+	} else {
+		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents)...)
+	}
 	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {
 		findings = append(findings, EvalFinding{
 			Dimension: "timeout",
@@ -176,6 +201,125 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Findings:   findings,
 		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: runID},
 	}, nil
+}
+
+// seedPriorRunPolicyAndTasks creates the event-first half of a historical
+// checkpoint before SetSessionData installs its matching session projection.
+// The provider endpoint participates in the policy fingerprint and is chosen
+// dynamically by httptest, so this canonical history cannot be static YAML.
+func seedPriorRunPolicyAndTasks(ctx context.Context, workspace string, coordinator *team.Coordinator, restored *team.SessionData, admissionDigests map[string]string) (returnErr error) {
+	snapshot := coordinator.ExecutionPolicySnapshot()
+	if snapshot == nil {
+		return errors.New("seed execution policy snapshot: coordinator has no resolved policy")
+	}
+	store, err := team.NewEventStore(workspace, "eval-prior-run", "eval-prior-session")
+	if err != nil {
+		return fmt.Errorf("seed prior-run event store: %w", err)
+	}
+	defer func() {
+		if closeErr := store.Close(); returnErr == nil && closeErr != nil {
+			returnErr = fmt.Errorf("close prior-run event store: %w", closeErr)
+		}
+	}()
+
+	policyPayload, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("seed execution policy snapshot: %w", err)
+	}
+	if _, err := store.AppendPersistedContext(ctx, team.RunEvent{
+		Type:    string(team.EventExecutionPolicySnapshot),
+		Actor:   "coordinator",
+		Payload: policyPayload,
+	}); err != nil {
+		return fmt.Errorf("seed execution policy snapshot event: %w", err)
+	}
+	for _, task := range restored.Tasks {
+		if task == nil {
+			continue
+		}
+		digest := admissionDigests[task.ID]
+		if digest == "" {
+			continue
+		}
+		attempt := task.Retries + 1
+		admission := team.DecisionAdmission{
+			SchemaVersion:   team.DecisionAdmissionSchemaVersion,
+			RunID:           "eval-prior-run",
+			TaskID:          task.ID,
+			Attempt:         attempt,
+			Profile:         team.DecisionProfileOff,
+			Source:          team.DecisionProfileSourceDefault,
+			TaskInputDigest: digest,
+		}
+		payload, marshalErr := json.Marshal(admission)
+		if marshalErr != nil {
+			return fmt.Errorf("seed decision admission for task %s: %w", task.ID, marshalErr)
+		}
+		if _, appendErr := store.AppendPersistedContext(ctx, team.RunEvent{
+			Type: string(team.EventDecisionAdmitted), Actor: "coordinator", TaskID: task.ID, Attempt: attempt, Payload: payload,
+		}); appendErr != nil {
+			return fmt.Errorf("seed decision admission for task %s event: %w", task.ID, appendErr)
+		}
+	}
+	for _, task := range restored.Tasks {
+		if task == nil {
+			continue
+		}
+		payload, payloadErr := legacyTaskCreatedPayload(task)
+		if payloadErr != nil {
+			return fmt.Errorf("seed legacy task %s: %w", task.ID, payloadErr)
+		}
+		if _, appendErr := store.AppendPersistedContext(ctx, team.RunEvent{
+			Type:    string(team.EventTaskCreated),
+			Actor:   task.Agent,
+			TaskID:  task.ID,
+			Payload: payload,
+		}); appendErr != nil {
+			return fmt.Errorf("seed legacy task %s event: %w", task.ID, appendErr)
+		}
+	}
+	restored.ExecutionPolicySnapshot = snapshot
+	return nil
+}
+
+// legacyTaskCreatedPayload converts TodoItem's checkpoint wire names into the
+// canonical task-event names used by the reducer. Several compatibility fields
+// predate JSON tags and therefore otherwise marshal as Go field names.
+func legacyTaskCreatedPayload(task *team.TodoItem) (json.RawMessage, error) {
+	data, err := json.Marshal(task)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	for oldName, eventName := range map[string]string{
+		"ID":             "id",
+		"Agent":          "agent",
+		"Desc":           "desc",
+		"Status":         "status",
+		"Detail":         "detail",
+		"Output":         "output",
+		"Skills":         "skills",
+		"InjectedSkills": "injected_skills",
+		"LoadedSkills":   "loaded_skills",
+		"Source":         "source",
+		"ParentID":       "parent_id",
+		"DependsOn":      "depends_on",
+		"Verify":         "verify",
+		"VerifyMode":     "verify_mode",
+		"VerifyResult":   "verify_result",
+		"MaxRetries":     "max_retries",
+		"Retries":        "retries",
+		"OnFailure":      "on_failure",
+	} {
+		if value, ok := payload[oldName]; ok {
+			payload[eventName] = value
+			delete(payload, oldName)
+		}
+	}
+	return json.Marshal(payload)
 }
 
 // seedWorkspaceFiles writes a case's WorkspaceFiles into its ephemeral

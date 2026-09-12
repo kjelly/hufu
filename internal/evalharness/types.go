@@ -35,6 +35,18 @@ type CaseFixture struct {
 	// team.yaml decision.default-profile (or the built-in "off" default)
 	// applies unmodified.
 	DecisionProfileOverride string `yaml:"decision-profile-override,omitempty"`
+	// SeedExecutionPolicySnapshot materializes the coordinator's current,
+	// dynamic execution policy into a seeded session and its event journal
+	// before restore. This models a checkpoint produced by a prior run against
+	// the same provider endpoint; httptest chooses a new endpoint per case, so
+	// a valid snapshot (whose identity hash covers that endpoint) cannot be
+	// stored as static fixture text.
+	SeedExecutionPolicySnapshot bool `yaml:"seed-execution-policy-snapshot,omitempty"`
+	// PriorRunDecisionAdmissionDigests supplies the historical off-profile
+	// admission digest for each restored Todo ID. The digest intentionally
+	// remains fixture evidence: recomputing it from live code would hide a
+	// compatibility regression in the very contract this case exercises.
+	PriorRunDecisionAdmissionDigests map[string]string `yaml:"prior-run-decision-admission-digests,omitempty"`
 	// WorkspaceFiles seeds files into the case's ephemeral workspace before
 	// the run starts, keyed by path relative to the workspace root, e.g. a
 	// fan_out source manifest a task's tool_call references by a
@@ -53,6 +65,11 @@ type ExpectSpec struct {
 	TaskCount  *int         `yaml:"task-count"`
 	Tasks      []TaskExpect `yaml:"tasks"`
 	Events     EventsExpect `yaml:"events"`
+	// DurableEvents asserts against the coordinator's append-only RunEvent
+	// journal. Status Events above remain the live reporter surface; recovery
+	// and compatibility boundaries such as execution_target_migrated are
+	// durable-only and must be checked at their canonical source.
+	DurableEvents EventsExpect `yaml:"durable-events"`
 	// ExecutionTargetFrozen, when true, asserts that every StatusEvent
 	// carrying a non-empty ExecutionTarget across the whole run reports the
 	// SAME value -- the resolved backend/model must be admitted once per
@@ -74,6 +91,7 @@ type TaskExpect struct {
 	RetryDisposition string `yaml:"retry-disposition"`
 	SideEffect       string `yaml:"side-effect"`
 	Attempts         *int   `yaml:"attempts"`
+	ExecutionTarget  string `yaml:"execution-target"`
 }
 
 // EventsExpect names the StatusEvent.Type values a case checks for.

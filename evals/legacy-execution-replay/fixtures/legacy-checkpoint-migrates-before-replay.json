@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"Restored legacy work completed.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Restored work is complete.\"}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

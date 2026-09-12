@@ -1,0 +1,51 @@
+version: 1
+name: legacy-execution-replay
+team: ./team
+mode: deterministic
+cases:
+  - id: legacy-checkpoint-migrates-before-replay
+    prompt: "Finish the work restored from the legacy checkpoint."
+    provider-fixture: fixtures/legacy-checkpoint-migrates-before-replay.json
+    seed-execution-policy-snapshot: true
+    prior-run-decision-admission-digests:
+      "1": 176b41702fc520897ac3c1ae6b045ce4a24ef92e3534148ee0fa2888c0bfa137
+    workspace-files:
+      session.json: |
+        {
+          "created_at": "2026-09-12T00:00:00Z",
+          "updated_at": "2026-09-12T00:00:00Z",
+          "rounds": 0,
+          "entries": [],
+          "delegation_phase": "active",
+          "tasks": [
+            {
+              "ID": "1",
+              "Agent": "worker",
+              "Desc": "Complete the restored legacy task.",
+              "goal": "Complete the restored legacy task.",
+              "Status": "in_progress",
+              "model": "eval-harness-model",
+              "subagent_provider": "hufu-local",
+              "side_effect": "none",
+              "recovery": "retry",
+              "execution": {
+                "requires_result": true
+              }
+            }
+          ]
+        }
+    expect:
+      run-outcome: unverified
+      acceptance: not_configured
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+          attempts: 1
+          execution-target: ollama/eval-harness-model
+      events:
+        required: [start, done]
+        order: [start, done]
+      durable-events:
+        required: [execution_target_migrated]
+        order: [execution_target_migrated, task_completed, run_finished]

@@ -167,8 +167,58 @@ func assertTasks(expectTasks []TaskExpect, tasks []*team.TodoItem) []EvalFinding
 				Actual:    fmt.Sprintf("%d", len(actual.ExecutionReceipts)),
 			})
 		}
+		if want.ExecutionTarget != "" && actual.ExecutionTarget.String() != want.ExecutionTarget {
+			findings = append(findings, EvalFinding{
+				Dimension: dim + ".execution-target",
+				Expected:  want.ExecutionTarget,
+				Actual:    actual.ExecutionTarget.String(),
+			})
+		}
 	}
 	return findings
+}
+
+func assertDurableEvents(expect EventsExpect, events []team.RunEvent) []EvalFinding {
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return assertEventTypes("durable-events", expect, types)
+}
+
+func assertEventTypes(dimension string, expect EventsExpect, eventTypes []string) []EvalFinding {
+	var findings []EvalFinding
+	for _, want := range expect.Required {
+		if !hasString(eventTypes, want) {
+			findings = append(findings, EvalFinding{Dimension: dimension + "." + want, Expected: "observed", Actual: "not observed"})
+		}
+	}
+	if len(expect.Order) == 0 {
+		return findings
+	}
+	next := 0
+	for _, eventType := range eventTypes {
+		if eventType == expect.Order[next] {
+			next++
+			if next == len(expect.Order) {
+				return findings
+			}
+		}
+	}
+	return append(findings, EvalFinding{
+		Dimension: dimension + ".order",
+		Expected:  strings.Join(expect.Order, " -> "),
+		Actual:    fmt.Sprintf("matched only %d/%d in order; never observed %q after the preceding ones", next, len(expect.Order), expect.Order[next]),
+	})
+}
+
+func hasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // assertEventOrder checks that order appears, in that relative order, as a

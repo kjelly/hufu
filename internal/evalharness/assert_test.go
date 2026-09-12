@@ -65,6 +65,37 @@ func TestEvalTaskRecoveryAssertions(t *testing.T) {
 	}
 }
 
+func TestEvalTaskExecutionTargetAssertion(t *testing.T) {
+	task := &team.TodoItem{}
+	task.ExecutionTarget.Backend = "ollama"
+	task.ExecutionTarget.Model = "eval-harness-model"
+	want := TaskExpect{ExecutionTarget: "ollama/eval-harness-model"}
+	if findings := assertTasks([]TaskExpect{want}, []*team.TodoItem{task}); len(findings) != 0 {
+		t.Fatalf("matching execution target produced findings: %+v", findings)
+	}
+	want.ExecutionTarget = "openai/eval-harness-model"
+	findings := assertTasks([]TaskExpect{want}, []*team.TodoItem{task})
+	if len(findings) != 1 || findings[0].Dimension != "tasks[0].execution-target" {
+		t.Fatalf("mismatched execution target findings = %+v, want one execution-target finding", findings)
+	}
+}
+
+func TestEvalDurableEventAssertions(t *testing.T) {
+	events := []team.RunEvent{{Type: "task_created"}, {Type: "execution_target_migrated"}, {Type: "task_completed"}}
+	want := EventsExpect{
+		Required: []string{"execution_target_migrated"},
+		Order:    []string{"task_created", "execution_target_migrated", "task_completed"},
+	}
+	if findings := assertDurableEvents(want, events); len(findings) != 0 {
+		t.Fatalf("matching durable events produced findings: %+v", findings)
+	}
+	want.Required = append(want.Required, "missing_event")
+	findings := assertDurableEvents(want, events)
+	if len(findings) != 1 || findings[0].Dimension != "durable-events.missing_event" {
+		t.Fatalf("missing durable event findings = %+v, want one required-event finding", findings)
+	}
+}
+
 func TestEvalNormalizesOpaqueIDs(t *testing.T) {
 	first := "run-20260912T093923.493930048Z-97f23d1c6c58"
 	second := "run-20260101T000000.000000000Z-deadbeef0000"
