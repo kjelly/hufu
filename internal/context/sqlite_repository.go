@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,43 @@ func OpenSQLite(path string) (*SQLiteRepository, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// OpenSQLiteReadOnly opens an existing context database in SQLite read-only
+// and query-only modes. It never creates parent directories, creates a
+// database, enables WAL, applies migrations, or rebuilds projections.
+func OpenSQLiteReadOnly(path string) (ReadOnlyRepository, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("open read-only context database: empty path")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only context database: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("open read-only context database: %q is not a regular file", path)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only context database: resolve path: %w", err)
+	}
+	dsn := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	query := dsn.Query()
+	query.Set("mode", "ro")
+	query.Add("_pragma", "query_only(1)")
+	query.Add("_pragma", "busy_timeout(5000)")
+	dsn.RawQuery = query.Encode()
+
+	db, err := sql.Open("sqlite", dsn.String())
+	if err != nil {
+		return nil, fmt.Errorf("open read-only context database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open read-only context database: %w", err)
+	}
+	return &SQLiteRepository{db: db, path: path}, nil
 }
 
 func (r *SQLiteRepository) Close() error { return r.db.Close() }

@@ -44,16 +44,35 @@ func runWorkspaceAudit(ctx context.Context, workspace string, runID string, opts
 		return nil, nil, fmt.Errorf("run id is required")
 	}
 
-	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
-
 	// Phase A: canonical event integrity.
-	lineage, err := canonicalLineage(workspace)
+	lineage, err := canonicalLineage(ctx, workspace)
 	if err != nil {
+		result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
 		result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
 	}
+	return runLineageAudit(ctx, workspace, runID, lineage, opts)
+}
+
+// VerifyLineageRun audits a caller-selected, already branch-scoped lineage.
+// It never loads workspace events or executes optional rechecks, making it the
+// read-only seam used by inspectors for explicit and non-active branches.
+func VerifyLineageRun(ctx context.Context, workspace, runID string, lineage []team.RunEvent) (*AuditVerificationResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, fmt.Errorf("run id is required")
+	}
+	result, _, err := runLineageAudit(ctx, workspace, runID, lineage, VerifyOptions{})
+	return result, err
+}
+
+func runLineageAudit(ctx context.Context, workspace, runID string, lineage []team.RunEvent, opts VerifyOptions) (*AuditVerificationResult, *runProjection, error) {
+	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
 
 	chain := VerifyEventChain(lineage)
 	if !chain.Valid {
@@ -190,7 +209,7 @@ func verifyEvidenceDimension(ctx context.Context, workspace string, runResult *t
 		result.addFinding(CodeManifestHashMismatch, FindingSeverityCritical, reason, "", 0, "")
 		return false, AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 	}
-	store, err := team.NewFileArtifactStore(workspace, workspace)
+	store, err := team.OpenFileArtifactStoreReadOnly(workspace, workspace)
 	if err != nil {
 		reason := fmt.Sprintf("open artifact store: %v", err)
 		return false, AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}

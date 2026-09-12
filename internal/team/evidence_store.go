@@ -105,6 +105,7 @@ type ArtifactPutResult struct {
 type FileArtifactStore struct {
 	root      string
 	sourceDir string
+	readOnly  bool
 }
 
 func NewFileArtifactStore(workspace, sourceDir string) (*FileArtifactStore, error) {
@@ -120,9 +121,31 @@ func NewFileArtifactStore(workspace, sourceDir string) (*FileArtifactStore, erro
 	return &FileArtifactStore{root: root, sourceDir: sourceDir}, nil
 }
 
+// OpenFileArtifactStoreReadOnly opens an existing artifact store without
+// creating its root, data, or metadata directories. The returned store rejects
+// Put even when those directories are writable, so callers cannot accidentally
+// turn an inspection path into a persistence path.
+func OpenFileArtifactStoreReadOnly(workspace, sourceDir string) (*FileArtifactStore, error) {
+	if workspace == "" {
+		return nil, fmt.Errorf("artifact store: empty workspace")
+	}
+	root := filepath.Join(workspace, logsDir, "artifacts")
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only artifact store: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("open read-only artifact store: %q is not a directory", root)
+	}
+	return &FileArtifactStore{root: root, sourceDir: sourceDir, readOnly: true}, nil
+}
+
 func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (ArtifactPutResult, error) {
 	if s == nil {
 		return ArtifactPutResult{}, fmt.Errorf("artifact store is nil")
+	}
+	if s.readOnly {
+		return ArtifactPutResult{}, fmt.Errorf("artifact store is read-only")
 	}
 	data := req.Content
 	if req.SourcePath != "" {

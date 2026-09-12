@@ -1,0 +1,126 @@
+package context
+
+import (
+	"bytes"
+	"database/sql"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+)
+
+func TestOpenSQLiteReadOnlyDoesNotCreateMissingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "context.sqlite")
+	if _, err := OpenSQLiteReadOnly(path); err == nil {
+		t.Fatal("open read-only context database succeeded for a missing file")
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+		t.Fatalf("read-only open created parent directory: %v", err)
+	}
+}
+
+func TestOpenSQLiteReadOnlyDoesNotMigrateOrMutateDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "context.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), "CREATE TABLE sentinel (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeNames := directoryNames(t, dir)
+	repository, err := OpenSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concrete := repository.(*SQLiteRepository)
+	if err := concrete.Append(t.Context(), ContextItem{}); err == nil {
+		t.Fatal("read-only SQLite repository accepted a mutation")
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("read-only open changed database bytes")
+	}
+	afterNames := directoryNames(t, dir)
+	if !slices.Equal(beforeNames, afterNames) {
+		t.Fatalf("read-only open changed directory entries: before=%v after=%v", beforeNames, afterNames)
+	}
+
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var migrations int
+	if err := db.QueryRowContext(t.Context(), "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'").Scan(&migrations); err != nil {
+		t.Fatal(err)
+	}
+	if migrations != 0 {
+		t.Fatal("read-only open applied context migrations")
+	}
+}
+
+func TestOpenSQLiteReadOnlyQueriesExistingContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	writable, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := ContextItem{
+		ID:         "ctx-read-only",
+		Kind:       ContextObservation,
+		Content:    "persisted observation",
+		Scope:      Scope{ProjectID: "project"},
+		Authority:  AuthorityTool,
+		TrustLevel: TrustInternal,
+	}
+	if err := writable.Append(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnly, err := OpenSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	got, err := readOnly.Get(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != item.ID || got.Content != item.Content {
+		t.Fatalf("read-only Get = %#v, want %q", got, item.ID)
+	}
+}
+
+func directoryNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	slices.Sort(names)
+	return names
+}

@@ -50,3 +50,20 @@ type Repository interface {
 	Revision(context.Context) (int64, error)
 	Close() error
 }
+
+// ReadOnlyRepository is the query surface exposed to inspectors and other
+// offline projections. It intentionally omits every mutation and projection
+// rebuild method from Repository.
+type ReadOnlyRepository interface {
+	Get(context.Context, string) (ContextItem, error)
+	GetMany(context.Context, []string) ([]ContextItem, error)
+	Query(context.Context, RepositoryQuery) ([]ContextItem, error)
+	SearchExact(context.Context, SearchRequest) ([]SearchResult, error)
+	SearchLexical(context.Context, SearchRequest) ([]SearchResult, error)
+	QuerySharedSessionProjection(context.Context, Scope) ([]ContextItem, error)
+	QuerySharedPersistentProjection(context.Context, Scope) ([]ContextItem, error)
+	Revision(context.Context) (int64, error)
+	ExperienceAggregate(context.Context, string, string) (ExperienceAggregate, error)
+	ListExperienceAggregates(context.Context, string) ([]ExperienceAggregate, error)
+	Close() error
+}

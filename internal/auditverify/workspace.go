@@ -1,30 +1,24 @@
 package auditverify
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
 )
 
-// canonicalLineage opens the workspace's EventStore, validates it can be read
-// at all (team.EventStore already fails closed on a broken chain at open
-// time), and returns the active branch's lineage exactly the way
-// team.LoadCanonicalRunFinishedSnapshot and the coordinator's own event-first
-// projections do (OpenEventStore -> ReadEvents -> LoadSessionTree ->
-// FilterEventsForBranch). This is deliberately the one lineage computation
-// audit verification performs per run (spec.md §46's "single scan"
-// requirement); every phase below operates on the slice returned here.
-func canonicalLineage(workspace string) ([]team.RunEvent, error) {
-	store, err := team.OpenEventStore(workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open event store: %w", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	events, err := store.ReadEvents()
-	if err != nil {
-		return nil, fmt.Errorf("read event store: %w", err)
+// canonicalLineage streams and validates the workspace's event log without
+// constructing an EventStore, then returns the active branch's exact lineage.
+// It is deliberately the one lineage computation audit verification performs
+// per run; every verification phase operates on the returned slice.
+func canonicalLineage(ctx context.Context, workspace string) ([]team.RunEvent, error) {
+	var events []team.RunEvent
+	if err := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("stream event store: %w", err)
 	}
 
 	tree, err := team.LoadSessionTree(workspace)
@@ -35,7 +29,11 @@ func canonicalLineage(workspace string) ([]team.RunEvent, error) {
 	if strings.TrimSpace(activeBranch) == "" {
 		activeBranch = "main"
 	}
-	return team.FilterEventsForBranch(events, tree, activeBranch), nil
+	lineage, err := team.ProjectValidatedEventsForBranch(events, tree, activeBranch)
+	if err != nil {
+		return nil, fmt.Errorf("project active branch lineage: %w", err)
+	}
+	return lineage, nil
 }
 
 // runTerminalEvents returns every run_finished event in lineage for runID,

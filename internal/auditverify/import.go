@@ -115,7 +115,7 @@ func verifyBundleFile(ctx context.Context, bundlePath, expectedRunID string, opt
 // events.jsonl whose own per-file hash checks out but which does not
 // actually contain the event bundle.json claims it does.
 func verifyDeclaredTerminalEventExists(pseudoWorkspace string, manifest AuditBundleManifest) error {
-	lineage, err := canonicalLineage(pseudoWorkspace)
+	lineage, err := canonicalLineage(context.Background(), pseudoWorkspace)
 	if err != nil {
 		return fmt.Errorf("read reconstructed event log: %w", err)
 	}
