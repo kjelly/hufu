@@ -38,6 +38,8 @@ to re-create an abstraction that already exists in the runtime.
   stages, evidence, deterministic aggregation, routing, and commit gates.
 - [Run outcome](architecture/run-outcome.md) — the policy implemented by
   `EvaluateRunOutcome` and `CompletionGate`.
+- [Unified observability inspector](architecture/unified-observability-inspector.md)
+  — read-only run, task, evidence, context, trace, and replay projections.
 - [Model metadata](architecture/model-metadata.md) — model profile evidence,
   runtime introspection, and effective context admission.
 - [Workset](architecture/workset.md) — artifact-backed fan-out, immutable

@@ -11,6 +11,10 @@ evidence, context, decision, memory, and terminal facts. It is a read-only
 facade: it does not execute agents, providers, tools, verifiers, migrations,
 rollback, or recovery, and it does not write workspace state.
 
+The [unified observability inspector specification](../architecture/unified-observability-inspector.md)
+defines the normative authority, identity, ordering, redaction, and replay
+contracts behind this operator guide.
+
 ## Commands
 
 ```text
