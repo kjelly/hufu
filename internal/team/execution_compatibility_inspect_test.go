@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/executioncompat"
 )
 
@@ -118,6 +119,26 @@ func TestCompatibilityScannerIsByteAndMtimeReadOnly(t *testing.T) {
 	}
 	if !bytes.Equal(beforeBytes, afterBytes) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
 		t.Fatalf("inspector mutated session.json: before=%v after=%v", before, after)
+	}
+}
+
+func TestCompatibilityScannerDoesNotUseSessionRuntimeShadowsAsEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	canonical := &SessionData{Tasks: []*TodoItem{{
+		ID: "canonical", Status: TaskPending,
+		ExecutionTarget:   execution.ExecutionTarget{Backend: "ollama", Model: "qwen3:8b"},
+		ExecutionTopology: []execution.ExecutionTarget{{Backend: "ollama", Model: "qwen3:8b"}},
+		BackendBinding:    &BackendBinding{Backend: "ollama", EffectiveTarget: "qwen3:8b"},
+	}}}
+	if err := SaveSession(workspace, canonical); err != nil {
+		t.Fatal(err)
+	}
+	report, err := InspectExecutionCompatibility(context.Background(), workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.CanonicalTasks != 1 || report.MigratableTasks != 0 || len(report.Findings) != 0 {
+		t.Fatalf("canonical session was classified using runtime shadows: %#v", report)
 	}
 }
 

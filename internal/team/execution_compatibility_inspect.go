@@ -354,15 +354,22 @@ func hasSessionPolicyCompatibilityMigration(events []RunEvent, branchID string) 
 
 func compatibilityInputFromTodo(task *TodoItem) executioncompat.TaskInput {
 	input := executioncompat.TaskInput{
-		Target:           executioncompat.Target{Backend: task.ExecutionTarget.Backend, Model: task.ExecutionTarget.Model},
-		Model:            task.Model,
-		SubagentProvider: task.SubagentProvider,
+		Target: executioncompat.Target{Backend: task.ExecutionTarget.Backend, Model: task.ExecutionTarget.Model},
 	}
 	for _, target := range task.ExecutionTopology {
 		input.Topology = append(input.Topology, executioncompat.Target{Backend: target.Backend, Model: target.Model})
 	}
-	if task.ProviderBinding != nil {
-		input.ProviderBinding = task.ProviderBinding.Provider
+	// TodoItem.UnmarshalJSON rebuilds Model, SubagentProvider, and
+	// ProviderBinding as in-memory compatibility shadows whenever the durable
+	// typed target is present. Those shadows are not source evidence: treating
+	// them as such falsely classifies a canonical session checkpoint as legacy.
+	// The inspector may consult them only for a genuinely target-less record.
+	if task.ExecutionTarget.IsZero() && len(task.ExecutionTopology) == 0 {
+		input.Model = task.Model
+		input.SubagentProvider = task.SubagentProvider
+		if task.ProviderBinding != nil {
+			input.ProviderBinding = task.ProviderBinding.Provider
+		}
 	}
 	if task.BackendBinding != nil {
 		input.BackendBinding = task.BackendBinding.Backend
