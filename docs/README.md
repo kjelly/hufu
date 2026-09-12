@@ -53,6 +53,7 @@ to re-create an abstraction that already exists in the runtime.
 ### Guides and references
 
 - [Decision authoring](guides/decision-authoring.md)
+- [Read-only runtime inspection](guides/inspect.md)
 - [SSH tool](guides/ssh-tool.md)
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)

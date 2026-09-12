@@ -72,6 +72,7 @@
 - 🔄 **DAG Task Scheduling** — Declare `on_failure` loops and `verify` commands for non-LLM task verification
 - 🪞 **Reflexion** — Structured failure hints inform retries with deterministic local fallback
 - 📓 **Task Journal** — Durable per-task results persisted to `workspace/logs/task_journal.jsonl`
+- 🔎 **Read-only Inspector** — Correlate canonical run, task, evidence, context, trace, and replay metadata without executing runtime behavior
 
 ---
 
@@ -108,6 +109,7 @@ hufu list              # show all discoverable teams and their agents
 hufu list my-team      # show one team in detail
 hufu chat --agent-team my-team  # interactive REPL with that team
 hufu chat --default    # interactive REPL with the built-in team
+hufu inspect run run-123 --workspace workspace  # inspect persisted run facts
 ```
 
 ### 1. Start Ollama

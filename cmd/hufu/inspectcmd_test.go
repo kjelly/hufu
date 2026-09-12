@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/execution"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/spf13/cobra"
 )
 
 func TestInspectCommandRunJSON(t *testing.T) {
@@ -170,6 +173,68 @@ func TestRootCommandIncludesInspect(t *testing.T) {
 	}
 	if command.Name() != "run" || command.Parent().Name() != "inspect" {
 		t.Fatalf("resolved command = %s", command.CommandPath())
+	}
+}
+
+func TestInspectCommandHelpDescribesReadOnlyFacade(t *testing.T) {
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetArgs([]string{"--help"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"read-only facade", "run", "task", "evidence", "context", "trace", "replay"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("help does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestInspectCommandCompletesFormatWithoutFiles(t *testing.T) {
+	command := newInspectCommand()
+	complete, ok := command.GetFlagCompletionFunc("format")
+	if !ok {
+		t.Fatal("format completion is not registered")
+	}
+	values, directive := complete(command, nil, "j")
+	if len(values) != 1 || values[0] != "json" {
+		t.Fatalf("format completions = %v", values)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("format completion directive = %v", directive)
+	}
+	runCommand, _, err := command.Find([]string{"run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, directive = runCommand.ValidArgsFunction(runCommand, nil, "run-")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("run ID completion directive = %v", directive)
+	}
+}
+
+func TestInspectInvalidFormatFailsBeforeReadingWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	logsDir := filepath.Join(workspace, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	command := newInspectCommand()
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "yaml", "run", "run-1"})
+	err := command.Execute()
+	var exitError interface{ ProcessExitCode() int }
+	if !errors.As(err, &exitError) || exitError.ProcessExitCode() != inspectpkg.ExitUsage {
+		t.Fatalf("error = %v, want usage exit code %d", err, inspectpkg.ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "invalid format") {
+		t.Fatalf("error = %v, want format validation before corrupt event-store read", err)
 	}
 }
 

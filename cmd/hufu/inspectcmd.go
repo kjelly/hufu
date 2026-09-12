@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,12 +32,22 @@ func newInspectCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "inspect",
 		Short: "Inspect persisted run facts without executing runtime behavior",
-		Args:  cobra.NoArgs,
+		Long: `Inspect is a read-only facade over Hufu's canonical event, evidence,
+context, decision, and terminal projections. It never executes agents,
+providers, verifiers, migrations, or recovery actions, and it does not replace
+the detailed audit, context, or decision maintenance commands.`,
+		Example: `  hufu inspect run run-123 --workspace ./workspace
+  hufu inspect task task-7 --run run-123 --format json
+  hufu inspect trace run-123 --branch incident-fix
+  hufu inspect replay run-123 --format json`,
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
 	}
 	command.PersistentFlags().StringVarP(&options.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
 	command.PersistentFlags().StringVar(&options.branch, "branch", "", "Exact branch ID, name, or branch label (default: active branch)")
 	command.PersistentFlags().StringVar(&options.session, "session", "", "Optional exact session ID filter")
 	command.PersistentFlags().StringVar(&options.format, "format", string(inspectpkg.FormatText), "Output format: text or json")
+	registerStaticFlagCompletion(command, "format", []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
 	command.AddCommand(
 		newInspectRunCommand(options),
 		newInspectTaskCommand(options),
@@ -52,10 +61,14 @@ func newInspectCommand() *cobra.Command {
 
 func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "replay <run-id>",
-		Short: "Compare canonical in-memory replay with stored projections",
-		Args:  cobra.ExactArgs(1),
+		Use:               "replay <run-id>",
+		Short:             "Compare canonical in-memory replay with stored projections",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = args[0]
 			envelope, err := inspectpkg.InspectReplay(command.Context(), query)
@@ -66,10 +79,14 @@ func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
 
 func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "trace <run-id>",
-		Short: "Show a unified event-anchored timeline of persisted run facts",
-		Args:  cobra.ExactArgs(1),
+		Use:               "trace <run-id>",
+		Short:             "Show a unified event-anchored timeline of persisted run facts",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = args[0]
 			envelope, err := inspectpkg.InspectTrace(command.Context(), query)
@@ -80,10 +97,14 @@ func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
 
 func newInspectEvidenceCommand(options *inspectCLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "evidence <run-id>",
-		Short: "Show audit-verified evidence metadata without artifact content",
-		Args:  cobra.ExactArgs(1),
+		Use:               "evidence <run-id>",
+		Short:             "Show audit-verified evidence metadata without artifact content",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = args[0]
 			envelope, err := inspectpkg.InspectEvidence(command.Context(), query)
@@ -97,10 +118,14 @@ func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
 	var attempt int
 	var showContent, allAgents bool
 	command := &cobra.Command{
-		Use:   "context <task-id>",
-		Short: "Show context and memory injection metadata for one task",
-		Args:  cobra.ExactArgs(1),
+		Use:               "context <task-id>",
+		Short:             "Show context and memory injection metadata for one task",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = runID
 			query.TaskID = args[0]
@@ -124,13 +149,17 @@ func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
 
 func newInspectRunCommand(options *inspectCLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "run <run-id>",
-		Short: "Show a canonical run outcome and task summary",
-		Args:  cobra.ExactArgs(1),
+		Use:               "run <run-id>",
+		Short:             "Show a canonical run outcome and task summary",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = args[0]
-			envelope, err := inspectpkg.InspectRun(context.Background(), query)
+			envelope, err := inspectpkg.InspectRun(command.Context(), query)
 			return finishInspect(command, options.format, envelope, err)
 		},
 	}
@@ -140,21 +169,37 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 	var runID string
 	var attempt int
 	command := &cobra.Command{
-		Use:   "task <task-id>",
-		Short: "Show a canonical task and its persisted attempts",
-		Args:  cobra.ExactArgs(1),
+		Use:               "task <task-id>",
+		Short:             "Show a canonical task and its persisted attempts",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
 			query := options.query()
 			query.RunID = runID
 			query.TaskID = args[0]
 			query.Attempt = attempt
-			envelope, err := inspectpkg.InspectTask(context.Background(), query)
+			envelope, err := inspectpkg.InspectTask(command.Context(), query)
 			return finishInspect(command, options.format, envelope, err)
 		},
 	}
 	command.Flags().StringVar(&runID, "run", "", "Run ID containing the task (required)")
 	command.Flags().IntVar(&attempt, "attempt", 0, "Optional positive attempt number")
 	return command
+}
+
+func (options *inspectCLIOptions) validateFormat() error {
+	switch inspectpkg.Format(strings.ToLower(strings.TrimSpace(options.format))) {
+	case inspectpkg.FormatText, inspectpkg.FormatJSON:
+		return nil
+	default:
+		return &inspectExitError{
+			code: inspectpkg.ExitUsage,
+			err:  fmt.Errorf("hufu inspect: invalid format %q (must be text or json)", options.format),
+		}
+	}
 }
 
 func (options *inspectCLIOptions) query() inspectpkg.InspectQuery {

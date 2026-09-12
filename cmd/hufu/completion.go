@@ -217,6 +217,24 @@ export extern "hufu context promotion edit" [
 export extern "hufu context promotion approve" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
 export extern "hufu context promotion reject" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
 export extern "hufu context promotion apply" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
+
+def "nu-complete hufu inspect formats" [] {
+  [text json]
+}
+
+export extern "hufu inspect" [
+  --workspace(-w): string # Workspace directory
+  --branch: string # Exact branch ID, name, or label
+  --session: string # Exact session ID filter
+  --format: string@'nu-complete hufu inspect formats' # text or json
+]
+
+export extern "hufu inspect run" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect task" [task_id: string --run: string --attempt: int --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect evidence" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect context" [task_id: string --run: string --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect trace" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect replay" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
 `
 	_, err := fmt.Fprint(w, script)
 	return err
