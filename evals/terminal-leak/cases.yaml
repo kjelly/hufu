@@ -1,0 +1,20 @@
+version: 1
+name: terminal-leak
+team: ./team
+mode: deterministic
+cases:
+  - id: terminal-leak-blocks-strict-completion
+    prompt: "Say hello, leaving a background process running."
+    provider-fixture: fixtures/terminal-leak.json
+    workspace-files:
+      logs/terminal_sessions.json: |
+        [{"id":"term-000000000000000000000001","run_id":"prior-run","owner_task_id":"prior-task","agent":"worker","command":["sh","-c","sleep 30"],"started_at":"2026-09-12T00:00:00Z","running":true,"state":"running","pid":99999999}]
+    expect:
+      # finish rejects the restored unknown session, and the final CompletionGate
+      # must preserve that terminal leak as an evidence-incomplete non-success.
+      run-outcome: partial
+      stop-reason: evidence_incomplete
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done

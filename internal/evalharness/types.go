@@ -48,6 +48,7 @@ type CaseFixture struct {
 // see assert.go.
 type ExpectSpec struct {
 	RunOutcome string       `yaml:"run-outcome"`
+	StopReason string       `yaml:"stop-reason"`
 	Acceptance string       `yaml:"acceptance"`
 	TaskCount  *int         `yaml:"task-count"`
 	Tasks      []TaskExpect `yaml:"tasks"`

@@ -39,6 +39,16 @@ func assertRun(expect ExpectSpec, result *team.RunResult, events []team.StatusEv
 		}
 	}
 
+	if expect.StopReason != "" {
+		actual := ""
+		if result != nil {
+			actual = string(result.StopReason)
+		}
+		if actual != expect.StopReason {
+			findings = append(findings, EvalFinding{Dimension: "stop-reason", Expected: expect.StopReason, Actual: actual})
+		}
+	}
+
 	if expect.Acceptance != "" {
 		actual := string(team.AcceptanceNotConfigured)
 		if result != nil && result.Acceptance != nil {

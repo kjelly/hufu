@@ -30,6 +30,17 @@ func TestEvalEventAssertionOrdering(t *testing.T) {
 	}
 }
 
+func TestEvalRunStopReasonAssertion(t *testing.T) {
+	result := &team.RunResult{Outcome: team.RunOutcomePartial, StopReason: team.StopReasonEvidenceIncomplete}
+	if findings := assertRun(ExpectSpec{StopReason: string(team.StopReasonEvidenceIncomplete)}, result, nil, nil); len(findings) != 0 {
+		t.Fatalf("matching stop reason produced findings: %+v", findings)
+	}
+	findings := assertRun(ExpectSpec{StopReason: string(team.StopReasonBudgetExceeded)}, result, nil, nil)
+	if len(findings) != 1 || findings[0].Dimension != "stop-reason" {
+		t.Fatalf("mismatched stop reason findings = %+v, want one stop-reason finding", findings)
+	}
+}
+
 func TestEvalNormalizesOpaqueIDs(t *testing.T) {
 	first := "run-20260912T093923.493930048Z-97f23d1c6c58"
 	second := "run-20260101T000000.000000000Z-deadbeef0000"

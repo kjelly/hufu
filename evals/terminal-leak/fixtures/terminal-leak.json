@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Say hello, leaving a background process running.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"Said hello; left a background process running.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Hello! Task complete.\"}"
+      }
+    },
+    { "content": "(finish was rejected because a restored terminal is unresolved)" },
+    { "content": "(continuation 1: terminal still unresolved)" },
+    { "content": "(continuation 2: terminal still unresolved)" },
+    { "content": "(continuation 3: terminal still unresolved)" },
+    { "content": "(continuation 4: terminal still unresolved)" },
+    { "content": "(continuation 5: terminal still unresolved)" },
+    { "content": "(forced wrap-up: terminal still unresolved)" }
+  ]
+}
