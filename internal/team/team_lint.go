@@ -40,14 +40,15 @@ type TeamLintResult struct {
 // TeamLintOptions carries invocation-scoped policy overrides. Pointer booleans
 // preserve an explicit --flag=false, which must override a true manifest value.
 type TeamLintOptions struct {
-	Vars             map[string]string
-	ForcedSkills     []string
-	Registry         *ProviderRegistry
-	Unattended       *bool
-	NoNet            *bool
-	ForceMCP         *bool
-	PlanFirst        *bool
-	ExecutionProfile string
+	Vars               map[string]string
+	ForcedSkills       []string
+	Registry           *ProviderRegistry
+	Unattended         *bool
+	NoNet              *bool
+	ForceMCP           *bool
+	PlanFirst          *bool
+	ExecutionProfile   string
+	RejectLegacyFanOut bool
 }
 
 // LintTeam runs the deterministic offline rules with manifest policy only.
@@ -83,8 +84,27 @@ func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResul
 		result.Findings = append(result.Findings, lintOfflineSkills(inspection.Session, inspection.Sources, directives)...)
 	}
 	result.Findings = append(result.Findings, ProjectContractFindings(inspection.Diagnostics, inspection.Sources, inspection.Session)...)
+	if options.RejectLegacyFanOut {
+		applyRejectLegacyFanOutPolicy(result.Findings)
+	}
 	SortTeamLintFindings(result.Findings)
 	return result, nil
+}
+
+// applyRejectLegacyFanOutPolicy escalates the deprecated-but-compatible
+// legacy fan-out finding to error severity in place. It is opt-in
+// (--reject-legacy-fanout) so a newly authored team, or a CI check on new
+// contributions, can hard-fail on legacy fan-out sources without changing
+// the default warning-level, read-compatible behavior existing workspaces
+// rely on during the deprecation window. See
+// docs/deprecations/workset-path-fanout.md and
+// docs/tmp/now/05-workset-legacy-tsv-removal.md §PR-3.
+func applyRejectLegacyFanOutPolicy(findings []TeamLintFinding) {
+	for i := range findings {
+		if findings[i].Code == FindingLegacyFanOutDeprecated {
+			findings[i].Severity = FindingSeverityError
+		}
+	}
 }
 
 func resolveTeamLintPolicy(session *TeamSession, options TeamLintOptions) (EffectiveTeamContractContext, error) {

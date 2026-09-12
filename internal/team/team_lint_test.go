@@ -296,6 +296,33 @@ func TestTeamLintLegacyFanoutDetectsNonTSVExtension(t *testing.T) {
 	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
 }
 
+// TestTeamLintRejectLegacyFanOutEscalatesSeverity is PR-3 of
+// docs/tmp/now/05-workset-legacy-tsv-removal.md: the opt-in
+// --reject-legacy-fanout policy escalates legacy_fanout_deprecated from
+// warning to error without changing default (unset) behavior, so existing
+// read-compatible workspaces are unaffected unless they opt in.
+func TestTeamLintRejectLegacyFanOutEscalatesSeverity(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items.tsv\n      goal-template: process {key}\n")
+
+	def, err := LintTeamWithOptions(dir, TeamLintOptions{Registry: DefaultProviderRegistry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding, ok := findLintCode(def.Findings, FindingLegacyFanOutDeprecated)
+	if !ok || finding.Severity != FindingSeverityWarning {
+		t.Fatalf("default finding = %#v, want warning severity", finding)
+	}
+
+	escalated, err := LintTeamWithOptions(dir, TeamLintOptions{Registry: DefaultProviderRegistry, RejectLegacyFanOut: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding, ok = findLintCode(escalated.Findings, FindingLegacyFanOutDeprecated)
+	if !ok || finding.Severity != FindingSeverityError {
+		t.Fatalf("escalated finding = %#v, want error severity", finding)
+	}
+}
+
 func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
 	if err != nil {

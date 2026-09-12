@@ -190,6 +190,41 @@ func TestTeamLintProcessExitContract(t *testing.T) {
 	}
 }
 
+// TestTeamLintRejectLegacyFanOutProcessExitContract is PR-3 of
+// docs/tmp/now/05-workset-legacy-tsv-removal.md: --reject-legacy-fanout must
+// not change the default exit code for a legacy fan-out source (it stays a
+// warning, so default --fail-on=error still exits 0), but must fail the
+// process once opted in.
+func TestTeamLintRejectLegacyFanOutProcessExitContract(t *testing.T) {
+	binary := buildProcessContractBinary(t)
+	dir := writeTeamLintFanOutFixture(t, "items.tsv")
+
+	if code, stdout, _ := runProcessContract(t, binary, "team", "lint", dir, "--format", "json"); code != 0 || !json.Valid(stdout) {
+		t.Fatalf("default process: code=%d stdout=%q", code, stdout)
+	}
+	if code, stdout, _ := runProcessContract(t, binary, "team", "lint", dir, "--format", "json", "--reject-legacy-fanout"); code != 1 || !json.Valid(stdout) {
+		t.Fatalf("reject-legacy-fanout process: code=%d stdout=%q", code, stdout)
+	}
+}
+
+func writeTeamLintFanOutFixture(t *testing.T, source string) string {
+	t.Helper()
+	dir := t.TempDir()
+	manifest := "name: cli-lint-fanout\ntasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: " + source + "\n      goal-template: process {key}\n"
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := "---\nname: coordinator\nrole: coordinator\ntools: view\n---\nCoordinate.\n"
+	if err := os.WriteFile(filepath.Join(dir, "coordinator.md"), []byte(coordinator), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	worker := "---\nname: worker\nrole: worker\ntools: view\n---\nWork.\n"
+	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte(worker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func writeTeamLintFixture(t *testing.T, manifest string) string {
 	t.Helper()
 	dir := t.TempDir()
