@@ -497,6 +497,14 @@ func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID st
 	return lineage
 }
 
+// ProjectValidatedEventsForBranch returns the exact visible event lineage and
+// preserves lineage errors for read-only integrity consumers. Callers that
+// must not turn malformed tree metadata into a partial report should use this
+// checked form instead of FilterEventsForBranch.
+func ProjectValidatedEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) ([]RunEvent, error) {
+	return projectEventsForBranch(events, st, targetBranchID)
+}
+
 func isVerifySuccess(vr *VerificationResult) bool {
 	return vr != nil && vr.ExitCode == 0 && !vr.TimedOut
 }

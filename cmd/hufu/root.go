@@ -63,6 +63,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(auditCmd)
 	rootCmd.AddCommand(decisionCmd)
 	rootCmd.AddCommand(modelsCmd)
+	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(examplesCmd, helpFlagsCmd)
 
 	// Add custom completion commands
