@@ -67,7 +67,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 }
 
 // loadTeamsForSegments loads and validates all the teams referenced in the switch team segments.
-func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegment, registry *team.TeamRegistry, pathConsent *tools.PathConsent, pr *readline.PromptReader, vars map[string]string) (map[string]*teamContext, map[string]string, error) {
+func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegment, registry *team.TeamRegistry, pathConsent *tools.PathConsent, pr *readline.PromptReader, vars map[string]string, compatibilityWarnings *executionCompatibilityWarningState) (map[string]*teamContext, map[string]string, error) {
 	loadedTeams := map[string]*teamContext{}
 	for _, seg := range initialSegments {
 		if seg.Type != team.SegmentSwitchTeam {
@@ -93,6 +93,7 @@ func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegm
 		if opts.stepsMode {
 			tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 		}
+		compatibilityWarnings.observeTeam(ctx, tc)
 		loadedTeams[seg.Name] = tc
 	}
 	return loadedTeams, vars, nil

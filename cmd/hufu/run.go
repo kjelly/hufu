@@ -33,6 +33,10 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
+	// Keep the user spelling before --temp synthesizes an internal workspace.
+	// Warnings may show an explicit argument verbatim but must never expose the
+	// default or resolved absolute path.
+	compatibilityWarnings := newExecutionCompatibilityWarningState(opts.workspace)
 	configureOutputRendering()
 	tuipkg.SetSpinnerEnabled(!opts.noSpinner)
 	tuipkg.SetCompactMode(opts.tuiCompact)
@@ -137,7 +141,7 @@ func runTeam(cmd *cobra.Command, args []string) error {
 
 	pathConsent := newPathConsent()
 
-	loadedTeams, vars, err = loadTeamsForSegments(ctx, initialSegments, registry, pathConsent, pr, vars)
+	loadedTeams, vars, err = loadTeamsForSegments(ctx, initialSegments, registry, pathConsent, pr, vars, compatibilityWarnings)
 	if err != nil {
 		return err
 	}

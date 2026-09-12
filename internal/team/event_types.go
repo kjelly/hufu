@@ -58,6 +58,11 @@ const (
 	// EventExecutionPolicySnapshotMigrated carries a canonical v4 policy
 	// snapshot for one historical v3 snapshot subject.
 	EventExecutionPolicySnapshotMigrated EventType = "execution_policy_snapshot_migrated"
+	// EventExecutionCompatibilityObserved is a metadata-only observation that
+	// a run encountered still-actionable legacy execution state. Its payload
+	// contains feature counts only; it never carries the workspace subjects
+	// that led to the observation.
+	EventExecutionCompatibilityObserved EventType = "execution_compatibility_observed"
 	// EventResourceLocked records a durably admitted LockedResourceSet
 	// (spec.md "Generic Required Resource Lock"). The payload is
 	// metadata-only — canonical path, sha256, byte size — never content
@@ -86,7 +91,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
 		EventModelProfileResolved, EventExecutionPolicySnapshot, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
-		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated,
+		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
 		EventResourceLocked:
 		return true
 	default:

@@ -643,6 +643,11 @@ type Coordinator struct {
 	executionEvents       *executionEventLogger
 	executionRunID        string
 	executionTeamRevision string
+	// executionCompatibilityObserver contains only a read-only, content-free
+	// preflight summary. It is flushed after a public invocation has allocated
+	// its durable run/branch identities; failures are telemetry gaps only.
+	executionCompatibilityMu       sync.Mutex
+	executionCompatibilityObserver *ExecutionCompatibilityObserver
 
 	// lastCompletedRunDeprecatedReport snapshots the per-run deprecated
 	// memory-usage aggregate just before beginExecutionRun's deferred close

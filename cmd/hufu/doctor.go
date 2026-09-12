@@ -44,6 +44,7 @@ type modelsResponse struct {
 
 func runDoctor(cmd *cobra.Command, args []string) error {
 	ok := true
+	compatibilityWarnings := newExecutionCompatibilityWarningState("")
 	pass := doneStyle.Render("✓")
 	warn := errStyle.Render("⚠")
 	fail := errStyle.Render("✗")
@@ -121,6 +122,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 				ok = false
 				fmt.Fprintf(os.Stderr, "  %s team %s: contract load failed: %v\n", fail, teamName, err)
 				continue
+			}
+			if team.HasAuthoredLegacyLocalExecutionBackend(session) {
+				compatibilityWarnings.warnAuthoredAlias()
 			}
 			if err := validateDoctorExecutionTargets(session, cfg, nil); err != nil {
 				contractErrors++

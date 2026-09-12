@@ -333,6 +333,12 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	}
 
 	c.initEventStore()
+	// The compatibility scanner runs before runtime dispatch and never writes.
+	// Only after initEventStore has bound this invocation to a run and branch do
+	// we append its metadata-only observation. A failure is deliberately not an
+	// admission failure: tasks remain runnable and the dual-write counter makes
+	// the local telemetry gap observable.
+	c.flushExecutionCompatibilityObservation(invocationCtx)
 
 	var logger *executionEventLogger
 	if workspace != "" {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/executioncompat"
 )
 
 // Event payloads intentionally contain references and redacted summaries,
@@ -92,6 +94,47 @@ func ValidateEventPayload(event RunEvent) error {
 		if payload.Outcome == "" {
 			return fmt.Errorf("run_finished payload lacks outcome")
 		}
+	case EventExecutionCompatibilityObserved:
+		var payload ExecutionCompatibilityObservedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("decode execution compatibility observation payload: %w", err)
+		}
+		if err := validateExecutionCompatibilityObservedPayload(payload); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func validateExecutionCompatibilityObservedPayload(payload ExecutionCompatibilityObservedPayload) error {
+	if payload.SchemaVersion != executionCompatibilityObservationSchemaVersion {
+		return fmt.Errorf("execution compatibility observation has unsupported schema version %d", payload.SchemaVersion)
+	}
+	if len(payload.Counts) == 0 {
+		return fmt.Errorf("execution compatibility observation has no feature counts")
+	}
+	for feature, count := range payload.Counts {
+		if !isExecutionCompatibilityFeature(feature) {
+			return fmt.Errorf("execution compatibility observation has unknown feature %q", feature)
+		}
+		if count <= 0 {
+			return fmt.Errorf("execution compatibility observation feature %q has non-positive count", feature)
+		}
+	}
+	return nil
+}
+
+func isExecutionCompatibilityFeature(feature executioncompat.Feature) bool {
+	switch feature {
+	case executioncompat.FeatureLocalAlias,
+		executioncompat.FeatureProviderShadowFields,
+		executioncompat.FeatureLegacyProviderBinding,
+		executioncompat.FeatureProviderSessionEvent,
+		executioncompat.FeatureLegacyReceiptProvider,
+		executioncompat.FeatureLegacyPolicyRoute,
+		executioncompat.FeatureLegacyResumeMigration:
+		return true
+	default:
+		return false
+	}
 }
