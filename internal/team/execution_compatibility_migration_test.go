@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing.T) {
@@ -280,6 +281,118 @@ func TestApplyExecutionCompatibilityMaterializesBackendBindingAndReceipt(t *test
 	}
 	if len(tasks) != 1 || tasks[0].BackendBinding == nil || tasks[0].BackendBinding.Backend != "ollama" || tasks[0].BackendBinding.SessionID != "thread-1" || tasks[0].ExecutionReceipt == nil || tasks[0].ExecutionReceipt.Backend != "ollama" || tasks[0].ExecutionReceipt.SubagentProvider != "" {
 		t.Fatalf("canonical task = %#v", tasks)
+	}
+}
+
+func TestApplyExecutionCompatibilityMaterializesLegacyProviderSessionBinding(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventTaskCreated), TaskID: "session-bound", RunID: "run-1", SessionID: "session-1", Actor: "worker", Timestamp: "2026-01-01T00:00:00Z",
+		Payload: compatibilityPayload(t, map[string]any{"id": "session-bound", "status": "pending", "model": "codex/gpt-5"}),
+	})
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventProviderSessionBound), TaskID: "session-bound", RunID: "run-1", SessionID: "session-1", Actor: "worker", Timestamp: "2026-01-01T00:00:01Z",
+		Payload: compatibilityPayload(t, ProviderSessionBoundPayload{TaskID: "session-bound", Attempt: 1, Provider: "codex", SessionID: "thread-1"}),
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err != nil {
+		t.Fatalf("ApplyExecutionCompatibility: %v", err)
+	}
+	store, err = OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ReadEvents()
+	_ = store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := ReplayTodoList(events)
+	if err != nil {
+		t.Fatalf("ReplayTodoList: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ExecutionTarget != (execution.ExecutionTarget{Backend: "codex", Model: "gpt-5"}) || tasks[0].BackendBinding == nil || tasks[0].BackendBinding.Backend != "codex" || tasks[0].BackendBinding.SessionID != "thread-1" {
+		t.Fatalf("canonical provider-session migration = %#v", tasks)
+	}
+}
+
+func TestApplyExecutionCompatibilityRejectsProfileBindingConflictWithoutAppending(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventTaskCreated), TaskID: "profile-conflict", RunID: "run-1", SessionID: "session-1", Actor: "worker", Timestamp: "2026-01-01T00:00:00Z",
+		Payload: compatibilityPayload(t, map[string]any{"id": "profile-conflict", "status": "pending", "model": "codex/gpt-5", "provider_binding": map[string]any{"provider": "codex"}}),
+	})
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventModelProfileResolved), RunID: "run-1", SessionID: "session-1", Actor: "coordinator", Timestamp: "2026-01-01T00:00:01Z",
+		Payload: compatibilityPayload(t, modelprofile.TelemetryProjection{SchemaVersion: 1, InvocationID: "profile-1", ModelID: "gpt-5", Provider: "openai"}),
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err == nil {
+		t.Fatal("profile/binding conflict was materialized")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("profile/binding conflict appended an event")
+	}
+}
+
+func TestApplyExecutionCompatibilityUsesHistoricalProfileEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventTaskCreated), TaskID: "profile-bound", RunID: "run-1", SessionID: "session-1", Actor: "worker", Timestamp: "2026-01-01T00:00:00Z",
+		Payload: compatibilityPayload(t, map[string]any{"id": "profile-bound", "status": "pending", "model": "openai/gpt-5"}),
+	})
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventModelProfileResolved), RunID: "run-1", SessionID: "session-1", Actor: "coordinator", Timestamp: "2026-01-01T00:00:01Z",
+		Payload: compatibilityPayload(t, modelprofile.TelemetryProjection{SchemaVersion: 1, InvocationID: "profile-1", ModelID: "gpt-5", Provider: "openai"}),
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err != nil {
+		t.Fatalf("ApplyExecutionCompatibility: %v", err)
+	}
+	store, err = OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ReadEvents()
+	_ = store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := ReplayTodoList(events)
+	if err != nil {
+		t.Fatalf("ReplayTodoList: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ExecutionTarget != (execution.ExecutionTarget{Backend: "openai", Model: "gpt-5"}) {
+		t.Fatalf("canonical profile migration = %#v", tasks)
 	}
 }
 

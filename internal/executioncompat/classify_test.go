@@ -45,6 +45,18 @@ func TestClassifyTaskUsesOnlyDurableEvidence(t *testing.T) {
 			reason: "qualified_model_without_durable_backend",
 		},
 		{
+			name:   "qualified model legacy provider session",
+			input:  TaskInput{Model: "codex/gpt-5", ProviderSessionBindings: []string{"codex"}},
+			class:  ClassificationMigratable,
+			reason: "canonical_identity_derivable",
+		},
+		{
+			name:   "binding conflicts with historical profile",
+			input:  TaskInput{Model: "codex/gpt-5", ProviderBindings: []string{"codex"}, ProfileProviders: []string{"openai"}},
+			class:  ClassificationAmbiguous,
+			reason: "conflicting_durable_backend",
+		},
+		{
 			name:   "empty typed target",
 			input:  TaskInput{Target: Target{Backend: "ollama"}},
 			class:  ClassificationUnmigratable,

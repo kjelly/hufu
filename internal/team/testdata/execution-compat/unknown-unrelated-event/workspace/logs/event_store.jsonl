@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"evt-20260912032923-447060aa60c59c6f","run_id":"run-1","session_id":"session-1","actor":"future","type":"future_execution_event","timestamp":"2026-01-01T00:00:00Z","payload":{"future":true},"hash":"7853a326167cb974c0307fad78559303d034c7ac7277c3149601a50e8b423dda"}

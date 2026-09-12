@@ -79,7 +79,14 @@ type TaskInput struct {
 	SubagentProvider string
 	ProviderBinding  string
 	BackendBinding   string
-	Receipts         []Receipt
+	// The plural fields preserve every independent immutable evidence source.
+	// Keeping only the first observed binding would silently hide a historical
+	// conflict and make an unsafe migration appear uniquely derivable.
+	ProviderBindings        []string
+	BackendBindings         []string
+	ProviderSessionBindings []string
+	ProfileProviders        []string
+	Receipts                []Receipt
 }
 
 // PolicyRoute is the compatibility-relevant subset of a policy route.

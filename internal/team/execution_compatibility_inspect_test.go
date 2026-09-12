@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/executioncompat"
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 func appendCompatibilityEvent(t *testing.T, store *EventStore, event RunEvent) RunEvent {
@@ -139,6 +140,32 @@ func TestCompatibilityScannerDoesNotUseSessionRuntimeShadowsAsEvidence(t *testin
 	}
 	if report.CanonicalTasks != 1 || report.MigratableTasks != 0 || len(report.Findings) != 0 {
 		t.Fatalf("canonical session was classified using runtime shadows: %#v", report)
+	}
+}
+
+func TestCompatibilityScannerDoesNotUseHistoricalProfileToRetargetTypedTask(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-1", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventTaskCreated), TaskID: "canonical", RunID: "run-1", SessionID: "session-1", Actor: "worker", Timestamp: "2026-01-01T00:00:00Z",
+		Payload: compatibilityPayload(t, map[string]any{"id": "canonical", "status": "pending", "execution_target": map[string]any{"backend": "ollama", "model": "qwen3:8b"}, "execution_topology": []map[string]any{{"backend": "ollama", "model": "qwen3:8b"}}}),
+	})
+	appendCompatibilityEvent(t, store, RunEvent{
+		Type: string(EventModelProfileResolved), RunID: "run-1", SessionID: "session-1", Actor: "coordinator", Timestamp: "2026-01-01T00:00:01Z",
+		Payload: compatibilityPayload(t, modelprofile.TelemetryProjection{SchemaVersion: 1, InvocationID: "profile-1", ModelID: "qwen3:8b", Provider: "codex"}),
+	})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := InspectExecutionCompatibility(t.Context(), workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.CanonicalTasks != 1 || report.MigratableTasks != 0 || report.AmbiguousTasks != 0 || len(report.Findings) != 0 {
+		t.Fatalf("historical profile retargeted canonical task: %#v", report)
 	}
 }
 

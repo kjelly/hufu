@@ -34,19 +34,6 @@ func ClassifyTask(input TaskInput) ClassificationResult {
 	candidates := make(map[string]struct{})
 	applicable := false
 
-	addBackend := func(backend string) {
-		backend = strings.TrimSpace(backend)
-		if backend == "" {
-			return
-		}
-		if IsLegacyLocalAlias(backend) {
-			features.add(FeatureLocalAlias)
-		}
-		canonical, _ := CanonicalBackend(backend)
-		if canonical != "" {
-			candidates[canonical] = struct{}{}
-		}
-	}
 	addTarget := func(target Target, contributesPrimary bool) (invalid bool) {
 		backend := strings.TrimSpace(target.Backend)
 		model := strings.TrimSpace(target.Model)
@@ -58,7 +45,7 @@ func ClassifyTask(input TaskInput) ClassificationResult {
 			return true
 		}
 		if contributesPrimary {
-			addBackend(backend)
+			addTaskBackendCandidate(backend, features, candidates)
 		} else if IsLegacyLocalAlias(backend) {
 			features.add(FeatureLocalAlias)
 		}
@@ -77,26 +64,14 @@ func ClassifyTask(input TaskInput) ClassificationResult {
 			return result(ClassificationUnmigratable, features, "invalid_typed_topology")
 		}
 	}
-	if backend := strings.TrimSpace(input.BackendBinding); backend != "" {
-		applicable = true
-		addBackend(backend)
-	}
-	if provider := strings.TrimSpace(input.ProviderBinding); provider != "" {
-		applicable = true
-		features.add(FeatureLegacyProviderBinding)
-		if strings.EqualFold(provider, "hufu-local") {
-			addBackend(execution.OllamaBackendName)
-		} else {
-			addBackend(provider)
-		}
-	}
+	applicable = addTaskBindingEvidence(input, features, candidates) || applicable
 	if provider := strings.TrimSpace(input.SubagentProvider); provider != "" {
 		applicable = true
 		features.add(FeatureProviderShadowFields)
 		if strings.EqualFold(provider, "hufu-local") {
-			addBackend(execution.OllamaBackendName)
+			addTaskBackendCandidate(execution.OllamaBackendName, features, candidates)
 		} else {
-			addBackend(provider)
+			addTaskBackendCandidate(provider, features, candidates)
 		}
 	}
 	if reason := addTaskReceiptCandidates(input, features, candidates, &applicable); reason != "" {
@@ -112,7 +87,7 @@ func ClassifyTask(input TaskInput) ClassificationResult {
 			// local/ollama qualifier is durable identity evidence and therefore
 			// still participates in conflict detection.
 			if strings.Contains(model, "/") || len(candidates) == 0 {
-				addBackend(backend)
+				addTaskBackendCandidate(backend, features, candidates)
 			}
 		} else if len(candidates) == 0 {
 			return result(ClassificationAmbiguous, features, "qualified_model_without_durable_backend")
@@ -134,6 +109,79 @@ func ClassifyTask(input TaskInput) ClassificationResult {
 		return result(ClassificationCanonical, features, "")
 	}
 	return result(ClassificationMigratable, features, "canonical_identity_derivable")
+}
+
+func addTaskBindingEvidence(input TaskInput, features featureSet, candidates map[string]struct{}) bool {
+	applicable := false
+	if backend := strings.TrimSpace(input.BackendBinding); backend != "" {
+		applicable = true
+		addTaskBackendCandidate(backend, features, candidates)
+	}
+	for _, backend := range input.BackendBindings {
+		if backend = strings.TrimSpace(backend); backend != "" {
+			applicable = true
+			addTaskBackendCandidate(backend, features, candidates)
+		}
+	}
+	if addTaskProviderBinding(input.ProviderBinding, features, candidates) {
+		applicable = true
+	}
+	for _, provider := range input.ProviderBindings {
+		if addTaskProviderBinding(provider, features, candidates) {
+			applicable = true
+		}
+	}
+	for _, provider := range input.ProviderSessionBindings {
+		if addTaskProviderSessionBinding(provider, features, candidates) {
+			applicable = true
+		}
+	}
+	for _, provider := range input.ProfileProviders {
+		addTaskBackendCandidate(provider, features, candidates)
+	}
+	return applicable
+}
+
+func addTaskBackendCandidate(backend string, features featureSet, candidates map[string]struct{}) {
+	backend = strings.TrimSpace(backend)
+	if backend == "" {
+		return
+	}
+	if IsLegacyLocalAlias(backend) {
+		features.add(FeatureLocalAlias)
+	}
+	canonical, _ := CanonicalBackend(backend)
+	if canonical != "" {
+		candidates[canonical] = struct{}{}
+	}
+}
+
+func addTaskProviderBinding(provider string, features featureSet, candidates map[string]struct{}) bool {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false
+	}
+	features.add(FeatureLegacyProviderBinding)
+	if strings.EqualFold(provider, "hufu-local") {
+		addTaskBackendCandidate(execution.OllamaBackendName, features, candidates)
+	} else {
+		addTaskBackendCandidate(provider, features, candidates)
+	}
+	return true
+}
+
+func addTaskProviderSessionBinding(provider string, features featureSet, candidates map[string]struct{}) bool {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false
+	}
+	features.add(FeatureProviderSessionEvent)
+	if strings.EqualFold(provider, "hufu-local") {
+		addTaskBackendCandidate(execution.OllamaBackendName, features, candidates)
+	} else {
+		addTaskBackendCandidate(provider, features, candidates)
+	}
+	return true
 }
 
 func addTaskReceiptCandidates(input TaskInput, features featureSet, candidates map[string]struct{}, applicable *bool) string {
@@ -259,7 +307,19 @@ func uniqueTaskBackend(input TaskInput) (string, error) {
 	}
 	add(primary.Backend)
 	add(input.BackendBinding)
+	for _, backend := range input.BackendBindings {
+		add(backend)
+	}
 	add(input.ProviderBinding)
+	for _, provider := range input.ProviderBindings {
+		add(provider)
+	}
+	for _, provider := range input.ProviderSessionBindings {
+		add(provider)
+	}
+	for _, provider := range input.ProfileProviders {
+		add(provider)
+	}
 	add(input.SubagentProvider)
 	// Receipt identity is a topology-leaf fact when a typed topology is
 	// present. It is deliberately not folded into the primary target here.

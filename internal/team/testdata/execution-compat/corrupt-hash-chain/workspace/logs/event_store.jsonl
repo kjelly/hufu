@@ -1,0 +1,1 @@
+z"schema_version":2,"id":"evt-20260912032923-658e093bf5c2c4d0","run_id":"run-1","session_id":"session-1","task_id":"corrupt","actor":"worker","type":"task_created","timestamp":"2026-01-01T00:00:00Z","payload":{"id":"corrupt","status":"pending"},"hash":"e91622ba78806f50dcaf409bf1b54b42093e11b4d38653f816335ee0593c510a"}

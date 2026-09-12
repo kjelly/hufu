@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/executioncompat"
+	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
 const executionCompatibilityMigrationSchemaVersion = 1
@@ -286,7 +287,67 @@ func collectCompatibilityTaskSubjects(events []RunEvent) (map[string]*compatibil
 		}
 		subject.merge(payload, event)
 	}
+	for _, event := range events {
+		if EventType(event.Type) != EventProviderSessionBound {
+			continue
+		}
+		var payload ProviderSessionBoundPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			continue
+		}
+		taskID := strings.TrimSpace(event.TaskID)
+		if taskID == "" {
+			taskID = strings.TrimSpace(payload.TaskID)
+		}
+		subject := tasks[taskID]
+		if subject == nil || strings.TrimSpace(payload.Provider) == "" {
+			continue
+		}
+		subject.input.ProviderSessionBindings = append(subject.input.ProviderSessionBindings, payload.Provider)
+		if subject.providerBinding == nil {
+			subject.providerBinding = &ProviderBinding{
+				Provider:         payload.Provider,
+				Protocol:         payload.Protocol,
+				SessionID:        payload.SessionID,
+				ExecutionWorldID: payload.ExecutionWorldID,
+				CWD:              payload.CWD,
+			}
+		}
+		if event.ID != "" {
+			subject.evidence = append(subject.evidence, event.ID)
+		}
+	}
+	for _, event := range events {
+		if EventType(event.Type) != EventModelProfileResolved {
+			continue
+		}
+		var profile modelprofile.TelemetryProjection
+		if json.Unmarshal(event.Payload, &profile) != nil || strings.TrimSpace(profile.Provider) == "" {
+			continue
+		}
+		for _, subject := range tasks {
+			if subject.runID != event.RunID || !compatibilityProfileMatchesTask(profile.ModelID, subject) {
+				continue
+			}
+			subject.input.ProfileProviders = append(subject.input.ProfileProviders, profile.Provider)
+			if event.ID != "" {
+				subject.evidence = append(subject.evidence, event.ID)
+			}
+		}
+	}
 	return tasks, eventTaskIDs, nil
+}
+
+func compatibilityProfileMatchesTask(profileModel string, subject *compatibilityTaskSubject) bool {
+	if subject == nil || subject.input.Target != (executioncompat.Target{}) || len(subject.input.Topology) != 0 {
+		return false
+	}
+	model := strings.TrimSpace(subject.input.Model)
+	selector, err := execution.ParseExecutionSelector(model)
+	if err == nil && selector.Model != "" {
+		model = selector.Model
+	}
+	return strings.TrimSpace(profileModel) != "" && strings.TrimSpace(profileModel) == model
 }
 
 func buildEventTaskCompatibilityPlan(branchID, taskID string, subject *compatibilityTaskSubject, lineage []RunEvent) (executionCompatibilityTaskPlan, bool, error) {
@@ -374,14 +435,30 @@ func compatibilityTaskSourceDigest(input executioncompat.TaskInput) (string, err
 	// A struct rather than a map fixes field ordering. These are precisely the
 	// durable identity fields consumed by ClassifyTask/DeriveTask.
 	evidence := struct {
-		Target           executioncompat.Target    `json:"target"`
-		Topology         []executioncompat.Target  `json:"topology,omitempty"`
-		Model            string                    `json:"model,omitempty"`
-		SubagentProvider string                    `json:"subagent_provider,omitempty"`
-		ProviderBinding  string                    `json:"provider_binding,omitempty"`
-		BackendBinding   string                    `json:"backend_binding,omitempty"`
-		Receipts         []executioncompat.Receipt `json:"receipts,omitempty"`
-	}{input.Target, input.Topology, input.Model, input.SubagentProvider, input.ProviderBinding, input.BackendBinding, input.Receipts}
+		Target                  executioncompat.Target    `json:"target"`
+		Topology                []executioncompat.Target  `json:"topology,omitempty"`
+		Model                   string                    `json:"model,omitempty"`
+		SubagentProvider        string                    `json:"subagent_provider,omitempty"`
+		ProviderBinding         string                    `json:"provider_binding,omitempty"`
+		BackendBinding          string                    `json:"backend_binding,omitempty"`
+		ProviderBindings        []string                  `json:"provider_bindings,omitempty"`
+		BackendBindings         []string                  `json:"backend_bindings,omitempty"`
+		ProviderSessionBindings []string                  `json:"provider_session_bindings,omitempty"`
+		ProfileProviders        []string                  `json:"profile_providers,omitempty"`
+		Receipts                []executioncompat.Receipt `json:"receipts,omitempty"`
+	}{
+		Target:                  input.Target,
+		Topology:                input.Topology,
+		Model:                   input.Model,
+		SubagentProvider:        input.SubagentProvider,
+		ProviderBinding:         input.ProviderBinding,
+		BackendBinding:          input.BackendBinding,
+		ProviderBindings:        input.ProviderBindings,
+		BackendBindings:         input.BackendBindings,
+		ProviderSessionBindings: input.ProviderSessionBindings,
+		ProfileProviders:        input.ProfileProviders,
+		Receipts:                input.Receipts,
+	}
 	return executionCompatibilityDigest(evidence)
 }
 

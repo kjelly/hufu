@@ -252,14 +252,8 @@ func (subject *compatibilityTaskSubject) merge(payload compatibilityTaskPayload,
 	if subject.input.SubagentProvider == "" {
 		subject.input.SubagentProvider = payload.SubagentProvider
 	}
-	if payload.ProviderBinding != nil && subject.input.ProviderBinding == "" {
-		subject.input.ProviderBinding = payload.ProviderBinding.Provider
-		subject.providerBinding = cloneProviderBinding(payload.ProviderBinding)
-	}
-	if payload.BackendBinding != nil && subject.input.BackendBinding == "" {
-		subject.input.BackendBinding = payload.BackendBinding.Backend
-		subject.backendBinding = cloneBackendBinding(payload.BackendBinding)
-	}
+	subject.addProviderBinding(payload.ProviderBinding)
+	subject.addBackendBinding(payload.BackendBinding)
 	if payload.ExecutionReceipt != nil {
 		subject.input.Receipts = append(subject.input.Receipts, executioncompat.Receipt{Backend: payload.ExecutionReceipt.Backend, SubagentProvider: payload.ExecutionReceipt.SubagentProvider})
 		subject.receipts = append(subject.receipts, *payload.ExecutionReceipt)
@@ -267,6 +261,28 @@ func (subject *compatibilityTaskSubject) merge(payload compatibilityTaskPayload,
 	for _, receipt := range payload.ExecutionReceipts {
 		subject.input.Receipts = append(subject.input.Receipts, executioncompat.Receipt{Backend: receipt.Backend, SubagentProvider: receipt.SubagentProvider})
 		subject.receipts = append(subject.receipts, receipt)
+	}
+}
+
+func (subject *compatibilityTaskSubject) addProviderBinding(binding *ProviderBinding) {
+	if binding == nil || strings.TrimSpace(binding.Provider) == "" {
+		return
+	}
+	subject.input.ProviderBindings = append(subject.input.ProviderBindings, binding.Provider)
+	if subject.input.ProviderBinding == "" {
+		subject.input.ProviderBinding = binding.Provider
+		subject.providerBinding = cloneProviderBinding(binding)
+	}
+}
+
+func (subject *compatibilityTaskSubject) addBackendBinding(binding *BackendBinding) {
+	if binding == nil || strings.TrimSpace(binding.Backend) == "" {
+		return
+	}
+	subject.input.BackendBindings = append(subject.input.BackendBindings, binding.Backend)
+	if subject.input.BackendBinding == "" {
+		subject.input.BackendBinding = binding.Backend
+		subject.backendBinding = cloneBackendBinding(binding)
 	}
 }
 
