@@ -41,6 +41,30 @@ func TestEvalRunStopReasonAssertion(t *testing.T) {
 	}
 }
 
+func TestEvalTaskRecoveryAssertions(t *testing.T) {
+	task := &team.TodoItem{
+		SideEffect:        team.SideEffectUnknown,
+		ExecutionReceipts: []team.ExecutionReceipt{{Attempt: 1}},
+		FailureEvent: &team.FailureEventPayload{
+			FailureClass:     team.FailureExecution,
+			RetryDisposition: team.ReconcileOnly,
+		},
+	}
+	want := TaskExpect{
+		SideEffect:       string(team.SideEffectUnknown),
+		Attempts:         new(1),
+		RetryDisposition: string(team.ReconcileOnly),
+	}
+	if findings := assertTasks([]TaskExpect{want}, []*team.TodoItem{task}); len(findings) != 0 {
+		t.Fatalf("matching task recovery fields produced findings: %+v", findings)
+	}
+	want.Attempts = new(2)
+	findings := assertTasks([]TaskExpect{want}, []*team.TodoItem{task})
+	if len(findings) != 1 || findings[0].Dimension != "tasks[0].attempts" {
+		t.Fatalf("mismatched task attempts findings = %+v, want one attempts finding", findings)
+	}
+}
+
 func TestEvalNormalizesOpaqueIDs(t *testing.T) {
 	first := "run-20260912T093923.493930048Z-97f23d1c6c58"
 	second := "run-20260101T000000.000000000Z-deadbeef0000"

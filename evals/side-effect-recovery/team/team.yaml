@@ -1,0 +1,10 @@
+name: eval-side-effect-recovery
+description: Static unknown-side-effect contract used to verify reconcile-only recovery
+delegation:
+  bind-task-goal-contracts: true
+tasks:
+  - agent: worker
+    when-goal-contains: "side-effect state may be unknown"
+    side_effect: unknown
+    recovery: reconcile
+    max_retries: 2

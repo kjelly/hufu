@@ -1,0 +1,18 @@
+version: 1
+name: side-effect-recovery
+team: ./team
+mode: deterministic
+cases:
+  - id: unknown-side-effect-reconciles-without-retry
+    prompt: "Attempt an operation whose side-effect state may be unknown."
+    provider-fixture: fixtures/unknown-side-effect.json
+    expect:
+      run-outcome: blocked
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: blocked
+          failure-class: execution
+          retry-disposition: reconcile_only
+          side-effect: unknown
+          attempts: 1

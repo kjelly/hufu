@@ -148,6 +148,25 @@ func assertTasks(expectTasks []TaskExpect, tasks []*team.TodoItem) []EvalFinding
 				findings = append(findings, EvalFinding{Dimension: dim + ".failure-class", Expected: want.FailureClass, Actual: actualClass})
 			}
 		}
+		if want.RetryDisposition != "" {
+			actualDisposition := ""
+			if actual.FailureEvent != nil {
+				actualDisposition = string(actual.FailureEvent.RetryDisposition)
+			}
+			if actualDisposition != want.RetryDisposition {
+				findings = append(findings, EvalFinding{Dimension: dim + ".retry-disposition", Expected: want.RetryDisposition, Actual: actualDisposition})
+			}
+		}
+		if want.SideEffect != "" && string(actual.SideEffect) != want.SideEffect {
+			findings = append(findings, EvalFinding{Dimension: dim + ".side-effect", Expected: want.SideEffect, Actual: string(actual.SideEffect)})
+		}
+		if want.Attempts != nil && len(actual.ExecutionReceipts) != *want.Attempts {
+			findings = append(findings, EvalFinding{
+				Dimension: dim + ".attempts",
+				Expected:  fmt.Sprintf("%d", *want.Attempts),
+				Actual:    fmt.Sprintf("%d", len(actual.ExecutionReceipts)),
+			})
+		}
 	}
 	return findings
 }

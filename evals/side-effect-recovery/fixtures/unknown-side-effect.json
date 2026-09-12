@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Attempt an operation whose side-effect state may be unknown.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "bash",
+        "arguments": "{\"command\":\"exit 17\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"failed\",\"summary\":\"The operation failed after its side-effect state became unknown.\"}"
+      }
+    }
+  ]
+}

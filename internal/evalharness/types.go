@@ -68,9 +68,12 @@ type ExpectSpec struct {
 // meaningful on its own, so position is the stable, opaque-ID-free join key.
 // A zero value field means "do not check this dimension".
 type TaskExpect struct {
-	Agent        string `yaml:"agent"`
-	Status       string `yaml:"status"`
-	FailureClass string `yaml:"failure-class"`
+	Agent            string `yaml:"agent"`
+	Status           string `yaml:"status"`
+	FailureClass     string `yaml:"failure-class"`
+	RetryDisposition string `yaml:"retry-disposition"`
+	SideEffect       string `yaml:"side-effect"`
+	Attempts         *int   `yaml:"attempts"`
 }
 
 // EventsExpect names the StatusEvent.Type values a case checks for.
