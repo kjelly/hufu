@@ -327,6 +327,40 @@ func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
 	}
 }
 
+// TestBundledTeamsHaveNoLegacyFanOutFinding is the PR-2 gate from
+// docs/tmp/now/05-workset-legacy-tsv-removal.md: it fails if any bundled team
+// starts using a legacy (non-source-artifact, non-.json) fan-out source, so
+// a future contributor can't silently reintroduce the deprecated path this
+// removal plan is retiring. Today's only bundled fan_out consumer
+// (.agent-teams/hufu-code-review/team.yaml) already uses source-artifact, so
+// this is expected to stay green with zero migration work.
+func TestBundledTeamsHaveNoLegacyFanOutFinding(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			result, err := LintTeam(filepath.Join(root, entry.Name()), nil, nil, DefaultProviderRegistry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, finding := range result.Findings {
+				if finding.Code == FindingLegacyFanOutDeprecated {
+					t.Fatalf("bundled team %q uses legacy fan-out: %#v", entry.Name(), finding)
+				}
+			}
+		})
+	}
+}
+
 func lintTeamWithAgentBody(t *testing.T, frontmatter, body string) string {
 	t.Helper()
 	dir := t.TempDir()
