@@ -1297,6 +1297,14 @@ func containTerminalProcessGroup(managed *managedTerminalSession, initialSignal 
 	if err != nil {
 		return fmt.Errorf("observe terminal leader: %w", err)
 	}
+	if state == terminalLeaderReaped && terminalProcessWaitCompleted(managed, terminalPTYDrainTimeout) {
+		// processWaitDone is closed only by this manager's waitForExit path,
+		// after that path has already proven group containment. A concurrent
+		// cleanup/close may observe the leader after the sole cmd.Wait; reuse
+		// that proof instead of misclassifying the completed reap as lost
+		// custody.
+		return nil
+	}
 	if state != terminalLeaderRunning && state != terminalLeaderExited {
 		return fmt.Errorf("terminal leader is not waitable: %s", state)
 	}
@@ -1307,6 +1315,9 @@ func containTerminalProcessGroup(managed *managedTerminalSession, initialSignal 
 	}
 	if initialSignal != 0 && state == terminalLeaderRunning {
 		state, err = waitTerminalLeaderExitWithObserver(identity.PID, observe, terminalPTYDrainTimeout)
+		if err == nil && state == terminalLeaderReaped && terminalProcessWaitCompleted(managed, terminalPTYDrainTimeout) {
+			return nil
+		}
 		if err != nil || state != terminalLeaderExited {
 			if err == nil {
 				err = fmt.Errorf("%w: leader did not become waitable after termination", errTerminalLeaderStillRunning)
@@ -1333,6 +1344,28 @@ func containTerminalProcessGroup(managed *managedTerminalSession, initialSignal 
 		}
 	}
 	return errors.New("terminal process-group containment unresolved")
+}
+
+func terminalProcessWaitCompleted(managed *managedTerminalSession, timeout time.Duration) bool {
+	if managed == nil || managed.processWaitDone == nil {
+		return false
+	}
+	if timeout <= 0 {
+		select {
+		case <-managed.processWaitDone:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-managed.processWaitDone:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func waitTerminalLeaderExitWithObserver(pid int, observe func(int) (terminalLeaderObservation, error), timeout time.Duration) (terminalLeaderObservation, error) {

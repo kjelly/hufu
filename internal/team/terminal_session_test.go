@@ -1799,6 +1799,39 @@ func TestTerminalContainmentRefusesReapedOrUnprovenLeader(t *testing.T) {
 	}
 }
 
+func TestTerminalContainmentAcceptsManagerCompletedReap(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = signalTerminalLeader(cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	}()
+	identity := &ProcessIdentity{PID: cmd.Process.Pid, PGID: cmd.Process.Pid}
+	processWaitDone := make(chan struct{})
+	close(processWaitDone)
+	managed := &managedTerminalSession{
+		cmd:               cmd,
+		session:           TerminalSession{Mode: TerminalModePipe, ProcessIdentity: identity},
+		launchIdentity:    identity,
+		launchCustodySeen: true,
+		processWaitDone:   processWaitDone,
+		leaderObserve:     func(int) (terminalLeaderObservation, error) { return terminalLeaderReaped, nil },
+		groupSignal: func(int, syscall.Signal) error {
+			t.Fatal("manager-completed reap must not signal a possibly recycled process group")
+			return nil
+		},
+		groupContained: func(int, int) (bool, error) {
+			t.Fatal("manager-completed reap must reuse the waiter's containment proof")
+			return false, nil
+		},
+	}
+	if err := containTerminalProcessGroup(managed, syscall.SIGKILL); err != nil {
+		t.Fatalf("manager-completed reap rejected: %v", err)
+	}
+}
+
 func TestTerminalPipeNaturalExitContainsDescendantsBeforeReap(t *testing.T) {
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
