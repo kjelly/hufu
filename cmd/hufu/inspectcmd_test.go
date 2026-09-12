@@ -106,6 +106,28 @@ func TestInspectEvidenceCommandJSON(t *testing.T) {
 	}
 }
 
+func TestInspectTraceCommandJSON(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "json", "trace", runID})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Kind inspectpkg.Kind      `json:"kind"`
+		Data inspectpkg.TraceData `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Kind != inspectpkg.KindTrace || len(envelope.Data.Entries) == 0 {
+		t.Fatalf("trace envelope = %#v", envelope)
+	}
+}
+
 func TestRootCommandIncludesInspect(t *testing.T) {
 	command, _, err := newRootCommand().Find([]string{"inspect", "run"})
 	if err != nil {

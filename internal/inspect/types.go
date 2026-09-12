@@ -59,12 +59,16 @@ func (q InspectQuery) Validate(kind Kind) error {
 		return fmt.Errorf("%w: attempt must not be negative", ErrInvalidQuery)
 	}
 	switch kind {
-	case KindRun, KindTrace, KindEvidence, KindReplay:
+	case KindRun, KindEvidence, KindReplay:
 		if strings.TrimSpace(q.RunID) == "" {
 			return fmt.Errorf("%w: run id is required for %s", ErrInvalidQuery, kind)
 		}
 		if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 {
 			return fmt.Errorf("%w: task and attempt filters are not valid for %s", ErrInvalidQuery, kind)
+		}
+	case KindTrace:
+		if strings.TrimSpace(q.RunID) == "" {
+			return fmt.Errorf("%w: run id is required for %s", ErrInvalidQuery, kind)
 		}
 	case KindTask:
 		if strings.TrimSpace(q.RunID) == "" || strings.TrimSpace(q.TaskID) == "" {
@@ -155,5 +159,6 @@ const (
 	ReasonProjectionNotRunScoped   = "projection_not_run_scoped"
 	ReasonProjectionChangedOnRead  = "projection_changed_during_read"
 	ReasonOptionalProjectionAbsent = "optional_projection_missing"
+	ReasonProjectionUnreadable     = "projection_unreadable"
 	ReasonLegacySchemaUnsupported  = "legacy_schema_unsupported"
 )

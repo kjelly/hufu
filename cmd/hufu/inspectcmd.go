@@ -44,8 +44,23 @@ func newInspectCommand() *cobra.Command {
 		newInspectTaskCommand(options),
 		newInspectEvidenceCommand(options),
 		newInspectContextCommand(options),
+		newInspectTraceCommand(options),
 	)
 	return command
+}
+
+func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "trace <run-id>",
+		Short: "Show a unified event-anchored timeline of persisted run facts",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			query := options.query()
+			query.RunID = args[0]
+			envelope, err := inspectpkg.InspectTrace(command.Context(), query)
+			return finishInspect(command, options.format, envelope, err)
+		},
+	}
 }
 
 func newInspectEvidenceCommand(options *inspectCLIOptions) *cobra.Command {
@@ -217,6 +232,20 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 				if _, err := fmt.Fprintf(writer, "  %s\n", item.Content); err != nil {
 					return err
 				}
+			}
+		}
+		return nil
+	case inspectpkg.TraceData:
+		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\n", data.RunID, envelope.Query.BranchID); err != nil {
+			return err
+		}
+		for _, entry := range data.Entries {
+			ordinal := entry.Ref.EventOrdinal
+			if ordinal == 0 {
+				ordinal = entry.AnchorEventOrdinal
+			}
+			if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\n", ordinal, entry.Ref.Source, entry.Kind, valueOrUnavailable(entry.Status), valueOrUnavailable(entry.ReasonCode)); err != nil {
+				return err
 			}
 		}
 		return nil
