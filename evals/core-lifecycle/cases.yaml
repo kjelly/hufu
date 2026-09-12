@@ -10,5 +10,9 @@ cases:
       run-outcome: unverified
       acceptance: not_configured
       task-count: 1
+      tasks:
+        - agent: worker
+          status: done
       events:
         required: [start, todos_updated, done]
+        order: [start, todos_updated, done]

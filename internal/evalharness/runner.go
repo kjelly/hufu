@@ -4,12 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
+
+// defaultCaseTimeout bounds a single case's wall-clock time so a stuck
+// scripted run (e.g. a fixture that never triggers the coordinator's
+// natural stop) cannot hang CI indefinitely (§13 "per-case timeout"). A
+// package-level var, not a const, so tests can shrink it instead of
+// waiting out the real default -- see TestEvalTimeout.
+var defaultCaseTimeout = 60 * time.Second
 
 // ErrCaseNotFound is wrapped into RunSuite's error when caseID is set but no
 // case in the fixture matches it. A caller filtering by case across several
@@ -45,14 +53,22 @@ func RunSuite(ctx context.Context, fixture *SuiteFixture, caseID string) (EvalSu
 // asserted against the case's ExpectSpec. No two cases share a Coordinator or
 // workspace.
 func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCaseResult, error) {
-	started := time.Now()
-
 	providerFixture, err := LoadProviderFixture(fixture.ProviderFixturePath(c))
 	if err != nil {
 		return EvalCaseResult{}, err
 	}
 	provider := newScriptedProvider(providerFixture)
-	server := httptest.NewServer(provider)
+	return runCaseWithHandler(ctx, fixture, c, provider, provider.unconsumed)
+}
+
+// runCaseWithHandler is runCase's implementation, taking the model driver as
+// a plain http.Handler (plus its own unconsumed-step reporter, or nil) so
+// tests can substitute a handler with different failure behavior --
+// see TestEvalTimeout, which needs a handler that never responds.
+func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, unconsumed func() []ProviderStep) (EvalCaseResult, error) {
+	started := time.Now()
+
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	teamDir := fixture.TeamDir()
@@ -101,10 +117,20 @@ func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCas
 		events = append(events, e)
 	})
 
-	_, runErr := coordinator.Run(ctx, c.Prompt)
+	caseCtx, cancel := context.WithTimeout(ctx, defaultCaseTimeout)
+	defer cancel()
+	_, runErr := coordinator.Run(caseCtx, c.Prompt)
 	runResult := coordinator.LastRunResult()
+	tasks := coordinator.TaskTracker().TodoList().Items()
 
-	findings := assertRun(c.Expect, runResult, events)
+	findings := assertRun(c.Expect, runResult, events, tasks)
+	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {
+		findings = append(findings, EvalFinding{
+			Dimension: "timeout",
+			Expected:  fmt.Sprintf("run to finish within %s", defaultCaseTimeout),
+			Actual:    "deadline exceeded",
+		})
+	}
 	if runErr != nil && runResult == nil {
 		// Run() returning an error alongside a populated RunResult is a
 		// normal outcome path (e.g. unresolved tasks); only a nil RunResult
@@ -115,23 +141,27 @@ func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCas
 			Actual:    runErr.Error(),
 		})
 	}
-	for _, leftover := range provider.unconsumed() {
-		findings = append(findings, EvalFinding{
-			Dimension: "provider-fixture",
-			Expected:  "every scripted step consumed",
-			Actual:    fmt.Sprintf("unused step: %+v", leftover),
-		})
+	if unconsumed != nil {
+		for _, leftover := range unconsumed() {
+			findings = append(findings, EvalFinding{
+				Dimension: "provider-fixture",
+				Expected:  "every scripted step consumed",
+				Actual:    fmt.Sprintf("unused step: %+v", leftover),
+			})
+		}
 	}
 
 	outcome := ""
+	runID := ""
 	if runResult != nil {
 		outcome = string(runResult.Outcome)
+		runID = normalizeOpaqueID(runResult.RunID)
 	}
 	return EvalCaseResult{
 		CaseID:     c.ID,
 		Passed:     len(findings) == 0,
 		RunOutcome: outcome,
 		Findings:   findings,
-		Metrics:    EvalMetrics{Duration: time.Since(started)},
+		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: runID},
 	}, nil
 }

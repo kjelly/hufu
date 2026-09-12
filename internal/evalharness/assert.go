@@ -2,14 +2,30 @@ package evalharness
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
 )
 
-// assertRun compares one case's ExpectSpec against the RunResult and events
-// a real run actually produced. Only fields the fixture set are checked --
-// see ExpectSpec's zero-value convention.
-func assertRun(expect ExpectSpec, result *team.RunResult, events []team.StatusEvent) []EvalFinding {
+// runIDPattern matches team.RunResult.RunID's opaque timestamp+random-hex
+// suffix (e.g. "run-20260912T093923.493930048Z-97f23d1c6c58"), the one
+// genuinely non-deterministic identifier a completed deterministic case
+// produces (TodoItem.ID is a plain sequence counter, not opaque).
+var runIDPattern = regexp.MustCompile(`run-\d{8}T\d{6}\.\d+Z-[0-9a-f]+`)
+
+// normalizeOpaqueID redacts a RunID (wherever it appears in a larger string)
+// so two runs of the same deterministic case report byte-identical
+// findings/metrics instead of differing solely by run identity.
+func normalizeOpaqueID(s string) string {
+	return runIDPattern.ReplaceAllString(s, "<run-id>")
+}
+
+// assertRun compares one case's ExpectSpec against everything a real run
+// actually produced: the RunResult, its reported events, and the durable
+// task list in creation order. Only fields/entries the fixture set are
+// checked -- see ExpectSpec's and TaskExpect's zero-value convention.
+func assertRun(expect ExpectSpec, result *team.RunResult, events []team.StatusEvent, tasks []*team.TodoItem) []EvalFinding {
 	var findings []EvalFinding
 
 	if expect.RunOutcome != "" {
@@ -46,11 +62,14 @@ func assertRun(expect ExpectSpec, result *team.RunResult, events []team.StatusEv
 		}
 	}
 
+	findings = append(findings, assertTasks(expect.Tasks, tasks)...)
+
 	for _, want := range expect.Events.Required {
 		if !hasEventType(events, want) {
 			findings = append(findings, EvalFinding{Dimension: "events." + want, Expected: "observed", Actual: "not observed"})
 		}
 	}
+	findings = append(findings, assertEventOrder(expect.Events.Order, events)...)
 
 	return findings
 }
@@ -62,4 +81,58 @@ func hasEventType(events []team.StatusEvent, want string) bool {
 		}
 	}
 	return false
+}
+
+// assertTasks matches Tasks[i] against the i-th durable task in creation
+// order (see TaskExpect's doc comment for why position, not ID).
+func assertTasks(expectTasks []TaskExpect, tasks []*team.TodoItem) []EvalFinding {
+	var findings []EvalFinding
+	for i, want := range expectTasks {
+		dim := fmt.Sprintf("tasks[%d]", i)
+		if i >= len(tasks) || tasks[i] == nil {
+			findings = append(findings, EvalFinding{Dimension: dim, Expected: "a task at this position", Actual: fmt.Sprintf("only %d task(s) observed", len(tasks))})
+			continue
+		}
+		actual := tasks[i]
+		if want.Agent != "" && actual.Agent != want.Agent {
+			findings = append(findings, EvalFinding{Dimension: dim + ".agent", Expected: want.Agent, Actual: actual.Agent})
+		}
+		if want.Status != "" && string(actual.Status) != want.Status {
+			findings = append(findings, EvalFinding{Dimension: dim + ".status", Expected: want.Status, Actual: string(actual.Status)})
+		}
+		if want.FailureClass != "" {
+			actualClass := ""
+			if actual.FailureEvent != nil {
+				actualClass = string(actual.FailureEvent.FailureClass)
+			}
+			if actualClass != want.FailureClass {
+				findings = append(findings, EvalFinding{Dimension: dim + ".failure-class", Expected: want.FailureClass, Actual: actualClass})
+			}
+		}
+	}
+	return findings
+}
+
+// assertEventOrder checks that order appears, in that relative order, as a
+// subsequence of events -- other event types may be interleaved between
+// them (§5 "Event": only critical type/order/cardinality/fields, never a
+// full golden comparison).
+func assertEventOrder(order []string, events []team.StatusEvent) []EvalFinding {
+	if len(order) == 0 {
+		return nil
+	}
+	next := 0
+	for _, e := range events {
+		if e.Type == order[next] {
+			next++
+			if next == len(order) {
+				return nil
+			}
+		}
+	}
+	return []EvalFinding{{
+		Dimension: "events.order",
+		Expected:  strings.Join(order, " -> "),
+		Actual:    fmt.Sprintf("matched only %d/%d in order; never observed %q after the preceding ones", next, len(order), order[next]),
+	}}
 }

@@ -37,13 +37,32 @@ type ExpectSpec struct {
 	RunOutcome string       `yaml:"run-outcome"`
 	Acceptance string       `yaml:"acceptance"`
 	TaskCount  *int         `yaml:"task-count"`
+	Tasks      []TaskExpect `yaml:"tasks"`
 	Events     EventsExpect `yaml:"events"`
 }
 
-// EventsExpect names the StatusEvent.Type values a case requires to have
-// been reported at least once during the run, in no particular order.
+// TaskExpect asserts on one task by position: Tasks[i] in the fixture is
+// matched against the i-th item of TaskTracker().TodoList().Items() in
+// creation order. Task IDs are never compared -- a durable TodoItem.ID is a
+// deterministic sequence counter ("1", "2", ...), not semantically
+// meaningful on its own, so position is the stable, opaque-ID-free join key.
+// A zero value field means "do not check this dimension".
+type TaskExpect struct {
+	Agent        string `yaml:"agent"`
+	Status       string `yaml:"status"`
+	FailureClass string `yaml:"failure-class"`
+}
+
+// EventsExpect names the StatusEvent.Type values a case checks for.
 type EventsExpect struct {
+	// Required lists types that must have been reported at least once,
+	// in no particular order.
 	Required []string `yaml:"required"`
+	// Order lists types that must appear, in this relative order, as a
+	// subsequence of the full event stream (other event types may appear
+	// interleaved between them; cardinality beyond "at least once" and
+	// non-listed fields are never compared -- see §5 "Event").
+	Order []string `yaml:"order"`
 }
 
 // ProviderFixture is the scripted response program for one case's model
@@ -94,6 +113,10 @@ type EvalFinding struct {
 // EvalMetrics is non-assertion telemetry about how a case ran.
 type EvalMetrics struct {
 	Duration time.Duration
+	// RunID is the completed run's RunID with its opaque timestamp+random
+	// suffix redacted (see normalizeOpaqueID), so two runs of the same
+	// deterministic case produce byte-identical JSON reports.
+	RunID string
 }
 
 // EvalCaseResult is the canonical per-case result (§6 of the plan).
