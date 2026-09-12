@@ -84,7 +84,7 @@ jobs:
         run: go vet ./...
 
   test:
-    name: test (go test ./... -race -short)
+    name: test (go test ./... -race -short -timeout 20m)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -97,7 +97,9 @@ jobs:
           cache: true
 
       - name: Run tests
-        run: go test ./... -race -short
+        # internal/team takes about 11 minutes under the race detector on the
+        # release toolchain, beyond go test's default 10-minute package limit.
+        run: go test ./... -race -short -timeout 20m
 
   build:
     name: build (go build ./cmd/hufu)
