@@ -1,7 +1,8 @@
 .claude
 /hufu
 hufu.exe
-bin/
+bin/*
+!bin/check-docs
 workspace
 reports
 ignores/

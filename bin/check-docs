@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+mapfile -t active_docs < <(
+	find docs -type f -name '*.md' \
+		-not -path 'docs/archive/*' \
+		-not -path 'docs/tmp/*' \
+		-print | sort
+)
+
+if ((${#active_docs[@]} == 0)); then
+	echo "check-docs: no active documentation files found" >&2
+	exit 1
+fi
+
+status_fields=(Status Authority Verified-Commit Supersedes Superseded-By)
+for file in "${active_docs[@]}"; do
+	header=$(sed -n '1,24p' "$file")
+	for field in "${status_fields[@]}"; do
+		if ! grep -Eq "(^|> )[[:space:]]*${field}:" <<<"$header"; then
+			echo "check-docs: $file is missing header field $field" >&2
+			exit 1
+		fi
+	done
+done
+
+if rg -n --glob '*.md' \
+	'file:///|docs/hufu-(future-improvement-roadmap|generic-workset-evidence-plan|coding-team-spec|runtime-composability-spec|external-coding-agent-runtime-spec|incomplete-run-reliability-plan|model-metadata-runtime-introspection-spec|outcome-driven-memory-hf-mem4-implementation-spec|ltm-promotion-spec|decision-aware-runtime-spec|per-worker-memory-implementation-plan|canonical-memory-hf-mem3-implementation-plan|strict-verification-workflow-improvement|ssh-tool-usage)\.md' \
+	"${active_docs[@]}"; then
+	echo "check-docs: active documentation contains a machine-local or retired path" >&2
+	exit 1
+fi
+
+missing=0
+for file in "${active_docs[@]}"; do
+	while IFS= read -r raw; do
+		target=${raw#\](}
+		target=${target%)}
+		target=${target%%\#*}
+		target=${target%%\?*}
+		target=${target#<}
+		target=${target%>}
+		case "$target" in
+			''|http://*|https://*|mailto:*|file://*|'#'*) continue ;;
+		esac
+		case "$target" in
+			/*) path="$target" ;;
+			*) path="$(dirname "$file")/$target" ;;
+		esac
+		if [[ ! -e "$path" ]]; then
+			echo "check-docs: $file links to missing path $target" >&2
+			missing=1
+		fi
+	done < <(rg -o --no-filename '\]\([^)]*\)' "$file" || true)
+done
+
+if ((missing)); then
+	exit 1
+fi
+
+echo "check-docs: ${#active_docs[@]} active files and relative links are valid"
