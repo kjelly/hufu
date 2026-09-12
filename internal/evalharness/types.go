@@ -78,12 +78,13 @@ type ContextItemFixture struct {
 // value field (empty string / nil) means "do not check this dimension" --
 // see assert.go.
 type ExpectSpec struct {
-	RunOutcome string       `yaml:"run-outcome"`
-	StopReason string       `yaml:"stop-reason"`
-	Acceptance string       `yaml:"acceptance"`
-	TaskCount  *int         `yaml:"task-count"`
-	Tasks      []TaskExpect `yaml:"tasks"`
-	Events     EventsExpect `yaml:"events"`
+	RunOutcome        string       `yaml:"run-outcome"`
+	StopReason        string       `yaml:"stop-reason"`
+	Acceptance        string       `yaml:"acceptance"`
+	TerminalLifecycle *bool        `yaml:"terminal-lifecycle-confirmed,omitempty"`
+	TaskCount         *int         `yaml:"task-count"`
+	Tasks             []TaskExpect `yaml:"tasks"`
+	Events            EventsExpect `yaml:"events"`
 	// DurableEvents asserts against the coordinator's append-only RunEvent
 	// journal. Status Events above remain the live reporter surface; recovery
 	// and compatibility boundaries such as execution_target_migrated are
@@ -99,6 +100,10 @@ type ExpectSpec struct {
 	// task occurrence and never re-resolved on retry (see
 	// internal/team/services.go's frozenTaskOccurrenceModel).
 	ExecutionTargetFrozen *bool `yaml:"execution-target-frozen,omitempty"`
+	// NoUnauthorizedFallback requires every recorded attempt backend and the
+	// task's mutable BackendBinding to agree with its immutable admitted
+	// ExecutionTarget. Missing provenance also fails closed.
+	NoUnauthorizedFallback *bool `yaml:"no-unauthorized-fallback,omitempty"`
 }
 
 // MemoryAggregateExpect describes the durable learning counters and credit
@@ -121,13 +126,30 @@ type MemoryAggregateExpect struct {
 // meaningful on its own, so position is the stable, opaque-ID-free join key.
 // A zero value field means "do not check this dimension".
 type TaskExpect struct {
-	Agent            string `yaml:"agent"`
-	Status           string `yaml:"status"`
-	FailureClass     string `yaml:"failure-class"`
-	RetryDisposition string `yaml:"retry-disposition"`
-	SideEffect       string `yaml:"side-effect"`
-	Attempts         *int   `yaml:"attempts"`
-	ExecutionTarget  string `yaml:"execution-target"`
+	Agent            string                `yaml:"agent"`
+	Status           string                `yaml:"status"`
+	Verification     string                `yaml:"verification"` // not-run, passed, or failed
+	FailureClass     string                `yaml:"failure-class"`
+	RetryDisposition string                `yaml:"retry-disposition"`
+	SideEffect       string                `yaml:"side-effect"`
+	Attempts         *int                  `yaml:"attempts"`
+	ExecutionTarget  string                `yaml:"execution-target"`
+	BackendBinding   *BackendBindingExpect `yaml:"backend-binding,omitempty"`
+}
+
+// BackendBindingExpect asserts the stable, secret-free execution backend
+// projection. Empty fields are omitted assertions; ResumeSupported is a
+// pointer so an explicit false remains distinguishable from omission.
+type BackendBindingExpect struct {
+	Backend          string `yaml:"backend"`
+	SessionID        string `yaml:"session-id,omitempty"`
+	TurnID           string `yaml:"turn-id,omitempty"`
+	BackendVersion   string `yaml:"backend-version,omitempty"`
+	EffectiveTarget  string `yaml:"effective-target,omitempty"`
+	ExecutionWorldID string `yaml:"execution-world-id,omitempty"`
+	CWD              string `yaml:"cwd,omitempty"`
+	SandboxMode      string `yaml:"sandbox-mode,omitempty"`
+	ResumeSupported  *bool  `yaml:"resume-supported,omitempty"`
 }
 
 // EventsExpect names the StatusEvent.Type values a case checks for.
@@ -136,10 +158,26 @@ type EventsExpect struct {
 	// in no particular order.
 	Required []string `yaml:"required"`
 	// Order lists types that must appear, in this relative order, as a
-	// subsequence of the full event stream (other event types may appear
-	// interleaved between them; cardinality beyond "at least once" and
-	// non-listed fields are never compared -- see §5 "Event").
+	// subsequence of the full event stream. Other event types may appear
+	// interleaved between them.
 	Order []string `yaml:"order"`
+	// Counts asserts exact cardinality for selected event types.
+	Counts []EventCountExpect `yaml:"counts,omitempty"`
+	// Matches selects the Nth event of a type (1-based) and compares only the
+	// listed stable fields. Nested maps use dotted paths such as data.reason or
+	// payload.status.
+	Matches []EventMatchExpect `yaml:"matches,omitempty"`
+}
+
+type EventCountExpect struct {
+	Type  string `yaml:"type"`
+	Count int    `yaml:"count"`
+}
+
+type EventMatchExpect struct {
+	Type       string         `yaml:"type"`
+	Occurrence int            `yaml:"occurrence,omitempty"`
+	Fields     map[string]any `yaml:"fields"`
 }
 
 // ProviderFixture is the scripted response program for one case's model

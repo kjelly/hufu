@@ -160,7 +160,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	runResult := coordinator.LastRunResult()
 	tasks := coordinator.TaskTracker().TodoList().Items()
 
-	findings := assertRun(c.Expect, runResult, events, tasks)
+	findings := assertRun(c.Expect, runResult, coordinator.TerminalLifecycleConfirmed(), events, tasks)
 	durableEvents, durableEventsErr := coordinator.EventJournal().ReadEvents(context.WithoutCancel(caseCtx))
 	if durableEventsErr != nil {
 		findings = append(findings, EvalFinding{
@@ -169,7 +169,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 			Actual:    durableEventsErr.Error(),
 		})
 	} else {
-		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents)...)
+		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents, tasks)...)
 	}
 	findings = append(findings, assertMemoryAggregates(context.WithoutCancel(caseCtx), workspace, c.Expect.MemoryAggregates)...)
 	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {

@@ -8,6 +8,10 @@ cases:
     provider-fixture: fixtures/execution-target-frozen.json
     expect:
       execution-target-frozen: true
+      no-unauthorized-fallback: true
       events:
         required: [start, verify_start, verify_error]
         order: [start, verify_error]
+        counts:
+          - type: verify_error
+            count: 1

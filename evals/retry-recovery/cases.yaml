@@ -29,7 +29,12 @@ cases:
       tasks:
         - agent: worker
           status: error
+          verification: failed
           failure-class: verification
+          attempts: 2
       events:
         required: [start, verify_start, verify_error, done]
         order: [start, verify_error, verify_error, done]
+        counts:
+          - type: verify_error
+            count: 2

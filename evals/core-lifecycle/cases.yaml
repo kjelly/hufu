@@ -9,10 +9,24 @@ cases:
     expect:
       run-outcome: unverified
       acceptance: not_configured
+      terminal-lifecycle-confirmed: true
       task-count: 1
+      no-unauthorized-fallback: true
       tasks:
         - agent: worker
           status: done
+          verification: not-run
+          execution-target: ollama/eval-harness-model
+          backend-binding:
+            backend: ollama
       events:
         required: [start, todos_updated, done]
         order: [start, todos_updated, done]
+        matches:
+          - type: start
+            occurrence: 2
+            fields:
+              agent: worker
+              task_index: 0
+              execution_target: ollama/eval-harness-model
+              backend: ollama

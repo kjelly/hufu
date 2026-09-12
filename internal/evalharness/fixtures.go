@@ -43,10 +43,53 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 		if seen[c.ID] {
 			return nil, fmt.Errorf("suite fixture %s: duplicate case id %q", path, c.ID)
 		}
+		if err := validateExpectSpec(c.Expect); err != nil {
+			return nil, fmt.Errorf("suite fixture %s: case %q: %w", path, c.ID, err)
+		}
 		seen[c.ID] = true
 	}
 	fixture.Path = path
 	return &fixture, nil
+}
+
+func validateExpectSpec(expect ExpectSpec) error {
+	for index, task := range expect.Tasks {
+		switch task.Verification {
+		case "", "not-run", "passed", "failed":
+		default:
+			return fmt.Errorf("tasks[%d].verification: unsupported state %q", index, task.Verification)
+		}
+		if task.BackendBinding != nil && strings.TrimSpace(task.BackendBinding.Backend) == "" {
+			return fmt.Errorf("tasks[%d].backend-binding.backend is required", index)
+		}
+	}
+	eventGroups := []struct {
+		name   string
+		events EventsExpect
+	}{{"events", expect.Events}, {"durable-events", expect.DurableEvents}}
+	for _, group := range eventGroups {
+		name, events := group.name, group.events
+		for index, count := range events.Counts {
+			if strings.TrimSpace(count.Type) == "" {
+				return fmt.Errorf("%s.counts[%d].type is required", name, index)
+			}
+			if count.Count < 0 {
+				return fmt.Errorf("%s.counts[%d].count must be non-negative", name, index)
+			}
+		}
+		for index, match := range events.Matches {
+			if strings.TrimSpace(match.Type) == "" {
+				return fmt.Errorf("%s.matches[%d].type is required", name, index)
+			}
+			if match.Occurrence < 0 {
+				return fmt.Errorf("%s.matches[%d].occurrence must be positive when set", name, index)
+			}
+			if len(match.Fields) == 0 {
+				return fmt.Errorf("%s.matches[%d].fields is required", name, index)
+			}
+		}
+	}
+	return nil
 }
 
 // TeamDir resolves the suite's Team path relative to the fixture file.

@@ -49,3 +49,8 @@ cases:
       durable-events:
         required: [execution_target_migrated]
         order: [execution_target_migrated, task_completed, run_finished]
+        matches:
+          - type: task_completed
+            fields:
+              actor: worker
+              task_index: 0

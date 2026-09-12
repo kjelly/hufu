@@ -81,3 +81,26 @@ cases:
 		t.Fatal("LoadSuiteFixture: expected error for duplicate case id, got nil")
 	}
 }
+
+func TestEvalFixtureRejectsInvalidAssertionState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cases.yaml")
+	const yamlDoc = `version: 1
+name: invalid-assertion
+team: ./team
+mode: deterministic
+cases:
+  - id: c1
+    prompt: hi
+    provider-fixture: fixtures/c1.json
+    expect:
+      tasks:
+        - verification: maybe
+`
+	if err := os.WriteFile(path, []byte(yamlDoc), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if _, err := LoadSuiteFixture(path); err == nil {
+		t.Fatal("LoadSuiteFixture: expected error for invalid verification state, got nil")
+	}
+}
