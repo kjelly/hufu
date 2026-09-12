@@ -44,23 +44,56 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 // for tasks already recorded in the same lineage.
 func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnapshot, error) {
 	var admitted *ExecutionPolicySnapshot
-	for _, event := range events {
-		if event.SchemaVersion < eventStoreSchemaVersion || EventType(event.Type) != EventExecutionPolicySnapshot {
+	for index, event := range events {
+		if event.SchemaVersion < eventStoreSchemaVersion {
 			continue
 		}
-		var candidate ExecutionPolicySnapshot
-		if err := json.Unmarshal(event.Payload, &candidate); err != nil {
-			return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
+		switch EventType(event.Type) {
+		case EventExecutionPolicySnapshot:
+			var candidate ExecutionPolicySnapshot
+			if err := json.Unmarshal(event.Payload, &candidate); err != nil {
+				return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
+			}
+			if err := validateExecutionPolicySnapshot(&candidate); err != nil {
+				return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
+			}
+			if admitted != nil && admitted.Version >= executionPolicySnapshotVersion && admitted.ConfigurationHash != candidate.ConfigurationHash {
+				return nil, fmt.Errorf("execution policy snapshot events disagree: %s != %s", admitted.ConfigurationHash, candidate.ConfigurationHash)
+			}
+			admitted = cloneExecutionPolicySnapshot(&candidate)
+		case EventExecutionPolicySnapshotMigrated:
+			var payload ExecutionPolicySnapshotMigratedPayload
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return nil, fmt.Errorf("execution policy migration event %q is invalid: %w", event.ID, err)
+			}
+			if payload.BranchID != effectiveEventBranchID(event) || validateExecutionPolicyCompatibilityMigrationPayload(payload) != nil {
+				return nil, fmt.Errorf("execution policy migration event %q is invalid", event.ID)
+			}
+			if payload.SourceKind == "event_lineage" && !policyMigrationSourceMatches(payload, events[:index]) {
+				return nil, fmt.Errorf("execution policy migration event %q source disagrees with preceding lineage", event.ID)
+			}
+			if admitted != nil && admitted.Version >= executionPolicySnapshotVersion && admitted.ConfigurationHash != payload.Snapshot.ConfigurationHash {
+				return nil, fmt.Errorf("execution policy migration events disagree: %s != %s", admitted.ConfigurationHash, payload.Snapshot.ConfigurationHash)
+			}
+			admitted = cloneExecutionPolicySnapshot(&payload.Snapshot)
 		}
-		if err := validateExecutionPolicySnapshot(&candidate); err != nil {
-			return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
-		}
-		if admitted != nil && admitted.ConfigurationHash != candidate.ConfigurationHash {
-			return nil, fmt.Errorf("execution policy snapshot events disagree: %s != %s", admitted.ConfigurationHash, candidate.ConfigurationHash)
-		}
-		admitted = cloneExecutionPolicySnapshot(&candidate)
 	}
 	return admitted, nil
+}
+
+func policyMigrationSourceMatches(payload ExecutionPolicySnapshotMigratedPayload, preceding []RunEvent) bool {
+	for _, event := range preceding {
+		if EventType(event.Type) != EventExecutionPolicySnapshot || event.ID != payload.SourceEventID {
+			continue
+		}
+		var snapshot ExecutionPolicySnapshot
+		if json.Unmarshal(event.Payload, &snapshot) != nil {
+			return false
+		}
+		digest, err := executionCompatibilityDigest(&snapshot)
+		return err == nil && digest == payload.SourceDigest
+	}
+	return false
 }
 
 func compareExecutionPolicySnapshotProjection(live, replayed *ExecutionPolicySnapshot) error {

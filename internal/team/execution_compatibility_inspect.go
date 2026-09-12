@@ -77,6 +77,9 @@ func InspectExecutionCompatibility(ctx context.Context, workspace, branch string
 			if err := inspectSessionOnlyCompatibilityTasks(report, branchID, lineage, session); err != nil {
 				return nil, err
 			}
+			if err := inspectSessionOnlyCompatibilityPolicy(report, branchID, lineage, session); err != nil {
+				return nil, err
+			}
 		}
 	}
 	sortCompatibilityFindings(report.Findings)
@@ -118,46 +121,41 @@ func loadCompatibilitySession(workspace string) (*SessionData, error) {
 }
 
 type compatibilityTaskPayload struct {
-	ID                string                        `json:"id"`
-	Model             string                        `json:"model"`
-	SubagentProvider  string                        `json:"subagent_provider"`
-	ExecutionTarget   executioncompat.Target        `json:"execution_target"`
-	ExecutionTopology []executioncompat.Target      `json:"execution_topology"`
-	ProviderBinding   *compatibilityProviderBinding `json:"provider_binding"`
-	BackendBinding    *compatibilityBackendBinding  `json:"backend_binding"`
-	ExecutionReceipt  *executioncompat.Receipt      `json:"execution_receipt"`
-	ExecutionReceipts []executioncompat.Receipt     `json:"execution_receipts"`
+	ID                string                   `json:"id"`
+	Model             string                   `json:"model"`
+	SubagentProvider  string                   `json:"subagent_provider"`
+	ExecutionTarget   executioncompat.Target   `json:"execution_target"`
+	ExecutionTopology []executioncompat.Target `json:"execution_topology"`
+	ProviderBinding   *ProviderBinding         `json:"provider_binding"`
+	BackendBinding    *BackendBinding          `json:"backend_binding"`
+	ExecutionReceipt  *compatibilityReceipt    `json:"execution_receipt"`
+	ExecutionReceipts []compatibilityReceipt   `json:"execution_receipts"`
 }
 
-type compatibilityProviderBinding struct {
-	Provider string `json:"provider"`
-}
-
-type compatibilityBackendBinding struct {
-	Backend string `json:"backend"`
+// compatibilityReceipt is deliberately limited to the immutable receipt
+// identity and its legacy/canonical backend spellings. The materializer must
+// patch an existing receipt without retaining task output or provenance data.
+type compatibilityReceipt struct {
+	RunID            string `json:"run_id"`
+	Attempt          int    `json:"attempt"`
+	ModelExecutionID string `json:"model_execution_id,omitempty"`
+	Backend          string `json:"backend,omitempty"`
+	SubagentProvider string `json:"subagent_provider,omitempty"`
 }
 
 type compatibilityTaskSubject struct {
-	input    executioncompat.TaskInput
-	runID    string
-	evidence []string
+	input           executioncompat.TaskInput
+	runID           string
+	evidence        []string
+	receipts        []compatibilityReceipt
+	providerBinding *ProviderBinding
+	backendBinding  *BackendBinding
 }
 
 func inspectCompatibilityLineage(report *executioncompat.InspectionReport, branchID string, events []RunEvent) error {
-	tasks := make(map[string]*compatibilityTaskSubject)
-	for _, event := range events {
-		if isCompatibilityTaskEvent(event.Type) {
-			taskID, payload, err := decodeCompatibilityTask(event)
-			if err != nil {
-				return fmt.Errorf("inspect execution compatibility task event %q: %w", event.ID, err)
-			}
-			subject := tasks[taskID]
-			if subject == nil {
-				subject = &compatibilityTaskSubject{}
-				tasks[taskID] = subject
-			}
-			subject.merge(payload, event)
-		}
+	tasks, _, err := collectCompatibilityTaskSubjects(events)
+	if err != nil {
+		return fmt.Errorf("inspect execution compatibility tasks: %w", err)
 	}
 	ids := make([]string, 0, len(tasks))
 	for id := range tasks {
@@ -166,7 +164,15 @@ func inspectCompatibilityLineage(report *executioncompat.InspectionReport, branc
 	sort.Strings(ids)
 	for _, id := range ids {
 		subject := tasks[id]
-		appendTaskCompatibilityFinding(report, branchID, id, subject.runID, subject.evidence, executioncompat.ClassifyTask(subject.input))
+		classification := executioncompat.ClassifyTask(subject.input)
+		if classification.Classification == executioncompat.ClassificationMigratable {
+			if _, needed, err := buildEventTaskCompatibilityPlan(branchID, id, subject, events); err != nil {
+				classification = invalidCompatibilityMigrationClassification()
+			} else if !needed {
+				classification = migratedCompatibilityClassification()
+			}
+		}
+		appendTaskCompatibilityFinding(report, branchID, id, subject.runID, subject.evidence, classification)
 	}
 	for _, event := range events {
 		if EventType(event.Type) != EventExecutionPolicySnapshot {
@@ -176,9 +182,31 @@ func inspectCompatibilityLineage(report *executioncompat.InspectionReport, branc
 		if err := json.Unmarshal(event.Payload, &input); err != nil {
 			return fmt.Errorf("inspect execution compatibility policy event %q: %w", event.ID, err)
 		}
-		appendPolicyCompatibilityFinding(report, branchID, event.ID, executioncompat.ClassifyPolicySnapshot(input))
+		classification := executioncompat.ClassifyPolicySnapshot(input)
+		if classification.Classification == executioncompat.ClassificationMigratable {
+			var snapshot ExecutionPolicySnapshot
+			// The inspector's v3 vocabulary intentionally remains useful for
+			// old compact policy fixtures that predate the complete snapshot
+			// shape. The writer revalidates the full snapshot before appending.
+			if json.Unmarshal(event.Payload, &snapshot) == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
+				if _, needed, err := buildPolicyCompatibilityPlan(branchID, event.ID, event.RunID, "event_lineage", &snapshot, events); err != nil {
+					classification = invalidCompatibilityMigrationClassification()
+				} else if !needed {
+					classification = migratedCompatibilityClassification()
+				}
+			}
+		}
+		appendPolicyCompatibilityFinding(report, branchID, event.ID, classification)
 	}
 	return nil
+}
+
+func migratedCompatibilityClassification() executioncompat.ClassificationResult {
+	return executioncompat.ClassificationResult{Classification: executioncompat.ClassificationMigrated, Features: []executioncompat.Feature{executioncompat.FeatureLegacyResumeMigration}, ReasonCode: "canonical_migration_verified"}
+}
+
+func invalidCompatibilityMigrationClassification() executioncompat.ClassificationResult {
+	return executioncompat.ClassificationResult{Classification: executioncompat.ClassificationUnmigratable, Features: []executioncompat.Feature{executioncompat.FeatureLegacyResumeMigration}, ReasonCode: "invalid_compatibility_migration"}
 }
 
 func isCompatibilityTaskEvent(eventType string) bool {
@@ -226,22 +254,26 @@ func (subject *compatibilityTaskSubject) merge(payload compatibilityTaskPayload,
 	}
 	if payload.ProviderBinding != nil && subject.input.ProviderBinding == "" {
 		subject.input.ProviderBinding = payload.ProviderBinding.Provider
+		subject.providerBinding = cloneProviderBinding(payload.ProviderBinding)
 	}
 	if payload.BackendBinding != nil && subject.input.BackendBinding == "" {
 		subject.input.BackendBinding = payload.BackendBinding.Backend
+		subject.backendBinding = cloneBackendBinding(payload.BackendBinding)
 	}
 	if payload.ExecutionReceipt != nil {
-		subject.input.Receipts = append(subject.input.Receipts, *payload.ExecutionReceipt)
+		subject.input.Receipts = append(subject.input.Receipts, executioncompat.Receipt{Backend: payload.ExecutionReceipt.Backend, SubagentProvider: payload.ExecutionReceipt.SubagentProvider})
+		subject.receipts = append(subject.receipts, *payload.ExecutionReceipt)
 	}
-	subject.input.Receipts = append(subject.input.Receipts, payload.ExecutionReceipts...)
+	for _, receipt := range payload.ExecutionReceipts {
+		subject.input.Receipts = append(subject.input.Receipts, executioncompat.Receipt{Backend: receipt.Backend, SubagentProvider: receipt.SubagentProvider})
+		subject.receipts = append(subject.receipts, receipt)
+	}
 }
 
 func inspectSessionOnlyCompatibilityTasks(report *executioncompat.InspectionReport, branchID string, events []RunEvent, session *SessionData) error {
-	eventTaskIDs := make(map[string]struct{})
-	for _, event := range events {
-		if isCompatibilityTaskEvent(event.Type) && event.TaskID != "" {
-			eventTaskIDs[event.TaskID] = struct{}{}
-		}
+	_, eventTaskIDs, err := collectCompatibilityTaskSubjects(events)
+	if err != nil {
+		return fmt.Errorf("inspect session-only task events: %w", err)
 	}
 	for _, task := range session.Tasks {
 		if task == nil || strings.TrimSpace(task.ID) == "" {
@@ -251,9 +283,73 @@ func inspectSessionOnlyCompatibilityTasks(report *executioncompat.InspectionRepo
 			continue
 		}
 		input := compatibilityInputFromTodo(task)
-		appendTaskCompatibilityFinding(report, branchID, task.ID, "", nil, executioncompat.ClassifyTask(input))
+		classification := executioncompat.ClassifyTask(input)
+		if hasSessionCompatibilityMigration(events, branchID, task.ID) {
+			classification = migratedCompatibilityClassification()
+		} else if classification.Classification == executioncompat.ClassificationMigratable {
+			if _, needed, err := buildSessionTaskCompatibilityPlan(branchID, task, events); err != nil {
+				classification = invalidCompatibilityMigrationClassification()
+			} else if !needed {
+				classification = migratedCompatibilityClassification()
+			}
+		}
+		appendTaskCompatibilityFinding(report, branchID, task.ID, "", nil, classification)
 	}
 	return nil
+}
+
+func hasSessionCompatibilityMigration(events []RunEvent, branchID, taskID string) bool {
+	for _, event := range events {
+		if EventType(event.Type) != EventExecutionCompatibilityMigrated || effectiveEventBranchID(event) != branchID || event.TaskID != taskID {
+			continue
+		}
+		var payload ExecutionCompatibilityMigratedPayload
+		if json.Unmarshal(event.Payload, &payload) == nil && payload.SourceKind == "session_snapshot" && validateExecutionCompatibilityMigrationPayload(payload) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectSessionOnlyCompatibilityPolicy(report *executioncompat.InspectionReport, branchID string, events []RunEvent, session *SessionData) error {
+	if session == nil || session.ExecutionPolicySnapshot == nil {
+		return nil
+	}
+	for _, event := range events {
+		if EventType(event.Type) == EventExecutionPolicySnapshot {
+			return nil
+		}
+	}
+	snapshot := session.ExecutionPolicySnapshot
+	input := executioncompat.PolicyInput{Version: snapshot.Version, Routes: make([]executioncompat.PolicyRoute, 0, len(snapshot.ModelRoutes))}
+	for _, route := range snapshot.ModelRoutes {
+		input.Routes = append(input.Routes, executioncompat.PolicyRoute{Model: route.Model, Backend: route.Backend, ProviderKey: route.ProviderKey, LegacyProvider: route.LegacyProvider})
+	}
+	classification := executioncompat.ClassifyPolicySnapshot(input)
+	if hasSessionPolicyCompatibilityMigration(events, branchID) {
+		classification = migratedCompatibilityClassification()
+	} else if classification.Classification == executioncompat.ClassificationMigratable {
+		if _, needed, err := buildSessionPolicyCompatibilityPlan(branchID, session, events); err != nil {
+			classification = invalidCompatibilityMigrationClassification()
+		} else if !needed {
+			classification = migratedCompatibilityClassification()
+		}
+	}
+	appendPolicyCompatibilityFinding(report, branchID, "", classification)
+	return nil
+}
+
+func hasSessionPolicyCompatibilityMigration(events []RunEvent, branchID string) bool {
+	for _, event := range events {
+		if EventType(event.Type) != EventExecutionPolicySnapshotMigrated || effectiveEventBranchID(event) != branchID {
+			continue
+		}
+		var payload ExecutionPolicySnapshotMigratedPayload
+		if json.Unmarshal(event.Payload, &payload) == nil && payload.SourceKind == "session_snapshot" && validateExecutionPolicyCompatibilityMigrationPayload(payload) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func compatibilityInputFromTodo(task *TodoItem) executioncompat.TaskInput {
@@ -446,7 +542,7 @@ func hasAnyKey(value map[string]json.RawMessage, keys ...string) bool {
 
 func countNonEmptyProviderBindings(value map[string]json.RawMessage) int {
 	raw := value["provider_binding"]
-	var binding compatibilityProviderBinding
+	var binding ProviderBinding
 	if json.Unmarshal(raw, &binding) == nil && strings.TrimSpace(binding.Provider) != "" {
 		return 1
 	}

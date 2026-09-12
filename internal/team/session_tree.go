@@ -905,7 +905,7 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 	entries := replayed.Entries
 
 	// Nothing to rebuild from: leave the live session untouched.
-	if len(tasks) == 0 && len(entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" {
+	if len(tasks) == 0 && len(entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil {
 		return nil
 	}
 
@@ -918,6 +918,7 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 	sd.CriterionResults = replayed.CriterionResults
 	sd.CriterionCheckpoints = replayed.CriterionCheckpoints
 	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
+	sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayed.ExecutionPolicySnapshot)
 	if err := SaveSession(workspace, sd); err != nil {
 		return fmt.Errorf("rebuild session for branch %q: %w", b.ID, err)
 	}

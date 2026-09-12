@@ -27,6 +27,12 @@ func TestClassifyTaskUsesOnlyDurableEvidence(t *testing.T) {
 			reason: "canonical_identity_derivable",
 		},
 		{
+			name:   "bare model named provider",
+			input:  TaskInput{Model: "gpt-5", SubagentProvider: "codex"},
+			class:  ClassificationMigratable,
+			reason: "canonical_identity_derivable",
+		},
+		{
 			name:   "conflicting binding and receipt",
 			input:  TaskInput{Model: "qwen3:8b", ProviderBinding: "openai", Receipts: []Receipt{{SubagentProvider: "hufu-local"}}},
 			class:  ClassificationAmbiguous,
@@ -65,5 +71,35 @@ func TestClassifyPolicySnapshot(t *testing.T) {
 	}
 	if got := ClassifyPolicySnapshot(PolicyInput{Version: 3, Routes: []PolicyRoute{{Model: "qwen3:8b", Backend: "local", LegacyProvider: "local"}}}); got.Classification != ClassificationMigratable {
 		t.Fatalf("v3 local route = %#v, want migratable", got)
+	}
+}
+
+func TestDeriveTaskDoesNotNeedLiveConfiguration(t *testing.T) {
+	derived, err := DeriveTask(TaskInput{Model: "local/qwen3:8b", SubagentProvider: "hufu-local", Receipts: []Receipt{{SubagentProvider: "hufu-local"}}})
+	if err != nil {
+		t.Fatalf("DeriveTask: %v", err)
+	}
+	if derived.Target != (Target{Backend: "ollama", Model: "qwen3:8b"}) || len(derived.Topology) != 1 || derived.ReceiptBackend[0] != "ollama" {
+		t.Fatalf("derived task = %#v", derived)
+	}
+	if _, err := DeriveTask(TaskInput{Model: "openai/gpt-4o"}); err == nil {
+		t.Fatal("qualified model without durable evidence was derived")
+	}
+}
+
+func TestDeriveTaskKeepsIndependentTypedTopologyLeaves(t *testing.T) {
+	input := TaskInput{
+		Target: Target{Backend: "local", Model: "qwen3:8b"},
+		Topology: []Target{
+			{Backend: "local", Model: "qwen3:8b"},
+			{Backend: "codex", Model: "gpt-5.6-luna"},
+		},
+	}
+	derived, err := DeriveTask(input)
+	if err != nil {
+		t.Fatalf("DeriveTask: %v", err)
+	}
+	if derived.Target != (Target{Backend: "ollama", Model: "qwen3:8b"}) || len(derived.Topology) != 2 || derived.Topology[1] != (Target{Backend: "codex", Model: "gpt-5.6-luna"}) {
+		t.Fatalf("derived topology = %#v", derived)
 	}
 }

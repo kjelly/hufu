@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/executioncompat"
 )
 
 // ExecutionIdentityConflictError means durable execution identity evidence
@@ -124,8 +125,15 @@ func validateReplayExecutionIdentities(events []RunEvent) error {
 	seenTargets := make(map[string]execution.ExecutionTarget)
 	seenTopologies := make(map[string][]execution.ExecutionTarget)
 	migrationExpectations := make(map[string]legacyExecutionMigrationExpectation)
+	compatibilityMigrations := make(map[string]ExecutionCompatibilityMigratedPayload)
 	normalizedEvents := normalizeReplayEvents(events)
 	for index, event := range normalizedEvents {
+		if event.Type == string(EventExecutionCompatibilityMigrated) && event.TaskID != "" {
+			if err := validateReplayExecutionCompatibilityMigration(event, normalizedEvents[:index], compatibilityMigrations, seenTargets, seenTopologies); err != nil {
+				return err
+			}
+			continue
+		}
 		if event.Type == string(EventExecutionTargetMigrated) && event.TaskID != "" {
 			if err := validateReplayExecutionTargetMigration(event, normalizedEvents[:index], migrationExpectations, seenTargets, seenTopologies); err != nil {
 				return err
@@ -189,6 +197,53 @@ func validateReplayExecutionIdentities(events []RunEvent) error {
 		seenTopologies[taskID] = cloneExecutionTopology(topology)
 	}
 	return validateReplayBackendSessionBindings(events, seenTargets)
+}
+
+func validateReplayExecutionCompatibilityMigration(event RunEvent, preceding []RunEvent, migrations map[string]ExecutionCompatibilityMigratedPayload, seenTargets map[string]execution.ExecutionTarget, seenTopologies map[string][]execution.ExecutionTarget) error {
+	var payload ExecutionCompatibilityMigratedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return executionIdentityConflict(event, event.TaskID, "decode execution compatibility migration")
+	}
+	if payload.TaskID != event.TaskID || payload.BranchID != effectiveEventBranchID(event) {
+		return executionIdentityConflict(event, event.TaskID, "execution compatibility migration scope disagrees with event")
+	}
+	if err := validateExecutionCompatibilityMigrationPayload(payload); err != nil {
+		return executionIdentityConflict(event, event.TaskID, err.Error())
+	}
+	if payload.SourceKind == "event_lineage" {
+		subjects, _, err := collectCompatibilityTaskSubjects(preceding)
+		if err != nil {
+			return executionIdentityConflict(event, event.TaskID, err.Error())
+		}
+		subject := subjects[event.TaskID]
+		if subject == nil {
+			return executionIdentityConflict(event, event.TaskID, "migration has no preceding task evidence")
+		}
+		digest, err := compatibilityTaskSourceDigest(subject.input)
+		if err != nil || digest != payload.SourceDigest {
+			return executionIdentityConflict(event, event.TaskID, "migration source digest disagrees with preceding evidence")
+		}
+		derivation, err := executioncompat.DeriveTask(subject.input)
+		if err != nil || !execution.TargetsEqual(payload.ExecutionTarget, executionTargetFromCompatibility(derivation.Target)) || !execution.TargetSlicesEqual(payload.ExecutionTopology, executionTopologyFromCompatibility(derivation.Topology)) {
+			return executionIdentityConflict(event, event.TaskID, "migration projection disagrees with preceding evidence")
+		}
+	}
+	if previous, exists := migrations[event.TaskID]; exists {
+		if !sameTaskMigrationProjection(previous, payload) {
+			return executionIdentityConflict(event, event.TaskID, "repeated execution compatibility migrations disagree")
+		}
+	} else {
+		migrations[event.TaskID] = payload
+	}
+	if previous, exists := seenTargets[event.TaskID]; exists && !execution.TargetsEqual(previous, payload.ExecutionTarget) {
+		return executionIdentityConflict(event, event.TaskID, "execution target changed after migration")
+	}
+	seenTargets[event.TaskID] = payload.ExecutionTarget
+	if previous, exists := seenTopologies[event.TaskID]; exists && !execution.TargetSlicesEqual(previous, payload.ExecutionTopology) {
+		return executionIdentityConflict(event, event.TaskID, "execution topology changed after migration")
+	}
+	seenTopologies[event.TaskID] = cloneExecutionTopology(payload.ExecutionTopology)
+	return nil
 }
 
 func validateReplayExecutionTargetMigration(event RunEvent, preceding []RunEvent, expectations map[string]legacyExecutionMigrationExpectation, seenTargets map[string]execution.ExecutionTarget, seenTopologies map[string][]execution.ExecutionTarget) error {

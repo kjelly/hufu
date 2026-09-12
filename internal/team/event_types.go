@@ -51,6 +51,13 @@ const (
 	// EventBackendSessionBound is the canonical mutable backend-session event.
 	EventBackendSessionBound     EventType = "backend_session_bound"
 	EventExecutionTargetMigrated EventType = "execution_target_migrated"
+	// EventExecutionCompatibilityMigrated is the self-contained canonical
+	// replacement for a legacy task execution identity. It is written only by
+	// the explicit append-only compatibility materializer.
+	EventExecutionCompatibilityMigrated EventType = "execution_compatibility_migrated"
+	// EventExecutionPolicySnapshotMigrated carries a canonical v4 policy
+	// snapshot for one historical v3 snapshot subject.
+	EventExecutionPolicySnapshotMigrated EventType = "execution_policy_snapshot_migrated"
 	// EventResourceLocked records a durably admitted LockedResourceSet
 	// (spec.md "Generic Required Resource Lock"). The payload is
 	// metadata-only — canonical path, sha256, byte size — never content
@@ -79,6 +86,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
 		EventModelProfileResolved, EventExecutionPolicySnapshot, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
+		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated,
 		EventResourceLocked:
 		return true
 	default:

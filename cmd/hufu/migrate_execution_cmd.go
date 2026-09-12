@@ -14,6 +14,9 @@ import (
 
 var migrateInspectExecutionBranch string
 var migrateInspectExecutionJSON bool
+var migrateApplyExecutionBranch string
+var migrateApplyExecutionJSON bool
+var migrateApplyExecutionApply bool
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
@@ -32,10 +35,24 @@ never printed.`,
 	RunE: runMigrateInspectExecution,
 }
 
+var migrateApplyExecutionCmd = &cobra.Command{
+	Use:   "apply-execution",
+	Short: "Append canonical execution compatibility migrations",
+	Long: `Materialize canonical execution identity from durable workspace evidence.
+The command does not rewrite historical events. --apply is required so an
+inspection command cannot be mistaken for a workspace-changing operation.`,
+	Args: cobra.NoArgs,
+	RunE: runMigrateApplyExecution,
+}
+
 func init() {
 	migrateInspectExecutionCmd.Flags().StringVar(&migrateInspectExecutionBranch, "branch", "", "Inspect only one session branch (ID or name)")
 	migrateInspectExecutionCmd.Flags().BoolVar(&migrateInspectExecutionJSON, "json", false, "Write the stable JSON inspection report to stdout")
+	migrateApplyExecutionCmd.Flags().StringVar(&migrateApplyExecutionBranch, "branch", "", "Apply only one session branch (ID or name)")
+	migrateApplyExecutionCmd.Flags().BoolVar(&migrateApplyExecutionJSON, "json", false, "Write the stable JSON apply result to stdout")
+	migrateApplyExecutionCmd.Flags().BoolVar(&migrateApplyExecutionApply, "apply", false, "Confirm the append-only workspace migration")
 	migrateCmd.AddCommand(migrateInspectExecutionCmd)
+	migrateCmd.AddCommand(migrateApplyExecutionCmd)
 }
 
 func runMigrateInspectExecution(cmd *cobra.Command, _ []string) error {
@@ -47,6 +64,21 @@ func runMigrateInspectExecution(cmd *cobra.Command, _ []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(report)
 	}
 	return renderExecutionCompatibilityInspection(cmd.OutOrStdout(), report)
+}
+
+func runMigrateApplyExecution(cmd *cobra.Command, _ []string) error {
+	if !migrateApplyExecutionApply {
+		return fmt.Errorf("hufu migrate apply-execution: --apply is required")
+	}
+	result, err := team.ApplyExecutionCompatibility(context.Background(), getWorkspace(), migrateApplyExecutionBranch)
+	if err != nil {
+		return fmt.Errorf("hufu migrate apply-execution: %w", err)
+	}
+	if migrateApplyExecutionJSON {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "schema_version: %d\nscope: %s\ntask_migration_events: %d\npolicy_migration_events: %d\nprojection_rebuilt: %t\n", result.SchemaVersion, result.Scope, result.TaskMigrationEvents, result.PolicyMigrationEvents, result.ProjectionRebuilt)
+	return err
 }
 
 func renderExecutionCompatibilityInspection(writer io.Writer, report *executioncompat.InspectionReport) error {

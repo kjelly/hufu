@@ -44,3 +44,32 @@ func TestMigrateCommandIsRegistered(t *testing.T) {
 		t.Fatalf("migrate inspect command = %#v", command)
 	}
 }
+
+func TestMigrateApplyExecutionRequiresExplicitApply(t *testing.T) {
+	previousOpts := opts
+	previousApply := migrateApplyExecutionApply
+	previousBranch := migrateApplyExecutionBranch
+	previousJSON := migrateApplyExecutionJSON
+	t.Cleanup(func() {
+		opts = previousOpts
+		migrateApplyExecutionApply = previousApply
+		migrateApplyExecutionBranch = previousBranch
+		migrateApplyExecutionJSON = previousJSON
+	})
+	root := newRootCommand()
+	root.SetArgs([]string{"migrate", "apply-execution"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("apply-execution accepted a missing --apply confirmation")
+	}
+}
+
+func TestMigrateApplyExecutionCommandIsRegistered(t *testing.T) {
+	root := newRootCommand()
+	command, _, err := root.Find([]string{"migrate", "apply-execution"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command == nil || command.Name() != "apply-execution" {
+		t.Fatalf("migrate apply command = %#v", command)
+	}
+}

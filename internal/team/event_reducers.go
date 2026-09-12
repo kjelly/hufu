@@ -85,6 +85,11 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
 				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
 			}
+		case string(EventExecutionPolicySnapshotMigrated):
+			var payload ExecutionPolicySnapshotMigratedPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && validateExecutionPolicyCompatibilityMigrationPayload(payload) == nil {
+				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&payload.Snapshot)
+			}
 		case string(EventResourceLocked):
 			var set LockedResourceSet
 			if err := json.Unmarshal(e.Payload, &set); err == nil {
@@ -325,6 +330,31 @@ func ReduceToTodoList(events []RunEvent) []*TodoItem {
 	return reduceToTodoList(events).tasks
 }
 
+func applyExecutionCompatibilityReceiptBackends(item *TodoItem, migrations []ReceiptBackendMigration) {
+	if item == nil || len(migrations) == 0 {
+		return
+	}
+	for _, migration := range migrations {
+		if strings.TrimSpace(migration.Backend) == "" {
+			continue
+		}
+		if item.ExecutionReceipt != nil && sameReceiptMigrationIdentity(*item.ExecutionReceipt, migration) {
+			item.ExecutionReceipt.Backend = migration.Backend
+			item.ExecutionReceipt.SubagentProvider = ""
+		}
+		for index := range item.ExecutionReceipts {
+			if sameReceiptMigrationIdentity(item.ExecutionReceipts[index], migration) {
+				item.ExecutionReceipts[index].Backend = migration.Backend
+				item.ExecutionReceipts[index].SubagentProvider = ""
+			}
+		}
+	}
+}
+
+func sameReceiptMigrationIdentity(receipt ExecutionReceipt, migration ReceiptBackendMigration) bool {
+	return receipt.RunID == migration.RunID && receipt.Attempt == migration.Attempt && receipt.ModelExecutionID == migration.ModelExecutionID
+}
+
 func reduceToTodoList(events []RunEvent) todoReplayResult {
 	events = normalizeReplayEvents(events)
 	taskMap := make(map[string]*TodoItem)
@@ -338,6 +368,28 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventExecutionCompatibilityMigrated) && e.TaskID != "" {
+			var payload ExecutionCompatibilityMigratedPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && validateExecutionCompatibilityMigrationPayload(payload) == nil {
+				item := taskMap[e.TaskID]
+				if item == nil && payload.SourceKind == "session_snapshot" {
+					var canonical TodoItem
+					if err := json.Unmarshal(payload.CanonicalTask, &canonical); err == nil && canonical.ID == e.TaskID {
+						item = &canonical
+						taskMap[e.TaskID] = item
+						taskOrder = append(taskOrder, e.TaskID)
+					}
+				}
+				if item != nil {
+					item.ExecutionTarget = payload.ExecutionTarget
+					item.ExecutionTopology = cloneExecutionTopology(payload.ExecutionTopology)
+					item.BackendBinding = cloneBackendBinding(payload.BackendBinding)
+					applyExecutionCompatibilityReceiptBackends(item, payload.ReceiptBackends)
+					materializeLegacyIdentityShadow(item)
+				}
+			}
+			continue
+		}
 		if e.Type == string(EventExecutionTargetMigrated) && e.TaskID != "" {
 			var payload ExecutionTargetMigratedPayload
 			if err := json.Unmarshal(e.Payload, &payload); err == nil {
