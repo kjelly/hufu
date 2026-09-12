@@ -1,0 +1,32 @@
+version: 1
+name: retry-recovery
+team: ./team
+mode: deterministic
+# verifier-failure-retry is a known-bug regression pin, not the desired
+# end state: internal/team's submit_result runtime-identity check
+# (submitResultRuntimeIdentityFromContext's metadata fallback,
+# coordinator_tools_result.go) can never succeed on an attempt >= 2 for a
+# durable task occurrence, so a worker's *second* submit_result call after
+# a verify failure always errors "submit_result runtime identity is
+# missing or invalid" -- classified failure-class: protocol -- rather than
+# the retry actually completing. This case pins that CURRENT behavior so
+# a future fix to the underlying bug is what turns it red (at which point
+# update this case's expect: block to run-outcome: unverified /
+# tasks[0].status: done, the originally-intended assertion -- see
+# docs/tmp/now/06-workflow-regression-eval-harness.md §10 PR-3 for the
+# full finding). Filed as an internal/team bug, out of scope for this
+# harness's own implementation.
+cases:
+  - id: verifier-failure-retry
+    prompt: "Report a status flag."
+    provider-fixture: fixtures/verifier-failure-retry.json
+    expect:
+      run-outcome: blocked
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: blocked
+          failure-class: protocol
+      events:
+        required: [start, verify_start, verify_error, failure, done]
+        order: [start, verify_error, failure, done]

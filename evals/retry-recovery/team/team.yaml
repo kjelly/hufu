@@ -1,0 +1,2 @@
+name: eval-retry-recovery
+description: Minimal coordinator + one worker fixture team for the retry-recovery eval suite
