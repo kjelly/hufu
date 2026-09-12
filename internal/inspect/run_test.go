@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestInspectTaskUsesFrozenExecutionTargetAndHidesRawEvidence(t *testing.T) {
 	if data.ExecutionTarget != "ollama/frozen-model" {
 		t.Fatalf("execution target = %q", data.ExecutionTarget)
 	}
-	if len(data.Attempts) != 1 || data.Attempts[0].VerificationStatus != "passed" || !data.Attempts[0].Winning {
+	if len(data.Attempts) != 1 || data.Attempts[0].ExecutionTarget != "ollama/frozen-model" || data.Attempts[0].VerificationStatus != "passed" || !data.Attempts[0].Winning {
 		t.Fatalf("attempts = %#v", data.Attempts)
 	}
 	encoded, err := json.Marshal(envelope)
@@ -59,6 +60,45 @@ func TestInspectTaskUsesFrozenExecutionTargetAndHidesRawEvidence(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("inspect task exposed %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestProjectTaskUsesAttemptAnchoredTargetsAndBothTranscriptRefs(t *testing.T) {
+	exitCode := 0
+	first := team.ExecutionReceipt{
+		RunID: "run-1", TaskID: "task-1", Attempt: 1, Backend: "ollama",
+		ModelExecutionID: "execution-fast", ProducerID: "worker", ExitCode: &exitCode,
+		TranscriptRef: "task-transcript", ProviderTranscriptRef: "provider-transcript",
+	}
+	second := team.ExecutionReceipt{
+		RunID: "run-1", TaskID: "task-1", Attempt: 2, Backend: "ollama",
+		ModelExecutionID: "execution-strong", ProducerID: "worker", ExitCode: &exitCode,
+	}
+	item := &team.TodoItem{
+		ID: "task-1", ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "strong"},
+		ExecutionReceipts: []team.ExecutionReceipt{first, second},
+	}
+	events := []IndexedEvent{
+		{Ordinal: 1, Event: team.RunEvent{ID: "event-fast", TaskID: item.ID, Payload: jsonBytes(t, map[string]any{
+			"execution_target": execution.ExecutionTarget{Backend: "ollama", Model: "fast"}, "execution_receipts": []team.ExecutionReceipt{first},
+		})}},
+		{Ordinal: 2, Event: team.RunEvent{ID: "event-strong", TaskID: item.ID, Payload: jsonBytes(t, map[string]any{
+			"execution_target": execution.ExecutionTarget{Backend: "ollama", Model: "strong"}, "execution_receipts": []team.ExecutionReceipt{second},
+		})}},
+	}
+	query := InspectQuery{RunID: "run-1", TaskID: item.ID}
+	data := projectTaskWithEvents(item, query, events)
+	if len(data.Attempts) != 2 || data.Attempts[0].ExecutionTarget != "ollama/fast" || data.Attempts[1].ExecutionTarget != "ollama/strong" {
+		t.Fatalf("attempt targets = %#v", data.Attempts)
+	}
+	for _, ref := range []string{"task-transcript", "provider-transcript"} {
+		if !slices.Contains(data.ArtifactRefs, ref) {
+			t.Fatalf("artifact refs %v do not contain %q", data.ArtifactRefs, ref)
+		}
+	}
+	trace := receiptTraceCandidates(events, item, query)
+	if len(trace) != 2 || trace[0].entry.Ref.ExecutionTarget != "ollama/fast" || trace[1].entry.Ref.ExecutionTarget != "ollama/strong" {
+		t.Fatalf("trace attempt targets = %#v", trace)
 	}
 }
 

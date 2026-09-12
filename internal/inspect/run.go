@@ -40,6 +40,7 @@ type AttemptData struct {
 	ModelExecutionID   string `json:"model_execution_id,omitempty"`
 	ProducerID         string `json:"producer_id,omitempty"`
 	Backend            string `json:"backend,omitempty"`
+	ExecutionTarget    string `json:"execution_target,omitempty"`
 	ExitCode           *int   `json:"exit_code,omitempty"`
 	VerificationStatus string `json:"verification_status"`
 	VerificationRef    string `json:"verification_ref,omitempty"`
@@ -158,7 +159,7 @@ func InspectTask(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err != nil {
 		return nil, classifyProjectionError(query.RunID, err)
 	}
-	data := projectTask(matches[0], query)
+	data := projectTaskWithEvents(matches[0], query, runIndexedEvents(lineage, query))
 	if query.Attempt > 0 && len(data.Attempts) == 0 {
 		return nil, fmt.Errorf("%w: attempt %d for task %q in run %q", ErrNotFound, query.Attempt, query.TaskID, query.RunID)
 	}
@@ -261,6 +262,10 @@ func evidenceRefs(manifest *team.EvidenceManifest) []string {
 }
 
 func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
+	return projectTaskWithEvents(item, query, nil)
+}
+
+func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []IndexedEvent) TaskData {
 	data := TaskData{
 		RunID:             query.RunID,
 		TaskID:            item.ID,
@@ -292,6 +297,7 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 			ModelExecutionID:   receipt.ModelExecutionID,
 			ProducerID:         receipt.ProducerID,
 			Backend:            receipt.Backend,
+			ExecutionTarget:    receiptExecutionTarget(findReceiptAnchor(events, receipt), receipt),
 			ExitCode:           receipt.ExitCode,
 			VerificationStatus: "not_run",
 		}
@@ -304,7 +310,8 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 			}
 		}
 		data.Attempts = append(data.Attempts, attempt)
-		data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, receipt.TranscriptRef, receipt.ProviderTranscriptRef)
+		data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, receipt.TranscriptRef)
+		data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, receipt.ProviderTranscriptRef)
 	}
 	if item.TypedResult != nil {
 		for _, ref := range item.TypedResult.Artifacts {

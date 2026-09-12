@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -193,15 +194,28 @@ func receiptTraceCandidates(events []IndexedEvent, item *team.TodoItem, query In
 		if receipt.VerifyResult != nil {
 			refs = append(refs, receipt.VerifyResult.Fingerprint)
 		}
+		anchor := findReceiptAnchor(events, receipt)
 		entry := TraceEntry{
-			Ref:  TraceRef{RunID: query.RunID, BranchID: query.BranchID, TaskID: item.ID, Attempt: receipt.Attempt, AgentID: receipt.ProducerID, ExecutionTarget: receipt.Backend, Source: "execution_receipt"},
+			Ref:  TraceRef{RunID: query.RunID, BranchID: query.BranchID, TaskID: item.ID, Attempt: receipt.Attempt, AgentID: receipt.ProducerID, ExecutionTarget: receiptExecutionTarget(anchor, receipt), Source: "execution_receipt"},
 			Kind: "execution_receipt", Timestamp: receiptTimestamp(receipt), Status: receiptStatus(receipt), Refs: normalizeOpaqueRefs(refs),
 		}
-		anchorSupplement(&entry, findReceiptAnchor(events, receipt))
+		anchorSupplement(&entry, anchor)
 		stableKey := fmt.Sprintf("%s:%d:%s", item.ID, receipt.Attempt, receipt.ModelExecutionID)
 		out = append(out, supplementalCandidate(entry, stableKey))
 	}
 	return out
+}
+
+func receiptExecutionTarget(anchor *IndexedEvent, receipt team.ExecutionReceipt) string {
+	if anchor != nil {
+		var payload struct {
+			ExecutionTarget execution.ExecutionTarget `json:"execution_target"`
+		}
+		if json.Unmarshal(anchor.Event.Payload, &payload) == nil && payload.ExecutionTarget.Validate() == nil {
+			return payload.ExecutionTarget.String()
+		}
+	}
+	return execution.CanonicalTargetBackendName(receipt.Backend)
 }
 
 func receiptTimestamp(receipt team.ExecutionReceipt) string {

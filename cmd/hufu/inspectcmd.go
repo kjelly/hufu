@@ -266,9 +266,9 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			return err
 		}
 		for _, attempt := range data.Attempts {
-			if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s backend=%s exit_code=%s verification=%s winning=%t\n",
+			if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s execution_target=%s backend=%s exit_code=%s verification=%s winning=%t\n",
 				attempt.Attempt, valueOrUnavailable(attempt.ModelExecutionID), valueOrUnavailable(attempt.ProducerID),
-				valueOrUnavailable(attempt.Backend), optionalInt(attempt.ExitCode), attempt.VerificationStatus, attempt.Winning); err != nil {
+				valueOrUnavailable(attempt.ExecutionTarget), valueOrUnavailable(attempt.Backend), optionalInt(attempt.ExitCode), attempt.VerificationStatus, attempt.Winning); err != nil {
 				return err
 			}
 		}
