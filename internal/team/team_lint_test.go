@@ -286,6 +286,16 @@ func TestTeamLintLegacyFanoutReusesExistingCode(t *testing.T) {
 	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
 }
 
+// TestTeamLintLegacyFanoutDetectsNonTSVExtension guards against narrowing the
+// deprecation finding to ".tsv" only: usesStructuredWorkset (fan_out.go)
+// treats any non-".json", non-source-artifact fan-out source as legacy at
+// runtime, so the lint finding must flag every such extension, not just
+// ".tsv".
+func TestTeamLintLegacyFanoutDetectsNonTSVExtension(t *testing.T) {
+	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items\n      goal-template: process {key}\n")
+	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
+}
+
 func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
 	if err != nil {

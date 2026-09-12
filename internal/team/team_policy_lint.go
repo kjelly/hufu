@@ -122,7 +122,13 @@ func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
 	if strings.TrimSpace(fanOut.GoalTemplate) == "" {
 		findings = append(findings, errorFinding(field+".fan-out.goal-template", FindingWorksetReceiptSource, "fan-out requires goal-template"))
 	}
-	if hasSource && !hasArtifact && strings.EqualFold(filepath.Ext(strings.TrimSpace(fanOut.Source)), ".tsv") {
+	// usesStructuredWorkset (fan_out.go) treats any source-artifact fan-out,
+	// or a plain source with a .json extension, as the canonical structured
+	// path. Every other extension (.tsv, no extension, etc.) falls through to
+	// the legacy expandFanOutTask reader at runtime, so the deprecation
+	// finding must match that same predicate instead of assuming ".tsv" is
+	// the only legacy spelling.
+	if hasSource && !hasArtifact && !strings.EqualFold(filepath.Ext(strings.TrimSpace(fanOut.Source)), ".json") {
 		findings = append(findings, ContractFinding{
 			Severity: FindingSeverityWarning,
 			Code:     FindingLegacyFanOutDeprecated,
