@@ -39,7 +39,56 @@ func newInspectCommand() *cobra.Command {
 	command.PersistentFlags().StringVar(&options.branch, "branch", "", "Exact branch ID, name, or branch label (default: active branch)")
 	command.PersistentFlags().StringVar(&options.session, "session", "", "Optional exact session ID filter")
 	command.PersistentFlags().StringVar(&options.format, "format", string(inspectpkg.FormatText), "Output format: text or json")
-	command.AddCommand(newInspectRunCommand(options), newInspectTaskCommand(options))
+	command.AddCommand(
+		newInspectRunCommand(options),
+		newInspectTaskCommand(options),
+		newInspectEvidenceCommand(options),
+		newInspectContextCommand(options),
+	)
+	return command
+}
+
+func newInspectEvidenceCommand(options *inspectCLIOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "evidence <run-id>",
+		Short: "Show audit-verified evidence metadata without artifact content",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			query := options.query()
+			query.RunID = args[0]
+			envelope, err := inspectpkg.InspectEvidence(command.Context(), query)
+			return finishInspect(command, options.format, envelope, err)
+		},
+	}
+}
+
+func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
+	var runID, projectID, teamID, agentID string
+	var attempt int
+	var showContent, allAgents bool
+	command := &cobra.Command{
+		Use:   "context <task-id>",
+		Short: "Show context and memory injection metadata for one task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			query := options.query()
+			query.RunID = runID
+			query.TaskID = args[0]
+			query.Attempt = attempt
+			query.ProjectID = projectID
+			query.TeamID = teamID
+			query.AgentID = agentID
+			envelope, err := inspectpkg.InspectContext(command.Context(), query, inspectpkg.ContextOptions{ShowContent: showContent, AllAgents: allAgents})
+			return finishInspect(command, options.format, envelope, err)
+		},
+	}
+	command.Flags().StringVar(&runID, "run", "", "Run ID containing the task (required)")
+	command.Flags().IntVar(&attempt, "attempt", 0, "Optional positive attempt number")
+	command.Flags().StringVar(&projectID, "project", "", "Canonical context project ID (required)")
+	command.Flags().StringVar(&teamID, "team", "", "Optional exact context team scope")
+	command.Flags().StringVar(&agentID, "agent", "", "Worker identity authorized to inspect private context")
+	command.Flags().BoolVar(&allAgents, "all-agents", false, "Explicit maintenance view of private context for all workers")
+	command.Flags().BoolVar(&showContent, "show-content", false, "Include authorized, safely redacted context content")
 	return command
 }
 
@@ -139,9 +188,52 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
 			refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
 		return err
+	case inspectpkg.EvidenceData:
+		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nManifest: %s (%s)\nAudit verdict: %s\nAcceptance: %s\n",
+			data.RunID, envelope.Query.BranchID, valueOrUnavailable(data.Manifest.Hash), data.Manifest.Status,
+			data.Verification.Verdict, data.Acceptance); err != nil {
+			return err
+		}
+		for _, requirement := range data.Requirements {
+			if _, err := fmt.Fprintf(writer, "Requirement %s: %s validator=%s artifacts=%d\n",
+				requirement.RequirementID, requirement.Status, valueOrUnavailable(requirement.Validator), len(requirement.ArtifactRefs)); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(writer, "Artifacts: %d\nFindings: %d\n", len(data.ArtifactRefs), len(data.Findings))
+		return err
+	case inspectpkg.ContextData:
+		if _, err := fmt.Fprintf(writer, "Run: %s\nTask: %s\nBranch: %s\nAuthorization: %s\nAttempts: %s\nContext manifests: %d\nMemory manifests: %d\n",
+			data.RunID, data.TaskID, envelope.Query.BranchID, data.Authorization.Status,
+			intsOrNone(data.Attempts), len(data.Manifests), len(data.MemoryManifests)); err != nil {
+			return err
+		}
+		for _, item := range data.Items {
+			if _, err := fmt.Fprintf(writer, "Context %s: available=%t kind=%s lifecycle=%s agent=%s\n",
+				item.ID, item.Available, item.Kind, item.Lifecycle, valueOrUnavailable(item.Scope.AgentID)); err != nil {
+				return err
+			}
+			if item.Content != "" {
+				if _, err := fmt.Fprintf(writer, "  %s\n", item.Content); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported inspect data %T", envelope.Data)
 	}
+}
+
+func intsOrNone(values []int) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(values))
+	for index, value := range values {
+		parts[index] = fmt.Sprintf("%d", value)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func valueOrUnavailable(value string) string {

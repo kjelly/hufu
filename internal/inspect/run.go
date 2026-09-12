@@ -253,7 +253,7 @@ func summarizeAttempts(tasks []*team.TodoItem, runID string) AttemptSummary {
 }
 
 func evidenceRefs(manifest *team.EvidenceManifest) []string {
-	refs := []string{manifest.ManifestHash}
+	refs := appendOpaqueRef(nil, manifest.ManifestHash)
 	for _, ref := range manifest.ArtifactRefs {
 		refs = appendOpaqueRef(refs, ref.ID, ref.SHA256)
 	}
@@ -317,6 +317,22 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 	for _, ref := range item.DecisionArtifacts {
 		data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, ref.ID, ref.SHA256)
 	}
+	for _, manifest := range item.ContextManifests {
+		if query.Attempt > 0 && manifest.Attempt != query.Attempt {
+			continue
+		}
+		for _, contextItem := range manifest.Items {
+			data.ContextRefs = appendOpaqueRef(data.ContextRefs, strings.TrimPrefix(contextItem.ID, "context:"))
+		}
+	}
+	for _, manifest := range item.MemoryManifests {
+		if query.Attempt > 0 && manifest.Attempt != query.Attempt {
+			continue
+		}
+		for _, memoryItem := range manifest.Items {
+			data.MemoryRefs = appendOpaqueRef(data.MemoryRefs, memoryItem.ContextItemID)
+		}
+	}
 	slices.SortFunc(data.Attempts, func(left, right AttemptData) int {
 		if order := cmp.Compare(left.Attempt, right.Attempt); order != 0 {
 			return order
@@ -324,6 +340,8 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 		return cmp.Compare(left.ModelExecutionID, right.ModelExecutionID)
 	})
 	data.ArtifactRefs = normalizeRefs(data.ArtifactRefs)
+	data.ContextRefs = normalizeRefs(data.ContextRefs)
+	data.MemoryRefs = normalizeRefs(data.MemoryRefs)
 	return data
 }
 
@@ -343,12 +361,20 @@ func applyWinningAttempts(data *TaskData, histories []auditverify.TaskAttemptHis
 
 func appendOpaqueRef(refs []string, candidates ...string) []string {
 	for _, candidate := range candidates {
-		if candidate = strings.TrimSpace(candidate); candidate != "" {
+		if candidate = safeOpaqueRef(candidate); candidate != "" {
 			refs = append(refs, candidate)
 			return refs
 		}
 	}
 	return refs
+}
+
+func safeOpaqueRef(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || strings.ContainsAny(candidate, "/\\\r\n\t") {
+		return ""
+	}
+	return candidate
 }
 
 func normalizeRefs(refs []string) []string {

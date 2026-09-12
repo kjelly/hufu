@@ -365,6 +365,18 @@ func OpenDecisionIndex(workspace string) (*DecisionIndex, error) {
 	return index, nil
 }
 
+// LoadDecisionIndexEntriesReadOnly reads the latest redacted addressing row
+// for each decision without creating the decisions directory, index, or lock
+// file. The returned rows remain a derived lookup projection; callers must
+// use the canonical decision event lineage and record artifacts for truth.
+func LoadDecisionIndexEntriesReadOnly(workspace string) ([]DecisionIndexEntry, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return nil, fmt.Errorf("load decision index read-only: empty workspace")
+	}
+	index := &DecisionIndex{path: DecisionIndexPath(workspace)}
+	return index.listFile()
+}
+
 // Path returns the index file path.
 func (i *DecisionIndex) Path() string { return i.path }
 

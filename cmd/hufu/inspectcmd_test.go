@@ -68,6 +68,44 @@ func TestInspectCommandUsageErrorsExitTwo(t *testing.T) {
 	}
 }
 
+func TestInspectContextCommandRequiresRunAndProject(t *testing.T) {
+	workspace, _, taskID := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "context", taskID, "--project", "project-1"})
+	err := command.Execute()
+	if err == nil {
+		t.Fatal("context without --run succeeded")
+	}
+	var exitError interface{ ProcessExitCode() int }
+	if !errors.As(err, &exitError) || exitError.ProcessExitCode() != inspectpkg.ExitUsage {
+		t.Fatalf("error = %v, want exit code %d", err, inspectpkg.ExitUsage)
+	}
+}
+
+func TestInspectEvidenceCommandJSON(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "json", "evidence", runID})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Kind inspectpkg.Kind         `json:"kind"`
+		Data inspectpkg.EvidenceData `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Kind != inspectpkg.KindEvidence || envelope.Data.RunID != runID {
+		t.Fatalf("evidence envelope = %#v", envelope)
+	}
+}
+
 func TestRootCommandIncludesInspect(t *testing.T) {
 	command, _, err := newRootCommand().Find([]string{"inspect", "run"})
 	if err != nil {

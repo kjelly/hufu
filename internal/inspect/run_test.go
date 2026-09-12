@@ -3,10 +3,12 @@ package inspect
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -130,6 +132,67 @@ func TestInspectRunSessionFilter(t *testing.T) {
 	}
 }
 
+func TestInspectEvidenceUsesAuditVerificationAndHidesRawFields(t *testing.T) {
+	fixture := buildRunFixture(t)
+	envelope, err := InspectEvidence(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := envelope.Data.(EvidenceData)
+	if data.Manifest.Hash == "" || len(data.Requirements) != 1 || data.Requirements[0].Binding == nil {
+		t.Fatalf("evidence data = %#v", data)
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret verifier output", "secret task output", "true --with-secret", "/private/artifact/path"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("inspect evidence exposed %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestInspectContextSeparatesManifestsAndEnforcesPrivateScope(t *testing.T) {
+	fixture := buildRunFixture(t)
+	repo, err := contextstore.OpenSQLite(filepath.Join(fixture.workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{
+		ID: "private-context", Kind: contextstore.ContextPattern, Content: "safe detail password=do-not-show",
+		Scope:     contextstore.Scope{ProjectID: "project-1", TeamID: "team-1", AgentID: "worker"},
+		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal, Lifecycle: contextstore.LifecycleConfirmed,
+		Source: contextstore.SourceRef{Type: "runtime", Ref: "Authorization: Bearer do-not-show"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	query := InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID, TaskID: fixture.taskID, ProjectID: "project-1", TeamID: "team-1"}
+	if _, err := InspectContext(t.Context(), query, ContextOptions{ShowContent: true}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("private context without agent error = %v", err)
+	}
+	query.AgentID = "worker"
+	envelope, err := InspectContext(t.Context(), query, ContextOptions{ShowContent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := envelope.Data.(ContextData)
+	if len(data.Manifests) != 1 || len(data.MemoryManifests) != 1 || data.MemoryManifests[0].RetrievalID != "retrieval-1" {
+		t.Fatalf("context manifests = %#v / %#v", data.Manifests, data.MemoryManifests)
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "do-not-show") {
+		t.Fatalf("context output leaked secret: %s", encoded)
+	}
+}
+
 type runFixture struct {
 	workspace string
 	runID     string
@@ -152,6 +215,15 @@ func buildRunFixture(t *testing.T) runFixture {
 		}
 	}
 	target := execution.ExecutionTarget{Backend: "ollama", Model: "frozen-model"}
+	contextManifest := team.ContextInjectionManifest{
+		SchemaVersion: 1, RequestID: "request-1", RunID: runID, TaskID: taskID, Attempt: 1,
+		Agent: "worker", ModelExecutionID: "execution-1", Fingerprint: "context-fingerprint",
+		Items: []team.ContextManifestItem{{ID: "private-context", Included: true, Tokens: 8, Reason: team.ContextIncludedRelevant}},
+	}
+	memoryManifest := team.MemoryInjectionManifest{
+		RetrievalID: "retrieval-1", RunID: runID, TaskID: taskID, Attempt: 1, Agent: "worker", PolicyVersion: "policy-v1", Fingerprint: "memory-fingerprint",
+		Items: []team.MemoryInjectionItem{{ContextItemID: "private-context", Rank: 1, TokenCount: 8, BaseScore: 0.8, FinalScore: 0.7}},
+	}
 	appendEvent(team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: jsonBytes(t, map[string]any{"goal": "inspect"})})
 	appendEvent(team.RunEvent{Type: "task_created", Actor: "coordinator", TaskID: taskID, Payload: jsonBytes(t, map[string]any{
 		"id": taskID, "status": team.TaskPending, "agent": "worker", "phase": "implementation",
@@ -170,10 +242,21 @@ func buildRunFixture(t *testing.T) runFixture {
 		"id": taskID, "status": team.TaskDone, "agent": "worker", "phase": "implementation",
 		"output": "secret task output", "execution_target": target,
 		"execution_topology": []execution.ExecutionTarget{target}, "execution_receipts": []team.ExecutionReceipt{receipt},
+		"context_manifests": []team.ContextInjectionManifest{contextManifest}, "memory_manifests": []team.MemoryInjectionManifest{memoryManifest},
 	})})
+	manifest := &team.EvidenceManifest{
+		RunID: runID, Status: "accepted", ArtifactRefs: []team.ArtifactRef{{ID: "artifact-1", SHA256: "digest-1", Path: "/private/artifact/path"}},
+		EvidenceResults: []team.EvidenceResult{{RequirementID: "req-1", Status: "passed", Validator: "receipt", Binding: &team.EvidenceBinding{
+			RunID: runID, TaskID: taskID, Attempt: 1, ModelExecutionID: "execution-1", ProducerID: "worker", TranscriptRef: "sha256-transcript", ArtifactIDs: []string{"artifact-1"},
+		}}},
+	}
+	if err := manifest.Seal(); err != nil {
+		t.Fatal(err)
+	}
 	result := team.RunResult{
 		RunID: runID, Outcome: team.RunOutcomePartial, GoalSatisfied: false,
 		StopReason: team.StopReasonUnresolvedTasks, Stats: team.RunStats{TasksTotal: 1, TasksDone: 1, AttemptsTotal: 1},
+		EvidenceManifest: manifest,
 	}
 	appendEvent(team.RunEvent{Type: "run_finished", Actor: "coordinator", Payload: jsonBytes(t, result)})
 	if err := store.Close(); err != nil {
