@@ -3,6 +3,7 @@ package auditverify
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -52,6 +53,28 @@ func ExplainRun(ctx context.Context, workspace, runID string) (*ExplainResult, e
 	if err != nil {
 		return nil, err
 	}
+	return buildExplainResult(runID, verification, projection)
+}
+
+// ExplainLineageRun explains a run from a caller-selected, branch-scoped
+// lineage. It is the non-active-branch seam for read-only inspectors and never
+// executes deterministic rechecks.
+func ExplainLineageRun(ctx context.Context, workspace, runID string, lineage []team.RunEvent) (*ExplainResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, fmt.Errorf("run id is required")
+	}
+	verification, projection, err := runLineageAudit(ctx, workspace, runID, lineage, VerifyOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return buildExplainResult(runID, verification, projection)
+}
+
+func buildExplainResult(runID string, verification *AuditVerificationResult, projection *runProjection) (*ExplainResult, error) {
 	result := &ExplainResult{Verification: verification}
 	if projection == nil || projection.runResult == nil {
 		return result, nil
