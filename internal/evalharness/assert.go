@@ -3,6 +3,7 @@ package evalharness
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -71,7 +72,35 @@ func assertRun(expect ExpectSpec, result *team.RunResult, events []team.StatusEv
 	}
 	findings = append(findings, assertEventOrder(expect.Events.Order, events)...)
 
+	if expect.ExecutionTargetFrozen != nil && *expect.ExecutionTargetFrozen {
+		findings = append(findings, assertExecutionTargetFrozen(events)...)
+	}
+
 	return findings
+}
+
+// assertExecutionTargetFrozen checks that every StatusEvent carrying a
+// non-empty ExecutionTarget across the run reports the same value.
+func assertExecutionTargetFrozen(events []team.StatusEvent) []EvalFinding {
+	seen := map[string]bool{}
+	for _, e := range events {
+		if e.ExecutionTarget != "" {
+			seen[e.ExecutionTarget] = true
+		}
+	}
+	if len(seen) <= 1 {
+		return nil
+	}
+	distinct := make([]string, 0, len(seen))
+	for target := range seen {
+		distinct = append(distinct, target)
+	}
+	sort.Strings(distinct)
+	return []EvalFinding{{
+		Dimension: "execution-target-frozen",
+		Expected:  "a single ExecutionTarget across the whole run",
+		Actual:    fmt.Sprintf("%d distinct values: %s", len(distinct), strings.Join(distinct, ", ")),
+	}}
 }
 
 func hasEventType(events []team.StatusEvent, want string) bool {

@@ -46,6 +46,12 @@ type ExpectSpec struct {
 	TaskCount  *int         `yaml:"task-count"`
 	Tasks      []TaskExpect `yaml:"tasks"`
 	Events     EventsExpect `yaml:"events"`
+	// ExecutionTargetFrozen, when true, asserts that every StatusEvent
+	// carrying a non-empty ExecutionTarget across the whole run reports the
+	// SAME value -- the resolved backend/model must be admitted once per
+	// task occurrence and never re-resolved on retry (see
+	// internal/team/services.go's frozenTaskOccurrenceModel).
+	ExecutionTargetFrozen *bool `yaml:"execution-target-frozen,omitempty"`
 }
 
 // TaskExpect asserts on one task by position: Tasks[i] in the fixture is

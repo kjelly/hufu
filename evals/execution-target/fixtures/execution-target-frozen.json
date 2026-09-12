@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Report a status flag.\",\"verify\":\"exit 1\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"attempt 1\"}"
+      }
+    },
+    { "content": "(attempt 2: giving up without retrying submit_result)" },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Could not verify.\",\"acknowledge_failed_tasks\":true}"
+      }
+    },
+    { "content": "(run ends here)" },
+    { "content": "(run ends here)" }
+  ]
+}

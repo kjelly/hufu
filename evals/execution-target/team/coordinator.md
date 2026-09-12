@@ -1,0 +1,8 @@
+---
+name: coordinator
+description: Coordinates the eval-harness fixture team (execution-target suite)
+role: coordinator
+tools: ask_user
+model: eval-harness-model
+---
+Delegate the requested work to the worker, then finish with a summary.

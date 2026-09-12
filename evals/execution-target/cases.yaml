@@ -1,0 +1,13 @@
+version: 1
+name: execution-target
+team: ./team
+mode: deterministic
+cases:
+  - id: execution-target-frozen-across-retry
+    prompt: "Report a status flag."
+    provider-fixture: fixtures/execution-target-frozen.json
+    expect:
+      execution-target-frozen: true
+      events:
+        required: [start, verify_start, verify_error]
+        order: [start, verify_error]
