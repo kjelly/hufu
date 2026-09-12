@@ -142,6 +142,28 @@ func LoadSession(workspace string) *SessionData {
 	return session
 }
 
+// LoadSessionReadOnly reads the mutable checkpoint projection without
+// creating, repairing, redacting, or warning about it. The boolean reports
+// whether session.json exists so offline inspectors can distinguish an absent
+// optional projection from malformed persisted JSON.
+func LoadSessionReadOnly(workspace string) (*SessionData, bool, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return nil, false, fmt.Errorf("load session read-only: empty workspace")
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("load session read-only: %w", err)
+	}
+	var session SessionData
+	if err := json.Unmarshal(data, &session); err != nil {
+		return nil, true, fmt.Errorf("load session read-only: decode session.json: %w", err)
+	}
+	return &session, true, nil
+}
+
 // loadSessionQuiet is the same load without the operator warning, for callers
 // that expect a rejection and treat it as a result rather than a problem — the
 // reliability self-check deliberately feeds it a corrupt checkpoint, and its

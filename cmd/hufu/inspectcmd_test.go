@@ -128,6 +128,41 @@ func TestInspectTraceCommandJSON(t *testing.T) {
 	}
 }
 
+func TestInspectReplayCommandReturnsIntegrityExitAfterDriftOutput(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	var events []team.RunEvent
+	if err := team.StreamValidatedRunEvents(t.Context(), workspace, func(event team.RunEvent) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := team.ReduceToSessionData(events)
+	checkpoint.Tasks[0].Status = team.TaskError
+	if err := team.SaveSession(workspace, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "json", "replay", runID})
+	err := command.Execute()
+	var exitError interface{ ProcessExitCode() int }
+	if !errors.As(err, &exitError) || exitError.ProcessExitCode() != inspectpkg.ExitIntegrity {
+		t.Fatalf("replay drift error = %v", err)
+	}
+	var envelope struct {
+		Data inspectpkg.ReplayData `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode replay output: %v\n%s", err, stdout.String())
+	}
+	if envelope.Data.OverallStatus != "drift" {
+		t.Fatalf("replay data = %#v", envelope.Data)
+	}
+}
+
 func TestRootCommandIncludesInspect(t *testing.T) {
 	command, _, err := newRootCommand().Find([]string{"inspect", "run"})
 	if err != nil {

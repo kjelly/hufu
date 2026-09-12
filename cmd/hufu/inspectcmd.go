@@ -45,8 +45,23 @@ func newInspectCommand() *cobra.Command {
 		newInspectEvidenceCommand(options),
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
+		newInspectReplayCommand(options),
 	)
 	return command
+}
+
+func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "replay <run-id>",
+		Short: "Compare canonical in-memory replay with stored projections",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			query := options.query()
+			query.RunID = args[0]
+			envelope, err := inspectpkg.InspectReplay(command.Context(), query)
+			return finishInspect(command, options.format, envelope, err)
+		},
+	}
 }
 
 func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
@@ -165,15 +180,27 @@ func finishInspect(command *cobra.Command, format string, envelope *inspectpkg.E
 		if err := encoder.Encode(envelope); err != nil {
 			return &inspectExitError{code: inspectpkg.ExitIntegrity, err: fmt.Errorf("hufu inspect: encode JSON: %w", err)}
 		}
-		return nil
+		return inspectProjectionExit(command, envelope)
 	case inspectpkg.FormatText:
 		if err := renderInspectText(command.OutOrStdout(), envelope); err != nil {
 			return &inspectExitError{code: inspectpkg.ExitIntegrity, err: fmt.Errorf("hufu inspect: render text: %w", err)}
 		}
-		return nil
+		return inspectProjectionExit(command, envelope)
 	default:
 		return &inspectExitError{code: inspectpkg.ExitUsage, err: fmt.Errorf("hufu inspect: invalid format %q (must be text or json)", format)}
 	}
+}
+
+func inspectProjectionExit(command *cobra.Command, envelope *inspectpkg.Envelope) error {
+	if envelope == nil || envelope.Kind != inspectpkg.KindReplay {
+		return nil
+	}
+	data, ok := envelope.Data.(inspectpkg.ReplayData)
+	if ok && data.OverallStatus == "drift" {
+		command.Root().SilenceUsage = true
+		return &inspectExitError{code: inspectpkg.ExitIntegrity, err: fmt.Errorf("hufu inspect replay: stored projection drift detected")}
+	}
+	return nil
 }
 
 func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
@@ -245,6 +272,16 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 				ordinal = entry.AnchorEventOrdinal
 			}
 			if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\n", ordinal, entry.Ref.Source, entry.Kind, valueOrUnavailable(entry.Status), valueOrUnavailable(entry.ReasonCode)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case inspectpkg.ReplayData:
+		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nEvent chain: %s\nOverall: %s\n", data.RunID, envelope.Query.BranchID, data.EventChain, data.OverallStatus); err != nil {
+			return err
+		}
+		for _, check := range data.Checks {
+			if _, err := fmt.Fprintf(writer, "%s: %s reason=%s diffs=%s\n", check.Name, check.Status, valueOrUnavailable(check.ReasonCode), refsOrNone(check.DiffPaths)); err != nil {
 				return err
 			}
 		}

@@ -16,7 +16,7 @@ func TestLoadLineageMissingEventStoreDoesNotCreateWorkspaceFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lineage.BranchID != "main" || len(lineage.Events) != 0 {
+	if lineage.BranchID != "main" || lineage.ActiveBranchID != "main" || len(lineage.Events) != 0 || len(lineage.GlobalEvents) != 0 {
 		t.Fatalf("missing lineage = %#v", lineage)
 	}
 	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
@@ -72,6 +72,9 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 	}
 	if active.BranchID != "main" || len(active.Events) != 1 || active.Events[0].Event.ID != "event-main" {
 		t.Fatalf("active lineage = %#v", active)
+	}
+	if active.ActiveBranchID != "main" || len(active.GlobalEvents) != 2 || active.GlobalEvents[1].Ordinal != 2 {
+		t.Fatalf("active global lineage metadata = %#v", active)
 	}
 	feature, err := LoadLineage(t.Context(), InspectQuery{Workspace: workspace, BranchID: "feature"})
 	if err != nil {

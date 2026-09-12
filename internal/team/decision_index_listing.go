@@ -12,6 +12,66 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
+type readOnlyDecisionLineage []RunEvent
+
+func (lineage readOnlyDecisionLineage) Append(context.Context, RunEvent) (RunEvent, error) {
+	return RunEvent{}, fmt.Errorf("decision lineage projection is read-only")
+}
+
+func (lineage readOnlyDecisionLineage) ReadEvents(ctx context.Context) ([]RunEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]RunEvent(nil), lineage...), nil
+}
+
+// ProjectDecisionEntriesForLineage rebuilds finalized decision addressing
+// facts from a caller-selected canonical lineage. It does not consult or
+// mutate DecisionIndex; callers may compare the result with that disposable
+// projection without treating the index as truth.
+func ProjectDecisionEntriesForLineage(ctx context.Context, events []RunEvent) ([]DecisionIndexEntry, error) {
+	journal := readOnlyDecisionLineage(events)
+	ids := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, event := range events {
+		if event.Type != agent.EventDecisionFinalized {
+			continue
+		}
+		var payload decisionEvent
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("project decision entries: decode finalized event: %w", err)
+		}
+		if payload.DecisionID == "" || payload.Record == nil {
+			return nil, fmt.Errorf("project decision entries: finalized event is incomplete")
+		}
+		if !seen[payload.DecisionID] {
+			ids = append(ids, payload.DecisionID)
+			seen[payload.DecisionID] = true
+		}
+	}
+	sort.Strings(ids)
+	entries := make([]DecisionIndexEntry, 0, len(ids))
+	for _, decisionID := range ids {
+		state, err := projectDecision(ctx, journal, decisionID)
+		if err != nil {
+			return nil, fmt.Errorf("project decision entries: %s: %w", decisionID, err)
+		}
+		if state.Record == nil {
+			return nil, fmt.Errorf("project decision entries: finalized decision %s has no record", decisionID)
+		}
+		question := state.FinalizationQuestion
+		if question == "" {
+			question = state.Packet.Question
+		}
+		entry := IndexEntryFor(*state.Record, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)
+		if state.Record.Stale {
+			entry.Stale, entry.StaleReason = true, state.Record.StaleReason
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // Reading the decision index, and proving what it says.
 //
 // The index is a projection, so a row is only trustworthy where the durable
