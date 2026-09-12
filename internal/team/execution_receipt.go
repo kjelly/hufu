@@ -130,6 +130,10 @@ type ExecutionReceipt struct {
 	RunID   string `json:"run_id"`
 	TaskID  string `json:"task_id"`
 	Attempt int    `json:"attempt"`
+	// Backend is the canonical execution backend admitted for this attempt.
+	// SubagentProvider remains a read-compatible legacy field only while the
+	// execution-identity sunset is in progress.
+	Backend string `json:"backend,omitempty"`
 	// ModelExecutionID is the stable isolated-worker identity. It keeps
 	// concurrent extra-model receipts distinct even though they share a Todo.
 	ModelExecutionID string               `json:"model_execution_id,omitempty"`
@@ -175,6 +179,20 @@ type ExecutionReceipt struct {
 	HandoffState     ResultHandoffState         `json:"handoff_state,omitempty"`
 	MemoryManifest   *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
 	ContextManifest  *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+}
+
+// MarshalJSON keeps old receipts readable while preventing a newly written
+// canonical receipt from dual-writing the retired SubagentProvider identity.
+// Backend is populated from the Todo's admitted ExecutionTarget at the single
+// receipt persistence boundary (TodoList.SetExecutionReceipt), rather than
+// being inferred from mutable task-definition configuration.
+func (receipt ExecutionReceipt) MarshalJSON() ([]byte, error) {
+	type executionReceiptWire ExecutionReceipt
+	wire := executionReceiptWire(receipt)
+	if wire.Backend != "" {
+		wire.SubagentProvider = ""
+	}
+	return json.Marshal(wire)
 }
 
 // ArtifactExpectation describes an expected output artifact and its verification criteria.

@@ -335,6 +335,9 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 			if scope := directItem.ExecutionReceipt.ArtifactScope; scope == nil || scope.TaskID != directItem.ID || scope.Attempt != 1 {
 				t.Fatalf("direct task artifact scope receipt = %#v, want task %q attempt 1", directItem.ExecutionReceipt.ArtifactScope, directItem.ID)
 			}
+			if directItem.ExecutionReceipt.Backend != directItem.ExecutionTarget.Backend || directItem.ExecutionReceipt.Backend == "" {
+				t.Fatalf("direct task receipt backend = %q, want admitted target backend %q", directItem.ExecutionReceipt.Backend, directItem.ExecutionTarget.Backend)
+			}
 
 			// The allowlist observed by the actual consumer must be exactly the
 			// final resolver Names used to build the direct agent surface.

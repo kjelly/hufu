@@ -179,8 +179,18 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	if route := snapshotRoute(t, snapshot, "remote/config-guard-model"); route.Backend != "remote" || route.ProviderKey == "" {
 		t.Fatalf("configured guard route = %#v, want remote provider route", route)
 	}
-	if route := snapshotRoute(t, snapshot, "codex-bare-model"); route.Backend != codexSubagentProviderName || route.LegacyProvider != codexSubagentProviderName {
-		t.Fatalf("Codex worker route = %#v, want bare model bound to Codex", route)
+	if route := snapshotRoute(t, snapshot, "codex-bare-model"); route.Backend != codexSubagentProviderName || route.LegacyProvider != "" {
+		t.Fatalf("Codex worker route = %#v, want bare model bound to Codex without legacy_provider", route)
+	}
+	if snapshot.Version != executionPolicySnapshotVersion {
+		t.Fatalf("snapshot version = %d, want %d", snapshot.Version, executionPolicySnapshotVersion)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal v4 snapshot: %v", err)
+	}
+	if strings.Contains(string(encodedSnapshot), `"legacy_provider"`) {
+		t.Fatalf("v4 snapshot wrote legacy_provider: %s", encodedSnapshot)
 	}
 
 	var codexWorld *ExecutionWorldPolicySnapshot
@@ -285,6 +295,77 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	}
 	if err := c.checkRunAdmission(); err == nil || !strings.Contains(err.Error(), "execution policy changed after coordinator startup") {
 		t.Fatalf("post-freeze policy drift error = %v, want admission failure", err)
+	}
+}
+
+func TestExecutionPolicySnapshotV4OmitsLegacyProviderAndReadsV3(t *testing.T) {
+	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 4, 3)
+	v4 := c.ExecutionPolicySnapshot()
+	if v4 == nil {
+		t.Fatal("missing v4 execution policy snapshot")
+	}
+	if err := validateExecutionPolicySnapshot(v4); err != nil {
+		t.Fatalf("validate v4 snapshot: %v", err)
+	}
+
+	v3State, err := newExecutionPolicyStateForVersion(c, executionPolicyLegacySnapshotVersion)
+	if err != nil {
+		t.Fatalf("build v3 compatibility snapshot: %v", err)
+	}
+	v3 := v3State.snapshot
+	if v3.Version != executionPolicyLegacySnapshotVersion {
+		t.Fatalf("v3 compatibility version = %d, want %d", v3.Version, executionPolicyLegacySnapshotVersion)
+	}
+	if route := snapshotRoute(t, v3, "codex-bare-model"); route.LegacyProvider != codexSubagentProviderName {
+		t.Fatalf("v3 Codex route = %#v, want legacy provider evidence", route)
+	}
+	if err := validateExecutionPolicySnapshot(v3); err != nil {
+		t.Fatalf("validate v3 compatibility snapshot: %v", err)
+	}
+	matches, err := c.executionPolicySnapshotMatchesCurrent(v3)
+	if err != nil || !matches {
+		t.Fatalf("v3 snapshot compatibility match = %v, err=%v", matches, err)
+	}
+
+	bad := cloneExecutionPolicySnapshot(v4)
+	bad.ModelRoutes[0].LegacyProvider = "ollama"
+	bad.ConfigurationHash, err = executionPolicyConfigurationHash(bad)
+	if err != nil {
+		t.Fatalf("rehash invalid v4 snapshot: %v", err)
+	}
+	if err := validateExecutionPolicySnapshot(bad); err == nil || !strings.Contains(err.Error(), "legacy_provider") {
+		t.Fatalf("invalid v4 legacy provider error = %v, want rejection", err)
+	}
+}
+
+func TestExecutionPolicySnapshotKeepsMatchingV3JournalReadable(t *testing.T) {
+	workspace := t.TempDir()
+	c := newExecutionPolicySnapshotCoordinator(t, workspace, 4, 3)
+	c.initEventStore()
+	if c.eventStore == nil {
+		t.Fatal("missing event store")
+	}
+
+	v3State, err := newExecutionPolicyStateForVersion(c, executionPolicyLegacySnapshotVersion)
+	if err != nil {
+		t.Fatalf("build v3 policy: %v", err)
+	}
+	payload, err := json.Marshal(v3State.snapshot)
+	if err != nil {
+		t.Fatalf("marshal v3 policy: %v", err)
+	}
+	if _, err := c.EventJournal().Append(context.Background(), RunEvent{
+		Type: string(EventExecutionPolicySnapshot), Actor: "coordinator", Payload: payload,
+	}); err != nil {
+		t.Fatalf("append v3 policy: %v", err)
+	}
+	c.SetSessionData(&SessionData{ExecutionPolicySnapshot: cloneExecutionPolicySnapshot(v3State.snapshot)})
+
+	if err := c.ensureExecutionPolicySnapshot(); err != nil {
+		t.Fatalf("matching v3 policy was not read-compatible: %v", err)
+	}
+	if got := c.SessionData().ExecutionPolicySnapshot; got == nil || got.Version != executionPolicyLegacySnapshotVersion {
+		t.Fatalf("v3 projection was unexpectedly rewritten: %#v", got)
 	}
 }
 

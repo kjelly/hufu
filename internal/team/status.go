@@ -1565,6 +1565,14 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				ti.ExecutionReceipt = nil
 			} else {
 				copyR := cloneExecutionReceipt(receipt)
+				// The Todo owns the frozen execution identity. Every current
+				// execution path persists receipts through this method, so derive
+				// the durable backend here instead of trusting a mutable task
+				// definition or a provider-era receipt field. A target-less Todo is
+				// historical/coordinator compatibility state and remains readable.
+				if !ti.ExecutionTarget.IsZero() {
+					copyR.Backend = execution.CanonicalTargetBackendName(ti.ExecutionTarget.Backend)
+				}
 				ti.ExecutionReceipt = &copyR
 
 				// A repair updates the durable record for the same execution

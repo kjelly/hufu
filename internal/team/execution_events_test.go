@@ -181,11 +181,14 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 		t.Fatal("expected first event")
 	}
 	var ev1 ExecutionEvent
-	json.Unmarshal(scanner.Bytes(), &ev1)
-	if ev1.Provider != "openai" {
-		t.Errorf("expected openai, got %v", ev1.Provider)
+	firstLine := append([]byte(nil), scanner.Bytes()...)
+	if err := json.Unmarshal(firstLine, &ev1); err != nil {
+		t.Fatalf("decode first execution event: %v", err)
 	}
-	if ev1.ExecutionTarget != "openai/gpt-4o" || ev1.Backend != "openai" || ev1.BackendKind != "llm" {
+	if strings.Contains(string(firstLine), `"provider"`) || ev1.Provider != "" {
+		t.Errorf("new execution event wrote legacy provider: %s / %#v", firstLine, ev1)
+	}
+	if ev1.Version != executionEventSchemaVersion || ev1.ExecutionTarget != "openai/gpt-4o" || ev1.Backend != "openai" || ev1.BackendKind != "llm" {
 		t.Errorf("execution identity = target:%q backend:%q kind:%q", ev1.ExecutionTarget, ev1.Backend, ev1.BackendKind)
 	}
 	if len(ev1.ArtifactRefs) != 1 || ev1.ArtifactRefs[0].Path != "art1" {
@@ -199,9 +202,33 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 		t.Fatal("expected second event")
 	}
 	var ev2 ExecutionEvent
-	json.Unmarshal(scanner.Bytes(), &ev2)
-	if ev2.Provider != "ollama" { // unqualified models use the canonical Ollama backend
-		t.Errorf("expected ollama, got %v", ev2.Provider)
+	if err := json.Unmarshal(scanner.Bytes(), &ev2); err != nil {
+		t.Fatalf("decode second execution event: %v", err)
+	}
+	if ev2.Provider != "" || ev2.Backend != "openai" {
+		t.Errorf("second execution event = %#v, want target-owned openai backend without provider", ev2)
+	}
+}
+
+func TestExecutionEventWritesBackendAndReadsLegacyProvider(t *testing.T) {
+	encoded, err := json.Marshal(ExecutionEvent{
+		Version:  executionEventSchemaVersion,
+		Backend:  "ollama",
+		Provider: "hufu-local",
+	})
+	if err != nil {
+		t.Fatalf("marshal execution event: %v", err)
+	}
+	if strings.Contains(string(encoded), `"provider"`) || !strings.Contains(string(encoded), `"backend":"ollama"`) {
+		t.Fatalf("canonical execution event = %s", encoded)
+	}
+
+	var legacy ExecutionEvent
+	if err := json.Unmarshal([]byte(`{"version":4,"provider":"openai"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy execution event: %v", err)
+	}
+	if legacy.Provider != "openai" {
+		t.Fatalf("legacy provider was not retained for read compatibility: %#v", legacy)
 	}
 }
 

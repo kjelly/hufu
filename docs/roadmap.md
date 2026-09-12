@@ -15,7 +15,7 @@ be tracked in an issue or ADR and linked here only while it is active.
 
 | Area | Current boundary | Next useful work | Authority |
 | --- | --- | --- | --- |
-| Execution compatibility | New durable identity is `ExecutionTarget`; legacy `local`, provider fields, and provider bindings remain readable for old workspaces. | Define and test the public compatibility sunset before deleting legacy fields. | [execution runtime](architecture/execution-runtime.md) |
+| Execution compatibility | New durable identity is `ExecutionTarget`; receipt backend, v4 policy routes, and execution-event backend shadows are now canonical writers. Legacy `local` and provider-era fields remain readable. | Deliver read-only inventory and append-only migration before the warning release and later removal. | [execution runtime](architecture/execution-runtime.md) |
 | Decision runtime | Capability-aware reference/JUDGE/CHALLENGE/REVISE routing and pinned bindings are implemented; outcome calibration remains data-gated. | Keep the deferred Phase 5 entry criteria and metrics honest as real runs accumulate. | [decision runtime](architecture/decision-runtime.md) |
 | Model profiles | Runtime resolver, provider introspection, provenance, cache, and effective-context admission are implemented. | Maintain provider adapters and update tests when provider metadata contracts change. | [model metadata](architecture/model-metadata.md) |
 | Worksets | Artifact-backed manifests and expansion receipts are canonical; path-based TSV fan-out is compatibility-only. | Complete the documented release-cycle migration and then remove the legacy path. | [workset](architecture/workset.md) |

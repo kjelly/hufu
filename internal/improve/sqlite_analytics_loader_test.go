@@ -161,8 +161,11 @@ func TestLoadExecutionEvents_PreservesAllFieldsForOneRow(t *testing.T) {
 		Provider:         "anthropic",
 		FailureSignature: "",
 	}
-	data, _ := json.Marshal(event)
-	path := writeJSONLFile(t, []string{string(data)})
+	// This is a saved provider-era JSONL row. Do not construct it through
+	// ExecutionEvent.MarshalJSON: current writers intentionally suppress the
+	// retired provider field, while the analytics reader must keep accepting
+	// historical files that contain it.
+	path := writeJSONLFile(t, []string{`{"version":3,"timestamp":"2026-07-12T10:00:00.5Z","run_id":"r1","team":"dev","task_id":"1","agent":"developer","attempt":2,"status":"done","model":"large","task_type":"agent","team_revision":"rev-a","duration_ms":1234,"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"progress_tokens":5},"outcome":"goal_satisfied","stop_reason":"completed","acceptance_state":"passed","repair_attempts":1,"phase":"execute","provider":"anthropic"}`})
 
 	session := newTestSession(t)
 	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {

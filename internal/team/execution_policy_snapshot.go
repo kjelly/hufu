@@ -16,9 +16,13 @@ import (
 )
 
 // executionPolicySnapshotVersion is incremented only when the canonical
-// fingerprint input changes. Older sessions remain readable, but cannot resume
-// interrupted work without an equivalent current snapshot.
-const executionPolicySnapshotVersion = 3
+// fingerprint input changes. New snapshots use version 4; version 3 remains
+// read-compatible until the append-only compatibility materializer replaces
+// it with a canonical v4 snapshot.
+const (
+	executionPolicyLegacySnapshotVersion = 3
+	executionPolicySnapshotVersion       = 4
+)
 
 // ExecutionPolicySnapshot is the durable, secret-free execution admission
 // record. It freezes all settings that can change scheduling, routing, or an
@@ -54,9 +58,11 @@ type ExecutionBackendPolicySnapshot struct {
 // ExecutionModelRouteSnapshot records the resolved target for every configured
 // model that can be selected during the run, including auxiliary role models.
 type ExecutionModelRouteSnapshot struct {
-	Model          string `json:"model"`
-	Backend        string `json:"backend"`
-	ProviderKey    string `json:"provider_key,omitempty"`
+	Model       string `json:"model"`
+	Backend     string `json:"backend"`
+	ProviderKey string `json:"provider_key,omitempty"`
+	// LegacyProvider is retained only to decode and verify v3 snapshots. New
+	// v4 writers leave it empty, so it is omitted from all new durable state.
 	LegacyProvider string `json:"legacy_provider,omitempty"`
 }
 
@@ -115,12 +121,12 @@ type executionPolicyCodexWorldState struct {
 // executionPolicyModelInput identifies a model at the configuration source
 // that selects it. Bare model IDs are not globally unique routes: a worker's
 // subagent-provider can deliberately send a bare ID to an external backend,
-// while the same ID can be used by a coordinator-side LLM role. Keeping the
-// compatibility provider in the snapshot makes that distinction durable and
-// causes a changed agent/team provider binding to fail admission.
+// while the same ID can be used by a coordinator-side LLM role. The hint is
+// admission-only input and is resolved into the canonical route Backend; it
+// is not written to new snapshots.
 type executionPolicyModelInput struct {
-	model          string
-	legacyProvider string
+	model       string
+	backendHint string
 }
 
 func configuredCodexProviderConfigs(c *Coordinator) map[string]agent.SubagentProviderConfig {
@@ -156,31 +162,31 @@ func (c *Coordinator) executionPolicyModelInputs() []executionPolicyModelInput {
 	}
 	seen := make(map[string]struct{})
 	inputs := make([]executionPolicyModelInput, 0)
-	add := func(model, legacyProvider string) {
+	add := func(model, backendHint string) {
 		model = strings.TrimSpace(model)
-		legacyProvider = strings.TrimSpace(legacyProvider)
+		backendHint = strings.TrimSpace(backendHint)
 		if model == "" {
 			return
 		}
-		key := model + "\x00" + legacyProvider
+		key := model + "\x00" + backendHint
 		if _, duplicate := seen[key]; duplicate {
 			return
 		}
 		seen[key] = struct{}{}
-		inputs = append(inputs, executionPolicyModelInput{model: model, legacyProvider: legacyProvider})
+		inputs = append(inputs, executionPolicyModelInput{model: model, backendHint: backendHint})
 	}
 
 	for _, def := range c.session.Agents {
 		if def == nil {
 			continue
 		}
-		legacyProvider := strings.TrimSpace(def.SubagentProvider)
-		if legacyProvider == "" {
-			legacyProvider = c.session.Config.SubagentProviderDefault
+		backendHint := strings.TrimSpace(def.SubagentProvider)
+		if backendHint == "" {
+			backendHint = c.session.Config.SubagentProviderDefault
 		}
-		add(c.resolveAgentModel(def, ""), legacyProvider)
+		add(c.resolveAgentModel(def, ""), backendHint)
 		for _, model := range def.ExtraModels {
-			add(model, legacyProvider)
+			add(model, backendHint)
 		}
 	}
 
@@ -203,21 +209,32 @@ func (c *Coordinator) executionPolicyModelInputs() []executionPolicyModelInput {
 		if inputs[i].model != inputs[j].model {
 			return inputs[i].model < inputs[j].model
 		}
-		return inputs[i].legacyProvider < inputs[j].legacyProvider
+		return inputs[i].backendHint < inputs[j].backendHint
 	})
 	return inputs
 }
 
 func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
+	return newExecutionPolicyStateForVersion(c, executionPolicySnapshotVersion)
+}
+
+// newExecutionPolicyStateForVersion is used only to compare a v3 durable
+// snapshot with the current admission inputs during the compatibility window.
+// Production writers always call newExecutionPolicyState and therefore emit
+// the current canonical version.
+func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionPolicyState, error) {
 	if c == nil || c.session == nil || c.providerManager == nil {
 		return nil, fmt.Errorf("execution policy snapshot requires an initialized coordinator")
+	}
+	if version != executionPolicyLegacySnapshotVersion && version != executionPolicySnapshotVersion {
+		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
 	}
 	defaultBackend := execution.OllamaBackendName
 	if configured := execution.CanonicalTargetBackendName(c.session.Config.DefaultLLMBackend); configured != "" {
 		defaultBackend = configured
 	}
 	snapshot := &ExecutionPolicySnapshot{
-		Version:           executionPolicySnapshotVersion,
+		Version:           version,
 		TeamMaxConcurrent: c.maxConcurrent,
 		DefaultLLMBackend: defaultBackend,
 	}
@@ -277,7 +294,7 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 	}
 
 	for _, input := range c.executionPolicyModelInputs() {
-		target, err := c.resolveCanonicalTaskTarget(input.model, input.legacyProvider)
+		target, err := c.resolveCanonicalTaskTarget(input.model, input.backendHint)
 		if err != nil {
 			return nil, fmt.Errorf("resolve execution policy model route for %q: %w", input.model, err)
 		}
@@ -286,9 +303,11 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 			return nil, fmt.Errorf("resolve execution policy backend for %q: %w", input.model, err)
 		}
 		route := ExecutionModelRouteSnapshot{
-			Model:          input.model,
-			Backend:        execution.CanonicalTargetBackendName(target.Backend),
-			LegacyProvider: execution.CanonicalTargetBackendName(input.legacyProvider),
+			Model:   input.model,
+			Backend: execution.CanonicalTargetBackendName(target.Backend),
+		}
+		if version == executionPolicyLegacySnapshotVersion {
+			route.LegacyProvider = execution.CanonicalTargetBackendName(input.backendHint)
 		}
 		if backend.Kind() == execution.BackendKindLLM {
 			providerModel := target.Backend + "/" + target.Model
@@ -298,7 +317,7 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 			}
 			route.ProviderKey = policy.ProviderKey
 		}
-		if input.legacyProvider == "" {
+		if input.backendHint == "" {
 			state.modelRouteByModel[input.model] = route
 		}
 		snapshot.ModelRoutes = append(snapshot.ModelRoutes, route)
@@ -308,12 +327,27 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 		snapshot.Backends = append(snapshot.Backends, backend)
 	}
 	sort.Slice(snapshot.Backends, func(i, j int) bool { return snapshot.Backends[i].Backend < snapshot.Backends[j].Backend })
-	sort.Slice(snapshot.ModelRoutes, func(i, j int) bool {
-		if snapshot.ModelRoutes[i].Model != snapshot.ModelRoutes[j].Model {
-			return snapshot.ModelRoutes[i].Model < snapshot.ModelRoutes[j].Model
-		}
-		return snapshot.ModelRoutes[i].LegacyProvider < snapshot.ModelRoutes[j].LegacyProvider
-	})
+	if version == executionPolicyLegacySnapshotVersion {
+		sort.Slice(snapshot.ModelRoutes, func(i, j int) bool {
+			if snapshot.ModelRoutes[i].Model != snapshot.ModelRoutes[j].Model {
+				return snapshot.ModelRoutes[i].Model < snapshot.ModelRoutes[j].Model
+			}
+			return snapshot.ModelRoutes[i].LegacyProvider < snapshot.ModelRoutes[j].LegacyProvider
+		})
+	} else {
+		sort.Slice(snapshot.ModelRoutes, func(i, j int) bool {
+			if snapshot.ModelRoutes[i].Model != snapshot.ModelRoutes[j].Model {
+				return snapshot.ModelRoutes[i].Model < snapshot.ModelRoutes[j].Model
+			}
+			if snapshot.ModelRoutes[i].Backend != snapshot.ModelRoutes[j].Backend {
+				return snapshot.ModelRoutes[i].Backend < snapshot.ModelRoutes[j].Backend
+			}
+			return snapshot.ModelRoutes[i].ProviderKey < snapshot.ModelRoutes[j].ProviderKey
+		})
+		snapshot.ModelRoutes = slices.CompactFunc(snapshot.ModelRoutes, func(left, right ExecutionModelRouteSnapshot) bool {
+			return left.Model == right.Model && left.Backend == right.Backend && left.ProviderKey == right.ProviderKey
+		})
+	}
 	sort.Slice(snapshot.ExecutionWorlds, func(i, j int) bool { return snapshot.ExecutionWorlds[i].Backend < snapshot.ExecutionWorlds[j].Backend })
 	for i := range snapshot.ExecutionWorlds {
 		sort.Slice(snapshot.ExecutionWorlds[i].AgentNetworkPolicies, func(j, k int) bool {
@@ -482,7 +516,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if snapshot == nil {
 		return fmt.Errorf("execution policy snapshot is missing")
 	}
-	if snapshot.Version != executionPolicySnapshotVersion {
+	if snapshot.Version != executionPolicyLegacySnapshotVersion && snapshot.Version != executionPolicySnapshotVersion {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
 	}
 	if len(snapshot.Backends) == 0 {
@@ -491,6 +525,13 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	for _, backend := range snapshot.Backends {
 		if strings.TrimSpace(backend.Backend) == "" || strings.TrimSpace(backend.IdentityHash) == "" {
 			return fmt.Errorf("execution policy snapshot backend identity is incomplete")
+		}
+	}
+	if snapshot.Version == executionPolicySnapshotVersion {
+		for _, route := range snapshot.ModelRoutes {
+			if strings.TrimSpace(route.LegacyProvider) != "" {
+				return fmt.Errorf("execution policy snapshot v%d writes legacy_provider", snapshot.Version)
+			}
 		}
 	}
 	for _, world := range snapshot.ExecutionWorlds {
@@ -689,7 +730,11 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 				return err
 			}
 		}
-		if journalSnapshot.ConfigurationHash != current.snapshot.ConfigurationHash {
+		matchesCurrent, matchErr := c.executionPolicySnapshotMatchesCurrent(journalSnapshot)
+		if matchErr != nil {
+			return matchErr
+		}
+		if !matchesCurrent {
 			return fmt.Errorf("execution policy snapshot drift detected (event_store=%s current=%s)", journalSnapshot.ConfigurationHash, current.snapshot.ConfigurationHash)
 		}
 		return nil
@@ -727,6 +772,22 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 		return err
 	}
 	return nil
+}
+
+// executionPolicySnapshotMatchesCurrent verifies that the live admission
+// inputs still match a durable snapshot without treating current config as
+// migration evidence. It is a normal admission-drift guard: v3 is rebuilt
+// with its historical hash shape only so an unchanged pre-v4 workspace can
+// remain readable until the materializer writes an explicit v4 migration.
+func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionPolicySnapshot) (bool, error) {
+	if err := validateExecutionPolicySnapshot(snapshot); err != nil {
+		return false, err
+	}
+	current, err := newExecutionPolicyStateForVersion(c, snapshot.Version)
+	if err != nil {
+		return false, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
+	}
+	return current.snapshot.ConfigurationHash == snapshot.ConfigurationHash, nil
 }
 
 // canonicalExecutionPolicySnapshot reads the active branch's event-first

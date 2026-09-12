@@ -1173,13 +1173,14 @@ retryLoop:
 				Exhausted: stepBudget > 0 && len(steps) >= stepBudget,
 			},
 			ToolDispositions: attemptDispositions.snapshot(),
-			// Provider identity is always recorded, hufu-local included — §20's
-			// "MUST NOT be overloaded as the only provider/session field" means
-			// ProducerID staying the isolated-worker identity is not enough on
-			// its own. SessionID/ExecutionWorldID come from the durable
-			// BackendBinding (already persisted before any turn ran, §7.4) since
-			// they outlive any one attempt; ProviderTurnID is this attempt's own,
-			// diagnostic-only, so it comes from the attempt itself.
+			// Backend is frozen at task admission. SetExecutionReceipt repeats
+			// this derivation from the durable Todo as the single persistence
+			// boundary for direct, extra-model, and terminal receipt paths.
+			Backend: execution.CanonicalTargetBackendName(task.ResolvedExecutionTarget.Backend),
+			// Keep the provider-era value available to in-memory compatibility
+			// consumers. ExecutionReceipt.MarshalJSON suppresses it whenever the
+			// canonical Backend is present, so new durable receipts never
+			// dual-write this retired identity.
 			SubagentProvider:      task.SubagentProvider,
 			ProviderTurnID:        attemptProviderTurnID,
 			ProviderTranscriptRef: attemptProviderTranscriptRef,

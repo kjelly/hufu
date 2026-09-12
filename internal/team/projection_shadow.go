@@ -148,6 +148,7 @@ type canonicalReceipt struct {
 	RunID            string                     `json:"run_id,omitempty"`
 	TaskID           string                     `json:"task_id,omitempty"`
 	Attempt          int                        `json:"attempt"`
+	Backend          string                     `json:"backend,omitempty"`
 	ExitCode         *int                       `json:"exit_code,omitempty"`
 	ProducerID       string                     `json:"producer_id,omitempty"`
 	TranscriptRef    string                     `json:"transcript_ref,omitempty"`
@@ -178,6 +179,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			RunID:            r.RunID,
 			TaskID:           r.TaskID,
 			Attempt:          r.Attempt,
+			Backend:          r.Backend,
 			ExitCode:         r.ExitCode,
 			ProducerID:       r.ProducerID,
 			TranscriptRef:    r.TranscriptRef,

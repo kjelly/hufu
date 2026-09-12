@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/execution"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,6 +41,46 @@ func TestExecutionReceipt_JSONSerialization(t *testing.T) {
 	}
 	if restored.ExitCode == nil || *restored.ExitCode != 0 {
 		t.Errorf("Restored ExitCode = %v, want 0", restored.ExitCode)
+	}
+}
+
+func TestExecutionReceiptPersistsCanonicalBackendWithoutLegacyProvider(t *testing.T) {
+	tl := &TodoList{items: []*TodoItem{{
+		ID:              "task-1",
+		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "qwen3:8b"},
+	}}}
+	receipt := &ExecutionReceipt{
+		RunID:            "run-1",
+		TaskID:           "task-1",
+		Attempt:          1,
+		Backend:          "wrong-backend",
+		SubagentProvider: "hufu-local",
+	}
+	if err := tl.SetExecutionReceipt("task-1", receipt); err != nil {
+		t.Fatalf("SetExecutionReceipt: %v", err)
+	}
+
+	got := tl.Items()[0].ExecutionReceipt
+	if got == nil || got.Backend != execution.OllamaBackendName {
+		t.Fatalf("persisted receipt backend = %#v, want %q", got, execution.OllamaBackendName)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal canonical receipt: %v", err)
+	}
+	if strings.Contains(string(encoded), `"subagent_provider"`) {
+		t.Fatalf("canonical receipt wrote legacy provider: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"backend":"ollama"`) {
+		t.Fatalf("canonical receipt omitted backend: %s", encoded)
+	}
+
+	var legacy ExecutionReceipt
+	if err := json.Unmarshal([]byte(`{"run_id":"run-old","task_id":"task-old","attempt":1,"subagent_provider":"hufu-local"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy receipt: %v", err)
+	}
+	if legacy.SubagentProvider != "hufu-local" || legacy.Backend != "" {
+		t.Fatalf("legacy receipt was not retained for dual read: %#v", legacy)
 	}
 }
 

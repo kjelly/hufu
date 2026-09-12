@@ -23,7 +23,10 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 )
 
-const executionEventsFile = "execution-events.jsonl"
+const (
+	executionEventsFile         = "execution-events.jsonl"
+	executionEventSchemaVersion = 5
+)
 
 // ExecutionUsage is the provider-reported LLM usage for a single attempt.
 // A zero value means the provider did not report usage.
@@ -82,6 +85,16 @@ type ExecutionEvent struct {
 	Provider             string          `json:"provider,omitempty"`
 	ArtifactRefs         []ArtifactRef   `json:"artifact_refs,omitempty"`
 	FailureSignature     string          `json:"failure_signature,omitempty"`
+}
+
+// MarshalJSON keeps the provider-era field readable from historical telemetry
+// while ensuring every newly written execution-event shadow uses the canonical
+// Backend/ExecutionTarget representation only.
+func (event ExecutionEvent) MarshalJSON() ([]byte, error) {
+	type executionEventWire ExecutionEvent
+	wire := executionEventWire(event)
+	wire.Provider = ""
+	return json.Marshal(wire)
 }
 
 // LifecycleEventPayload defines the canonical observability envelope required for all
@@ -348,7 +361,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	})
 	if logger != nil {
 		_ = logger.append(ExecutionEvent{
-			Version:      3,
+			Version:      executionEventSchemaVersion,
 			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
 			RunID:        runID,
 			Team:         teamName,
@@ -557,7 +570,7 @@ func (c *Coordinator) recordRunTelemetry(result *RunResult) {
 		hash = result.EvidenceManifest.ManifestHash
 	}
 	_ = logger.append(ExecutionEvent{
-		Version: 3, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), RunID: runID,
+		Version: executionEventSchemaVersion, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), RunID: runID,
 		Team: c.session.Config.Name, Status: "run_finished", TeamRevision: revision,
 		Outcome: result.Outcome, StopReason: result.StopReason, AcceptanceState: state,
 		EvidenceManifestHash: hash, RepairAttempts: telemetry.RepairCost.Attempts,
@@ -633,7 +646,6 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	taskType, skills := c.taskTracker.TodoList().ExecutionMetadata(taskID)
 	contractID, contractHash, contractRevision := "", "", 0
 	var phase Phase
-	var provider string
 	var target execution.ExecutionTarget
 	var backendKind execution.BackendKind
 	var artifactRefs []ArtifactRef
@@ -643,11 +655,6 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		phase = c.phaseWorkflow.State()
 	}
 
-	if selector, err := execution.ParseExecutionSelector(model); err == nil && selector.Backend != "" {
-		provider = execution.CanonicalTargetBackendName(selector.Backend)
-	} else {
-		provider = execution.OllamaBackendName
-	}
 	if item := c.todoItemByID(taskID); item != nil {
 		target = item.ExecutionTarget
 	}
@@ -673,7 +680,7 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		}
 	}
 	_ = logger.append(ExecutionEvent{
-		Version:          4,
+		Version:          executionEventSchemaVersion,
 		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
 		RunID:            runID,
 		Team:             c.session.Config.Name,
@@ -694,7 +701,6 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		ContractHash:     contractHash,
 		ContractRevision: contractRevision,
 		Phase:            phase,
-		Provider:         provider,
 		ArtifactRefs:     artifactRefs,
 		FailureSignature: failureSignature,
 	})

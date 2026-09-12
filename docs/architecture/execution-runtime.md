@@ -76,7 +76,10 @@ written durable events must use `ollama`; old workspaces may still contain
 4. Replay rejects disagreement between canonical target/topology and legacy
    shadow fields. It never silently retargets a task.
 5. New lifecycle events write `ExecutionTarget`, `ExecutionTopology`, and
-   `BackendBinding`. `SubagentProvider` and `ProviderBinding` are compatibility
+   `BackendBinding`. Current receipts write `backend`, policy snapshots write
+   v4 `{model, backend, provider_key}` routes, and execution-event shadows
+   write `backend`; `SubagentProvider`, `ProviderBinding`, receipt
+   `subagent_provider`, and policy-route `legacy_provider` are compatibility
    readers/shadows only until the public compatibility sunset.
 6. External execution providers return untrusted attempt results. Hufu
    canonicalizes the result and applies the same verification and acceptance

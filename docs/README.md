@@ -58,6 +58,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)
+- [Execution compatibility sunset](deprecations/execution-compatibility.md)
 - [Workset path fan-out deprecation](deprecations/workset-path-fanout.md)
 - [Accepted runtime-integrity ADR](adr/0001-runtime-integrity-improvements.md)
 
