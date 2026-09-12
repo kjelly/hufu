@@ -264,6 +264,10 @@ func (c *ProfileCache) refresh(ctx context.Context, key runtimeCacheKey, kind st
 		}
 		generation := c.generation[key]
 		residency := c.residency[key]
+		if result, fresh := c.freshResultLocked(key, kind); fresh {
+			c.mu.Unlock()
+			return result
+		}
 		flightSet := c.flights[key]
 		if waiting := flightSet.get(kind); waiting != nil {
 			c.mu.Unlock()
@@ -334,6 +338,25 @@ func (c *ProfileCache) refresh(ctx context.Context, key runtimeCacheKey, kind st
 			return refreshResult{err: err}
 		}
 	}
+}
+
+// freshResultLocked returns fresh, already-persisted evidence. It closes the
+// handoff between a caller's stale snapshot and a concurrent refresh that
+// finishes before that caller acquires the flight lock.
+func (c *ProfileCache) freshResultLocked(key runtimeCacheKey, kind string) (refreshResult, bool) {
+	entry := c.entries[key]
+	now := c.now()
+	switch kind {
+	case "show":
+		if entry.showOK && now.Sub(entry.showAt) < c.showTTL {
+			return refreshResult{info: entry.show}, true
+		}
+	case "ps":
+		if entry.psFetched && now.Sub(entry.psAt) < c.psTTL {
+			return refreshResult{info: entry.process, found: entry.psOK}, true
+		}
+	}
+	return refreshResult{}, false
 }
 
 func (c *ProfileCache) isResidentLocked(key runtimeCacheKey) bool {
