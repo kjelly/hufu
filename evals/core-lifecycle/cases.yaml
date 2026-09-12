@@ -9,9 +9,23 @@ cases:
     expect:
       run-outcome: unverified
       acceptance: not_configured
+      audit-verdict: pass
       terminal-lifecycle-confirmed: true
       task-count: 1
       no-unauthorized-fallback: true
+      evidence:
+        manifest-exists: true
+        hash-valid: true
+        status: unverified
+        min-artifact-refs: 1
+        required-results:
+          - task-index: 0
+            status: passed
+            min-artifact-refs: 1
+        required-artifact-refs:
+          - kind: application/x-ndjson
+            task-index: 0
+            min-count: 1
       tasks:
         - agent: worker
           status: done

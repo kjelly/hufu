@@ -53,6 +53,11 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 }
 
 func validateExpectSpec(expect ExpectSpec) error {
+	switch expect.AuditVerdict {
+	case "", "pass", "fail", "incomplete":
+	default:
+		return fmt.Errorf("audit-verdict: unsupported verdict %q", expect.AuditVerdict)
+	}
 	for index, task := range expect.Tasks {
 		switch task.Verification {
 		case "", "not-run", "passed", "failed":
@@ -86,6 +91,37 @@ func validateExpectSpec(expect ExpectSpec) error {
 			}
 			if len(match.Fields) == 0 {
 				return fmt.Errorf("%s.matches[%d].fields is required", name, index)
+			}
+		}
+	}
+	if expect.Evidence != nil {
+		if expect.Evidence.MinArtifactRefs != nil && *expect.Evidence.MinArtifactRefs < 0 {
+			return fmt.Errorf("evidence.min-artifact-refs must be non-negative")
+		}
+		for index, result := range expect.Evidence.RequiredResults {
+			selectors := 0
+			if strings.TrimSpace(result.RequirementID) != "" {
+				selectors++
+			}
+			if result.TaskIndex != nil {
+				selectors++
+				if *result.TaskIndex < 0 {
+					return fmt.Errorf("evidence.required-results[%d].task-index must be non-negative", index)
+				}
+			}
+			if selectors != 1 {
+				return fmt.Errorf("evidence.required-results[%d] requires exactly one of requirement-id or task-index", index)
+			}
+			if result.MinArtifactRefs != nil && *result.MinArtifactRefs < 0 {
+				return fmt.Errorf("evidence.required-results[%d].min-artifact-refs must be non-negative", index)
+			}
+		}
+		for index, ref := range expect.Evidence.RequiredArtifactRefs {
+			if ref.MinCount <= 0 {
+				return fmt.Errorf("evidence.required-artifact-refs[%d].min-count must be positive", index)
+			}
+			if ref.TaskIndex != nil && *ref.TaskIndex < 0 {
+				return fmt.Errorf("evidence.required-artifact-refs[%d].task-index must be non-negative", index)
 			}
 		}
 	}

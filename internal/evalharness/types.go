@@ -81,6 +81,7 @@ type ExpectSpec struct {
 	RunOutcome        string       `yaml:"run-outcome"`
 	StopReason        string       `yaml:"stop-reason"`
 	Acceptance        string       `yaml:"acceptance"`
+	AuditVerdict      string       `yaml:"audit-verdict,omitempty"`
 	TerminalLifecycle *bool        `yaml:"terminal-lifecycle-confirmed,omitempty"`
 	TaskCount         *int         `yaml:"task-count"`
 	Tasks             []TaskExpect `yaml:"tasks"`
@@ -104,6 +105,35 @@ type ExpectSpec struct {
 	// task's mutable BackendBinding to agree with its immutable admitted
 	// ExecutionTarget. Missing provenance also fails closed.
 	NoUnauthorizedFallback *bool `yaml:"no-unauthorized-fallback,omitempty"`
+	// Evidence checks the sealed manifest and its artifact/evidence membership
+	// against the case workspace's canonical artifact store.
+	Evidence *EvidenceExpect `yaml:"evidence,omitempty"`
+}
+
+type EvidenceExpect struct {
+	ManifestExists       *bool                  `yaml:"manifest-exists,omitempty"`
+	HashValid            *bool                  `yaml:"hash-valid,omitempty"`
+	Status               string                 `yaml:"status,omitempty"`
+	MinArtifactRefs      *int                   `yaml:"min-artifact-refs,omitempty"`
+	RequiredResults      []EvidenceResultExpect `yaml:"required-results,omitempty"`
+	RequiredArtifactRefs []ArtifactRefExpect    `yaml:"required-artifact-refs,omitempty"`
+}
+
+// EvidenceResultExpect selects either an explicit requirement ID or a task
+// by stable creation-order index. Exactly one selector must be set.
+type EvidenceResultExpect struct {
+	RequirementID   string `yaml:"requirement-id,omitempty"`
+	TaskIndex       *int   `yaml:"task-index,omitempty"`
+	Status          string `yaml:"status,omitempty"`
+	MinArtifactRefs *int   `yaml:"min-artifact-refs,omitempty"`
+}
+
+// ArtifactRefExpect asserts minimum manifest membership for stable metadata.
+// TaskIndex is optional; when omitted, refs from any task may match.
+type ArtifactRefExpect struct {
+	Kind      string `yaml:"kind,omitempty"`
+	TaskIndex *int   `yaml:"task-index,omitempty"`
+	MinCount  int    `yaml:"min-count"`
 }
 
 // MemoryAggregateExpect describes the durable learning counters and credit

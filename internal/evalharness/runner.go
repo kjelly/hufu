@@ -171,6 +171,12 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	} else {
 		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents, tasks)...)
 	}
+	findings = append(findings, assertEvidence(context.WithoutCancel(caseCtx), workspace, c.Expect.Evidence, runResult, tasks)...)
+	runID := ""
+	if runResult != nil {
+		runID = runResult.RunID
+	}
+	findings = append(findings, assertAudit(context.WithoutCancel(caseCtx), workspace, c.Expect.AuditVerdict, runID)...)
 	findings = append(findings, assertMemoryAggregates(context.WithoutCancel(caseCtx), workspace, c.Expect.MemoryAggregates)...)
 	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {
 		findings = append(findings, EvalFinding{
@@ -200,17 +206,17 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	}
 
 	outcome := ""
-	runID := ""
+	normalizedRunID := ""
 	if runResult != nil {
 		outcome = string(runResult.Outcome)
-		runID = normalizeOpaqueID(runResult.RunID)
+		normalizedRunID = normalizeOpaqueID(runResult.RunID)
 	}
 	return EvalCaseResult{
 		CaseID:     c.ID,
 		Passed:     len(findings) == 0,
 		RunOutcome: outcome,
 		Findings:   findings,
-		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: runID},
+		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: normalizedRunID},
 	}, nil
 }
 

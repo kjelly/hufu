@@ -104,3 +104,28 @@ cases:
 		t.Fatal("LoadSuiteFixture: expected error for invalid verification state, got nil")
 	}
 }
+
+func TestEvalFixtureRejectsAmbiguousEvidenceSelector(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cases.yaml")
+	const yamlDoc = `version: 1
+name: invalid-evidence
+team: ./team
+mode: deterministic
+cases:
+  - id: c1
+    prompt: hi
+    provider-fixture: fixtures/c1.json
+    expect:
+      evidence:
+        required-results:
+          - requirement-id: task:1
+            task-index: 0
+`
+	if err := os.WriteFile(path, []byte(yamlDoc), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if _, err := LoadSuiteFixture(path); err == nil {
+		t.Fatal("LoadSuiteFixture: expected error for ambiguous evidence selector, got nil")
+	}
+}
