@@ -89,11 +89,12 @@ func TestLoadTeamCommonAdmitsExecutionPolicyBeforeProviderPreflight(t *testing.T
 		Dir:       t.TempDir(),
 		Workspace: workspace,
 		Config: agent.TeamConfig{
-			Name:        "admission-before-probe",
-			WorkerModel: "warm-admission-model",
+			Name:             "admission-before-probe",
+			WorkerModel:      "ollama/warm-admission-model",
+			CoordinatorModel: "ollama/warm-admission-model",
 		},
 		Agents: map[string]*agent.AgentDef{
-			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "warm-admission-model"}},
+			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "ollama/warm-admission-model"}},
 		},
 	}
 
