@@ -2,8 +2,21 @@ package context
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrReadScopeDenied means the item exists but is outside the caller's scope.
+var ErrReadScopeDenied = errors.New("context read scope denied")
+
+// ScopedReadOptions is the authorization boundary for reading one context
+// item by ID. An ID is only a lookup key: project/team/private-agent scope is
+// still enforced, and content is omitted unless IncludeContent is explicit.
+type ScopedReadOptions struct {
+	Scope          Scope
+	AllAgents      bool
+	IncludeContent bool
+}
 
 type Repository interface {
 	Append(context.Context, ...ContextItem) error
@@ -55,8 +68,7 @@ type Repository interface {
 // offline projections. It intentionally omits every mutation and projection
 // rebuild method from Repository.
 type ReadOnlyRepository interface {
-	Get(context.Context, string) (ContextItem, error)
-	GetMany(context.Context, []string) ([]ContextItem, error)
+	GetScoped(context.Context, string, ScopedReadOptions) (ContextItem, error)
 	Query(context.Context, RepositoryQuery) ([]ContextItem, error)
 	SearchExact(context.Context, SearchRequest) ([]SearchResult, error)
 	SearchLexical(context.Context, SearchRequest) ([]SearchResult, error)

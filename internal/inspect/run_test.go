@@ -270,6 +270,33 @@ func TestInspectContextHidesContentByDefault(t *testing.T) {
 	}
 }
 
+func TestInspectContextFailsClosedOnRedactionError(t *testing.T) {
+	fixture := buildRunFixture(t)
+	repo, err := contextstore.OpenSQLite(filepath.Join(fixture.workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{
+		ID: "private-context", Kind: contextstore.ContextPattern, Content: "sensitive context",
+		Scope: contextstore.Scope{ProjectID: "project-1", TeamID: "team-1", AgentID: "worker"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = inspectContext(t.Context(), InspectQuery{
+		Workspace: fixture.workspace, RunID: fixture.runID, TaskID: fixture.taskID,
+		ProjectID: "project-1", TeamID: "team-1", AgentID: "worker",
+	}, ContextOptions{ShowContent: true}, func(string) (string, error) {
+		return "", errors.New("redactor unavailable")
+	})
+	if !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("redaction failure error = %v, want ErrIntegrity", err)
+	}
+}
+
 type runFixture struct {
 	workspace string
 	runID     string

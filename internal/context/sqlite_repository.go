@@ -517,9 +517,58 @@ func scanItem(row interface{ Scan(...any) error }) (ContextItem, error) {
 
 const itemColumns = `id,kind,content,content_hash,project_id,team_id,session_id,branch_id,agent_id,task_id,attempt_id,authority,trust_level,priority,must_keep,pinned,confidence,source_json,evidence_json,tags_json,metadata_json,created_at,updated_at,valid_from,valid_until,expires_at,superseded_by,lifecycle,embedding_state,embedding_model`
 
+const itemColumnsWithoutContent = `id,kind,'' AS content,content_hash,project_id,team_id,session_id,branch_id,agent_id,task_id,attempt_id,authority,trust_level,priority,must_keep,pinned,confidence,source_json,evidence_json,tags_json,metadata_json,created_at,updated_at,valid_from,valid_until,expires_at,superseded_by,lifecycle,embedding_state,embedding_model`
+
 func (r *SQLiteRepository) Get(ctx context.Context, id string) (ContextItem, error) {
 	return scanItem(r.db.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
 }
+
+// GetScoped treats id as a lookup key, never as authorization. Scope
+// predicates are evaluated by SQLite before a row is projected, and the
+// content column is not selected at all unless the authorized caller asks for
+// it explicitly.
+func (r *SQLiteRepository) GetScoped(ctx context.Context, id string, options ScopedReadOptions) (ContextItem, error) {
+	projectID := strings.TrimSpace(options.Scope.ProjectID)
+	teamID := strings.TrimSpace(options.Scope.TeamID)
+	agentID := strings.TrimSpace(options.Scope.AgentID)
+	if projectID == "" {
+		return ContextItem{}, errors.New("project scope is required")
+	}
+	if options.AllAgents && agentID != "" {
+		return ContextItem{}, errors.New("agent scope and all-agents are mutually exclusive")
+	}
+
+	where := []string{"id=?", "project_id=?"}
+	args := []any{id, projectID}
+	if teamID != "" {
+		where = append(where, "team_id=?")
+		args = append(args, teamID)
+	}
+	if !options.AllAgents {
+		if agentID == "" {
+			where = append(where, "agent_id IS NULL")
+		} else {
+			where = append(where, "(agent_id IS NULL OR agent_id=?)")
+			args = append(args, agentID)
+		}
+	}
+
+	columns := itemColumnsWithoutContent
+	if options.IncludeContent {
+		columns = itemColumns
+	}
+	item, err := scanItem(r.db.QueryRowContext(ctx, "SELECT "+columns+" FROM context_items WHERE "+strings.Join(where, " AND "), args...))
+	if !errors.Is(err, sql.ErrNoRows) {
+		return item, err
+	}
+
+	var exists int
+	if existsErr := r.db.QueryRowContext(ctx, "SELECT 1 FROM context_items WHERE id=?", id).Scan(&exists); existsErr != nil {
+		return ContextItem{}, existsErr
+	}
+	return ContextItem{}, fmt.Errorf("%w: context item %q is outside the requested scope", ErrReadScopeDenied, id)
+}
+
 func (r *SQLiteRepository) GetMany(ctx context.Context, ids []string) ([]ContextItem, error) {
 	out := make([]ContextItem, 0, len(ids))
 	for _, id := range ids {

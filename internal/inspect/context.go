@@ -81,7 +81,15 @@ type ContextData struct {
 	Authorization   ContextAuthorizationData  `json:"authorization"`
 }
 
+type contextContentRedactor func(string) (string, error)
+
 func InspectContext(ctx context.Context, query InspectQuery, options ContextOptions) (*Envelope, error) {
+	return inspectContext(ctx, query, options, func(content string) (string, error) {
+		return contextstore.RedactSecrets(content), nil
+	})
+}
+
+func inspectContext(ctx context.Context, query InspectQuery, options ContextOptions, redactContent contextContentRedactor) (*Envelope, error) {
 	if err := query.Validate(KindContext); err != nil {
 		return nil, err
 	}
@@ -154,14 +162,14 @@ func InspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 	if query.Attempt > 0 && len(data.Attempts) == 0 {
 		return nil, fmt.Errorf("%w: attempt %d for task %q in run %q", ErrNotFound, query.Attempt, query.TaskID, query.RunID)
 	}
-	data.Items, err = loadContextItems(ctx, query, options, itemIDs)
+	data.Items, err = loadContextItems(ctx, query, options, itemIDs, redactContent)
 	if err != nil {
 		return nil, err
 	}
 	return envelope(KindContext, query, lineage.BranchID, data), nil
 }
 
-func loadContextItems(ctx context.Context, query InspectQuery, options ContextOptions, ids map[string]struct{}) ([]ContextItemData, error) {
+func loadContextItems(ctx context.Context, query InspectQuery, options ContextOptions, ids map[string]struct{}, redactContent contextContentRedactor) ([]ContextItemData, error) {
 	ordered := make([]string, 0, len(ids))
 	for id := range ids {
 		if id = strings.TrimSpace(id); id != "" {
@@ -183,26 +191,34 @@ func loadContextItems(ctx context.Context, query InspectQuery, options ContextOp
 	}
 	defer func() { _ = repo.Close() }()
 	for _, id := range ordered {
-		item, getErr := repo.Get(ctx, id)
+		item, getErr := repo.GetScoped(ctx, id, contextstore.ScopedReadOptions{
+			Scope: contextstore.Scope{
+				ProjectID: query.ProjectID,
+				TeamID:    query.TeamID,
+				AgentID:   query.AgentID,
+			},
+			AllAgents:      options.AllAgents,
+			IncludeContent: options.ShowContent,
+		})
 		if getErr != nil {
 			if errors.Is(getErr, sql.ErrNoRows) {
 				out = append(out, ContextItemData{ID: id})
 				continue
 			}
+			if errors.Is(getErr, contextstore.ErrReadScopeDenied) {
+				return nil, fmt.Errorf("%w: context item %q is outside requested project/team/agent scope", ErrUnauthorized, id)
+			}
 			return nil, fmt.Errorf("%w: read context item %q: %v", ErrIntegrity, id, getErr)
-		}
-		if item.Scope.ProjectID != query.ProjectID || query.TeamID != "" && item.Scope.TeamID != query.TeamID {
-			return nil, fmt.Errorf("%w: context item %q is outside requested project/team scope", ErrUnauthorized, id)
-		}
-		if item.Scope.AgentID != "" && item.Scope.AgentID != query.AgentID && !options.AllAgents {
-			return nil, fmt.Errorf("%w: private context item %q requires matching agent or all-agents", ErrUnauthorized, id)
 		}
 		projected := ContextItemData{
 			ID: item.ID, Kind: item.Kind, SourceType: item.Source.Type, SourceRef: utils.RedactSecrets(item.Source.Ref),
 			Authority: item.Authority, Trust: item.TrustLevel, Scope: item.Scope, Lifecycle: item.Lifecycle, Available: true,
 		}
 		if options.ShowContent {
-			projected.Content = contextstore.RedactSecrets(item.Content)
+			projected.Content, err = redactContent(item.Content)
+			if err != nil {
+				return nil, fmt.Errorf("%w: redact context item %q: %v", ErrIntegrity, id, err)
+			}
 		}
 		out = append(out, projected)
 	}

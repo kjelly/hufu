@@ -3,6 +3,7 @@ package context
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,12 +103,81 @@ func TestOpenSQLiteReadOnlyQueriesExistingContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer readOnly.Close()
-	got, err := readOnly.Get(t.Context(), item.ID)
+	got, err := readOnly.GetScoped(t.Context(), item.ID, ScopedReadOptions{
+		Scope: Scope{ProjectID: "project"}, IncludeContent: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.ID != item.ID || got.Content != item.Content {
 		t.Fatalf("read-only Get = %#v, want %q", got, item.ID)
+	}
+}
+
+func TestSQLiteReadOnlyGetScopedAuthorizesBeforeContentHydration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	writable, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := ContextItem{
+		ID: "ctx-private", Kind: ContextObservation, Content: "private unredacted detail",
+		Scope: Scope{ProjectID: "project", TeamID: "team", AgentID: "worker"},
+	}
+	if err := writable.Append(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnly, err := OpenSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+
+	for name, options := range map[string]ScopedReadOptions{
+		"wrong project": {Scope: Scope{ProjectID: "other", TeamID: "team", AgentID: "worker"}},
+		"wrong team":    {Scope: Scope{ProjectID: "project", TeamID: "other", AgentID: "worker"}},
+		"missing agent": {Scope: Scope{ProjectID: "project", TeamID: "team"}},
+		"wrong agent":   {Scope: Scope{ProjectID: "project", TeamID: "team", AgentID: "other"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := readOnly.GetScoped(t.Context(), item.ID, options); !errors.Is(err, ErrReadScopeDenied) {
+				t.Fatalf("GetScoped error = %v, want ErrReadScopeDenied", err)
+			}
+		})
+	}
+
+	metadataOnly, err := readOnly.GetScoped(t.Context(), item.ID, ScopedReadOptions{
+		Scope: Scope{ProjectID: "project", TeamID: "team", AgentID: "worker"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadataOnly.Content != "" {
+		t.Fatalf("metadata-only read hydrated content %q", metadataOnly.Content)
+	}
+
+	withContent, err := readOnly.GetScoped(t.Context(), item.ID, ScopedReadOptions{
+		Scope: Scope{ProjectID: "project", TeamID: "team", AgentID: "worker"}, IncludeContent: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withContent.Content != item.Content {
+		t.Fatalf("content read = %q, want %q", withContent.Content, item.Content)
+	}
+
+	allAgents, err := readOnly.GetScoped(t.Context(), item.ID, ScopedReadOptions{
+		Scope: Scope{ProjectID: "project", TeamID: "team"}, AllAgents: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allAgents.Content != "" {
+		t.Fatalf("all-agents metadata read hydrated content %q", allAgents.Content)
 	}
 }
 
