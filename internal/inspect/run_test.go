@@ -193,6 +193,43 @@ func TestInspectContextSeparatesManifestsAndEnforcesPrivateScope(t *testing.T) {
 	}
 }
 
+func TestInspectContextHidesContentByDefault(t *testing.T) {
+	fixture := buildRunFixture(t)
+	repo, err := contextstore.OpenSQLite(filepath.Join(fixture.workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const privateContent = "private context content without credential syntax"
+	if err := repo.Append(t.Context(), contextstore.ContextItem{
+		ID: "private-context", Kind: contextstore.ContextPattern, Content: privateContent,
+		Scope: contextstore.Scope{ProjectID: "project-1", TeamID: "team-1", AgentID: "worker"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	envelope, err := InspectContext(t.Context(), InspectQuery{
+		Workspace: fixture.workspace, RunID: fixture.runID, TaskID: fixture.taskID,
+		ProjectID: "project-1", TeamID: "team-1", AgentID: "worker",
+	}, ContextOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := envelope.Data.(ContextData)
+	if len(data.Items) != 1 || data.Items[0].Content != "" {
+		t.Fatalf("default context projection = %#v", data.Items)
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), privateContent) {
+		t.Fatalf("default context projection exposed content: %s", encoded)
+	}
+}
+
 type runFixture struct {
 	workspace string
 	runID     string

@@ -3,6 +3,7 @@ package inspect
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,6 +46,63 @@ func TestInspectReplayMatchesEligibleSessionProjection(t *testing.T) {
 }
 
 func TestInspectReplayComparesMemoryAggregatesInMemory(t *testing.T) {
+	workspace, observations := buildMemoryReplayFixture(t)
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "memory-1", Kind: contextstore.ContextPattern, Content: "safe", Scope: contextstore.Scope{ProjectID: "project-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RebuildExperienceAggregates(t.Context(), observations); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: workspace, RunID: "run-memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, "memory_aggregates"); check.Status != "match" {
+		t.Fatalf("memory check = %#v", check)
+	}
+}
+
+func TestInspectReplayDetectsMemoryAggregateDrift(t *testing.T) {
+	workspace, observations := buildMemoryReplayFixture(t)
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "memory-1", Kind: contextstore.ContextPattern, Content: "safe", Scope: contextstore.Scope{ProjectID: "project-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	drift := observations[0]
+	drift.IdempotencyKey += ":projection-only"
+	drift.ExposureDelta++
+	if err := repo.RebuildExperienceAggregates(t.Context(), append(observations, drift)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: workspace, RunID: "run-memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, "memory_aggregates")
+	if check.Status != "drift" || len(check.DiffPaths) == 0 {
+		t.Fatalf("memory drift check = %#v", check)
+	}
+	if envelope.Data.(ReplayData).OverallStatus != "drift" {
+		t.Fatalf("replay status = %#v", envelope.Data)
+	}
+}
+
+func buildMemoryReplayFixture(t *testing.T) (string, []contextstore.ExperienceObservation) {
+	t.Helper()
 	workspace := t.TempDir()
 	store, err := team.NewEventStore(workspace, "run-memory", "session-memory")
 	if err != nil {
@@ -75,26 +133,7 @@ func TestInspectReplayComparesMemoryAggregatesInMemory(t *testing.T) {
 		events[index] = lineage.GlobalEvents[index].Event
 	}
 	observations := team.ExperienceObservationsFromEvents(events, agent.DefaultMemoryLearningPolicy())
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "memory-1", Kind: contextstore.ContextPattern, Content: "safe", Scope: contextstore.Scope{ProjectID: "project-1"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.RebuildExperienceAggregates(t.Context(), observations); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Close(); err != nil {
-		t.Fatal(err)
-	}
-	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: workspace, RunID: "run-memory"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, "memory_aggregates"); check.Status != "match" {
-		t.Fatalf("memory check = %#v", check)
-	}
+	return workspace, observations
 }
 
 func TestInspectReplayComparesTerminalLifecycleWithoutChangingTaskStatus(t *testing.T) {
@@ -190,6 +229,100 @@ func TestInspectReplayRejectsHistoricalSessionProjectionComparison(t *testing.T)
 		if check.Status != "unavailable" || check.ReasonCode != ReasonProjectionNotRunScoped {
 			t.Fatalf("historical %s check = %#v", name, check)
 		}
+	}
+}
+
+func TestInspectReplayReportsUnavailableOptionalSessionProjection(t *testing.T) {
+	fixture := buildRunFixture(t)
+	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"session.run", "session.tasks"} {
+		check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, name)
+		if check.Status != "unavailable" || check.ReasonCode != ReasonOptionalProjectionAbsent {
+			t.Fatalf("optional %s check = %#v", name, check)
+		}
+	}
+}
+
+func TestInspectReplayReportsNonActiveSessionProjectionUnavailable(t *testing.T) {
+	fixture := buildRunFixture(t)
+	saveCanonicalReplaySession(t, fixture)
+	lineage, err := LoadLineage(t.Context(), InspectQuery{Workspace: fixture.workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalID := lineage.Events[len(lineage.Events)-1].Event.ID
+	tree := team.NewSessionTree()
+	tree.Branches["feature"] = &team.SessionBranch{ID: "feature", Name: "feature", ParentID: "main", ForkEventID: terminalID}
+	tree.ActiveBranch = "feature"
+	if err := team.SaveSessionTree(fixture.workspace, tree); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID, BranchID: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"session.run", "session.tasks"} {
+		check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, name)
+		if check.Status != "unavailable" || check.ReasonCode != ReasonProjectionNotRunScoped {
+			t.Fatalf("non-active %s check = %#v", name, check)
+		}
+	}
+}
+
+func TestInspectReplayReportsProjectionChangedDuringRead(t *testing.T) {
+	fixture := buildRunFixture(t)
+	saveCanonicalReplaySession(t, fixture)
+	query := InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID}
+	lineage, err := LoadLineage(t.Context(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := selectRun(lineage, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := replaySessionChecksWithReaders(query, lineage, selected, sessionProjectionReaders{
+		loadSession: team.LoadSessionReadOnly,
+		loadTree: func(string) (*team.SessionTree, error) {
+			return &team.SessionTree{ActiveBranch: "changed"}, nil
+		},
+	})
+	for _, check := range checks {
+		if check.Status != "unavailable" || check.ReasonCode != ReasonProjectionChangedOnRead {
+			t.Fatalf("changed projection check = %#v", check)
+		}
+	}
+}
+
+func TestInspectReplayRejectsBrokenGlobalHashChain(t *testing.T) {
+	fixture := buildRunFixture(t)
+	path := filepath.Join(fixture.workspace, "logs", "event_store.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	if len(lines) < 2 {
+		t.Fatalf("event fixture has %d lines", len(lines))
+	}
+	var event team.RunEvent
+	if err := json.Unmarshal(lines[1], &event); err != nil {
+		t.Fatal(err)
+	}
+	event.Payload = json.RawMessage(`{"tampered":true}`)
+	lines[1], err = json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(bytes.Join(lines, []byte("\n")), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
+	if !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("broken chain error = %v, want ErrIntegrity", err)
 	}
 }
 

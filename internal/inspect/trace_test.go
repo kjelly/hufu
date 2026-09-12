@@ -64,6 +64,9 @@ func TestInspectTraceOrdersAnchoredEntriesAndPlacesUnanchoredLast(t *testing.T) 
 	sources := map[string]bool{}
 	for _, entry := range data.Entries {
 		sources[entry.Ref.Source] = true
+		if entry.Ref.ParentEventID != "" {
+			t.Fatalf("trace invented a parent event: %#v", entry)
+		}
 		if entry.AnchorEventOrdinal == 0 {
 			seenUnanchored = true
 			if entry.Ref.Source != "event_store" && entry.ReasonCode != ReasonMissingAnchor {

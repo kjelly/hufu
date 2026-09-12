@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,42 @@ func TestInspectCommandRunJSON(t *testing.T) {
 	}
 	if envelope.SchemaVersion != inspectpkg.SchemaVersion || envelope.Kind != inspectpkg.KindRun || envelope.Data.RunID != runID {
 		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
+func TestInspectTextAndJSONUseSameRunProjection(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	jsonCommand := newInspectCommand()
+	var jsonOutput bytes.Buffer
+	jsonCommand.SetOut(&jsonOutput)
+	jsonCommand.SetErr(&bytes.Buffer{})
+	jsonCommand.SetArgs([]string{"--workspace", workspace, "--format", "json", "run", runID})
+	if err := jsonCommand.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Data inspectpkg.RunData `json:"data"`
+	}
+	if err := json.Unmarshal(jsonOutput.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+
+	textCommand := newInspectCommand()
+	var textOutput bytes.Buffer
+	textCommand.SetOut(&textOutput)
+	textCommand.SetErr(&bytes.Buffer{})
+	textCommand.SetArgs([]string{"--workspace", workspace, "run", runID})
+	if err := textCommand.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"Run: " + envelope.Data.RunID,
+		"Outcome: " + envelope.Data.Outcome,
+		fmt.Sprintf("Tasks: %d total, %d done, %d unresolved", envelope.Data.TaskSummary.Total, envelope.Data.TaskSummary.Done, envelope.Data.TaskSummary.Unresolved),
+	} {
+		if !strings.Contains(textOutput.String(), expected) {
+			t.Fatalf("text output does not contain JSON projection %q:\n%s", expected, textOutput.String())
+		}
 	}
 }
 

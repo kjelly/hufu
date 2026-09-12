@@ -240,7 +240,7 @@ func summarizeAttempts(tasks []*team.TodoItem, runID string) AttemptSummary {
 			continue
 		}
 		for _, receipt := range item.ExecutionReceipts {
-			if receipt.RunID != runID {
+			if receipt.RunID != runID || receipt.TaskID != item.ID {
 				continue
 			}
 			summary.Total++
@@ -284,7 +284,7 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 		data.ReasonCode = item.FailureEvent.FailureType
 	}
 	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != query.RunID || query.Attempt > 0 && receipt.Attempt != query.Attempt {
+		if receipt.RunID != query.RunID || receipt.TaskID != item.ID || query.Attempt > 0 && receipt.Attempt != query.Attempt {
 			continue
 		}
 		attempt := AttemptData{

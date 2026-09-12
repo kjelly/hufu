@@ -186,7 +186,7 @@ func boundedCode(value string) string {
 func receiptTraceCandidates(events []IndexedEvent, item *team.TodoItem, query InspectQuery) []traceCandidate {
 	out := make([]traceCandidate, 0, len(item.ExecutionReceipts))
 	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != query.RunID {
+		if receipt.RunID != query.RunID || receipt.TaskID != item.ID {
 			continue
 		}
 		refs := []string{receipt.ModelExecutionID, receipt.ProducerID, receipt.TranscriptRef, receipt.ProviderTranscriptRef}

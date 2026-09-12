@@ -63,7 +63,19 @@ func InspectReplay(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	return envelope, nil
 }
 
+type sessionProjectionReaders struct {
+	loadSession func(string) (*team.SessionData, bool, error)
+	loadTree    func(string) (*team.SessionTree, error)
+}
+
 func replaySessionChecks(query InspectQuery, lineage Lineage, selected selectedRun) []ProjectionCheck {
+	return replaySessionChecksWithReaders(query, lineage, selected, sessionProjectionReaders{
+		loadSession: team.LoadSessionReadOnly,
+		loadTree:    team.LoadSessionTree,
+	})
+}
+
+func replaySessionChecksWithReaders(query InspectQuery, lineage Lineage, selected selectedRun, readers sessionProjectionReaders) []ProjectionCheck {
 	runCheck := ProjectionCheck{Name: "session.run", Status: "unavailable"}
 	taskCheck := ProjectionCheck{Name: "session.tasks", Status: "unavailable"}
 	reason := sessionProjectionGate(lineage, selected)
@@ -71,8 +83,8 @@ func replaySessionChecks(query InspectQuery, lineage Lineage, selected selectedR
 		runCheck.ReasonCode, taskCheck.ReasonCode = reason, reason
 		return []ProjectionCheck{runCheck, taskCheck}
 	}
-	checkpoint, exists, err := team.LoadSessionReadOnly(query.Workspace)
-	secondTree, treeErr := team.LoadSessionTree(query.Workspace)
+	checkpoint, exists, err := readers.loadSession(query.Workspace)
+	secondTree, treeErr := readers.loadTree(query.Workspace)
 	if treeErr != nil || secondTree.ActiveBranch != lineage.ActiveBranchID || secondTree.ActiveBranch != lineage.BranchID {
 		runCheck.ReasonCode, taskCheck.ReasonCode = ReasonProjectionChangedOnRead, ReasonProjectionChangedOnRead
 		return []ProjectionCheck{runCheck, taskCheck}
