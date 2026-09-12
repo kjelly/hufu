@@ -3,7 +3,6 @@ name: checker
 description: Quality checker — verifies output for completeness and correctness
 role: worker
 tools: read,bash,grep,find,ls
-skills: code-review
 max-tokens: 1024
 temperature: 0.1
 ---
