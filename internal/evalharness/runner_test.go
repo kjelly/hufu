@@ -3,6 +3,7 @@ package evalharness
 import (
 	"context"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -42,6 +43,50 @@ func TestRunSuiteCoreLifecycleSingleTaskUnverified(t *testing.T) {
 	}
 	if c.RunOutcome != "unverified" {
 		t.Errorf("RunOutcome = %q, want %q", c.RunOutcome, "unverified")
+	}
+}
+
+// TestRunAllEvalSuites runs every case in every suite fixture under evals/,
+// so a new suite added under evals/<name>/cases.yaml is exercised by `go
+// test` automatically without a new hand-written test function -- this is
+// the Go-level equivalent of `hufu eval run ./evals/<name>` per suite.
+func TestRunAllEvalSuites(t *testing.T) {
+	evalsRoot := filepath.Join(repoRoot(t), "evals")
+	entries, err := os.ReadDir(evalsRoot)
+	if err != nil {
+		t.Fatalf("read evals root %s: %v", evalsRoot, err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		suiteDir := filepath.Join(evalsRoot, entry.Name())
+		t.Run(entry.Name(), func(t *testing.T) {
+			paths, err := DiscoverSuiteFixtures(suiteDir)
+			if err != nil {
+				t.Fatalf("DiscoverSuiteFixtures(%s): %v", suiteDir, err)
+			}
+			if len(paths) == 0 {
+				t.Fatalf("no suite fixtures found in %s", suiteDir)
+			}
+			for _, path := range paths {
+				fixture, err := LoadSuiteFixture(path)
+				if err != nil {
+					t.Fatalf("LoadSuiteFixture(%s): %v", path, err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				result, err := RunSuite(ctx, fixture, "")
+				cancel()
+				if err != nil {
+					t.Fatalf("RunSuite(%s): %v", path, err)
+				}
+				for _, c := range result.Cases {
+					if !c.Passed {
+						t.Errorf("case %s/%s did not pass; findings: %+v", fixture.Name, c.CaseID, c.Findings)
+					}
+				}
+			}
+		})
 	}
 }
 

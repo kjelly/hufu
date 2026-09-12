@@ -1,0 +1,5 @@
+name: eval-strict-verification
+description: Minimal coordinator + one worker fixture team with a deterministically-failing acceptance gate
+acceptance:
+  commands:
+    - "false"

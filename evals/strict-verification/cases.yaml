@@ -1,0 +1,18 @@
+version: 1
+name: strict-verification
+team: ./team
+mode: deterministic
+cases:
+  - id: acceptance-failure-non-completed
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/acceptance-failure.json
+    expect:
+      run-outcome: partial
+      acceptance: failed
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+      events:
+        required: [start, todos_updated, done]
+        order: [start, todos_updated, done]
