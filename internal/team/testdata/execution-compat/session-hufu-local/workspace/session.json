@@ -1,0 +1,10 @@
+{
+  "tasks": [
+    {
+      "ID": "legacy-local-task",
+      "Status": "pending",
+      "model": "qwen3:8b",
+      "subagent_provider": "hufu-local"
+    }
+  ]
+}

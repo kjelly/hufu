@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "ID": "typed-local-task",
+      "Status": "pending",
+      "execution_target": {"backend": "local", "model": "qwen3:8b"},
+      "execution_topology": [{"backend": "local", "model": "qwen3:8b"}],
+      "backend_binding": {"backend": "local", "effective_target": "qwen3:8b"}
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "ID": "canonical-task",
+      "Status": "pending",
+      "execution_target": {"backend": "ollama", "model": "qwen3:8b"},
+      "execution_topology": [{"backend": "ollama", "model": "qwen3:8b"}],
+      "backend_binding": {"backend": "ollama", "effective_target": "qwen3:8b"}
+    }
+  ]
+}
