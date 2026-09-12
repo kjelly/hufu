@@ -30,8 +30,6 @@
         "arguments": "{\"response\":\"Could not verify after retries.\",\"acknowledge_failed_tasks\":true}"
       }
     },
-    { "content": "(run ends here)" },
-    { "content": "(run ends here)" },
     { "content": "(run ends here)" }
   ]
 }

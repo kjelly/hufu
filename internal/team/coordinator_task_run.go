@@ -751,6 +751,18 @@ retryLoop:
 				closeTranscript()
 				return "", fmt.Errorf("mark retry task started: %w", err)
 			}
+			// CommitTaskTransition always bumps OccurrenceRevision and revokes
+			// the task's current lease (coordinator_eventstore.go's
+			// revokeTaskOccurrence) to invalidate a prior worker's stale view --
+			// including the fresh lease this same iteration's setCurrentTaskAttempt
+			// call above just opened for this attempt. Without reopening it here,
+			// this attempt's own submit_result call finds no active occurrence and
+			// falls back to invocationMetadataFromContext, whose identity never
+			// carries an OccurrenceRevision/DispatchID and so can never pass
+			// validSubmitResultIdentity -- every retry's own resubmission would
+			// unconditionally fail with "submit_result runtime identity is missing
+			// or invalid", regardless of whether the attempt actually succeeded.
+			c.setCurrentTaskAttempt(todoID, attempt)
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
