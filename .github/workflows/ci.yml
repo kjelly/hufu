@@ -160,6 +160,53 @@ jobs:
       - name: CGO_ENABLED=0 test
         run: CGO_ENABLED=0 go test ./...
 
+  # Offline deterministic workflow regression harness
+  # (docs/tmp/now/06-workflow-regression-eval-harness.md §13). Deliberately
+  # NOT in ci-success's `needs` yet -- non-blocking until enough of the
+  # first-batch cases (§11) are in and stable; see that doc's PR-4 for the
+  # follow-up that adds it to the required gate. It still runs and reports
+  # red/green on every push/PR so regressions are visible before the gate
+  # goes live.
+  eval-core:
+    name: eval-core (hufu eval run ./evals/*, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build hufu
+        run: go build -o /tmp/hufu ./cmd/hufu
+
+      - name: Run every eval suite (offline, no live model, no network)
+        run: |
+          set -uo pipefail
+          mkdir -p eval-reports
+          status=0
+          for suite in evals/*/; do
+            suite="${suite%/}"
+            name="$(basename "$suite")"
+            if ! /tmp/hufu eval run "$suite" --format json >"eval-reports/${name}.json"; then
+              status=1
+            fi
+            cat "eval-reports/${name}.json"
+          done
+          exit "$status"
+
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eval-reports
+          path: eval-reports/*.json
+          retention-days: 14
+
   # Aggregate gate. Required by branch protection so PRs cannot merge with
   # any of the six parallel checks red.
   ci-success:
