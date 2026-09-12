@@ -1,0 +1,19 @@
+version: 1
+name: decision-runtime
+team: ./team
+mode: deterministic
+cases:
+  - id: off-profile-compatibility
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/off-profile-compatibility.json
+    decision-profile-override: "off"
+    expect:
+      run-outcome: unverified
+      acceptance: not_configured
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+      events:
+        required: [start, todos_updated, done]
+        order: [start, todos_updated, done]

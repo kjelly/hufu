@@ -1,0 +1,7 @@
+name: eval-decision-runtime
+description: Minimal coordinator + one worker fixture team with a non-off team-level decision default, for the off-profile-compatibility eval case
+decision:
+  default-profile: minimal
+  profiles:
+    minimal:
+      independent-judgments: 1

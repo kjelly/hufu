@@ -108,6 +108,9 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("construct coordinator: %w", err)
 	}
+	if c.DecisionProfileOverride != "" {
+		coordinator.SetDecisionProfile(c.DecisionProfileOverride)
+	}
 	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
 		return EvalCaseResult{}, fmt.Errorf("freeze execution policy: %w", err)
 	}

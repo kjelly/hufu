@@ -28,6 +28,13 @@ type CaseFixture struct {
 	Prompt          string     `yaml:"prompt"`
 	ProviderFixture string     `yaml:"provider-fixture"` // path to a ProviderFixture JSON file, relative to the SuiteFixture file
 	Expect          ExpectSpec `yaml:"expect"`
+	// DecisionProfileOverride, when set, is applied via
+	// Coordinator.SetDecisionProfile before Run -- the run-scoped top layer
+	// of the decision-profile precedence chain (normally set from
+	// --decision-profile). Empty means "do not override": the team's own
+	// team.yaml decision.default-profile (or the built-in "off" default)
+	// applies unmodified.
+	DecisionProfileOverride string `yaml:"decision-profile-override,omitempty"`
 }
 
 // ExpectSpec is the subset of RunResult dimensions a case asserts on. A zero
