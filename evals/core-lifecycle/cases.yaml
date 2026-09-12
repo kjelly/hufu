@@ -1,0 +1,14 @@
+version: 1
+name: core-lifecycle
+team: ./team
+mode: deterministic
+cases:
+  - id: single-task-unverified
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/single-task-unverified.json
+    expect:
+      run-outcome: unverified
+      acceptance: not_configured
+      task-count: 1
+      events:
+        required: [start, todos_updated, done]

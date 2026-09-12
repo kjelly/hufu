@@ -1,0 +1,122 @@
+// Package evalharness implements the offline deterministic workflow
+// regression harness described in docs/tmp/now/06-workflow-regression-eval-harness.md.
+// It runs a real team.Coordinator end-to-end against a scripted
+// OpenAI-compatible provider fake and asserts on the resulting RunResult,
+// never against model output quality.
+package evalharness
+
+import "time"
+
+// SuiteFixture is one YAML file under evals/<suite>/ declaring a named group
+// of deterministic cases that share a team.
+type SuiteFixture struct {
+	Version int           `yaml:"version"`
+	Name    string        `yaml:"name"`
+	Team    string        `yaml:"team"` // path to a bundled team directory, relative to this file
+	Mode    string        `yaml:"mode"` // must be "deterministic" in v1
+	Cases   []CaseFixture `yaml:"cases"`
+
+	// Path is the absolute path this fixture was loaded from. It is not part
+	// of the YAML; Loader sets it so error messages and relative resolution
+	// (Team, ProviderFixture) can point back at the file on disk.
+	Path string `yaml:"-"`
+}
+
+// CaseFixture is one deterministic scenario within a SuiteFixture.
+type CaseFixture struct {
+	ID              string     `yaml:"id"`
+	Prompt          string     `yaml:"prompt"`
+	ProviderFixture string     `yaml:"provider-fixture"` // path to a ProviderFixture JSON file, relative to the SuiteFixture file
+	Expect          ExpectSpec `yaml:"expect"`
+}
+
+// ExpectSpec is the subset of RunResult dimensions a case asserts on. A zero
+// value field (empty string / nil) means "do not check this dimension" --
+// see assert.go.
+type ExpectSpec struct {
+	RunOutcome string       `yaml:"run-outcome"`
+	Acceptance string       `yaml:"acceptance"`
+	TaskCount  *int         `yaml:"task-count"`
+	Events     EventsExpect `yaml:"events"`
+}
+
+// EventsExpect names the StatusEvent.Type values a case requires to have
+// been reported at least once during the run, in no particular order.
+type EventsExpect struct {
+	Required []string `yaml:"required"`
+}
+
+// ProviderFixture is the scripted response program for one case's model
+// driver (see docs/tmp/now/06-workflow-regression-eval-harness.md §4.1).
+type ProviderFixture struct {
+	Steps []ProviderStep `json:"steps"`
+}
+
+// ProviderStep is one scripted chat-completion reply. A step with no Match
+// is consumed strictly in arrival order; a step with Match is consulted
+// first, against every unconsumed request, matched by substring against the
+// raw request body. Exactly one of Content or ToolCall must be set: Content
+// answers with plain assistant text (finish_reason: stop); ToolCall answers
+// with a single tool call (finish_reason: tool_calls), e.g. the coordinator's
+// `agent` delegation call, a worker's `submit_result`, or the coordinator's
+// closing `finish`.
+type ProviderStep struct {
+	Match    *StepMatch    `json:"match,omitempty"`
+	Content  string        `json:"content,omitempty"`
+	ToolCall *ToolCallStep `json:"tool_call,omitempty"`
+}
+
+// ToolCallStep is one scripted tool call. Arguments is the exact JSON object
+// text the model would have emitted as the call's raw argument string (it is
+// embedded verbatim as the tool call's `function.arguments` string, not
+// re-encoded), so it must already match the target tool's schema -- e.g.
+// `{"tasks":[{"agent":"worker","goal":"..."}]}` for the coordinator's `agent`
+// tool, `{"status":"success","summary":"..."}` for a worker's
+// `submit_result`, or `{"response":"..."}` for the coordinator's `finish`.
+type ToolCallStep struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// StepMatch selects which incoming chat-completion request a ProviderStep
+// answers. Exactly one of its fields is set.
+type StepMatch struct {
+	Contains string `json:"contains,omitempty"`
+}
+
+// EvalFinding is one failed assertion dimension for a case.
+type EvalFinding struct {
+	Dimension string
+	Expected  string
+	Actual    string
+}
+
+// EvalMetrics is non-assertion telemetry about how a case ran.
+type EvalMetrics struct {
+	Duration time.Duration
+}
+
+// EvalCaseResult is the canonical per-case result (§6 of the plan).
+type EvalCaseResult struct {
+	CaseID     string
+	Passed     bool
+	RunOutcome string
+	Findings   []EvalFinding
+	Metrics    EvalMetrics
+}
+
+// EvalSuiteResult aggregates every case result loaded from one SuiteFixture.
+type EvalSuiteResult struct {
+	SuiteName string
+	Cases     []EvalCaseResult
+}
+
+// Passed reports whether every case in the suite passed.
+func (s EvalSuiteResult) Passed() bool {
+	for _, c := range s.Cases {
+		if !c.Passed {
+			return false
+		}
+	}
+	return true
+}
