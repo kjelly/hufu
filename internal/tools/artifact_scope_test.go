@@ -96,6 +96,7 @@ func TestArtifactScopeFallbackTraversalMatchesPolicy(t *testing.T) {
 }
 
 func TestGrepPolicySubtractsFromNativeRgSelection(t *testing.T) {
+	requireRipgrep(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -136,9 +137,7 @@ func TestGrepPolicySubtractsFromNativeRgSelection(t *testing.T) {
 }
 
 func TestGrepNoPolicyPreservesNativeDirectorySelection(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep is required for the native no-policy regression")
-	}
+	requireRipgrep(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -158,6 +157,7 @@ func TestGrepNoPolicyPreservesNativeDirectorySelection(t *testing.T) {
 }
 
 func TestGrepExplicitIgnoredFilePreservesDirectOperand(t *testing.T) {
+	requireRipgrep(t)
 	root := t.TempDir()
 	ignored := filepath.Join(root, "ignored.txt")
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
@@ -175,6 +175,7 @@ func TestGrepExplicitIgnoredFilePreservesDirectOperand(t *testing.T) {
 }
 
 func TestGrepExplicitIgnoredDirectorySubtractsBlockedDescendants(t *testing.T) {
+	requireRipgrep(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "ignored-dir")
 	blocked := filepath.Join(dir, "blocked")
@@ -358,6 +359,13 @@ func forceGrepFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
+}
+
+func requireRipgrep(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep is required for native rg selection coverage")
+	}
 }
 
 func TestGrepEmptyAuthorizedCandidatesNeverSearchesRoot(t *testing.T) {
