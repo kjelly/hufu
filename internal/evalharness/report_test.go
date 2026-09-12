@@ -7,9 +7,10 @@ import (
 )
 
 func TestEvalResultJSONStable(t *testing.T) {
-	suites := []EvalSuiteResult{
+	firstSuites := []EvalSuiteResult{
 		{
-			SuiteName: "core-lifecycle",
+			SuiteName:         "core-lifecycle",
+			BenchmarkRevision: "benchmark-revision",
 			Cases: []EvalCaseResult{
 				{
 					CaseID:     "single-task-unverified",
@@ -21,15 +22,25 @@ func TestEvalResultJSONStable(t *testing.T) {
 			},
 		},
 	}
+	secondSuites := []EvalSuiteResult{
+		{
+			SuiteName:         "core-lifecycle",
+			BenchmarkRevision: "benchmark-revision",
+			Cases: []EvalCaseResult{{
+				CaseID: "single-task-unverified", Passed: true, RunOutcome: "unverified",
+				Metrics: EvalMetrics{Duration: 9 * time.Second, RunID: "<run-id>"},
+			}},
+		},
+	}
 
 	var first, second bytes.Buffer
-	if err := WriteJSONReport(&first, suites); err != nil {
+	if err := WriteJSONReport(&first, firstSuites); err != nil {
 		t.Fatalf("WriteJSONReport (first): %v", err)
 	}
-	if err := WriteJSONReport(&second, suites); err != nil {
+	if err := WriteJSONReport(&second, secondSuites); err != nil {
 		t.Fatalf("WriteJSONReport (second): %v", err)
 	}
 	if first.String() != second.String() {
-		t.Errorf("encoding the same result twice produced different JSON:\nfirst:  %s\nsecond: %s", first.String(), second.String())
+		t.Errorf("runtime duration made deterministic JSON unstable:\nfirst:  %s\nsecond: %s", first.String(), second.String())
 	}
 }

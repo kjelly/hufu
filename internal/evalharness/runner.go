@@ -14,6 +14,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -33,7 +34,10 @@ var ErrCaseNotFound = errors.New("case not found in suite")
 // RunSuite executes every case in a suite fixture, or -- when caseID is
 // non-empty -- only that one case, and returns their canonical results.
 func RunSuite(ctx context.Context, fixture *SuiteFixture, caseID string) (EvalSuiteResult, error) {
-	suiteResult := EvalSuiteResult{SuiteName: fixture.Name}
+	suiteResult := EvalSuiteResult{
+		SuiteName:         fixture.Name,
+		BenchmarkRevision: improve.BenchmarkRevision(fixture.BenchmarkFixture()),
+	}
 	matched := false
 	for _, c := range fixture.Cases {
 		if caseID != "" && c.ID != caseID {

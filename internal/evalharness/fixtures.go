@@ -9,8 +9,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/improve"
 	"gopkg.in/yaml.v3"
 )
+
+const workflowRegressionCategory = "workflow-regression"
 
 // LoadSuiteFixture strict-decodes one suite YAML file. Strict decoding
 // (KnownFields) fails a fixture that misspells a key instead of silently
@@ -32,6 +35,9 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 	if fixture.Mode != "deterministic" {
 		return nil, fmt.Errorf("suite fixture %s: unsupported mode %q (want %q)", path, fixture.Mode, "deterministic")
 	}
+	if strings.TrimSpace(fixture.Name) == "" {
+		return nil, fmt.Errorf("suite fixture %s: name is required", path)
+	}
 	if strings.TrimSpace(fixture.Team) == "" {
 		return nil, fmt.Errorf("suite fixture %s: team is required", path)
 	}
@@ -43,6 +49,9 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 		if seen[c.ID] {
 			return nil, fmt.Errorf("suite fixture %s: duplicate case id %q", path, c.ID)
 		}
+		if strings.TrimSpace(c.Prompt) == "" {
+			return nil, fmt.Errorf("suite fixture %s: case %q: prompt is required", path, c.ID)
+		}
 		if err := validateExpectSpec(c.Expect); err != nil {
 			return nil, fmt.Errorf("suite fixture %s: case %q: %w", path, c.ID, err)
 		}
@@ -50,6 +59,24 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 	}
 	fixture.Path = path
 	return &fixture, nil
+}
+
+// BenchmarkFixture projects the authored prompts onto the repository's
+// existing improve benchmark contract. Provider scripts and runtime
+// assertions remain eval-only data; the shared fixture supplies the canonical
+// prompt-set revision used in reports and future baseline/candidate compares.
+func (s *SuiteFixture) BenchmarkFixture() improve.BenchmarkFixture {
+	cases := make([]improve.BenchmarkCase, 0, len(s.Cases))
+	for _, c := range s.Cases {
+		cases = append(cases, improve.BenchmarkCase{ID: c.ID, Type: "edge", Prompt: c.Prompt})
+	}
+	return improve.BenchmarkFixture{
+		Version:  1,
+		Name:     s.Name,
+		Team:     s.Name,
+		Category: workflowRegressionCategory,
+		Cases:    cases,
+	}
 }
 
 func validateExpectSpec(expect ExpectSpec) error {
@@ -164,15 +191,36 @@ func LoadProviderFixture(path string) (*ProviderFixture, error) {
 	return &fixture, nil
 }
 
-// DiscoverSuiteFixtures finds every *.yaml/*.yml suite fixture directly
-// under dir (suite subdirectories are not searched recursively: each suite
-// directory is expected to hold its own fixture file(s) alongside its
-// bundled team and provider-fixture files), sorted by path for stable
-// output.
+// DiscoverSuiteFixtures finds every *.yaml/*.yml suite fixture directly under
+// dir. If dir itself has no fixture, it treats dir as a suite root and searches
+// each immediate child directory. It never descends farther, so a suite's
+// team/team.yaml is not mistaken for a suite fixture.
 func DiscoverSuiteFixtures(dir string) ([]string, error) {
+	paths, entries, err := discoverDirectSuiteFixtures(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) > 0 {
+		return paths, nil
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		childPaths, _, childErr := discoverDirectSuiteFixtures(filepath.Join(dir, entry.Name()))
+		if childErr != nil {
+			return nil, childErr
+		}
+		paths = append(paths, childPaths...)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func discoverDirectSuiteFixtures(dir string) ([]string, []os.DirEntry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read suite directory %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("read suite directory %s: %w", dir, err)
 	}
 	var paths []string
 	for _, entry := range entries {
@@ -186,5 +234,5 @@ func DiscoverSuiteFixtures(dir string) ([]string, error) {
 		paths = append(paths, filepath.Join(dir, entry.Name()))
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return paths, entries, nil
 }

@@ -26,9 +26,18 @@ func WriteTextReport(w io.Writer, suites []EvalSuiteResult) {
 // WriteJSONReport writes the full suite results as a stable, indented JSON
 // array (`hufu eval run ... --format json`).
 func WriteJSONReport(w io.Writer, suites []EvalSuiteResult) error {
+	stable := make([]EvalSuiteResult, len(suites))
+	for suiteIndex, suite := range suites {
+		stable[suiteIndex] = suite
+		stable[suiteIndex].Cases = make([]EvalCaseResult, len(suite.Cases))
+		for caseIndex, result := range suite.Cases {
+			stable[suiteIndex].Cases[caseIndex] = result
+			stable[suiteIndex].Cases[caseIndex].Metrics.Duration = 0
+		}
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(suites)
+	return enc.Encode(stable)
 }
 
 // AllPassed reports whether every case across every suite passed.

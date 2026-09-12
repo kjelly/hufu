@@ -37,9 +37,9 @@ model or the network.`,
 }
 
 var evalListCmd = &cobra.Command{
-	Use:   "list <suite-dir>",
+	Use:   "list [suite-dir]",
 	Short: "List the cases declared by every suite fixture under a directory",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runEvalList,
 }
 
@@ -77,7 +77,11 @@ func loadEvalSuites(dir string) ([]*evalharness.SuiteFixture, error) {
 }
 
 func runEvalList(cmd *cobra.Command, args []string) error {
-	fixtures, err := loadEvalSuites(args[0])
+	dir := "./evals"
+	if len(args) == 1 {
+		dir = args[0]
+	}
+	fixtures, err := loadEvalSuites(dir)
 	if err != nil {
 		return err
 	}

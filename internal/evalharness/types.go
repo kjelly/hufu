@@ -255,12 +255,13 @@ type EvalFinding struct {
 	Actual    string
 }
 
-// EvalMetrics is non-assertion telemetry about how a case ran.
+// EvalMetrics is in-memory, non-assertion telemetry about how a case ran.
+// WriteJSONReport deliberately zeroes Duration so blocking-CI artifacts remain
+// byte-stable; callers embedding the runner still receive the real duration.
 type EvalMetrics struct {
 	Duration time.Duration
 	// RunID is the completed run's RunID with its opaque timestamp+random
-	// suffix redacted (see normalizeOpaqueID), so two runs of the same
-	// deterministic case produce byte-identical JSON reports.
+	// suffix redacted (see normalizeOpaqueID).
 	RunID string
 }
 
@@ -275,8 +276,9 @@ type EvalCaseResult struct {
 
 // EvalSuiteResult aggregates every case result loaded from one SuiteFixture.
 type EvalSuiteResult struct {
-	SuiteName string
-	Cases     []EvalCaseResult
+	SuiteName         string
+	BenchmarkRevision string
+	Cases             []EvalCaseResult
 }
 
 // Passed reports whether every case in the suite passed.
