@@ -1,13 +1,13 @@
 # Execution Compatibility Sunset
 
-> Status: active, warning release pending
+> Status: active, warning introduced in v2.0.0
 > Authority: normative
 > Verified-Commit: `8fd1802`
 > Supersedes: —
 > Superseded-By: —
 > Scope: durable execution identity only
 > Canonical architecture: [execution runtime](../architecture/execution-runtime.md)
-> Warning-Introduced-In: pending PR-4 release
+> Warning-Introduced-In: v2.0.0
 > Earliest-Removal: blocked until one later published release has also carried the warning
 
 ## Decision

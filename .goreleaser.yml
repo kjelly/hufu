@@ -1,8 +1,6 @@
 # GoReleaser config for kjelly/hufu.
 # Source of truth for the release target: the `release.github` block below.
-# Module path is intentionally left as github.com/anomalyco/hufu so go
-# module consumers that pin to the original project keep working; this
-# fork is published as prebuilt binaries only.
+# The module path and release owner both identify the kjelly/hufu fork.
 version: 2
 
 project_name: hufu
@@ -51,3 +49,19 @@ release:
   github:
     owner: kjelly
     name: hufu
+  header: |
+    ## Execution compatibility warning
+
+    The `local` execution-backend alias and provider-era durable execution
+    identity are deprecated. Before upgrading a workspace, make a complete
+    backup and inspect it before applying the append-only migration:
+
+    ```bash
+    hufu migrate inspect-execution --workspace <path>
+    hufu migrate apply-execution --workspace <path> --apply
+    ```
+
+    The apply command appends canonical migration events and rebuilds the
+    active projection; it never rewrites or truncates event history. To roll
+    back, stop Hufu and restore the complete pre-migration workspace backup.
+    Do not delete or truncate individual migration events.
