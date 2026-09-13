@@ -19,14 +19,15 @@ import (
 )
 
 var (
-	improveHandoffProject      string
-	improveHandoffPolicy       string
-	improveHandoffTeamSearch   string
-	improveHandoffJSON         bool
-	improveHandoffMemory       string
-	improveHandoffConsolidate  string
-	improveHandoffPromotion    string
-	improveHandoffBaselineTeam string
+	improveHandoffProject        string
+	improveHandoffPolicy         string
+	improveHandoffTeamSearch     string
+	improveHandoffJSON           bool
+	improveHandoffMemory         string
+	improveHandoffConsolidate    string
+	improveHandoffPromotion      string
+	improveHandoffBaselineTeam   string
+	improveHandoffBaselinePolicy string
 )
 
 var improveHandoffCmd = &cobra.Command{
@@ -64,7 +65,7 @@ func init() {
 	flags.StringVar(&improveHandoffTeamSearch, "team-search-path", "", "Reserved team search path metadata")
 	flags.BoolVar(&improveHandoffJSON, "json", false, "Print the handoff as JSON")
 	improveHandoffPrepareCmd.Flags().StringVar(&improveHandoffBaselineTeam, "baseline-team", "", "Baseline team snapshot ID (required for skill preparation)")
-	_ = improveHandoffPrepareCmd.MarkFlagRequired("baseline-team")
+	improveHandoffPrepareCmd.Flags().StringVar(&improveHandoffBaselinePolicy, "baseline-policy", "", "Baseline memory policy snapshot ID (required for memory policy preparation)")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffMemory, "from-memory-policy", "", "Durable memory policy proposal ID")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffConsolidate, "from-consolidation", "", "Canonical consolidation proposal ID")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffPromotion, "from-promotion", "", "Canonical skill promotion proposal ID")
@@ -149,6 +150,12 @@ func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("handoff %q is %s; only proposed handoffs can be prepared", handoff.ID, handoff.Status)
 	}
 	ctx := cmd.Context()
+	if handoff.Kind == improve.HandoffMemoryPolicy {
+		return prepareMemoryPolicyHandoff(ctx, workspace, store, handoff)
+	}
+	if strings.TrimSpace(improveHandoffBaselineTeam) == "" {
+		return fmt.Errorf("--baseline-team is required for skill preparation")
+	}
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
 		return fmt.Errorf("open context repository: %w", err)
@@ -200,6 +207,42 @@ func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
 	next.Status = improve.HandoffCandidateReady
 	next.Candidate = &improve.ArtifactRef{Kind: "team_snapshot", ID: snapshot.ID, Revision: snapshot.DefinitionRevision}
 	next.StatusReason = "isolated skill candidate snapshot prepared"
+	updated, err := store.Transition(ctx, handoff.ID, handoff.Revision, next)
+	if err != nil {
+		return err
+	}
+	return printHandoff(updated)
+}
+
+func prepareMemoryPolicyHandoff(ctx context.Context, workspace string, store *improve.HandoffStore, handoff improve.ImprovementHandoff) error {
+	if strings.TrimSpace(improveHandoffBaselinePolicy) == "" {
+		return fmt.Errorf("--baseline-policy is required for memory policy preparation")
+	}
+	proposal, err := improve.LoadMemoryPolicyOptimizationProposal(workspace, handoff.Proposal.ID)
+	if err != nil {
+		return fmt.Errorf("load memory policy proposal: %w", err)
+	}
+	if proposal.RevisionHash != handoff.Proposal.Revision {
+		return fmt.Errorf("memory policy proposal revision changed")
+	}
+	if proposal.BasePolicy.ID != improveHandoffBaselinePolicy {
+		return fmt.Errorf("baseline policy %q does not match proposal base %q", improveHandoffBaselinePolicy, proposal.BasePolicy.ID)
+	}
+	base, err := improve.LoadMemoryPolicySnapshot(workspace, proposal.BasePolicy.ID)
+	if err != nil {
+		return fmt.Errorf("load baseline memory policy: %w", err)
+	}
+	candidate, err := improve.LoadMemoryPolicySnapshot(workspace, proposal.Candidate.ID)
+	if err != nil {
+		return fmt.Errorf("load candidate memory policy: %w", err)
+	}
+	if base.RevisionHash != proposal.BasePolicy.Revision || candidate.RevisionHash != proposal.Candidate.Revision || candidate.Status != "candidate" || candidate.PreviousID != base.ID {
+		return fmt.Errorf("memory policy proposal snapshot bindings are stale")
+	}
+	next := handoff
+	next.Status = improve.HandoffCandidateReady
+	next.Candidate = &improve.ArtifactRef{Kind: "memory_policy_snapshot", ID: candidate.ID, Revision: candidate.RevisionHash}
+	next.StatusReason = "immutable memory policy candidate validated; active policy unchanged"
 	updated, err := store.Transition(ctx, handoff.ID, handoff.Revision, next)
 	if err != nil {
 		return err

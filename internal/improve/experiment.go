@@ -66,13 +66,14 @@ type BenchmarkRef struct {
 }
 
 type ExperimentArm struct {
-	SnapshotID         string   `json:"snapshot_id"`
-	DefinitionRevision string   `json:"definition_revision"`
-	ContentRevision    string   `json:"content_revision"`
-	RunIDs             []string `json:"run_ids"`
-	Metrics            Metrics  `json:"metrics"`
-	AcceptancePassed   bool     `json:"acceptance_passed"`
-	SafetyViolations   int      `json:"safety_violations"`
+	SnapshotID         string       `json:"snapshot_id"`
+	DefinitionRevision string       `json:"definition_revision"`
+	ContentRevision    string       `json:"content_revision"`
+	MemoryPolicy       *ArtifactRef `json:"memory_policy,omitempty"`
+	RunIDs             []string     `json:"run_ids"`
+	Metrics            Metrics      `json:"metrics"`
+	AcceptancePassed   bool         `json:"acceptance_passed"`
+	SafetyViolations   int          `json:"safety_violations"`
 }
 
 type GateResult struct {
@@ -100,6 +101,7 @@ type ExperimentReport struct {
 type ExperimentInput struct {
 	Snapshot         TeamSnapshot
 	Report           *Report
+	MemoryPolicy     *ArtifactRef
 	AcceptancePassed bool
 	SafetyViolations int
 }
@@ -385,6 +387,9 @@ func EvaluateExperiment(id string, fixture BenchmarkFixture, baseline, candidate
 	if candidate.Snapshot.BaselineID != baseline.Snapshot.ID {
 		return ExperimentReport{}, fmt.Errorf("candidate snapshot baseline %q does not match %q", candidate.Snapshot.BaselineID, baseline.Snapshot.ID)
 	}
+	if err := validateMemoryPolicyBindings(baseline.MemoryPolicy, candidate.MemoryPolicy); err != nil {
+		return ExperimentReport{}, err
+	}
 
 	baselineArm := experimentArm(baseline)
 	candidateArm := experimentArm(candidate)
@@ -569,15 +574,54 @@ func validateExperimentInput(label string, fixture BenchmarkFixture, input Exper
 	if input.Report.Metrics.TotalTasks < len(fixture.Cases) {
 		return fmt.Errorf("%s report has %d tasks for %d benchmark cases", label, input.Report.Metrics.TotalTasks, len(fixture.Cases))
 	}
+	if input.MemoryPolicy != nil {
+		if err := validateArtifactRef(*input.MemoryPolicy); err != nil || input.MemoryPolicy.Kind != "memory_policy_snapshot" {
+			return fmt.Errorf("%s memory policy must reference a memory_policy_snapshot", label)
+		}
+	}
+	return nil
+}
+
+func validateMemoryPolicyBindings(baseline, candidate *ArtifactRef) error {
+	if (baseline == nil) != (candidate == nil) {
+		return fmt.Errorf("baseline and candidate memory policy refs must be provided together")
+	}
 	return nil
 }
 
 func experimentArm(input ExperimentInput) ExperimentArm {
 	return ExperimentArm{
 		SnapshotID: input.Snapshot.ID, DefinitionRevision: input.Snapshot.DefinitionRevision, ContentRevision: input.Snapshot.ContentRevision,
-		RunIDs: append([]string(nil), input.Report.RunIDs...), Metrics: input.Report.Metrics,
+		MemoryPolicy: cloneArtifactRef(input.MemoryPolicy),
+		RunIDs:       append([]string(nil), input.Report.RunIDs...), Metrics: input.Report.Metrics,
 		AcceptancePassed: input.AcceptancePassed, SafetyViolations: input.SafetyViolations,
 	}
+}
+
+func cloneArtifactRef(ref *ArtifactRef) *ArtifactRef {
+	if ref == nil {
+		return nil
+	}
+	copy := *ref
+	return &copy
+}
+
+// ValidateMemoryPolicyExperimentReport ensures a report carries the exact
+// baseline and candidate policy identities used by the isolated experiment.
+func ValidateMemoryPolicyExperimentReport(report ExperimentReport, baseline, candidate ArtifactRef) error {
+	if err := validateArtifactRef(baseline); err != nil || baseline.Kind != "memory_policy_snapshot" {
+		return fmt.Errorf("invalid baseline memory policy ref")
+	}
+	if err := validateArtifactRef(candidate); err != nil || candidate.Kind != "memory_policy_snapshot" {
+		return fmt.Errorf("invalid candidate memory policy ref")
+	}
+	if report.Baseline.MemoryPolicy == nil || report.Candidate.MemoryPolicy == nil {
+		return fmt.Errorf("experiment report is missing memory policy bindings")
+	}
+	if *report.Baseline.MemoryPolicy != baseline || *report.Candidate.MemoryPolicy != candidate {
+		return fmt.Errorf("experiment report memory policy bindings do not match expected revisions")
+	}
+	return nil
 }
 
 func completionRate(metrics Metrics) float64 {

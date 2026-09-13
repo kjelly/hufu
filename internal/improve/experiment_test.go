@@ -81,14 +81,17 @@ func TestEvaluateExperimentUsesHardGatesAndWritesReviewOnlyReport(t *testing.T) 
 	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{"candidate-rev"}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 90}}
 
 	report, err := EvaluateExperiment("exp-1", fixture,
-		ExperimentInput{Snapshot: baseline, Report: baselineReport, AcceptancePassed: true},
-		ExperimentInput{Snapshot: candidate, Report: candidateReport, AcceptancePassed: true},
+		ExperimentInput{Snapshot: baseline, Report: baselineReport, MemoryPolicy: &ArtifactRef{Kind: "memory_policy_snapshot", ID: "base-policy", Revision: "base-policy-rev"}, AcceptancePassed: true},
+		ExperimentInput{Snapshot: candidate, Report: candidateReport, MemoryPolicy: &ArtifactRef{Kind: "memory_policy_snapshot", ID: "candidate-policy", Revision: "candidate-policy-rev"}, AcceptancePassed: true},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Status != "passed" || report.Decision != "eligible_for_review" {
 		t.Fatalf("report = %+v", report)
+	}
+	if err := ValidateMemoryPolicyExperimentReport(report, *report.Baseline.MemoryPolicy, *report.Candidate.MemoryPolicy); err != nil {
+		t.Fatal(err)
 	}
 	markdown := ExperimentMarkdown(report)
 	if !strings.Contains(markdown, "does not apply a candidate") {

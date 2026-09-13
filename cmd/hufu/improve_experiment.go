@@ -31,6 +31,8 @@ var (
 	experimentCandidateAccepted         bool
 	experimentBaselineSafetyViolations  int
 	experimentCandidateSafetyViolations int
+	experimentBaselinePolicyID          string
+	experimentCandidatePolicyID         string
 )
 
 var improveBenchmarkCmd = &cobra.Command{
@@ -110,6 +112,8 @@ func init() {
 	improveExperimentCompareCmd.Flags().BoolVar(&experimentCandidateAccepted, "candidate-accepted", false, "Record that the candidate acceptance gate passed (required)")
 	improveExperimentCompareCmd.Flags().IntVar(&experimentBaselineSafetyViolations, "baseline-safety-violations", 0, "Observed baseline safety violations")
 	improveExperimentCompareCmd.Flags().IntVar(&experimentCandidateSafetyViolations, "candidate-safety-violations", 0, "Observed candidate safety violations")
+	improveExperimentCompareCmd.Flags().StringVar(&experimentBaselinePolicyID, "baseline-policy", "", "Memory policy snapshot ID used by the baseline arm")
+	improveExperimentCompareCmd.Flags().StringVar(&experimentCandidatePolicyID, "candidate-policy", "", "Memory policy snapshot ID used by the candidate arm")
 	for _, name := range []string{"baseline", "candidate", "benchmark", "baseline-report", "candidate-report"} {
 		_ = improveExperimentCompareCmd.MarkFlagRequired(name)
 	}
@@ -207,9 +211,13 @@ func runImproveExperimentCompare(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("read candidate report: %w", err)
 	}
+	baselinePolicy, candidatePolicy, err := loadExperimentPolicyRefs(workspace)
+	if err != nil {
+		return err
+	}
 	report, err := improve.EvaluateExperiment(args[0], fixture,
-		improve.ExperimentInput{Snapshot: baselineSnapshot, Report: baselineReport, AcceptancePassed: experimentBaselineAccepted, SafetyViolations: experimentBaselineSafetyViolations},
-		improve.ExperimentInput{Snapshot: candidateSnapshot, Report: candidateReport, AcceptancePassed: experimentCandidateAccepted, SafetyViolations: experimentCandidateSafetyViolations},
+		improve.ExperimentInput{Snapshot: baselineSnapshot, Report: baselineReport, MemoryPolicy: baselinePolicy, AcceptancePassed: experimentBaselineAccepted, SafetyViolations: experimentBaselineSafetyViolations},
+		improve.ExperimentInput{Snapshot: candidateSnapshot, Report: candidateReport, MemoryPolicy: candidatePolicy, AcceptancePassed: experimentCandidateAccepted, SafetyViolations: experimentCandidateSafetyViolations},
 	)
 	if err != nil {
 		return err
@@ -220,6 +228,26 @@ func runImproveExperimentCompare(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("%s\nstatus: %s\ndecision: %s\n", path, report.Status, report.Decision)
 	return nil
+}
+
+func loadExperimentPolicyRefs(workspace string) (*improve.ArtifactRef, *improve.ArtifactRef, error) {
+	baseID := strings.TrimSpace(experimentBaselinePolicyID)
+	candidateID := strings.TrimSpace(experimentCandidatePolicyID)
+	if (baseID == "") != (candidateID == "") {
+		return nil, nil, fmt.Errorf("--baseline-policy and --candidate-policy must be provided together")
+	}
+	if baseID == "" {
+		return nil, nil, nil
+	}
+	base, err := improve.LoadMemoryPolicySnapshot(workspace, baseID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load baseline memory policy: %w", err)
+	}
+	candidate, err := improve.LoadMemoryPolicySnapshot(workspace, candidateID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load candidate memory policy: %w", err)
+	}
+	return &improve.ArtifactRef{Kind: "memory_policy_snapshot", ID: base.ID, Revision: base.RevisionHash}, &improve.ArtifactRef{Kind: "memory_policy_snapshot", ID: candidate.ID, Revision: candidate.RevisionHash}, nil
 }
 
 func resolveImproveTeamDir(teamName string) (string, error) {
