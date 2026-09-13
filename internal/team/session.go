@@ -243,10 +243,12 @@ func (s *SessionData) addEntryAt(role, content, timestamp string) {
 }
 
 // cloneSession returns a copy of TeamSession with Workspace replaced.
-// All other fields are shallow-copied (safe because they are read-only during task execution).
+// Mutable slice backing arrays are cloned even for load-time immutable policy,
+// so isolated coordinators cannot accidentally alias catalog state.
 func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone := *orig
 	clone.Workspace = newWorkspace
+	clone.InvariantCatalog = cloneInvariantCatalog(orig.InvariantCatalog)
 	return &clone
 }
 

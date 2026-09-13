@@ -28,6 +28,9 @@ type TeamSession struct {
 	MCPServers    map[string]mcp.MCPServerConfig
 	Skills        []*skill.SkillDef
 	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// InvariantCatalog is immutable repository-owned policy loaded from the
+	// team's invariants.yaml. It is never populated from model output or memory.
+	InvariantCatalog []InvariantDefinition
 	// ProviderRegistry is injected by the host at load time. It stays outside
 	// persistent session data so a resumed workflow rebinds only to providers
 	// explicitly registered by the current host process.
@@ -1307,6 +1310,10 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if cfg.Name == "" {
 		cfg.Name = filepath.Base(absDir)
 	}
+	invariantCatalog, err := loadInvariantCatalog(absDir)
+	if err != nil {
+		return nil, err
+	}
 	contractTasks, err := loadTeamContractTasks(absDir, vars)
 	if err != nil {
 		return nil, err
@@ -1352,6 +1359,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		Agents:           make(map[string]*agent.AgentDef),
 		MCPServers:       mcpServers,
 		ContractTasks:    contractTasks,
+		InvariantCatalog: cloneInvariantCatalog(invariantCatalog),
 		ProviderRegistry: effectiveRegistry,
 	}
 

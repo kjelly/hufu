@@ -20,6 +20,7 @@ const (
 	ContextConvention   ContextKind = "convention"
 	ContextArchitecture ContextKind = "architecture"
 	ContextPattern      ContextKind = "pattern"
+	ContextInvariant    ContextKind = "invariant"
 	ContextSummary      ContextKind = "summary"
 	ContextObservation  ContextKind = "observation"
 )

@@ -251,26 +251,28 @@ func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
 
 func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, sideEffect SideEffectClass, recovery RecoveryPolicy, maxRetries int, action *Action, fanOut *FanOutSpec, optional bool, evidence ...TaskDef) (string, error) {
 	payload := struct {
-		ID                  string               `json:"id"`
-		Revision            int                  `json:"revision"`
-		Agent               string               `json:"agent"`
-		Execution           ExecutionContract    `json:"execution"`
-		OutputMode          string               `json:"output_mode"`
-		SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
-		Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
-		MaxRetries          int                  `json:"max_retries,omitempty"`
-		Action              *Action              `json:"action,omitempty"`
-		FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
-		Optional            bool                 `json:"optional,omitempty"`
-		OnFailureClasses    []TaskFailureClass   `json:"on_failure_classes,omitempty"`
-		DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
-		DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
-		DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
-		DecisionAssumptions []DecisionAssumption `json:"decision_assumptions,omitempty"`
-		DecisionProvenance  []EvidenceProvenance `json:"decision_provenance,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, nil, nil, nil, nil, nil, nil}
+		ID                    string                    `json:"id"`
+		Revision              int                       `json:"revision"`
+		Agent                 string                    `json:"agent"`
+		Execution             ExecutionContract         `json:"execution"`
+		OutputMode            string                    `json:"output_mode"`
+		SideEffect            SideEffectClass           `json:"side_effect,omitempty"`
+		Recovery              RecoveryPolicy            `json:"recovery,omitempty"`
+		MaxRetries            int                       `json:"max_retries,omitempty"`
+		Action                *Action                   `json:"action,omitempty"`
+		FanOut                *FanOutSpec               `json:"fan_out,omitempty"`
+		Optional              bool                      `json:"optional,omitempty"`
+		InvariantVerification InvariantVerificationMode `json:"invariant_verification,omitempty"`
+		OnFailureClasses      []TaskFailureClass        `json:"on_failure_classes,omitempty"`
+		DecisionFacts         map[string]any            `json:"decision_facts,omitempty"`
+		DecisionArtifacts     []ArtifactRef             `json:"decision_artifacts,omitempty"`
+		DecisionBaseRates     []BaseRateEvidence        `json:"decision_base_rates,omitempty"`
+		DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
+		DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
+		payload.InvariantVerification = declared.InvariantVerification
 		payload.OnFailureClasses = append([]TaskFailureClass(nil), declared.OnFailureClasses...)
 		payload.DecisionFacts = cloneDecisionFacts(declared.DecisionFacts)
 		payload.DecisionArtifacts = append([]ArtifactRef(nil), declared.DecisionArtifacts...)
@@ -293,6 +295,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	for index, task := range session.ContractTasks {
+		findings = append(findings, validateInvariantVerificationContract(session, index, task)...)
+	}
 	if minimum := session.Config.MinimumCoordinatorRounds; minimum > 0 && session.Config.MaxRounds > 0 && session.Config.MaxRounds < minimum {
 		findings = append(findings, contractFinding("max-rounds", "max_rounds_below_minimum_coordinator_rounds", fmt.Sprintf("max-rounds (%d) must be at least minimum-coordinator-rounds (%d); coordinator progress and task retry budgets are separate", session.Config.MaxRounds, minimum)))
 	}
@@ -396,6 +401,44 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 			findings = append(findings, contractFinding("tasks", "initial_contract_id_duplicate", fmt.Sprintf("static contract ID %q is not unique", id)))
 		}
 		seenIDs[id] = true
+	}
+	return findings
+}
+
+// invariantVerificationFeatureEnabled stays false until the claim,
+// attestation, completion, audit, and cache consumers land together. Parsing
+// the contract early is safe; accepting a half-wired completion gate is not.
+const invariantVerificationFeatureEnabled = false
+
+func validateInvariantVerificationContract(session *TeamSession, index int, task TaskDef) []ContractFinding {
+	mode := task.InvariantVerification
+	if mode == "" {
+		return nil
+	}
+	field := fmt.Sprintf("tasks[%d].invariant-verification", index)
+	if !validInvariantVerificationMode(mode) {
+		return []ContractFinding{contractFinding(field, FindingInvariantVerificationMode, "invariant-verification must be report or gate")}
+	}
+
+	var findings []ContractFinding
+	if len(session.InvariantCatalog) == 0 {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationCatalog, "invariant-verification requires a non-empty invariants.yaml catalog"))
+	}
+	if len(session.Config.Workflow.Phases) > 0 && task.Phase != PhaseVerify {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationPhase, "invariant-verification tasks must run in the VERIFY phase"))
+	}
+	if !task.Execution.RequiresResult {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationResult, "invariant-verification requires execution.requires-result: true"))
+	}
+	agentDef := session.Agents[normalizedName(task.Agent)]
+	if task.Sidecar || task.Summarize || len(task.ModelTopology) > 1 || (agentDef != nil && len(agentDef.ExtraModels) > 0) {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationTopology, "invariant-verification does not support sidecar, summarize, or multi-model execution"))
+	}
+	if mode == InvariantVerificationGate && task.Optional {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationOptional, "gate invariant-verification task cannot be optional"))
+	}
+	if !invariantVerificationFeatureEnabled {
+		findings = append(findings, contractFinding(field, FindingInvariantVerificationUnavailable, "invariant-verification is parsed but unavailable until all runtime gate consumers are installed"))
 	}
 	return findings
 }

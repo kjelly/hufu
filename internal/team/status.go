@@ -224,22 +224,23 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
-	ID               string
-	Phase            Phase   `json:"phase,omitempty"`
-	Action           *Action `json:"action,omitempty"`
-	PlanTaskID       string  `json:"plan_task_id,omitempty"`
-	PlanFirst        bool    `json:"plan_first,omitzero"`
-	PlanID           string  `json:"plan_id,omitempty"`
-	ContractID       string  `json:"contract_id,omitempty"`
-	ContractHash     string  `json:"contract_hash,omitempty"`
-	ContractRevision int     `json:"contract_revision,omitempty"`
-	Agent            string
-	Desc             string
-	Goal             string `json:"goal,omitempty"`
-	Constraints      string `json:"constraints,omitempty"`
-	Status           TaskStatus
-	Detail           string
-	Output           string // Full task output
+	ID                    string
+	Phase                 Phase                     `json:"phase,omitempty"`
+	Action                *Action                   `json:"action,omitempty"`
+	InvariantVerification InvariantVerificationMode `json:"invariant_verification,omitempty"`
+	PlanTaskID            string                    `json:"plan_task_id,omitempty"`
+	PlanFirst             bool                      `json:"plan_first,omitzero"`
+	PlanID                string                    `json:"plan_id,omitempty"`
+	ContractID            string                    `json:"contract_id,omitempty"`
+	ContractHash          string                    `json:"contract_hash,omitempty"`
+	ContractRevision      int                       `json:"contract_revision,omitempty"`
+	Agent                 string
+	Desc                  string
+	Goal                  string `json:"goal,omitempty"`
+	Constraints           string `json:"constraints,omitempty"`
+	Status                TaskStatus
+	Detail                string
+	Output                string // Full task output
 	// CheckpointPause marks a deliberate scheduler pause. It is durable
 	// lifecycle metadata so crash recovery does not mistake an operator-facing
 	// checkpoint pause for an interrupted worker that may be replayed.
@@ -399,36 +400,37 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
-	PlanTaskID        string
-	PlanFirst         bool
-	PlanID            string
-	Phase             Phase
-	Action            *Action
-	ContractID        string
-	ContractHash      string
-	ContractRevision  int
-	Agent             string
-	Desc              string
-	Goal              string
-	Constraints       string
-	Model             string
-	ModelTopology     []string
-	ExecutionTarget   execution.ExecutionTarget
-	ExecutionTopology []execution.ExecutionTarget
-	Sidecar           bool
-	Summarize         bool
-	OutputMode        string
-	ContextFiles      []string
-	Requires          []string
-	Source            string
-	ParentID          string
-	Verify            string
-	VerifyMode        string
-	VerifySpec        *VerificationSpec
-	WorksetBinding    *WorksetBinding
-	WorksetReceipt    *WorksetExpansionReceipt
-	MaxRetries        int
-	OnFailure         string
+	PlanTaskID            string
+	PlanFirst             bool
+	PlanID                string
+	Phase                 Phase
+	Action                *Action
+	InvariantVerification InvariantVerificationMode
+	ContractID            string
+	ContractHash          string
+	ContractRevision      int
+	Agent                 string
+	Desc                  string
+	Goal                  string
+	Constraints           string
+	Model                 string
+	ModelTopology         []string
+	ExecutionTarget       execution.ExecutionTarget
+	ExecutionTopology     []execution.ExecutionTarget
+	Sidecar               bool
+	Summarize             bool
+	OutputMode            string
+	ContextFiles          []string
+	Requires              []string
+	Source                string
+	ParentID              string
+	Verify                string
+	VerifyMode            string
+	VerifySpec            *VerificationSpec
+	WorksetBinding        *WorksetBinding
+	WorksetReceipt        *WorksetExpansionReceipt
+	MaxRetries            int
+	OnFailure             string
 	// OnFailureClasses mirrors TaskDef.OnFailureClasses (coordinator.go):
 	// which TaskFailureClass values authorize this task's on_failure
 	// back-edge. It must survive the durable TodoSpec/TodoItem round trip
@@ -500,64 +502,65 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		providerBinding = nil
 	}
 	return &TodoItem{
-		ID:                  id,
-		PlanTaskID:          item.PlanTaskID,
-		PlanFirst:           item.PlanFirst,
-		PlanID:              item.PlanID,
-		Phase:               item.Phase,
-		Action:              cloneActionPtr(item.Action),
-		ContractID:          item.ContractID,
-		ContractHash:        item.ContractHash,
-		ContractRevision:    item.ContractRevision,
-		Agent:               item.Agent,
-		Desc:                item.Desc,
-		Goal:                item.Goal,
-		Constraints:         item.Constraints,
-		Model:               item.Model,
-		ModelTopology:       cloneModelTopology(item.ModelTopology),
-		ExecutionTarget:     target,
-		ExecutionTopology:   cloneExecutionTopology(topology),
-		Sidecar:             item.Sidecar,
-		Summarize:           item.Summarize,
-		OutputMode:          item.OutputMode,
-		ContextFiles:        append([]string(nil), item.ContextFiles...),
-		Requires:            append([]string(nil), item.Requires...),
-		Status:              TaskPending,
-		Source:              item.Source,
-		ParentID:            item.ParentID,
-		Verify:              item.Verify,
-		VerifyMode:          item.VerifyMode,
-		VerifySpec:          item.VerifySpec,
-		WorksetBinding:      cloneWorksetBinding(item.WorksetBinding),
-		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
-		MaxRetries:          item.MaxRetries,
-		OnFailure:           item.OnFailure,
-		OnFailureClasses:    append([]TaskFailureClass(nil), item.OnFailureClasses...),
-		Escalate:            item.Escalate,
-		AdversarialVerify:   item.AdversarialVerify,
-		DependsOn:           append([]string(nil), item.DependsOn...),
-		SideEffect:          item.SideEffect,
-		Recovery:            item.Recovery,
-		ReconcileTool:       item.ReconcileTool,
-		Kind:                item.Kind,
-		Advances:            append([]string(nil), item.Advances...),
-		ExpectedStateChange: item.ExpectedStateChange,
-		Progress:            ProgressUnknown,
-		RecoveryHypothesis:  item.RecoveryHypothesis,
-		Execution:           cloneExecutionContract(item.Execution),
-		Optional:            item.Optional,
-		ResourceClaims:      append([]string(nil), item.ResourceClaims...),
-		Resources:           append([]ResourceClaim(nil), item.Resources...),
-		DecisionProfile:     item.DecisionProfile,
-		DecisionOptions:     append([]DecisionOption(nil), item.DecisionOptions...),
-		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
-		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts),
-		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
-		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
-		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
-		SubagentProvider:    compatibilityProvider,
-		ProviderBinding:     cloneProviderBinding(providerBinding),
-		BackendBinding:      cloneBackendBinding(backendBinding),
+		ID:                    id,
+		PlanTaskID:            item.PlanTaskID,
+		PlanFirst:             item.PlanFirst,
+		PlanID:                item.PlanID,
+		Phase:                 item.Phase,
+		Action:                cloneActionPtr(item.Action),
+		InvariantVerification: item.InvariantVerification,
+		ContractID:            item.ContractID,
+		ContractHash:          item.ContractHash,
+		ContractRevision:      item.ContractRevision,
+		Agent:                 item.Agent,
+		Desc:                  item.Desc,
+		Goal:                  item.Goal,
+		Constraints:           item.Constraints,
+		Model:                 item.Model,
+		ModelTopology:         cloneModelTopology(item.ModelTopology),
+		ExecutionTarget:       target,
+		ExecutionTopology:     cloneExecutionTopology(topology),
+		Sidecar:               item.Sidecar,
+		Summarize:             item.Summarize,
+		OutputMode:            item.OutputMode,
+		ContextFiles:          append([]string(nil), item.ContextFiles...),
+		Requires:              append([]string(nil), item.Requires...),
+		Status:                TaskPending,
+		Source:                item.Source,
+		ParentID:              item.ParentID,
+		Verify:                item.Verify,
+		VerifyMode:            item.VerifyMode,
+		VerifySpec:            item.VerifySpec,
+		WorksetBinding:        cloneWorksetBinding(item.WorksetBinding),
+		WorksetReceipt:        cloneWorksetReceipt(item.WorksetReceipt),
+		MaxRetries:            item.MaxRetries,
+		OnFailure:             item.OnFailure,
+		OnFailureClasses:      append([]TaskFailureClass(nil), item.OnFailureClasses...),
+		Escalate:              item.Escalate,
+		AdversarialVerify:     item.AdversarialVerify,
+		DependsOn:             append([]string(nil), item.DependsOn...),
+		SideEffect:            item.SideEffect,
+		Recovery:              item.Recovery,
+		ReconcileTool:         item.ReconcileTool,
+		Kind:                  item.Kind,
+		Advances:              append([]string(nil), item.Advances...),
+		ExpectedStateChange:   item.ExpectedStateChange,
+		Progress:              ProgressUnknown,
+		RecoveryHypothesis:    item.RecoveryHypothesis,
+		Execution:             cloneExecutionContract(item.Execution),
+		Optional:              item.Optional,
+		ResourceClaims:        append([]string(nil), item.ResourceClaims...),
+		Resources:             append([]ResourceClaim(nil), item.Resources...),
+		DecisionProfile:       item.DecisionProfile,
+		DecisionOptions:       append([]DecisionOption(nil), item.DecisionOptions...),
+		DecisionAssumptions:   cloneDecisionAssumptions(item.DecisionAssumptions),
+		DecisionFacts:         cloneDecisionFacts(item.DecisionFacts),
+		DecisionArtifacts:     append([]ArtifactRef(nil), item.DecisionArtifacts...),
+		DecisionBaseRates:     cloneBaseRateEvidence(item.DecisionBaseRates),
+		DecisionProvenance:    cloneEvidenceProvenance(item.DecisionProvenance),
+		SubagentProvider:      compatibilityProvider,
+		ProviderBinding:       cloneProviderBinding(providerBinding),
+		BackendBinding:        cloneBackendBinding(backendBinding),
 	}
 }
 

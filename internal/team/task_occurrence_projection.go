@@ -19,52 +19,53 @@ import (
 // DAG edges and configuration-only fields, so it is not a safe durable
 // representation of an executable occurrence.
 type TaskOccurrenceProjection struct {
-	ID                  string
-	PlanTaskID          string
-	PlanFirst           bool
-	PlanID              string
-	Phase               Phase
-	Action              *Action
-	ContractID          string
-	ContractHash        string
-	ContractRevision    int
-	Agent               string
-	Desc                string
-	Goal                string
-	Constraints         string
-	Model               string
-	ModelTopology       []string
-	ExecutionTarget     execution.ExecutionTarget
-	ExecutionTopology   []execution.ExecutionTarget
-	Sidecar             bool
-	Summarize           bool
-	OutputMode          string
-	ContextFiles        []string
-	Requires            []string
-	Source              string
-	ParentID            string
-	DependsOn           []string
-	OnFailure           string
-	Verify              string
-	VerifyMode          string
-	VerifySpec          *VerificationSpec
-	WorksetBinding      *WorksetBinding
-	WorksetReceipt      *WorksetExpansionReceipt
-	MaxRetries          int
-	OnFailureClasses    []TaskFailureClass
-	SideEffect          SideEffectClass
-	Escalate            bool
-	AdversarialVerify   int
-	Recovery            RecoveryPolicy
-	ReconcileTool       string
-	Kind                TaskKind
-	Advances            []string
-	ExpectedStateChange string
-	RecoveryHypothesis  *RecoveryHypothesis
-	Execution           ExecutionContract
-	Optional            bool
-	ResourceClaims      []string
-	Resources           []ResourceClaim
+	ID                    string
+	PlanTaskID            string
+	PlanFirst             bool
+	PlanID                string
+	Phase                 Phase
+	Action                *Action
+	InvariantVerification InvariantVerificationMode
+	ContractID            string
+	ContractHash          string
+	ContractRevision      int
+	Agent                 string
+	Desc                  string
+	Goal                  string
+	Constraints           string
+	Model                 string
+	ModelTopology         []string
+	ExecutionTarget       execution.ExecutionTarget
+	ExecutionTopology     []execution.ExecutionTarget
+	Sidecar               bool
+	Summarize             bool
+	OutputMode            string
+	ContextFiles          []string
+	Requires              []string
+	Source                string
+	ParentID              string
+	DependsOn             []string
+	OnFailure             string
+	Verify                string
+	VerifyMode            string
+	VerifySpec            *VerificationSpec
+	WorksetBinding        *WorksetBinding
+	WorksetReceipt        *WorksetExpansionReceipt
+	MaxRetries            int
+	OnFailureClasses      []TaskFailureClass
+	SideEffect            SideEffectClass
+	Escalate              bool
+	AdversarialVerify     int
+	Recovery              RecoveryPolicy
+	ReconcileTool         string
+	Kind                  TaskKind
+	Advances              []string
+	ExpectedStateChange   string
+	RecoveryHypothesis    *RecoveryHypothesis
+	Execution             ExecutionContract
+	Optional              bool
+	ResourceClaims        []string
+	Resources             []ResourceClaim
 
 	DecisionProfile     string
 	DecisionOptions     []DecisionOption
@@ -99,7 +100,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 	}
 	return TaskOccurrenceProjection{
 		ID: item.ID, PlanTaskID: item.PlanTaskID, PlanFirst: item.PlanFirst, PlanID: item.PlanID,
-		Phase: item.Phase, Action: cloneActionPtr(item.Action), ContractID: item.ContractID,
+		Phase: item.Phase, Action: cloneActionPtr(item.Action), InvariantVerification: item.InvariantVerification, ContractID: item.ContractID,
 		ContractHash: item.ContractHash, ContractRevision: item.ContractRevision, Agent: item.Agent,
 		Desc: item.Desc, Goal: item.Goal, Constraints: item.Constraints, Model: model,
 		ModelTopology: modelTopology, Source: item.Source, ParentID: item.ParentID,
@@ -145,7 +146,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 	desc := goal
 	item := todoItemFromSpec(TodoSpec{
 		PlanTaskID: task.ID, PlanFirst: task.PlanFirst, PlanID: task.PlanID, Phase: task.Phase,
-		Action: cloneActionPtr(task.Action), ContractID: task.ContractID, ContractHash: task.ContractHash,
+		Action: cloneActionPtr(task.Action), InvariantVerification: task.InvariantVerification, ContractID: task.ContractID, ContractHash: task.ContractHash,
 		ContractRevision: task.ContractRevision, Agent: task.Agent, Desc: desc, Goal: goal,
 		Constraints: task.Constraints, Model: task.Model, ModelTopology: cloneModelTopology(task.ModelTopology),
 		ExecutionTarget: task.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(task.ExecutionTopology),

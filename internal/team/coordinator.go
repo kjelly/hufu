@@ -88,6 +88,9 @@ type TaskDef struct {
 	// coordinator dispatch. It is configuration-only and is never exposed as a
 	// coordinator tool parameter.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
+	// InvariantVerification is repository-authored completion policy. Keeping it
+	// out of JSON prevents a coordinator from granting report/gate authority.
+	InvariantVerification InvariantVerificationMode `json:"-" yaml:"invariant-verification,omitempty"`
 	// Phase is configuration-only when a runtime workflow is enabled. The
 	// coordinator cannot set it through the agent tool; static task contracts
 	// bind it to a runtime-owned workflow phase.

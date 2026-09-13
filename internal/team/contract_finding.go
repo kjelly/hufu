@@ -105,13 +105,20 @@ const (
 	FindingSkillNotAvailable    = "skill_not_available_to_agent"
 	// Runtime-semantic lint codes apply resolved profile, recovery, verifier,
 	// resource, and deadline policy without executing any external action.
-	FindingSideEffectRetryWithoutReconcile = "side_effect_retry_without_reconcile"
-	FindingStrictTaskWithoutTypedResult    = "strict_task_without_typed_result"
-	FindingAcceptanceMissingUnattended     = "acceptance_missing_for_unattended"
-	FindingVerifierMissing                 = "verifier_missing"
-	FindingExecutionStepsVerifierMissing   = "execution_steps_verifier_missing"
-	FindingResourceClaimConflict           = "resource_claim_conflict"
-	FindingTimeoutImpossible               = "timeout_impossible"
+	FindingSideEffectRetryWithoutReconcile  = "side_effect_retry_without_reconcile"
+	FindingStrictTaskWithoutTypedResult     = "strict_task_without_typed_result"
+	FindingAcceptanceMissingUnattended      = "acceptance_missing_for_unattended"
+	FindingVerifierMissing                  = "verifier_missing"
+	FindingExecutionStepsVerifierMissing    = "execution_steps_verifier_missing"
+	FindingResourceClaimConflict            = "resource_claim_conflict"
+	FindingTimeoutImpossible                = "timeout_impossible"
+	FindingInvariantVerificationMode        = "invariant_verification_mode_invalid"
+	FindingInvariantVerificationCatalog     = "invariant_verification_catalog_missing"
+	FindingInvariantVerificationPhase       = "invariant_verification_phase_invalid"
+	FindingInvariantVerificationResult      = "invariant_verification_result_required"
+	FindingInvariantVerificationTopology    = "invariant_verification_topology_unsupported"
+	FindingInvariantVerificationOptional    = "invariant_verification_gate_optional"
+	FindingInvariantVerificationUnavailable = "invariant_verification_feature_unavailable"
 
 	// FindingDeadlineConflict indicates that a child deadline equals or exceeds
 	// its parent deadline, leaving no room for result finalisation.
