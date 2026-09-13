@@ -383,6 +383,137 @@ type MemoryOptimizerProposal struct {
 	Reason       string               `json:"reason"`
 }
 
+// MemoryPolicyOptimizationProposal is the durable, content-free proposal
+// consumed by the improvement handoff. The policy bodies remain immutable
+// memory policy snapshot artifacts referenced by revision.
+type MemoryPolicyOptimizationProposal struct {
+	Version       int         `json:"version"`
+	ID            string      `json:"id"`
+	BasePolicy    ArtifactRef `json:"base_policy"`
+	Candidate     ArtifactRef `json:"candidate"`
+	SourceMetrics Metrics     `json:"source_metrics"`
+	Reason        string      `json:"reason"`
+	RevisionHash  string      `json:"revision_hash"`
+	CreatedAt     time.Time   `json:"created_at"`
+}
+
+const memoryPolicyOptimizationProposalVersion = 1
+
+func WriteMemoryPolicyOptimizationProposal(workspace string, proposal MemoryPolicyOptimizationProposal) (string, error) {
+	if err := validateMemoryPolicyOptimizationProposal(workspace, proposal); err != nil {
+		return "", err
+	}
+	path := filepath.Join(ImprovementRoot(workspace), "memory-policies", "proposals", proposal.ID, "proposal.json")
+	data, err := json.MarshalIndent(proposal, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal memory policy proposal: %w", err)
+	}
+	data = append(data, '\n')
+	if err := team.AtomicCreateFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write memory policy proposal: %w", err)
+	}
+	return path, nil
+}
+
+func LoadMemoryPolicyOptimizationProposal(workspace, id string) (MemoryPolicyOptimizationProposal, error) {
+	if err := validateArtifactID(id); err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	path := filepath.Join(ImprovementRoot(workspace), "memory-policies", "proposals", id, "proposal.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	var proposal MemoryPolicyOptimizationProposal
+	if err := json.Unmarshal(data, &proposal); err != nil {
+		return MemoryPolicyOptimizationProposal{}, fmt.Errorf("parse memory policy proposal: %w", err)
+	}
+	if err := validateMemoryPolicyOptimizationProposal(workspace, proposal); err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	return proposal, nil
+}
+
+func validateMemoryPolicyOptimizationProposal(workspace string, proposal MemoryPolicyOptimizationProposal) error {
+	if proposal.Version != memoryPolicyOptimizationProposalVersion {
+		return fmt.Errorf("unsupported memory policy proposal version %d", proposal.Version)
+	}
+	if err := validateArtifactID(proposal.ID); err != nil {
+		return fmt.Errorf("memory policy proposal id: %w", err)
+	}
+	if proposal.BasePolicy.Kind != "memory_policy_snapshot" || proposal.Candidate.Kind != "memory_policy_snapshot" {
+		return fmt.Errorf("memory policy proposal refs must be memory_policy_snapshot")
+	}
+	if err := validateArtifactRef(proposal.BasePolicy); err != nil {
+		return fmt.Errorf("base policy: %w", err)
+	}
+	if err := validateArtifactRef(proposal.Candidate); err != nil {
+		return fmt.Errorf("candidate policy: %w", err)
+	}
+	if strings.TrimSpace(proposal.Reason) == "" || proposal.CreatedAt.IsZero() {
+		return fmt.Errorf("memory policy proposal reason and created_at are required")
+	}
+	copyForHash := proposal
+	copyForHash.RevisionHash = ""
+	data, err := json.Marshal(copyForHash)
+	if err != nil {
+		return fmt.Errorf("hash memory policy proposal: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	if proposal.RevisionHash != hex.EncodeToString(sum[:]) {
+		return fmt.Errorf("memory policy proposal %q failed revision validation", proposal.ID)
+	}
+	base, err := LoadMemoryPolicySnapshot(workspace, proposal.BasePolicy.ID)
+	if err != nil {
+		return fmt.Errorf("load base policy: %w", err)
+	}
+	candidate, err := LoadMemoryPolicySnapshot(workspace, proposal.Candidate.ID)
+	if err != nil {
+		return fmt.Errorf("load candidate policy: %w", err)
+	}
+	if base.RevisionHash != proposal.BasePolicy.Revision || candidate.RevisionHash != proposal.Candidate.Revision {
+		return fmt.Errorf("memory policy proposal references changed snapshot revision")
+	}
+	if candidate.Status != "candidate" || candidate.PreviousID != base.ID {
+		return fmt.Errorf("memory policy proposal candidate is not based on %q", base.ID)
+	}
+	return nil
+}
+
+// NewMemoryPolicyOptimizationProposal persists the candidate snapshot and its
+// content-free durable proposal in one caller-controlled sequence.
+func NewMemoryPolicyOptimizationProposal(workspace, proposalID string, optimizer MemoryOptimizerProposal, metrics Metrics) (MemoryPolicyOptimizationProposal, error) {
+	if err := validateArtifactID(proposalID); err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	if optimizer.Candidate.ID == "" || optimizer.BasePolicyID == "" {
+		return MemoryPolicyOptimizationProposal{}, fmt.Errorf("optimizer proposal is missing base or candidate policy")
+	}
+	base, err := LoadMemoryPolicySnapshot(workspace, optimizer.BasePolicyID)
+	if err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	if _, err := WriteMemoryPolicySnapshot(workspace, optimizer.Candidate); err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	now := time.Now().UTC()
+	proposal := MemoryPolicyOptimizationProposal{
+		Version: memoryPolicyOptimizationProposalVersion, ID: proposalID,
+		BasePolicy:    ArtifactRef{Kind: "memory_policy_snapshot", ID: base.ID, Revision: base.RevisionHash},
+		Candidate:     ArtifactRef{Kind: "memory_policy_snapshot", ID: optimizer.Candidate.ID, Revision: optimizer.Candidate.RevisionHash},
+		SourceMetrics: metrics, Reason: optimizer.Reason, CreatedAt: now,
+	}
+	copyForHash := proposal
+	data, err := json.Marshal(copyForHash)
+	if err != nil {
+		return MemoryPolicyOptimizationProposal{}, err
+	}
+	sum := sha256.Sum256(data)
+	proposal.RevisionHash = hex.EncodeToString(sum[:])
+	_, err = WriteMemoryPolicyOptimizationProposal(workspace, proposal)
+	return proposal, err
+}
+
 // ContextOutcomeSummary is a content-free optimizer input aggregated from
 // context_item × phase × trigger × role × environment observations.
 type ContextOutcomeSummary struct {
