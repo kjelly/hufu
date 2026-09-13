@@ -24,9 +24,9 @@ type memoryLoadStats struct {
 const insertMemoryEventSQL = `
 INSERT INTO memory_events (
     event_seq, run_id, task_id, attempt, type, timestamp_raw,
-    timestamp_unix_ns, retrieval_id, reason_code, token_count,
+    timestamp_unix_ns, retrieval_id, context_item_id, policy_version, reason_code, token_count,
     disposition, signal, direction
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 const (
 	memoryRetrievedEvent       = "memory_retrieved"
@@ -82,7 +82,8 @@ func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace
 		}
 		_, insertErr = insertEvent.ExecContext(ctx,
 			eventSeq, event.RunID, event.TaskID, event.Attempt, event.Type, event.Timestamp,
-			timestampUnixNS, memoryPayloadString(payload, "retrieval_id"), memoryPayloadString(payload, "reason_code"),
+			timestampUnixNS, memoryPayloadString(payload, "retrieval_id"), memoryPayloadString(payload, "context_item_id"),
+			memoryPayloadString(payload, "policy_version"), memoryPayloadString(payload, "reason_code"),
 			memoryPayloadInt(payload, "token_count"), memoryPayloadString(payload, "disposition"),
 			memoryPayloadString(payload, "signal"), memoryPayloadString(payload, "direction"),
 		)

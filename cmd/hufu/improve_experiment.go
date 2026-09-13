@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -33,6 +34,7 @@ var (
 	experimentCandidateSafetyViolations int
 	experimentBaselinePolicyID          string
 	experimentCandidatePolicyID         string
+	experimentCandidateContextID        string
 )
 
 var improveBenchmarkCmd = &cobra.Command{
@@ -114,6 +116,7 @@ func init() {
 	improveExperimentCompareCmd.Flags().IntVar(&experimentCandidateSafetyViolations, "candidate-safety-violations", 0, "Observed candidate safety violations")
 	improveExperimentCompareCmd.Flags().StringVar(&experimentBaselinePolicyID, "baseline-policy", "", "Memory policy snapshot ID used by the baseline arm")
 	improveExperimentCompareCmd.Flags().StringVar(&experimentCandidatePolicyID, "candidate-policy", "", "Memory policy snapshot ID used by the candidate arm")
+	improveExperimentCompareCmd.Flags().StringVar(&experimentCandidateContextID, "candidate-context", "", "Context item ID applied by the candidate arm")
 	for _, name := range []string{"baseline", "candidate", "benchmark", "baseline-report", "candidate-report"} {
 		_ = improveExperimentCompareCmd.MarkFlagRequired(name)
 	}
@@ -215,9 +218,13 @@ func runImproveExperimentCompare(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	contextCandidate, err := loadExperimentContextCandidate(cmd, workspace, candidateReport)
+	if err != nil {
+		return err
+	}
 	report, err := improve.EvaluateExperiment(args[0], fixture,
 		improve.ExperimentInput{Snapshot: baselineSnapshot, Report: baselineReport, MemoryPolicy: baselinePolicy, AcceptancePassed: experimentBaselineAccepted, SafetyViolations: experimentBaselineSafetyViolations},
-		improve.ExperimentInput{Snapshot: candidateSnapshot, Report: candidateReport, MemoryPolicy: candidatePolicy, AcceptancePassed: experimentCandidateAccepted, SafetyViolations: experimentCandidateSafetyViolations},
+		improve.ExperimentInput{Snapshot: candidateSnapshot, Report: candidateReport, MemoryPolicy: candidatePolicy, ContextCandidate: contextCandidate, AcceptancePassed: experimentCandidateAccepted, SafetyViolations: experimentCandidateSafetyViolations},
 	)
 	if err != nil {
 		return err
@@ -228,6 +235,29 @@ func runImproveExperimentCompare(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("%s\nstatus: %s\ndecision: %s\n", path, report.Status, report.Decision)
 	return nil
+}
+
+func loadExperimentContextCandidate(cmd *cobra.Command, workspace string, report *improve.Report) (*improve.ArtifactRef, error) {
+	id := strings.TrimSpace(experimentCandidateContextID)
+	if id == "" {
+		return nil, nil
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		return nil, fmt.Errorf("open context repository: %w", err)
+	}
+	defer func() { _ = repo.Close() }()
+	item, err := repo.Get(cmd.Context(), id)
+	if err != nil {
+		return nil, fmt.Errorf("load candidate context item: %w", err)
+	}
+	if item.Lifecycle != contextstore.LifecycleCandidate || item.SupersededBy != "" {
+		return nil, fmt.Errorf("context item %q is not an active candidate", id)
+	}
+	if !strings.EqualFold(item.Scope.TeamID, report.Team) {
+		return nil, fmt.Errorf("context candidate team %q does not match report team %q", item.Scope.TeamID, report.Team)
+	}
+	return &improve.ArtifactRef{Kind: "context_item", ID: item.ID, Revision: item.ContentHash}, nil
 }
 
 func loadExperimentPolicyRefs(workspace string) (*improve.ArtifactRef, *improve.ArtifactRef, error) {

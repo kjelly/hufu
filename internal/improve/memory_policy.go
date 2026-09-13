@@ -259,7 +259,14 @@ func ApproveMemoryPolicyCandidate(workspace, id string, explicitApproval bool) (
 	if err != nil {
 		return candidate, err
 	}
-	if candidate.Status != "eligible_for_review" {
+	handoffApproved := false
+	if candidate.Status == "candidate" {
+		handoffApproved, err = hasApprovedMemoryPolicyHandoff(workspace, candidate)
+		if err != nil {
+			return candidate, err
+		}
+	}
+	if candidate.Status != "eligible_for_review" && !handoffApproved {
 		return candidate, fmt.Errorf("candidate %q is not eligible for review", id)
 	}
 	previous, err := LoadMemoryPolicySnapshot(workspace, candidate.PreviousID)
@@ -270,12 +277,14 @@ func ApproveMemoryPolicyCandidate(workspace, id string, explicitApproval bool) (
 	if len(categories) != 1 || categories[0] != candidate.ChangedCategory {
 		return candidate, fmt.Errorf("candidate %q no longer changes exactly its declared policy category", id)
 	}
-	if len(candidate.EvaluationGates) == 0 {
-		return candidate, fmt.Errorf("candidate %q has no durable evaluation gates", id)
-	}
-	for _, gate := range candidate.EvaluationGates {
-		if !gate.Passed {
-			return candidate, fmt.Errorf("candidate %q has a failing %s gate", id, gate.Name)
+	if !handoffApproved {
+		if len(candidate.EvaluationGates) == 0 {
+			return candidate, fmt.Errorf("candidate %q has no durable evaluation gates", id)
+		}
+		for _, gate := range candidate.EvaluationGates {
+			if !gate.Passed {
+				return candidate, fmt.Errorf("candidate %q has a failing %s gate", id, gate.Name)
+			}
 		}
 	}
 	candidate.Status, candidate.ApprovedAt = "active", time.Now().UTC().Format(time.RFC3339Nano)
@@ -296,6 +305,53 @@ func ApproveMemoryPolicyCandidate(workspace, id string, explicitApproval bool) (
 	// canonical adoption record used by runtime startup.
 	_ = writeMemoryPolicyAdoption(workspace, adoption)
 	return candidate, nil
+}
+
+func hasApprovedMemoryPolicyHandoff(workspace string, candidate MemoryPolicySnapshot) (bool, error) {
+	paths, err := filepath.Glob(filepath.Join(ImprovementRoot(workspace), "handoffs", "*", "handoff.json"))
+	if err != nil {
+		return false, fmt.Errorf("list memory policy handoffs: %w", err)
+	}
+	store := NewHandoffStore(workspace)
+	for _, path := range paths {
+		id := filepath.Base(filepath.Dir(path))
+		handoff, err := store.Get(id)
+		if err != nil {
+			return false, fmt.Errorf("load memory policy handoff %q: %w", id, err)
+		}
+		if handoff.Kind != HandoffMemoryPolicy || handoff.Status != HandoffApproved || handoff.Candidate == nil || handoff.Candidate.ID != candidate.ID || handoff.Candidate.Revision != candidate.RevisionHash {
+			continue
+		}
+		if handoff.Experiment == nil || handoff.Evaluation.Report == nil || handoff.Evaluation.Decision != "eligible_for_review" {
+			return false, fmt.Errorf("approved memory policy handoff %q has incomplete evaluation evidence", handoff.ID)
+		}
+		proposal, err := LoadMemoryPolicyOptimizationProposal(workspace, handoff.Proposal.ID)
+		if err != nil {
+			return false, fmt.Errorf("load handoff memory policy proposal: %w", err)
+		}
+		if proposal.RevisionHash != handoff.Proposal.Revision || proposal.Candidate.ID != candidate.ID || proposal.Candidate.Revision != candidate.RevisionHash {
+			return false, fmt.Errorf("approved memory policy handoff %q has stale proposal bindings", handoff.ID)
+		}
+		report, err := LoadExperimentReport(workspace, handoff.Experiment.ID)
+		if err != nil {
+			return false, fmt.Errorf("load handoff memory policy experiment: %w", err)
+		}
+		if ExperimentReportRevision(report) != handoff.Experiment.Revision || report.Status != "passed" || report.Decision != "eligible_for_review" {
+			return false, fmt.Errorf("approved memory policy handoff %q has stale experiment evidence", handoff.ID)
+		}
+		if err := ValidateMemoryPolicyExperimentReport(report, proposal.BasePolicy, proposal.Candidate); err != nil {
+			return false, fmt.Errorf("validate handoff memory policy experiment: %w", err)
+		}
+		fixture, err := LoadBenchmark(BenchmarkPath(workspace, report.Benchmark.Name))
+		if err != nil {
+			return false, fmt.Errorf("load handoff memory policy benchmark: %w", err)
+		}
+		if BenchmarkRevision(fixture) != report.Benchmark.Revision || !strings.EqualFold(fixture.Team, handoff.Scope.TeamID) {
+			return false, fmt.Errorf("approved memory policy handoff %q has stale benchmark evidence", handoff.ID)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func RollbackMemoryPolicy(workspace string, explicitApproval bool) (MemoryPolicySnapshot, error) {
@@ -474,10 +530,19 @@ func validateMemoryPolicyOptimizationProposal(workspace string, proposal MemoryP
 	if base.RevisionHash != proposal.BasePolicy.Revision || candidate.RevisionHash != proposal.Candidate.Revision {
 		return fmt.Errorf("memory policy proposal references changed snapshot revision")
 	}
-	if candidate.Status != "candidate" || candidate.PreviousID != base.ID {
+	if !validMemoryPolicyProposalCandidateStatus(candidate.Status) || candidate.PreviousID != base.ID {
 		return fmt.Errorf("memory policy proposal candidate is not based on %q", base.ID)
 	}
 	return nil
+}
+
+func validMemoryPolicyProposalCandidateStatus(status string) bool {
+	switch status {
+	case "candidate", "eligible_for_review", "rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewMemoryPolicyOptimizationProposal persists the candidate snapshot and its

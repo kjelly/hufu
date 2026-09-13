@@ -18,8 +18,9 @@ type HandoffAuditFunc func(context.Context, team.RunEvent) error
 type HandoffStore struct {
 	workspace string
 	audit     HandoffAuditFunc
-	mu        sync.Mutex
 }
+
+var handoffProcessLocks sync.Map
 
 func NewHandoffStore(workspace string) *HandoffStore {
 	return &HandoffStore{
@@ -31,8 +32,19 @@ func NewHandoffStore(workspace string) *HandoffStore {
 }
 
 func (s *HandoffStore) Create(ctx context.Context, handoff ImprovementHandoff) (ImprovementHandoff, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result ImprovementHandoff
+	err := s.withExclusiveLock(ctx, handoff.ID, func() error {
+		var err error
+		result, err = s.createUnlocked(ctx, handoff)
+		return err
+	})
+	return result, err
+}
+
+func (s *HandoffStore) createUnlocked(ctx context.Context, handoff ImprovementHandoff) (ImprovementHandoff, error) {
 	if err := handoff.Validate(); err != nil {
 		return ImprovementHandoff{}, err
 	}
@@ -44,14 +56,11 @@ func (s *HandoffStore) Create(ctx context.Context, handoff ImprovementHandoff) (
 	if err := team.AtomicCreateFile(path, data, 0o600); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			current, getErr := s.getUnlocked(handoff.ID)
-			if getErr == nil {
-				currentData, marshalErr := marshalHandoff(current)
-				if marshalErr == nil && string(currentData) == string(data) {
-					if auditErr := s.audit(ctx, handoffEvent("handoff_created", current, current.Revision)); auditErr != nil {
-						return current, fmt.Errorf("audit idempotent handoff creation: %w", auditErr)
-					}
-					return current, nil
+			if getErr == nil && sameHandoffIdentity(current, handoff) {
+				if auditErr := s.audit(ctx, handoffEvent("handoff_created", handoff, handoff.Revision)); auditErr != nil {
+					return current, fmt.Errorf("audit idempotent handoff creation: %w", auditErr)
 				}
+				return current, nil
 			}
 		}
 		return ImprovementHandoff{}, fmt.Errorf("create handoff: %w", err)
@@ -84,8 +93,19 @@ func (s *HandoffStore) Get(id string) (ImprovementHandoff, error) {
 }
 
 func (s *HandoffStore) Transition(ctx context.Context, id string, expectedRevision int64, next ImprovementHandoff) (ImprovementHandoff, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result ImprovementHandoff
+	err := s.withExclusiveLock(ctx, id, func() error {
+		var err error
+		result, err = s.transitionUnlocked(ctx, id, expectedRevision, next)
+		return err
+	})
+	return result, err
+}
+
+func (s *HandoffStore) transitionUnlocked(ctx context.Context, id string, expectedRevision int64, next ImprovementHandoff) (ImprovementHandoff, error) {
 	current, err := s.getUnlocked(id)
 	if err != nil {
 		return ImprovementHandoff{}, err
@@ -93,8 +113,11 @@ func (s *HandoffStore) Transition(ctx context.Context, id string, expectedRevisi
 	if current.Revision != expectedRevision {
 		return current, fmt.Errorf("handoff %q revision conflict: expected %d, got %d", id, expectedRevision, current.Revision)
 	}
-	if next.ID != current.ID || next.Version != current.Version || next.Kind != current.Kind || next.Scope != current.Scope || next.Proposal != current.Proposal || !sameSources(next.Sources, current.Sources) {
+	if !sameHandoffIdentity(next, current) {
 		return current, errors.New("handoff immutable bindings cannot change")
+	}
+	if err := validateBoundHandoffRefs(current, next); err != nil {
+		return current, err
 	}
 	if !validHandoffTransition(current.Status, next.Status) {
 		return current, fmt.Errorf("invalid handoff transition %s -> %s", current.Status, next.Status)
@@ -116,6 +139,24 @@ func (s *HandoffStore) Transition(ctx context.Context, id string, expectedRevisi
 		return next, fmt.Errorf("audit handoff transition: %w", err)
 	}
 	return next, nil
+}
+
+// RetryAudit reconciles the audit event for the current durable state without
+// changing the handoff. EventStore idempotency makes repeated calls safe.
+func (s *HandoffStore) RetryAudit(ctx context.Context, handoff ImprovementHandoff) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inputRevision := handoff.Revision - 1
+	eventType := handoffAuditType(handoff.Status)
+	if handoff.Status == HandoffProposed && handoff.Revision == 1 {
+		inputRevision = 1
+		eventType = "handoff_created"
+	}
+	if inputRevision < 1 {
+		return fmt.Errorf("handoff %q has invalid audit revision", handoff.ID)
+	}
+	return s.audit(ctx, handoffEvent(eventType, handoff, inputRevision))
 }
 
 func handoffAuditType(status HandoffStatus) string {
@@ -171,6 +212,39 @@ func sameSources(a, b []SourceBinding) bool {
 	left, _ := json.Marshal(a)
 	right, _ := json.Marshal(b)
 	return string(left) == string(right)
+}
+
+func sameHandoffIdentity(a, b ImprovementHandoff) bool {
+	return a.ID == b.ID && a.Version == b.Version && a.Kind == b.Kind && a.Scope == b.Scope && a.Proposal == b.Proposal && sameSources(a.Sources, b.Sources)
+}
+
+func (s *HandoffStore) withExclusiveLock(ctx context.Context, id string, fn func() error) error {
+	if err := validateArtifactID(id); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(ImprovementRoot(s.workspace), "handoffs", ".locks", id+".lock")
+	lock, _ := handoffProcessLocks.LoadOrStore(lockPath, &sync.Mutex{})
+	processLock := lock.(*sync.Mutex)
+	processLock.Lock()
+	defer processLock.Unlock()
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return fmt.Errorf("create handoff lock directory: %w", err)
+	}
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open handoff lock: %w", err)
+	}
+	if err := lockHandoffFile(file); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("acquire handoff lock: %w", err)
+	}
+	operationErr := fn()
+	unlockErr := unlockHandoffFile(file)
+	closeErr := file.Close()
+	return errors.Join(operationErr, unlockErr, closeErr)
 }
 
 func handoffEvent(eventType string, handoff ImprovementHandoff, inputRevision int64) team.RunEvent {

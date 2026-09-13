@@ -5,6 +5,50 @@ import (
 	"fmt"
 )
 
+func (s *sqliteAnalyticsSession) sqlMemoryEvidence(ctx context.Context, runIDs []string) ([]string, []string, error) {
+	if len(runIDs) == 0 {
+		return nil, nil, nil
+	}
+	inClause, args := runsInClause(runIDs)
+	policyQuery := fmt.Sprintf(`
+SELECT DISTINCT policy_version
+FROM memory_events
+WHERE run_id IN (%s) AND policy_version <> ''
+ORDER BY policy_version`, inClause)
+	policies, err := queryStrings(ctx, s, policyQuery, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query selected memory policy versions: %w", err)
+	}
+	contextQuery := fmt.Sprintf(`
+SELECT DISTINCT context_item_id
+FROM memory_events
+WHERE run_id IN (%s) AND type = 'memory_usage_recorded'
+  AND disposition = 'applied' AND context_item_id <> ''
+ORDER BY context_item_id`, inClause)
+	items, err := queryStrings(ctx, s, contextQuery, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query selected applied context items: %w", err)
+	}
+	return policies, items, nil
+}
+
+func queryStrings(ctx context.Context, s *sqliteAnalyticsSession, query string, args ...any) ([]string, error) {
+	rows, err := s.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var values []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
 // sqlCollectMemoryMetrics computes the memory metrics using the global
 // TEMP memory_events scope. Memory events are intentionally not filtered by
 // selected run or execution time: the canonical event-store reader always

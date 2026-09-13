@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -18,10 +20,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var errHandoffEvidenceStale = errors.New("handoff canonical evidence is stale")
+
 var (
 	improveHandoffProject        string
 	improveHandoffPolicy         string
-	improveHandoffTeamSearch     string
 	improveHandoffJSON           bool
 	improveHandoffMemory         string
 	improveHandoffConsolidate    string
@@ -71,7 +74,6 @@ func init() {
 	flags := improveHandoffCmd.PersistentFlags()
 	flags.StringVar(&improveHandoffProject, "project", "", "Project scope for the handoff (required)")
 	flags.StringVar(&improveHandoffPolicy, "policy-version", "", "Optional memory policy version in the handoff scope")
-	flags.StringVar(&improveHandoffTeamSearch, "team-search-path", "", "Reserved team search path metadata")
 	flags.BoolVar(&improveHandoffJSON, "json", false, "Print the handoff as JSON")
 	improveHandoffPrepareCmd.Flags().StringVar(&improveHandoffBaselineTeam, "baseline-team", "", "Baseline team snapshot ID (required for skill preparation)")
 	improveHandoffPrepareCmd.Flags().StringVar(&improveHandoffBaselinePolicy, "baseline-policy", "", "Baseline memory policy snapshot ID (required for memory policy preparation)")
@@ -129,15 +131,18 @@ func runImproveHandoffCreate(cmd *cobra.Command, _ []string) error {
 }
 
 func runImproveHandoffShow(cmd *cobra.Command, args []string) error {
-	if _, err := handoffScope(); err != nil {
-		return err
-	}
 	workspace, err := resolveImproveWorkspace(improveWorkspace)
 	if err != nil {
 		return err
 	}
 	handoff, err := improve.NewHandoffStore(workspace).Get(args[0])
 	if err != nil {
+		return err
+	}
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := validateCanonicalHandoffEvidence(cmd.Context(), workspace, handoff); err != nil {
 		return err
 	}
 	return printHandoff(handoff)
@@ -153,15 +158,21 @@ func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if handoff.Kind != improve.HandoffSkill {
-		return fmt.Errorf("handoff %q is %s; skill preparation requires kind skill", handoff.ID, handoff.Kind)
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := ensureCanonicalHandoffEvidence(cmd.Context(), workspace, store, handoff); err != nil {
+		return err
 	}
 	if handoff.Status == improve.HandoffCandidateReady {
 		if handoff.Candidate == nil {
 			return fmt.Errorf("handoff %q is candidate_ready without a candidate ref", handoff.ID)
 		}
-		if _, _, err := improve.LoadCandidateSnapshot(workspace, handoff.Candidate.ID); err != nil {
-			return fmt.Errorf("load existing skill candidate: %w", err)
+		if err := validatePreparedHandoffCandidate(cmd.Context(), workspace, handoff); err != nil {
+			return err
+		}
+		if err := store.RetryAudit(cmd.Context(), handoff); err != nil {
+			return fmt.Errorf("reconcile prepared handoff audit: %w", err)
 		}
 		return printHandoff(handoff)
 	}
@@ -169,10 +180,10 @@ func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("handoff %q is %s; only proposed handoffs can be prepared", handoff.ID, handoff.Status)
 	}
 	ctx := cmd.Context()
-	if handoff.Kind == improve.HandoffMemoryPolicy {
+	switch handoff.Kind {
+	case improve.HandoffMemoryPolicy:
 		return prepareMemoryPolicyHandoff(ctx, workspace, store, handoff)
-	}
-	if handoff.Kind == improve.HandoffConsolidation {
+	case improve.HandoffConsolidation:
 		return prepareConsolidationHandoff(cmd, workspace, store, handoff)
 	}
 	if strings.TrimSpace(improveHandoffBaselineTeam) == "" {
@@ -249,7 +260,7 @@ func prepareConsolidationHandoff(cmd *cobra.Command, workspace string, store *im
 	if proposal.ProjectID != handoff.Scope.ProjectID || proposal.TeamID != handoff.Scope.TeamID || proposal.Status != "proposed" {
 		return fmt.Errorf("consolidation proposal scope or status changed")
 	}
-	if err := validateConsolidationHandoffCurrent(cmd, repo, proposal, handoff.Scope.PolicyVersion); err != nil {
+	if err := validateConsolidationHandoffCurrent(cmd.Context(), repo, proposal, handoff.Scope.PolicyVersion); err != nil {
 		return fmt.Errorf("consolidation evidence is stale: %w", err)
 	}
 	candidate, err := repo.Get(cmd.Context(), proposal.CandidateContextItemID)
@@ -270,8 +281,8 @@ func prepareConsolidationHandoff(cmd *cobra.Command, workspace string, store *im
 	return printHandoff(updated)
 }
 
-func validateConsolidationHandoffCurrent(cmd *cobra.Command, repo *contextstore.SQLiteRepository, proposal contextstore.ConsolidationProposal, policyVersion string) error {
-	sources, err := repo.GetMany(cmd.Context(), proposal.SourceIDs)
+func validateConsolidationHandoffCurrent(ctx context.Context, repo *contextstore.SQLiteRepository, proposal contextstore.ConsolidationProposal, policyVersion string) error {
+	sources, err := repo.GetMany(ctx, proposal.SourceIDs)
 	if err != nil {
 		return err
 	}
@@ -285,7 +296,7 @@ func validateConsolidationHandoffCurrent(cmd *cobra.Command, repo *contextstore.
 		if proposal.SourceRevisions[source.ID] != source.ContentHash {
 			return fmt.Errorf("source %q content revision changed", source.ID)
 		}
-		aggregate, err := repo.ExperienceAggregate(cmd.Context(), source.ID, policyVersion)
+		aggregate, err := repo.ExperienceAggregate(ctx, source.ID, policyVersion)
 		if err != nil || proposal.AggregateRevisions[source.ID] != aggregate.Revision {
 			return fmt.Errorf("source %q aggregate revision changed", source.ID)
 		}
@@ -303,7 +314,13 @@ func runImproveHandoffEvaluate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if handoff.Status != improve.HandoffCandidateReady && handoff.Status != improve.HandoffBenchmarkBound {
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := ensureCanonicalHandoffEvidence(cmd.Context(), workspace, store, handoff); err != nil {
+		return err
+	}
+	if handoff.Status != improve.HandoffCandidateReady && handoff.Status != improve.HandoffBenchmarkBound && handoff.Status != improve.HandoffEvaluated && handoff.Status != improve.HandoffEligibleForReview {
 		return fmt.Errorf("handoff %q is %s; evaluate requires a prepared candidate", handoff.ID, handoff.Status)
 	}
 	report, err := improve.LoadExperimentReport(workspace, improveHandoffExperiment)
@@ -316,29 +333,50 @@ func runImproveHandoffEvaluate(cmd *cobra.Command, args []string) error {
 	benchmark := &improve.BenchmarkBinding{Ref: improve.ArtifactRef{Kind: "benchmark_fixture", ID: report.Benchmark.Name, Revision: report.Benchmark.Revision}, Name: report.Benchmark.Name, Category: report.Benchmark.Category, Cases: report.Benchmark.Cases}
 	experimentRef := &improve.ArtifactRef{Kind: "experiment_report", ID: report.ID, Revision: improve.ExperimentReportRevision(report)}
 	next := handoff
-	next.Status = improve.HandoffBenchmarkBound
-	next.Benchmark = benchmark
-	next.Experiment = experimentRef
-	next.Evaluation = improve.EvaluationState{Decision: report.Decision, Status: report.Status, Report: experimentRef}
-	next.StatusReason = "experiment report bound"
-	if handoff.Status == improve.HandoffCandidateReady {
+	if next.Status == improve.HandoffCandidateReady {
+		next.Status = improve.HandoffBenchmarkBound
+		next.Benchmark = benchmark
+		next.StatusReason = "benchmark fixture bound"
 		next, err = store.Transition(cmd.Context(), handoff.ID, handoff.Revision, next)
 		if err != nil {
 			return err
 		}
 	}
-	next.Status = improve.HandoffEvaluated
-	next.StatusReason = "experiment evaluation recorded"
-	next, err = store.Transition(cmd.Context(), handoff.ID, next.Revision, next)
-	if err != nil {
-		return err
+	if next.Benchmark == nil || *next.Benchmark != *benchmark {
+		return fmt.Errorf("experiment benchmark does not match existing handoff binding")
 	}
-	if report.Decision == "eligible_for_review" {
+	if next.Status == improve.HandoffBenchmarkBound {
+		if err := store.RetryAudit(cmd.Context(), next); err != nil {
+			return fmt.Errorf("reconcile benchmark binding audit: %w", err)
+		}
+		next.Status = improve.HandoffEvaluated
+		next.Experiment = experimentRef
+		next.Evaluation = improve.EvaluationState{Decision: report.Decision, Status: report.Status, Report: experimentRef}
+		next.StatusReason = "experiment evaluation recorded"
+		next, err = store.Transition(cmd.Context(), handoff.ID, next.Revision, next)
+		if err != nil {
+			return err
+		}
+	}
+	if next.Experiment == nil || *next.Experiment != *experimentRef || next.Evaluation.Report == nil || *next.Evaluation.Report != *experimentRef || next.Evaluation.Decision != report.Decision || next.Evaluation.Status != report.Status {
+		return fmt.Errorf("experiment report does not match existing handoff evaluation")
+	}
+	if next.Status == improve.HandoffEvaluated {
+		if err := store.RetryAudit(cmd.Context(), next); err != nil {
+			return fmt.Errorf("reconcile evaluation audit: %w", err)
+		}
+	}
+	if next.Status == improve.HandoffEvaluated && report.Decision == "eligible_for_review" {
 		next.Status = improve.HandoffEligibleForReview
 		next.StatusReason = "experiment is eligible for explicit review"
 		next, err = store.Transition(cmd.Context(), handoff.ID, next.Revision, next)
 		if err != nil {
 			return err
+		}
+	}
+	if next.Status == improve.HandoffEligibleForReview {
+		if err := store.RetryAudit(cmd.Context(), next); err != nil {
+			return fmt.Errorf("reconcile review eligibility audit: %w", err)
 		}
 	}
 	return printHandoff(next)
@@ -374,9 +412,7 @@ func validateHandoffExperiment(handoff improve.ImprovementHandoff, report improv
 			return fmt.Errorf("experiment report candidate does not match handoff candidate")
 		}
 	case improve.HandoffConsolidation:
-		if report.Candidate.SnapshotID == "" {
-			return fmt.Errorf("consolidation experiment must identify its candidate evidence")
-		}
+		return improve.ValidateContextCandidateExperimentReport(report, *handoff.Candidate)
 	}
 	return nil
 }
@@ -390,6 +426,21 @@ func runImproveHandoffApprove(cmd *cobra.Command, args []string) error {
 	handoff, err := store.Get(args[0])
 	if err != nil {
 		return err
+	}
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := ensureCanonicalHandoffEvidence(cmd.Context(), workspace, store, handoff); err != nil {
+		return err
+	}
+	if handoff.Status == improve.HandoffApproved {
+		if improveHandoffExpected != handoff.Revision-1 {
+			return fmt.Errorf("handoff %q revision conflict: retry expected %d, got %d", handoff.ID, handoff.Revision-1, improveHandoffExpected)
+		}
+		if err := store.RetryAudit(cmd.Context(), handoff); err != nil {
+			return fmt.Errorf("reconcile approval audit: %w", err)
+		}
+		return printHandoff(handoff)
 	}
 	if handoff.Status != improve.HandoffEligibleForReview || handoff.Evaluation.Decision != "eligible_for_review" {
 		return fmt.Errorf("handoff %q is not eligible for explicit approval", handoff.ID)
@@ -414,8 +465,11 @@ func runImproveHandoffAdopt(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if handoff.Status != improve.HandoffApproved {
-		return fmt.Errorf("handoff %q is %s; approval is required before adoption", handoff.ID, handoff.Status)
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := ensureCanonicalHandoffEvidence(cmd.Context(), workspace, store, handoff); err != nil {
+		return err
 	}
 	adoption, err := parseHandoffRef(improveHandoffAdoption)
 	if err != nil {
@@ -423,6 +477,18 @@ func runImproveHandoffAdopt(cmd *cobra.Command, args []string) error {
 	}
 	if err := validateHandoffAdoption(cmd.Context(), workspace, handoff, adoption); err != nil {
 		return err
+	}
+	if handoff.Status == improve.HandoffAdopted {
+		if handoff.Adoption == nil || *handoff.Adoption != adoption || improveHandoffExpected != handoff.Revision-1 {
+			return fmt.Errorf("handoff %q adoption retry does not match durable state", handoff.ID)
+		}
+		if err := store.RetryAudit(cmd.Context(), handoff); err != nil {
+			return fmt.Errorf("reconcile adoption audit: %w", err)
+		}
+		return printHandoff(handoff)
+	}
+	if handoff.Status != improve.HandoffApproved {
+		return fmt.Errorf("handoff %q is %s; approval is required before adoption", handoff.ID, handoff.Status)
 	}
 	next := handoff
 	next.Status = improve.HandoffAdopted
@@ -445,7 +511,13 @@ func runImproveHandoffMonitor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if handoff.Status != improve.HandoffAdopted && handoff.Status != improve.HandoffMonitoring {
+	if err := validateHandoffCommandScope(handoff); err != nil {
+		return err
+	}
+	if err := ensureCanonicalHandoffEvidence(cmd.Context(), workspace, store, handoff); err != nil {
+		return err
+	}
+	if handoff.Status != improve.HandoffAdopted && handoff.Status != improve.HandoffMonitoring && handoff.Status != improve.HandoffRollbackRecommended {
 		return fmt.Errorf("handoff %q is %s; monitoring requires adoption", handoff.ID, handoff.Status)
 	}
 	monitoring, err := parseHandoffRef(improveHandoffMonitoring)
@@ -459,18 +531,56 @@ func runImproveHandoffMonitor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if handoff.Adoption == nil || report.AdoptionID != handoff.Adoption.ID || monitoring.Revision != improve.MonitoringReportRevision(report) {
+	if handoff.Adoption == nil || handoff.Candidate == nil || report.AdoptionID != handoff.Adoption.ID || !strings.EqualFold(report.Team, handoff.Scope.TeamID) || report.ExpectedRevision != handoff.Candidate.Revision || monitoring.Revision != improve.MonitoringReportRevision(report) {
 		return fmt.Errorf("monitoring report does not match handoff adoption or revision")
 	}
-	next := handoff
-	next.Status = improve.HandoffMonitoring
-	next.Monitoring = append(append([]improve.ArtifactRef(nil), handoff.Monitoring...), monitoring)
-	next.StatusReason = "monitoring evidence linked; rollback remains a recommendation"
-	updated, err := store.Transition(cmd.Context(), handoff.ID, improveHandoffExpected, next)
-	if err != nil {
-		return err
+	if handoff.Kind == improve.HandoffSkill && report.RollbackSuggestion != nil {
+		adoption, err := improve.LoadAdoption(workspace, handoff.Adoption.ID)
+		if err != nil {
+			return err
+		}
+		if report.RollbackSuggestion.BaselineSnapshotID != adoption.BaselineSnapshotID || report.RollbackSuggestion.RollbackRevision != adoption.RollbackRevision || !reflect.DeepEqual(report.BaselineMetrics, adoption.BaselineMetrics) {
+			return fmt.Errorf("monitoring rollback suggestion does not match adoption baseline")
+		}
 	}
-	return printHandoff(updated)
+	expectedRevision := improveHandoffExpected
+	if slices.Contains(handoff.Monitoring, monitoring) {
+		retryRevision := handoff.Revision - 1
+		if handoff.Status == improve.HandoffRollbackRecommended && report.RollbackSuggestion != nil {
+			retryRevision--
+		}
+		if improveHandoffExpected != retryRevision {
+			return fmt.Errorf("handoff %q monitoring retry does not match durable revision", handoff.ID)
+		}
+		if err := store.RetryAudit(cmd.Context(), handoff); err != nil {
+			return fmt.Errorf("reconcile monitoring audit: %w", err)
+		}
+		if handoff.Status == improve.HandoffRollbackRecommended || report.RollbackSuggestion == nil {
+			return printHandoff(handoff)
+		}
+		expectedRevision = handoff.Revision
+	} else if handoff.Status == improve.HandoffRollbackRecommended {
+		return fmt.Errorf("handoff %q already recommends rollback and cannot accept new monitoring evidence", handoff.ID)
+	}
+	next := handoff
+	if !slices.Contains(next.Monitoring, monitoring) {
+		next.Status = improve.HandoffMonitoring
+		next.Monitoring = append(slices.Clone(handoff.Monitoring), monitoring)
+		next.StatusReason = "monitoring evidence linked; rollback remains a recommendation"
+		next, err = store.Transition(cmd.Context(), handoff.ID, expectedRevision, next)
+		if err != nil {
+			return err
+		}
+	}
+	if report.RollbackSuggestion != nil {
+		next.Status = improve.HandoffRollbackRecommended
+		next.StatusReason = "monitoring evidence recommends explicit rollback review"
+		next, err = store.Transition(cmd.Context(), handoff.ID, next.Revision, next)
+		if err != nil {
+			return err
+		}
+	}
+	return printHandoff(next)
 }
 
 func parseHandoffRef(value string) (improve.ArtifactRef, error) {
@@ -498,19 +608,24 @@ func validateHandoffAdoption(ctx context.Context, workspace string, handoff impr
 		if err != nil {
 			return err
 		}
-		if record.Team != handoff.Scope.TeamID || record.CandidateSnapshotID != handoff.Candidate.ID || record.CandidateRevision != handoff.Candidate.Revision || adoption.Revision != record.CandidateRevision {
+		if handoff.Experiment == nil || record.ExperimentID != handoff.Experiment.ID || record.Team != handoff.Scope.TeamID || record.CandidateSnapshotID != handoff.Candidate.ID || record.CandidateRevision != handoff.Candidate.Revision || adoption.Revision != improve.AdoptionRevision(record) {
 			return fmt.Errorf("adoption does not match handoff candidate")
 		}
 	case improve.HandoffMemoryPolicy:
 		if adoption.Kind != "memory_policy_activation" || adoption.ID != handoff.Candidate.ID || adoption.Revision != handoff.Candidate.Revision {
 			return fmt.Errorf("memory adoption must reference the matching activated policy")
 		}
-		candidate, err := improve.LoadMemoryPolicySnapshot(workspace, adoption.ID)
+		repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 		if err != nil {
 			return err
 		}
-		if candidate.Status != "active" {
-			return fmt.Errorf("memory policy %q is not active", candidate.ID)
+		defer func() { _ = repo.Close() }()
+		active, err := repo.ActiveMemoryPolicyVersion(ctx)
+		if err != nil {
+			return err
+		}
+		if active.PolicyVersion != adoption.ID || active.RevisionHash != adoption.Revision || active.Status != "active" {
+			return fmt.Errorf("memory policy %q is not active", adoption.ID)
 		}
 	case improve.HandoffConsolidation:
 		if adoption.Kind != "context_consolidation_approval" {
@@ -578,6 +693,246 @@ func handoffScope() (improve.HandoffScope, error) {
 	return improve.HandoffScope{ProjectID: project, TeamID: team, PolicyVersion: strings.TrimSpace(improveHandoffPolicy)}, nil
 }
 
+func validateHandoffCommandScope(handoff improve.ImprovementHandoff) error {
+	scope, err := handoffScope()
+	if err != nil {
+		return err
+	}
+	if scope != handoff.Scope {
+		return fmt.Errorf("command scope does not match handoff scope")
+	}
+	return nil
+}
+
+func validatePreparedHandoffCandidate(ctx context.Context, workspace string, handoff improve.ImprovementHandoff) error {
+	if handoff.Candidate == nil {
+		return fmt.Errorf("handoff %q has no candidate", handoff.ID)
+	}
+	switch handoff.Kind {
+	case improve.HandoffSkill:
+		candidate, _, err := improve.LoadCandidateSnapshot(workspace, handoff.Candidate.ID)
+		if err != nil {
+			return fmt.Errorf("load existing skill candidate: %w", err)
+		}
+		if candidate.DefinitionRevision != handoff.Candidate.Revision {
+			return fmt.Errorf("skill candidate revision changed")
+		}
+	case improve.HandoffMemoryPolicy:
+		candidate, err := improve.LoadMemoryPolicySnapshot(workspace, handoff.Candidate.ID)
+		if err != nil {
+			return err
+		}
+		if candidate.RevisionHash != handoff.Candidate.Revision || candidate.Status != "candidate" {
+			return fmt.Errorf("memory policy candidate revision or status changed")
+		}
+	case improve.HandoffConsolidation:
+		repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = repo.Close() }()
+		candidate, err := repo.Get(ctx, handoff.Candidate.ID)
+		if err != nil {
+			return err
+		}
+		if candidate.ContentHash != handoff.Candidate.Revision || candidate.Lifecycle != contextstore.LifecycleCandidate || candidate.SupersededBy != "" {
+			return fmt.Errorf("consolidation candidate revision or lifecycle changed")
+		}
+	}
+	return nil
+}
+
+func validateCanonicalHandoffEvidence(ctx context.Context, workspace string, handoff improve.ImprovementHandoff) error {
+	if handoff.Status == improve.HandoffStale {
+		return nil
+	}
+	if err := validateCanonicalHandoffProposal(ctx, workspace, handoff); err != nil {
+		return err
+	}
+	return validateCanonicalHandoffBindings(ctx, workspace, handoff)
+}
+
+func validateCanonicalHandoffProposal(ctx context.Context, workspace string, handoff improve.ImprovementHandoff) error {
+	switch handoff.Kind {
+	case improve.HandoffSkill:
+		repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = repo.Close() }()
+		proposal, err := repo.GetPromotion(ctx, handoff.Proposal.ID, handoff.Scope.ProjectID, handoff.Scope.TeamID)
+		if err != nil {
+			return canonicalArtifactError("skill promotion proposal", err)
+		}
+		if proposal.DraftHash != handoff.Proposal.Revision || proposal.Type != contextstore.PromotionTypeSkill || proposal.Status == contextstore.PromotionStatusRejected || proposal.Status == contextstore.PromotionStatusStale {
+			return staleHandoffEvidencef("skill promotion proposal changed")
+		}
+		if err := samePromotionSources(handoff, proposal); err != nil {
+			return staleHandoffEvidencef("%v", err)
+		}
+		if err := (promotion.Service{Repo: repo}).ValidateProposalEvidence(ctx, proposal); err != nil {
+			return staleHandoffEvidencef("skill promotion evidence changed: %v", err)
+		}
+	case improve.HandoffMemoryPolicy:
+		proposal, err := improve.LoadMemoryPolicyOptimizationProposal(workspace, handoff.Proposal.ID)
+		if err != nil {
+			return canonicalArtifactError("memory policy proposal", err)
+		}
+		if proposal.RevisionHash != handoff.Proposal.Revision {
+			return staleHandoffEvidencef("memory policy proposal changed")
+		}
+	case improve.HandoffConsolidation:
+		repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = repo.Close() }()
+		proposal, err := repo.GetConsolidationProposal(ctx, handoff.Proposal.ID)
+		if err != nil {
+			return canonicalArtifactError("consolidation proposal", err)
+		}
+		if proposal.ProjectID != handoff.Scope.ProjectID || proposal.TeamID != handoff.Scope.TeamID || consolidationProposalRevision(proposal) != handoff.Proposal.Revision || proposal.Status == "rejected" || proposal.Status == "failed" {
+			return staleHandoffEvidencef("consolidation proposal changed")
+		}
+		if !handoffHasAdoption(handoff.Status) {
+			if err := validateConsolidationHandoffCurrent(ctx, repo, proposal, handoff.Scope.PolicyVersion); err != nil {
+				return staleHandoffEvidencef("consolidation source changed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateCanonicalHandoffBindings(ctx context.Context, workspace string, handoff improve.ImprovementHandoff) error {
+	if handoff.Candidate != nil {
+		if err := validateCanonicalCandidate(ctx, workspace, handoff); err != nil {
+			return err
+		}
+	}
+	if handoff.Benchmark != nil {
+		fixture, err := improve.LoadBenchmark(improve.BenchmarkPath(workspace, handoff.Benchmark.Name))
+		if err != nil {
+			return canonicalArtifactError("benchmark fixture", err)
+		}
+		if improve.BenchmarkRevision(fixture) != handoff.Benchmark.Ref.Revision || !strings.EqualFold(fixture.Team, handoff.Scope.TeamID) || fixture.Category != handoff.Benchmark.Category || len(fixture.Cases) != handoff.Benchmark.Cases {
+			return staleHandoffEvidencef("benchmark binding changed")
+		}
+	}
+	if handoff.Experiment != nil {
+		report, err := improve.LoadExperimentReport(workspace, handoff.Experiment.ID)
+		if err != nil {
+			return canonicalArtifactError("experiment report", err)
+		}
+		if improve.ExperimentReportRevision(report) != handoff.Experiment.Revision {
+			return staleHandoffEvidencef("experiment report changed")
+		}
+		if err := validateHandoffExperiment(handoff, report, workspace); err != nil {
+			return staleHandoffEvidencef("experiment evidence changed: %v", err)
+		}
+	}
+	if handoff.Adoption != nil {
+		if err := validateHandoffAdoption(ctx, workspace, handoff, *handoff.Adoption); err != nil {
+			return staleHandoffEvidencef("adoption evidence changed: %v", err)
+		}
+	}
+	for _, ref := range handoff.Monitoring {
+		report, err := improve.LoadMonitoringReport(workspace, ref.ID)
+		if err != nil {
+			return canonicalArtifactError("monitoring report", err)
+		}
+		if ref.Revision != improve.MonitoringReportRevision(report) || handoff.Adoption == nil || handoff.Candidate == nil || report.AdoptionID != handoff.Adoption.ID || report.ExpectedRevision != handoff.Candidate.Revision || !strings.EqualFold(report.Team, handoff.Scope.TeamID) {
+			return staleHandoffEvidencef("monitoring evidence changed")
+		}
+	}
+	return nil
+}
+
+func validateCanonicalCandidate(ctx context.Context, workspace string, handoff improve.ImprovementHandoff) error {
+	if handoff.Candidate == nil {
+		return nil
+	}
+	switch handoff.Kind {
+	case improve.HandoffSkill:
+		candidate, _, err := improve.LoadCandidateSnapshot(workspace, handoff.Candidate.ID)
+		if err != nil {
+			return canonicalArtifactError("skill candidate", err)
+		}
+		if candidate.DefinitionRevision != handoff.Candidate.Revision || !strings.EqualFold(candidate.Team, handoff.Scope.TeamID) {
+			return staleHandoffEvidencef("skill candidate changed")
+		}
+	case improve.HandoffMemoryPolicy:
+		candidate, err := improve.LoadMemoryPolicySnapshot(workspace, handoff.Candidate.ID)
+		if err != nil {
+			return canonicalArtifactError("memory policy candidate", err)
+		}
+		if candidate.RevisionHash != handoff.Candidate.Revision || candidate.Status == "rejected" {
+			return staleHandoffEvidencef("memory policy candidate changed")
+		}
+	case improve.HandoffConsolidation:
+		repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = repo.Close() }()
+		candidate, err := repo.Get(ctx, handoff.Candidate.ID)
+		if err != nil {
+			return canonicalArtifactError("consolidation candidate", err)
+		}
+		wantLifecycle := contextstore.LifecycleCandidate
+		if handoffHasAdoption(handoff.Status) {
+			wantLifecycle = contextstore.LifecycleConfirmed
+		}
+		lifecycleMatches := candidate.Lifecycle == wantLifecycle
+		if handoff.Status == improve.HandoffApproved {
+			lifecycleMatches = candidate.Lifecycle == contextstore.LifecycleCandidate || candidate.Lifecycle == contextstore.LifecycleConfirmed
+		}
+		if candidate.ContentHash != handoff.Candidate.Revision || !lifecycleMatches || candidate.Scope.ProjectID != handoff.Scope.ProjectID || candidate.Scope.TeamID != handoff.Scope.TeamID {
+			return staleHandoffEvidencef("consolidation candidate changed")
+		}
+	}
+	return nil
+}
+
+func ensureCanonicalHandoffEvidence(ctx context.Context, workspace string, store *improve.HandoffStore, handoff improve.ImprovementHandoff) error {
+	if handoff.Status == improve.HandoffStale {
+		if err := store.RetryAudit(ctx, handoff); err != nil {
+			return errors.Join(errHandoffEvidenceStale, err)
+		}
+		return errHandoffEvidenceStale
+	}
+	err := validateCanonicalHandoffEvidence(ctx, workspace, handoff)
+	if err == nil || !errors.Is(err, errHandoffEvidenceStale) {
+		return err
+	}
+	if handoff.Status == improve.HandoffProposed || handoff.Status == improve.HandoffCandidateReady || handoff.Status == improve.HandoffBenchmarkBound || handoff.Status == improve.HandoffEvaluated || handoff.Status == improve.HandoffEligibleForReview || handoff.Status == improve.HandoffApproved {
+		next := handoff
+		next.Status = improve.HandoffStale
+		next.StatusReason = "canonical evidence changed; create a new handoff"
+		_, transitionErr := store.Transition(ctx, handoff.ID, handoff.Revision, next)
+		return errors.Join(err, transitionErr)
+	}
+	return err
+}
+
+func staleHandoffEvidencef(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", errHandoffEvidenceStale, fmt.Sprintf(format, args...))
+}
+
+func canonicalArtifactError(label string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("load %s: %w", label, err)
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "database is locked") || strings.Contains(message, "database is busy") {
+		return fmt.Errorf("load %s: %w", label, err)
+	}
+	return staleHandoffEvidencef("%s is missing or invalid: %v", label, err)
+}
+
+func handoffHasAdoption(status improve.HandoffStatus) bool {
+	return status == improve.HandoffAdopted || status == improve.HandoffMonitoring || status == improve.HandoffRollbackRecommended
+}
+
 func createMemoryPolicyHandoff(ctx context.Context, workspace string, scope improve.HandoffScope, id string) (improve.ImprovementHandoff, error) {
 	proposal, err := improve.LoadMemoryPolicyOptimizationProposal(workspace, id)
 	if err != nil {
@@ -608,13 +963,17 @@ func createConsolidationHandoff(ctx context.Context, workspace string, scope imp
 		aggregate := proposal.AggregateRevisions[sourceID]
 		sources = append(sources, improve.SourceBinding{Ref: improve.ArtifactRef{Kind: "context_item", ID: sourceID, Revision: hash}, ContentHash: hash, AggregateRevision: aggregate, ProjectID: scope.ProjectID, TeamID: scope.TeamID})
 	}
-	revision := digestRevision(struct {
+	revision := consolidationProposalRevision(proposal)
+	return improve.NewImprovementHandoff(improve.HandoffConsolidation, scope, improve.ArtifactRef{Kind: "consolidation_proposal", ID: proposal.ID, Revision: revision}, sources)
+}
+
+func consolidationProposalRevision(proposal contextstore.ConsolidationProposal) string {
+	return digestRevision(struct {
 		ID         string
 		Sources    map[string]string
 		Aggregates map[string]int64
 		Candidate  string
 	}{proposal.ID, proposal.SourceRevisions, proposal.AggregateRevisions, proposal.CandidateContextItemID})
-	return improve.NewImprovementHandoff(improve.HandoffConsolidation, scope, improve.ArtifactRef{Kind: "consolidation_proposal", ID: proposal.ID, Revision: revision}, sources)
 }
 
 func createSkillHandoff(ctx context.Context, workspace string, scope improve.HandoffScope, id string) (improve.ImprovementHandoff, error) {

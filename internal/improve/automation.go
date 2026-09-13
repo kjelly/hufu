@@ -4,12 +4,17 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 const (
@@ -101,20 +106,21 @@ type RollbackSuggestion struct {
 // MonitoringReport summarizes post-adoption production telemetry without
 // storing prompts, outputs, tool arguments, or tool results.
 type MonitoringReport struct {
-	Version            int                 `json:"version"`
-	ID                 string              `json:"id"`
-	AdoptionID         string              `json:"adoption_id"`
-	Team               string              `json:"team"`
-	GeneratedAt        string              `json:"generated_at"`
-	ProductionRunIDs   []string            `json:"production_run_ids"`
-	ExpectedRevision   string              `json:"expected_revision"`
-	BaselineMetrics    Metrics             `json:"baseline_metrics"`
-	ProductionMetrics  Metrics             `json:"production_metrics"`
-	AcceptancePassed   bool                `json:"acceptance_passed"`
-	SafetyViolations   int                 `json:"safety_violations"`
-	Status             string              `json:"status"`
-	Issues             []MonitoringIssue   `json:"issues"`
-	RollbackSuggestion *RollbackSuggestion `json:"rollback_suggestion,omitempty"`
+	Version             int                 `json:"version"`
+	ID                  string              `json:"id"`
+	AdoptionID          string              `json:"adoption_id"`
+	Team                string              `json:"team"`
+	GeneratedAt         string              `json:"generated_at"`
+	ProductionRunIDs    []string            `json:"production_run_ids"`
+	ProductionRevisions []string            `json:"production_revisions"`
+	ExpectedRevision    string              `json:"expected_revision"`
+	BaselineMetrics     Metrics             `json:"baseline_metrics"`
+	ProductionMetrics   Metrics             `json:"production_metrics"`
+	AcceptancePassed    bool                `json:"acceptance_passed"`
+	SafetyViolations    int                 `json:"safety_violations"`
+	Status              string              `json:"status"`
+	Issues              []MonitoringIssue   `json:"issues"`
+	RollbackSuggestion  *RollbackSuggestion `json:"rollback_suggestion,omitempty"`
 }
 
 type CommandRunner interface {
@@ -151,6 +157,9 @@ func LoadExperimentReport(workspace, id string) (ExperimentReport, error) {
 	}
 	if report.Version != experimentVersion || report.ID != id {
 		return ExperimentReport{}, fmt.Errorf("invalid experiment report %q", id)
+	}
+	if err := ValidateExperimentReport(report); err != nil {
+		return ExperimentReport{}, fmt.Errorf("validate experiment report %q: %w", id, err)
 	}
 	return report, nil
 }
@@ -353,7 +362,59 @@ func LoadAdoption(workspace, id string) (Adoption, error) {
 	if adoption.Version != adoptionVersion || adoption.ID != id {
 		return Adoption{}, fmt.Errorf("invalid adoption %q", id)
 	}
+	if err := ValidateAdoption(workspace, adoption); err != nil {
+		return Adoption{}, fmt.Errorf("validate adoption %q: %w", id, err)
+	}
 	return adoption, nil
+}
+
+// ValidateAdoption resolves the immutable experiment and snapshots so an
+// adoption record cannot substitute a different candidate or rollback target.
+func ValidateAdoption(workspace string, adoption Adoption) error {
+	if adoption.Version != adoptionVersion {
+		return fmt.Errorf("unsupported adoption version %d", adoption.Version)
+	}
+	if err := validateArtifactID(adoption.ID); err != nil {
+		return fmt.Errorf("adoption id: %w", err)
+	}
+	if strings.TrimSpace(adoption.PullRequestURL) == "" || strings.TrimSpace(adoption.ChangeSummary) == "" || strings.TrimSpace(adoption.Team) == "" {
+		return fmt.Errorf("adoption team, pull request, and change summary are required")
+	}
+	if _, err := time.Parse(time.RFC3339, adoption.AdoptedAt); err != nil {
+		return fmt.Errorf("adoption adopted_at: %w", err)
+	}
+	report, err := LoadExperimentReport(workspace, adoption.ExperimentID)
+	if err != nil {
+		return err
+	}
+	if report.Status != "passed" || report.Decision != "eligible_for_review" {
+		return fmt.Errorf("adoption experiment is not eligible for review")
+	}
+	baseline, _, err := LoadBaselineSnapshot(workspace, report.Baseline.SnapshotID)
+	if err != nil {
+		return err
+	}
+	candidate, _, err := LoadCandidateSnapshot(workspace, report.Candidate.SnapshotID)
+	if err != nil {
+		return err
+	}
+	if adoption.BaselineSnapshotID != baseline.ID || adoption.CandidateSnapshotID != candidate.ID || adoption.RollbackRevision != baseline.DefinitionRevision || adoption.CandidateRevision != candidate.DefinitionRevision || !strings.EqualFold(adoption.Team, candidate.Team) || !strings.EqualFold(adoption.Team, baseline.Team) {
+		return fmt.Errorf("adoption snapshot bindings do not match experiment")
+	}
+	if !reflect.DeepEqual(adoption.BaselineMetrics, report.Baseline.Metrics) || !reflect.DeepEqual(adoption.CandidateMetrics, report.Candidate.Metrics) || adoption.IssueType != report.Benchmark.Category {
+		return fmt.Errorf("adoption evaluation evidence does not match experiment")
+	}
+	return nil
+}
+
+// AdoptionRevision returns the content digest used by cross-artifact refs.
+func AdoptionRevision(adoption Adoption) string {
+	data, err := json.Marshal(adoption)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // EvaluateMonitoring compares production telemetry with the baseline captured
@@ -368,8 +429,28 @@ func EvaluateMonitoring(adoption Adoption, production *Report, acceptancePassed 
 	if !strings.EqualFold(adoption.Team, production.Team) {
 		return MonitoringReport{}, fmt.Errorf("production report team %q does not match adoption team %q", production.Team, adoption.Team)
 	}
+	issues, status := monitoringOutcome(adoption.CandidateRevision, production.TeamRevisions, adoption.BaselineMetrics, production.Metrics, acceptancePassed, safetyViolations)
+	report := MonitoringReport{
+		Version: monitoringVersion, AdoptionID: adoption.ID, Team: adoption.Team, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		ProductionRunIDs: append([]string(nil), production.RunIDs...), ProductionRevisions: append([]string(nil), production.TeamRevisions...), ExpectedRevision: adoption.CandidateRevision,
+		BaselineMetrics: adoption.BaselineMetrics, ProductionMetrics: production.Metrics,
+		AcceptancePassed: acceptancePassed, SafetyViolations: safetyViolations, Status: status, Issues: issues,
+	}
+	if status == "degraded" {
+		report.RollbackSuggestion = &RollbackSuggestion{
+			AdoptionID: adoption.ID, Team: adoption.Team, BaselineSnapshotID: adoption.BaselineSnapshotID,
+			RollbackRevision: adoption.RollbackRevision, Reason: monitoringReason(issues),
+			Action: monitoringRollbackAction,
+		}
+	}
+	return report, nil
+}
+
+const monitoringRollbackAction = "Create a review patch from the immutable baseline snapshot and restore it through the normal PR workflow; do not reset or merge automatically."
+
+func monitoringOutcome(expectedRevision string, productionRevisions []string, baseline, production Metrics, acceptancePassed bool, safetyViolations int) ([]MonitoringIssue, string) {
 	issues := make([]MonitoringIssue, 0)
-	revisionMatches := contains(production.TeamRevisions, adoption.CandidateRevision)
+	revisionMatches := contains(productionRevisions, expectedRevision)
 	if !revisionMatches {
 		issues = append(issues, MonitoringIssue{Type: "revision_drift", Severity: "warning", Detail: "production report does not reference the adopted candidate revision"})
 	}
@@ -379,11 +460,11 @@ func EvaluateMonitoring(adoption Adoption, production *Report, acceptancePassed 
 	if !acceptancePassed {
 		issues = append(issues, MonitoringIssue{Type: "acceptance_regression", Severity: "critical", Detail: "production acceptance gate failed"})
 	}
-	if completionRate(production.Metrics) < completionRate(adoption.BaselineMetrics) {
-		issues = append(issues, MonitoringIssue{Type: "completion_regression", Severity: "warning", Detail: fmt.Sprintf("production completion %.2f%% is below baseline %.2f%%", completionRate(production.Metrics)*100, completionRate(adoption.BaselineMetrics)*100)})
+	if completionRate(production) < completionRate(baseline) {
+		issues = append(issues, MonitoringIssue{Type: "completion_regression", Severity: "warning", Detail: fmt.Sprintf("production completion %.2f%% is below baseline %.2f%%", completionRate(production)*100, completionRate(baseline)*100)})
 	}
-	if production.Metrics.Error > adoption.BaselineMetrics.Error {
-		issues = append(issues, MonitoringIssue{Type: "error_regression", Severity: "warning", Detail: fmt.Sprintf("production errors %d exceed baseline %d", production.Metrics.Error, adoption.BaselineMetrics.Error)})
+	if production.Error > baseline.Error {
+		issues = append(issues, MonitoringIssue{Type: "error_regression", Severity: "warning", Detail: fmt.Sprintf("production errors %d exceed baseline %d", production.Error, baseline.Error)})
 	}
 
 	status := "healthy"
@@ -396,20 +477,7 @@ func EvaluateMonitoring(adoption Adoption, production *Report, acceptancePassed 
 	if status == "healthy" && !revisionMatches {
 		status = "inconclusive"
 	}
-	report := MonitoringReport{
-		Version: monitoringVersion, AdoptionID: adoption.ID, Team: adoption.Team, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		ProductionRunIDs: append([]string(nil), production.RunIDs...), ExpectedRevision: adoption.CandidateRevision,
-		BaselineMetrics: adoption.BaselineMetrics, ProductionMetrics: production.Metrics,
-		AcceptancePassed: acceptancePassed, SafetyViolations: safetyViolations, Status: status, Issues: issues,
-	}
-	if status == "degraded" {
-		report.RollbackSuggestion = &RollbackSuggestion{
-			AdoptionID: adoption.ID, Team: adoption.Team, BaselineSnapshotID: adoption.BaselineSnapshotID,
-			RollbackRevision: adoption.RollbackRevision, Reason: monitoringReason(issues),
-			Action: "Create a review patch from the immutable baseline snapshot and restore it through the normal PR workflow; do not reset or merge automatically.",
-		}
-	}
-	return report, nil
+	return issues, status
 }
 
 func WriteMonitoringReport(workspace string, report MonitoringReport) (string, error) {
@@ -426,19 +494,38 @@ func WriteMonitoringReport(workspace string, report MonitoringReport) (string, e
 	if err := validateArtifactID(report.ID); err != nil {
 		return "", err
 	}
+	if err := ValidateMonitoringReport(report); err != nil {
+		return "", err
+	}
 	name := report.ID
 	jsonPath := filepath.Join(dir, name+".json")
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal monitoring report: %w", err)
 	}
-	if err := os.WriteFile(jsonPath, data, 0o644); err != nil {
+	if err := writeImmutableFile(jsonPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("write monitoring report: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(MonitoringMarkdown(report)), 0o644); err != nil {
+	if err := writeImmutableFile(filepath.Join(dir, name+".md"), []byte(MonitoringMarkdown(report)), 0o644); err != nil {
 		return "", fmt.Errorf("write monitoring markdown: %w", err)
 	}
 	return jsonPath, nil
+}
+
+func writeImmutableFile(path string, data []byte, perm os.FileMode) error {
+	if err := team.AtomicCreateFile(path, data, perm); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		current, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if string(current) != string(data) {
+			return fmt.Errorf("immutable artifact %s already exists with different content", path)
+		}
+	}
+	return nil
 }
 
 func LoadMonitoringReport(workspace, id string) (MonitoringReport, error) {
@@ -465,7 +552,55 @@ func LoadMonitoringReport(workspace, id string) (MonitoringReport, error) {
 	if report.Version != monitoringVersion || report.ID != id {
 		return MonitoringReport{}, fmt.Errorf("invalid monitoring report %q", id)
 	}
+	if err := ValidateMonitoringReport(report); err != nil {
+		return MonitoringReport{}, fmt.Errorf("validate monitoring report %q: %w", id, err)
+	}
 	return report, nil
+}
+
+// ValidateMonitoringReport rejects edited lifecycle outcomes and rollback
+// suggestions that no longer match the report's adoption identity.
+func ValidateMonitoringReport(report MonitoringReport) error {
+	if report.Version != monitoringVersion {
+		return fmt.Errorf("unsupported monitoring report version %d", report.Version)
+	}
+	if err := validateArtifactID(report.ID); err != nil {
+		return fmt.Errorf("monitoring id: %w", err)
+	}
+	if err := validateArtifactID(report.AdoptionID); err != nil {
+		return fmt.Errorf("monitoring adoption: %w", err)
+	}
+	if strings.TrimSpace(report.Team) == "" || strings.TrimSpace(report.ExpectedRevision) == "" || len(report.ProductionRunIDs) == 0 || len(report.ProductionRevisions) == 0 {
+		return fmt.Errorf("monitoring identity and production evidence are required")
+	}
+	if report.SafetyViolations < 0 {
+		return fmt.Errorf("monitoring safety violations cannot be negative")
+	}
+	if _, err := time.Parse(time.RFC3339, report.GeneratedAt); err != nil {
+		return fmt.Errorf("monitoring generated_at: %w", err)
+	}
+	wantIssues, wantStatus := monitoringOutcome(report.ExpectedRevision, report.ProductionRevisions, report.BaselineMetrics, report.ProductionMetrics, report.AcceptancePassed, report.SafetyViolations)
+	if !slices.Equal(report.Issues, wantIssues) || report.Status != wantStatus {
+		return fmt.Errorf("monitoring outcome does not match deterministic evidence")
+	}
+	switch report.Status {
+	case "healthy", "inconclusive":
+		if report.RollbackSuggestion != nil {
+			return fmt.Errorf("status %q cannot recommend rollback", report.Status)
+		}
+	case "degraded":
+		if report.RollbackSuggestion == nil {
+			return fmt.Errorf("degraded monitoring requires a rollback suggestion")
+		}
+	default:
+		return fmt.Errorf("unsupported monitoring status %q", report.Status)
+	}
+	if suggestion := report.RollbackSuggestion; suggestion != nil {
+		if suggestion.AdoptionID != report.AdoptionID || !strings.EqualFold(suggestion.Team, report.Team) || suggestion.BaselineSnapshotID == "" || suggestion.RollbackRevision == "" || suggestion.Reason != monitoringReason(report.Issues) || suggestion.Action != monitoringRollbackAction {
+			return fmt.Errorf("rollback suggestion does not match monitoring identity")
+		}
+	}
+	return nil
 }
 
 func MonitoringReportRevision(report MonitoringReport) string {

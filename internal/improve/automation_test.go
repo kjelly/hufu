@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func TestPullRequestPlanAndRunnerNeverMerge(t *testing.T) {
 
 func TestAdoptionStoresKnowledgeAndMonitoringSuggestsRollback(t *testing.T) {
 	workspace, experiment, candidate := createAutomationExperiment(t)
-	adoption, _, err := CreateAdoption(workspace, "adopt-1", experiment.ID, "https://github.com/acme/repo/pull/42", "Require focused verification before reporting completion.", []string{"task-type:refactor"})
+	adoption, adoptionPath, err := CreateAdoption(workspace, "adopt-1", experiment.ID, "https://github.com/acme/repo/pull/42", "Require focused verification before reporting completion.", []string{"task-type:refactor"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +77,7 @@ func TestAdoptionStoresKnowledgeAndMonitoringSuggestsRollback(t *testing.T) {
 	if monitoring.RollbackSuggestion.RollbackRevision != adoption.RollbackRevision {
 		t.Fatalf("rollback suggestion = %+v", monitoring.RollbackSuggestion)
 	}
+	monitoring.ID = "monitor-fixed"
 	path, err := WriteMonitoringReport(workspace, monitoring)
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +85,32 @@ func TestAdoptionStoresKnowledgeAndMonitoringSuggestsRollback(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := WriteMonitoringReport(workspace, monitoring); err != nil {
+		t.Fatalf("idempotent monitoring write: %v", err)
+	}
+	mutated := monitoring
+	mutated.Status = "healthy"
+	if _, err := WriteMonitoringReport(workspace, mutated); err == nil {
+		t.Fatal("monitoring report overwrite was accepted")
+	}
+	loaded, err := LoadMonitoringReport(workspace, monitoring.ID)
+	if err != nil || loaded.Status != monitoring.Status {
+		t.Fatalf("loaded monitoring = %#v, %v", loaded, err)
+	}
 	if strings.Contains(MonitoringMarkdown(monitoring), "Implement the feature") {
 		t.Fatal("monitoring report must not include benchmark prompts")
+	}
+	tamperedAdoption := adoption
+	tamperedAdoption.RollbackRevision = "attacker-selected-revision"
+	data, err := json.Marshal(tamperedAdoption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(adoptionPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAdoption(workspace, adoption.ID); err == nil {
+		t.Fatal("adoption with a substituted rollback revision was accepted")
 	}
 }
 
@@ -105,11 +131,13 @@ func createAutomationExperiment(t *testing.T) (string, ExperimentReport, TeamSna
 	if err != nil {
 		t.Fatal(err)
 	}
-	experiment := ExperimentReport{
-		Version: experimentVersion, ID: "exp-1", Benchmark: BenchmarkRef{Name: "refactor-smoke", Revision: "fixture-revision", Category: "refactor", Cases: 2},
-		Baseline:  ExperimentArm{SnapshotID: baseline.ID, DefinitionRevision: baseline.DefinitionRevision, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 100}},
-		Candidate: ExperimentArm{SnapshotID: candidate.ID, DefinitionRevision: candidate.DefinitionRevision, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 90}},
-		Status:    "passed", Decision: "eligible_for_review",
+	fixture := BenchmarkFixture{Version: benchmarkVersion, Name: "refactor-smoke", Team: "dev", Category: "refactor", Cases: []BenchmarkCase{{ID: "one", Type: "happy", Prompt: "one"}, {ID: "two", Type: "edge", Prompt: "two"}}}
+	experiment, err := EvaluateExperiment("exp-1", fixture,
+		ExperimentInput{Snapshot: baseline, Report: &Report{Team: "dev", RunIDs: []string{"base-run"}, TeamRevisions: []string{baseline.DefinitionRevision}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 100}}, AcceptancePassed: true},
+		ExperimentInput{Snapshot: candidate, Report: &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 90}}, AcceptancePassed: true},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := WriteExperimentReport(workspace, experiment); err != nil {
 		t.Fatal(err)

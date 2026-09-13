@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ type ExperimentArm struct {
 	DefinitionRevision string       `json:"definition_revision"`
 	ContentRevision    string       `json:"content_revision"`
 	MemoryPolicy       *ArtifactRef `json:"memory_policy,omitempty"`
+	ContextCandidate   *ArtifactRef `json:"context_candidate,omitempty"`
 	RunIDs             []string     `json:"run_ids"`
 	Metrics            Metrics      `json:"metrics"`
 	AcceptancePassed   bool         `json:"acceptance_passed"`
@@ -102,6 +104,7 @@ type ExperimentInput struct {
 	Snapshot         TeamSnapshot
 	Report           *Report
 	MemoryPolicy     *ArtifactRef
+	ContextCandidate *ArtifactRef
 	AcceptancePassed bool
 	SafetyViolations int
 }
@@ -292,8 +295,36 @@ func LoadSnapshot(workspace, kind, id string) (TeamSnapshot, string, error) {
 	if snapshot.Version != snapshotVersion || snapshot.ID != id || snapshot.Kind != kind {
 		return TeamSnapshot{}, "", fmt.Errorf("invalid %s snapshot %q", kind, id)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "team")); err != nil {
+	teamDir := filepath.Join(dir, "team")
+	if _, err := os.Stat(teamDir); err != nil {
 		return TeamSnapshot{}, "", fmt.Errorf("snapshot team directory: %w", err)
+	}
+	contentRevision, err := directoryRevision(teamDir)
+	if err != nil {
+		return TeamSnapshot{}, "", fmt.Errorf("validate snapshot content: %w", err)
+	}
+	if snapshot.DefinitionRevision != definitionRevision(teamDir) || snapshot.ContentRevision != contentRevision {
+		return TeamSnapshot{}, "", fmt.Errorf("%s snapshot %q failed content revision validation", kind, id)
+	}
+	if _, err := time.Parse(time.RFC3339, snapshot.CreatedAt); err != nil {
+		return TeamSnapshot{}, "", fmt.Errorf("%s snapshot %q has invalid created_at: %w", kind, id, err)
+	}
+	if kind == baselineSnapshotKind {
+		if snapshot.BaselineID != "" || snapshot.PatchRevision != "" {
+			return TeamSnapshot{}, "", fmt.Errorf("baseline snapshot %q has candidate-only bindings", id)
+		}
+		return snapshot, dir, nil
+	}
+	if snapshot.BaselineID == "" || snapshot.PatchRevision == "" {
+		return TeamSnapshot{}, "", fmt.Errorf("candidate snapshot %q is missing baseline or patch binding", id)
+	}
+	patch, err := os.ReadFile(filepath.Join(dir, "candidate.patch"))
+	if err != nil {
+		return TeamSnapshot{}, "", fmt.Errorf("candidate snapshot patch: %w", err)
+	}
+	patchSum := sha256.Sum256(patch)
+	if snapshot.PatchRevision != fmt.Sprintf("%x", patchSum[:]) {
+		return TeamSnapshot{}, "", fmt.Errorf("candidate snapshot %q failed patch revision validation", id)
 	}
 	return snapshot, dir, nil
 }
@@ -393,7 +424,17 @@ func EvaluateExperiment(id string, fixture BenchmarkFixture, baseline, candidate
 
 	baselineArm := experimentArm(baseline)
 	candidateArm := experimentArm(candidate)
-	gates := []GateResult{
+	gates := experimentGates(baselineArm, candidateArm)
+	status, decision := experimentOutcome(gates)
+	return ExperimentReport{
+		Version: experimentVersion, ID: id, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Benchmark: BenchmarkRef{Name: fixture.Name, Revision: BenchmarkRevision(fixture), Category: fixture.Category, Cases: len(fixture.Cases)},
+		Baseline:  baselineArm, Candidate: candidateArm, Gates: gates, Status: status, Decision: decision,
+	}, nil
+}
+
+func experimentGates(baseline, candidate ExperimentArm) []GateResult {
+	return []GateResult{
 		{
 			Name: "baseline_control", Passed: baseline.AcceptancePassed,
 			Expected: "baseline acceptance passed", Observed: boolText(baseline.AcceptancePassed),
@@ -407,37 +448,39 @@ func EvaluateExperiment(id string, fixture BenchmarkFixture, baseline, candidate
 			Expected: "candidate acceptance passed", Observed: boolText(candidate.AcceptancePassed),
 		},
 		{
-			Name: "completion_non_regression", Passed: completionRate(candidate.Report.Metrics) >= completionRate(baseline.Report.Metrics),
-			Expected: fmt.Sprintf(">= %.2f%% baseline completion", completionRate(baseline.Report.Metrics)*100),
-			Observed: fmt.Sprintf("%.2f%% candidate completion", completionRate(candidate.Report.Metrics)*100),
+			Name: "completion_non_regression", Passed: completionRate(candidate.Metrics) >= completionRate(baseline.Metrics),
+			Expected: fmt.Sprintf(">= %.2f%% baseline completion", completionRate(baseline.Metrics)*100),
+			Observed: fmt.Sprintf("%.2f%% candidate completion", completionRate(candidate.Metrics)*100),
 		},
 		{
-			Name: "error_non_regression", Passed: candidate.Report.Metrics.Error <= baseline.Report.Metrics.Error,
-			Expected: fmt.Sprintf("<= %d baseline errors", baseline.Report.Metrics.Error),
-			Observed: fmt.Sprintf("%d candidate errors", candidate.Report.Metrics.Error),
+			Name: "error_non_regression", Passed: candidate.Metrics.Error <= baseline.Metrics.Error,
+			Expected: fmt.Sprintf("<= %d baseline errors", baseline.Metrics.Error),
+			Observed: fmt.Sprintf("%d candidate errors", candidate.Metrics.Error),
 		},
 		{
-			Name: "memory_harmful_rate", Passed: candidate.Report.Metrics.MemoryHarmfulUseRate == 0,
-			Expected: "0 harmful memory uses", Observed: fmt.Sprintf("%.4f harmful use rate", candidate.Report.Metrics.MemoryHarmfulUseRate),
+			Name: "memory_harmful_rate", Passed: candidate.Metrics.MemoryHarmfulUseRate == 0,
+			Expected: "0 harmful memory uses", Observed: fmt.Sprintf("%.4f harmful use rate", candidate.Metrics.MemoryHarmfulUseRate),
 		},
 		{
-			Name: "memory_attribution_coverage", Passed: candidate.Report.Metrics.MemoryAttributionCoverage >= baseline.Report.Metrics.MemoryAttributionCoverage,
-			Expected: fmt.Sprintf(">= %.4f baseline coverage", baseline.Report.Metrics.MemoryAttributionCoverage), Observed: fmt.Sprintf("%.4f candidate coverage", candidate.Report.Metrics.MemoryAttributionCoverage),
+			Name: "memory_attribution_coverage", Passed: candidate.Metrics.MemoryAttributionCoverage >= baseline.Metrics.MemoryAttributionCoverage,
+			Expected: fmt.Sprintf(">= %.4f baseline coverage", baseline.Metrics.MemoryAttributionCoverage), Observed: fmt.Sprintf("%.4f candidate coverage", candidate.Metrics.MemoryAttributionCoverage),
 		},
 		{
-			Name: "memory_token_overhead", Passed: candidate.Report.Metrics.MemoryTokenOverhead <= math.Max(baseline.Report.Metrics.MemoryTokenOverhead*1.10, 0.10),
-			Expected: "<= 10% overhead or <= 110% of baseline", Observed: fmt.Sprintf("%.4f candidate overhead", candidate.Report.Metrics.MemoryTokenOverhead),
+			Name: "memory_token_overhead", Passed: candidate.Metrics.MemoryTokenOverhead <= math.Max(baseline.Metrics.MemoryTokenOverhead*1.10, 0.10),
+			Expected: "<= 10% overhead or <= 110% of baseline", Observed: fmt.Sprintf("%.4f candidate overhead", candidate.Metrics.MemoryTokenOverhead),
 		},
 		{
-			Name: "memory_stale_rate", Passed: candidate.Report.Metrics.MemoryStaleRetrievalRate <= baseline.Report.Metrics.MemoryStaleRetrievalRate,
-			Expected: fmt.Sprintf("<= %.4f baseline stale rate", baseline.Report.Metrics.MemoryStaleRetrievalRate), Observed: fmt.Sprintf("%.4f candidate stale rate", candidate.Report.Metrics.MemoryStaleRetrievalRate),
+			Name: "memory_stale_rate", Passed: candidate.Metrics.MemoryStaleRetrievalRate <= baseline.Metrics.MemoryStaleRetrievalRate,
+			Expected: fmt.Sprintf("<= %.4f baseline stale rate", baseline.Metrics.MemoryStaleRetrievalRate), Observed: fmt.Sprintf("%.4f candidate stale rate", candidate.Metrics.MemoryStaleRetrievalRate),
 		},
 		{
-			Name: "retry_non_regression", Passed: candidate.Report.Metrics.RetriedTasks <= baseline.Report.Metrics.RetriedTasks,
-			Expected: fmt.Sprintf("<= %d baseline retried tasks", baseline.Report.Metrics.RetriedTasks), Observed: fmt.Sprintf("%d candidate retried tasks", candidate.Report.Metrics.RetriedTasks),
+			Name: "retry_non_regression", Passed: candidate.Metrics.RetriedTasks <= baseline.Metrics.RetriedTasks,
+			Expected: fmt.Sprintf("<= %d baseline retried tasks", baseline.Metrics.RetriedTasks), Observed: fmt.Sprintf("%d candidate retried tasks", candidate.Metrics.RetriedTasks),
 		},
 	}
+}
 
+func experimentOutcome(gates []GateResult) (string, string) {
 	status, decision := "passed", "eligible_for_review"
 	for _, gate := range gates {
 		if gate.Passed {
@@ -449,15 +492,11 @@ func EvaluateExperiment(id string, fixture BenchmarkFixture, baseline, candidate
 		}
 		status, decision = "failed", "reject"
 	}
-	return ExperimentReport{
-		Version: experimentVersion, ID: id, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Benchmark: BenchmarkRef{Name: fixture.Name, Revision: BenchmarkRevision(fixture), Category: fixture.Category, Cases: len(fixture.Cases)},
-		Baseline:  baselineArm, Candidate: candidateArm, Gates: gates, Status: status, Decision: decision,
-	}, nil
+	return status, decision
 }
 
 func WriteExperimentReport(workspace string, report ExperimentReport) (string, error) {
-	if err := validateArtifactID(report.ID); err != nil {
+	if err := ValidateExperimentReport(report); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(ImprovementRoot(workspace), "experiments", report.ID)
@@ -476,6 +515,60 @@ func WriteExperimentReport(workspace string, report ExperimentReport) (string, e
 		return "", fmt.Errorf("write experiment markdown: %w", err)
 	}
 	return jsonPath, nil
+}
+
+// ValidateExperimentReport recomputes every deterministic gate and outcome so
+// edited report JSON cannot promote itself by changing status or decision.
+func ValidateExperimentReport(report ExperimentReport) error {
+	if report.Version != experimentVersion {
+		return fmt.Errorf("unsupported experiment report version %d", report.Version)
+	}
+	if err := validateArtifactID(report.ID); err != nil {
+		return fmt.Errorf("experiment id: %w", err)
+	}
+	if _, err := time.Parse(time.RFC3339, report.GeneratedAt); err != nil {
+		return fmt.Errorf("experiment generated_at: %w", err)
+	}
+	if err := validateArtifactID(report.Benchmark.Name); err != nil || report.Benchmark.Revision == "" || report.Benchmark.Category == "" || report.Benchmark.Cases < 1 {
+		return fmt.Errorf("experiment benchmark binding is incomplete")
+	}
+	for _, item := range []struct {
+		label string
+		arm   ExperimentArm
+	}{{"baseline", report.Baseline}, {"candidate", report.Candidate}} {
+		label, arm := item.label, item.arm
+		if err := validateArtifactID(arm.SnapshotID); err != nil || arm.DefinitionRevision == "" || arm.ContentRevision == "" || len(arm.RunIDs) == 0 {
+			return fmt.Errorf("experiment %s arm identity is incomplete", label)
+		}
+		if arm.Metrics.TotalTasks < report.Benchmark.Cases || arm.SafetyViolations < 0 {
+			return fmt.Errorf("experiment %s arm evidence is incomplete", label)
+		}
+		if arm.MemoryPolicy != nil {
+			if err := validateArtifactRef(*arm.MemoryPolicy); err != nil || arm.MemoryPolicy.Kind != "memory_policy_snapshot" {
+				return fmt.Errorf("experiment %s arm has invalid memory policy", label)
+			}
+		}
+		if arm.ContextCandidate != nil {
+			if err := validateArtifactRef(*arm.ContextCandidate); err != nil || arm.ContextCandidate.Kind != "context_item" {
+				return fmt.Errorf("experiment %s arm has invalid context candidate", label)
+			}
+		}
+	}
+	if err := validateMemoryPolicyBindings(report.Baseline.MemoryPolicy, report.Candidate.MemoryPolicy); err != nil {
+		return err
+	}
+	if report.Baseline.ContextCandidate != nil {
+		return fmt.Errorf("baseline experiment arm cannot carry a context candidate")
+	}
+	wantGates := experimentGates(report.Baseline, report.Candidate)
+	if !slices.Equal(report.Gates, wantGates) {
+		return fmt.Errorf("experiment gates do not match deterministic evidence")
+	}
+	wantStatus, wantDecision := experimentOutcome(wantGates)
+	if report.Status != wantStatus || report.Decision != wantDecision {
+		return fmt.Errorf("experiment outcome does not match deterministic gates")
+	}
+	return nil
 }
 
 func ExperimentMarkdown(report ExperimentReport) string {
@@ -578,6 +671,17 @@ func validateExperimentInput(label string, fixture BenchmarkFixture, input Exper
 		if err := validateArtifactRef(*input.MemoryPolicy); err != nil || input.MemoryPolicy.Kind != "memory_policy_snapshot" {
 			return fmt.Errorf("%s memory policy must reference a memory_policy_snapshot", label)
 		}
+		if len(input.Report.MemoryPolicyVersions) != 1 || input.Report.MemoryPolicyVersions[0] != input.MemoryPolicy.ID {
+			return fmt.Errorf("%s report does not prove execution with memory policy %q", label, input.MemoryPolicy.ID)
+		}
+	}
+	if input.ContextCandidate != nil {
+		if err := validateArtifactRef(*input.ContextCandidate); err != nil || input.ContextCandidate.Kind != "context_item" {
+			return fmt.Errorf("%s context candidate must reference a context_item", label)
+		}
+		if !slices.Contains(input.Report.AppliedContextItemIDs, input.ContextCandidate.ID) {
+			return fmt.Errorf("%s report does not prove applied context item %q", label, input.ContextCandidate.ID)
+		}
 	}
 	return nil
 }
@@ -592,8 +696,9 @@ func validateMemoryPolicyBindings(baseline, candidate *ArtifactRef) error {
 func experimentArm(input ExperimentInput) ExperimentArm {
 	return ExperimentArm{
 		SnapshotID: input.Snapshot.ID, DefinitionRevision: input.Snapshot.DefinitionRevision, ContentRevision: input.Snapshot.ContentRevision,
-		MemoryPolicy: cloneArtifactRef(input.MemoryPolicy),
-		RunIDs:       append([]string(nil), input.Report.RunIDs...), Metrics: input.Report.Metrics,
+		MemoryPolicy:     cloneArtifactRef(input.MemoryPolicy),
+		ContextCandidate: cloneArtifactRef(input.ContextCandidate),
+		RunIDs:           append([]string(nil), input.Report.RunIDs...), Metrics: input.Report.Metrics,
 		AcceptancePassed: input.AcceptancePassed, SafetyViolations: input.SafetyViolations,
 	}
 }
@@ -620,6 +725,21 @@ func ValidateMemoryPolicyExperimentReport(report ExperimentReport, baseline, can
 	}
 	if *report.Baseline.MemoryPolicy != baseline || *report.Candidate.MemoryPolicy != candidate {
 		return fmt.Errorf("experiment report memory policy bindings do not match expected revisions")
+	}
+	return nil
+}
+
+// ValidateContextCandidateExperimentReport ensures the candidate arm carries
+// the exact context item that canonical runtime evidence says was applied.
+func ValidateContextCandidateExperimentReport(report ExperimentReport, candidate ArtifactRef) error {
+	if err := validateArtifactRef(candidate); err != nil || candidate.Kind != "context_item" {
+		return fmt.Errorf("invalid context candidate ref")
+	}
+	if report.Baseline.ContextCandidate != nil || report.Candidate.ContextCandidate == nil {
+		return fmt.Errorf("experiment report has invalid context candidate bindings")
+	}
+	if *report.Candidate.ContextCandidate != candidate {
+		return fmt.Errorf("experiment report context candidate does not match expected revision")
 	}
 	return nil
 }

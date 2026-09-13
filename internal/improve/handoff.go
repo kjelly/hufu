@@ -236,14 +236,46 @@ func validateHandoffStatusBindings(h ImprovementHandoff) error {
 	if requiresEvaluation(h.Status) && (h.Experiment == nil || h.Evaluation.Report == nil) {
 		return fmt.Errorf("status %q requires an experiment and report", h.Status)
 	}
-	if h.Status == HandoffApproved && h.Evaluation.Decision != "eligible_for_review" {
-		return fmt.Errorf("approved handoff requires eligible_for_review decision")
+	if h.Experiment != nil && (h.Evaluation.Report == nil || *h.Experiment != *h.Evaluation.Report) {
+		return fmt.Errorf("experiment and evaluation report refs must match")
+	}
+	if (h.Status == HandoffEligibleForReview || h.Status == HandoffApproved || requiresAdoption(h.Status)) && h.Evaluation.Decision != "eligible_for_review" {
+		return fmt.Errorf("status %q requires eligible_for_review decision", h.Status)
 	}
 	if requiresAdoption(h.Status) && h.Adoption == nil {
 		return fmt.Errorf("status %q requires adoption evidence", h.Status)
 	}
 	if h.Status == HandoffRollbackRecommended && len(h.Monitoring) == 0 {
 		return fmt.Errorf("rollback_recommended requires monitoring evidence")
+	}
+	if err := validateNoPrematureHandoffBindings(h); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNoPrematureHandoffBindings(h ImprovementHandoff) error {
+	switch h.Status {
+	case HandoffProposed:
+		if h.Candidate != nil || h.Benchmark != nil || h.Experiment != nil || h.Adoption != nil || len(h.Monitoring) > 0 {
+			return fmt.Errorf("proposed handoff cannot contain later lifecycle bindings")
+		}
+	case HandoffCandidateReady:
+		if h.Benchmark != nil || h.Experiment != nil || h.Adoption != nil || len(h.Monitoring) > 0 {
+			return fmt.Errorf("candidate_ready handoff cannot contain evaluation or adoption bindings")
+		}
+	case HandoffBenchmarkBound:
+		if h.Experiment != nil || h.Adoption != nil || len(h.Monitoring) > 0 {
+			return fmt.Errorf("benchmark_bound handoff cannot contain evaluation or adoption bindings")
+		}
+	case HandoffEvaluated, HandoffEligibleForReview, HandoffApproved:
+		if h.Adoption != nil || len(h.Monitoring) > 0 {
+			return fmt.Errorf("status %q cannot contain adoption or monitoring bindings", h.Status)
+		}
+	case HandoffAdopted:
+		if len(h.Monitoring) > 0 {
+			return fmt.Errorf("adopted handoff cannot contain monitoring bindings")
+		}
 	}
 	return nil
 }
@@ -348,4 +380,35 @@ func validHandoffTransition(from, to HandoffStatus) bool {
 	default:
 		return false
 	}
+}
+
+func validateBoundHandoffRefs(current, next ImprovementHandoff) error {
+	if current.Candidate != nil && (next.Candidate == nil || *current.Candidate != *next.Candidate) {
+		return fmt.Errorf("handoff candidate binding is immutable")
+	}
+	if current.Benchmark != nil && (next.Benchmark == nil || *current.Benchmark != *next.Benchmark) {
+		return fmt.Errorf("handoff benchmark binding is immutable")
+	}
+	if current.Experiment != nil && (next.Experiment == nil || *current.Experiment != *next.Experiment) {
+		return fmt.Errorf("handoff experiment binding is immutable")
+	}
+	if current.Evaluation.Report != nil {
+		if next.Evaluation.Report == nil || *current.Evaluation.Report != *next.Evaluation.Report || current.Evaluation.Decision != next.Evaluation.Decision || current.Evaluation.Status != next.Evaluation.Status {
+			return fmt.Errorf("handoff evaluation binding is immutable")
+		}
+	}
+	if current.Adoption != nil && (next.Adoption == nil || *current.Adoption != *next.Adoption) {
+		return fmt.Errorf("handoff adoption binding is immutable")
+	}
+	if len(next.Monitoring) < len(current.Monitoring) || !slices.Equal(next.Monitoring[:len(current.Monitoring)], current.Monitoring) {
+		return fmt.Errorf("handoff monitoring bindings are append-only")
+	}
+	seen := make(map[ArtifactRef]struct{}, len(next.Monitoring))
+	for _, ref := range next.Monitoring {
+		if _, exists := seen[ref]; exists {
+			return fmt.Errorf("handoff monitoring binding %s:%s is duplicated", ref.Kind, ref.ID)
+		}
+		seen[ref] = struct{}{}
+	}
+	return nil
 }

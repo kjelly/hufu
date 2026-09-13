@@ -90,6 +90,8 @@ CREATE TEMP TABLE memory_events (
     timestamp_raw     TEXT NOT NULL DEFAULT '',
     timestamp_unix_ns INTEGER,
     retrieval_id      TEXT NOT NULL DEFAULT '',
+    context_item_id   TEXT NOT NULL DEFAULT '',
+    policy_version    TEXT NOT NULL DEFAULT '',
     reason_code       TEXT NOT NULL DEFAULT '',
     token_count       INTEGER NOT NULL DEFAULT 0,
     disposition       TEXT NOT NULL DEFAULT '',

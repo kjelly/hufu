@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,12 @@ func TestBenchmarkAndSnapshotsCreateImmutableArtifacts(t *testing.T) {
 	if err != nil || loadedBaseline.ContentRevision != baseline.ContentRevision {
 		t.Fatalf("loaded baseline = %+v, err = %v", loadedBaseline, err)
 	}
+	if err := os.WriteFile(filepath.Join(candidateDir, "team", "developer.md"), []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadCandidateSnapshot(workspace, candidate.ID); err == nil {
+		t.Fatal("candidate snapshot with edited team content was accepted")
+	}
 }
 
 func TestEvaluateExperimentUsesHardGatesAndWritesReviewOnlyReport(t *testing.T) {
@@ -77,8 +84,8 @@ func TestEvaluateExperimentUsesHardGatesAndWritesReviewOnlyReport(t *testing.T) 
 	}
 	baseline := TeamSnapshot{Version: snapshotVersion, ID: "base-1", Kind: baselineSnapshotKind, Team: "dev", DefinitionRevision: "base-rev", ContentRevision: "base-content"}
 	candidate := TeamSnapshot{Version: snapshotVersion, ID: "candidate-1", Kind: candidateSnapshotKind, Team: "dev", DefinitionRevision: "candidate-rev", ContentRevision: "candidate-content", BaselineID: "base-1"}
-	baselineReport := &Report{Team: "dev", RunIDs: []string{"base-run"}, TeamRevisions: []string{"base-rev"}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 100}}
-	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{"candidate-rev"}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 90}}
+	baselineReport := &Report{Team: "dev", RunIDs: []string{"base-run"}, TeamRevisions: []string{"base-rev"}, MemoryPolicyVersions: []string{"base-policy"}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 100}}
+	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{"candidate-rev"}, MemoryPolicyVersions: []string{"candidate-policy"}, Metrics: Metrics{TotalTasks: 2, Done: 2, TotalTokens: 90}}
 
 	report, err := EvaluateExperiment("exp-1", fixture,
 		ExperimentInput{Snapshot: baseline, Report: baselineReport, MemoryPolicy: &ArtifactRef{Kind: "memory_policy_snapshot", ID: "base-policy", Revision: "base-policy-rev"}, AcceptancePassed: true},
@@ -122,6 +129,44 @@ func TestEvaluateExperimentUsesHardGatesAndWritesReviewOnlyReport(t *testing.T) 
 	}
 	if _, err := WriteExperimentReport(workspace, report); err == nil {
 		t.Fatal("expected immutable experiment report to reject overwrite")
+	}
+	tampered := report
+	tampered.Status = "failed"
+	data, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadExperimentReport(workspace, report.ID); err == nil {
+		t.Fatal("tampered experiment outcome was accepted")
+	}
+}
+
+func TestEvaluateExperimentBindsAppliedContextCandidate(t *testing.T) {
+	fixture := BenchmarkFixture{Name: "context-smoke", Team: "dev", Category: "context", Cases: []BenchmarkCase{{ID: "case", Type: "happy", Prompt: "Use confirmed context."}}}
+	baseline := TeamSnapshot{Version: snapshotVersion, ID: "base", Kind: baselineSnapshotKind, Team: "dev", DefinitionRevision: "base-rev", ContentRevision: "base-content"}
+	candidate := TeamSnapshot{Version: snapshotVersion, ID: "candidate", Kind: candidateSnapshotKind, Team: "dev", DefinitionRevision: "candidate-rev", ContentRevision: "candidate-content", BaselineID: baseline.ID}
+	contextRef := ArtifactRef{Kind: "context_item", ID: "context-candidate", Revision: "context-revision"}
+	baselineReport := &Report{Team: "dev", RunIDs: []string{"base-run"}, TeamRevisions: []string{baseline.DefinitionRevision}, Metrics: Metrics{TotalTasks: 1, Done: 1}}
+	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, AppliedContextItemIDs: []string{contextRef.ID}, Metrics: Metrics{TotalTasks: 1, Done: 1}}
+	report, err := EvaluateExperiment("context-experiment", fixture,
+		ExperimentInput{Snapshot: baseline, Report: baselineReport, AcceptancePassed: true},
+		ExperimentInput{Snapshot: candidate, Report: candidateReport, ContextCandidate: &contextRef, AcceptancePassed: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateContextCandidateExperimentReport(report, contextRef); err != nil {
+		t.Fatal(err)
+	}
+	candidateReport.AppliedContextItemIDs = nil
+	if _, err := EvaluateExperiment("missing-context-evidence", fixture,
+		ExperimentInput{Snapshot: baseline, Report: baselineReport, AcceptancePassed: true},
+		ExperimentInput{Snapshot: candidate, Report: candidateReport, ContextCandidate: &contextRef, AcceptancePassed: true},
+	); err == nil {
+		t.Fatal("context candidate without runtime usage evidence was accepted")
 	}
 }
 
