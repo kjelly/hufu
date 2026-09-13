@@ -24,7 +24,7 @@ worker tool call
   -> sliding windows (預設 3–10 steps)
   -> frequency gate (預設至少 5 次)
   -> parameter normalization
-  -> optional sidecar semantic grouping
+  -> sidecar semantic grouping and parameter qualification
   -> quality/candidate cap
   -> draft review flow
   -> atomic replace <workspace>/skills/patterns.json
@@ -38,7 +38,9 @@ detector 內部會保留 normalized parameters 供草稿生成，但 projection 
 
 ### Sidecar 語意分組
 
-provider execution boundary 啟動且 sidecar 可用時，coordinator 會將 sidecar 接到 detector，以批次語意分析協助合併相近 candidate。sidecar 不可用、timeout 或分析失敗時，偵測會退回 deterministic 的工具序列結果；因此 sidecar 是增強功能，不是 projection 或 graph command 的讀取依賴。
+provider execution boundary 啟動且 sidecar 可用時，coordinator 會將 sidecar 接到 detector，以批次語意分析協助合併相近 candidate，並評估參數能否泛化。candidate qualification 需要 sidecar；sidecar 不可用時本次評估不會產生 candidate。若個別 sidecar 分析 timeout 或失敗，該分析會依 detector 的 fail-closed 規則退回、降分或排除 candidate，不保證保留 deterministic 工具序列結果。
+
+已持久化的 projection 與 `hufu skill graph` 不需要 sidecar：graph command 只讀取最新成功寫入的 `patterns.json`，不會呼叫 provider 或重新評估 candidate。
 
 ## 草稿生命週期
 
@@ -48,7 +50,7 @@ provider execution boundary 啟動且 sidecar 可用時，coordinator 會將 sid
 <team-dir>/skills/drafts/<name>/SKILL.md
 ```
 
-內建 default team 的 `<team-dir>` 等於 workspace。具名 team 則是已解析的 team directory；若要用 lifecycle CLI 操作該目錄，可明確傳入 `--workspace <team-dir>`。
+內建 default team 的 `<team-dir>` 等於 workspace。具名 team 則是已解析的 team directory；lifecycle CLI 可用 `--team <name>` 經由和執行期相同的 `TeamRegistry` 搜尋規則定位。未指定 `--team` 時保留 workspace-based 行為；必要時仍可用 `--workspace <team-dir>` 明確指定目錄。
 
 高信心 candidate 可自動寫成草稿，其餘 candidate 先經使用者選擇。兩種路徑都只建立 draft，不會自動 publication。`DiscoverSkills(..., false)` 是提供給模型的預設 discovery 路徑，會排除 `skills/drafts/`；只有明確 promotion 後，技能才進入正式目錄。
 
@@ -58,29 +60,35 @@ provider execution boundary 啟動且 sidecar 可用時，coordinator 會將 sid
 # 列出正式技能與草稿；草稿會標記為 [draft]
 hufu skill list
 hufu skill list --drafts-only
+hufu skill list --team my-team --drafts-only
 
 # 顯示草稿的路徑與內容；不會開 editor，也不會 promotion
 hufu skill review draft-view-edit-bash
+hufu skill review draft-view-edit-bash --team my-team
 
 # 人工審查後，將 skills/drafts/<name> 移到 skills/<name>
 hufu skill promote draft-view-edit-bash
+hufu skill promote draft-view-edit-bash --team my-team
 
 # 預覽或執行草稿清理
 hufu skill clean --older-than 30d --unused
 hufu skill clean --older-than 30d --unused --apply --yes
+hufu skill clean --team my-team --older-than 30d --unused
 ```
+
+`--team` 適用於 `list`、`review`、`promote` 與 `clean`，並使用 `--agent-team-search-path`（若有設定）或預設 team search paths。具名 team 的 `clean --unused` 會從和執行期一致的 `<base-workspace>/<team-name>/.skill-usage.json` 判斷使用狀態；`--workspace` 在此代表 base workspace。`graph` 仍以 execution workspace 的 projection 為準，使用 `--workspace` 選擇來源。
 
 如需修改草稿，直接用編輯器編輯對應的 `SKILL.md`，完成審查後再執行 `hufu skill promote`。
 
 ## 模式 projection
 
-每次 round-boundary 模式評估都會以 atomic replace 更新：
+每次 coordinator round-boundary，以及每次已建立 task 的 direct-agent invocation 結束時，模式評估都會以 atomic replace 更新：
 
 ```text
 <workspace>/skills/patterns.json
 ```
 
-即使評估結果為空，也會寫入空的 `patterns` 陣列，以免舊 candidate 被誤認為目前結果。projection 代表最近一次成功寫入的 evaluation，不代表整個 run 已完成；`run_id`、`team_name` 與 `generated_at` 會標示來源。
+即使評估結果為空，也會寫入空的 `patterns` 陣列，以免舊 candidate 被誤認為目前結果。若 invocation context 已取消，evaluation 會停止且不覆寫上一份已完成 projection。projection 代表最近一次成功寫入的 evaluation，不代表整個 run 已完成；`run_id`、`team_name` 與 `generated_at` 會標示來源。
 
 projection 不是 canonical execution state，也不會被 detector 讀回。它不包含 raw tool arguments、task descriptions、model output、transcript 或 draft filesystem path。`draft_name` 只保留模式與曾產生草稿的歷史關聯；loader 不會檢查草稿目前是否仍存在。
 

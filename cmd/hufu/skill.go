@@ -13,7 +13,10 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 )
 
-var draftsOnly bool
+var (
+	draftsOnly    bool
+	skillTeamName string
+)
 
 var (
 	skillReviewCmd = &cobra.Command{
@@ -98,6 +101,10 @@ func init() {
 	skillGraphCmd.Flags().StringVar(&skillGraphFormat, "format", "text", "Output format: text, json, or mermaid")
 	skillGraphCmd.Flags().StringVar(&skillGraphAgent, "agent", "", "Include only patterns attributed to this agent")
 	skillGraphCmd.Flags().Int64Var(&skillGraphMinFrequency, "min-frequency", 0, "Include only patterns with at least this count")
+	for _, lifecycleCmd := range []*cobra.Command{skillReviewCmd, skillListCmd, skillPromoteCmd, skillCleanCmd} {
+		lifecycleCmd.Flags().StringVar(&skillTeamName, "team", "", "Manage skills for this discoverable team")
+		lifecycleCmd.Flags().StringVar(&opts.agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
+	}
 
 	skillCleanCmd.Flags().StringVar(&skillCleanOlderThan, "older-than", "", "Delete drafts older than this duration (e.g. 30d, 24h)")
 	skillCleanCmd.Flags().BoolVar(&skillCleanUnused, "unused", false, "Only delete drafts that have never been used")
@@ -111,11 +118,11 @@ func runSkillReview(cmd *cobra.Command, args []string) error {
 	}
 
 	skillName := args[0]
-	workspace := getWorkspace()
-	teamDir := filepath.Join(workspace, "..")
-
-	skillDirs := buildSkillDirs(workspace, teamDir)
-	skills := skill.DiscoverSkills(skillDirs, true)
+	target, err := resolveSkillLifecycleTarget()
+	if err != nil {
+		return err
+	}
+	skills := skill.DiscoverSkills(target.discoveryDirs, true)
 	var found *skill.SkillDef
 	for _, s := range skills {
 		if strings.EqualFold(s.Name, skillName) {
@@ -127,46 +134,50 @@ func runSkillReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("skill not found: %s\n  Run 'hufu skill list' to see available skills", skillName)
 	}
 
-	fmt.Printf("Found skill: %s\n\n", found.Path)
-	fmt.Println(strings.Repeat("=", 80))
-	fmt.Println(found.Content)
-	fmt.Println(strings.Repeat("=", 80))
-	return nil
+	var output strings.Builder
+	fmt.Fprintf(&output, "Found skill: %s\n\n", found.Path)
+	fmt.Fprintln(&output, strings.Repeat("=", 80))
+	fmt.Fprintln(&output, found.Content)
+	fmt.Fprintln(&output, strings.Repeat("=", 80))
+	return writeSkillCommandOutput(cmd, output.String())
 }
 
 func runSkillList(cmd *cobra.Command, args []string) error {
-	workspace := getWorkspace()
-	teamDir := filepath.Join(workspace, "..")
-
-	output := listAvailableSkills(workspace, teamDir, draftsOnly)
+	target, err := resolveSkillLifecycleTarget()
+	if err != nil {
+		return err
+	}
+	output := listAvailableSkills(target.discoveryDirs, draftsOnly)
 	if output == "" {
-		fmt.Println("No skills found.")
-		return nil
+		return writeSkillCommandOutput(cmd, "No skills found.\n")
 	}
 
+	heading := "Available skills:\n"
 	if draftsOnly {
-		fmt.Println("Available draft skills:")
-	} else {
-		fmt.Println("Available skills:")
+		heading = "Available draft skills:\n"
 	}
-	fmt.Println(output)
-	return nil
+	return writeSkillCommandOutput(cmd, heading+output+"\n")
 }
 
 func runSkillPromote(cmd *cobra.Command, args []string) error {
 	draftName := args[0]
-	skillsDir := filepath.Join(getWorkspace(), "skills")
-
-	newPath, err := skill.PromoteDraft(skillsDir, draftName)
+	target, err := resolveSkillLifecycleTarget()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Promoted: %s -> %s\n", draftName, newPath)
-	return nil
+
+	newPath, err := skill.PromoteDraft(target.skillsDir, draftName)
+	if err != nil {
+		return err
+	}
+	return writeSkillCommandOutput(cmd, fmt.Sprintf("Promoted: %s -> %s\n", draftName, newPath))
 }
 
 func runSkillClean(cmd *cobra.Command, args []string) error {
-	skillsDir := filepath.Join(getWorkspace(), "skills")
+	target, err := resolveSkillLifecycleTarget()
+	if err != nil {
+		return err
+	}
 
 	var olderThan time.Duration
 	if skillCleanOlderThan != "" {
@@ -177,27 +188,31 @@ func runSkillClean(cmd *cobra.Command, args []string) error {
 		olderThan = d
 	}
 
-	result, err := skill.CleanDrafts(skillsDir, skill.CleanOpts{
+	result, err := skill.CleanDrafts(target.skillsDir, skill.CleanOpts{
 		OlderThan:  olderThan,
 		UnusedOnly: skillCleanUnused,
 		DryRun:     !skillCleanApply,
+		UsageDir:   target.usageDir,
 	})
 	if err != nil {
 		return err
 	}
 
 	if len(result.Deleted) == 0 {
-		fmt.Println("No drafts match the criteria.")
-		return nil
+		return writeSkillCommandOutput(cmd, "No drafts match the criteria.\n")
 	}
 
+	var output strings.Builder
 	if skillCleanApply {
-		fmt.Printf("Deleted %d drafts:\n", len(result.Deleted))
+		fmt.Fprintf(&output, "Deleted %d drafts:\n", len(result.Deleted))
 	} else {
-		fmt.Printf("Would delete %d drafts (dry-run; use --apply to delete):\n", len(result.Deleted))
+		fmt.Fprintf(&output, "Would delete %d drafts (dry-run; use --apply to delete):\n", len(result.Deleted))
 	}
 	for _, name := range result.Deleted {
-		fmt.Printf("  - %s\n", name)
+		fmt.Fprintf(&output, "  - %s\n", name)
+	}
+	if err := writeSkillCommandOutput(cmd, output.String()); err != nil {
+		return err
 	}
 	if !skillCleanApply && !skillCleanYes {
 		prompt := promptui.Prompt{
@@ -206,24 +221,30 @@ func runSkillClean(cmd *cobra.Command, args []string) error {
 		}
 		_, err := prompt.Run()
 		if err != nil {
-			fmt.Println("Aborted.")
-			return nil
+			return writeSkillCommandOutput(cmd, "Aborted.\n")
 		}
-		result, err = skill.CleanDrafts(skillsDir, skill.CleanOpts{
+		result, err = skill.CleanDrafts(target.skillsDir, skill.CleanOpts{
 			OlderThan:  olderThan,
 			UnusedOnly: skillCleanUnused,
 			DryRun:     false,
+			UsageDir:   target.usageDir,
 		})
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Deleted %d drafts.\n", len(result.Deleted))
+		return writeSkillCommandOutput(cmd, fmt.Sprintf("Deleted %d drafts.\n", len(result.Deleted)))
 	}
 	return nil
 }
 
-func listAvailableSkills(workspace, teamDir string, draftsOnly bool) string {
-	skillDirs := buildSkillDirs(workspace, teamDir)
+func writeSkillCommandOutput(cmd *cobra.Command, output string) error {
+	if _, err := fmt.Fprint(cmd.OutOrStdout(), output); err != nil {
+		return fmt.Errorf("write skill command output: %w", err)
+	}
+	return nil
+}
+
+func listAvailableSkills(skillDirs []string, draftsOnly bool) string {
 	skills := skill.DiscoverSkills(skillDirs, true)
 	if len(skills) == 0 {
 		return ""
@@ -241,6 +262,32 @@ func listAvailableSkills(workspace, teamDir string, draftsOnly bool) string {
 		}
 	}
 	return sb.String()
+}
+
+type skillLifecycleTarget struct {
+	skillsDir     string
+	discoveryDirs []string
+	usageDir      string
+}
+
+func resolveSkillLifecycleTarget() (skillLifecycleTarget, error) {
+	if strings.TrimSpace(skillTeamName) != "" {
+		teamDir, err := resolveTeamDirArg(nil, skillTeamName)
+		if err != nil {
+			return skillLifecycleTarget{}, fmt.Errorf("resolve skill team: %w", err)
+		}
+		skillsDir := filepath.Join(teamDir, "skills")
+		usageDir := filepath.Join(getWorkspace(), strings.ToLower(strings.TrimSpace(skillTeamName)))
+		return skillLifecycleTarget{skillsDir: skillsDir, discoveryDirs: []string{skillsDir}, usageDir: usageDir}, nil
+	}
+
+	workspace := getWorkspace()
+	teamDir := filepath.Join(workspace, "..")
+	return skillLifecycleTarget{
+		skillsDir:     filepath.Join(workspace, "skills"),
+		discoveryDirs: buildSkillDirs(workspace, teamDir),
+		usageDir:      workspace,
+	}, nil
 }
 
 func buildSkillDirs(workspace, teamDir string) []string {

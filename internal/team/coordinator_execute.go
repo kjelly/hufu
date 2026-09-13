@@ -587,7 +587,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.checkpointSTM()
 
 	// Check for skill patterns after completing a round
-	c.checkSkillPatterns()
+	c.checkSkillPatterns(ctx)
 
 	// No-progress budget enforcement at the task-end / round boundary (§8.1,
 	// WP-12). After a round of tasks completes, evaluate the three counters

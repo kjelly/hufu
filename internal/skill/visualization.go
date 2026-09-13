@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // SkillPatternGraph is a deterministic projection of one persisted pattern
@@ -244,8 +245,8 @@ func RenderSkillPatternGraphMermaid(graph SkillPatternGraph) string {
 		return output.String()
 	}
 
-	fmt.Fprintf(&output, "  %%%% Run: %s\n", graph.RunID)
-	fmt.Fprintf(&output, "  %%%% Team: %s\n", graph.TeamName)
+	fmt.Fprintf(&output, "  %%%% Run: %s\n", sanitizeMermaidComment(graph.RunID))
+	fmt.Fprintf(&output, "  %%%% Team: %s\n", sanitizeMermaidComment(graph.TeamName))
 	if graph.GeneratedAt != nil {
 		fmt.Fprintf(&output, "  %%%% Generated: %s\n", graph.GeneratedAt.UTC().Format(time.RFC3339Nano))
 	}
@@ -261,6 +262,18 @@ func RenderSkillPatternGraphMermaid(graph SkillPatternGraph) string {
 		fmt.Fprintf(&output, "  %s -->|×%d| %s\n", edge.From, edge.Count, edge.To)
 	}
 	return output.String()
+}
+
+// sanitizeMermaidComment keeps snapshot metadata on one Mermaid comment line.
+// Snapshot files are local input and team names are user-authored, so control
+// characters must not be allowed to introduce additional Mermaid statements.
+func sanitizeMermaidComment(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, value)
 }
 
 func patternIncludesAgent(pattern SkillPatternSummary, agentName string) bool {

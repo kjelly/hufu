@@ -20,13 +20,20 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-// checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts
-func (c *Coordinator) checkSkillPatterns() {
+// checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts.
+// A canceled invocation does not replace the last completed projection.
+func (c *Coordinator) checkSkillPatterns(ctx context.Context) {
 	if c.skillDetector == nil {
 		return
 	}
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
 
-	candidates := c.skillDetector.FindCandidates(context.Background())
+	candidates := c.skillDetector.FindCandidates(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	if len(candidates) == 0 {
 		if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{}, nil); err != nil {
 			log.Printf("[WARN] failed to persist skill pattern snapshot: %s", utils.RedactSecrets(err.Error()))
@@ -74,10 +81,35 @@ func (c *Coordinator) checkSkillPatterns() {
 		for _, draft := range savedSkills {
 			fmt.Fprintf(&msg, "  - %s\n", draft.Path)
 		}
-		msg.WriteString("\nReview and refine with: hufu skill review <skill-name>\n")
+		msg.WriteString("\nReview and refine with:\n")
+		for _, draft := range savedSkills {
+			fmt.Fprintf(&msg, "  %s\n", c.skillDraftReviewCommand(draft.Name))
+		}
 	}
 
 	c.report(c.newEvent("step").withMessage(msg.String()))
+}
+
+func (c *Coordinator) skillDraftReviewCommand(draftName string) string {
+	if c != nil && c.session != nil {
+		teamDir := filepath.Clean(c.session.Dir)
+		workspace := filepath.Clean(c.session.Workspace)
+		if teamDir != "." && teamDir != workspace {
+			teamName := filepath.Base(teamDir)
+			if teamName != "." && teamName != string(filepath.Separator) {
+				return fmt.Sprintf(
+					"hufu skill review %s --team %s --agent-team-search-path %s",
+					strconv.Quote(draftName),
+					strconv.Quote(teamName),
+					strconv.Quote(filepath.Dir(teamDir)),
+				)
+			}
+		}
+		if teamDir != "." {
+			return fmt.Sprintf("hufu skill review %s --workspace %s", strconv.Quote(draftName), strconv.Quote(teamDir))
+		}
+	}
+	return fmt.Sprintf("hufu skill review %s", strconv.Quote(draftName))
 }
 
 // checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts (requires user confirmation)

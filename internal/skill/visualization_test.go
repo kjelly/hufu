@@ -266,6 +266,30 @@ func TestSkillGraphMermaidEscapesNames(t *testing.T) {
 	}
 }
 
+func TestSkillGraphMermaidKeepsMetadataOnCommentLines(t *testing.T) {
+	graph := SkillPatternGraph{
+		SnapshotAvailable: true,
+		RunID:             "run-safe\ngraph TD\r\u2028",
+		TeamName:          "team-safe\tA --> B\u2029",
+		Patterns:          []SkillPatternSummary{},
+		Nodes:             []SkillPatternNode{},
+		Edges:             []SkillPatternEdge{},
+	}
+
+	output := RenderSkillPatternGraphMermaid(graph)
+	for _, expected := range []string{
+		"  %% Run: run-safe graph TD  \n",
+		"  %% Team: team-safe A --> B \n",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("Mermaid output does not contain sanitized metadata %q:\n%s", expected, output)
+		}
+	}
+	if strings.Contains(output, "\ngraph TD\n") || strings.Contains(output, "\nA --> B\n") {
+		t.Errorf("Mermaid metadata introduced a statement line:\n%s", output)
+	}
+}
+
 func TestRenderSkillPatternGraphMermaidEmptyStates(t *testing.T) {
 	missingWant := "graph LR\n  %% No skill-pattern snapshot is available for this workspace.\n"
 	if got := RenderSkillPatternGraphMermaid(NewUnavailableSkillPatternGraph()); got != missingWant {

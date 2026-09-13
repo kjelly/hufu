@@ -25,6 +25,9 @@ type CleanOpts struct {
 	OlderThan  time.Duration
 	UnusedOnly bool
 	DryRun     bool
+	// UsageDir is the runtime workspace that owns .skill-usage.json. When
+	// empty, CleanDrafts preserves the historical skillsDir parent behavior.
+	UsageDir string
 }
 
 // CleanResult reports what was (or would have been) deleted.
@@ -135,8 +138,11 @@ func CleanDrafts(skillsDir string, opts CleanOpts) (CleanResult, error) {
 
 	var usage map[string]UsageStats
 	if opts.UnusedOnly {
-		workspaceDir := filepath.Dir(skillsDir)
-		usage, _ = LoadUsageStats(workspaceDir)
+		usageDir := strings.TrimSpace(opts.UsageDir)
+		if usageDir == "" {
+			usageDir = filepath.Dir(skillsDir)
+		}
+		usage, _ = LoadUsageStats(usageDir)
 		if usage == nil {
 			usage = make(map[string]UsageStats)
 		}

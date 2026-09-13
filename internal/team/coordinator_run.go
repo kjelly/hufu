@@ -447,6 +447,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 		return nil, err
 	}
+	// A direct-agent invocation is a complete execution boundary just like a
+	// coordinator round. Evaluate its recorded tool sequence on every terminal
+	// return, while the invocation context and execution run are still active.
+	defer c.checkSkillPatterns(ctx)
 	// Direct-agent invocation creates a real task and must participate in the
 	// same run-scoped task budget as coordinator-created work.
 	c.recordNoProgressTasks(len(todoItems))

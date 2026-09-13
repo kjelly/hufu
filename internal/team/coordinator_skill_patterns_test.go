@@ -1,10 +1,13 @@
 package team
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -19,7 +22,7 @@ func TestSkillPatternSnapshotEmptyEvaluationReplacesPreviousData(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
-	c.checkSkillPatterns()
+	c.checkSkillPatterns(t.Context())
 
 	snapshot, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(c.session.Workspace))
 	if err != nil {
@@ -40,7 +43,56 @@ func TestSkillPatternSnapshotAtomicWriteFailureDoesNotFailRun(t *testing.T) {
 
 	// checkSkillPatterns intentionally returns no error. Projection failures are
 	// warnings and cannot change the coordinator run outcome.
-	c.checkSkillPatterns()
+	c.checkSkillPatterns(t.Context())
+}
+
+func TestSkillPatternEvaluationDoesNotReplaceSnapshotAfterCancellation(t *testing.T) {
+	c := skillPatternSnapshotTestCoordinator(t.TempDir())
+	candidate := teamSnapshotTestCandidate(time.Now().UTC())
+	if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{candidate}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	detector := skill.NewSkillPatternDetector(1, 2, 2)
+	detector.RecordToolCall("coder", "view", `{"path":"file.go"}`, "inspect")
+	detector.RecordToolCall("coder", "edit", `{"path":"file.go"}`, "change")
+	detector.SetModelInvoker(failingIfCalledSkillInvoker{t: t})
+	c.skillDetector = detector
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	c.checkSkillPatterns(canceled)
+
+	snapshot, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(c.session.Workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !available || len(snapshot.Patterns) != 1 {
+		t.Fatalf("canceled evaluation replaced snapshot: %#v, available = %v", snapshot, available)
+	}
+}
+
+func TestRunDirectAgentEvaluatesSkillPatternsAtInvocationBoundary(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
+
+	if _, err := c.RunDirectAgent(t.Context(), "worker", "perform direct work"); err != nil {
+		t.Fatalf("RunDirectAgent() error = %v", err)
+	}
+
+	snapshot, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(c.session.Workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !available || snapshot.RunID == "" || snapshot.TeamName != "test" {
+		t.Fatalf("direct-agent pattern snapshot = %#v, available = %v", snapshot, available)
+	}
+}
+
+type failingIfCalledSkillInvoker struct{ t *testing.T }
+
+func (i failingIfCalledSkillInvoker) Invoke(context.Context, string, string) (string, error) {
+	i.t.Fatal("canceled skill-pattern evaluation invoked the sidecar")
+	return "", context.Canceled
 }
 
 func TestSkillPatternSnapshotReusesDraftNameByPatternID(t *testing.T) {
@@ -78,6 +130,23 @@ func TestSavedPatternDraftStoresNameWithoutPersistingPath(t *testing.T) {
 	}
 	if draft.Name != "draft-safe" || draft.Path == "" || draft.PatternID == "" {
 		t.Fatalf("saved draft = %#v", draft)
+	}
+}
+
+func TestSkillDraftReviewCommandTargetsNamedTeamDirectory(t *testing.T) {
+	searchPath := filepath.Join(t.TempDir(), ".agent-teams")
+	c := &Coordinator{session: &TeamSession{
+		Dir:       filepath.Join(searchPath, "directory-name"),
+		Workspace: t.TempDir(),
+		Config:    agent.TeamConfig{Name: "display-name"},
+	}}
+	got := c.skillDraftReviewCommand("draft-view-edit")
+	want := fmt.Sprintf(
+		`hufu skill review "draft-view-edit" --team "directory-name" --agent-team-search-path %s`,
+		strconv.Quote(searchPath),
+	)
+	if got != want {
+		t.Fatalf("skillDraftReviewCommand() = %q, want %q", got, want)
 	}
 }
 

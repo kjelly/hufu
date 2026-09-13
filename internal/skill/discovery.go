@@ -137,7 +137,8 @@ func (d *SkillPatternDetector) SetSidecar(s *sidecar.Sidecar) {
 }
 
 // SetModelInvoker installs a coordinator-owned, context-attributed invoker.
-// A nil invoker selects the deterministic heuristic path.
+// A nil invoker disables candidate qualification; raw sequence recording
+// remains available, but FindCandidates returns no candidates.
 func (d *SkillPatternDetector) SetModelInvoker(invoker SkillModelInvoker) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
