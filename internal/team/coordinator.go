@@ -1196,7 +1196,67 @@ type RoleModels struct {
 	PlanReviewer string
 }
 
+type coordinatorParams struct {
+	Session               *TeamSession
+	DefaultProviderURL    string
+	DefaultProviderAPIKey string
+	MCPManager            *mcp.MCPToolManager
+	MemoryStore           *memory.MemoryStore
+	ModelList             []config.ModelEntry
+	RoleModels            RoleModels
+	MaxConcurrent         int
+	Verbose               bool
+	Think                 bool
+	Direnv                bool
+	AllowedPaths          []string
+	PathConsent           *tools.PathConsent
+	HookRegistry          *hooks.HookRegistry
+	RestrictedBash        bool
+	RestrictedPath        string
+	NoNet                 bool
+	ForceMCP              bool
+	ForcedSkillNames      []string
+	PlanMode              bool
+	AutoSkillsMode        bool
+}
+
 func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
+	return newCoordinator(coordinatorParams{
+		Session: session, DefaultProviderURL: defaultProviderURL, DefaultProviderAPIKey: defaultProviderAPIKey,
+		MCPManager: mcpManager, MemoryStore: memoryStore, ModelList: modelList, RoleModels: roleModels,
+		MaxConcurrent: maxConcurrent, Verbose: verbose, Think: think, Direnv: direnv,
+		AllowedPaths: allowedPaths, PathConsent: pathConsent, HookRegistry: hookRegistry,
+		RestrictedBash: rbashMode, RestrictedPath: restrictedPath, NoNet: noNet, ForceMCP: forceMCP,
+		ForcedSkillNames: forcedSkillNames, PlanMode: planMode, AutoSkillsMode: autoSkillsMode,
+	}, RuntimeServices{})
+}
+
+func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordinator, error) {
+	if params.Session == nil {
+		return nil, fmt.Errorf("coordinator session is required")
+	}
+	session := params.Session
+	defaultProviderURL := params.DefaultProviderURL
+	defaultProviderAPIKey := params.DefaultProviderAPIKey
+	mcpManager := params.MCPManager
+	memoryStore := params.MemoryStore
+	modelList := params.ModelList
+	roleModels := params.RoleModels
+	maxConcurrent := params.MaxConcurrent
+	verbose := params.Verbose
+	think := params.Think
+	direnv := params.Direnv
+	allowedPaths := params.AllowedPaths
+	pathConsent := params.PathConsent
+	hookRegistry := params.HookRegistry
+	rbashMode := params.RestrictedBash
+	restrictedPath := params.RestrictedPath
+	noNet := params.NoNet
+	forceMCP := params.ForceMCP
+	forcedSkillNames := params.ForcedSkillNames
+	planMode := params.PlanMode
+	autoSkillsMode := params.AutoSkillsMode
+
 	projectDir, _ := os.Getwd()
 	projectDir = canonicalPath(projectDir)
 	var coordinator *Coordinator
@@ -1275,6 +1335,31 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		skillPatternsDetected:  0,
 		maxDrafts:              maxDraftsPerSession,
 	}
+	// Install the complete production service bundle before any dependent
+	// callback or tool captures the coordinator, then apply only explicitly
+	// injected seams.
+	c.planner = &defaultPlanner{c: c}
+	c.sessionStore = &defaultSessionStore{c: c}
+	c.policyEngine = &defaultPolicyEngine{c: c}
+	c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
+	c.evidenceService = &defaultEvidenceService{}
+	c.repairController = NewRepairController()
+	c.contextCompiler = &defaultContextCompiler{c: c}
+	c.agentPool = &defaultAgentPool{c: c}
+	c.workflowEngine = &defaultWorkflowEngine{c: c}
+	c.eventJournal = eventStoreJournal{}
+	c.toolResolver = &defaultToolResolver{c: c}
+	c.modelRuntime = &defaultModelRuntime{c: c}
+	c.subagentRegistry = newSubagentRegistryFor(c)
+	c.executionRegistry = newExecutionRegistryFor(c)
+	c.experienceProcessor = &defaultExperienceProcessor{c: c}
+	c.setRuntimeServices(services)
+
+	c.authorizationPolicy = defaultAuthorizationPolicy{}
+	c.secretRegistry = tools.NewSecretRegistry()
+	utils.RegisterSecretRedactor(c.secretRegistry)
+	registerProviderSecrets(c.secretRegistry, session, defaultProviderAPIKey)
+	c.structuredStepRunner = &coordinatorDeclaredToolRunner{c: c}
 	coordinator = c
 	// Context lookup is coordinator-owned so it can use the canonical router.
 	// It still enters the exact same selection, policy, unattended, force-MCP,
@@ -1316,19 +1401,6 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		}
 	}
 
-	c.planner = &defaultPlanner{c: c}
-	c.sessionStore = &defaultSessionStore{c: c}
-	c.policyEngine = &defaultPolicyEngine{c: c}
-	c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
-	c.evidenceService = &defaultEvidenceService{}
-	c.repairController = NewRepairController()
-	c.authorizationPolicy = defaultAuthorizationPolicy{}
-	c.secretRegistry = tools.NewSecretRegistry()
-	utils.RegisterSecretRedactor(c.secretRegistry)
-	registerProviderSecrets(c.secretRegistry, session, defaultProviderAPIKey)
-	c.contextCompiler = &defaultContextCompiler{c: c}
-	c.agentPool = &defaultAgentPool{c: c}
-	c.structuredStepRunner = &coordinatorDeclaredToolRunner{c: c}
 	// Canonical context is now required for every coordinator. Refusing to run
 	// without it prevents a fallback to legacy Markdown/JSONL truth after the
 	// cutover; callers can repair workspace permissions and retry safely.
@@ -1337,31 +1409,32 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("open canonical context store: %w", openErr)
 	}
 	c.contextRepo = repo
-	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
+	constructionComplete := false
+	var ownedAuditLogger *audit.AuditLogger
+	defer func() {
+		if constructionComplete {
+			return
+		}
 		_ = repo.Close()
+		if ownedAuditLogger != nil {
+			_ = ownedAuditLogger.Close()
+		}
+	}()
+	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
 		return nil, fmt.Errorf("load adopted memory policy: %w", err)
 	}
 	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	c.sharedMemorySvc = NewSharedMemoryService(repo)
-	c.workflowEngine = &defaultWorkflowEngine{c: c}
-	c.eventJournal = eventStoreJournal{}
-	c.toolResolver = &defaultToolResolver{c: c}
-	c.modelRuntime = &defaultModelRuntime{c: c}
-	c.subagentRegistry = newSubagentRegistryFor(c)
-	c.executionRegistry = newExecutionRegistryFor(c)
 	executionPolicy, err := newExecutionPolicyState(c)
 	if err != nil {
-		_ = repo.Close()
 		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
 	}
 	c.executionPolicy = executionPolicy
-	c.experienceProcessor = &defaultExperienceProcessor{c: c}
-
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {
 		c.auditLogger = auditLogger
+		ownedAuditLogger = auditLogger
 		auditLogger.SetRedactor(c.SecretRegistry())
-		audit.SetDefault(auditLogger)
 	}
 
 	// Initialize SSH session manager
@@ -1477,6 +1550,10 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		return nil, fmt.Errorf("tool grant validation failed: %w", err)
 	}
 
+	if c.auditLogger != nil {
+		audit.SetDefault(c.auditLogger)
+	}
+	constructionComplete = true
 	return c, nil
 }
 
