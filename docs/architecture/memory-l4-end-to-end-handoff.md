@@ -3,7 +3,7 @@
 > Status: implemented
 > Priority: P2
 > Baseline: 3e5054b
-> Verified-Commit: c7fc533
+> Verified-Commit: 3f94103
 > Scope: 串接既有 memory / consolidation / promotion / improve artifacts；禁止 autonomous production mutation
 > Authority: implementation contract for the handoff layer
 
@@ -45,6 +45,9 @@ experiment subsystem。
   `MemoryPolicyVersions`。
 - Experiment、adoption 與 monitoring loaders 會重算 deterministic outcome、
   snapshot content/patch digest 與 cross-artifact bindings，拒絕修改過的 JSON。
+- Handoff monitoring 另將 baseline metrics 綁回同一 handoff 的 immutable
+  experiment；rollback suggestion 必須指向 skill adoption、baseline memory
+  policy 或 baseline team snapshot 所能驗證的 rollback target。
 
 以上 primitive 仍只保存 metadata、refs 與 immutable snapshots；不會自行 apply、activate
 或 rollback 正式環境。
@@ -176,7 +179,8 @@ and updated_at. The store must reject unknown schema versions.
 
 Normative invariants：
 
-- Version is 1；ID 是 artifact-safe；Revision starts at 1。
+- Version is 1；ID 是 immutable identity 的 deterministic digest 且
+  artifact-safe；新 record 必須從 proposed revision 1 開始。
 - Kind 決定合法的 proposal、candidate 與 adoption ref kinds。
 - ProjectID、TeamID 必填，且必須匹配所有 scoped artifact。
 - Sources 依 (Ref.Kind, Ref.ID) 排序且不得重複。
@@ -185,6 +189,8 @@ Normative invariants：
   opaque refs，canonical artifact 不由 handoff 複製。
 - 建立後 immutable bindings 不得修改；lifecycle update 只能修改 Status、
   StatusReason、Evaluation、Adoption、Monitoring、Revision、UpdatedAt。
+- StatusReason 只能使用與目前 status 及 kind 相符的固定 reason code，不接受
+  caller prose；既有 schema v1 固定字串仍可讀取。
 - Monitoring refs 只能 append，不能取代或刪除；Experiment 與
   Evaluation.Report 必須是同一 ref。
 
@@ -369,8 +375,8 @@ directory 建立一次，不得重用。store 必須：
 
 handoff JSON 是 handoff lifecycle 的 canonical record。既有 EventStore
 只保存 metadata audit：handoff_created、handoff_prepared、
-handoff_evaluated、handoff_approved、handoff_adopted、handoff_stale、
-handoff_monitoring。不建立第二 EventStore 或 execution state machine。
+handoff_evaluated、handoff_approved、handoff_rejected、handoff_adopted、
+handoff_stale、handoff_monitoring。不建立第二 EventStore 或 execution state machine。
 
 跨 store 操作順序：
 
@@ -378,7 +384,8 @@ handoff_monitoring。不建立第二 EventStore 或 execution state machine。
 2. atomic persist handoff；
 3. append metadata-only audit event；
 4. event append 失敗時回傳 error，但保留 handoff；
-5. retry 使用相同 idempotency key，不得重複 event。
+5. audit retry 只接受 handoff ID，鎖定後重讀 durable record，並使用相同
+   idempotency key；caller 不得提供 event state，也不得重複 event。
 
 audit failure 不回滾已完成 canonical operation，也不重跑 worker 或 benchmark。
 
@@ -440,6 +447,9 @@ hufu improve handoff evaluate <handoff-id> --experiment <experiment-id> \
 hufu improve handoff approve <handoff-id> --expected-revision <n> \
   --workspace workspace --project p --team dev
 
+hufu improve handoff reject <handoff-id> --expected-revision <n> \
+  --workspace workspace --project p --team dev
+
 hufu improve handoff adopt <handoff-id> --adoption-ref <kind:id:revision> \
   --expected-revision <n> --workspace workspace --project p --team dev
 
@@ -456,6 +466,8 @@ Rules：
 - evaluate 只接受 benchmark revision、candidate refs、team、project、
   policy refs 全部匹配的 existing ExperimentReport。
 - approve/adopt/monitor 必須有 expected revision；stale write 不改 record。
+- reject 必須有 expected revision，只允許從 evaluated 或
+  eligible_for_review 明確進入 terminal rejected；不修改 canonical candidate。
 - adopt/monitor 只驗證 supplied ref，絕不執行該 ref 的 operation。
 - JSON 只輸出 metadata/refs，不輸出 draft 或 benchmark prompts。
 
@@ -537,7 +549,7 @@ report 以 `monitor-<timestamp>` ID durable 保存於
 `workspace/improvement/monitoring/<adoption-id>/`，並透過
 `monitoring_report:<id>:<revision>` ref 綁定。
 
-### Corrective hardening（已完成：`d4e23f6`、`c7fc533`）
+### Corrective hardening（已完成：`d4e23f6`、`c7fc533`、`3f94103`）
 
 - 修正三種 kind 的 prepare dispatch 與所有 command scope enforcement；
 - candidate / benchmark / experiment / evaluation / adoption bindings immutable；
@@ -548,8 +560,13 @@ report 以 `monitor-<timestamp>` ID durable 保存於
 - rollback suggestion 可實際進入 rollback_recommended；
 - runtime report 綁定 exact policy version 與 applied context ContentHash，而非
   接受使用者自行宣告；
+- handoff ID、initial state、status reason code、create-time evidence 與 audit retry
+  都由 durable identity 驗證，不接受 caller 組裝 lifecycle metadata；
+- monitoring baseline metrics 與 rollback target 綁回同一 experiment/adoption，
+  healthy report 也不能繞過 baseline 驗證；
+- 補上帶 CAS 的 explicit reject facade，拒絕不會 confirm/apply candidate；
 - 補齊 prepare、完整 consolidation lifecycle、canonical memory activation、
-  tamper、scope、audit retry 與 cross-process concurrency tests。
+  tamper、scope、audit retry、monitoring baseline 與 cross-process concurrency tests。
 
 ## 10. Required tests
 
@@ -584,6 +601,8 @@ TestHandoffRejectsWrongBenchmarkRevision
 TestHandoffRejectsWrongExperimentCandidate
 TestHandoffRejectsMismatchedAdoptionRef
 TestHandoffMonitoringNeverExecutesRollback
+TestHandoffMonitoringRejectsUnboundHealthyBaseline
+TestHandoffRejectRequiresExplicitReviewedState
 TestSideEffectTaskNeverEnablesMemoryExploration
 TestHandoffArtifactsAndEventsContainNoContentOrSecrets
 ~~~
