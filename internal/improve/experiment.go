@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/promotion"
+	"github.com/kjelly/hufu/internal/team"
 	"gopkg.in/yaml.v3"
 )
 
@@ -198,6 +200,75 @@ func CreateCandidateSnapshot(workspace, id, baselineID, sourceDir, patchPath str
 		return TeamSnapshot{}, "", fmt.Errorf("candidate content is identical to baseline; provide a changed team definition")
 	}
 	return snapshot, dir, nil
+}
+
+// CreateSkillCandidateSnapshot materializes a promotion draft only inside an
+// isolated staging directory and snapshots the resulting team under the
+// improvement artifact root. The formal team and the canonical skill target
+// are never modified.
+func CreateSkillCandidateSnapshot(workspace, id, baselineID, skillName, draft string) (TeamSnapshot, string, error) {
+	if err := validateArtifactID(id); err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	if err := promotion.ValidateDraft(promotion.TypeSkill, draft, skillName, skillDraftSteps(draft)); err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	baseline, baselineDir, err := LoadBaselineSnapshot(workspace, baselineID)
+	if err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	teamSource := filepath.Join(baselineDir, "team")
+	targetPath := filepath.Join(teamSource, "skills", skillName, "SKILL.md")
+	if _, err := os.Stat(targetPath); err == nil {
+		return TeamSnapshot{}, "", fmt.Errorf("baseline already contains skill target %s", filepath.ToSlash(filepath.Join("skills", skillName, "SKILL.md")))
+	} else if !os.IsNotExist(err) {
+		return TeamSnapshot{}, "", err
+	}
+	stagingRoot := filepath.Join(ImprovementRoot(workspace), ".staging")
+	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	stagingDir, err := os.MkdirTemp(stagingRoot, "skill-")
+	if err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	defer func() { _ = os.RemoveAll(stagingDir) }()
+	if err := copyTree(teamSource, stagingDir); err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	stagedTarget := filepath.Join(stagingDir, "skills", skillName, "SKILL.md")
+	if err := team.AtomicCreateFile(stagedTarget, []byte(draft), 0o644); err != nil {
+		return TeamSnapshot{}, "", fmt.Errorf("materialize skill candidate: %w", err)
+	}
+	patch := newSkillPatch(skillName, draft)
+	snapshot, dir, err := createSnapshot(workspace, id, candidateSnapshotKind, stagingDir, baseline.ID, patch)
+	if err != nil {
+		return TeamSnapshot{}, "", err
+	}
+	return snapshot, dir, nil
+}
+
+func skillDraftSteps(draft string) []string {
+	var steps []string
+	for _, line := range strings.Split(draft, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "1. ") || strings.HasPrefix(line, "2. ") {
+			steps = append(steps, line)
+		}
+	}
+	return steps
+}
+
+func newSkillPatch(skillName, draft string) string {
+	lines := strings.Split(draft, "\n")
+	var patch strings.Builder
+	fmt.Fprintf(&patch, "--- /dev/null\n+++ b/skills/%s/SKILL.md\n@@ -0,0 +1,%d @@\n", skillName, len(lines))
+	for _, line := range lines {
+		patch.WriteByte('+')
+		patch.WriteString(line)
+		patch.WriteByte('\n')
+	}
+	return patch.String()
 }
 
 func LoadSnapshot(workspace, kind, id string) (TeamSnapshot, string, error) {

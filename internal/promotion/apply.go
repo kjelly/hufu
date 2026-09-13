@@ -161,6 +161,13 @@ func (s Service) validateEvidence(ctx context.Context, p Proposal) error {
 	return nil
 }
 
+// ValidateProposalEvidence exposes the same source validation used by the
+// canonical apply path without performing any promotion mutation. Improvement
+// handoffs use it before creating an isolated candidate snapshot.
+func (s Service) ValidateProposalEvidence(ctx context.Context, p Proposal) error {
+	return s.validateEvidence(ctx, p)
+}
+
 func secureTarget(teamDir, rel string) (string, error) {
 	if rel == "" || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("promotion target must be relative")

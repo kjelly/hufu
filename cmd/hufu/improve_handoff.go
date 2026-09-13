@@ -1,27 +1,32 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/improve"
+	"github.com/kjelly/hufu/internal/promotion"
 	"github.com/spf13/cobra"
 )
 
 var (
-	improveHandoffProject     string
-	improveHandoffPolicy      string
-	improveHandoffTeamSearch  string
-	improveHandoffJSON        bool
-	improveHandoffMemory      string
-	improveHandoffConsolidate string
-	improveHandoffPromotion   string
+	improveHandoffProject      string
+	improveHandoffPolicy       string
+	improveHandoffTeamSearch   string
+	improveHandoffJSON         bool
+	improveHandoffMemory       string
+	improveHandoffConsolidate  string
+	improveHandoffPromotion    string
+	improveHandoffBaselineTeam string
 )
 
 var improveHandoffCmd = &cobra.Command{
@@ -43,14 +48,23 @@ var improveHandoffShowCmd = &cobra.Command{
 	RunE:  runImproveHandoffShow,
 }
 
+var improveHandoffPrepareCmd = &cobra.Command{
+	Use:   "prepare <handoff-id>",
+	Short: "Prepare an isolated candidate for a handoff",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runImproveHandoffPrepare,
+}
+
 func init() {
 	improveCmd.AddCommand(improveHandoffCmd)
-	improveHandoffCmd.AddCommand(improveHandoffCreateCmd, improveHandoffShowCmd)
+	improveHandoffCmd.AddCommand(improveHandoffCreateCmd, improveHandoffShowCmd, improveHandoffPrepareCmd)
 	flags := improveHandoffCmd.PersistentFlags()
 	flags.StringVar(&improveHandoffProject, "project", "", "Project scope for the handoff (required)")
 	flags.StringVar(&improveHandoffPolicy, "policy-version", "", "Optional memory policy version in the handoff scope")
 	flags.StringVar(&improveHandoffTeamSearch, "team-search-path", "", "Reserved team search path metadata")
 	flags.BoolVar(&improveHandoffJSON, "json", false, "Print the handoff as JSON")
+	improveHandoffPrepareCmd.Flags().StringVar(&improveHandoffBaselineTeam, "baseline-team", "", "Baseline team snapshot ID (required for skill preparation)")
+	_ = improveHandoffPrepareCmd.MarkFlagRequired("baseline-team")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffMemory, "from-memory-policy", "", "Durable memory policy proposal ID")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffConsolidate, "from-consolidation", "", "Canonical consolidation proposal ID")
 	improveHandoffCreateCmd.Flags().StringVar(&improveHandoffPromotion, "from-promotion", "", "Canonical skill promotion proposal ID")
@@ -107,6 +121,90 @@ func runImproveHandoffShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return printHandoff(handoff)
+}
+
+func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
+	workspace, err := resolveImproveWorkspace(improveWorkspace)
+	if err != nil {
+		return err
+	}
+	store := improve.NewHandoffStore(workspace)
+	handoff, err := store.Get(args[0])
+	if err != nil {
+		return err
+	}
+	if handoff.Kind != improve.HandoffSkill {
+		return fmt.Errorf("handoff %q is %s; skill preparation requires kind skill", handoff.ID, handoff.Kind)
+	}
+	if handoff.Status == improve.HandoffCandidateReady {
+		if handoff.Candidate == nil {
+			return fmt.Errorf("handoff %q is candidate_ready without a candidate ref", handoff.ID)
+		}
+		if _, _, err := improve.LoadCandidateSnapshot(workspace, handoff.Candidate.ID); err != nil {
+			return fmt.Errorf("load existing skill candidate: %w", err)
+		}
+		return printHandoff(handoff)
+	}
+	if handoff.Status != improve.HandoffProposed {
+		return fmt.Errorf("handoff %q is %s; only proposed handoffs can be prepared", handoff.ID, handoff.Status)
+	}
+	ctx := cmd.Context()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		return fmt.Errorf("open context repository: %w", err)
+	}
+	defer func() { _ = repo.Close() }()
+	proposal, err := repo.GetPromotion(ctx, handoff.Proposal.ID, handoff.Scope.ProjectID, handoff.Scope.TeamID)
+	if err != nil {
+		return fmt.Errorf("load skill promotion proposal: %w", err)
+	}
+	if proposal.Type != contextstore.PromotionTypeSkill {
+		return fmt.Errorf("promotion proposal %q is not a skill proposal", proposal.ID)
+	}
+	if proposal.DraftHash != handoff.Proposal.Revision {
+		return fmt.Errorf("skill promotion proposal revision changed")
+	}
+	if proposal.Status != contextstore.PromotionStatusProposed && proposal.Status != contextstore.PromotionStatusApproved {
+		return fmt.Errorf("skill promotion proposal %q is %s and cannot prepare a candidate", proposal.ID, proposal.Status)
+	}
+	skillName := skillNameFromSkillTarget(proposal.TargetPath)
+	if skillName == "" || proposal.TargetPath != promotion.TargetPathForSkill(skillName) {
+		return fmt.Errorf("skill promotion target must be skills/<name>/SKILL.md")
+	}
+	if err := promotion.ValidateDraft(promotion.TypeSkill, proposal.Draft, skillName, skillDraftStepsForHandoff(proposal.Draft)); err != nil {
+		return fmt.Errorf("validate skill promotion draft: %w", err)
+	}
+	if err := samePromotionSources(handoff, proposal); err != nil {
+		return err
+	}
+	if err := (promotion.Service{Repo: repo}).ValidateProposalEvidence(ctx, proposal); err != nil {
+		return fmt.Errorf("skill promotion evidence is stale: %w", err)
+	}
+	baseline, _, err := improve.LoadBaselineSnapshot(workspace, improveHandoffBaselineTeam)
+	if err != nil {
+		return fmt.Errorf("load baseline team snapshot: %w", err)
+	}
+	if !strings.EqualFold(baseline.Team, handoff.Scope.TeamID) {
+		return fmt.Errorf("baseline team %q does not match handoff team %q", baseline.Team, handoff.Scope.TeamID)
+	}
+	candidateID := "skill-candidate-" + digestRevision(struct {
+		HandoffID string
+		DraftHash string
+		Baseline  string
+	}{handoff.ID, proposal.DraftHash, baseline.ContentRevision})[:20]
+	snapshot, _, err := improve.CreateSkillCandidateSnapshot(workspace, candidateID, improveHandoffBaselineTeam, skillName, proposal.Draft)
+	if err != nil {
+		return err
+	}
+	next := handoff
+	next.Status = improve.HandoffCandidateReady
+	next.Candidate = &improve.ArtifactRef{Kind: "team_snapshot", ID: snapshot.ID, Revision: snapshot.DefinitionRevision}
+	next.StatusReason = "isolated skill candidate snapshot prepared"
+	updated, err := store.Transition(ctx, handoff.ID, handoff.Revision, next)
+	if err != nil {
+		return err
+	}
+	return printHandoff(updated)
 }
 
 func handoffScope() (improve.HandoffScope, error) {
@@ -175,6 +273,41 @@ func createSkillHandoff(ctx context.Context, workspace string, scope improve.Han
 		sources = append(sources, improve.SourceBinding{Ref: improve.ArtifactRef{Kind: "context_item", ID: source.ContextItemID, Revision: source.ContentHash}, ContentHash: source.ContentHash, AggregateRevision: source.AggregateRevision, ProjectID: scope.ProjectID, TeamID: scope.TeamID})
 	}
 	return improve.NewImprovementHandoff(improve.HandoffSkill, scope, improve.ArtifactRef{Kind: "promotion_proposal", ID: proposal.ID, Revision: proposal.DraftHash}, sources)
+}
+
+func samePromotionSources(handoff improve.ImprovementHandoff, proposal contextstore.PromotionProposal) error {
+	got := make([]improve.SourceBinding, 0, len(proposal.Sources))
+	for _, source := range proposal.Sources {
+		got = append(got, improve.SourceBinding{
+			Ref:         improve.ArtifactRef{Kind: "context_item", ID: source.ContextItemID, Revision: source.ContentHash},
+			ContentHash: source.ContentHash, AggregateRevision: source.AggregateRevision,
+			ProjectID: proposal.ProjectID, TeamID: proposal.TeamID,
+		})
+	}
+	slices.SortFunc(got, func(left, right improve.SourceBinding) int { return cmp.Compare(left.Ref.ID, right.Ref.ID) })
+	if !reflect.DeepEqual(handoff.Sources, got) {
+		return fmt.Errorf("skill promotion source bindings changed")
+	}
+	return nil
+}
+
+func skillNameFromSkillTarget(target string) string {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(target)), "/")
+	if len(parts) != 3 || parts[0] != "skills" || parts[2] != "SKILL.md" {
+		return ""
+	}
+	return parts[1]
+}
+
+func skillDraftStepsForHandoff(draft string) []string {
+	var steps []string
+	for _, line := range strings.Split(draft, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "1. ") || strings.HasPrefix(line, "2. ") {
+			steps = append(steps, line)
+		}
+	}
+	return steps
 }
 
 func digestRevision(value any) string {

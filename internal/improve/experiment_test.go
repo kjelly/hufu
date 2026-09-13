@@ -122,6 +122,32 @@ func TestEvaluateExperimentUsesHardGatesAndWritesReviewOnlyReport(t *testing.T) 
 	}
 }
 
+func TestCreateSkillCandidateSnapshotIsolatedAndImmutable(t *testing.T) {
+	workspace := t.TempDir()
+	baselineTeam := createExperimentTeam(t, "dev", "Follow the baseline workflow.")
+	baseline, baselineDir, err := CreateBaselineSnapshot(workspace, "base-skill", baselineTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\nname: verification\ndescription: Verify changes.\n---\n# Verification\n\n## Steps\n- Run the check.\n- Record the result.\n"
+	candidate, candidateDir, err := CreateSkillCandidateSnapshot(workspace, "skill-candidate", "base-skill", "verification", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Kind != candidateSnapshotKind || candidate.BaselineID != baseline.ID || candidate.PatchRevision == "" {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	if candidate.ContentRevision == baseline.ContentRevision {
+		t.Fatal("skill candidate must differ from baseline")
+	}
+	if _, err := os.Stat(filepath.Join(candidateDir, "team", "skills", "verification", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(baselineDir, "team", "skills", "verification", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("baseline skill target was modified: %v", err)
+	}
+}
+
 func createExperimentTeam(t *testing.T, name, prompt string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), name)

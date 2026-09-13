@@ -1,11 +1,12 @@
 package improve
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -93,11 +94,8 @@ type ImprovementHandoff struct {
 func NewImprovementHandoff(kind HandoffKind, scope HandoffScope, proposal ArtifactRef, sources []SourceBinding) (ImprovementHandoff, error) {
 	now := time.Now().UTC()
 	orderedSources := append([]SourceBinding(nil), sources...)
-	sort.Slice(orderedSources, func(i, j int) bool {
-		if orderedSources[i].Ref.Kind != orderedSources[j].Ref.Kind {
-			return orderedSources[i].Ref.Kind < orderedSources[j].Ref.Kind
-		}
-		return orderedSources[i].Ref.ID < orderedSources[j].Ref.ID
+	slices.SortFunc(orderedSources, func(left, right SourceBinding) int {
+		return cmp.Or(cmp.Compare(left.Ref.Kind, right.Ref.Kind), cmp.Compare(left.Ref.ID, right.Ref.ID))
 	})
 	handoff := ImprovementHandoff{
 		Version: HandoffSchemaVersion, Kind: kind, Scope: scope, Proposal: proposal,
@@ -113,11 +111,8 @@ func NewImprovementHandoff(kind HandoffKind, scope HandoffScope, proposal Artifa
 
 func HandoffID(kind HandoffKind, scope HandoffScope, proposal ArtifactRef, sources []SourceBinding) string {
 	ordered := append([]SourceBinding(nil), sources...)
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].Ref.Kind != ordered[j].Ref.Kind {
-			return ordered[i].Ref.Kind < ordered[j].Ref.Kind
-		}
-		return ordered[i].Ref.ID < ordered[j].Ref.ID
+	slices.SortFunc(ordered, func(left, right SourceBinding) int {
+		return cmp.Or(cmp.Compare(left.Ref.Kind, right.Ref.Kind), cmp.Compare(left.Ref.ID, right.Ref.ID))
 	})
 	identity := struct {
 		Kind     HandoffKind
@@ -166,11 +161,8 @@ func validateHandoffIdentity(h ImprovementHandoff) error {
 }
 
 func validateHandoffSources(h ImprovementHandoff) error {
-	if !sort.SliceIsSorted(h.Sources, func(i, j int) bool {
-		if h.Sources[i].Ref.Kind != h.Sources[j].Ref.Kind {
-			return h.Sources[i].Ref.Kind < h.Sources[j].Ref.Kind
-		}
-		return h.Sources[i].Ref.ID < h.Sources[j].Ref.ID
+	if !slices.IsSortedFunc(h.Sources, func(left, right SourceBinding) int {
+		return cmp.Or(cmp.Compare(left.Ref.Kind, right.Ref.Kind), cmp.Compare(left.Ref.ID, right.Ref.ID))
 	}) {
 		return fmt.Errorf("handoff sources must be sorted by kind and id")
 	}
