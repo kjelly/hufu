@@ -295,8 +295,8 @@ func TestCoordinatorSubServices_NilFallback(t *testing.T) {
 func TestCoordinatorSubServices_PolicyEngineOverrideAffectsLookup(t *testing.T) {
 	ws := t.TempDir()
 	c := &Coordinator{
-		projectDir:      ws,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: ws,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 
 	// Seed the cache under an explicit CacheUse PolicyEngine override (fresh=true).

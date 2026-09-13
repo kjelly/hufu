@@ -114,11 +114,11 @@ func TestProtocolRepair_PreparationFailureIsRecorded(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-preparation-failure",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-preparation-failure",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "record repair preparation failure"}})[0]
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "worker execution evidence"}
@@ -158,11 +158,11 @@ func TestProtocolRepair_StreamErrorIsRecordedAsPreparationFailure(t *testing.T) 
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-stream-failure",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-stream-failure",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "record repair stream failure"}})[0]
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "worker execution evidence"}
@@ -290,7 +290,7 @@ func TestPolicyDeniedAttemptGetsOneCleanWorkerRetryWithoutResultOnlyRepair(t *te
 			"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 		}},
 		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry), executionRunID: "run-policy-retry",
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}), executionRunID: "run-policy-retry",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "run bounded inspection"}})[0]
 	c.workerAgentOverride = &policyDeniedThenSubmittedWorker{calls: &workerCalls, prompts: &prompts, onSecond: func() {
@@ -330,7 +330,7 @@ func TestSecondPolicyDenialDoesNotCallWorkerOrRepairAgain(t *testing.T) {
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "policy-terminal", Timeout: 30, MaxRetries: 3}, Agents: map[string]*agent.AgentDef{
 			"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 3, Generation: agent.GenerationParams{Model: "test"}},
 		}},
-		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry), executionRunID: "run-policy-terminal",
+		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskCache: newDefaultTaskCache(taskCacheDependencies{}), executionRunID: "run-policy-terminal",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "run bounded inspection"}})[0]
 	c.workerAgentOverride = &policyDeniedThenSubmittedWorker{calls: &workerCalls, prompts: new([]string)}
@@ -393,11 +393,11 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-progress-repair",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-progress-repair",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "incomplete execution"}})[0]
 
@@ -450,11 +450,11 @@ func TestSubmittedPartialReadOnlyRetriesWithEvidenceContext(t *testing.T) {
 				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-read-only-partial",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-read-only-partial",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "inspect runtime"}})[0]
 	c.workerAgentOverride = &submittedPartialThenSuccessWorker{calls: &workerCalls, prompts: &prompts,
@@ -529,11 +529,11 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-progress-retry",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-progress-retry",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "replay progress result"}})[0]
 
@@ -605,11 +605,11 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-schema-repair-success",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-schema-repair-success",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "schema repair task"}})[0]
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "execution output"}
@@ -681,11 +681,11 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-schema-repair-failure",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-schema-repair-failure",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "unrecoverable schema task"}})[0]
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "original execution evidence"}
@@ -1056,11 +1056,11 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-101",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-101",
 	}
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -1175,11 +1175,11 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-grounded-101",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-grounded-101",
 	}
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -1235,11 +1235,11 @@ func TestProtocolRepair_UsesCleanContextInsteadOfOriginalToolHistory(t *testing.
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-clean-protocol-repair",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-clean-protocol-repair",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect runtime"}})[0]
 	c.workerAgentOverride = &resultContractWorker{calls: &workerCalls}
@@ -1283,11 +1283,11 @@ func TestProtocolRepair_ReadOnlyResultContractFailureRetriesOnceCleanly(t *testi
 				},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-capability-fallback",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-capability-fallback",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect before implementation"}})[0]
 	c.workerAgentOverride = &resultContractWorker{
@@ -1335,11 +1335,11 @@ func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
 				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-read-only-free-text",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-read-only-free-text",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
 	c.workerAgentOverride = &mockWorkerTextAgent{text: "[WARNING] internal/team/example.go:1 — review finding"}
@@ -1373,11 +1373,11 @@ func TestReadOnlyFreeTextIncompleteHandoffIsRetryableNotDone(t *testing.T) {
 				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectNone), Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-read-only-free-text-incomplete",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-read-only-free-text-incomplete",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review changes"}})[0]
 	c.workerAgentOverride = &incompleteFreeTextWorker{calls: &workerCalls}
@@ -1418,11 +1418,11 @@ func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testin
 				"worker": {Name: "worker", Role: "worker", MaxSteps: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-budget-finalization",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-budget-finalization",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "long read-only task"}})[0]
 	c.workerAgentOverride = &exhaustedWorkerAgent{calls: &workerCalls}
@@ -1477,11 +1477,11 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-retry",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-retry",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "replayable protocol task"}})[0]
 
@@ -1561,11 +1561,11 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-102",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-102",
 	}
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -1630,11 +1630,11 @@ func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-bypass",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-bypass",
 	}
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -1686,11 +1686,11 @@ func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-replay-false",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-replay-false",
 	}
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -1740,11 +1740,11 @@ func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-protocol-policy",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-policy",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "reconcile before retry"}})[0]
 	c.workerAgentOverride = &countingEmptyAgent{calls: &workerCalls}

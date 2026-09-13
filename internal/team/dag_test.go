@@ -190,7 +190,7 @@ func TestMarkStrandedBlocksDependentWithProducerVerifierEvidence(t *testing.T) {
 }
 
 func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
-	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry), maxConcurrent: 1}
+	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskCache: newDefaultTaskCache(taskCacheDependencies{}), maxConcurrent: 1}
 	tasks := []TaskDef{
 		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, SideEffect: SideEffectExternalWrite, Recovery: RecoveryManual},
 	}
@@ -210,7 +210,7 @@ func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
 
 func TestInvalidateTaskCache(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	ctx := context.Background()
 
@@ -281,10 +281,10 @@ func TestResetForRetryTimingReclock(t *testing.T) {
 
 func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
 	coord := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		sessionData:     NewSession(),
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		sessionData:  NewSession(),
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
 	tasks := []TaskDef{
@@ -317,7 +317,7 @@ func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
 }
 
 func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
-	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, sessionData: NewSession(), taskResultCache: make(map[string][]cachedTaskEntry)}
+	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, sessionData: NewSession(), taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
 	tasks := []TaskDef{
 		{Agent: "worker", Kind: TaskKindOutcome, Advances: []string{"build"}},
@@ -346,11 +346,11 @@ func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
 
 func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
 	coord := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		sessionData:     NewSession(),
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		maxConcurrent:   1,
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		sessionData:   NewSession(),
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+		maxConcurrent: 1,
 	}
 	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
 	tasks := []TaskDef{

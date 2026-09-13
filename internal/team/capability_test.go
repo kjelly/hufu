@@ -33,7 +33,7 @@ func newCapabilityCoordinator(t *testing.T, preflight []agent.CapabilityRequirem
 		taskTracker:        NewTaskTracker(),
 		reportStatus:       func(StatusEvent) {},
 		delegatedTasks:     make(map[string]int),
-		taskResultCache:    make(map[string][]cachedTaskEntry),
+		taskCache:          newDefaultTaskCache(taskCacheDependencies{}),
 		capabilityCache:    make(map[string]CapabilityResult),
 		capabilityInflight: make(map[string]chan CapabilityResult),
 	}

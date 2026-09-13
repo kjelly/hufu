@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -272,11 +271,9 @@ func TestLookupTaskCache(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Coordinator{
-				taskResultCache:   tt.cacheSetup(),
-				taskResultCacheMu: sync.RWMutex{},
-				cacheGeneration:   atomic.Int64{},
+				taskCache: &defaultTaskCache{entries: tt.cacheSetup()},
 			}
-			c.cacheGeneration.Store(tt.cacheGen)
+			testTaskCache(c).generation.Store(tt.cacheGen)
 
 			got, found := c.lookupTaskCache(context.Background(), tt.agentKey, tt.newTask)
 			if found != tt.wantFound {
@@ -364,8 +361,7 @@ func TestLookupTaskCacheAllGenerations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Coordinator{
-				taskResultCache:   tt.cacheSetup(),
-				taskResultCacheMu: sync.RWMutex{},
+				taskCache: &defaultTaskCache{entries: tt.cacheSetup()},
 			}
 
 			gotOutput, gotDesc, found := c.lookupTaskCacheAllGenerations(context.Background(), tt.agentKey, tt.newTask)
@@ -385,15 +381,13 @@ func TestLookupTaskCacheAllGenerations(t *testing.T) {
 // TestStoreTaskCache tests caching of task results
 func TestStoreTaskCache(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache:   make(map[string][]cachedTaskEntry),
-		taskResultCacheMu: sync.RWMutex{},
-		cacheGeneration:   atomic.Int64{},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
-	c.cacheGeneration.Store(5)
+	testTaskCache(c).generation.Store(5)
 
 	c.storeTaskCache("agent1", "test task", "test result")
 
-	entries := c.taskResultCache["agent1"]
+	entries := testTaskCache(c).entries["agent1"]
 	if len(entries) != 1 {
 		t.Fatalf("storeTaskCache() should add 1 entry, got %d", len(entries))
 	}
@@ -413,18 +407,16 @@ func TestStoreTaskCache(t *testing.T) {
 // TestStoreTaskCacheMaxEntries tests that cache is limited to max entries
 func TestStoreTaskCacheMaxEntries(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache:   make(map[string][]cachedTaskEntry),
-		taskResultCacheMu: sync.RWMutex{},
-		cacheGeneration:   atomic.Int64{},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	// Add more than maxTaskCacheEntries
 	for i := 0; i < maxTaskCacheEntries+10; i++ {
 		c.storeTaskCache("agent1", "task "+string(rune('A'+i)), "result")
 	}
 
-	entries := c.taskResultCache["agent1"]
+	entries := testTaskCache(c).entries["agent1"]
 	if len(entries) > maxTaskCacheEntries {
 		t.Errorf("cache size = %d, should be <= %d", len(entries), maxTaskCacheEntries)
 	}

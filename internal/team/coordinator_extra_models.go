@@ -492,21 +492,6 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	}
 	orig.delegatedTasksMu.Unlock()
 
-	var taskResultCacheClone map[string][]cachedTaskEntry
-	orig.taskResultCacheMu.RLock()
-	if orig.taskResultCache != nil {
-		taskResultCacheClone = make(map[string][]cachedTaskEntry, len(orig.taskResultCache))
-		for k, v := range orig.taskResultCache {
-			var sliceCopy []cachedTaskEntry
-			if v != nil {
-				sliceCopy = make([]cachedTaskEntry, len(v))
-				copy(sliceCopy, v)
-			}
-			taskResultCacheClone[k] = sliceCopy
-		}
-	}
-	orig.taskResultCacheMu.RUnlock()
-
 	var capabilityCacheClone map[string]CapabilityResult
 	orig.capabilityCacheMu.Lock()
 	if orig.capabilityCache != nil {
@@ -658,7 +643,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 	orig.stepConfirmFnMu.RUnlock()
 	//nolint:staticcheck,SA5011
 
-	return &Coordinator{
+	clone := &Coordinator{
 		session:                            newSession,
 		providerManager:                    orig.providerManager,
 		mcpManager:                         orig.mcpManager,
@@ -690,7 +675,6 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		sshSessionMgr:                      orig.sshSessionMgr,
 		skillUsage:                         skillUsageClone,
 		delegatedTasks:                     delegatedTasksClone,
-		taskResultCache:                    taskResultCacheClone,
 		capabilityCache:                    capabilityCacheClone,
 		capabilityInflight:                 make(map[string]chan CapabilityResult),
 		memoryStore:                        orig.memoryStore,
@@ -750,6 +734,10 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		noProgressUsageOwner:               usageOwner,
 		noProgressUsageNamespace:           usageNamespace,
 	}
+	cacheDeps := taskCacheDependenciesFor(clone)
+	cacheDeps.AppendJournal = nil
+	clone.taskCache = orig.TaskCache().Fork(cacheDeps)
+	return clone
 }
 
 // sanitizeModel removes characters unsafe for file paths from a model name.

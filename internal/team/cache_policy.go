@@ -283,7 +283,9 @@ func (c *Coordinator) ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMod
 
 	var gen int64
 	if c != nil {
-		gen = c.cacheGeneration.Load()
+		if cache, ok := c.TaskCache().(interface{ currentGeneration() int64 }); ok {
+			gen = cache.currentGeneration()
+		}
 	}
 
 	fp, hasErr := ComputeProjectFingerprintWithStatus(projDir)

@@ -633,30 +633,17 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	c.rebuildAntiThrashingState()
 
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
-		c.taskResultCacheMu.Lock()
-		if c.taskResultCache == nil {
-			c.taskResultCache = make(map[string][]cachedTaskEntry)
-		}
-		gen := c.cacheGeneration.Load()
+		seeds := make([]TaskCacheSeed, 0, len(tasks))
 		for _, t := range tasks {
 			if t != nil && t.Status == TaskDone && t.Output != "" {
-				agentKey := strings.ToLower(t.Agent)
-				c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-					taskDesc:     t.Desc,
-					verify:       t.Verify,
-					verifyMode:   normalizeVerifyMode(t.VerifyMode),
-					verifySpec:   cloneVerificationSpecPtr(t.VerifySpec),
-					verification: cloneVerificationResult(t.VerifyResult),
-					output:       t.Output,
-					generation:   gen,
-					pinned:       true,
+				seeds = append(seeds, TaskCacheSeed{
+					AgentKey: strings.ToLower(t.Agent), Task: t.Desc, Output: t.Output,
+					VerifySpec: t.VerifySpec, Verify: t.Verify, VerifyMode: t.VerifyMode,
+					Verification: t.VerifyResult, Pinned: true,
 				})
-				if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
-					c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
-				}
 			}
 		}
-		c.taskResultCacheMu.Unlock()
+		c.TaskCache().Restore(seeds)
 	}
 
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {

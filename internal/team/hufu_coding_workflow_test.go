@@ -45,11 +45,11 @@ import (
 func hufuCodingWorkflowFixture(t *testing.T) (*dagScheduler, []*TodoItem) {
 	t.Helper()
 	coord := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		sessionData:     NewSession(),
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		maxConcurrent:   1,
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		sessionData:   NewSession(),
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+		maxConcurrent: 1,
 	}
 	classes := []TaskFailureClass{FailureVerify, FailureSemanticRejection}
 	tasks := []TaskDef{

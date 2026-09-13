@@ -510,8 +510,7 @@ type Coordinator struct {
 	skillUsageMu          sync.Mutex
 	delegatedTasks        map[string]int
 	delegatedTasksMu      sync.Mutex
-	taskResultCache       map[string][]cachedTaskEntry // agent → ordered list of past results
-	taskResultCacheMu     sync.RWMutex
+	taskCache             TaskCache
 	cachePolicy           CachePolicy
 	cachePolicyMu         sync.RWMutex
 	executionProfile      ExecutionProfile
@@ -524,7 +523,6 @@ type Coordinator struct {
 	capabilityCache        map[string]CapabilityResult
 	capabilityCacheMu      sync.Mutex
 	capabilityInflight     map[string]chan CapabilityResult
-	cacheGeneration        atomic.Int64 // bumped each time coordinator starts a new delegation round
 	journal                *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal              bool
 	eventStore             *EventStore     // append-only session event store
@@ -1239,7 +1237,6 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 		stepReceipts:              NewExecutionStepReceiptRegistry(),
 		taskAttempts:              make(map[string]int),
 		toolPolicyVerdicts:        make(map[string]string),
-		taskResultCache:           make(map[string][]cachedTaskEntry),
 		pendingDiagnosticPackets:  make(map[string]DiagnosticPacket),
 		capabilityCache:           make(map[string]CapabilityResult),
 		capabilityInflight:        make(map[string]chan CapabilityResult),
@@ -1321,6 +1318,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.planner = &defaultPlanner{c: c}
 	c.sessionStore = &defaultSessionStore{c: c}
 	c.policyEngine = &defaultPolicyEngine{c: c}
+	c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
 	c.repairController = NewRepairController()
 	c.authorizationPolicy = defaultAuthorizationPolicy{}
 	c.secretRegistry = tools.NewSecretRegistry()
@@ -1963,6 +1961,26 @@ func (c *Coordinator) SetPolicyEngine(pe PolicyEngine) {
 	c.policyEngine = pe
 }
 
+// TaskCache returns the coordinator's task-result cache service. Coordinators
+// assembled directly in tests receive the same production default lazily.
+func (c *Coordinator) TaskCache() TaskCache {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.taskCache == nil {
+		c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
+	} else if cache, ok := c.taskCache.(*defaultTaskCache); ok && cache.deps.isZero() {
+		cache.deps = taskCacheDependenciesFor(c)
+	}
+	return c.taskCache
+}
+
+// SetTaskCache replaces the task-result cache service.
+func (c *Coordinator) SetTaskCache(cache TaskCache) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.taskCache = cache
+}
+
 // RepairController returns the coordinator's fail-closed recovery service.
 func (c *Coordinator) RepairController() *RepairController {
 	c.mu.RLock()
@@ -2324,6 +2342,7 @@ func (c *Coordinator) RuntimeServices() RuntimeServices {
 		SubagentRegistry:    c.SubagentRegistry(),
 		ExecutionRegistry:   c.ExecutionRegistry(),
 		ExperienceProcessor: c.ExperienceProcessor(),
+		TaskCache:           c.TaskCache(),
 	}
 }
 
@@ -2366,6 +2385,9 @@ func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
 	}
 	if services.ExperienceProcessor != nil {
 		c.SetExperienceProcessor(services.ExperienceProcessor)
+	}
+	if services.TaskCache != nil {
+		c.SetTaskCache(services.TaskCache)
 	}
 }
 

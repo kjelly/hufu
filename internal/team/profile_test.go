@@ -183,9 +183,9 @@ func TestProfile_FreshVerificationIsolation(t *testing.T) {
 	}
 	c.SetSessionData(pastSessionData)
 
-	c.taskResultCacheMu.RLock()
-	cacheLen := len(c.taskResultCache["helper"])
-	c.taskResultCacheMu.RUnlock()
+	testTaskCache(c).mu.RLock()
+	cacheLen := len(testTaskCache(c).entries["helper"])
+	testTaskCache(c).mu.RUnlock()
 	if cacheLen != 0 {
 		t.Errorf("taskResultCache length under fresh-verification = %d, want 0 (historical task reuse disabled)", cacheLen)
 	}

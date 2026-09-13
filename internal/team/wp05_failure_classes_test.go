@@ -466,11 +466,11 @@ func newWP05RetryTestCoordinator(t *testing.T, worker fantasy.Agent) (*Coordinat
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}, MaxRetries: -1},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(e StatusEvent) { events = append(events, e.Type) },
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-wp05-retry",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(e StatusEvent) { events = append(events, e.Type) },
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-wp05-retry",
 	}
 	c.workerAgentOverride = worker
 	return c, &events

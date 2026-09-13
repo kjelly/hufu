@@ -27,7 +27,7 @@ func TestExecuteTaskFailsClosedWhenWorkerContextPreflightFails(t *testing.T) {
 		sessionTime:         time.Now(),
 		taskTracker:         NewTaskTracker(),
 		reportStatus:        func(StatusEvent) {},
-		taskResultCache:     make(map[string][]cachedTaskEntry),
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		workerAgentOverride: &countingEmptyAgent{calls: &calls},
 	}
 	c.SetContextCompiler(&mockContextCompiler{compileWorkerErr: errors.New("normative conflict")})
@@ -49,9 +49,9 @@ func TestBuildSystemPromptFailsClosedWhenCoordinatorContextPreflightFails(t *tes
 			Config:    agent.TeamConfig{Name: "coordinator-context"},
 			Agents:    map[string]*agent.AgentDef{"coordinator": orch},
 		},
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.SetContextCompiler(&mockContextCompiler{compileCoordinatorErr: errors.New("context budget exceeded")})
 	_, err := c.buildSystemPrompt(context.Background(), orch, "do work", false)

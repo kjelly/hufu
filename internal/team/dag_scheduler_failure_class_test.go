@@ -41,10 +41,10 @@ func TestFailureClassAllowedHelpers(t *testing.T) {
 func dagSchedulerOnFailureClassesFixture(t *testing.T, onFailureClasses []TaskFailureClass, terminalClass TaskFailureClass) (*dagScheduler, []*TodoItem) {
 	t.Helper()
 	coord := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		maxConcurrent:   1,
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+		maxConcurrent: 1,
 	}
 	tasks := []TaskDef{
 		{Agent: "coder"},

@@ -105,10 +105,10 @@ func TestExecuteTaskProtocolOnlyEmptyOutputBlocksWithoutRetry(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		sessionTime:  time.Now(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	// The override models a worker that performed one external side effect,
 	// then stopped without output or submit_result. executeTask must classify
@@ -162,7 +162,7 @@ func TestRunResultPersistsAndRestoresWithSession(t *testing.T) {
 	if saved == nil || saved.RunResult == nil || saved.RunResult.Outcome != RunOutcomePartial {
 		t.Fatalf("persisted run result missing or incorrect: %#v", saved)
 	}
-	restored := &Coordinator{session: session, taskTracker: NewTaskTracker(), taskResultCache: make(map[string][]cachedTaskEntry)}
+	restored := &Coordinator{session: session, taskTracker: NewTaskTracker(), taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	restored.SetSessionData(saved)
 	if got := restored.LastRunResult(); got == nil || got.Outcome != RunOutcomePartial {
 		t.Fatalf("restored run result missing or incorrect: %#v", got)

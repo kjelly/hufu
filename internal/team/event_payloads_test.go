@@ -348,7 +348,7 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 		sessionTime:     time.Now(),
 		taskTracker:     NewTaskTracker(),
 		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskCache:       newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:  "run-retry",
 		providerManager: providerManager,
 	}
@@ -417,10 +417,10 @@ func TestDAGScheduler_CacheHitFailingJournalDoesNotAdvanceCheckpointOrReleaseDep
 				"worker": {Name: "worker", Role: "worker"},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		sessionTime:  time.Now(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.workerAgentOverride = &failOnAttemptAgent{}
 	c.storeTaskCacheWithTypedVerification("worker", "cached task", nil, "", "", "cached result")
@@ -463,10 +463,10 @@ func TestDAGScheduler_ResetWaveFailingJournalDoesNotResetStateOrLaunchWorker(t *
 				"worker": {Name: "worker", Role: "worker"},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		sessionTime:  time.Now(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.workerAgentOverride = worker
 	c.SetEventJournal(journal)
@@ -519,10 +519,10 @@ func TestResumeInterruptedTasks_FailingJournalAbortDoesNotResetOrLaunch(t *testi
 				"worker": {Name: "worker", Role: "worker"},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		sessionTime:  time.Now(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.workerAgentOverride = worker
 	c.SetEventJournal(failingJournal{err: errors.New("event store write failed on resume reset")})
@@ -853,11 +853,11 @@ func TestExecuteTasks_AppendsDAGEdgesInTaskCreatedPayload(t *testing.T) {
 				"test":  {Name: "test", Role: "worker"},
 			},
 		},
-		projectDir:      workspace,
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		delegatedTasks:  make(map[string]int),
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		delegatedTasks: make(map[string]int),
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.SetEventJournal(journal)
 	// The DAG scheduler dispatches each task to a worker. Submit a completed

@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -43,6 +46,339 @@ type cachedTaskEntry struct {
 	// until their first lookup. invalidateTaskCache removes them regardless.
 	pinned   bool
 	identity CacheIdentity
+}
+
+type taskCacheDependencies struct {
+	PolicyEngine  func() PolicyEngine
+	Identity      func(TaskCacheLookupRequest) CacheIdentity
+	Forbidden     func(task, verify string) bool
+	SimilarTask   func(context.Context, string, []string, time.Duration) (int, error)
+	ObserveThink  func(TaskCacheLookupScope, string)
+	AppendJournal func(journalRecord)
+}
+
+type defaultTaskCache struct {
+	mu         sync.RWMutex
+	entries    map[string][]cachedTaskEntry
+	generation atomic.Int64
+	deps       taskCacheDependencies
+}
+
+func newDefaultTaskCache(deps taskCacheDependencies) *defaultTaskCache {
+	return &defaultTaskCache{entries: make(map[string][]cachedTaskEntry), deps: deps}
+}
+
+func (d taskCacheDependencies) isZero() bool {
+	return d.PolicyEngine == nil && d.Identity == nil && d.Forbidden == nil && d.SimilarTask == nil &&
+		d.ObserveThink == nil && d.AppendJournal == nil
+}
+
+func taskCacheDependenciesFor(c *Coordinator) taskCacheDependencies {
+	return taskCacheDependencies{
+		PolicyEngine: c.PolicyEngine,
+		Identity: func(req TaskCacheLookupRequest) CacheIdentity {
+			agentKey := req.AgentKey
+			if req.Scope != TaskCacheLookupExecution {
+				agentKey = ""
+			}
+			return c.ComputeCacheIdentity(agentKey, req.Task, req.Verify, req.VerifyMode)
+		},
+		Forbidden: c.IsCacheForbidden,
+		SimilarTask: func(ctx context.Context, task string, candidates []string, timeout time.Duration) (int, error) {
+			sidecar := c.AgentPool().Sidecar()
+			if sidecar == nil {
+				return -1, nil
+			}
+			sidecarCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return sidecar.SimilarTask(sidecarCtx, task, candidates)
+		},
+		ObserveThink: func(scope TaskCacheLookupScope, task string) {
+			if !c.think {
+				return
+			}
+			if scope == TaskCacheLookupExecution {
+				c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking cache for semantically similar task: %.50s", task))
+				return
+			}
+			c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking semantic similarity across all history: %.50s", task))
+		},
+		AppendJournal: func(record journalRecord) {
+			record.Round = c.round
+			c.journalAppend(record)
+		},
+	}
+}
+
+func (tc *defaultTaskCache) cachePolicy() CachePolicy {
+	if tc.deps.PolicyEngine == nil {
+		return CacheUse
+	}
+	return tc.deps.PolicyEngine().GetCachePolicy()
+}
+
+func (tc *defaultTaskCache) identity(req TaskCacheLookupRequest) CacheIdentity {
+	if tc.deps.Identity == nil {
+		return CacheIdentity{}
+	}
+	return tc.deps.Identity(req)
+}
+
+func (tc *defaultTaskCache) isFresh(entry cachedTaskEntry, identity CacheIdentity) bool {
+	if tc.deps.PolicyEngine == nil {
+		return true
+	}
+	return tc.deps.PolicyEngine().IsCacheFresh(entry, identity)
+}
+
+func (tc *defaultTaskCache) forbidden(task, verify string) bool {
+	return tc.deps.Forbidden != nil && tc.deps.Forbidden(task, verify)
+}
+
+func (tc *defaultTaskCache) appendJournal(record journalRecord) {
+	if tc.deps.AppendJournal != nil {
+		tc.deps.AppendJournal(record)
+	}
+}
+
+func (tc *defaultTaskCache) entriesFor(agentKey string) []cachedTaskEntry {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return slices.Clone(tc.entries[agentKey])
+}
+
+func (tc *defaultTaskCache) Lookup(ctx context.Context, req TaskCacheLookupRequest) (TaskCacheLookupResult, bool) {
+	if tc == nil {
+		return TaskCacheLookupResult{}, false
+	}
+	policy := tc.cachePolicy()
+	if policy == CacheBypass || policy == CacheRefresh || tc.forbidden(req.Task, req.Verify) {
+		return TaskCacheLookupResult{}, false
+	}
+
+	normalizedSpec := normalizedVerificationSpecForCache(req.VerifySpec, req.Verify, req.VerifyMode)
+	if isTaskResultVerificationSpec(normalizedSpec) {
+		return TaskCacheLookupResult{}, false
+	}
+	evidenceSpec := normalizedSpec
+	if req.VerifySpec == nil {
+		evidenceSpec = nil
+	}
+	if normalizedSpec != nil {
+		if err := validateVerificationSpec(*normalizedSpec); err != nil {
+			return TaskCacheLookupResult{}, false
+		}
+	}
+
+	all := tc.entriesFor(req.AgentKey)
+	if req.Scope == TaskCacheLookupCurrentRun {
+		currentRun := make([]cachedTaskEntry, 0, len(all))
+		for _, entry := range all {
+			if !entry.pinned {
+				currentRun = append(currentRun, entry)
+			}
+		}
+		all = currentRun
+	}
+	if len(all) == 0 {
+		return TaskCacheLookupResult{}, false
+	}
+
+	target := tc.identity(req)
+	if req.Scope == TaskCacheLookupExecution {
+		generation := tc.generation.Load()
+		for i := len(all) - 1; i >= 0; i-- {
+			entry := all[i]
+			if entry.generation == generation && entry.matchesWithSpec(req.Task, req.VerifySpec, req.Verify, req.VerifyMode) && entry.verificationEvidenceFresh(evidenceSpec) && tc.isFresh(entry, target) {
+				return TaskCacheLookupResult{Output: entry.output, MatchedTask: entry.taskDesc}, true
+			}
+		}
+	}
+
+	for i := len(all) - 1; i >= 0; i-- {
+		entry := all[i]
+		if entry.matchesWithSpec(req.Task, req.VerifySpec, req.Verify, req.VerifyMode) && entry.verificationEvidenceFresh(evidenceSpec) && tc.isFresh(entry, target) {
+			return TaskCacheLookupResult{Output: entry.output, MatchedTask: entry.taskDesc}, true
+		}
+	}
+
+	if tc.deps.SimilarTask == nil {
+		return TaskCacheLookupResult{}, false
+	}
+	semanticEntries := all
+	timeout := 5 * time.Second
+	if req.Scope == TaskCacheLookupExecution {
+		generation := tc.generation.Load()
+		semanticEntries = make([]cachedTaskEntry, 0, len(all))
+		for _, entry := range all {
+			if entry.generation == generation {
+				semanticEntries = append(semanticEntries, entry)
+			}
+		}
+		timeout = 10 * time.Second
+	} else if len(semanticEntries) > 100 {
+		semanticEntries = semanticEntries[len(semanticEntries)-100:]
+	}
+
+	eligible := make([]cachedTaskEntry, 0, len(semanticEntries))
+	for _, entry := range semanticEntries {
+		if entry.matchesVerificationContract(req.VerifySpec, req.Verify, req.VerifyMode) && entry.verificationEvidenceFresh(evidenceSpec) && tc.isFresh(entry, target) {
+			eligible = append(eligible, entry)
+		}
+	}
+	if len(eligible) == 0 {
+		return TaskCacheLookupResult{}, false
+	}
+
+	descriptions := make([]string, len(eligible))
+	for i, entry := range eligible {
+		descriptions[i] = entry.taskDesc
+	}
+	if tc.deps.ObserveThink != nil {
+		tc.deps.ObserveThink(req.Scope, req.Task)
+	}
+	idx, err := tc.deps.SimilarTask(ctx, req.Task, descriptions, timeout)
+	if err != nil || idx < 0 || idx >= len(eligible) {
+		return TaskCacheLookupResult{}, false
+	}
+	return TaskCacheLookupResult{Output: eligible[idx].output, MatchedTask: eligible[idx].taskDesc}, true
+}
+
+func (tc *defaultTaskCache) Store(req TaskCacheStoreRequest) {
+	if tc == nil || tc.cachePolicy() == CacheBypass {
+		return
+	}
+	normalizedSpec := normalizedVerificationSpecForCache(req.VerifySpec, req.Verify, req.VerifyMode)
+	if (normalizedSpec != nil && normalizeVerifyMode(normalizedSpec.Mode) == "observation") || isTaskResultVerificationSpec(normalizedSpec) {
+		return
+	}
+	if req.VerifySpec != nil && requiresFreshVerificationEvidence(normalizedSpec) && (req.Verification == nil || req.Verification.ExitCode != 0 || req.Verification.EvaluatedAt.IsZero() || req.Verification.Fingerprint == "") {
+		return
+	}
+	lookup := TaskCacheLookupRequest{
+		Scope: TaskCacheLookupExecution, AgentKey: req.AgentKey, Task: req.Task,
+		VerifySpec: req.VerifySpec, Verify: req.Verify, VerifyMode: req.VerifyMode,
+	}
+	identity := tc.identity(lookup)
+	tc.mu.Lock()
+	tc.entries[req.AgentKey] = append(tc.entries[req.AgentKey], cachedTaskEntry{
+		taskDesc: req.Task, verify: req.Verify, verifyMode: normalizeVerifyMode(req.VerifyMode),
+		verifySpec: cloneVerificationSpecPtr(normalizedSpec), verification: cloneVerificationResult(req.Verification),
+		output: req.Output, generation: tc.generation.Load(), identity: identity,
+	})
+	if len(tc.entries[req.AgentKey]) > maxTaskCacheEntries {
+		tc.entries[req.AgentKey] = tc.entries[req.AgentKey][1:]
+	}
+	tc.mu.Unlock()
+
+	tc.appendJournal(journalRecord{
+		Op: "put", Agent: req.AgentKey, Desc: req.Task, Verify: req.Verify,
+		VerifyMode: normalizeVerifyMode(req.VerifyMode), VerifySpec: cloneVerificationSpecPtr(normalizedSpec),
+		Verification: cloneVerificationResult(req.Verification), Output: req.Output,
+		TS: time.Now().Format(time.RFC3339), RepoCommit: identity.RepoCommit,
+		ProjectFingerprint: identity.ProjectFingerprint, Identity: &identity,
+	})
+}
+
+func (tc *defaultTaskCache) Invalidate(req TaskCacheInvalidateRequest) {
+	if tc == nil {
+		return
+	}
+	normalized := normalizeTaskCacheKey(req.Task)
+	contract := taskCacheIdentityWithSpec(req.Task, req.VerifySpec, req.Verify, req.VerifyMode)
+	tc.mu.Lock()
+	entries := tc.entries[req.AgentKey]
+	fresh := entries[:0]
+	for _, entry := range entries {
+		entryContract := taskCacheIdentityWithSpec(entry.taskDesc, entry.verifySpec, entry.verify, entry.verifyMode)
+		if normalizeTaskCacheKey(entry.taskDesc) != normalized || entryContract != contract {
+			fresh = append(fresh, entry)
+		}
+	}
+	tc.entries[req.AgentKey] = fresh
+	tc.mu.Unlock()
+
+	tc.appendJournal(journalRecord{
+		Op: "del", Agent: req.AgentKey, Desc: req.Task, Verify: req.Verify,
+		VerifyMode: normalizeVerifyMode(req.VerifyMode), VerifySpec: cloneVerificationSpecPtr(req.VerifySpec),
+		TS: time.Now().Format(time.RFC3339),
+	})
+}
+
+func (tc *defaultTaskCache) AdvanceGeneration() {
+	if tc == nil {
+		return
+	}
+	newGeneration := tc.generation.Add(1)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	for key, entries := range tc.entries {
+		fresh := make([]cachedTaskEntry, 0, len(entries))
+		for _, entry := range entries {
+			if entry.generation == newGeneration || entry.pinned {
+				fresh = append(fresh, entry)
+			}
+		}
+		tc.entries[key] = fresh
+	}
+}
+
+func (tc *defaultTaskCache) Restore(seeds []TaskCacheSeed) {
+	if tc == nil || len(seeds) == 0 {
+		return
+	}
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	generation := tc.generation.Load()
+	for _, seed := range seeds {
+		if seed.Deduplicate {
+			identity := taskCacheIdentity(seed.Task, seed.Verify, seed.VerifyMode)
+			duplicate := false
+			for _, entry := range tc.entries[seed.AgentKey] {
+				if taskCacheIdentity(entry.taskDesc, entry.verify, entry.verifyMode) == identity {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+		}
+		tc.entries[seed.AgentKey] = append(tc.entries[seed.AgentKey], cachedTaskEntry{
+			taskDesc: seed.Task, verify: seed.Verify, verifyMode: normalizeVerifyMode(seed.VerifyMode),
+			verifySpec: cloneVerificationSpecPtr(seed.VerifySpec), verification: cloneVerificationResult(seed.Verification),
+			output: seed.Output, generation: generation, pinned: seed.Pinned, identity: seed.Identity,
+		})
+		if n := len(tc.entries[seed.AgentKey]); n > maxTaskCacheEntries {
+			tc.entries[seed.AgentKey] = tc.entries[seed.AgentKey][n-maxTaskCacheEntries:]
+		}
+	}
+}
+
+func (tc *defaultTaskCache) Fork(deps taskCacheDependencies) TaskCache {
+	clone := newDefaultTaskCache(deps)
+	if tc == nil {
+		return clone
+	}
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	for key, entries := range tc.entries {
+		copied := make([]cachedTaskEntry, len(entries))
+		for i, entry := range entries {
+			copied[i] = entry
+			copied[i].verifySpec = cloneVerificationSpecPtr(entry.verifySpec)
+			copied[i].verification = cloneVerificationResult(entry.verification)
+		}
+		clone.entries[key] = copied
+	}
+	return clone
+}
+
+func (tc *defaultTaskCache) currentGeneration() int64 {
+	if tc == nil {
+		return 0
+	}
+	return tc.generation.Load()
 }
 
 type duplicateTodoMatch struct {
@@ -227,97 +563,11 @@ func (c *Coordinator) lookupTaskCacheWithVerification(ctx context.Context, agent
 }
 
 func (c *Coordinator) lookupTaskCacheWithTypedVerification(ctx context.Context, agentKey, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, bool) {
-	policy := c.PolicyEngine().GetCachePolicy()
-	if policy == CacheBypass || policy == CacheRefresh {
-		return "", false
-	}
-	if c.IsCacheForbidden(newTask, verify) {
-		return "", false
-	}
-	normalized := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
-	// A task_result_assert is bound to the current attempt's canonical result;
-	// cached entries do not carry that result and therefore cannot be reused.
-	if isTaskResultVerificationSpec(normalized) {
-		return "", false
-	}
-	// Legacy verify commands retain their historical cache policy for backward
-	// compatibility. Explicit verify_spec entries require fresh typed evidence;
-	// this distinction prevents the conservative legacy translation from making
-	// old helper APIs silently stop caching while keeping typed checks fail-closed.
-	evidenceSpec := normalized
-	if verifySpec == nil {
-		evidenceSpec = nil
-	}
-	if normalized != nil {
-		if err := validateVerificationSpec(*normalized); err != nil {
-			// A malformed verifier is never allowed to inherit a previous
-			// success. The normal execution path records its fail-closed error.
-			return "", false
-		}
-	}
-
-	target := c.ComputeCacheIdentity(agentKey, newTask, verify, verifyMode)
-	gen := c.cacheGeneration.Load()
-
-	c.taskResultCacheMu.RLock()
-	all := c.taskResultCache[agentKey]
-	c.taskResultCacheMu.RUnlock()
-
-	if len(all) == 0 {
-		return "", false
-	}
-
-	// Step 1: exact match in current generation (newest entry first)
-	for i := len(all) - 1; i >= 0; i-- {
-		e := all[i]
-		if e.generation == gen && e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
-			return e.output, true
-		}
-	}
-
-	// Step 2: exact match across all generations (newest entry first)
-	for i := len(all) - 1; i >= 0; i-- {
-		e := all[i]
-		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
-			return e.output, true
-		}
-	}
-
-	// Step 3: sidecar semantic similarity in current generation only
-	s := c.AgentPool().Sidecar()
-	if s == nil {
-		return "", false
-	}
-
-	var currentGenEntries []cachedTaskEntry
-	for _, e := range all {
-		if e.generation == gen && e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
-			currentGenEntries = append(currentGenEntries, e)
-		}
-	}
-	if len(currentGenEntries) == 0 {
-		return "", false
-	}
-
-	pastDescs := make([]string, len(currentGenEntries))
-	for i, e := range currentGenEntries {
-		pastDescs[i] = e.taskDesc
-	}
-
-	sidecarCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if c.think {
-		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking cache for semantically similar task: %.50s", newTask))
-	}
-	idx, err := s.SimilarTask(sidecarCtx, newTask, pastDescs)
-	if err != nil {
-		return "", false
-	}
-	if idx >= 0 && idx < len(currentGenEntries) {
-		return currentGenEntries[idx].output, true
-	}
-	return "", false
+	result, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
+		Scope: TaskCacheLookupExecution, AgentKey: agentKey, Task: newTask,
+		VerifySpec: verifySpec, Verify: verify, VerifyMode: verifyMode,
+	})
+	return result.Output, ok
 }
 
 // lookupTaskCacheAllGenerations checks for semantically similar tasks across ALL
@@ -338,11 +588,11 @@ func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerify(ctx context.Contex
 }
 
 func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerification(ctx context.Context, agentKey, newTask, verify, verifyMode string) (string, string, bool) {
-	c.taskResultCacheMu.RLock()
-	all := c.taskResultCache[agentKey]
-	c.taskResultCacheMu.RUnlock()
-
-	return c.lookupTaskCacheIn(ctx, all, newTask, verify, verifyMode)
+	result, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
+		Scope: TaskCacheLookupAllGenerations, AgentKey: agentKey, Task: newTask,
+		Verify: verify, VerifyMode: verifyMode,
+	})
+	return result.Output, result.MatchedTask, ok
 }
 
 // lookupTaskCacheCurrentRunWithVerification is restricted to entries produced
@@ -357,99 +607,11 @@ func (c *Coordinator) lookupTaskCacheCurrentRunWithVerification(ctx context.Cont
 }
 
 func (c *Coordinator) lookupTaskCacheCurrentRunWithTypedVerification(ctx context.Context, agentKey, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, string, bool) {
-	c.taskResultCacheMu.RLock()
-	all := c.taskResultCache[agentKey]
-	c.taskResultCacheMu.RUnlock()
-
-	thisRun := make([]cachedTaskEntry, 0, len(all))
-	for _, e := range all {
-		if !e.pinned {
-			thisRun = append(thisRun, e)
-		}
-	}
-	return c.lookupTaskCacheInWithTypedVerification(ctx, thisRun, newTask, verifySpec, verify, verifyMode)
-}
-
-func (c *Coordinator) lookupTaskCacheIn(ctx context.Context, all []cachedTaskEntry, newTask, verify, verifyMode string) (string, string, bool) {
-	return c.lookupTaskCacheInWithTypedVerification(ctx, all, newTask, nil, verify, verifyMode)
-}
-
-func (c *Coordinator) lookupTaskCacheInWithTypedVerification(ctx context.Context, all []cachedTaskEntry, newTask string, verifySpec *VerificationSpec, verify, verifyMode string) (string, string, bool) {
-	policy := c.PolicyEngine().GetCachePolicy()
-	if policy == CacheBypass || policy == CacheRefresh {
-		return "", "", false
-	}
-	if c.IsCacheForbidden(newTask, verify) {
-		return "", "", false
-	}
-
-	if len(all) == 0 {
-		return "", "", false
-	}
-	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
-	if isTaskResultVerificationSpec(normalizedSpec) {
-		return "", "", false
-	}
-	evidenceSpec := normalizedSpec
-	if verifySpec == nil {
-		evidenceSpec = nil
-	}
-	if normalizedSpec != nil {
-		if err := validateVerificationSpec(*normalizedSpec); err != nil {
-			return "", "", false
-		}
-	}
-
-	target := c.ComputeCacheIdentity("", newTask, verify, verifyMode)
-
-	// Step 1: exact match across all generations (newest entry first)
-	for i := len(all) - 1; i >= 0; i-- {
-		e := all[i]
-		if e.matchesWithSpec(newTask, verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
-			return e.output, e.taskDesc, true
-		}
-	}
-
-	// Step 2: sidecar semantic similarity across all generations
-	s := c.AgentPool().Sidecar()
-	if s == nil {
-		return "", "", false
-	}
-
-	// Limit to last 100 entries to avoid overwhelming the sidecar
-	startIdx := 0
-	if len(all) > 100 {
-		startIdx = len(all) - 100
-	}
-	recentEntries := make([]cachedTaskEntry, 0, len(all)-startIdx)
-	for _, e := range all[startIdx:] {
-		if e.matchesVerificationContract(verifySpec, verify, verifyMode) && e.verificationEvidenceFresh(evidenceSpec) && c.PolicyEngine().IsCacheFresh(e, target) {
-			recentEntries = append(recentEntries, e)
-		}
-	}
-	if len(recentEntries) == 0 {
-		return "", "", false
-	}
-
-	pastDescs := make([]string, len(recentEntries))
-	for i, e := range recentEntries {
-		pastDescs[i] = e.taskDesc
-	}
-
-	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	if c.think {
-		c.emitThinkSidecar("SimilarTask", fmt.Sprintf("checking semantic similarity across all history: %.50s", newTask))
-	}
-	idx, err := s.SimilarTask(sidecarCtx, newTask, pastDescs)
-	if err != nil {
-		return "", "", false
-	}
-	if idx >= 0 && idx < len(recentEntries) {
-		return recentEntries[idx].output, recentEntries[idx].taskDesc, true
-	}
-	return "", "", false
+	result, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
+		Scope: TaskCacheLookupCurrentRun, AgentKey: agentKey, Task: newTask,
+		VerifySpec: verifySpec, Verify: verify, VerifyMode: verifyMode,
+	})
+	return result.Output, result.MatchedTask, ok
 }
 
 const maxTaskCacheEntries = 50
@@ -473,54 +635,9 @@ func (c *Coordinator) storeTaskCacheWithTypedVerification(agentKey, taskDesc str
 }
 
 func (c *Coordinator) storeTaskCacheWithTypedVerificationEvidence(agentKey, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode, output string, verification *VerificationResult) {
-	if c.PolicyEngine().GetCachePolicy() == CacheBypass {
-		return
-	}
-	normalizedSpec := normalizedVerificationSpecForCache(verifySpec, verify, verifyMode)
-	// Observation-mode results must not be cached for reuse. Use the same
-	// translation as execution so a mixed typed/legacy definition cannot lose
-	// its observation mode at the cache boundary.
-	if normalizedSpec != nil && normalizeVerifyMode(normalizedSpec.Mode) == "observation" {
-		return
-	}
-	if isTaskResultVerificationSpec(normalizedSpec) {
-		return
-	}
-	if verifySpec != nil && requiresFreshVerificationEvidence(normalizedSpec) && (verification == nil || verification.ExitCode != 0 || verification.EvaluatedAt.IsZero() || verification.Fingerprint == "") {
-		return
-	}
-	gen := c.cacheGeneration.Load()
-	identity := c.ComputeCacheIdentity(agentKey, taskDesc, verify, verifyMode)
-	c.taskResultCacheMu.Lock()
-	c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], cachedTaskEntry{
-		taskDesc:     taskDesc,
-		verify:       verify,
-		verifyMode:   normalizeVerifyMode(verifyMode),
-		verifySpec:   cloneVerificationSpecPtr(normalizedSpec),
-		verification: cloneVerificationResult(verification),
-		output:       output,
-		generation:   gen,
-		identity:     identity,
-	})
-	if len(c.taskResultCache[agentKey]) > maxTaskCacheEntries {
-		c.taskResultCache[agentKey] = c.taskResultCache[agentKey][1:]
-	}
-	c.taskResultCacheMu.Unlock()
-
-	c.journalAppend(journalRecord{
-		Op:                 "put",
-		Agent:              agentKey,
-		Desc:               taskDesc,
-		Verify:             verify,
-		VerifyMode:         normalizeVerifyMode(verifyMode),
-		VerifySpec:         cloneVerificationSpecPtr(normalizedSpec),
-		Verification:       cloneVerificationResult(verification),
-		Output:             output,
-		TS:                 time.Now().Format(time.RFC3339),
-		Round:              c.round,
-		RepoCommit:         identity.RepoCommit,
-		ProjectFingerprint: identity.ProjectFingerprint,
-		Identity:           &identity,
+	c.TaskCache().Store(TaskCacheStoreRequest{
+		AgentKey: agentKey, Task: taskDesc, Output: output, VerifySpec: verifySpec,
+		Verify: verify, VerifyMode: verifyMode, Verification: verification,
 	})
 }
 
@@ -546,22 +663,9 @@ func (c *Coordinator) invalidateTaskCacheWithVerification(agentKey, taskDesc, ve
 // identity; comparing legacy verify fields alone would delete unrelated typed
 // results which conventionally leave those fields empty.
 func (c *Coordinator) invalidateTaskCacheWithTypedVerification(agentKey, taskDesc string, verifySpec *VerificationSpec, verify, verifyMode string) {
-	normalized := normalizeTaskCacheKey(taskDesc)
-	contract := taskCacheIdentityWithSpec(taskDesc, verifySpec, verify, verifyMode)
-	c.taskResultCacheMu.Lock()
-	entries := c.taskResultCache[agentKey]
-	fresh := entries[:0]
-	for _, e := range entries {
-		entryContract := taskCacheIdentityWithSpec(e.taskDesc, e.verifySpec, e.verify, e.verifyMode)
-		if normalizeTaskCacheKey(e.taskDesc) != normalized || entryContract != contract {
-			fresh = append(fresh, e)
-		}
-	}
-	c.taskResultCache[agentKey] = fresh
-	c.taskResultCacheMu.Unlock()
-
-	// Tombstone so a restart cannot resurrect the invalidated result.
-	c.journalAppend(journalRecord{Op: "del", Agent: agentKey, Desc: taskDesc, Verify: verify, VerifyMode: normalizeVerifyMode(verifyMode), VerifySpec: cloneVerificationSpecPtr(verifySpec), TS: time.Now().Format(time.RFC3339)})
+	c.TaskCache().Invalidate(TaskCacheInvalidateRequest{
+		AgentKey: agentKey, Task: taskDesc, VerifySpec: verifySpec, Verify: verify, VerifyMode: verifyMode,
+	})
 }
 
 func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, desc string, verifySpec *VerificationSpec, verify, verifyMode string) *duplicateTodoMatch {

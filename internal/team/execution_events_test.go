@@ -143,7 +143,7 @@ func TestExecutionEvent_ModelProviderAndArtifacts(t *testing.T) {
 		"openai": {ProviderURL: "https://api.openai.com/v1", ProviderAPIKey: "test"},
 	})
 	c := &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskCache:       newDefaultTaskCache(taskCacheDependencies{}),
 		providerManager: pm,
 	}
 	c.session = &TeamSession{Config: agent.TeamConfig{Name: "test-team"}}

@@ -5,13 +5,21 @@ import (
 	"testing"
 )
 
+func testTaskCache(c *Coordinator) *defaultTaskCache {
+	cache, ok := c.TaskCache().(*defaultTaskCache)
+	if !ok {
+		panic("coordinator does not use defaultTaskCache")
+	}
+	return cache
+}
+
 // newTestCacheCoordinator creates a minimal Coordinator suitable for testing
 // the task result cache. No LLM provider or session is needed because
 // lookupTaskCache/storeTaskCache only touch the cache fields and Sidecar()
 // (which returns nil when sidecarModel is empty).
 func newTestCacheCoordinator() *Coordinator {
 	return &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
 }
 
@@ -19,14 +27,14 @@ func newTestCacheCoordinator() *Coordinator {
 
 func TestCacheGenerationInitiallyZero(t *testing.T) {
 	c := newTestCacheCoordinator()
-	if got := c.cacheGeneration.Load(); got != 0 {
+	if got := testTaskCache(c).generation.Load(); got != 0 {
 		t.Errorf("initial cacheGeneration = %d, want 0", got)
 	}
 }
 
 func TestCacheHitSameGeneration(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("researcher", "analyze code", "result: clean")
 
@@ -41,11 +49,11 @@ func TestCacheHitSameGeneration(t *testing.T) {
 
 func TestCacheMissAfterGenerationBump(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("researcher", "analyze code", "old result")
 
-	c.cacheGeneration.Add(1) // now gen = 2
+	testTaskCache(c).generation.Add(1) // now gen = 2
 
 	// Exact match across generations is a HIT — same goal text means same work.
 	out, ok := c.lookupTaskCache(context.Background(), "researcher", "analyze code")
@@ -59,11 +67,11 @@ func TestCacheMissAfterGenerationBump(t *testing.T) {
 
 func TestCacheNewGenerationAllowsNewEntries(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("researcher", "analyze code", "old result")
 
-	c.cacheGeneration.Add(1) // gen = 2
+	testTaskCache(c).generation.Add(1) // gen = 2
 
 	// Store a new result under the new generation.
 	c.storeTaskCache("researcher", "analyze code", "fresh result")
@@ -81,11 +89,11 @@ func TestCacheMultipleGenerationsCoexist(t *testing.T) {
 	c := newTestCacheCoordinator()
 
 	// Gen 1: store task A.
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 	c.storeTaskCache("writer", "write docs", "docs v1")
 
 	// Gen 2: store task B.
-	c.cacheGeneration.Store(2)
+	testTaskCache(c).generation.Store(2)
 	c.storeTaskCache("writer", "write tests", "tests v2")
 
 	// In gen 2: both tasks hit via cross-generation exact match.
@@ -107,7 +115,7 @@ func TestCacheMultipleGenerationsCoexist(t *testing.T) {
 
 func TestCacheHitCaseFolding(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("developer", "Run lint checks", "no issues")
 
@@ -123,7 +131,7 @@ func TestCacheHitCaseFolding(t *testing.T) {
 
 func TestCacheVerifyMustMatch(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCacheWithVerify("developer", "build binary", "test -f bin/app", "build succeeded")
 
@@ -152,8 +160,8 @@ func TestCacheVerifyModeMustMatch(t *testing.T) {
 
 func TestSessionCacheRestoreKeepsVerifyMode(t *testing.T) {
 	c := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskTracker: NewTaskTracker(),
+		taskCache:   newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.SetSessionData(&SessionData{Tasks: []*TodoItem{{
 		ID:         "1",
@@ -175,7 +183,7 @@ func TestSessionCacheRestoreKeepsVerifyMode(t *testing.T) {
 
 func TestCacheMissDifferentAgent(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("researcher", "find bugs", "3 bugs found")
 
@@ -187,7 +195,7 @@ func TestCacheMissDifferentAgent(t *testing.T) {
 
 func TestCacheMissDifferentTask(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("researcher", "analyze foo.go", "result A")
 
@@ -199,7 +207,7 @@ func TestCacheMissDifferentTask(t *testing.T) {
 
 func TestCacheMultipleEntriesSameAgent(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	c.storeTaskCache("developer", "write unit tests", "tests written")
 	c.storeTaskCache("developer", "run integration tests", "all pass")
@@ -217,7 +225,7 @@ func TestCacheMultipleEntriesSameAgent(t *testing.T) {
 
 func TestCacheEmptyOnInit(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	_, ok := c.lookupTaskCache(context.Background(), "any-agent", "any task")
 	if ok {
@@ -231,13 +239,13 @@ func TestCacheEmptyOnInit(t *testing.T) {
 // generation are also retrievable.
 func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(1)
+	testTaskCache(c).generation.Store(1)
 
 	// Store a result in gen 1.
 	c.storeTaskCache("developer", "build binary", "build succeeded")
 
 	// Bump generation (coordinator starts new round).
-	c.cacheGeneration.Add(1)
+	testTaskCache(c).generation.Add(1)
 
 	// Exact match across generations → HIT (same goal = same work).
 	out, ok := c.lookupTaskCache(context.Background(), "developer", "build binary")
@@ -267,43 +275,43 @@ func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
 // does not. We replicate the bump condition directly.
 func TestCoordinatorCallBumpsGeneration(t *testing.T) {
 	c := newTestCacheCoordinator()
-	initial := c.cacheGeneration.Load() // 0
+	initial := testTaskCache(c).generation.Load() // 0
 
 	// Simulate coordinator calling ExecuteTasks (callerID == CoordTodoID).
 	callerID := CoordTodoID
 	if callerID == "" || callerID == CoordTodoID {
-		c.cacheGeneration.Add(1)
+		testTaskCache(c).generation.Add(1)
 	}
-	if got := c.cacheGeneration.Load(); got != initial+1 {
+	if got := testTaskCache(c).generation.Load(); got != initial+1 {
 		t.Errorf("after coordinator call, generation = %d, want %d", got, initial+1)
 	}
 }
 
 func TestWorkerCallDoesNotBumpGeneration(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(5)
+	testTaskCache(c).generation.Store(5)
 
 	// Simulate a worker calling ExecuteTasks (callerID is a task ID, not coord).
 	callerID := "42" // some worker todoID
 	if callerID == "" || callerID == CoordTodoID {
-		c.cacheGeneration.Add(1)
+		testTaskCache(c).generation.Add(1)
 	}
 
-	if got := c.cacheGeneration.Load(); got != 5 {
+	if got := testTaskCache(c).generation.Load(); got != 5 {
 		t.Errorf("after worker call, generation = %d, want 5 (must not change)", got)
 	}
 }
 
 func TestEmptyCallerIDCountsAsCoordinator(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(3)
+	testTaskCache(c).generation.Store(3)
 
 	callerID := "" // no todoID in context
 	if callerID == "" || callerID == CoordTodoID {
-		c.cacheGeneration.Add(1)
+		testTaskCache(c).generation.Add(1)
 	}
 
-	if got := c.cacheGeneration.Load(); got != 4 {
+	if got := testTaskCache(c).generation.Load(); got != 4 {
 		t.Errorf("generation = %d, want 4 (empty callerID treated as coordinator)", got)
 	}
 }
@@ -313,7 +321,7 @@ func TestEmptyCallerIDCountsAsCoordinator(t *testing.T) {
 // should get a cache hit once the first has stored its result.
 func TestWorkerSubTaskSharingCache(t *testing.T) {
 	c := newTestCacheCoordinator()
-	c.cacheGeneration.Store(2) // coordinator already bumped to gen 2
+	testTaskCache(c).generation.Store(2) // coordinator already bumped to gen 2
 
 	// Worker A completes sub-task X and stores result.
 	c.storeTaskCache("analyst", "check performance", "latency p99=12ms")

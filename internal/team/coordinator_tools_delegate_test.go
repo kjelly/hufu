@@ -81,7 +81,7 @@ func TestRequestAgentToolInfoOmitsEnumWithNoWorkers(t *testing.T) {
 func TestRequestAgentToolUsesTypedResultWorkerSurface(t *testing.T) {
 	modelID := "request-agent-worker-surface-test"
 	c, def, capture := newWorkerProviderSurfaceCoordinator(t, modelID, "sub-agent")
-	c.taskResultCache = make(map[string][]cachedTaskEntry)
+	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
 	if err := c.startProviderExecutionBoundary(t.Context()); err != nil {
 		t.Fatal(err)
 	}

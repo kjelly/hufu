@@ -249,11 +249,11 @@ func TestRepeatedJSONAssertionPathsCanonicalizeInvalidationJournalAndFingerprint
 		t.Fatalf("reordered same-path assertions must share a fingerprint: first=%q reversed=%q", firstFingerprint, reversedFingerprint)
 	}
 
-	c := &Coordinator{taskResultCache: make(map[string][]cachedTaskEntry)}
+	c := &Coordinator{taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 	c.storeTaskCacheWithTypedVerification(agentKey, task, first, "", "", "cached")
 	c.invalidateTaskCacheWithTypedVerification(agentKey, task, reversed, "", "")
-	if entries := c.taskResultCache[agentKey]; len(entries) != 0 {
+	if entries := testTaskCache(c).entries[agentKey]; len(entries) != 0 {
 		t.Fatalf("invalidation with equivalent reordered contract retained cache entries: %#v", entries)
 	}
 
@@ -290,8 +290,8 @@ func TestRepeatedJSONAssertionPathsCanonicalizeInvalidationJournalAndFingerprint
 // are not stored in the task cache.
 func TestVerifySpecCache_ObservationModeNotCacheable(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		session:         &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
+		session:   &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 
@@ -302,9 +302,9 @@ func TestVerifySpecCache_ObservationModeNotCacheable(t *testing.T) {
 	}
 	c.storeTaskCacheWithTypedVerification("builder", "build the thing", spec, "", "observation", "done")
 
-	c.taskResultCacheMu.RLock()
-	entries := c.taskResultCache["builder"]
-	c.taskResultCacheMu.RUnlock()
+	testTaskCache(c).mu.RLock()
+	entries := testTaskCache(c).entries["builder"]
+	testTaskCache(c).mu.RUnlock()
 
 	for _, e := range entries {
 		if e.taskDesc == "build the thing" {
@@ -315,8 +315,8 @@ func TestVerifySpecCache_ObservationModeNotCacheable(t *testing.T) {
 
 func TestVerifySpecCache_MixedLegacyObservationModeNotCacheable(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		session:         &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
+		session:   &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 
@@ -335,7 +335,7 @@ func TestVerifySpecCache_MixedLegacyObservationModeNotCacheable(t *testing.T) {
 
 func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *testing.T) {
 	workspace := t.TempDir()
-	c := &Coordinator{taskResultCache: make(map[string][]cachedTaskEntry)}
+	c := &Coordinator{taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 
 	first := &VerificationSpec{Type: VerifyCommandExit, Command: "test -f report-a.json"}
@@ -352,7 +352,7 @@ func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *te
 		states: []TaskStatus{TaskPending},
 	}
 	_ = s.resetTask(context.Background(), 0, "retry")
-	entries := c.taskResultCache[agentKey]
+	entries := testTaskCache(c).entries[agentKey]
 	if len(entries) != 1 || !entries[0].matchesVerificationContract(second, "", "") {
 		t.Fatalf("DAG invalidation removed unrelated typed cache entry: %#v", entries)
 	}
@@ -392,13 +392,13 @@ func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *te
 
 func TestVerifySpecCache_MalformedSpecIsCacheMiss(t *testing.T) {
 	c := &Coordinator{
-		taskResultCache: map[string][]cachedTaskEntry{
+		taskCache: &defaultTaskCache{entries: map[string][]cachedTaskEntry{
 			"builder": {{
 				taskDesc:   "write result",
 				verifySpec: &VerificationSpec{Type: VerifyFileExists},
 				output:     "stale success",
 			}},
-		},
+		}},
 		session: &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
@@ -410,9 +410,9 @@ func TestVerifySpecCache_MalformedSpecIsCacheMiss(t *testing.T) {
 func TestVerifySpecCache_FileAndJSONEvidenceMustRemainFresh(t *testing.T) {
 	dir := t.TempDir()
 	c := &Coordinator{
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		session:         &TeamSession{Config: agent.TeamConfig{Name: "test"}},
-		projectDir:      dir,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
+		session:    &TeamSession{Config: agent.TeamConfig{Name: "test"}},
+		projectDir: dir,
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 

@@ -17,11 +17,11 @@ import (
 func newBudgetCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 	return &Coordinator{
-		session:         &TeamSession{Config: agent.TeamConfig{Name: "test", Timeout: 30}},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(event StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		session:      &TeamSession{Config: agent.TeamConfig{Name: "test", Timeout: 30}},
+		sessionTime:  time.Now(),
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(event StatusEvent) {},
+		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
 }
 
@@ -290,9 +290,9 @@ func TestSessionRestoreTasksAndCache(t *testing.T) {
 	}
 
 	// Verify semantic cache prepopulation
-	c.taskResultCacheMu.RLock()
-	cache := c.taskResultCache["worker"]
-	c.taskResultCacheMu.RUnlock()
+	testTaskCache(c).mu.RLock()
+	cache := testTaskCache(c).entries["worker"]
+	testTaskCache(c).mu.RUnlock()
 
 	if len(cache) != 1 {
 		t.Errorf("expected 1 cached entry for 'worker', got %d", len(cache))

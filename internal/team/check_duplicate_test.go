@@ -175,7 +175,7 @@ func TestCheckDuplicateTasks_TypedVerificationIdentity(t *testing.T) {
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
 		taskTracker:      NewTaskTracker(),
-		taskResultCache:  make(map[string][]cachedTaskEntry),
+		taskCache:        newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 
@@ -201,7 +201,7 @@ func TestCheckDuplicateTasks_TypedVerificationContractFiltersActiveAndCurrentRun
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
 		taskTracker:      NewTaskTracker(),
-		taskResultCache:  make(map[string][]cachedTaskEntry),
+		taskCache:        newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
 
@@ -282,13 +282,13 @@ func TestCheckDuplicateTasks_PinnedEntriesDoNotReject(t *testing.T) {
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
 		taskTracker:      NewTaskTracker(),
-		taskResultCache: map[string][]cachedTaskEntry{
+		taskCache: &defaultTaskCache{entries: map[string][]cachedTaskEntry{
 			"deployer": {{
 				taskDesc: "clean up old VMs and create OVS bridge",
 				output:   "done last run",
 				pinned:   true,
 			}},
-		},
+		}},
 	}
 
 	warnings, duplicates, _ := c.checkDuplicateTasks(context.Background(), []TaskDef{{
@@ -306,12 +306,12 @@ func TestCheckDuplicateTasks_CurrentRunCacheStillRejects(t *testing.T) {
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
 		taskTracker:      NewTaskTracker(),
-		taskResultCache: map[string][]cachedTaskEntry{
+		taskCache: &defaultTaskCache{entries: map[string][]cachedTaskEntry{
 			"deployer": {{
 				taskDesc: "clean up old VMs and create OVS bridge",
 				output:   "done this run",
 			}},
-		},
+		}},
 	}
 
 	warnings, duplicates, _ := c.checkDuplicateTasks(context.Background(), []TaskDef{{

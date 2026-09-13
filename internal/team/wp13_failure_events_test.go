@@ -174,7 +174,7 @@ func TestWP13ProtocolIncompleteFailureEventAcrossSurfaces(t *testing.T) {
 		journal:                journal,
 		reportStatus:           func(event StatusEvent) { reported = append(reported, event) },
 		emittedTaskTransitions: make(map[string]bool),
-		taskResultCache:        make(map[string][]cachedTaskEntry),
+		taskCache:              newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:         "run-wp13-protocol",
 	}
 	task, item := createAdmittedTestTask(t, c, TaskDef{Agent: "worker", Goal: "process api_token=protocol-secret", Execution: ExecutionContract{RequiresResult: true}})

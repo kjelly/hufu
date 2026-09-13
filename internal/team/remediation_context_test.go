@@ -124,10 +124,10 @@ func TestDAGSchedulerAttachesRemediationContextOnSemanticReset(t *testing.T) {
 // not also produce a self-referential remediation context.
 func TestDAGSchedulerSelfLoopDoesNotAttachRemediationContext(t *testing.T) {
 	coord := &Coordinator{
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		maxConcurrent:   1,
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+		maxConcurrent: 1,
 	}
 	tasks := []TaskDef{
 		{Agent: "verifier", OnFailure: intPtr(0), MaxRetries: 2, OnFailureClasses: []TaskFailureClass{FailureVerify}},

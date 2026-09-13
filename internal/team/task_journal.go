@@ -393,25 +393,18 @@ func (c *Coordinator) initTaskJournal() {
 			log.Printf("warning: task journal load failed: %v", err)
 		}
 		if len(loaded) > 0 {
-			gen := c.cacheGeneration.Load()
-			c.taskResultCacheMu.Lock()
+			var seeds []TaskCacheSeed
 			for agentKey, recs := range loaded {
-				existing := make(map[string]bool, len(c.taskResultCache[agentKey]))
-				for _, e := range c.taskResultCache[agentKey] {
-					existing[taskCacheIdentity(e.taskDesc, e.verify, e.verifyMode)] = true
-				}
 				for _, r := range recs {
-					if existing[taskCacheIdentity(r.taskDesc, r.verify, r.verifyMode)] {
-						continue
-					}
-					r.generation = gen
-					c.taskResultCache[agentKey] = append(c.taskResultCache[agentKey], r)
-				}
-				if n := len(c.taskResultCache[agentKey]); n > maxTaskCacheEntries {
-					c.taskResultCache[agentKey] = c.taskResultCache[agentKey][n-maxTaskCacheEntries:]
+					seeds = append(seeds, TaskCacheSeed{
+						AgentKey: agentKey, Task: r.taskDesc, Output: r.output,
+						VerifySpec: r.verifySpec, Verify: r.verify, VerifyMode: r.verifyMode,
+						Verification: r.verification, Identity: r.identity,
+						Pinned: true, Deduplicate: true,
+					})
 				}
 			}
-			c.taskResultCacheMu.Unlock()
+			c.TaskCache().Restore(seeds)
 		}
 	}
 	j, err := openTaskJournal(ws)
@@ -422,8 +415,8 @@ func (c *Coordinator) initTaskJournal() {
 	c.journal = j
 }
 
-// journalAppend writes one record. Callers must NOT hold taskResultCacheMu:
-// the journal has its own mutex and disk I/O must never block cache lookups.
+// journalAppend writes one record. Cache callers release their own mutex
+// before entering here so disk I/O never blocks cache lookups.
 func (c *Coordinator) journalAppend(rec journalRecord) {
 	j := c.journal
 	if j == nil {

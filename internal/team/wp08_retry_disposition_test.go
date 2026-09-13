@@ -115,11 +115,11 @@ func newWP08TestCoordinator(t *testing.T, worker fantasy.Agent, maxRetries int) 
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}, MaxRetries: -1},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(e StatusEvent) { events = append(events, e.Type) },
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-wp08",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(e StatusEvent) { events = append(events, e.Type) },
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-wp08",
 	}
 	c.workerAgentOverride = worker
 	return c, &events

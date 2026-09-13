@@ -50,13 +50,13 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	}
 
 	first := &Coordinator{
-		session:         &TeamSession{Workspace: workspace, Config: config, Agents: agents},
-		sessionData:     NewSession(),
-		projectDir:      workspace,
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-before-crash",
+		session:        &TeamSession{Workspace: workspace, Config: config, Agents: agents},
+		sessionData:    NewSession(),
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-before-crash",
 	}
 	first.taskTracker.TodoList().onChange = func() { first.saveCheckpoint() }
 	item := first.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -94,7 +94,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 		projectDir:          workspace,
 		taskTracker:         NewTaskTracker(),
 		reportStatus:        func(event StatusEvent) { events = append(events, event) },
-		taskResultCache:     make(map[string][]cachedTaskEntry),
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:      "run-after-crash",
 		workerAgentOverride: &countingTextAgent{calls: &workerCalls, text: "UNSAFE WORKER REPLAY"},
 	}
@@ -190,13 +190,13 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 	}
 
 	first := &Coordinator{
-		session:         &TeamSession{Workspace: workspace, Config: config, Agents: agents},
-		sessionData:     NewSession(),
-		projectDir:      workspace,
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-before-submitted-crash",
+		session:        &TeamSession{Workspace: workspace, Config: config, Agents: agents},
+		sessionData:    NewSession(),
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-before-submitted-crash",
 	}
 	first.taskTracker.TodoList().onChange = func() { first.saveCheckpoint() }
 	item := first.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -231,7 +231,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 		projectDir:          workspace,
 		taskTracker:         NewTaskTracker(),
 		reportStatus:        func(StatusEvent) {},
-		taskResultCache:     make(map[string][]cachedTaskEntry),
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:      "run-after-submitted-crash",
 		workerAgentOverride: &countingTextAgent{calls: &workerCalls, text: "UNSAFE WORKER REPLAY"},
 		repairAgentOverride: &countingTextAgent{calls: &repairCalls, text: "UNSAFE REPAIR REPLAY"},
@@ -268,13 +268,13 @@ func TestResumeInterruptedTasks_ProtocolSchemaRetryPreservesPriorHistory(t *test
 	}
 
 	first := &Coordinator{
-		session:         &TeamSession{Workspace: workspace, Config: config, Agents: agents},
-		sessionData:     NewSession(),
-		projectDir:      workspace,
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-before-schema-restart",
+		session:        &TeamSession{Workspace: workspace, Config: config, Agents: agents},
+		sessionData:    NewSession(),
+		projectDir:     workspace,
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-before-schema-restart",
 	}
 	first.taskTracker.TodoList().onChange = func() { first.saveCheckpoint() }
 	item := first.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -311,7 +311,7 @@ func TestResumeInterruptedTasks_ProtocolSchemaRetryPreservesPriorHistory(t *test
 		projectDir:          workspace,
 		taskTracker:         NewTaskTracker(),
 		reportStatus:        func(StatusEvent) {},
-		taskResultCache:     make(map[string][]cachedTaskEntry),
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:      "run-after-schema-restart",
 		workerAgentOverride: &countingTextAgent{calls: new(int), text: "UNSAFE WORKER REPLAY"},
 	}
@@ -349,7 +349,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointWithoutEvidenceBlocks(t *testi
 			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 		}},
 		sessionData: NewSession(), taskTracker: NewTaskTracker(),
-		reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry),
+		reportStatus: func(StatusEvent) {}, taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	c.taskTracker.TodoList().Restore([]*TodoItem{{
 		ID: "1", Agent: "worker", Desc: "missing evidence", Status: TaskProtocolIncomplete,
@@ -384,11 +384,11 @@ func TestResumeInterruptedTasks_ProtocolPreparationFailureIsRecorded(t *testing.
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionData:     NewSession(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-resume-preparation-failure",
+		sessionData:    NewSession(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-resume-preparation-failure",
 	}
 	item := &TodoItem{
 		ID: "1", Agent: "worker", Desc: "record resumed repair preparation failure",
@@ -555,7 +555,7 @@ func TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair(t *testing.T) {
 			"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 		}},
 		sessionData: NewSession(), taskTracker: NewTaskTracker(), projectDir: workspace,
-		reportStatus: func(StatusEvent) {}, taskResultCache: make(map[string][]cachedTaskEntry),
+		reportStatus: func(StatusEvent) {}, taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	item := &TodoItem{
 		ID: "1", Agent: "worker", Desc: "direct protocol repair", Status: TaskProtocolIncomplete,

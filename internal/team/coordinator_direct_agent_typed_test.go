@@ -123,7 +123,7 @@ func TestForcePlanFirstRejectsClosedSequenceBeforeProviderConstruction(t *testin
 		c := newDirectTypedCoordinator(t, "view", nil, nil)
 		c.forcePlanFirst = true
 		c.delegatedTasks = make(map[string]int)
-		c.taskResultCache = make(map[string][]cachedTaskEntry)
+		testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
 		task := TaskDef{
 			Agent: "worker",
 			Goal:  "review the bounded workset",

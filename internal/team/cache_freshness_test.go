@@ -17,8 +17,8 @@ import (
 func TestCachePolicy_UseRefreshBypass(t *testing.T) {
 	ws := t.TempDir()
 	c := &Coordinator{
-		projectDir:      ws,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: ws,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 
 	// 1. Default policy is CacheUse
@@ -68,8 +68,8 @@ func TestCachePolicy_UseRefreshBypass(t *testing.T) {
 func TestCacheIdentity_FreshnessValidation(t *testing.T) {
 	ws := t.TempDir()
 	c := &Coordinator{
-		projectDir:      ws,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: ws,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 
 	// Store entry with initial identity
@@ -340,8 +340,8 @@ func TestCacheLookup_GitDirtyTreeInvalidation(t *testing.T) {
 	}
 
 	c := &Coordinator{
-		projectDir:      ws,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: ws,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 
 	// Store task cache result under dirty v1
@@ -436,8 +436,8 @@ func TestCacheLookup_GitCommandFailureIneligible(t *testing.T) {
 	runGit("commit", "-m", "init")
 
 	c := &Coordinator{
-		projectDir:      ws,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: ws,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	ctx := context.Background()
 
@@ -461,8 +461,8 @@ func TestCacheLookup_GitCommandFailureIneligible(t *testing.T) {
 	}
 
 	cNoCommit := &Coordinator{
-		projectDir:      wsNoCommit,
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		projectDir: wsNoCommit,
+		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
 	}
 
 	// Verify production ComputeCacheIdentity sets HasError=true via real git rev-parse HEAD failure

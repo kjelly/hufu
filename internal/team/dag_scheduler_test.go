@@ -335,12 +335,12 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		maxConcurrent:   1,
-		sessionTime:     time.Now(),
-		budgetLedger:    budgetLedger{maxWallClock: 20 * time.Millisecond},
-		taskResultCache: make(map[string][]cachedTaskEntry),
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		maxConcurrent: 1,
+		sessionTime:   time.Now(),
+		budgetLedger:  budgetLedger{maxWallClock: 20 * time.Millisecond},
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "holds permit"},

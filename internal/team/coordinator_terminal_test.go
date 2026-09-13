@@ -489,7 +489,7 @@ func TestExecuteTaskRetainsPartialSubmittedResultWithoutConsultingTerminalEviden
 		sessionTime:        time.Now(),
 		taskTracker:        NewTaskTracker(),
 		reportStatus:       func(StatusEvent) {},
-		taskResultCache:    make(map[string][]cachedTaskEntry),
+		taskCache:          newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:     "run-claim-gate",
 		terminalSessionMgr: manager,
 	}
@@ -569,11 +569,11 @@ func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
 				"analyst": {Name: "analyst", Role: "worker", MaxRetries: 2, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-completed-with-gaps",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-completed-with-gaps",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "survey target capability"}})[0]
 	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
@@ -607,12 +607,12 @@ func TestExecuteTaskUsesSubmittedResultWithEmptyDetailsForCompletionAndProjectio
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		projectDir:      workspace,
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-typed-empty-details",
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-typed-empty-details",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "complete typed handoff"}})[0]
 	const fallback = "Now let me continue with the remaining work."
@@ -693,15 +693,15 @@ func TestExecuteTaskAdversarialVerifyUsesCanonicalSubmittedResult(t *testing.T) 
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		projectDir:      workspace,
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-skeptic-canonical",
-		sidecarModel:    modelID,
-		sidecarInst:     skeptic,
-		sidecarInit:     true,
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-skeptic-canonical",
+		sidecarModel:   modelID,
+		sidecarInst:    skeptic,
+		sidecarInit:    true,
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify typed handoff"}})[0]
 	const fallback = "Now let me continue with the remaining work."
@@ -739,11 +739,11 @@ func TestExecuteTaskVerbatimFinalizationUpdatesCanonicalResult(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-verbatim-finalization",
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-verbatim-finalization",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "capture complete transcript"}})[0]
 	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
@@ -802,12 +802,12 @@ func TestCharacterizationChildVerificationFailurePreservesTheSubmittedResult(t *
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		projectDir:      workspace,
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-characterization",
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-characterization",
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "process gamma"}})[0]
 	var calls int
@@ -918,12 +918,12 @@ func TestCharacterizationResumeReusesGenericChildIdentity(t *testing.T) {
 				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
 			},
 		},
-		projectDir:      workspace,
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-resume-before-checkpoint",
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-resume-before-checkpoint",
 	}
 	items := first.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "process alpha", Recovery: RecoveryRetry},
@@ -936,13 +936,13 @@ func TestCharacterizationResumeReusesGenericChildIdentity(t *testing.T) {
 	}
 
 	second := &Coordinator{
-		session:         first.session,
-		projectDir:      workspace,
-		sessionTime:     time.Now(),
-		taskTracker:     NewTaskTracker(),
-		reportStatus:    func(StatusEvent) {},
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		executionRunID:  "run-resume-after-checkpoint",
+		session:        first.session,
+		projectDir:     workspace,
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-resume-after-checkpoint",
 	}
 	second.SetSessionData(LoadSession(workspace))
 	var calls int

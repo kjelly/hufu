@@ -49,7 +49,7 @@ func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
 	if replayed == nil {
 		t.Fatal("session was not saved")
 	}
-	second := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: replayed, taskTracker: NewTaskTracker(), taskResultCache: make(map[string][]cachedTaskEntry)}
+	second := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: replayed, taskTracker: NewTaskTracker(), taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	second.SetSessionData(replayed)
 	response, err := taskResultByID(second, item.ID)
 	if err != nil || response.IsError {

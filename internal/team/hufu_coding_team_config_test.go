@@ -254,10 +254,10 @@ func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) 
 		session: session, projectDir: workspace,
 		taskTracker: NewTaskTracker(), sessionData: NewSession(),
 		eventStore: store, executionRunID: "hufu-coding-admission-test",
-		reportStatus:    func(StatusEvent) {},
-		delegatedTasks:  make(map[string]int),
-		taskResultCache: make(map[string][]cachedTaskEntry),
-		maxConcurrent:   1,
+		reportStatus:   func(StatusEvent) {},
+		delegatedTasks: make(map[string]int),
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		maxConcurrent:  1,
 	}
 	tasks := []TaskDef{
 		{Agent: "sa", Goal: "SA_ANALYZE: implement a small safe test change"},

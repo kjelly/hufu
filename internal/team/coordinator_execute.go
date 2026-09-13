@@ -282,21 +282,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// making all previous cached results invalid — ensuring stale workspace
 	// state is never reused.
 	if callerID == "" || callerID == CoordTodoID {
-		newGen := c.cacheGeneration.Add(1)
-		c.taskResultCacheMu.Lock()
-		for key, entries := range c.taskResultCache {
-			var fresh []cachedTaskEntry
-			for _, e := range entries {
-				// Pinned entries were restored from a previous run (session.json
-				// or the task journal); without this they would be wiped before
-				// their first lookup ever happens.
-				if e.generation == newGen || e.pinned {
-					fresh = append(fresh, e)
-				}
-			}
-			c.taskResultCache[key] = fresh
-		}
-		c.taskResultCacheMu.Unlock()
+		c.TaskCache().AdvanceGeneration()
 	}
 
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))

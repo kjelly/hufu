@@ -111,6 +111,78 @@ type WorkflowEngine interface {
 	ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error)
 }
 
+// TaskCacheLookupScope selects the cache search semantics used by a
+// coordinator call site. Execution reuse and duplicate detection remain
+// distinct so restored entries cannot suppress a new run.
+type TaskCacheLookupScope string
+
+const (
+	TaskCacheLookupExecution      TaskCacheLookupScope = "execution"
+	TaskCacheLookupAllGenerations TaskCacheLookupScope = "all_generations"
+	TaskCacheLookupCurrentRun     TaskCacheLookupScope = "current_run"
+)
+
+type TaskCacheLookupRequest struct {
+	Scope      TaskCacheLookupScope
+	AgentKey   string
+	Task       string
+	VerifySpec *VerificationSpec
+	Verify     string
+	VerifyMode string
+}
+
+type TaskCacheLookupResult struct {
+	Output      string
+	MatchedTask string
+}
+
+type TaskCacheStoreRequest struct {
+	AgentKey     string
+	Task         string
+	Output       string
+	VerifySpec   *VerificationSpec
+	Verify       string
+	VerifyMode   string
+	Verification *VerificationResult
+}
+
+type TaskCacheInvalidateRequest struct {
+	AgentKey   string
+	Task       string
+	VerifySpec *VerificationSpec
+	Verify     string
+	VerifyMode string
+}
+
+// TaskCacheSeed is a trusted result restored from session or task-journal
+// state. Deduplicate preserves the task journal's existing merge behavior;
+// session projection restores retain their baseline append behavior.
+type TaskCacheSeed struct {
+	AgentKey     string
+	Task         string
+	Output       string
+	VerifySpec   *VerificationSpec
+	Verify       string
+	VerifyMode   string
+	Verification *VerificationResult
+	Identity     CacheIdentity
+	Pinned       bool
+	Deduplicate  bool
+}
+
+// TaskCache owns in-memory task-result reuse state, matching, generation
+// lifecycle, restore, invalidation, and isolated extra-model forks. Its
+// failure behavior remains best-effort: similarity errors are cache misses
+// and journal errors remain warnings at the journal adapter.
+type TaskCache interface {
+	Lookup(context.Context, TaskCacheLookupRequest) (TaskCacheLookupResult, bool)
+	Store(TaskCacheStoreRequest)
+	Invalidate(TaskCacheInvalidateRequest)
+	AdvanceGeneration()
+	Restore([]TaskCacheSeed)
+	Fork(taskCacheDependencies) TaskCache
+}
+
 // ResolvedWorkerTools is the one source for both model-visible tool names and
 // the concrete runtime allowlist. Capabilities remain descriptive; they never
 // grant a tool independently of Tools.
@@ -383,6 +455,7 @@ type RuntimeServices struct {
 	SubagentRegistry    *SubagentRegistry
 	ExecutionRegistry   *ExecutionRegistry
 	ExperienceProcessor ExperienceProcessor
+	TaskCache           TaskCache
 }
 
 // Default sub-service implementations wrapping Coordinator

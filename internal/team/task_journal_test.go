@@ -263,34 +263,34 @@ func TestCompactTaskJournal(t *testing.T) {
 }
 
 func TestPinnedEntriesSurviveGenerationPrune(t *testing.T) {
-	c := &Coordinator{taskResultCache: make(map[string][]cachedTaskEntry)}
-	c.taskResultCache["coder"] = []cachedTaskEntry{
+	c := &Coordinator{taskCache: newDefaultTaskCache(taskCacheDependencies{})}
+	testTaskCache(c).entries["coder"] = []cachedTaskEntry{
 		{taskDesc: "pinned task", output: "p", generation: 0, pinned: true},
 		{taskDesc: "unpinned task", output: "u", generation: 0},
 	}
 
 	// Simulate the generation-bump prune from ExecuteTasks.
-	newGen := c.cacheGeneration.Add(1)
-	c.taskResultCacheMu.Lock()
-	for key, entries := range c.taskResultCache {
+	newGen := testTaskCache(c).generation.Add(1)
+	testTaskCache(c).mu.Lock()
+	for key, entries := range testTaskCache(c).entries {
 		var fresh []cachedTaskEntry
 		for _, e := range entries {
 			if e.generation == newGen || e.pinned {
 				fresh = append(fresh, e)
 			}
 		}
-		c.taskResultCache[key] = fresh
+		testTaskCache(c).entries[key] = fresh
 	}
-	c.taskResultCacheMu.Unlock()
+	testTaskCache(c).mu.Unlock()
 
-	entries := c.taskResultCache["coder"]
+	entries := testTaskCache(c).entries["coder"]
 	if len(entries) != 1 || entries[0].taskDesc != "pinned task" {
 		t.Errorf("pinned entry did not survive prune: %+v", entries)
 	}
 
 	// invalidateTaskCache must remove pinned entries regardless.
 	c.invalidateTaskCache("coder", "Pinned  Task")
-	if len(c.taskResultCache["coder"]) != 0 {
-		t.Errorf("invalidateTaskCache kept a pinned entry: %+v", c.taskResultCache["coder"])
+	if len(testTaskCache(c).entries["coder"]) != 0 {
+		t.Errorf("invalidateTaskCache kept a pinned entry: %+v", testTaskCache(c).entries["coder"])
 	}
 }

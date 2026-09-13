@@ -109,7 +109,7 @@ func newAcceptedTerminalResultStopCoordinator(t *testing.T, worker fantasy.Agent
 		sessionTime:         time.Now(),
 		taskTracker:         NewTaskTracker(),
 		reportStatus:        func(StatusEvent) {},
-		taskResultCache:     make(map[string][]cachedTaskEntry),
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID:      "run-accepted-terminal-result",
 		workerAgentOverride: worker,
 	}
