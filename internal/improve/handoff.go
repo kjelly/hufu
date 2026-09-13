@@ -13,6 +13,21 @@ import (
 
 const HandoffSchemaVersion = 1
 
+const (
+	HandoffReasonSkillCandidatePrepared      = "skill_candidate_prepared"
+	HandoffReasonConsolidationCandidateReady = "consolidation_candidate_validated"
+	HandoffReasonMemoryPolicyCandidateReady  = "memory_policy_candidate_validated"
+	HandoffReasonBenchmarkBound              = "benchmark_bound"
+	HandoffReasonExperimentEvaluated         = "experiment_evaluated"
+	HandoffReasonExperimentEligible          = "experiment_eligible_for_review"
+	HandoffReasonReviewApproved              = "review_approved"
+	HandoffReasonReviewRejected              = "review_rejected"
+	HandoffReasonAdoptionLinked              = "adoption_linked"
+	HandoffReasonMonitoringLinked            = "monitoring_linked"
+	HandoffReasonRollbackRecommended         = "rollback_recommended"
+	HandoffReasonCanonicalEvidenceStale      = "canonical_evidence_stale"
+)
+
 type ArtifactRef struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`
@@ -154,10 +169,44 @@ func validateHandoffIdentity(h ImprovementHandoff) error {
 	if err := validateRefForKind(h.Kind, h.Proposal, true); err != nil {
 		return fmt.Errorf("proposal: %w", err)
 	}
+	if h.ID != HandoffID(h.Kind, h.Scope, h.Proposal, h.Sources) {
+		return fmt.Errorf("handoff id does not match immutable identity")
+	}
 	if h.Revision < 1 || h.CreatedAt.IsZero() || h.UpdatedAt.IsZero() {
 		return fmt.Errorf("handoff revision and timestamps are required")
 	}
+	if !validHandoffStatusReason(h) {
+		return fmt.Errorf("unsupported handoff status reason %q", h.StatusReason)
+	}
 	return nil
+}
+
+func validHandoffStatusReason(handoff ImprovementHandoff) bool {
+	if handoff.StatusReason == "" {
+		return true
+	}
+	if handoff.Status == HandoffCandidateReady {
+		allowedByKind := map[HandoffKind][]string{
+			HandoffSkill:         {HandoffReasonSkillCandidatePrepared, "isolated skill candidate snapshot prepared"},
+			HandoffConsolidation: {HandoffReasonConsolidationCandidateReady, "current consolidation candidate validated; confirmation remains canonical"},
+			HandoffMemoryPolicy:  {HandoffReasonMemoryPolicyCandidateReady, "immutable memory policy candidate validated; active policy unchanged"},
+		}
+		return slices.Contains(allowedByKind[handoff.Kind], handoff.StatusReason)
+	}
+	allowed := map[HandoffStatus][]string{
+		HandoffBenchmarkBound:      {HandoffReasonBenchmarkBound, "benchmark fixture bound"},
+		HandoffEvaluated:           {HandoffReasonExperimentEvaluated, "experiment evaluation recorded"},
+		HandoffEligibleForReview:   {HandoffReasonExperimentEligible, "experiment is eligible for explicit review"},
+		HandoffApproved:            {HandoffReasonReviewApproved, "explicit handoff review acknowledgement; no canonical artifact changed"},
+		HandoffRejected:            {HandoffReasonReviewRejected},
+		HandoffAdopted:             {HandoffReasonAdoptionLinked, "canonical adoption evidence linked; handoff performed no mutation"},
+		HandoffMonitoring:          {HandoffReasonMonitoringLinked, "monitoring evidence linked; rollback remains a recommendation"},
+		HandoffRollbackRecommended: {HandoffReasonRollbackRecommended, "monitoring evidence recommends explicit rollback review"},
+		HandoffStale:               {HandoffReasonCanonicalEvidenceStale, "canonical evidence changed; create a new handoff"},
+	}
+	// Schema v1 artifacts written before status reasons became codes remain
+	// readable through the fixed legacy strings above.
+	return slices.Contains(allowed[handoff.Status], handoff.StatusReason)
 }
 
 func validateHandoffSources(h ImprovementHandoff) error {

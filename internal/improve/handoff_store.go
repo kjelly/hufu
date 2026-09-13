@@ -48,6 +48,9 @@ func (s *HandoffStore) createUnlocked(ctx context.Context, handoff ImprovementHa
 	if err := handoff.Validate(); err != nil {
 		return ImprovementHandoff{}, err
 	}
+	if handoff.Status != HandoffProposed || handoff.Revision != 1 {
+		return ImprovementHandoff{}, errors.New("new handoff must start at proposed revision 1")
+	}
 	path := s.path(handoff.ID)
 	data, err := marshalHandoff(handoff)
 	if err != nil {
@@ -142,11 +145,22 @@ func (s *HandoffStore) transitionUnlocked(ctx context.Context, id string, expect
 }
 
 // RetryAudit reconciles the audit event for the current durable state without
-// changing the handoff. EventStore idempotency makes repeated calls safe.
-func (s *HandoffStore) RetryAudit(ctx context.Context, handoff ImprovementHandoff) error {
+// changing the handoff. The durable record, rather than caller-supplied state,
+// is authoritative. EventStore idempotency makes repeated calls safe.
+func (s *HandoffStore) RetryAudit(ctx context.Context, id string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return s.withExclusiveLock(ctx, id, func() error {
+		handoff, err := s.getUnlocked(id)
+		if err != nil {
+			return err
+		}
+		return s.retryAuditUnlocked(ctx, handoff)
+	})
+}
+
+func (s *HandoffStore) retryAuditUnlocked(ctx context.Context, handoff ImprovementHandoff) error {
 	inputRevision := handoff.Revision - 1
 	eventType := handoffAuditType(handoff.Status)
 	if handoff.Status == HandoffProposed && handoff.Revision == 1 {
@@ -167,6 +181,8 @@ func handoffAuditType(status HandoffStatus) string {
 		return "handoff_evaluated"
 	case HandoffApproved:
 		return "handoff_approved"
+	case HandoffRejected:
+		return "handoff_rejected"
 	case HandoffAdopted:
 		return "handoff_adopted"
 	case HandoffMonitoring, HandoffRollbackRecommended:

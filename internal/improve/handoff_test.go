@@ -258,7 +258,7 @@ func TestHandoffStoreRetriesAuditWithoutRepeatingTransition(t *testing.T) {
 		retried = event
 		return nil
 	}
-	if err := store.RetryAudit(t.Context(), durable); err != nil {
+	if err := store.RetryAudit(t.Context(), durable.ID); err != nil {
 		t.Fatal(err)
 	}
 	if retried.IdempotencyKey != failedEvent.IdempotencyKey {

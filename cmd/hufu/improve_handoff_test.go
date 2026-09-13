@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,7 +69,7 @@ func TestConsolidationHandoffLifecycleRejectsWrongEvidenceAndRecommendsRollback(
 
 	monitoring, err := improve.EvaluateMonitoring(improve.Adoption{
 		ID: fixture.proposalID, Team: fixture.scope.TeamID, CandidateRevision: fixture.candidate.Revision,
-		BaselineSnapshotID: "baseline-context", RollbackRevision: "baseline-context-revision", BaselineMetrics: improve.Metrics{TotalTasks: 1, Done: 1},
+		BaselineSnapshotID: report.Baseline.SnapshotID, RollbackRevision: report.Baseline.DefinitionRevision, BaselineMetrics: report.Baseline.Metrics,
 	}, &improve.Report{Team: fixture.scope.TeamID, RunIDs: []string{"production-run"}, TeamRevisions: []string{fixture.candidate.Revision}, Metrics: improve.Metrics{TotalTasks: 1, Done: 1}}, false, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +86,92 @@ func TestConsolidationHandoffLifecycleRejectsWrongEvidenceAndRecommendsRollback(
 	assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffRollbackRecommended)
 	if err := runImproveHandoffMonitor(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
 		t.Fatalf("idempotent monitoring retry: %v", err)
+	}
+}
+
+func TestHandoffMonitoringRejectsUnboundHealthyBaseline(t *testing.T) {
+	fixture := prepareConsolidationHandoffFixture(t)
+	report := writeConsolidationExperiment(t, fixture, "healthy-monitoring-experiment", fixture.candidate)
+	setHandoffTestGlobals(fixture.workspace, fixture.scope)
+	improveHandoffExperiment = report.ID
+	if err := runImproveHandoffEvaluate(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatal(err)
+	}
+	handoff := assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffEligibleForReview)
+	improveHandoffExpected = handoff.Revision
+	if err := runImproveHandoffApprove(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatal(err)
+	}
+	handoff = assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffApproved)
+	repo := openHandoffTestRepo(t, fixture.workspace)
+	if err := repo.ConfirmCandidates(t.Context(), []string{fixture.candidate.ID}, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "operator_approval", Ref: fixture.proposalID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateConsolidationProposal(t.Context(), fixture.proposalID, "approved", "explicit operator approval"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	improveHandoffExpected = handoff.Revision
+	improveHandoffAdoption = "context_consolidation_approval:" + fixture.proposalID + ":" + fixture.candidate.Revision
+	if err := runImproveHandoffAdopt(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatal(err)
+	}
+	handoff = assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffAdopted)
+	monitoring, err := improve.EvaluateMonitoring(improve.Adoption{
+		ID: fixture.proposalID, Team: fixture.scope.TeamID, CandidateRevision: fixture.candidate.Revision,
+		BaselineSnapshotID: report.Baseline.SnapshotID, RollbackRevision: report.Baseline.DefinitionRevision,
+		BaselineMetrics: improve.Metrics{TotalTasks: 100, Done: 1},
+	}, &improve.Report{Team: fixture.scope.TeamID, RunIDs: []string{"production-run"}, TeamRevisions: []string{fixture.candidate.Revision}, Metrics: improve.Metrics{TotalTasks: 100, Done: 100}}, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitoring.ID = "unbound-healthy-monitoring"
+	if _, err := improve.WriteMonitoringReport(fixture.workspace, monitoring); err != nil {
+		t.Fatal(err)
+	}
+	improveHandoffExpected = handoff.Revision
+	improveHandoffMonitoring = "monitoring_report:" + monitoring.ID + ":" + improve.MonitoringReportRevision(monitoring)
+	if err := runImproveHandoffMonitor(handoffTestCommand(t), []string{fixture.handoffID}); err == nil || !strings.Contains(err.Error(), "baseline metrics") {
+		t.Fatalf("unbound healthy monitoring error = %v", err)
+	}
+	assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffAdopted)
+}
+
+func TestHandoffRejectRequiresExplicitReviewedState(t *testing.T) {
+	fixture := prepareConsolidationHandoffFixture(t)
+	setHandoffTestGlobals(fixture.workspace, fixture.scope)
+	improveHandoffExpected = 1
+	if err := runImproveHandoffReject(handoffTestCommand(t), []string{fixture.handoffID}); err == nil || !strings.Contains(err.Error(), "only evaluated") {
+		t.Fatalf("premature rejection error = %v", err)
+	}
+	report := writeConsolidationExperiment(t, fixture, "rejected-handoff-experiment", fixture.candidate)
+	improveHandoffExperiment = report.ID
+	if err := runImproveHandoffEvaluate(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatal(err)
+	}
+	handoff := assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffEligibleForReview)
+	improveHandoffExpected = handoff.Revision - 1
+	if err := runImproveHandoffReject(handoffTestCommand(t), []string{fixture.handoffID}); err == nil || !strings.Contains(err.Error(), "revision conflict") {
+		t.Fatalf("stale rejection error = %v", err)
+	}
+	improveHandoffExpected = handoff.Revision
+	if err := runImproveHandoffReject(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatal(err)
+	}
+	handoff = assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffRejected)
+	if err := runImproveHandoffReject(handoffTestCommand(t), []string{fixture.handoffID}); err != nil {
+		t.Fatalf("idempotent rejection retry: %v", err)
+	}
+	repo := openHandoffTestRepo(t, fixture.workspace)
+	defer func() { _ = repo.Close() }()
+	candidate, err := repo.Get(t.Context(), fixture.candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Lifecycle != contextstore.LifecycleCandidate {
+		t.Fatalf("handoff rejection mutated canonical candidate lifecycle to %s", candidate.Lifecycle)
 	}
 }
 
@@ -107,6 +195,38 @@ func TestHandoffCommandsEnforceScopeAndMarkChangedEvidenceStale(t *testing.T) {
 		t.Fatalf("changed evidence error = %v", err)
 	}
 	assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffStale)
+}
+
+func TestConsolidationHandoffRejectsChangedSource(t *testing.T) {
+	workspace := t.TempDir()
+	scope := improve.HandoffScope{ProjectID: "project", TeamID: "team", PolicyVersion: "memory-policy-v1"}
+	repo := openHandoffTestRepo(t, workspace)
+	sources := appendConfirmedHandoffSources(t, repo, scope, 2)
+	candidate, err := repo.UpsertCandidate(t.Context(), contextstore.ContextItem{
+		ID: "changed-source-candidate", Kind: contextstore.ContextPattern, Content: "consolidated guidance",
+		Scope: scopeToContextScope(scope), Lifecycle: contextstore.LifecycleCandidate,
+		Source: contextstore.SourceRef{Type: "consolidation_proposal", Ref: "changed-source-proposal"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := contextstore.ConsolidationProposal{
+		ID: "changed-source-proposal", ProjectID: scope.ProjectID, TeamID: scope.TeamID, CandidateContextItemID: candidate.ID,
+		SourceIDs: []string{sources[0].ID, sources[1].ID}, SourceRevisions: map[string]string{sources[0].ID: sources[0].ContentHash, sources[1].ID: sources[1].ContentHash},
+		AggregateRevisions: map[string]int64{sources[0].ID: 1, sources[1].ID: 1}, Status: "proposed",
+	}
+	if err := repo.SaveConsolidationProposal(t.Context(), proposal); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateLifecycle(t.Context(), []string{sources[0].ID}, contextstore.LifecycleRejected); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createConsolidationHandoff(t.Context(), workspace, scope, proposal.ID); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("changed consolidation source error = %v", err)
+	}
 }
 
 type consolidationHandoffFixture struct {
@@ -221,6 +341,16 @@ func testPrepareMemoryPolicyHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertHandoffCandidateReady(t, store, handoff.ID, "memory_policy_snapshot")
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = repo.Close() }()
+	if active, err := repo.ActiveMemoryPolicyVersion(t.Context()); err == nil {
+		t.Fatalf("memory policy preparation activated production policy: %#v", active)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal(err)
+	}
 }
 
 func testPrepareConsolidationHandoff(t *testing.T) {
@@ -376,4 +506,8 @@ func handoffTestCommand(t *testing.T) *cobra.Command {
 	command := &cobra.Command{}
 	command.SetContext(t.Context())
 	return command
+}
+
+func scopeToContextScope(scope improve.HandoffScope) contextstore.Scope {
+	return contextstore.Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID}
 }

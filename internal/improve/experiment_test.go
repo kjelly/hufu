@@ -196,6 +196,25 @@ func TestCreateSkillCandidateSnapshotIsolatedAndImmutable(t *testing.T) {
 	}
 }
 
+func TestSkillHandoffRejectsExistingSkillTarget(t *testing.T) {
+	workspace := t.TempDir()
+	baselineTeam := createExperimentTeam(t, "dev", "Follow the baseline workflow.")
+	existingTarget := filepath.Join(baselineTeam, "skills", "verification", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(existingTarget), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existingTarget, []byte("---\nname: verification\ndescription: Existing skill.\n---\n- Keep the existing behavior.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := CreateBaselineSnapshot(workspace, "base-existing-skill", baselineTeam); err != nil {
+		t.Fatal(err)
+	}
+	draft := "---\nname: verification\ndescription: Replacement attempt.\n---\n- Replace the existing behavior.\n- Verify the replacement.\n"
+	if _, _, err := CreateSkillCandidateSnapshot(workspace, "candidate-existing-skill", "base-existing-skill", "verification", draft); err == nil || !strings.Contains(err.Error(), "already contains skill target") {
+		t.Fatalf("existing skill target error = %v", err)
+	}
+}
+
 func createExperimentTeam(t *testing.T, name, prompt string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), name)
