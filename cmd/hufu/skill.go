@@ -93,7 +93,11 @@ func init() {
 	skillCmd.AddCommand(skillListCmd)
 	skillCmd.AddCommand(skillPromoteCmd)
 	skillCmd.AddCommand(skillCleanCmd)
+	skillCmd.AddCommand(skillGraphCmd)
 	skillListCmd.Flags().BoolVar(&draftsOnly, "drafts-only", false, "Show only draft skills")
+	skillGraphCmd.Flags().StringVar(&skillGraphFormat, "format", "text", "Output format: text or json")
+	skillGraphCmd.Flags().StringVar(&skillGraphAgent, "agent", "", "Include only patterns attributed to this agent")
+	skillGraphCmd.Flags().Int64Var(&skillGraphMinFrequency, "min-frequency", 0, "Include only patterns with at least this count")
 
 	skillCleanCmd.Flags().StringVar(&skillCleanOlderThan, "older-than", "", "Delete drafts older than this duration (e.g. 30d, 24h)")
 	skillCleanCmd.Flags().BoolVar(&skillCleanUnused, "unused", false, "Only delete drafts that have never been used")
