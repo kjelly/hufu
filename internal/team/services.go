@@ -478,6 +478,7 @@ type RuntimeServices struct {
 	ExperienceProcessor ExperienceProcessor
 	TaskCache           TaskCache
 	Evidence            EvidenceService
+	RepairController    *RepairController
 }
 
 // Default sub-service implementations wrapping Coordinator

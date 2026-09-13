@@ -71,6 +71,9 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 	if c.EvidenceService() == nil {
 		t.Errorf("expected non-nil EvidenceService interface")
 	}
+	if c.RepairController() == nil {
+		t.Errorf("expected non-nil RepairController")
+	}
 }
 
 func TestCoordinatorSubServices_Override(t *testing.T) {
@@ -278,6 +281,11 @@ func TestCoordinatorSubServices_RoundTrip(t *testing.T) {
 	if c.EvidenceService() != EvidenceService(mes) {
 		t.Errorf("EvidenceService round-trip failed")
 	}
+	rc := NewRepairController()
+	c.setRuntimeServices(RuntimeServices{RepairController: rc})
+	if c.RepairController() != rc {
+		t.Errorf("RepairController runtime injection failed")
+	}
 }
 
 // TestCoordinatorSubServices_NilFallback verifies each getter returns a non-nil
@@ -306,6 +314,10 @@ func TestCoordinatorSubServices_NilFallback(t *testing.T) {
 	}
 	if c.EvidenceService() == nil {
 		t.Errorf("EvidenceService() nil-fallback returned nil")
+	}
+	first := c.RepairController()
+	if first == nil || c.RepairController() != first {
+		t.Errorf("RepairController() nil-fallback is not stable")
 	}
 }
 

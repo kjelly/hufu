@@ -2002,10 +2002,10 @@ func (c *Coordinator) SetEvidenceService(service EvidenceService) {
 
 // RepairController returns the coordinator's fail-closed recovery service.
 func (c *Coordinator) RepairController() *RepairController {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.repairController == nil {
-		return NewRepairController()
+		c.repairController = NewRepairController()
 	}
 	return c.repairController
 }
@@ -2363,6 +2363,7 @@ func (c *Coordinator) RuntimeServices() RuntimeServices {
 		ExperienceProcessor: c.ExperienceProcessor(),
 		TaskCache:           c.TaskCache(),
 		Evidence:            c.EvidenceService(),
+		RepairController:    c.RepairController(),
 	}
 }
 
@@ -2411,6 +2412,9 @@ func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
 	}
 	if services.Evidence != nil {
 		c.SetEvidenceService(services.Evidence)
+	}
+	if services.RepairController != nil {
+		c.SetRepairController(services.RepairController)
 	}
 }
 
