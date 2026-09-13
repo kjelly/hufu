@@ -68,6 +68,9 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 	if c.WorkflowEngine() == nil {
 		t.Errorf("expected non-nil WorkflowEngine interface")
 	}
+	if c.EvidenceService() == nil {
+		t.Errorf("expected non-nil EvidenceService interface")
+	}
 }
 
 func TestCoordinatorSubServices_Override(t *testing.T) {
@@ -218,6 +221,16 @@ func (m *mockWorkflowEngine) ExecuteTasks(ctx context.Context, tasks []TaskDef) 
 	return m.execResult, m.execErr
 }
 
+type mockEvidenceService struct{}
+
+func (*mockEvidenceService) BuildRunManifest(context.Context, EvidenceBuildRequest) (*EvidenceManifest, error) {
+	return &EvidenceManifest{RunID: "mock-build"}, nil
+}
+
+func (*mockEvidenceService) FinalizeRunManifest(_ context.Context, req EvidenceFinalizeRequest) (*EvidenceManifest, error) {
+	return req.Manifest, nil
+}
+
 // TestCoordinatorSubServices_RoundTrip verifies Set+Get returns the exact mock
 // for all 6 sub-service interfaces (fix 3: extends override coverage beyond
 // the original Planner/PolicyEngine-only test).
@@ -260,6 +273,11 @@ func TestCoordinatorSubServices_RoundTrip(t *testing.T) {
 	if c.WorkflowEngine() != WorkflowEngine(mwe) {
 		t.Errorf("WorkflowEngine round-trip failed")
 	}
+	mes := &mockEvidenceService{}
+	c.SetEvidenceService(mes)
+	if c.EvidenceService() != EvidenceService(mes) {
+		t.Errorf("EvidenceService round-trip failed")
+	}
 }
 
 // TestCoordinatorSubServices_NilFallback verifies each getter returns a non-nil
@@ -285,6 +303,9 @@ func TestCoordinatorSubServices_NilFallback(t *testing.T) {
 	}
 	if c.WorkflowEngine() == nil {
 		t.Errorf("WorkflowEngine() nil-fallback returned nil")
+	}
+	if c.EvidenceService() == nil {
+		t.Errorf("EvidenceService() nil-fallback returned nil")
 	}
 }
 

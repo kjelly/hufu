@@ -511,6 +511,7 @@ type Coordinator struct {
 	delegatedTasks        map[string]int
 	delegatedTasksMu      sync.Mutex
 	taskCache             TaskCache
+	evidenceService       EvidenceService
 	cachePolicy           CachePolicy
 	cachePolicyMu         sync.RWMutex
 	executionProfile      ExecutionProfile
@@ -1319,6 +1320,7 @@ func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPI
 	c.sessionStore = &defaultSessionStore{c: c}
 	c.policyEngine = &defaultPolicyEngine{c: c}
 	c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
+	c.evidenceService = &defaultEvidenceService{}
 	c.repairController = NewRepairController()
 	c.authorizationPolicy = defaultAuthorizationPolicy{}
 	c.secretRegistry = tools.NewSecretRegistry()
@@ -1981,6 +1983,23 @@ func (c *Coordinator) SetTaskCache(cache TaskCache) {
 	c.taskCache = cache
 }
 
+// EvidenceService returns the run evidence builder/finalizer.
+func (c *Coordinator) EvidenceService() EvidenceService {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.evidenceService == nil {
+		c.evidenceService = &defaultEvidenceService{}
+	}
+	return c.evidenceService
+}
+
+// SetEvidenceService replaces the run evidence builder/finalizer.
+func (c *Coordinator) SetEvidenceService(service EvidenceService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evidenceService = service
+}
+
 // RepairController returns the coordinator's fail-closed recovery service.
 func (c *Coordinator) RepairController() *RepairController {
 	c.mu.RLock()
@@ -2343,6 +2362,7 @@ func (c *Coordinator) RuntimeServices() RuntimeServices {
 		ExecutionRegistry:   c.ExecutionRegistry(),
 		ExperienceProcessor: c.ExperienceProcessor(),
 		TaskCache:           c.TaskCache(),
+		Evidence:            c.EvidenceService(),
 	}
 }
 
@@ -2388,6 +2408,9 @@ func (c *Coordinator) setRuntimeServices(services RuntimeServices) {
 	}
 	if services.TaskCache != nil {
 		c.SetTaskCache(services.TaskCache)
+	}
+	if services.Evidence != nil {
+		c.SetEvidenceService(services.Evidence)
 	}
 }
 

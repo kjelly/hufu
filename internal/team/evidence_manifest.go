@@ -18,17 +18,36 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	if runID == "" {
 		runID = "run-unknown"
 	}
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	manifest, err := c.EvidenceService().BuildRunManifest(ctx, EvidenceBuildRequest{
+		RunID: runID, Workspace: c.session.Workspace,
+		Items: c.taskTracker.TodoList().Items(), Strict: strict,
+	})
 	if err != nil {
 		return nil, err
 	}
-	manifest := &EvidenceManifest{RunID: runID, Status: "accepted"}
+	c.lastEvidenceManifestMu.Lock()
+	c.lastEvidenceManifest = manifest
+	c.lastEvidenceManifestMu.Unlock()
+	return manifest, nil
+}
+
+type defaultEvidenceService struct{}
+
+func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req EvidenceBuildRequest) (*EvidenceManifest, error) {
+	if strings.TrimSpace(req.Workspace) == "" {
+		return nil, fmt.Errorf("evidence manifest requires a workspace")
+	}
+	store, err := NewFileArtifactStore(req.Workspace, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	manifest := &EvidenceManifest{RunID: req.RunID, Status: "accepted"}
 	completedCount := 0
-	for _, item := range c.taskTracker.TodoList().Items() {
+	for _, item := range req.Items {
 		if item == nil {
 			continue
 		}
-		result, refs, failed, err := c.buildTaskEvidence(ctx, store, runID, item, strict)
+		result, refs, failed, err := buildTaskEvidence(ctx, store, req.RunID, item, req.Strict)
 		if err != nil {
 			return nil, err
 		}
@@ -43,12 +62,12 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		manifest.ArtifactRefs = append(manifest.ArtifactRefs, refs...)
 		manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 	}
-	if completedCount == 0 && len(c.taskTracker.TodoList().Items()) > 0 {
+	if completedCount == 0 && len(req.Items) > 0 {
 		manifest.Status = "failed"
-		if strict {
+		if req.Strict {
 			return nil, fmt.Errorf("no completed tasks with evidence")
 		}
-	} else if completedCount == 0 && strict {
+	} else if completedCount == 0 && req.Strict {
 		return nil, fmt.Errorf("no completed tasks with evidence")
 	}
 	if err := manifest.Seal(); err != nil {
@@ -61,17 +80,14 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(c.session.Workspace, logsDir, "evidence_manifest.json")
+	path := filepath.Join(req.Workspace, logsDir, "evidence_manifest.json")
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		return nil, fmt.Errorf("persist evidence manifest: %w", err)
 	}
-	c.lastEvidenceManifestMu.Lock()
-	c.lastEvidenceManifest = manifest
-	c.lastEvidenceManifestMu.Unlock()
 	return manifest, nil
 }
 
-func (c *Coordinator) buildTaskEvidence(ctx context.Context, store *FileArtifactStore, runID string, item *TodoItem, strict bool) (EvidenceResult, []ArtifactRef, bool, error) {
+func buildTaskEvidence(ctx context.Context, store *FileArtifactStore, runID string, item *TodoItem, strict bool) (EvidenceResult, []ArtifactRef, bool, error) {
 	result := EvidenceResult{RequirementID: "task:" + item.ID, Validator: "task-verification", CheckedAt: nowUTC()}
 	if item.Status != TaskDone {
 		result.Status = "failed"
@@ -392,6 +408,26 @@ func (c *Coordinator) finalizeEvidenceManifest(ctx context.Context, acceptance *
 			return err
 		}
 	}
+	manifest, err := c.EvidenceService().FinalizeRunManifest(ctx, EvidenceFinalizeRequest{
+		Workspace: c.session.Workspace, Manifest: manifest, Acceptance: acceptance,
+	})
+	if err != nil {
+		return err
+	}
+	c.lastEvidenceManifestMu.Lock()
+	c.lastEvidenceManifest = manifest
+	c.lastEvidenceManifestMu.Unlock()
+	return nil
+}
+
+func (*defaultEvidenceService) FinalizeRunManifest(ctx context.Context, req EvidenceFinalizeRequest) (*EvidenceManifest, error) {
+	if strings.TrimSpace(req.Workspace) == "" {
+		return nil, fmt.Errorf("evidence manifest requires a workspace")
+	}
+	if req.Manifest == nil {
+		return nil, fmt.Errorf("evidence manifest is required for finalization")
+	}
+	manifest := req.Manifest
 	for i := range manifest.EvidenceResults {
 		if manifest.EvidenceResults[i].RequirementID == "run:acceptance" {
 			manifest.EvidenceResults = append(manifest.EvidenceResults[:i], manifest.EvidenceResults[i+1:]...)
@@ -400,40 +436,37 @@ func (c *Coordinator) finalizeEvidenceManifest(ctx context.Context, acceptance *
 	}
 	acceptanceResult := EvidenceResult{RequirementID: "run:acceptance", Validator: "acceptance-gate", CheckedAt: nowUTC()}
 	switch {
-	case acceptance == nil || acceptance.EffectiveState() == AcceptanceNotConfigured:
+	case req.Acceptance == nil || req.Acceptance.EffectiveState() == AcceptanceNotConfigured:
 		acceptanceResult.Status = "not_configured"
 		if manifest.Status == "accepted" {
 			manifest.Status = "unverified"
 		}
-	case acceptance.IsPassed():
+	case req.Acceptance.IsPassed():
 		acceptanceResult.Status = "passed"
 	default:
 		acceptanceResult.Status = "failed"
 		manifest.Status = "failed"
-		acceptanceResult.Assertions = append(acceptanceResult.Assertions, acceptance.Errors...)
+		acceptanceResult.Assertions = append(acceptanceResult.Assertions, req.Acceptance.Errors...)
 	}
 	manifest.EvidenceResults = append(manifest.EvidenceResults, acceptanceResult)
 	if err := manifest.Seal(); err != nil {
-		return err
+		return nil, err
 	}
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	store, err := NewFileArtifactStore(req.Workspace, req.Workspace)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := manifest.Verify(ctx, store); err != nil {
-		return err
+		return nil, err
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(c.session.Workspace, logsDir, "evidence_manifest.json"), b, 0o644); err != nil {
-		return fmt.Errorf("persist evidence manifest: %w", err)
+	if err := os.WriteFile(filepath.Join(req.Workspace, logsDir, "evidence_manifest.json"), b, 0o644); err != nil {
+		return nil, fmt.Errorf("persist evidence manifest: %w", err)
 	}
-	c.lastEvidenceManifestMu.Lock()
-	c.lastEvidenceManifest = manifest
-	c.lastEvidenceManifestMu.Unlock()
-	return nil
+	return manifest, nil
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }

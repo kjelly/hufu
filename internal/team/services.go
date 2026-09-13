@@ -183,6 +183,27 @@ type TaskCache interface {
 	Fork(taskCacheDependencies) TaskCache
 }
 
+type EvidenceBuildRequest struct {
+	RunID     string
+	Workspace string
+	Items     []*TodoItem
+	Strict    bool
+}
+
+type EvidenceFinalizeRequest struct {
+	Workspace  string
+	Manifest   *EvidenceManifest
+	Acceptance *AcceptanceResult
+}
+
+// EvidenceService builds and finalizes the persisted run evidence manifest.
+// The coordinator remains responsible for selecting authoritative run state
+// and publishing a successfully built manifest.
+type EvidenceService interface {
+	BuildRunManifest(context.Context, EvidenceBuildRequest) (*EvidenceManifest, error)
+	FinalizeRunManifest(context.Context, EvidenceFinalizeRequest) (*EvidenceManifest, error)
+}
+
 // ResolvedWorkerTools is the one source for both model-visible tool names and
 // the concrete runtime allowlist. Capabilities remain descriptive; they never
 // grant a tool independently of Tools.
@@ -456,6 +477,7 @@ type RuntimeServices struct {
 	ExecutionRegistry   *ExecutionRegistry
 	ExperienceProcessor ExperienceProcessor
 	TaskCache           TaskCache
+	Evidence            EvidenceService
 }
 
 // Default sub-service implementations wrapping Coordinator
