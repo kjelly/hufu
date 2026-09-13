@@ -27,26 +27,27 @@ type SubmitArtifactInput struct {
 // claims and descriptive handoff data; runtime-owned TaskResult identity,
 // outputs, and transcript references cannot be decoded through this boundary.
 type SubmitResultInput struct {
-	Status             string                `json:"status"`
-	Summary            string                `json:"summary"`
-	Details            string                `json:"details,omitempty"`
-	Artifacts          []SubmitArtifactInput `json:"artifacts,omitempty"`
-	Evidence           []EvidenceRef         `json:"evidence,omitempty"`
-	FilesRead          []FileRef             `json:"files_read,omitempty"`
-	FilesModified      []FileRef             `json:"files_modified,omitempty"`
-	Commands           []CommandResult       `json:"commands,omitempty"`
-	Verification       []VerificationResult  `json:"verification,omitempty"`
-	Decisions          []Decision            `json:"decisions,omitempty"`
-	Findings           []Finding             `json:"findings,omitempty"`
-	Risks              []Risk                `json:"risks,omitempty"`
-	OpenQuestions      OpenQuestions         `json:"open_questions,omitempty"`
-	SuggestedNextTasks []TaskProposal        `json:"suggested_next_tasks,omitempty"`
-	RetryHint          string                `json:"retry_hint,omitempty"`
-	ReceiptIDs         []string              `json:"receipt_ids,omitempty"`
-	MemoryUses         []MemoryUseRef        `json:"memory_uses,omitempty"`
-	AssumptionChecks   []AssumptionCheck     `json:"assumption_checks,omitempty"`
-	Facts              map[string]any        `json:"facts,omitempty"`
-	Confidence         float64               `json:"confidence"`
+	Status               string                      `json:"status"`
+	Summary              string                      `json:"summary"`
+	Details              string                      `json:"details,omitempty"`
+	Artifacts            []SubmitArtifactInput       `json:"artifacts,omitempty"`
+	Evidence             []EvidenceRef               `json:"evidence,omitempty"`
+	FilesRead            []FileRef                   `json:"files_read,omitempty"`
+	FilesModified        []FileRef                   `json:"files_modified,omitempty"`
+	Commands             []CommandResult             `json:"commands,omitempty"`
+	Verification         []VerificationResult        `json:"verification,omitempty"`
+	Decisions            []Decision                  `json:"decisions,omitempty"`
+	Findings             []Finding                   `json:"findings,omitempty"`
+	Risks                []Risk                      `json:"risks,omitempty"`
+	OpenQuestions        OpenQuestions               `json:"open_questions,omitempty"`
+	SuggestedNextTasks   []TaskProposal              `json:"suggested_next_tasks,omitempty"`
+	RetryHint            string                      `json:"retry_hint,omitempty"`
+	ReceiptIDs           []string                    `json:"receipt_ids,omitempty"`
+	MemoryUses           []MemoryUseRef              `json:"memory_uses,omitempty"`
+	AssumptionChecks     []AssumptionCheck           `json:"assumption_checks,omitempty"`
+	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
+	Facts                map[string]any              `json:"facts,omitempty"`
+	Confidence           float64                     `json:"confidence"`
 }
 
 func (input SubmitResultInput) taskResult() TaskResult {
@@ -138,11 +139,12 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
 	}
 	return taskResultSubmissionContractForTask(TaskDef{
-		ID:         item.ID,
-		Verify:     item.Verify,
-		VerifyMode: item.VerifyMode,
-		VerifySpec: item.VerifySpec,
-		Execution:  item.Execution,
+		ID:                    item.ID,
+		InvariantVerification: item.InvariantVerification,
+		Verify:                item.Verify,
+		VerifyMode:            item.VerifyMode,
+		VerifySpec:            item.VerifySpec,
+		Execution:             item.Execution,
 	})
 }
 
@@ -286,10 +288,13 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 						"category": map[string]any{"type": "string"},
 						"summary":  map[string]any{"type": "string"},
 						"detail":   map[string]any{"type": "string"},
+						"severity": map[string]any{"type": "string", "enum": []string{FindingSeverityError, FindingSeverityWarning, FindingSeverityInfo}},
 					},
-					"required": []string{"summary"},
+					"required":             []string{"summary"},
+					"additionalProperties": false,
 				},
 			},
+			"invariant_assessments": invariantAssessmentClaimsSchema(false),
 			"risks": map[string]any{
 				"type":        "array",
 				"description": "Identified risks or concerns for the final report. This is a non-blocking handoff field; use status=partial, failed, or blocked when the assigned task itself is incomplete.",
@@ -375,6 +380,9 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 			filesRead["minItems"] = contract.FilesReadMinItems
 		}
 	}
+	if contract.InvariantVerification != "" && !slices.Contains(info.Required, "invariant_assessments") {
+		info.Required = append(info.Required, "invariant_assessments")
+	}
 	for _, field := range contract.RequiredFields {
 		if _, ok := info.Parameters[field]; !ok || slices.Contains(info.Required, field) {
 			continue
@@ -409,6 +417,12 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	if err := contract.validateWorkerClaims(&res); err != nil {
 		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
+	}
+	if err := validateFindingSeverities(res.Findings); err != nil {
+		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
+	}
+	if contract.InvariantVerification == "" && input.InvariantAssessments != nil {
+		return fantasy.NewTextErrorResponse("submit_result contract violation: ordinary task must omit invariant_assessments or submit null"), nil
 	}
 
 	var identity submitResultRuntimeIdentity
@@ -464,6 +478,10 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		receiptCandidate.Attempt = identity.Attempt
 		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &receiptCandidate); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+		metadata, _ := invocationMetadataFromContext(ctx)
+		if err := t.coordinator.attestInvariantClaims(t.todoID, identity.Attempt, metadata.ModelExecutionID, input.InvariantAssessments, &res); err != nil {
+			return fantasy.NewTextErrorResponse("invalid invariant assessment: " + err.Error()), nil
 		}
 		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
 		if txErr != nil {

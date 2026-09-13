@@ -45,6 +45,10 @@ type AttemptRequest struct {
 	// authorizes and integrity-verifies the reference. The scope is copied into
 	// every initial, retry, and result-repair request.
 	ArtifactScope *ArtifactAccessScope
+	// invariantRepairInstructions is coordinator-authored from the persisted
+	// worker manifest. External result-only repair may reuse it but cannot
+	// choose IDs, policy text, hashes, or severities itself.
+	invariantRepairInstructions string
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.
@@ -79,6 +83,10 @@ type AttemptResult struct {
 	// both providers converge on one receipt/verification/completion
 	// pipeline. Nil for hufu-local.
 	CanonicalResult *TaskResult
+	// invariantClaims remains transient until the coordinator attests it
+	// against the durable context manifest. It is never serialized or copied
+	// into TaskResult by an external provider.
+	invariantClaims *[]InvariantAssessmentClaim
 	// WorkspaceDelta is the actually-observed change for this attempt, when
 	// an external provider's ExecutionWorld captured one — populated even on
 	// a failed/cancelled attempt when a final snapshot was possible (§16.3:

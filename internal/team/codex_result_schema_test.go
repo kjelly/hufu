@@ -26,8 +26,8 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 		t.Fatalf("schema additionalProperties = %v, want false", schema["additionalProperties"])
 	}
 	required, _ := schema["required"].([]string)
-	if !slices.Contains(required, "status") || !slices.Contains(required, "summary") || !slices.Contains(required, "files_read") {
-		t.Fatalf("schema required = %v, want status, summary, and files_read", required)
+	if !slices.Contains(required, "status") || !slices.Contains(required, "summary") || !slices.Contains(required, "files_read") || !slices.Contains(required, "invariant_assessments") {
+		t.Fatalf("schema required = %v, want status, summary, files_read, and invariant_assessments", required)
 	}
 	props, _ := schema["properties"].(map[string]any)
 	if props == nil {
@@ -47,6 +47,21 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 	filesReadItems, _ := filesReadSchema["items"].(map[string]any)
 	if filesReadItems == nil || filesReadItems["type"] != "string" {
 		t.Fatalf("files_read items = %v, want non-empty strings", filesReadSchema["items"])
+	}
+	invariantSchema, _ := props["invariant_assessments"].(map[string]any)
+	invariantTypes, _ := invariantSchema["type"].([]string)
+	if !slices.Equal(invariantTypes, []string{"array", "null"}) || invariantSchema["maxItems"] != maxInvariantAssessmentClaims {
+		t.Fatalf("invariant_assessments schema = %#v", invariantSchema)
+	}
+	claimItem, _ := invariantSchema["items"].(map[string]any)
+	claimRequired, _ := claimItem["required"].([]string)
+	for _, field := range []string{"invariant_id", "status", "summary", "finding_index", "missing_evidence"} {
+		if !slices.Contains(claimRequired, field) {
+			t.Fatalf("claim required = %v, missing %q", claimRequired, field)
+		}
+	}
+	if claimItem["additionalProperties"] != false {
+		t.Fatalf("claim additionalProperties = %v, want false", claimItem["additionalProperties"])
 	}
 	statusSchema, _ := props["status"].(map[string]any)
 	enumVals, _ := statusSchema["enum"].([]string)

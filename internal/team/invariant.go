@@ -46,3 +46,40 @@ func cloneInvariantCatalog(catalog []InvariantDefinition) []InvariantDefinition 
 func validInvariantVerificationMode(mode InvariantVerificationMode) bool {
 	return mode == "" || mode == InvariantVerificationReport || mode == InvariantVerificationGate
 }
+
+type InvariantAssessmentStatus string
+
+const (
+	InvariantPreserved InvariantAssessmentStatus = "preserved"
+	InvariantViolated  InvariantAssessmentStatus = "violated"
+	InvariantUnknown   InvariantAssessmentStatus = "unknown"
+)
+
+// InvariantAssessmentClaim is the model-owned assessment shape accepted at
+// local and external result boundaries. Runtime attribution is deliberately
+// absent and is attached only after the claim is matched to a durable context
+// manifest.
+type InvariantAssessmentClaim struct {
+	InvariantID     string                    `json:"invariant_id"`
+	Status          InvariantAssessmentStatus `json:"status"`
+	Summary         string                    `json:"summary"`
+	FindingIndex    *int                      `json:"finding_index,omitempty"`
+	MissingEvidence []string                  `json:"missing_evidence,omitempty"`
+}
+
+// InvariantAssessment is the runtime-attested form persisted in TaskResult.
+type InvariantAssessment struct {
+	InvariantID          string                    `json:"invariant_id"`
+	ContextItemID        string                    `json:"context_item_id"`
+	InvariantContentHash string                    `json:"invariant_content_hash"`
+	Severity             InvariantSeverity         `json:"severity"`
+	Status               InvariantAssessmentStatus `json:"status"`
+	Summary              string                    `json:"summary"`
+	FindingIndex         *int                      `json:"finding_index,omitempty"`
+	MissingEvidence      []string                  `json:"missing_evidence,omitempty"`
+}
+
+type InvariantVerificationResult struct {
+	ContextManifestFingerprint string                `json:"context_manifest_fingerprint"`
+	Assessments                []InvariantAssessment `json:"assessments"`
+}

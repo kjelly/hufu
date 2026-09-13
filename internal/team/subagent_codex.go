@@ -573,6 +573,7 @@ func (p *CodexSubagentProvider) finishCodexAttempt(
 	res.TranscriptRef = ""
 	res.CanonicalResult = nil
 	res.ResultProposal = nil
+	res.invariantClaims = nil
 	if hadCanonicalResult {
 		res.Output = ""
 	}
@@ -860,7 +861,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, err))
 		}
 
-		canonical, repairOutput, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
+		canonical, claims, repairOutput, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
 		if repairErr != nil {
 			transcript.record("repair failed: %v", repairErr)
 			failureOutput := combineCodexFailureEvidence(originalEvidence, repairOutput)
@@ -873,7 +874,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		}
 		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{
 			ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID,
-			CanonicalResult: canonical, Output: canonical.Summary,
+			CanonicalResult: canonical, invariantClaims: claims, Output: canonical.Summary,
 		}, nil)
 	}
 	transcript.record("turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
@@ -920,6 +921,7 @@ func finalizeCodexTurn(
 		return result, fmt.Errorf("canonicalize codex result: %w", err)
 	}
 	result.CanonicalResult = canonical
+	result.invariantClaims = cloneInvariantAssessmentClaims(turnResult.Proposal.InvariantAssessments)
 	result.Output = canonical.Summary
 	return result, nil
 }
@@ -940,7 +942,7 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	ctx context.Context, sup ProcessSupervisor, request AttemptRequest,
 	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta,
 	transcript *codexTranscript, onActivity func(codexTurnActivity), startupTimeout, interruptGrace, shutdownGrace time.Duration,
-) (canonical *TaskResult, output, turnID string, resultErr error) {
+) (canonical *TaskResult, claims *[]InvariantAssessmentClaim, output, turnID string, resultErr error) {
 	transcript.record("attempting result-only repair thread_id=%s", threadID)
 
 	startCtx := ctx
@@ -955,7 +957,7 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	})
 	if err != nil {
 		transcript.record("repair: start app-server failed: %v", err)
-		return nil, "", "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
+		return nil, nil, "", "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
 	}
 	defer p.stopCodexProcess(sup, repairProc, interruptGrace, shutdownGrace, transcript)
 
@@ -972,26 +974,27 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	effective, err := codexStartOrResumeThread(ctx, repairProc.Client, threadID, threadCfg, nil)
 	if err != nil {
 		transcript.record("repair: thread/resume failed: %v", err)
-		return nil, "", "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
+		return nil, nil, "", "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
 	}
 
-	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, codexResultRepairPrompt, codexTurnOptions{
+	repairPrompt := codexResultRepairPrompt + request.invariantRepairInstructions
+	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, repairPrompt, codexTurnOptions{
 		ReasoningEffort: request.ReasoningEffort,
 		DetailedOutput:  p.coordinator.verbose,
 		OnActivity:      onActivity,
 	})
 	if turnErr != nil {
 		transcript.record("repair: turn failed: %v", turnErr)
-		return nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, p.classifyTurnError(turnErr)
+		return nil, nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, p.classifyTurnError(turnErr)
 	}
 	transcript.record("repair: turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
 
 	canonical, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, frozenDelta, prepared.Root)
 	if err != nil {
 		transcript.record("repair: canonicalize failed: %v", err)
-		return nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
+		return nil, nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
 	}
-	return canonical, "", turnResult.TurnID, nil
+	return canonical, cloneInvariantAssessmentClaims(turnResult.Proposal.InvariantAssessments), "", turnResult.TurnID, nil
 }
 
 // boundedCodexFailureEvidence preserves only diagnostic provider output. It

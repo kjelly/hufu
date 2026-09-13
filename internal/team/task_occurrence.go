@@ -69,6 +69,18 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 	copyResult.SuggestedNextTasks = append([]TaskProposal(nil), result.SuggestedNextTasks...)
 	copyResult.ReceiptIDs = append([]string(nil), result.ReceiptIDs...)
 	copyResult.MemoryUses = append([]MemoryUseRef(nil), result.MemoryUses...)
+	if result.InvariantVerification != nil {
+		copyVerification := *result.InvariantVerification
+		copyVerification.Assessments = make([]InvariantAssessment, len(result.InvariantVerification.Assessments))
+		for i, assessment := range result.InvariantVerification.Assessments {
+			copyVerification.Assessments[i] = assessment
+			copyVerification.Assessments[i].MissingEvidence = append([]string(nil), assessment.MissingEvidence...)
+			if assessment.FindingIndex != nil {
+				copyVerification.Assessments[i].FindingIndex = new(*assessment.FindingIndex)
+			}
+		}
+		copyResult.InvariantVerification = &copyVerification
+	}
 	if result.RawOutputRef != nil {
 		copyRef := *result.RawOutputRef
 		copyResult.RawOutputRef = &copyRef

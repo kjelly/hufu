@@ -37,12 +37,13 @@ type WorkerResultProposal struct {
 	// external provider at all. Like ProposedFiles, each entry is untrusted
 	// and is verified against the actually-observed workspace/live
 	// filesystem before becoming a canonical FileRef — never trusted as-is.
-	FilesRead     []string       `json:"files_read,omitempty"`
-	Findings      []Finding      `json:"findings,omitempty"`
-	Risks         []Risk         `json:"risks,omitempty"`
-	OpenQuestions []string       `json:"open_questions,omitempty"`
-	Facts         map[string]any `json:"facts,omitempty"`
-	Confidence    float64        `json:"confidence,omitempty"`
+	FilesRead            []string                    `json:"files_read,omitempty"`
+	Findings             []Finding                   `json:"findings,omitempty"`
+	Risks                []Risk                      `json:"risks,omitempty"`
+	OpenQuestions        []string                    `json:"open_questions,omitempty"`
+	Facts                map[string]any              `json:"facts,omitempty"`
+	Confidence           float64                     `json:"confidence,omitempty"`
+	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
 }
 
 // ProposedFile names one file the provider believes it produced or relied on.
@@ -98,6 +99,14 @@ func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
 	if !validWorkerResultProposalStatus(proposal.Status) {
 		return nil, fmt.Errorf("decode worker result proposal: unknown status %q", proposal.Status)
 	}
+	if err := validateFindingSeverities(proposal.Findings); err != nil {
+		return nil, fmt.Errorf("decode worker result proposal: %w", err)
+	}
+	if proposal.InvariantAssessments != nil {
+		if _, err := normalizedInvariantAssessmentClaims(proposal.InvariantAssessments); err != nil {
+			return nil, fmt.Errorf("decode worker result proposal: %w", err)
+		}
+	}
 	return &proposal, nil
 }
 
@@ -141,6 +150,17 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	}
 	if !validWorkerResultProposalStatus(proposal.Status) {
 		return nil, fmt.Errorf("canonicalize external result: unknown proposal status %q", proposal.Status)
+	}
+	if err := validateFindingSeverities(proposal.Findings); err != nil {
+		return nil, fmt.Errorf("canonicalize external result: %w", err)
+	}
+	if proposal.InvariantAssessments != nil {
+		if _, err := normalizedInvariantAssessmentClaims(proposal.InvariantAssessments); err != nil {
+			return nil, fmt.Errorf("canonicalize external result: %w", err)
+		}
+	}
+	if request.Task.InvariantVerification == "" && proposal.InvariantAssessments != nil {
+		return nil, fmt.Errorf("canonicalize external result: ordinary task must omit invariant_assessments or submit null")
 	}
 
 	requiresGrounded := request.Task.Execution.RequiresGroundedResult
@@ -502,6 +522,7 @@ func boundedFindings(in []Finding) []Finding {
 			Category: utils.TruncateRunes(f.Category, workerResultProposalMaxTextRunes),
 			Summary:  utils.TruncateRunes(f.Summary, workerResultProposalMaxTextRunes),
 			Detail:   utils.TruncateRunes(f.Detail, workerResultProposalMaxTextRunes),
+			Severity: f.Severity,
 		}
 	}
 	return out

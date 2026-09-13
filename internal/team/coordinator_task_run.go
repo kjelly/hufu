@@ -885,6 +885,14 @@ retryLoop:
 			closeTranscript()
 			return "", fmt.Errorf("worker context manifest preflight failed: %w", err)
 		}
+		invariantRepairPrompt := ""
+		if task.InvariantVerification != "" {
+			invariantRepairPrompt, _, err = c.invariantRepairInstructions(todoID, attempt, contextManifest.ModelExecutionID)
+			if err != nil {
+				closeTranscript()
+				return "", fmt.Errorf("worker invariant repair contract preflight failed: %w", err)
+			}
+		}
 		attemptStarted := time.Now()
 		runID := c.executionRunID
 		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
@@ -1086,22 +1094,23 @@ retryLoop:
 						}
 						defer backendSlot.release()
 						return backend.RunAttempt(taskCtx, AttemptRequest{
-							RunID:           runID,
-							BranchID:        c.activeBranchID(),
-							TaskID:          todoID,
-							Attempt:         attempt,
-							Agent:           agentDef,
-							Task:            task,
-							Prompt:          currentPrompt,
-							ModelID:         target.Model,
-							ReasoningEffort: c.effectiveReasoningEffort(agentDef),
-							MaxSteps:        stepBudget,
-							Tools:           resolvedTools,
-							History:         conversationHistory,
-							ExecutionTarget: target,
-							BackendBinding:  backendBinding,
-							ArtifactScope:   cloneArtifactAccessScope(attemptArtifactScope),
-							timing:          timing,
+							RunID:                       runID,
+							BranchID:                    c.activeBranchID(),
+							TaskID:                      todoID,
+							Attempt:                     attempt,
+							Agent:                       agentDef,
+							Task:                        task,
+							Prompt:                      currentPrompt,
+							ModelID:                     target.Model,
+							ReasoningEffort:             c.effectiveReasoningEffort(agentDef),
+							MaxSteps:                    stepBudget,
+							Tools:                       resolvedTools,
+							History:                     conversationHistory,
+							ExecutionTarget:             target,
+							BackendBinding:              backendBinding,
+							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
+							invariantRepairInstructions: invariantRepairPrompt,
+							timing:                      timing,
 						})
 					}()
 					// An external provider's canonical result is Hufu-owned
@@ -1109,8 +1118,14 @@ retryLoop:
 					// route it through the same storage path hufu-local's
 					// submit_result tool uses so both providers converge on
 					// one receipt/verification/completion pipeline.
-					if attemptResult.CanonicalResult != nil {
-						c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
+					if attemptResult.CanonicalResult != nil && runErr == nil {
+						if attestErr := c.attestInvariantClaims(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.invariantClaims, attemptResult.CanonicalResult); attestErr != nil {
+							runErr = withFailureClassOverride(fmt.Errorf("external invariant attestation: %w", attestErr), FailureProtocol)
+							attemptResult.CanonicalResult = nil
+							attemptResult.invariantClaims = nil
+						} else {
+							c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
+						}
 					}
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
 					ag = attemptResult.agent
@@ -1345,6 +1360,14 @@ retryLoop:
 							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
+								if task.InvariantVerification != "" {
+									instructions, metadata, invariantErr := c.invariantRepairInstructions(todoID, attempt, contextManifest.ModelExecutionID)
+									if invariantErr != nil {
+										return nil, fmt.Errorf("prepare invariant protocol repair: %w", invariantErr)
+									}
+									prompt += instructions
+									workerCtx = withInvocationMetadata(workerCtx, metadata)
+								}
 								var repairInvocation providerBoundInvocationContext
 								if c.repairAgentOverride == nil {
 									if task.ResolvedExecutionTarget.IsZero() {
@@ -2711,7 +2734,27 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
 		return "", err
 	}
-	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.", task.Goal, output)
+	var invariantRepairInstructions string
+	var invariantRepairMetadata InvocationMetadata
+	if task.InvariantVerification != "" {
+		originalAttempt := item.Retries + 1
+		if item.ExecutionReceipt != nil && item.ExecutionReceipt.Attempt > 0 {
+			originalAttempt = item.ExecutionReceipt.Attempt
+		}
+		invariantRepairMetadata, err = c.invariantRepairIdentity(canonical.Todo, originalAttempt)
+		if err != nil {
+			detail := c.FailureDetail(err, FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+			return "", fmt.Errorf("prepare invariant protocol repair: %w", err)
+		}
+		invariantRepairInstructions, _, err = c.invariantRepairInstructions(item.ID, originalAttempt, invariantRepairMetadata.ModelExecutionID)
+		if err != nil {
+			detail := c.FailureDetail(err, FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
+			return "", fmt.Errorf("prepare invariant protocol repair: %w", err)
+		}
+	}
+	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.%s", task.Goal, output, invariantRepairInstructions)
 	priorAttempts := 0
 	var repairHistory []RepairAttemptProvenance
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
@@ -2800,6 +2843,9 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
 	repairCtx = context.WithValue(repairCtx, hooks.TeamNameKey, c.session.Config.Name)
 	repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, task.Goal)
+	if task.InvariantVerification != "" {
+		repairCtx = withInvocationMetadata(repairCtx, invariantRepairMetadata)
+	}
 	repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptorWithContext(repairCtx, resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 	timing := &taskTiming{}
 	timing.reset()
@@ -2815,7 +2861,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			attemptCtx = withSubmitResultRuntimeIdentity(attemptCtx, identity)
 		}
 		if attempt > priorAttempts+1 {
-			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`.\n\n## Execution Output\n%s", task.Goal, output)
+			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the submit_result schema. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response. The call must include both required fields: `status` (one of `success`, `completed_with_gaps`, `partial`, `failed`, or `blocked`) and a non-empty `summary`; put any complete textual deliverable in `details`.\n\n## Execution Output\n%s%s", task.Goal, output, invariantRepairInstructions)
 		}
 		preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", repairPrompt)
 		if prepareErr != nil {
@@ -4607,6 +4653,9 @@ func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]b
 	if !contract.AllowEvidence {
 		b.WriteString("- `evidence` is not a legal field for this task. Do not submit it; use the documented `files_read` entries instead.\n")
 	}
+	if contract.InvariantVerification != "" {
+		b.WriteString("- `invariant_assessments` must contain exactly one claim for every repository invariant included in this task context. Use only the supplied logical invariant IDs; an unknown assessment must list the missing evidence, and a violated assessment must point to a finding with the same severity as the invariant.\n")
+	}
 	b.WriteString("- Reserve your final model step for `submit_result`. Once you have enough evidence, stop writing prose or making new tool calls and submit the result; if you are running out of steps, submit what you have.\n")
 	if len(task.Execution.ToolSequence) > 0 {
 		b.WriteString("- This is a closed tool sequence. The runtime permits only this order: `")
@@ -4651,6 +4700,9 @@ func externalResultProtocolInstructions(task TaskDef) string {
 	b.WriteString("\n")
 	if taskResultSubmissionContractForTask(task).FilesReadMinItems > 0 {
 		b.WriteString("- A successful response must include the required non-empty `files_read` string array; report observed paths or authorized opaque artifact IDs there.\n")
+	}
+	if task.InvariantVerification != "" {
+		b.WriteString("- `invariant_assessments` must be a non-null array with exactly one claim for each repository invariant included in this task context; use [] only when none were included.\n")
 	}
 	b.WriteString("- Return the structured response as the final provider answer, without a prose wrapper or claims of Hufu receipt/verification authority.\n")
 	return b.String()

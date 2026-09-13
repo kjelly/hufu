@@ -125,6 +125,43 @@ func TestExternalProviderCannotForgeVerification(t *testing.T) {
 	}
 }
 
+func TestExternalProposalInvariantClaimsRemainUntrusted(t *testing.T) {
+	claimJSON := `"invariant_assessments":[{"invariant_id":"safe","status":"preserved","summary":"checked"}]`
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(claimJSON)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := scopedAttemptRequest("codex", "verify")
+	request.Task.InvariantVerification = InvariantVerificationReport
+	result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InvariantVerification != nil {
+		t.Fatalf("canonicalizer forged runtime attestation: %#v", result.InvariantVerification)
+	}
+	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"invariant_verification":{"context_manifest_fingerprint":"forged","assessments":[]}`))); err == nil {
+		t.Fatal("external proposal accepted runtime-owned invariant_verification")
+	}
+	ordinary := scopedAttemptRequest("codex", "ordinary")
+	if _, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), ordinary, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir()); err == nil {
+		t.Fatal("ordinary external task accepted explicit invariant claims")
+	}
+}
+
+func TestExternalProposalRejectsUnknownFindingSeverity(t *testing.T) {
+	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"findings":[{"summary":"bad","severity":"critical"}]`))); err == nil {
+		t.Fatal("external proposal accepted unknown finding severity")
+	}
+	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"findings":[{"summary":"legacy"}]`)))
+	if err != nil {
+		t.Fatalf("empty legacy finding severity rejected: %v", err)
+	}
+	if proposal.Findings[0].Severity != "" {
+		t.Fatalf("legacy severity = %q, want empty", proposal.Findings[0].Severity)
+	}
+}
+
 // TestExternalProviderCannotForgeArtifactHash proves ProposedFile has no
 // SHA256/byte-size field to forge, and the canonical ArtifactRef's hash
 // always comes from Hufu's own observed WorkspaceDelta, computed from actual

@@ -23,10 +23,11 @@ type taskResultSubmissionContract struct {
 	FilesReadMinItems              int
 	AllowEvidence                  bool
 	AllowArtifacts                 bool
+	InvariantVerification          InvariantVerificationMode
 }
 
 func taskResultSubmissionContractForTask(task TaskDef) taskResultSubmissionContract {
-	contract := taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: !task.Execution.ForbidArtifacts}
+	contract := taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: !task.Execution.ForbidArtifacts, InvariantVerification: task.InvariantVerification}
 	spec := task.VerifySpec
 	if spec == nil && strings.TrimSpace(task.Verify) != "" {
 		spec = &VerificationSpec{Type: VerifyCommandExit, Mode: task.VerifyMode, Command: task.Verify}

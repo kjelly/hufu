@@ -137,6 +137,7 @@ type Finding struct {
 	Category string `json:"category"`
 	Summary  string `json:"summary"`
 	Detail   string `json:"detail,omitempty"`
+	Severity string `json:"severity,omitempty"`
 }
 
 type Risk struct {
@@ -296,6 +297,11 @@ type TaskResult struct {
 	// machinery (which needs schema/SHA256/scope for its own repair and
 	// receipt semantics): an ordinary worker just names a value.
 	Facts map[string]any `json:"facts,omitempty"`
+
+	// InvariantVerification is runtime-owned attestation. Model-facing DTOs
+	// expose only invariant_assessments claims and cannot populate this
+	// envelope or its manifest attribution.
+	InvariantVerification *InvariantVerificationResult `json:"invariant_verification,omitempty"`
 
 	Confidence float64 `json:"confidence"`
 	// Source is "submitted" (the local provider's own submit_result tool

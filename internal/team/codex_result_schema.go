@@ -43,13 +43,16 @@ func codexWorkerResultProposalSchema() map[string]any {
 	finding := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"category", "summary", "detail"},
+		"required":             []string{"category", "summary", "detail", "severity"},
 		"properties": map[string]any{
 			"category": map[string]any{"type": "string"},
 			"summary":  map[string]any{"type": "string"},
 			"detail":   map[string]any{"type": nullable("string")},
+			"severity": map[string]any{"type": nullable("string"), "enum": []any{FindingSeverityError, FindingSeverityWarning, FindingSeverityInfo, nil}},
 		},
 	}
+	invariantAssessments := invariantAssessmentClaimsSchema(true)
+	invariantAssessments["type"] = nullable("array")
 	risk := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -79,7 +82,7 @@ func codexWorkerResultProposalSchema() map[string]any {
 		"additionalProperties": false,
 		"required": []string{
 			"status", "summary", "details", "proposed_files", "files_read", "findings",
-			"risks", "open_questions", "facts", "confidence",
+			"risks", "open_questions", "facts", "confidence", "invariant_assessments",
 		},
 		"properties": map[string]any{
 			"status": map[string]any{
@@ -97,11 +100,12 @@ func codexWorkerResultProposalSchema() map[string]any {
 				"items":    map[string]any{"type": "string", "minLength": 1},
 				"maxItems": workerResultProposalMaxFilesRead,
 			},
-			"findings":       map[string]any{"type": nullable("array"), "items": finding, "maxItems": workerResultProposalMaxFindings},
-			"risks":          map[string]any{"type": nullable("array"), "items": risk, "maxItems": workerResultProposalMaxRisks},
-			"open_questions": map[string]any{"type": nullable("array"), "items": map[string]any{"type": "string"}, "maxItems": workerResultProposalMaxOpenQuestions},
-			"facts":          facts,
-			"confidence":     map[string]any{"type": nullable("number"), "minimum": 0, "maximum": 1},
+			"findings":              map[string]any{"type": nullable("array"), "items": finding, "maxItems": workerResultProposalMaxFindings},
+			"risks":                 map[string]any{"type": nullable("array"), "items": risk, "maxItems": workerResultProposalMaxRisks},
+			"open_questions":        map[string]any{"type": nullable("array"), "items": map[string]any{"type": "string"}, "maxItems": workerResultProposalMaxOpenQuestions},
+			"facts":                 facts,
+			"confidence":            map[string]any{"type": nullable("number"), "minimum": 0, "maximum": 1},
+			"invariant_assessments": invariantAssessments,
 		},
 	}
 }
