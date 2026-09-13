@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -820,6 +821,134 @@ func TestCalculateQualityScore(t *testing.T) {
 	expectedScore = 0.0*0.6 + 1.0*0.4 // 0.4
 	if qualityScore != expectedScore {
 		t.Errorf("Expected %.2f, got %.2f", expectedScore, qualityScore)
+	}
+}
+
+type deterministicSkillModelInvoker struct{}
+
+func (deterministicSkillModelInvoker) Invoke(_ context.Context, _ string, prompt string) (string, error) {
+	switch {
+	case strings.Contains(prompt, "task similarity analyzer"):
+		return `{"0":[0,1]}`, nil
+	case strings.Contains(prompt, "skill naming assistant"):
+		return "edit-and-verify", nil
+	default:
+		return `{"score":1,"reason":"generic","specific_elements":[]}`, nil
+	}
+}
+
+func TestSkillPatternCandidatePreservesSourceHash(t *testing.T) {
+	now := time.Now().UTC()
+	detector := NewSkillPatternDetector(1, 2, 2)
+	detector.SetModelInvoker(deterministicSkillModelInvoker{})
+	sequence := &ToolSequence{
+		Tools:       []string{"view", "edit"},
+		Params:      []string{"*.go", "*.go"},
+		Count:       4,
+		FirstSeen:   now.Add(-time.Minute),
+		LastSeen:    now,
+		TaskDescs:   []string{"edit source"},
+		Agent:       "coder",
+		AgentCounts: map[string]int{"coder": 4},
+	}
+	sequence.Hash = detector.hashSequence(sequence)
+	detector.sequences[sequence.Hash] = sequence
+
+	candidates := detector.FindCandidates(t.Context())
+	if len(candidates) != 1 {
+		t.Fatalf("FindCandidates() returned %d candidates", len(candidates))
+	}
+	if candidates[0].Sequence.Hash != sequence.Hash {
+		t.Fatalf("candidate hash = %q, want %q", candidates[0].Sequence.Hash, sequence.Hash)
+	}
+	if len(candidates[0].SourcePatternIDs) != 1 || candidates[0].SourcePatternIDs[0] != sequence.Hash {
+		t.Fatalf("source pattern IDs = %#v", candidates[0].SourcePatternIDs)
+	}
+	if candidates[0].Sequence.Count != 4 || candidates[0].QualityScore != 1 {
+		t.Fatalf("candidate selection metadata changed: %#v", candidates[0])
+	}
+}
+
+func TestSkillPatternTracksIdenticalSequenceAcrossAgents(t *testing.T) {
+	detector := NewSkillPatternDetector(1, 2, 2)
+	for _, agent := range []string{"coder", "writer"} {
+		detector.RecordToolCall(agent, "view", "file.go", "task")
+		detector.RecordToolCall(agent, "edit", "file.go", "task")
+	}
+
+	sequences := detector.GetAllSequences()
+	if len(sequences) != 1 {
+		t.Fatalf("GetAllSequences() returned %d sequences", len(sequences))
+	}
+	if sequences[0].Count != 2 {
+		t.Fatalf("sequence count = %d", sequences[0].Count)
+	}
+	if sequences[0].AgentCounts["coder"] != 1 || sequences[0].AgentCounts["writer"] != 1 {
+		t.Fatalf("agent counts = %#v", sequences[0].AgentCounts)
+	}
+	if len(detector.GetSequencesByAgent("coder")) != 1 || len(detector.GetSequencesByAgent("writer")) != 1 {
+		t.Fatal("shared sequence is not visible to both contributing agents")
+	}
+}
+
+func TestSkillPatternSemanticMergeUnionsSourceIDsAndAgents(t *testing.T) {
+	detector := NewSkillPatternDetector(1, 2, 2)
+	firstID := sha256Hex("first")
+	secondID := sha256Hex("second")
+	now := time.Now().UTC()
+	merged := detector.mergeCandidateGroup([]PatternCandidate{
+		{
+			Sequence: &ToolSequence{
+				Tools:       []string{"view", "edit"},
+				Count:       2,
+				FirstSeen:   now.Add(-2 * time.Minute),
+				LastSeen:    now.Add(-time.Minute),
+				AgentCounts: map[string]int{"coder": 2},
+			},
+			SourcePatternIDs: []string{secondID},
+		},
+		{
+			Sequence: &ToolSequence{
+				Tools:       []string{"view", "edit"},
+				Count:       3,
+				FirstSeen:   now.Add(-time.Minute),
+				LastSeen:    now,
+				AgentCounts: map[string]int{"writer": 3},
+			},
+			SourcePatternIDs: []string{firstID},
+		},
+	})
+
+	if merged.Sequence.Count != 5 || merged.Sequence.AgentCounts["coder"] != 2 || merged.Sequence.AgentCounts["writer"] != 3 {
+		t.Fatalf("merged counts = %#v", merged.Sequence)
+	}
+	wantIDs := []string{firstID, secondID}
+	slices.Sort(wantIDs)
+	if !slices.Equal(merged.SourcePatternIDs, wantIDs) {
+		t.Fatalf("merged source IDs = %#v", merged.SourcePatternIDs)
+	}
+}
+
+func TestSkillPatternSequenceAccessorsReturnDeepCopies(t *testing.T) {
+	detector := NewSkillPatternDetector(1, 2, 2)
+	detector.RecordToolCall("coder", "view", "file.go", "task")
+	detector.RecordToolCall("coder", "edit", "file.go", "task")
+
+	first := detector.GetAllSequences()
+	if len(first) != 1 {
+		t.Fatalf("GetAllSequences() returned %d sequences", len(first))
+	}
+	first[0].Tools[0] = "mutated"
+	first[0].Params[0] = "mutated"
+	first[0].TaskDescs[0] = "mutated"
+	first[0].AgentCounts["coder"] = 99
+
+	second := detector.GetSequencesByAgent("coder")
+	if len(second) != 1 {
+		t.Fatalf("GetSequencesByAgent() returned %d sequences", len(second))
+	}
+	if second[0].Tools[0] == "mutated" || second[0].Params[0] == "mutated" || second[0].TaskDescs[0] == "mutated" || second[0].AgentCounts["coder"] != 1 {
+		t.Fatalf("accessor exposed detector state: %#v", second[0])
 	}
 }
 

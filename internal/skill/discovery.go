@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -56,14 +58,15 @@ type ToolCallRecord struct {
 
 // ToolSequence represents a sequence of tool calls
 type ToolSequence struct {
-	Tools     []string
-	Params    []string // normalized parameter patterns
-	Hash      string
-	Count     int
-	FirstSeen time.Time
-	LastSeen  time.Time
-	TaskDescs []string // task descriptions where this sequence was used
-	Agent     string
+	Tools       []string
+	Params      []string // normalized parameter patterns
+	Hash        string
+	Count       int
+	FirstSeen   time.Time
+	LastSeen    time.Time
+	TaskDescs   []string // task descriptions where this sequence was used
+	Agent       string
+	AgentCounts map[string]int
 }
 
 // PatternCandidate represents a detected repeating pattern
@@ -77,6 +80,7 @@ type PatternCandidate struct {
 	IsSingleTool         bool     // true if single tool repeated
 	GeneralizationReason string   // LLM assessment reason
 	SpecificElements     []string // specific values detected
+	SourcePatternIDs     []string // stable source ToolSequence hashes
 }
 
 // SkillModelInvoker is the narrow composition boundary for optional
@@ -221,6 +225,10 @@ func (d *SkillPatternDetector) extractSequencesForAgent(agent string, calls []To
 		} else {
 			existing := d.sequences[seq.Hash]
 			existing.Count++
+			if existing.AgentCounts == nil {
+				existing.AgentCounts = map[string]int{existing.Agent: existing.Count - 1}
+			}
+			existing.AgentCounts[agent]++
 			existing.LastSeen = window[windowSize-1].Timestamp
 			existing.TaskDescs = append(existing.TaskDescs, window[windowSize-1].TaskDesc)
 		}
@@ -238,13 +246,14 @@ func (d *SkillPatternDetector) buildSequence(calls []ToolCallRecord, agent strin
 	}
 
 	seq := &ToolSequence{
-		Tools:     tools,
-		Params:    params,
-		Count:     1,
-		FirstSeen: calls[0].Timestamp,
-		LastSeen:  calls[len(calls)-1].Timestamp,
-		TaskDescs: []string{calls[len(calls)-1].TaskDesc},
-		Agent:     agent,
+		Tools:       tools,
+		Params:      params,
+		Count:       1,
+		FirstSeen:   calls[0].Timestamp,
+		LastSeen:    calls[len(calls)-1].Timestamp,
+		TaskDescs:   []string{calls[len(calls)-1].TaskDesc},
+		Agent:       agent,
+		AgentCounts: map[string]int{agent: 1},
 	}
 	seq.Hash = d.hashSequence(seq)
 
@@ -433,20 +442,13 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		requiredFreq := d.dynamicMinFrequency(len(seq.Tools))
 		if seq.Count >= requiredFreq {
 			// Deep copy ToolSequence to prevent data race after RUnlock
-			copiedSeq := &ToolSequence{
-				Tools:     append([]string{}, seq.Tools...),
-				Params:    append([]string{}, seq.Params...),
-				TaskDescs: append([]string{}, seq.TaskDescs...),
-				Count:     seq.Count,
-				FirstSeen: seq.FirstSeen,
-				LastSeen:  seq.LastSeen,
-				Agent:     seq.Agent,
-			}
+			copiedSeq := cloneToolSequence(seq)
 			candidate := PatternCandidate{
-				Sequence:        copiedSeq,
-				SimilarityScore: 1.0,
-				SuggestedName:   d.generateSuggestedName(seq),
-				SuggestedDesc:   d.generateSuggestedDescription(seq),
+				Sequence:         copiedSeq,
+				SimilarityScore:  1.0,
+				SuggestedName:    d.generateSuggestedName(seq),
+				SuggestedDesc:    d.generateSuggestedDescription(seq),
+				SourcePatternIDs: []string{seq.Hash},
 			}
 			candidates = append(candidates, candidate)
 		}
@@ -874,11 +876,17 @@ func isStrictPrefix(a, b []string) bool {
 func (d *SkillPatternDetector) mergeCandidateGroup(group []PatternCandidate) PatternCandidate {
 	totalCount := 0
 	allTaskDescs := []string{}
+	agentCounts := make(map[string]int)
+	var sourcePatternIDs []string
 	var firstSeen, lastSeen time.Time
 
 	for _, cand := range group {
 		totalCount += cand.Sequence.Count
 		allTaskDescs = append(allTaskDescs, cand.Sequence.TaskDescs...)
+		for agent, count := range cand.Sequence.AgentCounts {
+			agentCounts[agent] += count
+		}
+		sourcePatternIDs = append(sourcePatternIDs, cand.SourcePatternIDs...)
 
 		if firstSeen.IsZero() || cand.Sequence.FirstSeen.Before(firstSeen) {
 			firstSeen = cand.Sequence.FirstSeen
@@ -890,21 +898,25 @@ func (d *SkillPatternDetector) mergeCandidateGroup(group []PatternCandidate) Pat
 
 	// Use first candidate's sequence as representative
 	representative := group[0]
+	slices.Sort(sourcePatternIDs)
+	sourcePatternIDs = slices.Compact(sourcePatternIDs)
 
 	return PatternCandidate{
 		Sequence: &ToolSequence{
-			Tools:     representative.Sequence.Tools,
-			Params:    representative.Sequence.Params,
-			Hash:      representative.Sequence.Hash,
-			Count:     totalCount,
-			FirstSeen: firstSeen,
-			LastSeen:  lastSeen,
-			TaskDescs: allTaskDescs,
-			Agent:     representative.Sequence.Agent,
+			Tools:       slices.Clone(representative.Sequence.Tools),
+			Params:      slices.Clone(representative.Sequence.Params),
+			Hash:        representative.Sequence.Hash,
+			Count:       totalCount,
+			FirstSeen:   firstSeen,
+			LastSeen:    lastSeen,
+			TaskDescs:   allTaskDescs,
+			Agent:       representative.Sequence.Agent,
+			AgentCounts: agentCounts,
 		},
-		SimilarityScore: 0.9,
-		SuggestedName:   representative.SuggestedName,
-		SuggestedDesc:   d.generateMergedDescription(allTaskDescs, totalCount),
+		SimilarityScore:  0.9,
+		SuggestedName:    representative.SuggestedName,
+		SuggestedDesc:    d.generateMergedDescription(allTaskDescs, totalCount),
+		SourcePatternIDs: sourcePatternIDs,
 	}
 }
 
@@ -1125,14 +1137,15 @@ func (d *SkillPatternDetector) GetSequencesByAgent(agent string) []*ToolSequence
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	hashes := d.sequenceByAgent[agent]
 	var sequences []*ToolSequence
-
-	for _, hash := range hashes {
-		if seq, exists := d.sequences[hash]; exists {
-			sequences = append(sequences, seq)
+	for _, seq := range d.sequences {
+		if seq.AgentCounts[agent] > 0 || (seq.AgentCounts == nil && seq.Agent == agent) {
+			sequences = append(sequences, cloneToolSequence(seq))
 		}
 	}
+	slices.SortFunc(sequences, func(a, b *ToolSequence) int {
+		return strings.Compare(a.Hash, b.Hash)
+	})
 
 	return sequences
 }
@@ -1144,10 +1157,25 @@ func (d *SkillPatternDetector) GetAllSequences() []*ToolSequence {
 
 	sequences := make([]*ToolSequence, 0, len(d.sequences))
 	for _, seq := range d.sequences {
-		sequences = append(sequences, seq)
+		sequences = append(sequences, cloneToolSequence(seq))
 	}
+	slices.SortFunc(sequences, func(a, b *ToolSequence) int {
+		return strings.Compare(a.Hash, b.Hash)
+	})
 
 	return sequences
+}
+
+func cloneToolSequence(seq *ToolSequence) *ToolSequence {
+	if seq == nil {
+		return nil
+	}
+	cloned := *seq
+	cloned.Tools = slices.Clone(seq.Tools)
+	cloned.Params = slices.Clone(seq.Params)
+	cloned.TaskDescs = slices.Clone(seq.TaskDescs)
+	cloned.AgentCounts = maps.Clone(seq.AgentCounts)
+	return &cloned
 }
 
 // isHighValueSequence returns true if the sequence represents a meaningful multi-step workflow.

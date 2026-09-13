@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts
@@ -35,14 +38,18 @@ func (c *Coordinator) checkSkillPatterns() {
 
 	// Only report new patterns (more than previously detected)
 	newPatterns := len(candidates) - c.skillPatternsDetected
+	var savedSkills []skill.SavedPatternDraft
+	if newPatterns > 0 {
+		c.skillPatternsDetected = len(candidates)
+		savedSkills = c.checkSkillPatternsAndSave(candidates)
+	}
+
+	if err := c.persistSkillPatternSnapshot(candidates, savedSkills); err != nil {
+		log.Printf("[WARN] failed to persist skill pattern snapshot: %s", utils.RedactSecrets(err.Error()))
+	}
 	if newPatterns <= 0 {
 		return
 	}
-
-	c.skillPatternsDetected = len(candidates)
-
-	// Auto-generate skill drafts
-	savedSkills := c.checkSkillPatternsAndSave()
 
 	// Report skill pattern suggestions
 	var msg strings.Builder
@@ -61,8 +68,8 @@ func (c *Coordinator) checkSkillPatterns() {
 	}
 	if len(savedSkills) > 0 {
 		msg.WriteString("\nDraft skills saved to:\n")
-		for _, path := range savedSkills {
-			fmt.Fprintf(&msg, "  - %s\n", path)
+		for _, draft := range savedSkills {
+			fmt.Fprintf(&msg, "  - %s\n", draft.Path)
 		}
 		msg.WriteString("\nReview and refine with: hufu skill review <skill-name>\n")
 	}
@@ -71,13 +78,8 @@ func (c *Coordinator) checkSkillPatterns() {
 }
 
 // checkSkillPatternsAndSave checks for patterns and auto-generates skill drafts (requires user confirmation)
-func (c *Coordinator) checkSkillPatternsAndSave() []string {
+func (c *Coordinator) checkSkillPatternsAndSave(candidates []skill.PatternCandidate) []skill.SavedPatternDraft {
 	if c.skillDetector == nil || c.skillGenerator == nil {
-		return nil
-	}
-
-	candidates := c.skillDetector.FindCandidates(context.Background())
-	if len(candidates) == 0 {
 		return nil
 	}
 
@@ -86,7 +88,7 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 	// behavior and therefore requires an explicit human promotion step.
 	const autoPromoteQuality = 0.95
 	const autoPromoteCount = 15
-	var autoDrafts []string
+	var autoDrafts []skill.SavedPatternDraft
 	var needConfirmation []skill.PatternCandidate
 	for _, cand := range candidates {
 		if cand.QualityScore >= autoPromoteQuality && cand.Sequence.Count >= autoPromoteCount {
@@ -95,7 +97,12 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 				log.Printf("[WARN] automatic skill draft generation failed: %v", err)
 				continue
 			}
-			autoDrafts = append(autoDrafts, path)
+			draft, err := savedPatternDraft(cand, path)
+			if err != nil {
+				log.Printf("[WARN] automatic skill draft identity failed: %s", utils.RedactSecrets(err.Error()))
+				continue
+			}
+			autoDrafts = append(autoDrafts, draft)
 			c.report(c.newEvent("step").withMessage(fmt.Sprintf(
 				"Generated high-confidence skill draft awaiting approval: %s (quality %.2f, ×%d)",
 				cand.SuggestedName, cand.QualityScore, cand.Sequence.Count)))
@@ -104,7 +111,7 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 		}
 	}
 
-	var savedSkills []string
+	var savedSkills []skill.SavedPatternDraft
 	savedSkills = append(savedSkills, autoDrafts...)
 
 	// Multi-select confirm remaining candidates: user picks which drafts to keep.
@@ -116,11 +123,69 @@ func (c *Coordinator) checkSkillPatternsAndSave() []string {
 				log.Printf("[WARN] failed to generate skill draft: %v", err)
 				continue
 			}
-			savedSkills = append(savedSkills, path)
+			draft, err := savedPatternDraft(cand, path)
+			if err != nil {
+				log.Printf("[WARN] skill draft identity failed: %s", utils.RedactSecrets(err.Error()))
+				continue
+			}
+			savedSkills = append(savedSkills, draft)
 		}
 	}
 
 	return savedSkills
+}
+
+func savedPatternDraft(candidate skill.PatternCandidate, path string) (skill.SavedPatternDraft, error) {
+	patternID, err := skill.PatternCandidateID(candidate)
+	if err != nil {
+		return skill.SavedPatternDraft{}, err
+	}
+	name := filepath.Base(filepath.Dir(path))
+	if strings.TrimSpace(path) == "" || name == "." || name == string(filepath.Separator) {
+		return skill.SavedPatternDraft{}, fmt.Errorf("generated skill draft path %q has no name", path)
+	}
+	return skill.SavedPatternDraft{
+		PatternID: patternID,
+		Name:      name,
+		Path:      path,
+	}, nil
+}
+
+func (c *Coordinator) persistSkillPatternSnapshot(
+	candidates []skill.PatternCandidate,
+	savedDrafts []skill.SavedPatternDraft,
+) error {
+	if c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
+		return fmt.Errorf("skill pattern snapshot workspace is unavailable")
+	}
+
+	path := skill.SkillPatternSnapshotPath(c.session.Workspace)
+	var previous *skill.SkillPatternSnapshot
+	if loaded, available, err := skill.LoadSkillPatternSnapshot(path); err != nil {
+		log.Printf("[WARN] replacing unreadable skill pattern snapshot: %s", utils.RedactSecrets(err.Error()))
+	} else if available {
+		previous = &loaded
+	}
+
+	snapshot, err := skill.NewSkillPatternSnapshot(
+		c.contextRunID(),
+		c.session.Config.Name,
+		time.Now().UTC(),
+		candidates,
+		savedDrafts,
+		previous,
+	)
+	if err != nil {
+		return err
+	}
+	data, err := skill.EncodeSkillPatternSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	if err := AtomicWriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write skill pattern snapshot: %w", err)
+	}
+	return nil
 }
 
 // displaySkillPreviewMultiSelect shows the candidate list and asks the user
