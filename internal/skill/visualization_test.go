@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"reflect"
@@ -9,7 +10,7 @@ import (
 	"time"
 )
 
-func TestBuildSkillPatternGraphCountsOccurrencesAndTransitions(t *testing.T) {
+func TestSkillGraphAggregatesNodeCountsPerOccurrence(t *testing.T) {
 	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
 		testSkillPatternSummary("pat_a", []string{"write", "write", "bash"}, 2, "alice"),
 		testSkillPatternSummary("pat_b", []string{"bash", "write"}, 3, "bob"),
@@ -45,7 +46,33 @@ func TestBuildSkillPatternGraphCountsOccurrencesAndTransitions(t *testing.T) {
 	}
 }
 
-func TestBuildSkillPatternGraphFiltersBeforeCounting(t *testing.T) {
+func TestSkillGraphAggregatesRepeatedEdgeCounts(t *testing.T) {
+	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
+		testSkillPatternSummary("pat_a", []string{"bash", "write", "bash", "write"}, 2, "alice"),
+	})
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+	if got, want := graphEdgeCount(graph, "bash", "write"), int64(4); got != want {
+		t.Errorf("repeated edge count = %d, want %d", got, want)
+	}
+}
+
+func TestSkillGraphPreservesSelfEdges(t *testing.T) {
+	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
+		testSkillPatternSummary("pat_a", []string{"write", "write"}, 3, "alice"),
+	})
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+	if got, want := graphEdgeCount(graph, "write", "write"), int64(3); got != want {
+		t.Errorf("self-edge count = %d, want %d", got, want)
+	}
+}
+
+func TestSkillGraphFiltersByAgentBeforeAggregation(t *testing.T) {
 	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
 		testSkillPatternSummary("pat_a", []string{"bash", "write"}, 2, "alice"),
 		testSkillPatternSummary("pat_b", []string{"view", "write"}, 5, "bob"),
@@ -70,7 +97,21 @@ func TestBuildSkillPatternGraphFiltersBeforeCounting(t *testing.T) {
 	}
 }
 
-func TestBuildSkillPatternGraphUnknownAgentReturnsAvailableEmptyGraph(t *testing.T) {
+func TestSkillGraphFiltersByMinimumFrequency(t *testing.T) {
+	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
+		testSkillPatternSummary("pat_a", []string{"view"}, 2, "alice"),
+		testSkillPatternSummary("pat_b", []string{"write"}, 3, "alice"),
+	})
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{MinFrequency: 3})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+	if got, want := len(graph.Patterns), 1; got != want || graph.Patterns[0].ID != "pat_b" {
+		t.Errorf("filtered patterns = %#v, want only pat_b", graph.Patterns)
+	}
+}
+
+func TestSkillGraphMissingAgentReturnsEmptySuccess(t *testing.T) {
 	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
 		testSkillPatternSummary("pat_a", []string{"bash", "write"}, 2, "alice"),
 	})
@@ -90,7 +131,7 @@ func TestBuildSkillPatternGraphUnknownAgentReturnsAvailableEmptyGraph(t *testing
 	}
 }
 
-func TestBuildSkillPatternGraphIsDeterministicAndDoesNotAliasInput(t *testing.T) {
+func TestSkillGraphDeterministicOrdering(t *testing.T) {
 	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
 		testSkillPatternSummary("pat_a", []string{"zeta", "alpha"}, 2, "z-agent"),
 		testSkillPatternSummary("pat_b", []string{"alpha", "middle"}, 3, "a-agent"),
@@ -127,7 +168,28 @@ func TestBuildSkillPatternGraphIsDeterministicAndDoesNotAliasInput(t *testing.T)
 	}
 }
 
-func TestBuildSkillPatternGraphRejectsCountOverflow(t *testing.T) {
+func TestSkillGraphJSONStable(t *testing.T) {
+	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
+		testSkillPatternSummary("pat_a", []string{"bash", "write"}, 2, "alice"),
+	})
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+	var first bytes.Buffer
+	if err := json.NewEncoder(&first).Encode(graph); err != nil {
+		t.Fatalf("first Encode() error = %v", err)
+	}
+	var second bytes.Buffer
+	if err := json.NewEncoder(&second).Encode(graph); err != nil {
+		t.Fatalf("second Encode() error = %v", err)
+	}
+	if first.String() != second.String() || !strings.HasSuffix(first.String(), "\n") {
+		t.Errorf("JSON output is not stable and newline-terminated:\nfirst:  %s\nsecond: %s", first.String(), second.String())
+	}
+}
+
+func TestSkillGraphRejectsCountOverflow(t *testing.T) {
 	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
 		testSkillPatternSummary("pat_a", []string{"bash"}, math.MaxInt64, "alice"),
 		testSkillPatternSummary("pat_b", []string{"bash"}, 1, "bob"),
@@ -177,6 +239,55 @@ func TestRenderUnavailableSkillPatternGraphText(t *testing.T) {
 	want := "No skill-pattern snapshot is available for this workspace.\n"
 	if got != want {
 		t.Errorf("RenderSkillPatternGraphText() = %q, want %q", got, want)
+	}
+}
+
+func TestSkillGraphMermaidEscapesNames(t *testing.T) {
+	toolName := "read & \"<tag>\r\n\tnext"
+	snapshot := testSkillPatternSnapshot([]SkillPatternSummary{
+		testSkillPatternSummary("pat_a", []string{toolName, "write"}, 2, "alice"),
+	})
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+
+	output := RenderSkillPatternGraphMermaid(graph)
+	expectedNode := SkillPatternNodeID(toolName) + `["read &amp; &quot;&lt;tag&gt;   next"]`
+	if !strings.Contains(output, expectedNode) {
+		t.Errorf("Mermaid output does not contain escaped node %q:\n%s", expectedNode, output)
+	}
+	expectedEdge := SkillPatternNodeID(toolName) + " -->|×2| " + SkillPatternNodeID("write")
+	if !strings.Contains(output, expectedEdge) {
+		t.Errorf("Mermaid output does not contain edge %q:\n%s", expectedEdge, output)
+	}
+	if strings.Contains(output, toolName) {
+		t.Errorf("Mermaid output contains unescaped tool name:\n%s", output)
+	}
+}
+
+func TestRenderSkillPatternGraphMermaidEmptyStates(t *testing.T) {
+	missingWant := "graph LR\n  %% No skill-pattern snapshot is available for this workspace.\n"
+	if got := RenderSkillPatternGraphMermaid(NewUnavailableSkillPatternGraph()); got != missingWant {
+		t.Errorf("missing Mermaid output = %q, want %q", got, missingWant)
+	}
+
+	snapshot := testSkillPatternSnapshot(nil)
+	graph, err := BuildSkillPatternGraph(snapshot, SkillPatternGraphFilter{})
+	if err != nil {
+		t.Fatalf("BuildSkillPatternGraph() error = %v", err)
+	}
+	existingOutput := RenderSkillPatternGraphMermaid(graph)
+	for _, expected := range []string{
+		"graph LR\n",
+		"  %% Run: run-test\n",
+		"  %% Team: test-team\n",
+		"  %% Generated: 2026-09-13T12:00:00Z\n",
+		"  %% No patterns matched.\n",
+	} {
+		if !strings.Contains(existingOutput, expected) {
+			t.Errorf("existing-empty Mermaid output does not contain %q:\n%s", expected, existingOutput)
+		}
 	}
 }
 

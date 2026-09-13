@@ -28,6 +28,9 @@ func (c *Coordinator) checkSkillPatterns() {
 
 	candidates := c.skillDetector.FindCandidates(context.Background())
 	if len(candidates) == 0 {
+		if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{}, nil); err != nil {
+			log.Printf("[WARN] failed to persist skill pattern snapshot: %s", utils.RedactSecrets(err.Error()))
+		}
 		return
 	}
 

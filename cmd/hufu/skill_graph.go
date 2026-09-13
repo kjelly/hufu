@@ -22,7 +22,8 @@ var (
 		Long: `Render the latest persisted skill-pattern snapshot.
 
 The command performs no model calls and does not re-run pattern detection.
-Use --format text for a human-readable view or --format json for automation.`,
+Use --format text for a human-readable view, json for automation, or mermaid
+for raw Mermaid graph source.`,
 		Args: cobra.NoArgs,
 		RunE: runSkillGraph,
 	}
@@ -32,8 +33,8 @@ func runSkillGraph(cmd *cobra.Command, _ []string) error {
 	if skillGraphMinFrequency < 0 {
 		return errors.New("--min-frequency must not be negative")
 	}
-	if skillGraphFormat != "text" && skillGraphFormat != "json" {
-		return fmt.Errorf("unsupported --format %q (allowed: text, json)", skillGraphFormat)
+	if skillGraphFormat != "text" && skillGraphFormat != "json" && skillGraphFormat != "mermaid" {
+		return fmt.Errorf("unsupported --format %q (allowed: text, json, mermaid)", skillGraphFormat)
 	}
 
 	snapshot, available, err := skill.LoadSkillPatternSnapshot(
@@ -57,6 +58,12 @@ func runSkillGraph(cmd *cobra.Command, _ []string) error {
 	if skillGraphFormat == "json" {
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(graph); err != nil {
 			return fmt.Errorf("write skill-pattern graph JSON: %w", err)
+		}
+		return nil
+	}
+	if skillGraphFormat == "mermaid" {
+		if _, err := fmt.Fprint(cmd.OutOrStdout(), skill.RenderSkillPatternGraphMermaid(graph)); err != nil {
+			return fmt.Errorf("write skill-pattern graph Mermaid: %w", err)
 		}
 		return nil
 	}

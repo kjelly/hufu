@@ -18,9 +18,8 @@ func TestSkillPatternSnapshotEmptyEvaluationReplacesPreviousData(t *testing.T) {
 	if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{candidate}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{}, nil); err != nil {
-		t.Fatal(err)
-	}
+	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
+	c.checkSkillPatterns()
 
 	snapshot, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(c.session.Workspace))
 	if err != nil {

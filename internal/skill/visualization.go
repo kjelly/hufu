@@ -234,6 +234,35 @@ func RenderSkillPatternGraphText(graph SkillPatternGraph) string {
 	return output.String()
 }
 
+// RenderSkillPatternGraphMermaid returns raw Mermaid source with stable node
+// IDs and labels escaped for Mermaid's quoted-node syntax.
+func RenderSkillPatternGraphMermaid(graph SkillPatternGraph) string {
+	var output strings.Builder
+	fmt.Fprintln(&output, "graph LR")
+	if !graph.SnapshotAvailable {
+		fmt.Fprintln(&output, "  %% No skill-pattern snapshot is available for this workspace.")
+		return output.String()
+	}
+
+	fmt.Fprintf(&output, "  %%%% Run: %s\n", graph.RunID)
+	fmt.Fprintf(&output, "  %%%% Team: %s\n", graph.TeamName)
+	if graph.GeneratedAt != nil {
+		fmt.Fprintf(&output, "  %%%% Generated: %s\n", graph.GeneratedAt.UTC().Format(time.RFC3339Nano))
+	}
+	if len(graph.Patterns) == 0 {
+		fmt.Fprintln(&output, "  %% No patterns matched.")
+		return output.String()
+	}
+
+	for _, node := range graph.Nodes {
+		fmt.Fprintf(&output, "  %s[\"%s\"]\n", node.ID, escapeMermaidLabel(node.Tool))
+	}
+	for _, edge := range graph.Edges {
+		fmt.Fprintf(&output, "  %s -->|×%d| %s\n", edge.From, edge.Count, edge.To)
+	}
+	return output.String()
+}
+
 func patternIncludesAgent(pattern SkillPatternSummary, agentName string) bool {
 	if agentName == "" {
 		return true
@@ -287,4 +316,16 @@ func formatParameterClasses(classes [][]string) string {
 		formatted[i] = "[" + strings.Join(classes[i], ",") + "]"
 	}
 	return strings.Join(formatted, " ")
+}
+
+func escapeMermaidLabel(label string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"\"", "&quot;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\r", " ",
+		"\n", " ",
+		"\t", " ",
+	).Replace(label)
 }

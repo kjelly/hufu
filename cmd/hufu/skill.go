@@ -18,11 +18,11 @@ var draftsOnly bool
 var (
 	skillReviewCmd = &cobra.Command{
 		Use:   "review <skill-name>",
-		Short: "Review and edit an auto-generated skill draft",
-		Long: `Review and edit an auto-generated skill draft.
+		Short: "Display an auto-generated skill draft for review",
+		Long: `Display an auto-generated skill draft for review.
 
-This command opens a skill draft file for review. You can edit the file
-with your editor and then confirm to save it as a final skill.
+This command prints the draft path and content. It does not open an editor or
+promote the draft; use 'hufu skill promote <draft-name>' after review.
 
 Usage:
   hufu skill review <skill-name>
@@ -95,7 +95,7 @@ func init() {
 	skillCmd.AddCommand(skillCleanCmd)
 	skillCmd.AddCommand(skillGraphCmd)
 	skillListCmd.Flags().BoolVar(&draftsOnly, "drafts-only", false, "Show only draft skills")
-	skillGraphCmd.Flags().StringVar(&skillGraphFormat, "format", "text", "Output format: text or json")
+	skillGraphCmd.Flags().StringVar(&skillGraphFormat, "format", "text", "Output format: text, json, or mermaid")
 	skillGraphCmd.Flags().StringVar(&skillGraphAgent, "agent", "", "Include only patterns attributed to this agent")
 	skillGraphCmd.Flags().Int64Var(&skillGraphMinFrequency, "min-frequency", 0, "Include only patterns with at least this count")
 

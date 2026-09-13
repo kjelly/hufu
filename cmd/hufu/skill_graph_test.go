@@ -24,7 +24,7 @@ func TestSkillGraphCommandIsRegistered(t *testing.T) {
 	}
 }
 
-func TestRunSkillGraphMissingSnapshot(t *testing.T) {
+func TestSkillGraphMissingSnapshotPerFormat(t *testing.T) {
 	workspace := configureSkillGraphTest(t, "text", "", 0)
 	if _, err := os.Stat(skill.SkillPatternSnapshotPath(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("snapshot unexpectedly exists: %v", err)
@@ -56,6 +56,16 @@ func TestRunSkillGraphMissingSnapshot(t *testing.T) {
 	if graph.Patterns == nil || graph.Nodes == nil || graph.Edges == nil {
 		t.Fatalf("missing snapshot arrays must be []: %s", output.String())
 	}
+
+	skillGraphFormat = "mermaid"
+	output.Reset()
+	if err := runSkillGraph(command, nil); err != nil {
+		t.Fatalf("runSkillGraph(mermaid) error = %v", err)
+	}
+	want = "graph LR\n  %% No skill-pattern snapshot is available for this workspace.\n"
+	if got := output.String(); got != want {
+		t.Errorf("Mermaid output = %q, want %q", got, want)
+	}
 }
 
 func TestRunSkillGraphJSONAppliesFilters(t *testing.T) {
@@ -85,9 +95,18 @@ func TestRunSkillGraphJSONAppliesFilters(t *testing.T) {
 	if got, want := graph.Patterns[0].ID, "pat_b"; got != want {
 		t.Errorf("pattern ID = %q, want %q", got, want)
 	}
+
+	firstOutput := output.String()
+	output.Reset()
+	if err := runSkillGraph(command, nil); err != nil {
+		t.Fatalf("second runSkillGraph() error = %v", err)
+	}
+	if got := output.String(); got != firstOutput {
+		t.Errorf("JSON output is not stable:\nfirst:  %s\nsecond: %s", firstOutput, got)
+	}
 }
 
-func TestRunSkillGraphTextUsesCommandWriter(t *testing.T) {
+func TestSkillGraphRendersDraftName(t *testing.T) {
 	workspace := configureSkillGraphTest(t, "text", "", 0)
 	writeSkillGraphTestSnapshot(t, workspace)
 
@@ -97,25 +116,65 @@ func TestRunSkillGraphTextUsesCommandWriter(t *testing.T) {
 	if err := runSkillGraph(command, nil); err != nil {
 		t.Fatalf("runSkillGraph() error = %v", err)
 	}
-	for _, expected := range []string{"Skill pattern graph", "Team: test-team", "bash -> write"} {
+	for _, expected := range []string{"Skill pattern graph", "Team: test-team", "bash -> write", "draft=draft-bash-write"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output.String())
 		}
 	}
 }
 
-func TestRunSkillGraphRejectsInvalidOptionsBeforeReadingSnapshot(t *testing.T) {
+func TestSkillGraphUnknownFormatFails(t *testing.T) {
 	configureSkillGraphTest(t, "dot", "", 0)
 	command := &cobra.Command{}
 	command.SetOut(&bytes.Buffer{})
-	if err := runSkillGraph(command, nil); err == nil || !strings.Contains(err.Error(), "allowed: text, json") {
+	if err := runSkillGraph(command, nil); err == nil || !strings.Contains(err.Error(), "allowed: text, json, mermaid") {
 		t.Fatalf("runSkillGraph() error = %v, want unsupported format", err)
 	}
+}
 
-	skillGraphFormat = "text"
-	skillGraphMinFrequency = -1
+func TestRunSkillGraphRejectsNegativeMinimumFrequency(t *testing.T) {
+	configureSkillGraphTest(t, "text", "", -1)
+	command := &cobra.Command{}
+	command.SetOut(&bytes.Buffer{})
 	if err := runSkillGraph(command, nil); err == nil || !strings.Contains(err.Error(), "must not be negative") {
 		t.Fatalf("runSkillGraph() error = %v, want negative frequency error", err)
+	}
+}
+
+func TestSkillGraphExistingEmptySnapshotPerFormat(t *testing.T) {
+	workspace := configureSkillGraphTest(t, "text", "", 0)
+	writeEmptySkillGraphTestSnapshot(t, workspace)
+	command := &cobra.Command{}
+	var output bytes.Buffer
+	command.SetOut(&output)
+
+	if err := runSkillGraph(command, nil); err != nil {
+		t.Fatalf("runSkillGraph(text) error = %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "Patterns: 0\n") || !strings.Contains(got, "Patterns\n  (none)\n") {
+		t.Errorf("text output does not describe existing empty snapshot:\n%s", got)
+	}
+
+	skillGraphFormat = "json"
+	output.Reset()
+	if err := runSkillGraph(command, nil); err != nil {
+		t.Fatalf("runSkillGraph(json) error = %v", err)
+	}
+	var graph skill.SkillPatternGraph
+	if err := json.Unmarshal(output.Bytes(), &graph); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !graph.SnapshotAvailable || len(graph.Patterns) != 0 || graph.RunID != "run-test" {
+		t.Errorf("JSON existing-empty graph = %#v", graph)
+	}
+
+	skillGraphFormat = "mermaid"
+	output.Reset()
+	if err := runSkillGraph(command, nil); err != nil {
+		t.Fatalf("runSkillGraph(mermaid) error = %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "%% Run: run-test") || !strings.Contains(got, "%% No patterns matched.") {
+		t.Errorf("Mermaid output does not describe existing empty snapshot:\n%s", got)
 	}
 }
 
@@ -182,6 +241,7 @@ func writeSkillGraphTestSnapshot(t *testing.T, workspace string) {
 				ParameterClasses: [][]string{{"string"}, {"file"}},
 				Count:            4,
 				Agents:           []skill.SkillPatternAgent{{Name: "alice", Count: 4}},
+				DraftName:        "draft-bash-write",
 				FirstSeen:        generatedAt.Add(-2 * time.Hour),
 				LastSeen:         generatedAt.Add(-time.Hour),
 			},
@@ -195,6 +255,28 @@ func writeSkillGraphTestSnapshot(t *testing.T, workspace string) {
 				LastSeen:         generatedAt.Add(-time.Hour),
 			},
 		},
+	}
+	data, err := skill.EncodeSkillPatternSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("skill.EncodeSkillPatternSnapshot() error = %v", err)
+	}
+	path := skill.SkillPatternSnapshotPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+}
+
+func writeEmptySkillGraphTestSnapshot(t *testing.T, workspace string) {
+	t.Helper()
+	snapshot := skill.SkillPatternSnapshot{
+		SchemaVersion: skill.SkillPatternSnapshotVersion,
+		RunID:         "run-test",
+		TeamName:      "test-team",
+		GeneratedAt:   time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC),
+		Patterns:      []skill.SkillPatternSummary{},
 	}
 	data, err := skill.EncodeSkillPatternSnapshot(snapshot)
 	if err != nil {
