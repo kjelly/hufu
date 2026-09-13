@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -27,6 +30,23 @@ type teamContext struct {
 	coordinator *team.Coordinator
 	sessionData *team.SessionData
 	notifier    *notify.Notifier
+}
+
+func (tc *teamContext) Close() error {
+	if tc == nil || tc.coordinator == nil {
+		return nil
+	}
+	return tc.coordinator.Close()
+}
+
+func closeTeamContexts(contexts map[string]*teamContext) error {
+	var closeErrs []error
+	for _, name := range slices.Sorted(maps.Keys(contexts)) {
+		if err := contexts[name].Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close team %q: %w", name, err))
+		}
+	}
+	return errors.Join(closeErrs...)
 }
 
 // applyUnattendedAndBudget configures the coordinator's unattended mode,
@@ -288,7 +308,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	coordinator.SetFreshSession(startsFresh)
 	coordinator.SetSessionData(sessionData)
 	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
-		return nil, fmt.Errorf("freeze execution policy before provider preflight: %w", err)
+		return nil, errors.Join(fmt.Errorf("freeze execution policy before provider preflight: %w", err), coordinator.Close())
 	}
 	// Warm provider-bound profiles after the coordinator owns the exact
 	// ProviderManager used for invocation. This covers configured agents,
@@ -299,17 +319,17 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		stderrLog("%s %s\n", errStyle.Render("⚠"), warning)
 	}
 	if err := modelCapabilityValidation.Err(); err != nil {
-		return nil, err
+		return nil, errors.Join(err, coordinator.Close())
 	}
 
 	if stallThreshold := cfg.ResolveStallThreshold(session.Config.StallThreshold); stallThreshold > 0 {
 		coordinator.SetStallWatchdog(stallThreshold, 0)
 	}
 	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
-		return nil, err
+		return nil, errors.Join(err, coordinator.Close())
 	}
 	if err := coordinator.SetPTYTerminalEnabled(opts.enablePTYTerminal); err != nil {
-		return nil, err
+		return nil, errors.Join(err, coordinator.Close())
 	}
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
 	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent, execProfile)

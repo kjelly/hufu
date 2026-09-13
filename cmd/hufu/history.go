@@ -66,6 +66,9 @@ func runArchiveMemory(ctx context.Context, registry *team.TeamRegistry, vars map
 		} else {
 			fmt.Fprintf(os.Stderr, "%s No session data for team %q\n", dimStyle.Render("○"), name)
 		}
+		if err := tc.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s Failed to close team %q: %v\n", errStyle.Render("⚠"), name, err)
+		}
 	}
 
 	if archived == 0 {

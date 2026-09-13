@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -113,12 +114,21 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 	return nil
 }
 
-// CloseContextPreflight releases preflight-only resources after a CLI model
-// invocation. It never mutates the persisted lineage.
+// CloseContextPreflight releases a single-use CLI preflight boundary. It also
+// closes the coordinator-owned canonical repository, preserving the existing
+// terminal preflight lifecycle; callers should use Close to release the
+// remaining coordinator resources. It never mutates the persisted lineage.
 func (c *Coordinator) CloseContextPreflight() {
-	if c == nil {
-		return
+	if err := c.closeContextPreflight(); err != nil {
+		log.Printf("warning: close context preflight: %v", err)
 	}
+}
+
+func (c *Coordinator) closeContextPreflight() error {
+	if c == nil {
+		return nil
+	}
+	var closeErrs []error
 	c.preflightMu.Lock()
 	c.preflightContext = nil
 	owner := c.preflightOwner
@@ -128,7 +138,7 @@ func (c *Coordinator) CloseContextPreflight() {
 	c.preflightMu.Unlock()
 	if owner != nil {
 		if err := owner.close(); err != nil {
-			log.Printf("warning: close context preflight provider boundary: %v", err)
+			closeErrs = append(closeErrs, fmt.Errorf("close provider boundary: %w", err))
 		}
 		if owner.watchdog != nil {
 			owner.watchdog.wait()
@@ -136,16 +146,20 @@ func (c *Coordinator) CloseContextPreflight() {
 		}
 	}
 	if lease == nil {
-		return
+		return errors.Join(closeErrs...)
 	}
 	if c.eventStore != nil {
-		_ = c.eventStore.Close()
+		if err := c.eventStore.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close event store: %w", err))
+		}
 		c.eventStore = nil
+		c.SetEventJournal(eventStoreJournal{})
 	}
-	if closer, ok := c.contextRepo.(interface{ Close() error }); ok {
-		_ = closer.Close()
+	if err := c.closeContextRepository(); err != nil {
+		closeErrs = append(closeErrs, err)
 	}
 	lease.release()
+	return errors.Join(closeErrs...)
 }
 
 // ContextPreflight returns the live context owned by the current CLI

@@ -139,6 +139,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("construct coordinator: %w", err)
 	}
+	defer func() { _ = coordinator.Close() }()
 	if c.DecisionProfileOverride != "" {
 		coordinator.SetDecisionProfile(c.DecisionProfileOverride)
 	}

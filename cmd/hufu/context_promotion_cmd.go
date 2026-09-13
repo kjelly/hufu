@@ -350,9 +350,14 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	}
 	handle, err := preparePreflightSidecarContext(ctx, coordinator)
 	if err != nil {
+		_ = coordinator.Close()
 		return nil, nil, err
 	}
-	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context()}}, handle.Close, nil
+	closeGenerator := func() {
+		handle.Close()
+		_ = coordinator.Close()
+	}
+	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context()}}, closeGenerator, nil
 }
 
 func parsePromotionType(v string) (promotion.Type, error) {

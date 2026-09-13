@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,12 +84,13 @@ func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegm
 		} else {
 			vars, err = promptForMissingTemplateVars(ctx, seg.Name, registry, pr, vars)
 			if err != nil {
-				return nil, vars, err
+				return nil, vars, errors.Join(err, closeTeamContexts(loadedTeams))
 			}
 			tc, err = loadTeamByName(ctx, seg.Name, registry, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 		}
 		if err != nil {
-			return nil, vars, fmt.Errorf("failed to load team %q: %w\n  Verify the team exists in your search paths (run 'hufu list' or 'hufu doctor')", seg.Name, err)
+			loadErr := fmt.Errorf("failed to load team %q: %w\n  Verify the team exists in your search paths (run 'hufu list' or 'hufu doctor')", seg.Name, err)
+			return nil, vars, errors.Join(loadErr, closeTeamContexts(loadedTeams))
 		}
 		if opts.stepsMode {
 			tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())

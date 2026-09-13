@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,7 +39,7 @@ var retryCmd = &cobra.Command{
 	},
 }
 
-func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) error {
+func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr error) {
 	workspace, teamName, err := resolveCommandWorkspaceAndTeam(getWorkspace(), targetedRecoveryTeamName, opts.workspace != "")
 	if err != nil {
 		return err
@@ -64,6 +65,9 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) error {
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
 	}
+	defer func() {
+		runErr = errors.Join(runErr, tc.Close())
+	}()
 
 	var report team.TargetedRecoveryReport
 	switch action {

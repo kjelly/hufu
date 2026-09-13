@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -31,7 +32,7 @@ Examples:
 	RunE: runResumeCommand,
 }
 
-func runResumeCommand(cmd *cobra.Command, _ []string) error {
+func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	syncLogState()
 	if err := applyProfile(cmd); err != nil {
 		return err
@@ -73,8 +74,12 @@ func runResumeCommand(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
 	}
 	if tc == nil || tc.coordinator == nil || tc.sessionData == nil {
+		_ = tc.Close()
 		return fmt.Errorf("team %q has no resumable coordinator session", teamName)
 	}
+	defer func() {
+		runErr = errors.Join(runErr, tc.Close())
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

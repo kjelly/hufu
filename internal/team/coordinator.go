@@ -371,6 +371,8 @@ type backendSemaphoreState struct {
 
 type Coordinator struct {
 	mu                 sync.RWMutex
+	closeOnce          sync.Once
+	closeErr           error
 	session            *TeamSession
 	providerManager    *agent.ProviderManager
 	mcpManager         *mcp.MCPToolManager
@@ -473,6 +475,9 @@ type Coordinator struct {
 	currentStageStart            time.Time
 	currentStageStartMu          sync.RWMutex
 	auditLogger                  *audit.AuditLogger
+	ownsAuditLogger              bool
+	auditLoggerCloseOnce         sync.Once
+	auditLoggerCloseErr          error
 	sshSessionMgr                *tools.SSHSessionManager
 	terminalSessionMgr           *TerminalSessionManager
 	terminalBroker               *TerminalBroker
@@ -542,6 +547,9 @@ type Coordinator struct {
 	dualWriteFailures       atomic.Int64
 	memoryStore             *memory.MemoryStore
 	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
+	ownsContextRepo         bool
+	contextRepoCloseOnce    sync.Once
+	contextRepoCloseErr     error
 	memoryRankingPolicy     MemoryRuntimeRankingPolicy
 	workerMemorySvc         WorkerMemoryService // WP-3 per-worker memory recall service.
 	sharedMemorySvc         SharedMemoryService // canonical shared persistent memory service.
@@ -1409,6 +1417,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, fmt.Errorf("open canonical context store: %w", openErr)
 	}
 	c.contextRepo = repo
+	c.ownsContextRepo = true
 	constructionComplete := false
 	var ownedAuditLogger *audit.AuditLogger
 	defer func() {
@@ -1433,6 +1442,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {
 		c.auditLogger = auditLogger
+		c.ownsAuditLogger = true
 		ownedAuditLogger = auditLogger
 		auditLogger.SetRedactor(c.SecretRegistry())
 	}

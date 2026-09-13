@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -79,7 +80,7 @@ func init() {
 	f.IntVar(&opts.compactionDiagnosticMaxTokens, "compaction-diagnostic-max-tokens", 0, "Override preserved diagnostic token cap; zero keeps the safety default")
 }
 
-func runChat(cmd *cobra.Command, args []string) error {
+func runChat(cmd *cobra.Command, args []string) (runErr error) {
 	if err := applyProfile(cmd); err != nil {
 		return err
 	}
@@ -124,6 +125,9 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
 	}
+	defer func() {
+		runErr = errors.Join(runErr, tc.Close())
+	}()
 
 	// Recreate the prompt reader with a team-aware tab completer. The
 	// first reader (line 71) had no completer because we did not yet
@@ -233,7 +237,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), terr)
 				continue
 			}
+			oldTC := tc
 			tc, teamName, turn = newTc, newTc.teamName, 0
+			if err := oldTC.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
+			}
 			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
 			continue
 		}
@@ -257,9 +265,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 			if newTc == nil {
 				continue
 			}
+			oldTC := tc
 			tc = newTc
 			teamName = newName
 			turn = 0
+			if err := oldTC.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
+			}
 			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n",
 				doneStyle.Render("✓"), teamStyle.Render(teamName))
 			continue

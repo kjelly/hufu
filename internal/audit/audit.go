@@ -208,6 +208,17 @@ func SetDefault(logger *AuditLogger) {
 	defaultLogger = logger
 }
 
+// ClearDefault removes logger only when it is still the process-wide default.
+// A coordinator that closes after another coordinator was installed must not
+// close or detach the newer logger.
+func ClearDefault(logger *AuditLogger) {
+	defaultLoggerMu.Lock()
+	defer defaultLoggerMu.Unlock()
+	if defaultLogger == logger {
+		defaultLogger = nil
+	}
+}
+
 func GetDefault() *AuditLogger {
 	defaultLoggerMu.Lock()
 	defer defaultLoggerMu.Unlock()

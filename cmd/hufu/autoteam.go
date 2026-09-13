@@ -240,7 +240,13 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	}
 	handle, err := preparePreflightSidecarContext(ctx, coordinator)
 	if err != nil {
+		_ = coordinator.Close()
 		return nil
+	}
+	closePreflight := handle.close
+	handle.close = func() {
+		closePreflight()
+		_ = coordinator.Close()
 	}
 	return handle
 }

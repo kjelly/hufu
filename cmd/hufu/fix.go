@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,12 @@ func runFixMode(ctx context.Context, prompt string, fixQuestion string, registry
 			)
 
 			data := collectFixData(tc.session, seg.Content)
-			analysis, err := runFixAnalysis(ctx, tc, fixQuestion, seg.Content, data)
+			analysis, err := func() (analysis string, runErr error) {
+				defer func() {
+					runErr = errors.Join(runErr, tc.Close())
+				}()
+				return runFixAnalysis(ctx, tc, fixQuestion, seg.Content, data)
+			}()
 			if err != nil {
 				fmt.Printf("%s Analysis failed: %v\n", errStyle.Render("✗"), err)
 				continue

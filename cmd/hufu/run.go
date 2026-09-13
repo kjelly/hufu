@@ -20,7 +20,7 @@ import (
 	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
-func runTeam(cmd *cobra.Command, args []string) error {
+func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// Push current quiet/JSON/TUI state into internal/log so internal/* packages
 	// that log through it stay in sync with the CLI.
 	syncLogState()
@@ -101,6 +101,9 @@ func runTeam(cmd *cobra.Command, args []string) error {
 	// Declared as a top-level var so the closure captures the
 	// pointer, not the value.
 	var loadedTeams map[string]*teamContext
+	defer func() {
+		runErr = errors.Join(runErr, closeTeamContexts(loadedTeams))
+	}()
 	defer setupInterruptHandler(injector, activeCoord, &loadedTeams, cancel)()
 
 	searchPaths := resolveSearchPaths()

@@ -8,6 +8,36 @@ import (
 	"time"
 )
 
+func BenchmarkTaskCacheLookupAtCapacity(b *testing.B) {
+	cache := newDefaultTaskCache(taskCacheDependencies{})
+	for i := range maxTaskCacheEntries {
+		cache.Store(TaskCacheStoreRequest{
+			AgentKey: "worker",
+			Task:     fmt.Sprintf("task-%02d", i),
+			Output:   "cached output",
+		})
+	}
+
+	benchmarks := []struct {
+		name string
+		task string
+	}{
+		{name: "latest-hit", task: fmt.Sprintf("task-%02d", maxTaskCacheEntries-1)},
+		{name: "oldest-hit", task: "task-00"},
+		{name: "miss", task: "task-not-present"},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				cache.Lookup(b.Context(), TaskCacheLookupRequest{
+					Scope: TaskCacheLookupExecution, AgentKey: "worker", Task: benchmark.task,
+				})
+			}
+		})
+	}
+}
+
 func TestTaskCacheServiceStableGetterAndRuntimeInjection(t *testing.T) {
 	c := &Coordinator{}
 	first := c.TaskCache()
