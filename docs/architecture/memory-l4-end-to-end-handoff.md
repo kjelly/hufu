@@ -3,7 +3,7 @@
 > Status: implemented
 > Priority: P2
 > Baseline: 3e5054b
-> Verified-Commit: 3e5054b
+> Verified-Commit: c7fc533
 > Scope: 串接既有 memory / consolidation / promotion / improve artifacts；禁止 autonomous production mutation
 > Authority: implementation contract for the handoff layer
 
@@ -39,6 +39,12 @@ experiment subsystem。
 - `MemoryPolicyOptimizationProposal` 有 ID、revision、loader 與 durable store。
 - Skill promotion draft 可產生 isolated candidate team snapshot 與 review patch。
 - `ExperimentReport` 的 arm/input 可綁定 baseline/candidate memory-policy snapshot refs。
+- Runtime memory manifest 與 `memory_retrieved` / `memory_usage_recorded` events
+  保存 content-free 的 context item ID、ContentHash 與 policy version；`Report`
+  只從指定 run 的 runtime events 產生 `AppliedContextRefs` 與
+  `MemoryPolicyVersions`。
+- Experiment、adoption 與 monitoring loaders 會重算 deterministic outcome、
+  snapshot content/patch digest 與 cross-artifact bindings，拒絕修改過的 JSON。
 
 以上 primitive 仍只保存 metadata、refs 與 immutable snapshots；不會自行 apply、activate
 或 rollback 正式環境。
@@ -119,7 +125,7 @@ Revision mapping：
 | experiment_report | immutable report digest |
 | improve_adoption | adoption artifact digest |
 | monitoring_report | monitoring artifact digest |
-| context_consolidation_approval | consolidation proposal ID + canonical status/revision |
+| context_consolidation_approval | ID 是 consolidation proposal ID；Revision 是 confirmed candidate ContentHash |
 
 ### 3.2 Handoff record
 
@@ -179,6 +185,8 @@ Normative invariants：
   opaque refs，canonical artifact 不由 handoff 複製。
 - 建立後 immutable bindings 不得修改；lifecycle update 只能修改 Status、
   StatusReason、Evaluation、Adoption、Monitoring、Revision、UpdatedAt。
+- Monitoring refs 只能 append，不能取代或刪除；Experiment 與
+  Evaluation.Report 必須是同一 ref。
 
 ## 4. Status machine
 
@@ -268,14 +276,19 @@ inline policy content。
 candidate execution 必須使用 isolated context repository 或等價的
 read-only policy override。prepare/evaluate 絕不得呼叫
 ActivateMemoryPolicy。experiment evidence 必須保存 baseline 與 candidate
-memory_policy_snapshot refs；只有 team snapshot ref 不足以證明 policy
-experiment。
+memory_policy_snapshot refs，且 arm 的 improve report 必須由 runtime event
+證明只使用相符 policy version；只有 team snapshot ref 或 CLI 宣告不足以證明
+policy experiment。
 
 explicit adoption 才能走既有 policy activation path，並保留 previous
 policy 供 rollback。handoff 只連結 activation/adoption evidence。
 
 實作上的 adoption ref 為 `memory_policy_activation:<snapshot-id>:<revision>`；
 handoff 只驗證既有 active snapshot 與 ref 相符，不在 adopt command 內執行 activation。
+既有 `ApproveMemoryPolicyCandidate` canonical activation path 可接受兩種
+review evidence：原本的 durable policy gates，或 exact candidate / benchmark /
+experiment refs 均通過的 approved memory-policy handoff。兩者仍要求呼叫端明確
+傳入 approval；handoff adopt 本身不會 activate。
 
 ### 5.2 Context consolidation
 
@@ -294,6 +307,11 @@ prepare 必須驗證：
 redaction、token overhead、stale/harmful retrieval exclusion 及
 completion/error non-regression。
 
+candidate arm 必須在 runtime `memory_usage_recorded` event 中證明 exact
+`context_item:<id>:<ContentHash>` 曾被 applied；只匹配 ID、只在 compare 時讀取
+目前 candidate hash，或只提供非空 snapshot ID 都不算有效證據。baseline arm
+不得綁定 context candidate。
+
 現有 hufu context consolidation approve 是 canonical confirmation。
 handoff 的 prepare/evaluate 不得確認 candidate；adopt 只連結已確認的
 candidate 與 approval evidence。
@@ -308,7 +326,6 @@ prepare 必須接受：
 
 ~~~text
 --baseline-team <baseline-snapshot-id>
---benchmark <benchmark-name-or-path>
 ~~~
 
 並只在 improvement workspace：
@@ -326,6 +343,8 @@ skill 時直接拒絕，符合既有 promotion 不覆寫 skill 的規則。
 
 evaluation 後由既有 improve experiment pr 與人工作業負責 rollout；
 handoff adopt 只連結既有 Adoption artifact，不 merge PR、不 apply patch。
+benchmark 由 `hufu improve experiment compare --benchmark ...` 建立 report binding，
+再由 handoff evaluate 驗證，不在 prepare 階段提前綁定。
 
 ## 6. Persistence 與 consistency
 
@@ -342,6 +361,8 @@ directory 建立一次，不得重用。store 必須：
 - lifecycle update 使用 temp-file + rename atomic write；
 - 每次成功 update 遞增 Revision；
 - expected revision 不匹配時拒絕更新；
+- 同一 handoff ID 的 write 先取得 process-wide mutex，再取得 OS advisory
+  file lock，CAS 的 read/validate/write 在同一 critical section；
 - schema/ref validation 失敗時拒絕 tampered JSON；
 - lifecycle audit key 使用 handoff:<id>:<operation>:<input-revision>；
 - 永不保存 source content 或 model draft content。
@@ -362,8 +383,11 @@ handoff_monitoring。不建立第二 EventStore 或 execution state machine。
 audit failure 不回滾已完成 canonical operation，也不重跑 worker 或 benchmark。
 
 目前 store 使用 `workspace/improvement/handoffs/<id>/handoff.json`，以
-atomic create/update、in-process mutex 與 expected-revision CAS 保護 lifecycle
-寫入；audit failure 會保留已寫入的 handoff，供相同 idempotency key 重試。
+atomic create/update、跨 store/process lock 與 expected-revision CAS 保護 lifecycle
+寫入；audit failure 會保留已寫入的 handoff。candidate_ready、benchmark_bound、
+evaluated、eligible_for_review、approved、adopted、monitoring 與
+rollback_recommended 都可透過 durable state 重送相同 idempotency key 的 audit，
+不重做 state transition。
 
 ## 7. CLI contract
 
@@ -373,7 +397,7 @@ atomic create/update、in-process mutex 與 expected-revision CAS 保護 lifecyc
 --workspace <path>          default: <cwd>/workspace
 --project <id>              required
 --team <name>               required
---team-search-path <csv>    skill preparation 使用
+--agent-team-search-path <csv>  improve 的既有 team discovery flag
 --policy-version <id>       memory/consolidation source checks 使用
 --json                      stable metadata-only output
 ~~~
@@ -392,17 +416,23 @@ hufu improve handoff show <handoff-id> --workspace workspace \
   --project p --team dev
 
 hufu improve handoff prepare <handoff-id> --baseline-team <baseline-id> \
-  --benchmark <fixture-name-or-path> --workspace workspace \
-  --project p --team dev
+  --workspace workspace --project p --team dev
 
 # Memory policy preparation uses a policy snapshot as its baseline.
 hufu improve handoff prepare <handoff-id> --baseline-policy <policy-id> \
-  --benchmark <fixture-name-or-path> --workspace workspace \
-  --project p --team dev
+  --workspace workspace --project p --team dev
 
 # Consolidation preparation validates the existing candidate binding.
 hufu improve handoff prepare <handoff-id> --workspace workspace \
   --project p --team dev
+
+# compare 綁定 benchmark；consolidation 另以 --candidate-context 將 runtime
+# applied context ref 寫入 experiment report。
+hufu improve experiment compare <experiment-id> \
+  --baseline <baseline-team-snapshot> --candidate <candidate-team-snapshot> \
+  --benchmark <fixture> --baseline-report <report.json> \
+  --candidate-report <report.json> --candidate-context <context-item-id> \
+  --baseline-accepted --candidate-accepted --workspace workspace
 
 hufu improve handoff evaluate <handoff-id> --experiment <experiment-id> \
   --workspace workspace --project p --team dev
@@ -441,8 +471,10 @@ experiment 會被拒絕。
 ~~~text
 internal/improve/handoff.go
 internal/improve/handoff_store.go
+internal/improve/handoff_lock_{unix,windows,other}.go
 internal/improve/handoff_test.go
 cmd/hufu/improve_handoff.go
+cmd/hufu/improve_handoff_test.go
 ~~~
 
 修改：
@@ -451,9 +483,9 @@ cmd/hufu/improve_handoff.go
 internal/improve/memory_policy.go
 internal/improve/experiment.go
 internal/improve/automation.go
-internal/promotion/*
-internal/context/consolidation.go
-cmd/hufu/improve_*.go
+internal/improve/sqlite_analytics_{schema,memory,memory_loader}.go
+internal/team/memory_learning.go
+cmd/hufu/improve_experiment.go
 ~~~
 
 不得新增第二 context database、EventStore、graph database 或 remote memory
@@ -505,6 +537,20 @@ report 以 `monitor-<timestamp>` ID durable 保存於
 `workspace/improvement/monitoring/<adoption-id>/`，並透過
 `monitoring_report:<id>:<revision>` ref 綁定。
 
+### Corrective hardening（已完成：`d4e23f6`、`c7fc533`）
+
+- 修正三種 kind 的 prepare dispatch 與所有 command scope enforcement；
+- candidate / benchmark / experiment / evaluation / adoption bindings immutable；
+- canonical source、snapshot、benchmark、report、adoption 與 monitoring evidence
+  每次 mutation command 前重驗，變更即轉 stale；
+- 使用跨程序 lock 保護 CAS，並支援 audit-safe command retry；
+- experiment / monitoring outcome 由 evidence deterministic 重算；
+- rollback suggestion 可實際進入 rollback_recommended；
+- runtime report 綁定 exact policy version 與 applied context ContentHash，而非
+  接受使用者自行宣告；
+- 補齊 prepare、完整 consolidation lifecycle、canonical memory activation、
+  tamper、scope、audit retry 與 cross-process concurrency tests。
+
 ## 10. Required tests
 
 ~~~text
@@ -544,6 +590,10 @@ TestHandoffArtifactsAndEventsContainNoContentOrSecrets
 
 Tests 使用 local temp workspace 與 deterministic fixtures；live Ollama、external
 API、GitHub、real PR 或 infrastructure mutation 不得是必要條件。
+
+上列 contract 由 package-level schema/store tests 與 CLI lifecycle tests 共同
+覆蓋；cross-process CAS 另以 subprocess 測試，並以 race detector 驗證
+in-process concurrent transitions。
 
 每個 code PR 必須執行：
 
