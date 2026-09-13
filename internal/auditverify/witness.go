@@ -13,7 +13,7 @@ import (
 )
 
 // WitnessSchemaVersion is the schema version for DecisionWitness.
-const WitnessSchemaVersion = 1
+const WitnessSchemaVersion = 2
 
 // ReceiptRef points at a specific execution attempt without copying its
 // receipt into the witness (spec.md §7.4).
@@ -72,6 +72,11 @@ type GateWitness struct {
 	EvidenceManifestStatus string               `json:"evidence_manifest_status,omitempty"`
 	RequiredTasksTotal     int                  `json:"required_tasks_total"`
 	RequiredTasksDone      int                  `json:"required_tasks_done"`
+
+	SemanticRegressionConfigured    bool     `json:"semantic_regression_configured,omitempty"`
+	SemanticRegressionClear         bool     `json:"semantic_regression_clear,omitempty"`
+	SemanticRegressionBlockingCount int      `json:"semantic_regression_blocking_count,omitempty"`
+	SemanticRegressionReasons       []string `json:"semantic_regression_reasons,omitempty"`
 }
 
 // DecisionWitness is the persisted, hash-linked explanation of why a run was
@@ -182,11 +187,16 @@ func requiredCriteriaIDs(lineage []team.RunEvent, runID string) map[string]bool 
 // full DecisionWitness. It is the one witness-construction entry point
 // shared by ExplainRun and ExportRun so both derive "accepted" the same way.
 func buildRunWitness(runID string, verification *AuditVerificationResult, projection *runProjection) (*DecisionWitness, error) {
+	semanticDecision := team.EvaluateSemanticRegression(runID, projection.tasks)
 	gate := GateWitness{
-		Accepted:               verification.Completion.Status == AuditDimensionPass && projection.runResult.Outcome == team.RunOutcomeCompleted,
-		AcceptanceState:        acceptanceState(projection.runResult),
-		EvidenceManifestStatus: evidenceStatus(projection.runResult),
-		RequiredTasksTotal:     len(projection.tasks),
+		Accepted:                        verification.Completion.Status == AuditDimensionPass && projection.runResult.Outcome == team.RunOutcomeCompleted,
+		AcceptanceState:                 acceptanceState(projection.runResult),
+		EvidenceManifestStatus:          evidenceStatus(projection.runResult),
+		RequiredTasksTotal:              len(projection.tasks),
+		SemanticRegressionConfigured:    semanticDecision.Configured,
+		SemanticRegressionClear:         semanticDecision.Clear,
+		SemanticRegressionBlockingCount: semanticDecision.BlockingCount,
+		SemanticRegressionReasons:       append([]string(nil), semanticDecision.Reasons...),
 	}
 	for _, item := range projection.tasks {
 		if item != nil && item.Status == team.TaskDone {

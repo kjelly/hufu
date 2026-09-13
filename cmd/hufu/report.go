@@ -38,6 +38,15 @@ func hasReportFindings(todos []*team.TodoItem) bool {
 	return false
 }
 
+func hasInvariantAssessments(todos []*team.TodoItem) bool {
+	for _, item := range todos {
+		if item != nil && item.TypedResult != nil && item.TypedResult.InvariantVerification != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // generateReport creates a markdown execution report for every loaded team.
 // It is the explicit --report behavior.
 func generateReport(loadedTeams map[string]*teamContext, combinedResult string) {
@@ -338,7 +347,7 @@ func renderReportAuditSection(data *reportData) string {
 		d    auditverify.AuditDimensionResult
 	}{
 		{"Integrity", result.Integrity}, {"Provenance", result.Provenance}, {"Evidence", result.Evidence},
-		{"Acceptance", result.Acceptance}, {"Completion", result.Completion}, {"Recheck", result.Recheck},
+		{"Acceptance", result.Acceptance}, {"Semantic regression", result.SemanticRegression}, {"Completion", result.Completion}, {"Recheck", result.Recheck},
 	} {
 		fmt.Fprintf(&b, "  - %s: `%s`", dim.name, strings.ToUpper(string(dim.d.Status)))
 		if dim.d.Reason != "" {
@@ -726,6 +735,23 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 					fmt.Fprintf(&b, "- %s%s — %s\n", label, f.Summary, f.Detail)
 				} else {
 					fmt.Fprintf(&b, "- %s%s\n", label, f.Summary)
+				}
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("---\n\n")
+	}
+	if hasInvariantAssessments(data.Todos) {
+		b.WriteString("## Invariant Assessments\n\n")
+		for _, item := range data.Todos {
+			if item == nil || item.TypedResult == nil || item.TypedResult.InvariantVerification == nil {
+				continue
+			}
+			fmt.Fprintf(&b, "### %s (%s)\n\n", reportSafeMetadata(item.ID, 120), item.InvariantVerification)
+			for _, assessment := range item.TypedResult.InvariantVerification.Assessments {
+				fmt.Fprintf(&b, "- `%s` — `%s` / `%s`: %s\n", reportSafeMetadata(assessment.InvariantID, 120), assessment.Severity, assessment.Status, reportSafeMetadata(assessment.Summary, 300))
+				for _, evidence := range assessment.MissingEvidence {
+					fmt.Fprintf(&b, "  - Missing evidence: %s\n", reportSafeMetadata(evidence, 240))
 				}
 			}
 			b.WriteString("\n")

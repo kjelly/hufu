@@ -1512,7 +1512,7 @@ retryLoop:
 							// tools and the declared evidence contract validates the full text.
 							// This preserves the typed-result/report pipeline without allowing
 							// an incomplete or mutating free-text claim to become success.
-							if !repairSuccess && !reclassifyExecution && typedRes == nil &&
+							if task.InvariantVerification == "" && !repairSuccess && !reclassifyExecution && typedRes == nil &&
 								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
 								if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
 									c.storeSubmittedTaskResult(todoID, promoted)
@@ -1634,6 +1634,14 @@ retryLoop:
 					if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
 						err = withFailureClassOverride(resultErr, FailureExecution)
 					}
+				}
+				if err == nil && typedRes != nil && HasBlockingInvariantAssessment(task.InvariantVerification, typedRes.InvariantVerification) {
+					receipt.HandoffState = ResultHandoffSubmitted
+					receipt.SubmittedResult = typedRes
+					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+					}
+					err = withFailureClassOverride(errors.New("runtime-attested invariant gate rejected the worker result"), FailureExecution)
 				}
 			}
 			// For requires-result tasks the typed submission is the terminal

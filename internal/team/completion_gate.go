@@ -12,13 +12,14 @@ import (
 // A worker response is deliberately not part of this contract: prose cannot
 // make a run accepted.
 type CompletionGateInput struct {
-	Result          *RunResult
-	Acceptance      *AcceptanceResult
-	Evidence        *EvidenceManifest
-	RequiredTasks   []TaskReference
-	UnresolvedRisks []string
-	TerminalLeaks   []string
-	ArtifactStore   ArtifactStore
+	Result             *RunResult
+	Acceptance         *AcceptanceResult
+	Evidence           *EvidenceManifest
+	RequiredTasks      []TaskReference
+	UnresolvedRisks    []string
+	TerminalLeaks      []string
+	ArtifactStore      ArtifactStore
+	SemanticRegression SemanticRegressionDecision
 }
 
 type CompletionGateDecision struct {
@@ -83,6 +84,14 @@ func (CompletionGate) Evaluate(ctx context.Context, input CompletionGateInput) C
 			reject("terminal leak: " + strings.TrimSpace(leak))
 		}
 	}
+	if input.SemanticRegression.Configured && !input.SemanticRegression.Clear {
+		for _, reason := range input.SemanticRegression.Reasons {
+			reject(reason)
+		}
+		if len(input.SemanticRegression.Reasons) == 0 {
+			reject("semantic regression gate did not pass")
+		}
+	}
 	return decision
 }
 
@@ -119,6 +128,7 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 		Result: result, Acceptance: acceptance, Evidence: manifest,
 		RequiredTasks: required, UnresolvedRisks: riskFindings,
 		TerminalLeaks: terminalLeaks, ArtifactStore: store,
+		SemanticRegression: EvaluateSemanticRegression(c.executionRunID, items),
 	})
 	input := c.runFinalizationInput(result, acceptance)
 	input.Evidence = manifest

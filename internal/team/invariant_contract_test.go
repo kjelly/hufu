@@ -103,7 +103,6 @@ func TestValidateInvariantVerificationContract(t *testing.T) {
 		edit func(*TeamSession, *TaskDef)
 		code string
 	}{
-		{name: "feature guard", code: FindingInvariantVerificationUnavailable},
 		{name: "bad mode", edit: func(_ *TeamSession, task *TaskDef) { task.InvariantVerification = "bad" }, code: FindingInvariantVerificationMode},
 		{name: "catalog", edit: func(session *TeamSession, _ *TaskDef) { session.InvariantCatalog = nil }, code: FindingInvariantVerificationCatalog},
 		{name: "phase", edit: func(_ *TeamSession, task *TaskDef) { task.Phase = PhaseExecute }, code: FindingInvariantVerificationPhase},
@@ -114,6 +113,9 @@ func TestValidateInvariantVerificationContract(t *testing.T) {
 			task.InvariantVerification = InvariantVerificationGate
 			task.Optional = true
 		}, code: FindingInvariantVerificationOptional},
+	}
+	if findings := validateInvariantVerificationContract(base, 0, validTask); len(findings) != 0 {
+		t.Fatalf("valid invariant verification contract findings = %#v", findings)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

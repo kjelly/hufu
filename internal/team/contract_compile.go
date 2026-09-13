@@ -405,11 +405,6 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	return findings
 }
 
-// invariantVerificationFeatureEnabled stays false until the claim,
-// attestation, completion, audit, and cache consumers land together. Parsing
-// the contract early is safe; accepting a half-wired completion gate is not.
-const invariantVerificationFeatureEnabled = false
-
 func validateInvariantVerificationContract(session *TeamSession, index int, task TaskDef) []ContractFinding {
 	mode := task.InvariantVerification
 	if mode == "" {
@@ -436,9 +431,6 @@ func validateInvariantVerificationContract(session *TeamSession, index int, task
 	}
 	if mode == InvariantVerificationGate && task.Optional {
 		findings = append(findings, contractFinding(field, FindingInvariantVerificationOptional, "gate invariant-verification task cannot be optional"))
-	}
-	if !invariantVerificationFeatureEnabled {
-		findings = append(findings, contractFinding(field, FindingInvariantVerificationUnavailable, "invariant-verification is parsed but unavailable until all runtime gate consumers are installed"))
 	}
 	return findings
 }

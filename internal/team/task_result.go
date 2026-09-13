@@ -432,6 +432,15 @@ func (tr *TaskResult) FormatForContext() string {
 			}
 		}
 	}
+	if tr.InvariantVerification != nil {
+		sb.WriteString("Invariant Assessments:\n")
+		for _, assessment := range tr.InvariantVerification.Assessments {
+			fmt.Fprintf(&sb, "  - [%s/%s] %s: %s\n", assessment.Severity, assessment.Status, assessment.InvariantID, assessment.Summary)
+			for _, evidence := range assessment.MissingEvidence {
+				fmt.Fprintf(&sb, "    Missing evidence: %s\n", evidence)
+			}
+		}
+	}
 	if len(tr.Decisions) > 0 {
 		sb.WriteString("Decisions:\n")
 		for _, d := range tr.Decisions {

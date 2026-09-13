@@ -67,6 +67,9 @@ func TestCompletionGateRejectsFalseCompletionInputs(t *testing.T) {
 		{"unfinished task", func(in *CompletionGateInput) { in.RequiredTasks[0].Status = string(TaskPending) }},
 		{"unresolved risk", func(in *CompletionGateInput) { in.UnresolvedRisks = []string{"external state unknown"} }},
 		{"terminal leak", func(in *CompletionGateInput) { in.TerminalLeaks = []string{"pty-1"} }},
+		{"semantic regression", func(in *CompletionGateInput) {
+			in.SemanticRegression = SemanticRegressionDecision{Configured: true, Clear: false, BlockingCount: 1, Reasons: []string{"task gate invariant safe is violated: regressed"}}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

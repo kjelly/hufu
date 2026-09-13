@@ -13,7 +13,7 @@ package auditverify
 import "github.com/kjelly/hufu/internal/team"
 
 // AuditSchemaVersion is the schema version for AuditVerificationResult.
-const AuditSchemaVersion = 1
+const AuditSchemaVersion = 2
 
 // AuditVerdict is the top-level pass/fail/incomplete verdict for a run audit.
 type AuditVerdict string
@@ -65,24 +65,27 @@ const (
 
 // Finding codes (spec.md §48).
 const (
-	CodeEventHashMismatch        = "AUDIT-EVENT-HASH-MISMATCH"
-	CodeEventChainBroken         = "AUDIT-EVENT-CHAIN-BROKEN"
-	CodeTerminalMissing          = "AUDIT-TERMINAL-MISSING"
-	CodeTerminalConflict         = "AUDIT-TERMINAL-CONFLICT"
-	CodeManifestMissing          = "AUDIT-MANIFEST-MISSING"
-	CodeManifestHashMismatch     = "AUDIT-MANIFEST-HASH-MISMATCH"
-	CodeArtifactMissing          = "AUDIT-ARTIFACT-MISSING"
-	CodeArtifactHashMismatch     = "AUDIT-ARTIFACT-HASH-MISMATCH"
-	CodeBindingConflict          = "AUDIT-BINDING-CONFLICT"
-	CodeReceiptMissing           = "AUDIT-RECEIPT-MISSING"
-	CodeReceiptAmbiguous         = "AUDIT-RECEIPT-AMBIGUOUS"
-	CodeAcceptanceNotPassed      = "AUDIT-ACCEPTANCE-NOT-PASSED"
-	CodeCriterionEvidenceMissing = "AUDIT-CRITERION-EVIDENCE-MISSING"
-	CodeCompletionUnjustified    = "AUDIT-COMPLETION-UNJUSTIFIED"
-	CodeBundleHashMismatch       = "AUDIT-BUNDLE-HASH-MISMATCH"
-	CodeBundleFileMissing        = "AUDIT-BUNDLE-FILE-MISSING"
-	CodeBundlePathUnsafe         = "AUDIT-BUNDLE-PATH-UNSAFE"
-	CodeRecheckUnavailable       = "AUDIT-RECHECK-UNAVAILABLE"
+	CodeEventHashMismatch           = "AUDIT-EVENT-HASH-MISMATCH"
+	CodeEventChainBroken            = "AUDIT-EVENT-CHAIN-BROKEN"
+	CodeTerminalMissing             = "AUDIT-TERMINAL-MISSING"
+	CodeTerminalConflict            = "AUDIT-TERMINAL-CONFLICT"
+	CodeManifestMissing             = "AUDIT-MANIFEST-MISSING"
+	CodeManifestHashMismatch        = "AUDIT-MANIFEST-HASH-MISMATCH"
+	CodeArtifactMissing             = "AUDIT-ARTIFACT-MISSING"
+	CodeArtifactHashMismatch        = "AUDIT-ARTIFACT-HASH-MISMATCH"
+	CodeBindingConflict             = "AUDIT-BINDING-CONFLICT"
+	CodeReceiptMissing              = "AUDIT-RECEIPT-MISSING"
+	CodeReceiptAmbiguous            = "AUDIT-RECEIPT-AMBIGUOUS"
+	CodeAcceptanceNotPassed         = "AUDIT-ACCEPTANCE-NOT-PASSED"
+	CodeCriterionEvidenceMissing    = "AUDIT-CRITERION-EVIDENCE-MISSING"
+	CodeCompletionUnjustified       = "AUDIT-COMPLETION-UNJUSTIFIED"
+	CodeBundleHashMismatch          = "AUDIT-BUNDLE-HASH-MISMATCH"
+	CodeBundleFileMissing           = "AUDIT-BUNDLE-FILE-MISSING"
+	CodeBundlePathUnsafe            = "AUDIT-BUNDLE-PATH-UNSAFE"
+	CodeRecheckUnavailable          = "AUDIT-RECHECK-UNAVAILABLE"
+	CodeInvariantViolated           = "AUDIT-INVARIANT-VIOLATED"
+	CodeInvariantAttestationInvalid = "AUDIT-INVARIANT-ATTESTATION-INVALID"
+	CodeInvariantWitnessMismatch    = "AUDIT-INVARIANT-WITNESS-MISMATCH"
 )
 
 // AuditVerificationResult is the complete output of hufu audit verify.
@@ -92,12 +95,13 @@ type AuditVerificationResult struct {
 
 	Verdict AuditVerdict `json:"verdict"`
 
-	Integrity  AuditDimensionResult `json:"integrity"`
-	Provenance AuditDimensionResult `json:"provenance"`
-	Evidence   AuditDimensionResult `json:"evidence"`
-	Acceptance AuditDimensionResult `json:"acceptance"`
-	Completion AuditDimensionResult `json:"completion"`
-	Recheck    AuditDimensionResult `json:"recheck"`
+	Integrity          AuditDimensionResult `json:"integrity"`
+	Provenance         AuditDimensionResult `json:"provenance"`
+	Evidence           AuditDimensionResult `json:"evidence"`
+	Acceptance         AuditDimensionResult `json:"acceptance"`
+	SemanticRegression AuditDimensionResult `json:"semantic_regression"`
+	Completion         AuditDimensionResult `json:"completion"`
+	Recheck            AuditDimensionResult `json:"recheck"`
 
 	ExpectedOutcome team.RunOutcome `json:"expected_outcome,omitempty"`
 	DerivedOutcome  team.RunOutcome `json:"derived_outcome,omitempty"`
@@ -117,10 +121,10 @@ func (r *AuditVerificationResult) addFinding(code, severity, message, taskID str
 	})
 }
 
-// mandatoryDimensions returns the five dimensions that participate in the
+// mandatoryDimensions returns the dimensions that participate in the
 // overall verdict per spec.md §35. Recheck is deliberately excluded.
 func (r *AuditVerificationResult) mandatoryDimensions() []AuditDimensionResult {
-	return []AuditDimensionResult{r.Integrity, r.Provenance, r.Evidence, r.Acceptance, r.Completion}
+	return []AuditDimensionResult{r.Integrity, r.Provenance, r.Evidence, r.Acceptance, r.SemanticRegression, r.Completion}
 }
 
 // finalizeVerdict derives the overall Verdict from the mandatory dimensions.

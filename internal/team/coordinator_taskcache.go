@@ -747,6 +747,9 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// First pass: build local counts for this batch to handle duplicates within the batch
 	localCounts := make(map[string]int)
 	for _, t := range tasks {
+		if t.InvariantVerification != "" {
+			continue
+		}
 		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
@@ -761,6 +764,9 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// Track how many we've seen in this batch so far (for in-batch dedup: first instance proceeds, rest are duplicates)
 	batchSeen := make(map[string]int)
 	for i, t := range tasks {
+		if t.InvariantVerification != "" {
+			continue
+		}
 		desc := t.Goal
 		if t.Constraints != "" {
 			desc += "\nconstraints: " + t.Constraints
@@ -785,7 +791,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Increment global counts for all non-duplicate tasks
 	for i, t := range tasks {
-		if duplicates[i] {
+		if duplicates[i] || t.InvariantVerification != "" {
 			continue
 		}
 		desc := t.Goal
@@ -799,7 +805,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Third pass: current todo-list duplicate check (active work and recent failures).
 	for i, t := range tasks {
-		if duplicates[i] {
+		if duplicates[i] || t.InvariantVerification != "" {
 			continue
 		}
 		desc := t.Goal
@@ -820,7 +826,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// duplicate of last run's work.
 	if !c.ExecutionProfile().DisableSemanticDedup {
 		for i, t := range tasks {
-			if duplicates[i] {
+			if duplicates[i] || t.InvariantVerification != "" {
 				continue
 			}
 			desc := t.Goal

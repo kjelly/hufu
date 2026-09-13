@@ -420,13 +420,35 @@ func TestBuildReportMDIncludesAuditSection(t *testing.T) {
 		AuditResult: &auditverify.AuditVerificationResult{
 			RunID: "run-1", Verdict: auditverify.AuditVerdictPass,
 			ExpectedOutcome: team.RunOutcomeCompleted, DerivedOutcome: team.RunOutcomeCompleted,
-			Integrity:  auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass, Reason: "event chain verified"},
-			Evidence:   auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
-			Completion: auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
+			Integrity:          auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass, Reason: "event chain verified"},
+			Evidence:           auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
+			SemanticRegression: auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass, Reason: "semantic regression gate not configured"},
+			Completion:         auditverify.AuditDimensionResult{Status: auditverify.AuditDimensionPass},
 		},
 	}
 	report := buildReportMD(data, "demo", "completed")
-	for _, want := range []string{"## Audit", "Run ID:** `run-1`", "Evidence manifest:** `deadbeef`", "Audit status:** `PASS`", "Expected outcome:** `completed`", "Integrity: `PASS` — event chain verified"} {
+	for _, want := range []string{"## Audit", "Run ID:** `run-1`", "Evidence manifest:** `deadbeef`", "Audit status:** `PASS`", "Expected outcome:** `completed`", "Integrity: `PASS` — event chain verified", "Semantic regression: `PASS` — semantic regression gate not configured"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestBuildReportMDIncludesInvariantAssessments(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		Todos: []*team.TodoItem{{
+			ID: "gate", Agent: "reviewer", InvariantVerification: team.InvariantVerificationGate,
+			TypedResult: &team.TaskResult{InvariantVerification: &team.InvariantVerificationResult{
+				Assessments: []team.InvariantAssessment{{
+					InvariantID: "sqlite-canonical-memory", Severity: team.InvariantSeverityError,
+					Status: team.InvariantUnknown, Summary: "restart evidence missing", MissingEvidence: []string{"restart test"},
+				}},
+			}},
+		}},
+	}
+	report := buildReportMD(data, "demo", "")
+	for _, want := range []string{"## Invariant Assessments", "sqlite-canonical-memory", "`error` / `unknown`", "restart evidence missing", "Missing evidence: restart test"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}

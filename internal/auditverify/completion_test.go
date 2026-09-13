@@ -18,12 +18,13 @@ func TestDeriveCompletionAuditNonCompletedIsAlwaysPass(t *testing.T) {
 func TestDeriveCompletionAuditCompletedRequiresAllInvariants(t *testing.T) {
 	base := func() CompletionAuditInput {
 		return CompletionAuditInput{
-			RunResult:              &team.RunResult{Outcome: team.RunOutcomeCompleted, GoalSatisfied: true},
-			EvidenceValid:          true,
-			EvidenceStatus:         "accepted",
-			AcceptanceState:        team.AcceptancePassed,
-			RequiredTasksComplete:  true,
-			CompletionGateAccepted: true,
+			RunResult:               &team.RunResult{Outcome: team.RunOutcomeCompleted, GoalSatisfied: true},
+			EvidenceValid:           true,
+			EvidenceStatus:          "accepted",
+			AcceptanceState:         team.AcceptancePassed,
+			RequiredTasksComplete:   true,
+			CompletionGateAccepted:  true,
+			SemanticRegressionClear: true,
 		}
 	}
 	if dim := DeriveCompletionAudit(base()); dim.Status != AuditDimensionPass {
@@ -38,6 +39,7 @@ func TestDeriveCompletionAuditCompletedRequiresAllInvariants(t *testing.T) {
 		{"acceptance not passed", func(in *CompletionAuditInput) { in.AcceptanceState = team.AcceptanceFailed }},
 		{"tasks incomplete", func(in *CompletionAuditInput) { in.RequiredTasksComplete = false }},
 		{"provenance rejected", func(in *CompletionAuditInput) { in.CompletionGateAccepted = false }},
+		{"semantic regression", func(in *CompletionAuditInput) { in.SemanticRegressionClear = false }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

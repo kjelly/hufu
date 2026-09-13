@@ -202,6 +202,9 @@ func TestVerifyWorkspaceRunLegacyRunWithNoOptionalDataIsPass(t *testing.T) {
 	if result.Evidence.Status != AuditDimensionSkipped || result.Acceptance.Status != AuditDimensionSkipped {
 		t.Fatalf("legacy minimal run should skip (not fail) undecided dimensions: evidence=%#v acceptance=%#v", result.Evidence, result.Acceptance)
 	}
+	if result.SemanticRegression.Status != AuditDimensionPass || result.SemanticRegression.Reason != "semantic regression gate not configured" {
+		t.Fatalf("legacy semantic regression = %#v, want not-configured pass", result.SemanticRegression)
+	}
 }
 
 // A legacy run that nonetheless claims completed without any evidence must

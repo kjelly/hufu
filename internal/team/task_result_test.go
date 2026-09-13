@@ -31,6 +31,10 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 		Decisions: []Decision{
 			{Topic: "architecture", Choice: "use typed task result"},
 		},
+		InvariantVerification: &InvariantVerificationResult{Assessments: []InvariantAssessment{{
+			InvariantID: "sqlite-canonical-memory", Severity: InvariantSeverityError,
+			Status: InvariantUnknown, Summary: "needs a persistence test", MissingEvidence: []string{"restart coverage"},
+		}}},
 		Confidence: 1.0,
 		Source:     "submitted",
 	}
@@ -53,6 +57,9 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 	}
 	if !strings.Contains(formatted, "[refactor] code is now modular") {
 		t.Errorf("expected finding in formatted context, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "[error/unknown] sqlite-canonical-memory: needs a persistence test") || !strings.Contains(formatted, "Missing evidence: restart coverage") {
+		t.Errorf("expected invariant assessment in formatted context, got: %s", formatted)
 	}
 }
 

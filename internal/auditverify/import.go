@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // VerifyBundle verifies a portable audit bundle without needing the original
@@ -100,12 +104,12 @@ func verifyBundleFile(ctx context.Context, bundlePath, expectedRunID string, opt
 		return failResultf(manifest.RunID, CodeBundleHashMismatch, "%v", err), nil
 	}
 
-	result, _, auditErr := runWorkspaceAudit(ctx, pseudoWorkspace, manifest.RunID, opts)
+	result, projection, auditErr := runWorkspaceAudit(ctx, pseudoWorkspace, manifest.RunID, opts)
 	if auditErr != nil {
 		return nil, fmt.Errorf("verify reconstructed bundle: %w", auditErr)
 	}
 
-	verifyWitnessLinkage(extractDir, manifest, result)
+	verifyWitnessLinkage(extractDir, manifest, result, projection)
 	return result, nil
 }
 
@@ -133,7 +137,7 @@ func verifyDeclaredTerminalEventExists(pseudoWorkspace string, manifest AuditBun
 // A witness that fails either check downgrades Integrity to FAIL in place; a
 // bundle with no witness file is left as runWorkspaceAudit evaluated it
 // (older export, or a run with no terminal event at all).
-func verifyWitnessLinkage(extractDir string, manifest AuditBundleManifest, result *AuditVerificationResult) {
+func verifyWitnessLinkage(extractDir string, manifest AuditBundleManifest, result *AuditVerificationResult, projection *runProjection) {
 	data, err := os.ReadFile(filepath.Join(extractDir, "decision-witness.json"))
 	if err != nil {
 		return
@@ -153,12 +157,30 @@ func verifyWitnessLinkage(extractDir string, manifest AuditBundleManifest, resul
 		reason = "decision witness event_head_hash does not match this bundle's run_finished_event_hash"
 	case witness.EvidenceManifestHash != manifest.EvidenceManifestHash:
 		reason = "decision witness evidence_manifest_hash does not match this bundle's evidence_manifest_hash"
+	case projection == nil:
+		reason = "decision witness has no replayed terminal projection"
+	default:
+		decision := team.EvaluateSemanticRegression(manifest.RunID, projection.tasks)
+		if witness.SchemaVersion < 2 {
+			if decision.Configured {
+				reason = "legacy decision witness omits a configured semantic regression gate"
+			}
+		} else if witness.Gate.SemanticRegressionConfigured != decision.Configured ||
+			witness.Gate.SemanticRegressionClear != decision.Clear ||
+			witness.Gate.SemanticRegressionBlockingCount != decision.BlockingCount ||
+			!slices.Equal(witness.Gate.SemanticRegressionReasons, decision.Reasons) {
+			reason = "decision witness semantic regression fields do not match the replayed decision"
+		}
 	}
 	if reason == "" {
 		return
 	}
 	result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
-	result.addFinding(CodeBundleHashMismatch, FindingSeverityCritical, reason, "", 0, "")
+	code := CodeBundleHashMismatch
+	if strings.Contains(reason, "semantic regression") {
+		code = CodeInvariantWitnessMismatch
+	}
+	result.addFinding(code, FindingSeverityCritical, reason, "", 0, "")
 	result.finalizeVerdict()
 }
 
@@ -208,7 +230,8 @@ func copyExtractedFile(extractDir, relPath, destPath string) error {
 func failResultf(runID, code, format string, args ...any) *AuditVerificationResult {
 	reason := fmt.Sprintf(format, args...)
 	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID,
-		Integrity: AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}}
+		Integrity:          AuditDimensionResult{Status: AuditDimensionFail, Reason: reason},
+		SemanticRegression: AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}}
 	result.addFinding(code, FindingSeverityCritical, reason, "", 0, "")
 	result.finalizeVerdict()
 	return result

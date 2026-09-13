@@ -40,12 +40,13 @@ type EvidenceManifestData struct {
 }
 
 type EvidenceVerificationData struct {
-	Verdict    string `json:"verdict"`
-	Integrity  string `json:"integrity"`
-	Provenance string `json:"provenance"`
-	Evidence   string `json:"evidence"`
-	Acceptance string `json:"acceptance"`
-	Completion string `json:"completion"`
+	Verdict            string `json:"verdict"`
+	Integrity          string `json:"integrity"`
+	Provenance         string `json:"provenance"`
+	Evidence           string `json:"evidence"`
+	Acceptance         string `json:"acceptance"`
+	SemanticRegression string `json:"semantic_regression"`
+	Completion         string `json:"completion"`
 }
 
 type EvidenceFindingData struct {
@@ -88,7 +89,7 @@ func InspectEvidence(ctx context.Context, query InspectQuery) (*Envelope, error)
 	data := EvidenceData{
 		RunID: query.RunID, Manifest: EvidenceManifestData{Status: "unavailable"},
 		Requirements: []EvidenceRequirementData{}, ArtifactRefs: []ArtifactMetadata{},
-		Verification: EvidenceVerificationData{Verdict: "unavailable", Integrity: "unavailable", Provenance: "unavailable", Evidence: "unavailable", Acceptance: "unavailable", Completion: "unavailable"},
+		Verification: EvidenceVerificationData{Verdict: "unavailable", Integrity: "unavailable", Provenance: "unavailable", Evidence: "unavailable", Acceptance: "unavailable", SemanticRegression: "unavailable", Completion: "unavailable"},
 		Acceptance:   "unavailable", Findings: []EvidenceFindingData{},
 	}
 	if explanation != nil && explanation.Verification != nil {
@@ -96,7 +97,7 @@ func InspectEvidence(ctx context.Context, query InspectQuery) (*Envelope, error)
 		data.Verification = EvidenceVerificationData{
 			Verdict: string(verification.Verdict), Integrity: string(verification.Integrity.Status),
 			Provenance: string(verification.Provenance.Status), Evidence: string(verification.Evidence.Status),
-			Acceptance: string(verification.Acceptance.Status), Completion: string(verification.Completion.Status),
+			Acceptance: string(verification.Acceptance.Status), SemanticRegression: string(verification.SemanticRegression.Status), Completion: string(verification.Completion.Status),
 		}
 		for _, finding := range verification.Findings {
 			data.Findings = append(data.Findings, EvidenceFindingData{Code: finding.Code, Severity: finding.Severity, TaskID: finding.TaskID, Attempt: finding.Attempt, Ref: safeOpaqueRef(finding.Ref)})

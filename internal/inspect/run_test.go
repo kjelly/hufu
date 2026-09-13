@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/auditverify"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/team"
@@ -181,6 +182,9 @@ func TestInspectEvidenceUsesAuditVerificationAndHidesRawFields(t *testing.T) {
 	data := envelope.Data.(EvidenceData)
 	if data.Manifest.Hash == "" || len(data.Requirements) != 1 || data.Requirements[0].Binding == nil {
 		t.Fatalf("evidence data = %#v", data)
+	}
+	if data.Verification.SemanticRegression != string(auditverify.AuditDimensionPass) {
+		t.Fatalf("semantic regression status = %q, want pass", data.Verification.SemanticRegression)
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {

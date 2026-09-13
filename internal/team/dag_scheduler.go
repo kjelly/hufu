@@ -689,26 +689,28 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 
 	// In-flight dedup: the first task with a given key runs; identical
 	// concurrent tasks release their slot and wait to share its result.
-	s.inflightMu.Lock()
-	if ch, ok := s.inflight[cacheKey]; ok {
-		s.inflightMu.Unlock()
-		teamSlot.release()
-		select {
-		case result := <-ch:
-			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err, idx: idx}
-		case <-ctx.Done():
-			s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err(), idx: idx}
+	if td.InvariantVerification == "" {
+		s.inflightMu.Lock()
+		if ch, ok := s.inflight[cacheKey]; ok {
+			s.inflightMu.Unlock()
+			teamSlot.release()
+			select {
+			case result := <-ch:
+				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err, idx: idx}
+			case <-ctx.Done():
+				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: ctx.Err(), idx: idx}
+			}
+			return
 		}
-		return
+		s.inflight[cacheKey] = make(chan agentTaskResult, 1)
+		isOwner = true
+		s.inflightMu.Unlock()
 	}
-	s.inflight[cacheKey] = make(chan agentTaskResult, 1)
-	isOwner = true
-	s.inflightMu.Unlock()
 
 	// Check the task result cache before running. Sidecar tasks, summarized
 	// tasks, and verbatim-output tasks always run fresh: a cached prose result
 	// cannot satisfy a new runner-owned transcript contract.
-	if td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
+	if td.InvariantVerification == "" && td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
 		if cached, ok := c.lookupTaskCacheWithTypedVerification(ctx, agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode); ok {
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			if err := c.commitTaskTransitionFromCurrent(ctx, tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached, nil); err != nil {
@@ -739,7 +741,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	} else {
 		output, err = c.executeTask(ctx, td, tid)
 	}
-	if err == nil && td.Action == nil {
+	if err == nil && td.Action == nil && td.InvariantVerification == "" {
 		c.storeTaskCacheWithTypedVerificationEvidence(agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode, output, verificationForTodo(c.taskTracker.TodoList().Items(), tid))
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}
@@ -750,10 +752,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		}
 		c.pendingPlansMu.Unlock()
 	}
-	s.inflightMu.Lock()
-	s.inflight[cacheKey] <- result
-	delete(s.inflight, cacheKey)
-	s.inflightMu.Unlock()
+	if isOwner {
+		s.inflightMu.Lock()
+		s.inflight[cacheKey] <- result
+		delete(s.inflight, cacheKey)
+		s.inflightMu.Unlock()
+	}
 	s.eventCh <- result
 }
 
@@ -845,10 +849,18 @@ func failureClassAllowed(class TaskFailureClass, allowed []TaskFailureClass) boo
 // reported failed" may reset an ancestor — never a separate condition ORed
 // alongside the class check that could silently bypass it.
 func effectiveFailureClassForTodo(item *TodoItem) TaskFailureClass {
+	if isRuntimeAttestedInvariantRejection(item) {
+		return FailureSemanticRejection
+	}
 	if isGenuineWorkerReportedFailure(item) {
 		return FailureSemanticRejection
 	}
 	return failureClassForTodo(item)
+}
+
+func isRuntimeAttestedInvariantRejection(item *TodoItem) bool {
+	return item != nil && item.InvariantVerification == InvariantVerificationGate && item.TypedResult != nil &&
+		isSubmittedResultSource(item.TypedResult.Source) && HasBlockingInvariantAssessment(item.InvariantVerification, item.TypedResult.InvariantVerification)
 }
 
 // isGenuineWorkerReportedFailure reports whether a task's terminal failure is

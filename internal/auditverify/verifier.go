@@ -49,6 +49,7 @@ func runWorkspaceAudit(ctx context.Context, workspace string, runID string, opts
 	if err != nil {
 		result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
+		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -78,6 +79,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 	if !chain.Valid {
 		reason := strings.Join(chain.Findings, "; ")
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeEventHashMismatch, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -90,6 +92,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 	if terminalConflict(terminals) {
 		reason := fmt.Sprintf("run %q has %d conflicting terminal run_finished events", runID, len(terminals))
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeTerminalConflict, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -101,6 +104,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.Evidence = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind evidence to"}
 		result.Acceptance = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind acceptance to"}
 		result.Provenance = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind provenance to"}
+		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal projection"}
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event"}
 		result.addFinding(CodeTerminalMissing, FindingSeverityWarning, reason, "", 0, "")
 		result.finalizeVerdict()
@@ -133,6 +137,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.Evidence = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.Acceptance = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.Provenance = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionFail, Reason: "canonical projection invalid"}
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: reason}
 		result.addFinding(CodeCompletionUnjustified, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
@@ -152,15 +157,21 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 	// Phase E: acceptance.
 	result.Acceptance = verifyAcceptanceDimension(runResult, requiredCriteria, result)
 
-	// Phase F: completion derivation.
+	// Phase F: semantic regression. Use the runtime's pure validator and
+	// evaluator exclusively against the terminal event projection.
+	semanticDecision := team.EvaluateSemanticRegression(runID, session.Tasks)
+	result.SemanticRegression = verifySemanticRegressionDimension(runID, session.Tasks, semanticDecision, result)
+
+	// Phase G: completion derivation.
 	requiredTasksComplete := allRequiredTasksComplete(session.Tasks)
 	completionDim := DeriveCompletionAudit(CompletionAuditInput{
-		RunResult:              runResult,
-		EvidenceValid:          evidenceValid,
-		EvidenceStatus:         evidenceStatus(runResult),
-		AcceptanceState:        acceptanceState(runResult),
-		RequiredTasksComplete:  requiredTasksComplete,
-		CompletionGateAccepted: result.Provenance.Status != AuditDimensionFail,
+		RunResult:               runResult,
+		EvidenceValid:           evidenceValid,
+		EvidenceStatus:          evidenceStatus(runResult),
+		AcceptanceState:         acceptanceState(runResult),
+		RequiredTasksComplete:   requiredTasksComplete,
+		CompletionGateAccepted:  result.Provenance.Status != AuditDimensionFail,
+		SemanticRegressionClear: semanticDecision.Clear,
 	})
 	result.Completion = completionDim
 	result.DerivedOutcome = runResult.Outcome
@@ -169,7 +180,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.addFinding(CodeCompletionUnjustified, FindingSeverityCritical, completionDim.Reason, "", 0, "")
 	}
 
-	// Phase G: optional recheck. Recheck never participates in the overall
+	// Phase H: optional recheck. Recheck never participates in the overall
 	// verdict (spec.md §35), so it is computed last and does not gate anything
 	// above.
 	if opts.Recheck {
@@ -184,6 +195,46 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		tasks: session.Tasks, requiredCriteria: requiredCriteria,
 	}
 	return result, projection, nil
+}
+
+func verifySemanticRegressionDimension(runID string, tasks []*team.TodoItem, decision team.SemanticRegressionDecision, result *AuditVerificationResult) AuditDimensionResult {
+	if !decision.Configured {
+		return AuditDimensionResult{Status: AuditDimensionPass, Reason: "semantic regression gate not configured"}
+	}
+	if decision.Clear {
+		return AuditDimensionResult{Status: AuditDimensionPass, Reason: "semantic regression gate is clear"}
+	}
+
+	for _, item := range tasks {
+		if item == nil || item.InvariantVerification != team.InvariantVerificationGate {
+			continue
+		}
+		validation := team.ValidateInvariantVerificationResult(item, runID)
+		attempt := 0
+		if item.TypedResult != nil {
+			attempt = item.TypedResult.Attempt
+		}
+		if !validation.Valid {
+			result.addFinding(CodeInvariantAttestationInvalid, FindingSeverityCritical,
+				fmt.Sprintf("task %q invariant attestation is invalid: %s", item.ID, validation.Code), item.ID, attempt, "")
+			continue
+		}
+		if team.HasBlockingInvariantAssessment(item.InvariantVerification, item.TypedResult.InvariantVerification) {
+			result.addFinding(CodeInvariantViolated, FindingSeverityCritical,
+				fmt.Sprintf("task %q has a blocking invariant assessment", item.ID), item.ID, attempt, "")
+			continue
+		}
+		if item.Status != team.TaskDone {
+			result.addFinding(CodeInvariantAttestationInvalid, FindingSeverityCritical,
+				fmt.Sprintf("task %q has a valid clear attestation but status %q is not done", item.ID, item.Status), item.ID, attempt, "")
+		}
+	}
+
+	reason := strings.Join(decision.Reasons, "; ")
+	if reason == "" {
+		reason = "semantic regression gate is not clear"
+	}
+	return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 }
 
 // verifyEvidenceDimension re-verifies the run's evidence manifest by calling
@@ -392,6 +443,8 @@ type CompletionAuditInput struct {
 	RequiredTasksComplete bool
 
 	CompletionGateAccepted bool
+
+	SemanticRegressionClear bool
 }
 
 // DeriveCompletionAudit is a pure function that checks whether a persisted
@@ -423,6 +476,9 @@ func DeriveCompletionAudit(input CompletionAuditInput) AuditDimensionResult {
 	}
 	if !input.CompletionGateAccepted {
 		unmet = append(unmet, "task evidence provenance does not verify")
+	}
+	if !input.SemanticRegressionClear {
+		unmet = append(unmet, "semantic regression gate is not clear")
 	}
 	if len(unmet) > 0 {
 		return AuditDimensionResult{Status: AuditDimensionFail, Reason: "persisted completed result is not justified: " + strings.Join(unmet, "; ")}

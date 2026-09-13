@@ -1187,6 +1187,40 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	return count, firstErr
 }
 
+// RefreshStaleGateVerifiers resets terminal gate-verifier projections whose
+// attestation cannot satisfy the current top-level invocation. The reset is a
+// fresh occurrence, not a failed retry, so retry counters remain unchanged.
+func (c *Coordinator) RefreshStaleGateVerifiers(ctx context.Context) (int, error) {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return 0, nil
+	}
+	items := c.taskTracker.TodoList().Items()
+	sort.SliceStable(items, func(i, j int) bool { return todoIDLess(items[i].ID, items[j].ID) })
+	refreshed := 0
+	for _, item := range items {
+		if item == nil || item.InvariantVerification != InvariantVerificationGate {
+			continue
+		}
+		switch item.Status {
+		case TaskPending, TaskPlanned, TaskInProgress, TaskPaused, TaskProtocolIncomplete, TaskVerifying:
+			continue
+		case TaskDone, TaskError, TaskBlocked, TaskSkipped:
+		default:
+			continue
+		}
+		validation := ValidateInvariantVerificationResult(item, c.executionRunID)
+		if validation.Valid {
+			continue
+		}
+		c.invalidateTaskCacheWithTypedVerification(strings.ToLower(item.Agent), item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
+		if err := c.CommitStaleGateVerifierReset(ctx, item.ID); err != nil {
+			return refreshed, err
+		}
+		refreshed++
+	}
+	return refreshed, nil
+}
+
 // prepareInterruptedTaskForResume returns an interrupted task to the pending
 // execution boundary without incrementing Retries. Crash recovery is a
 // continuation of the same (run, task, attempt) occurrence; a retry reset would

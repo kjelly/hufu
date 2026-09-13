@@ -145,7 +145,7 @@ func TestVerifyWorkspaceRunPassesOnCompletedFixture(t *testing.T) {
 	}
 	for name, dim := range map[string]AuditDimensionResult{
 		"integrity": result.Integrity, "provenance": result.Provenance, "evidence": result.Evidence,
-		"acceptance": result.Acceptance, "completion": result.Completion,
+		"acceptance": result.Acceptance, "semantic_regression": result.SemanticRegression, "completion": result.Completion,
 	} {
 		if dim.Status != AuditDimensionPass {
 			t.Fatalf("dimension %s = %#v, want pass", name, dim)

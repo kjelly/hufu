@@ -2157,6 +2157,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	// interrupted workers. Their resumed LLM usage must accumulate on top of
 	// the persisted counters, not be overwritten by a later restore.
 	c.ResumeContinuationCheckpoint()
+	if n, refreshErr := c.RefreshStaleGateVerifiers(ctx); refreshErr != nil {
+		c.finalizePublicInvocationFailure(refreshErr)
+		return "", fmt.Errorf("refresh stale gate verifiers: %w", refreshErr)
+	} else if n > 0 {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: refreshed %d stale gate verifier(s)", n)))
+	}
 
 	c.report(c.newEvent("step").withMessage("coordinator preparing"))
 

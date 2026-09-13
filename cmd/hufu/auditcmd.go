@@ -182,6 +182,7 @@ func renderAuditVerifyText(w io.Writer, result *auditverify.AuditVerificationRes
 	renderAuditDimension(w, "Provenance", result.Provenance)
 	renderAuditDimension(w, "Evidence", result.Evidence)
 	renderAuditDimension(w, "Acceptance", result.Acceptance)
+	renderAuditDimension(w, "Semantic regression", result.SemanticRegression)
 	renderAuditDimension(w, "Completion", result.Completion)
 	renderAuditDimension(w, "Recheck", result.Recheck)
 
@@ -281,6 +282,12 @@ func renderAuditExplainText(w io.Writer, result *auditverify.ExplainResult) {
 		_, _ = fmt.Fprintf(w, "  evidence manifest: %s\n", strings.ToUpper(witness.Gate.EvidenceManifestStatus))
 	}
 	_, _ = fmt.Fprintf(w, "  required tasks: %d/%d done\n", witness.Gate.RequiredTasksDone, witness.Gate.RequiredTasksTotal)
+	_, _ = fmt.Fprintf(w, "  semantic regression configured: %v\n", witness.Gate.SemanticRegressionConfigured)
+	_, _ = fmt.Fprintf(w, "  semantic regression clear: %v\n", witness.Gate.SemanticRegressionClear)
+	_, _ = fmt.Fprintf(w, "  semantic regression blockers: %d\n", witness.Gate.SemanticRegressionBlockingCount)
+	for _, reason := range witness.Gate.SemanticRegressionReasons {
+		_, _ = fmt.Fprintf(w, "  semantic regression reason: %s\n", reason)
+	}
 	for _, reason := range witness.Gate.Reasons {
 		_, _ = fmt.Fprintf(w, "  reason: %s\n", reason)
 	}
@@ -315,7 +322,7 @@ func auditConclusionReason(v *auditverify.AuditVerificationResult) string {
 	if v == nil {
 		return "no verification result available"
 	}
-	for _, dim := range []auditverify.AuditDimensionResult{v.Integrity, v.Provenance, v.Evidence, v.Acceptance, v.Completion} {
+	for _, dim := range []auditverify.AuditDimensionResult{v.Integrity, v.Provenance, v.Evidence, v.Acceptance, v.SemanticRegression, v.Completion} {
 		if dim.Status == auditverify.AuditDimensionFail && dim.Reason != "" {
 			return dim.Reason
 		}

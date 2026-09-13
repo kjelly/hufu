@@ -1043,6 +1043,71 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 	return nil
 }
 
+// CommitStaleGateVerifierReset creates a new pending occurrence for a
+// terminal gate verifier whose attestation belongs to an earlier invocation.
+// Unlike a recovery retry, this refresh does not consume retry budget or
+// discard historical context manifests.
+func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID string) error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return fmt.Errorf("commit stale gate verifier reset: task tracker is unavailable")
+	}
+	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
+	if current == nil {
+		return fmt.Errorf("commit stale gate verifier reset: task %s not found", taskID)
+	}
+	projected := *current
+	projected.OccurrenceRevision = current.OccurrenceRevision + 1
+	if projected.OccurrenceRevision <= 0 {
+		projected.OccurrenceRevision = 1
+	}
+	projected.DispatchID = ""
+	projected.Status = TaskPending
+	projected.Detail = "stale_gate_verification"
+	projected.Output = ""
+	projected.VerifyResult = nil
+	projected.RuntimeError = nil
+	projected.ExecutionReceipt = nil
+	projected.FailureEvent = nil
+	projected.Resolution = nil
+	projected.RecoveryState = RecoveryStateNotStarted
+	projected.LastOperation = ""
+	projected.Progress = ProgressUnknown
+	projected.ProgressCriteria = nil
+	projected.StartedAt = time.Time{}
+	projected.EndedAt = time.Time{}
+	projected.ModelTime = 0
+	projected.ToolTime = 0
+	projected.TypedResult = nil
+	projected.CheckpointPause = false
+
+	if !c.hasDurableEventJournal() {
+		if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
+			return err
+		}
+		c.revokeTaskOccurrence(taskID)
+		return nil
+	}
+	payload := c.taskTransitionPayloadWithCoordinator(&projected)
+	payload["reset_reason"] = "stale_gate_verification"
+	payload["previous_status"] = string(current.Status)
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("commit stale gate verifier reset payload: %w", err)
+	}
+	key := fmt.Sprintf("stale-gate-reset:%s:%s:%d", c.executionRunID, projected.ID, projected.OccurrenceRevision)
+	if _, err := c.EventJournal().Append(context.WithoutCancel(ctx), RunEvent{
+		Type: string(EventTaskCreated), Actor: projected.Agent, TaskID: projected.ID,
+		IdempotencyKey: key, Payload: rawPayload,
+	}); err != nil {
+		return fmt.Errorf("commit stale gate verifier reset append: %w", err)
+	}
+	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
+		return fmt.Errorf("apply stale gate verifier reset after durable append: %w", err)
+	}
+	c.revokeTaskOccurrence(taskID)
+	return nil
+}
+
 // CommitTaskCreation is the event-first creation boundary for new tasks. It
 // reserves IDs and delegates to CommitTaskCreationResolved, which appends
 // complete task_created payloads and makes each successfully appended task
