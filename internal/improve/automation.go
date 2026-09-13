@@ -2,6 +2,7 @@ package improve
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -101,6 +102,7 @@ type RollbackSuggestion struct {
 // storing prompts, outputs, tool arguments, or tool results.
 type MonitoringReport struct {
 	Version            int                 `json:"version"`
+	ID                 string              `json:"id"`
 	AdoptionID         string              `json:"adoption_id"`
 	Team               string              `json:"team"`
 	GeneratedAt        string              `json:"generated_at"`
@@ -418,7 +420,13 @@ func WriteMonitoringReport(workspace string, report MonitoringReport) (string, e
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create monitoring directory: %w", err)
 	}
-	name := "report-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+	if report.ID == "" {
+		report.ID = "monitor-" + time.Now().UTC().Format("20060102T150405000000000Z")
+	}
+	if err := validateArtifactID(report.ID); err != nil {
+		return "", err
+	}
+	name := report.ID
 	jsonPath := filepath.Join(dir, name+".json")
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -431,6 +439,42 @@ func WriteMonitoringReport(workspace string, report MonitoringReport) (string, e
 		return "", fmt.Errorf("write monitoring markdown: %w", err)
 	}
 	return jsonPath, nil
+}
+
+func LoadMonitoringReport(workspace, id string) (MonitoringReport, error) {
+	if err := validateArtifactID(id); err != nil {
+		return MonitoringReport{}, err
+	}
+	path := filepath.Join(ImprovementRoot(workspace), "monitoring", "reports", id+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		path = filepath.Join(ImprovementRoot(workspace), "monitoring", "*", id+".json")
+		matches, globErr := filepath.Glob(path)
+		if globErr != nil || len(matches) != 1 {
+			return MonitoringReport{}, fmt.Errorf("read monitoring report %q: %w", id, err)
+		}
+		data, err = os.ReadFile(matches[0])
+	}
+	if err != nil {
+		return MonitoringReport{}, fmt.Errorf("read monitoring report: %w", err)
+	}
+	var report MonitoringReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return MonitoringReport{}, fmt.Errorf("parse monitoring report: %w", err)
+	}
+	if report.Version != monitoringVersion || report.ID != id {
+		return MonitoringReport{}, fmt.Errorf("invalid monitoring report %q", id)
+	}
+	return report, nil
+}
+
+func MonitoringReportRevision(report MonitoringReport) string {
+	data, err := json.Marshal(report)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func MonitoringMarkdown(report MonitoringReport) string {

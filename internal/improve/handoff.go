@@ -205,6 +205,11 @@ func validateHandoffRefs(h ImprovementHandoff) error {
 			return fmt.Errorf("experiment must reference an experiment_report")
 		}
 	}
+	if h.Evaluation.Report != nil {
+		if err := validateArtifactRef(*h.Evaluation.Report); err != nil || h.Evaluation.Report.Kind != "experiment_report" {
+			return fmt.Errorf("evaluation report must reference an experiment_report")
+		}
+	}
 	if h.Adoption != nil {
 		if err := validateArtifactRef(*h.Adoption); err != nil {
 			return fmt.Errorf("adoption: %w", err)
@@ -295,6 +300,12 @@ func validateArtifactRef(ref ArtifactRef) error {
 	return nil
 }
 
+// ValidateArtifactRef validates an opaque cross-artifact reference without
+// resolving or reading the referenced canonical artifact.
+func ValidateArtifactRef(ref ArtifactRef) error {
+	return validateArtifactRef(ref)
+}
+
 func validateRefForKind(kind HandoffKind, ref ArtifactRef, proposal bool) error {
 	if err := validateArtifactRef(ref); err != nil {
 		return err
@@ -319,11 +330,11 @@ func validHandoffTransition(from, to HandoffStatus) bool {
 	}
 	switch from {
 	case HandoffProposed:
-		return to == HandoffCandidateReady || to == HandoffRejected
+		return to == HandoffCandidateReady
 	case HandoffCandidateReady:
-		return to == HandoffBenchmarkBound || to == HandoffRejected
+		return to == HandoffBenchmarkBound
 	case HandoffBenchmarkBound:
-		return to == HandoffEvaluated || to == HandoffRejected
+		return to == HandoffEvaluated
 	case HandoffEvaluated:
 		return to == HandoffEligibleForReview || to == HandoffRejected
 	case HandoffEligibleForReview:
@@ -333,7 +344,7 @@ func validHandoffTransition(from, to HandoffStatus) bool {
 	case HandoffAdopted:
 		return to == HandoffMonitoring
 	case HandoffMonitoring:
-		return to == HandoffRollbackRecommended
+		return to == HandoffMonitoring || to == HandoffRollbackRecommended
 	default:
 		return false
 	}

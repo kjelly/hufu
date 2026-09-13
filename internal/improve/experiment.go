@@ -624,6 +624,16 @@ func ValidateMemoryPolicyExperimentReport(report ExperimentReport, baseline, can
 	return nil
 }
 
+func ExperimentReportRevision(report ExperimentReport) string {
+	copy := report
+	data, err := json.Marshal(copy)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
+}
+
 func completionRate(metrics Metrics) float64 {
 	if metrics.TotalTasks == 0 {
 		return 0
