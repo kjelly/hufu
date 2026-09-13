@@ -86,6 +86,7 @@ spec:
       agent: reviewer
       when-goal-contains: review workset
       phase: verify
+      invariant-verification: report
       fan_out:
         source-artifact:
           task_id: produce-workset

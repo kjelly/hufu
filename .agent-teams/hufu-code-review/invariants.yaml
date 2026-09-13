@@ -1,0 +1,9 @@
+schema-version: 1
+invariants:
+  - id: sqlite-canonical-memory
+    statement: "context.sqlite is canonical; context-stm.md and context-ltm.md are disposable projections and never runtime inputs"
+    severity: error
+    applies-to:
+      - internal/context/
+      - internal/team/shared_memory.go
+      - internal/team/worker_memory.go

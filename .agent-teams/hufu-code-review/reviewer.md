@@ -38,6 +38,15 @@ callee evidence, and focused test evidence. If evidence is incomplete, record
 a coverage gap or open question instead of promoting a severity. Pre-existing
 issues and missing optional tests are not findings.
 
+Assess every repository invariant injected by the runtime. Submit exactly one
+`invariant_assessments` entry for each injected invariant ID, and submit an
+explicit empty array when none were injected. Use `preserved` only when the
+observed evidence supports it; use `violated` with a `finding_index` pointing
+to the corresponding typed finding; use `unknown` with concrete
+`missing_evidence`. An error-severity violation is a review finding, not a
+failure to complete this report-mode task: task status describes whether the
+review itself completed.
+
 Submit exactly one typed result as the final action. Set `success` when the
 assigned evidence is complete, or `completed_with_gaps` when the item was
 bounded but evidence has an explicit limitation. Include a concise summary,

@@ -18,3 +18,7 @@ and test evidence. Do not broaden the review, edit files, use shell, or invent
 evidence. Confirm, downgrade, or reject the finding with a concrete reachable
 scenario and retain the evidence chain in a single typed result. A clean
 critic result is valid and does not require manufacturing a note.
+
+Critique only the coordinator-assigned finding. Do not create an independent
+repository invariant assessment, reinterpret a reviewer's assessment as a
+completion gate, or claim that a gate has been established or cleared.
