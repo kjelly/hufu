@@ -33,8 +33,8 @@ func TestLoadMemoryEventsExtractsMinimalPayloadFields(t *testing.T) {
 	workspace := t.TempDir()
 	writeMemoryEventStore(t, workspace, []team.RunEvent{
 		{ID: "run-start", Type: "run_started", Actor: "runtime", Payload: []byte(`{"secret":"do-not-store"}`)},
-		{ID: "memory-retrieved", Type: memoryRetrievedEvent, Actor: "runtime", Timestamp: "2026-07-12T10:00:00Z", Payload: []byte(`{"retrieval_id":"retrieval-1","context_item_id":"context-1","policy_version":"policy-v1","reason_code":"stale_environment","token_count":12,"secret":"memory-content"}`)},
-		{ID: "memory-used", Type: memoryUsageRecordedEvent, Actor: "runtime", TaskID: "task-1", Attempt: 2, Payload: []byte(`{"retrieval_id":"retrieval-1","context_item_id":"context-1","policy_version":"policy-v1","disposition":"applied","secret":"memory-content"}`)},
+		{ID: "memory-retrieved", Type: memoryRetrievedEvent, Actor: "runtime", Timestamp: "2026-07-12T10:00:00Z", Payload: []byte(`{"retrieval_id":"retrieval-1","context_item_id":"context-1","content_hash":"hash-1","policy_version":"policy-v1","reason_code":"stale_environment","token_count":12,"secret":"memory-content"}`)},
+		{ID: "memory-used", Type: memoryUsageRecordedEvent, Actor: "runtime", TaskID: "task-1", Attempt: 2, Payload: []byte(`{"retrieval_id":"retrieval-1","context_item_id":"context-1","content_hash":"hash-1","policy_version":"policy-v1","disposition":"applied","secret":"memory-content"}`)},
 		{ID: "memory-outcome", Type: memoryOutcomeRecordedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"retrieval-1","signal":"verification_passed","direction":"negative","secret":"memory-content"}`)},
 		{ID: "memory-bad-payload", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`"not-an-object"`)},
 	})
@@ -56,7 +56,7 @@ func TestLoadMemoryEventsExtractsMinimalPayloadFields(t *testing.T) {
 		t.Fatalf("memory_events rows = %d, want 3", count)
 	}
 	rows, err := session.conn.QueryContext(t.Context(), `
-SELECT type, retrieval_id, context_item_id, policy_version, reason_code, token_count, disposition, signal, direction
+	SELECT type, retrieval_id, context_item_id, content_hash, policy_version, reason_code, token_count, disposition, signal, direction
 FROM memory_events ORDER BY event_seq`)
 	if err != nil {
 		t.Fatal(err)
@@ -64,20 +64,20 @@ FROM memory_events ORDER BY event_seq`)
 	defer func() { _ = rows.Close() }()
 	var got [][]any
 	for rows.Next() {
-		var eventType, retrievalID, contextItemID, policyVersion, reasonCode, disposition, signal, direction string
+		var eventType, retrievalID, contextItemID, contentHash, policyVersion, reasonCode, disposition, signal, direction string
 		var tokenCount int64
-		if err := rows.Scan(&eventType, &retrievalID, &contextItemID, &policyVersion, &reasonCode, &tokenCount, &disposition, &signal, &direction); err != nil {
+		if err := rows.Scan(&eventType, &retrievalID, &contextItemID, &contentHash, &policyVersion, &reasonCode, &tokenCount, &disposition, &signal, &direction); err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, []any{eventType, retrievalID, contextItemID, policyVersion, reasonCode, tokenCount, disposition, signal, direction})
+		got = append(got, []any{eventType, retrievalID, contextItemID, contentHash, policyVersion, reasonCode, tokenCount, disposition, signal, direction})
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
 	want := [][]any{
-		{memoryRetrievedEvent, "retrieval-1", "context-1", "policy-v1", "stale_environment", int64(12), "", "", ""},
-		{memoryUsageRecordedEvent, "retrieval-1", "context-1", "policy-v1", "", int64(0), "applied", "", ""},
-		{memoryOutcomeRecordedEvent, "retrieval-1", "", "", "", int64(0), "", "verification_passed", "negative"},
+		{memoryRetrievedEvent, "retrieval-1", "context-1", "hash-1", "policy-v1", "stale_environment", int64(12), "", "", ""},
+		{memoryUsageRecordedEvent, "retrieval-1", "context-1", "hash-1", "policy-v1", "", int64(0), "applied", "", ""},
+		{memoryOutcomeRecordedEvent, "retrieval-1", "", "", "", "", int64(0), "", "verification_passed", "negative"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("memory rows = %#v, want %#v", got, want)
@@ -110,12 +110,12 @@ FROM memory_events ORDER BY event_seq`)
 	if err := columns.Err(); err != nil {
 		t.Fatal(err)
 	}
-	policies, items, err := session.sqlMemoryEvidence(t.Context(), []string{"memory-loader-run"})
+	policies, refs, err := session.sqlMemoryEvidence(t.Context(), []string{"memory-loader-run"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(policies, ",") != "policy-v1" || strings.Join(items, ",") != "context-1" {
-		t.Fatalf("memory evidence policies=%v items=%v", policies, items)
+	if strings.Join(policies, ",") != "policy-v1" || len(refs) != 1 || refs[0] != (ArtifactRef{Kind: "context_item", ID: "context-1", Revision: "hash-1"}) {
+		t.Fatalf("memory evidence policies=%v refs=%v", policies, refs)
 	}
 }
 

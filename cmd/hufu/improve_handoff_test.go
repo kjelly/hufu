@@ -169,7 +169,7 @@ func writeConsolidationExperiment(t *testing.T, handoff consolidationHandoffFixt
 	candidate := improve.TeamSnapshot{Version: 1, ID: "candidate-" + id, Kind: "candidate", Team: handoff.scope.TeamID, DefinitionRevision: "candidate-revision", ContentRevision: "candidate-content", BaselineID: baseline.ID}
 	report, err := improve.EvaluateExperiment(id, benchmark,
 		improve.ExperimentInput{Snapshot: baseline, Report: &improve.Report{Team: handoff.scope.TeamID, RunIDs: []string{"baseline-run"}, TeamRevisions: []string{baseline.DefinitionRevision}, Metrics: improve.Metrics{TotalTasks: 1, Done: 1}}, AcceptancePassed: true},
-		improve.ExperimentInput{Snapshot: candidate, Report: &improve.Report{Team: handoff.scope.TeamID, RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, AppliedContextItemIDs: []string{candidateRef.ID}, Metrics: improve.Metrics{TotalTasks: 1, Done: 1}}, ContextCandidate: &candidateRef, AcceptancePassed: true},
+		improve.ExperimentInput{Snapshot: candidate, Report: &improve.Report{Team: handoff.scope.TeamID, RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, AppliedContextRefs: []improve.ArtifactRef{candidateRef}, Metrics: improve.Metrics{TotalTasks: 1, Done: 1}}, ContextCandidate: &candidateRef, AcceptancePassed: true},
 	)
 	if err != nil {
 		t.Fatal(err)

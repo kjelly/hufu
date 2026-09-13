@@ -679,8 +679,8 @@ func validateExperimentInput(label string, fixture BenchmarkFixture, input Exper
 		if err := validateArtifactRef(*input.ContextCandidate); err != nil || input.ContextCandidate.Kind != "context_item" {
 			return fmt.Errorf("%s context candidate must reference a context_item", label)
 		}
-		if !slices.Contains(input.Report.AppliedContextItemIDs, input.ContextCandidate.ID) {
-			return fmt.Errorf("%s report does not prove applied context item %q", label, input.ContextCandidate.ID)
+		if !slices.Contains(input.Report.AppliedContextRefs, *input.ContextCandidate) {
+			return fmt.Errorf("%s report does not prove applied context item %q at revision %q", label, input.ContextCandidate.ID, input.ContextCandidate.Revision)
 		}
 	}
 	return nil

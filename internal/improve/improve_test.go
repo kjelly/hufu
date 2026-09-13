@@ -231,8 +231,8 @@ func TestAnalyzeRecentIncludesSQLMemoryMetrics(t *testing.T) {
 		{Timestamp: "2026-07-12T10:00:00Z", RunID: "run-1", Team: "dev", TaskID: "task-1", Attempt: 1, Status: "done", Usage: team.ExecutionUsage{InputTokens: 10}},
 	})
 	writeMemoryEventStore(t, workspace, []team.RunEvent{
-		{ID: "retrieval-1", RunID: "run-1", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1","context_item_id":"context-1","policy_version":"policy-v1","token_count":2.9}`)},
-		{ID: "usage-1", RunID: "run-1", TaskID: "task-1", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"context_item_id":"context-1","policy_version":"policy-v1","disposition":"applied"}`)},
+		{ID: "retrieval-1", RunID: "run-1", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1","context_item_id":"context-1","content_hash":"hash-1","policy_version":"policy-v1","token_count":2.9}`)},
+		{ID: "usage-1", RunID: "run-1", TaskID: "task-1", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"context_item_id":"context-1","content_hash":"hash-1","policy_version":"policy-v1","disposition":"applied"}`)},
 	})
 
 	report, err := AnalyzeRecent(workspace, "dev", teamDir, 1)
@@ -245,8 +245,9 @@ func TestAnalyzeRecentIncludesSQLMemoryMetrics(t *testing.T) {
 	if report.Metrics.MemoryTokenOverhead != 0.2 || report.Metrics.MemoryAttributionCoverage != 1 {
 		t.Fatalf("memory rates = %+v", report.Metrics)
 	}
-	if strings.Join(report.MemoryPolicyVersions, ",") != "policy-v1" || strings.Join(report.AppliedContextItemIDs, ",") != "context-1" {
-		t.Fatalf("memory provenance policies=%v items=%v", report.MemoryPolicyVersions, report.AppliedContextItemIDs)
+	wantRef := ArtifactRef{Kind: "context_item", ID: "context-1", Revision: "hash-1"}
+	if strings.Join(report.MemoryPolicyVersions, ",") != "policy-v1" || len(report.AppliedContextRefs) != 1 || report.AppliedContextRefs[0] != wantRef {
+		t.Fatalf("memory provenance policies=%v refs=%v", report.MemoryPolicyVersions, report.AppliedContextRefs)
 	}
 }
 

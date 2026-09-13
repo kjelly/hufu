@@ -150,7 +150,7 @@ func TestEvaluateExperimentBindsAppliedContextCandidate(t *testing.T) {
 	candidate := TeamSnapshot{Version: snapshotVersion, ID: "candidate", Kind: candidateSnapshotKind, Team: "dev", DefinitionRevision: "candidate-rev", ContentRevision: "candidate-content", BaselineID: baseline.ID}
 	contextRef := ArtifactRef{Kind: "context_item", ID: "context-candidate", Revision: "context-revision"}
 	baselineReport := &Report{Team: "dev", RunIDs: []string{"base-run"}, TeamRevisions: []string{baseline.DefinitionRevision}, Metrics: Metrics{TotalTasks: 1, Done: 1}}
-	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, AppliedContextItemIDs: []string{contextRef.ID}, Metrics: Metrics{TotalTasks: 1, Done: 1}}
+	candidateReport := &Report{Team: "dev", RunIDs: []string{"candidate-run"}, TeamRevisions: []string{candidate.DefinitionRevision}, AppliedContextRefs: []ArtifactRef{contextRef}, Metrics: Metrics{TotalTasks: 1, Done: 1}}
 	report, err := EvaluateExperiment("context-experiment", fixture,
 		ExperimentInput{Snapshot: baseline, Report: baselineReport, AcceptancePassed: true},
 		ExperimentInput{Snapshot: candidate, Report: candidateReport, ContextCandidate: &contextRef, AcceptancePassed: true},
@@ -161,7 +161,7 @@ func TestEvaluateExperimentBindsAppliedContextCandidate(t *testing.T) {
 	if err := ValidateContextCandidateExperimentReport(report, contextRef); err != nil {
 		t.Fatal(err)
 	}
-	candidateReport.AppliedContextItemIDs = nil
+	candidateReport.AppliedContextRefs = nil
 	if _, err := EvaluateExperiment("missing-context-evidence", fixture,
 		ExperimentInput{Snapshot: baseline, Report: baselineReport, AcceptancePassed: true},
 		ExperimentInput{Snapshot: candidate, Report: candidateReport, ContextCandidate: &contextRef, AcceptancePassed: true},

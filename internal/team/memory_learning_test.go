@@ -16,10 +16,10 @@ func TestOnlyCompilerIncludedItemsBecomeExposures(t *testing.T) {
 	policy.Mode = agent.MemoryLearningObserve
 	compiled := CompiledContext{IncludedItems: []ContextItem{
 		{ID: "current_task", Source: "task"},
-		{ID: "context:included", Source: "shared_persistent", BaseScore: 0.8},
+		{ID: "context:included", Source: "shared_persistent", DedupKey: "included-hash", BaseScore: 0.8},
 	}, OmittedItems: []ContextItem{{ID: "context:omitted", Source: "shared_persistent", BaseScore: 0.9}}}
 	manifest := buildMemoryInjectionManifest(compiled, "run-1", "task-1", 1, "worker", "goal", policy)
-	if manifest == nil || len(manifest.Items) != 1 || manifest.Items[0].ContextItemID != "included" {
+	if manifest == nil || len(manifest.Items) != 1 || manifest.Items[0].ContextItemID != "included" || manifest.Items[0].ContentHash != "included-hash" {
 		t.Fatalf("manifest = %+v", manifest)
 	}
 }
@@ -115,6 +115,18 @@ func TestMemoryUseCannotCrossTaskOrAttempt(t *testing.T) {
 	}
 }
 
+func TestMemoryUseRejectsRevisionChangedAfterInjection(t *testing.T) {
+	c, manifest := memoryValidationCoordinator(t)
+	manifest.Items[0].ContentHash = "different-revision"
+	if err := c.taskTracker.TodoList().SetMemoryManifest(manifest.TaskID, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	result := &TaskResult{TaskID: manifest.TaskID, Attempt: manifest.Attempt, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}}
+	if err := c.validateMemoryUseClaims(t.Context(), manifest.TaskID, result); err == nil || !strings.Contains(err.Error(), "revision changed") {
+		t.Fatalf("revision mismatch error = %v", err)
+	}
+}
+
 func TestFreeTextResultCannotClaimAppliedMemory(t *testing.T) {
 	c, manifest := memoryValidationCoordinator(t)
 	result := ParseFreeTextResult("done")
@@ -136,7 +148,11 @@ func memoryValidationCoordinator(t *testing.T) (*Coordinator, MemoryInjectionMan
 	}
 	tracker := NewTaskTracker()
 	tasks := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})
-	manifest := MemoryInjectionManifest{RetrievalID: "retrieval-1", RunID: "run-1", TaskID: tasks[0].ID, Attempt: 1, Agent: "worker", PolicyVersion: "v1", Items: []MemoryInjectionItem{{ContextItemID: "memory-1"}}}
+	stored, err := repo.Get(context.Background(), "memory-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := MemoryInjectionManifest{RetrievalID: "retrieval-1", RunID: "run-1", TaskID: tasks[0].ID, Attempt: 1, Agent: "worker", PolicyVersion: "v1", Items: []MemoryInjectionItem{{ContextItemID: "memory-1", ContentHash: stored.ContentHash}}}
 	if err := tracker.TodoList().SetMemoryManifest(tasks[0].ID, &manifest); err != nil {
 		t.Fatal(err)
 	}

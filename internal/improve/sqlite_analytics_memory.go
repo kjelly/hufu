@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func (s *sqliteAnalyticsSession) sqlMemoryEvidence(ctx context.Context, runIDs []string) ([]string, []string, error) {
+func (s *sqliteAnalyticsSession) sqlMemoryEvidence(ctx context.Context, runIDs []string) ([]string, []ArtifactRef, error) {
 	if len(runIDs) == 0 {
 		return nil, nil, nil
 	}
@@ -20,16 +20,28 @@ ORDER BY policy_version`, inClause)
 		return nil, nil, fmt.Errorf("query selected memory policy versions: %w", err)
 	}
 	contextQuery := fmt.Sprintf(`
-SELECT DISTINCT context_item_id
+SELECT DISTINCT context_item_id, content_hash
 FROM memory_events
 WHERE run_id IN (%s) AND type = 'memory_usage_recorded'
-  AND disposition = 'applied' AND context_item_id <> ''
-ORDER BY context_item_id`, inClause)
-	items, err := queryStrings(ctx, s, contextQuery, args...)
+	  AND disposition = 'applied' AND context_item_id <> '' AND content_hash <> ''
+ORDER BY context_item_id, content_hash`, inClause)
+	rows, err := s.conn.QueryContext(ctx, contextQuery, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query selected applied context items: %w", err)
 	}
-	return policies, items, nil
+	defer func() { _ = rows.Close() }()
+	var refs []ArtifactRef
+	for rows.Next() {
+		var id, revision string
+		if err := rows.Scan(&id, &revision); err != nil {
+			return nil, nil, fmt.Errorf("scan selected applied context item: %w", err)
+		}
+		refs = append(refs, ArtifactRef{Kind: "context_item", ID: id, Revision: revision})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate selected applied context items: %w", err)
+	}
+	return policies, refs, nil
 }
 
 func queryStrings(ctx context.Context, s *sqliteAnalyticsSession, query string, args ...any) ([]string, error) {

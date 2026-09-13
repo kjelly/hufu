@@ -113,18 +113,18 @@ type GroupedMetrics struct {
 }
 
 type Report struct {
-	Team                  string         `json:"team"`
-	Workspace             string         `json:"workspace"`
-	GeneratedAt           string         `json:"generated_at"`
-	Source                string         `json:"source"`
-	RunIDs                []string       `json:"run_ids"`
-	TeamRevisions         []string       `json:"team_revisions,omitempty"`
-	MemoryPolicyVersions  []string       `json:"memory_policy_versions,omitempty"`
-	AppliedContextItemIDs []string       `json:"applied_context_item_ids,omitempty"`
-	Metrics               Metrics        `json:"metrics"`
-	Trend                 []TrendPoint   `json:"trend"`
-	Groups                GroupedMetrics `json:"groups"`
-	Findings              []Finding      `json:"findings"`
+	Team                 string         `json:"team"`
+	Workspace            string         `json:"workspace"`
+	GeneratedAt          string         `json:"generated_at"`
+	Source               string         `json:"source"`
+	RunIDs               []string       `json:"run_ids"`
+	TeamRevisions        []string       `json:"team_revisions,omitempty"`
+	MemoryPolicyVersions []string       `json:"memory_policy_versions,omitempty"`
+	AppliedContextRefs   []ArtifactRef  `json:"applied_context_refs,omitempty"`
+	Metrics              Metrics        `json:"metrics"`
+	Trend                []TrendPoint   `json:"trend"`
+	Groups               GroupedMetrics `json:"groups"`
+	Findings             []Finding      `json:"findings"`
 }
 
 type agentFrontmatter struct {
@@ -239,7 +239,7 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	if err := analytics.sqlCollectMemoryMetrics(ctx, runIDs, &metrics); err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
-	memoryPolicyVersions, appliedContextItemIDs, err := analytics.sqlMemoryEvidence(ctx, runIDs)
+	memoryPolicyVersions, appliedContextRefs, err := analytics.sqlMemoryEvidence(ctx, runIDs)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
@@ -275,18 +275,18 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	}
 	provenance := findingProvenance{runIDs: runIDs, teamRevisions: teamRevisions}
 	report := &Report{
-		Team:                  teamName,
-		Workspace:             workspace,
-		GeneratedAt:           time.Now().UTC().Format(time.RFC3339),
-		Source:                "hufu improve",
-		RunIDs:                runIDs,
-		TeamRevisions:         teamRevisions,
-		MemoryPolicyVersions:  memoryPolicyVersions,
-		AppliedContextItemIDs: appliedContextItemIDs,
-		Metrics:               metrics,
-		Trend:                 trend,
-		Groups:                groups,
-		Findings:              analyze(def, metrics, provenance),
+		Team:                 teamName,
+		Workspace:            workspace,
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+		Source:               "hufu improve",
+		RunIDs:               runIDs,
+		TeamRevisions:        teamRevisions,
+		MemoryPolicyVersions: memoryPolicyVersions,
+		AppliedContextRefs:   appliedContextRefs,
+		Metrics:              metrics,
+		Trend:                trend,
+		Groups:               groups,
+		Findings:             analyze(def, metrics, provenance),
 	}
 	return report, nil
 }

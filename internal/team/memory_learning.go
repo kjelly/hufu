@@ -102,6 +102,10 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 		}
 		ids = append(ids, use.ContextItemID)
 	}
+	return c.validateMemoryUseRecords(ctx, ids, allowed)
+}
+
+func (c *Coordinator) validateMemoryUseRecords(ctx context.Context, ids []string, allowed map[string]MemoryInjectionItem) error {
 	records, err := c.contextRepo.GetMany(ctx, ids)
 	if err != nil {
 		return fmt.Errorf("validate memory lifecycle: %w", err)
@@ -115,6 +119,9 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 		record, ok := byID[id]
 		if !ok || record.Lifecycle != contextstore.LifecycleConfirmed || record.SupersededBy != "" || (record.ExpiresAt != nil && !now.Before(*record.ExpiresAt)) {
 			return fmt.Errorf("memory context item %q is no longer eligible for attribution", id)
+		}
+		if bound := allowed[id]; bound.ContentHash != "" && record.ContentHash != bound.ContentHash {
+			return fmt.Errorf("memory context item %q revision changed after injection", id)
 		}
 	}
 	return nil
@@ -141,8 +148,15 @@ func (c *Coordinator) emitMemoryUsageEvents(result *TaskResult) {
 		if manifest == nil {
 			continue
 		}
+		contentHash := ""
+		for _, item := range manifest.Items {
+			if item.ContextItemID == use.ContextItemID {
+				contentHash = item.ContentHash
+				break
+			}
+		}
 		policy := c.session.Config.MemoryLearning
-		payload := memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, ReasonCode: use.ReasonCode, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile}
+		payload := memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, ContentHash: contentHash, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, ReasonCode: use.ReasonCode, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile}
 		raw, _ := json.Marshal(struct {
 			memoryEventPayload
 			Disposition string  `json:"disposition"`
@@ -158,6 +172,7 @@ func (c *Coordinator) emitMemoryUsageEvents(result *TaskResult) {
 
 type MemoryInjectionItem struct {
 	ContextItemID string           `json:"context_item_id"`
+	ContentHash   string           `json:"content_hash,omitempty"`
 	Source        string           `json:"source"`
 	Rank          int              `json:"rank"`
 	TokenCount    int              `json:"token_count,omitempty"`
@@ -245,6 +260,7 @@ type memoryEventPayload struct {
 	SchemaVersion     int     `json:"schema_version"`
 	RetrievalID       string  `json:"retrieval_id,omitempty"`
 	ContextItemID     string  `json:"context_item_id,omitempty"`
+	ContentHash       string  `json:"content_hash,omitempty"`
 	PolicyVersion     string  `json:"policy_version,omitempty"`
 	ProjectID         string  `json:"project_id,omitempty"`
 	ReasonCode        string  `json:"reason_code,omitempty"`
@@ -328,18 +344,18 @@ func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, g
 			tokenCount = max(1, len([]rune(included.Content))/4)
 		}
 		items = append(items, MemoryInjectionItem{
-			ContextItemID: contextItemID, Source: included.Source,
+			ContextItemID: contextItemID, ContentHash: included.DedupKey, Source: included.Source,
 			Rank: len(items) + 1, TokenCount: tokenCount, BaseScore: base, FinalScore: final, ScoreParts: parts,
 		})
 	}
 	if len(items) == 0 {
 		return nil
 	}
-	orderedIDs := make([]string, len(items))
+	orderedBindings := make([]string, len(items))
 	for i := range items {
-		orderedIDs[i] = items[i].ContextItemID
+		orderedBindings[i] = items[i].ContextItemID + "\x1e" + items[i].ContentHash
 	}
-	identity := strings.Join([]string{runID, taskID, agentName, policy.PolicyVersion, strings.Join(orderedIDs, "\x00")}, "\x1f")
+	identity := strings.Join([]string{runID, taskID, agentName, policy.PolicyVersion, strings.Join(orderedBindings, "\x00")}, "\x1f")
 	sum := sha256.Sum256([]byte(identity))
 	fingerprint := hex.EncodeToString(sum[:])
 	return &MemoryInjectionManifest{
@@ -386,7 +402,7 @@ func (c *Coordinator) emitMemoryRetrievalEvents(manifest *MemoryInjectionManifes
 		}
 		payload := memoryEventPayload{
 			SchemaVersion: memoryEventSchemaVersion, RetrievalID: manifest.RetrievalID,
-			ContextItemID: item.ContextItemID, PolicyVersion: manifest.PolicyVersion,
+			ContextItemID: item.ContextItemID, ContentHash: item.ContentHash, PolicyVersion: manifest.PolicyVersion,
 			ProjectID: projectID,
 			Source:    item.Source, Rank: item.Rank, BaseScore: item.BaseScore,
 			FinalScore: item.FinalScore, Fingerprint: manifest.Fingerprint, TokenCount: item.TokenCount,
