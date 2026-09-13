@@ -12,6 +12,31 @@ func validTestContextRequest() ContextRequest {
 	return r
 }
 
+func TestNewTaskContextRequestCopiesVerifierTouchedPaths(t *testing.T) {
+	paths := []string{"internal/team/context_router.go", "cmd/hufu/main.go"}
+	task := TaskDef{
+		Agent: "reviewer", Goal: "verify", Phase: PhaseVerify,
+		InvariantVerification: InvariantVerificationReport,
+		WorksetBinding:        &WorksetBinding{TouchedPaths: paths},
+	}
+	c := &Coordinator{session: &TeamSession{}, executionRunID: "run-1"}
+	request := c.newTaskContextRequest(task, "task-1", 1, ContextTriggerTaskDispatch, "reviewer", "worker", nil)
+	if len(request.TouchedPaths) != 2 || request.TouchedPaths[0] != paths[0] || request.TouchedPaths[1] != paths[1] {
+		t.Fatalf("touched paths = %#v", request.TouchedPaths)
+	}
+	request.TouchedPaths[0] = "changed"
+	if paths[0] != "internal/team/context_router.go" {
+		t.Fatal("context request aliases workset touched paths")
+	}
+
+	ordinary := task
+	ordinary.InvariantVerification = ""
+	ordinaryRequest := c.newTaskContextRequest(ordinary, "task-2", 1, ContextTriggerTaskDispatch, "reviewer", "worker", nil)
+	if len(ordinaryRequest.TouchedPaths) != 0 {
+		t.Fatalf("ordinary request received touched paths: %#v", ordinaryRequest.TouchedPaths)
+	}
+}
+
 func TestContextRequestTriggerValidationMatrix(t *testing.T) {
 	base := validTestContextRequest()
 	cases := []struct {

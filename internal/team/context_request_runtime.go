@@ -1,6 +1,7 @@
 package team
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -71,6 +72,17 @@ func (c *Coordinator) newTaskContextRequest(task TaskDef, todoID string, attempt
 		Phase: taskContextPhase(task), Trigger: trigger, Purpose: contextPurposeForTrigger(trigger), ActionType: actionType, Capabilities: capabilities,
 		DependencyIDs: dependencies, VerificationCriteria: task.Verify, Failure: failure,
 		ModelExecutionID: modelExecutionID,
+	}
+	if task.InvariantVerification != "" {
+		binding := task.WorksetBinding
+		if binding == nil && c != nil {
+			if item := c.todoItemByID(todoID); item != nil {
+				binding = item.WorksetBinding
+			}
+		}
+		if binding != nil {
+			r.TouchedPaths = slices.Clone(binding.TouchedPaths)
+		}
 	}
 	if c != nil && c.session != nil {
 		r.EnvironmentFingerprint = hashContentKey(strings.TrimSpace(c.projectDir) + "\x00" + strings.TrimSpace(c.session.Config.Name))

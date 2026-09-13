@@ -22,9 +22,9 @@ func writeWorksetManifest(t *testing.T, workspace string, content string) string
 
 func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := writeWorksetManifest(t, workspace, `{"schema_version":1,"items":[{"key":"alpha","bindings":{"name":"alpha","input":"a.txt"}},{"key":"beta","bindings":{"name":"beta","input":"b.txt"}}]}`)
+	manifestPath := writeWorksetManifest(t, workspace, `{"schema_version":1,"items":[{"key":"alpha","bindings":{"name":"alpha","input":"a.txt"},"touched_paths":["internal/team/z.go","internal/team/a.go","internal/team/z.go"]},{"key":"beta","bindings":{"name":"beta","input":"b.txt"},"touched_paths":["cmd/hufu/main.go"]}]}`)
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}, executionRunID: "run-1"}
-	parent := TaskDef{ID: "prepare", Agent: "worker", FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "process {name} from {input}"}}
+	parent := TaskDef{ID: "prepare", Agent: "worker", InvariantVerification: InvariantVerificationReport, FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "process {name} from {input}"}}
 	tasks, err := c.expandFanOutTasks([]TaskDef{parent})
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +34,12 @@ func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
 	}
 	if tasks[0].WorksetBinding.ItemKey != "alpha" || tasks[1].WorksetBinding.ItemKey != "beta" || tasks[0].WorksetBinding.SourceArtifactID == "" {
 		t.Fatalf("missing immutable workset binding: %#v", tasks)
+	}
+	if got := tasks[0].WorksetBinding.TouchedPaths; len(got) != 2 || got[0] != "internal/team/a.go" || got[1] != "internal/team/z.go" {
+		t.Fatalf("touched paths were not normalized and frozen: %#v", got)
+	}
+	if tasks[0].InvariantVerification != InvariantVerificationReport || tasks[1].InvariantVerification != InvariantVerificationReport {
+		t.Fatalf("fan-out children lost invariant verification mode: %#v", tasks)
 	}
 	if tasks[0].WorksetBinding.WorksetID != tasks[1].WorksetBinding.WorksetID {
 		t.Fatal("children do not share one workset identity")
@@ -132,9 +138,22 @@ func TestWorksetReceiptBindsEveryChildAndReplays(t *testing.T) {
 	if receipt == nil || receipt.ItemCount != 2 || receipt.Children["a"] != "11" || receipt.Children["b"] != "12" {
 		t.Fatalf("receipt = %#v", receipt)
 	}
+	tasks[0].WorksetBinding.TouchedPaths = []string{"internal/team/a.go"}
 	raw, _ := json.Marshal(map[string]any{"id": "11", "status": "pending", "workset_binding": tasks[0].WorksetBinding, "workset_receipt": receipt})
 	projected := ReduceToTodoList([]RunEvent{{Type: "task_created", TaskID: "11", Payload: raw}})
-	if len(projected) != 1 || projected[0].WorksetBinding == nil || projected[0].WorksetReceipt == nil || projected[0].WorksetReceipt.Children["b"] != "12" {
+	if len(projected) != 1 || projected[0].WorksetBinding == nil || projected[0].WorksetReceipt == nil || projected[0].WorksetReceipt.Children["b"] != "12" || len(projected[0].WorksetBinding.TouchedPaths) != 1 || projected[0].WorksetBinding.TouchedPaths[0] != "internal/team/a.go" {
 		t.Fatalf("replayed workset projection = %#v", projected)
+	}
+}
+
+func TestStructuredWorksetRejectsInvalidTouchedPath(t *testing.T) {
+	for _, touchedPath := range []string{"*", "../escape.go", `/absolute.go`, `internal\\team\\file.go`} {
+		manifestBytes, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "one", TouchedPaths: []string{touchedPath}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeWorksetManifest(manifestBytes); err == nil {
+			t.Fatalf("invalid touched path %q was accepted", touchedPath)
+		}
 	}
 }

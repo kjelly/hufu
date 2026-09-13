@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -28,9 +29,10 @@ type WorksetManifest struct {
 }
 
 type WorksetItem struct {
-	Key      string            `json:"key" yaml:"key"`
-	Bindings map[string]string `json:"bindings,omitempty" yaml:"bindings,omitempty"`
-	Inputs   []ArtifactRef     `json:"inputs,omitempty" yaml:"inputs,omitempty"`
+	Key          string            `json:"key" yaml:"key"`
+	Bindings     map[string]string `json:"bindings,omitempty" yaml:"bindings,omitempty"`
+	Inputs       []ArtifactRef     `json:"inputs,omitempty" yaml:"inputs,omitempty"`
+	TouchedPaths []string          `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
 }
 
 // WorksetExpansionReceipt is immutable evidence that one source generation
@@ -57,6 +59,7 @@ type WorksetBinding struct {
 	ItemKey          string            `json:"item_key"`
 	Bindings         map[string]string `json:"bindings,omitempty"`
 	Inputs           []ArtifactRef     `json:"inputs,omitempty"`
+	TouchedPaths     []string          `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
 	SourceArtifactID string            `json:"source_artifact_id"`
 	SourceSHA256     string            `json:"source_sha256"`
 	SourceArtifact   ArtifactRef       `json:"source_artifact"`
@@ -103,6 +106,7 @@ func cloneWorksetBinding(src *WorksetBinding) *WorksetBinding {
 		}
 	}
 	copyBinding.Inputs = append([]ArtifactRef(nil), src.Inputs...)
+	copyBinding.TouchedPaths = append([]string(nil), src.TouchedPaths...)
 	return &copyBinding
 }
 
@@ -211,6 +215,20 @@ func validateWorksetManifest(manifest WorksetManifest) error {
 				return fmt.Errorf("workset item %q input %d must have an opaque id and sha256", key, inputIndex)
 			}
 		}
+		normalizedPaths := make(map[string]struct{}, len(item.TouchedPaths))
+		for pathIndex, rawPath := range item.TouchedPaths {
+			normalizedPath, err := NormalizeTouchedPath(rawPath)
+			if err != nil {
+				return fmt.Errorf("workset item %q touched_paths[%d]: %w", key, pathIndex, err)
+			}
+			normalizedPaths[normalizedPath] = struct{}{}
+		}
+		item.TouchedPaths = item.TouchedPaths[:0]
+		for normalizedPath := range normalizedPaths {
+			item.TouchedPaths = append(item.TouchedPaths, normalizedPath)
+		}
+		slices.Sort(item.TouchedPaths)
+		manifest.Items[index] = item
 	}
 	return nil
 }

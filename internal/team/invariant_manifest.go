@@ -182,3 +182,17 @@ func normalizeInvariantPath(raw string) (string, error) {
 	}
 	return core, nil
 }
+
+// NormalizeTouchedPath applies the repository-relative path contract shared by
+// workset producers and invariant applicability routing. A touched path names
+// repository content, so the catalog-only global selector is not accepted.
+func NormalizeTouchedPath(raw string) (string, error) {
+	normalized, err := normalizeInvariantPath(raw)
+	if err != nil {
+		return "", err
+	}
+	if normalized == "*" {
+		return "", errors.New("touched path must not be the global selector")
+	}
+	return normalized, nil
+}

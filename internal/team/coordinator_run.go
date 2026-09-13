@@ -688,7 +688,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context preflight produced an empty prompt")}, nil
 	}
 	prompt = compiled.Prompt
-	contextManifest := BuildContextInjectionManifest(request, compiled, routeDecisions, resolvedName, time.Now().UTC())
+	contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, resolvedName, time.Now().UTC())
+	if buildManifestErr != nil {
+		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)})
+		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)}, nil
+	}
 	if manifestErr := c.persistContextManifest(&contextManifest); manifestErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
@@ -2040,8 +2044,8 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	if strings.TrimSpace(compiled.Prompt) == "" {
 		return "", fmt.Errorf("coordinator context preflight failed: compiled prompt is empty")
 	}
-	contextManifest := BuildContextInjectionManifest(contextRequest, compiled, routeDecisions, "coordinator", time.Now().UTC())
-	if err := c.persistContextManifest(&contextManifest); err != nil {
+	contextManifest, err := c.buildAndPersistContextManifest(contextRequest, compiled, routeDecisions, "coordinator", time.Now().UTC())
+	if err != nil {
 		return "", fmt.Errorf("coordinator context manifest preflight failed: %w", err)
 	}
 	systemPrompt = compiled.Prompt

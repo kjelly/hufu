@@ -61,6 +61,7 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 			ItemKey:          item.Key,
 			Bindings:         cloneStringMap(item.Bindings),
 			Inputs:           append([]ArtifactRef(nil), item.Inputs...),
+			TouchedPaths:     append([]string(nil), item.TouchedPaths...),
 			SourceArtifactID: source.ID,
 			SourceSHA256:     source.SHA256,
 			SourceArtifact:   source,

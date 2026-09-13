@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 const manifestSchemaVersion = 1
@@ -66,15 +68,15 @@ type reviewRange struct {
 }
 
 type item struct {
-	Key       string            `json:"key"`
-	Lens      string            `json:"lens"`
-	Bindings  map[string]string `json:"bindings"`
-	Paths     []string          `json:"paths"`
-	Inputs    []artifact        `json:"inputs,omitempty"`
-	DiffPath  string            `json:"diff_path"`
-	DiffSHA   string            `json:"diff_sha256"`
-	DiffBytes int               `json:"diff_bytes"`
-	DiffLines int               `json:"diff_lines"`
+	Key          string            `json:"key"`
+	Lens         string            `json:"lens"`
+	Bindings     map[string]string `json:"bindings"`
+	TouchedPaths []string          `json:"touched_paths"`
+	Inputs       []artifact        `json:"inputs,omitempty"`
+	DiffPath     string            `json:"diff_path"`
+	DiffSHA      string            `json:"diff_sha256"`
+	DiffBytes    int               `json:"diff_bytes"`
+	DiffLines    int               `json:"diff_lines"`
 }
 
 type batch struct {
@@ -350,7 +352,11 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 		if strings.ContainsAny(path, "\r\n\t") {
 			return nil, fmt.Errorf("changed path %q cannot be represented in a line-oriented manifest", path)
 		}
-		seen[path] = struct{}{}
+		normalizedPath, err := team.NormalizeTouchedPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("normalize changed path %q: %w", path, err)
+		}
+		seen[normalizedPath] = struct{}{}
 	}
 	for path := range seen {
 		paths = append(paths, path)
@@ -404,11 +410,11 @@ func buildItems(ctx context.Context, repo, artifactRoot, outputDir string, r rev
 		diffArtifact.Description = "bounded workset diff"
 		items = append(items, item{
 			Key: key, Lens: current.lens,
-			Bindings: map[string]string{"key": key, "lens": current.lens},
-			Paths:    append([]string(nil), current.paths...),
-			Inputs:   []artifact{diffArtifact},
-			DiffPath: filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
-			DiffSHA:  sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
+			Bindings:     map[string]string{"key": key, "lens": current.lens},
+			TouchedPaths: append([]string(nil), current.paths...),
+			Inputs:       []artifact{diffArtifact},
+			DiffPath:     filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
+			DiffSHA:      sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
 		})
 	}
 	return items, nil

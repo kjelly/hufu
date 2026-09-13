@@ -239,6 +239,48 @@ func TestCompileCoordinatorContextOmitsOptionalContextWhenItExceedsBudget(t *tes
 	}
 }
 
+func TestRepositoryInvariantCompilerKeepsSameTextWithDistinctIDs(t *testing.T) {
+	c := &Coordinator{projectDir: "/repo", session: &TeamSession{Config: agent.TeamConfig{Name: "review"}}}
+	definitionA := InvariantDefinition{ID: "first", Statement: "preserve behavior", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
+	definitionB := InvariantDefinition{ID: "second", Statement: "preserve behavior", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
+	recordA, err := materializeInvariantContextItem(c, definitionA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordB, err := materializeInvariantContextItem(c, definitionB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := repositoryInvariantCompilerItems([]contextstore.ContextItem{recordA, recordB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deduplicated := DeduplicateContextItems(items); len(deduplicated) != 2 {
+		t.Fatalf("same-text invariants with distinct logical IDs were deduplicated: %#v", deduplicated)
+	}
+	for _, item := range items {
+		if !item.Required || item.Compressible || item.Authority != ContextAuthorityNormative || item.Priority != PriorityHardConstraints || item.InvariantContentHash == "" || item.InvariantSeverity != InvariantSeverityError {
+			t.Fatalf("invalid compiler invariant contract: %#v", item)
+		}
+	}
+}
+
+func TestCompileWorkerContextFailsBeforeModelWhenInvariantExceedsBudget(t *testing.T) {
+	c := &Coordinator{projectDir: "/repo", session: &TeamSession{Config: agent.TeamConfig{Name: "review"}}}
+	record, err := materializeInvariantContextItem(c, InvariantDefinition{ID: "large", Statement: strings.Repeat("required invariant ", 100), Severity: InvariantSeverityError, AppliesTo: []string{"*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CompileWorkerContext(t.Context(), WorkerContextInput{
+		Goal:            "review",
+		CanonicalMemory: &CanonicalContextBundle{RepositoryInvariants: []contextstore.ContextItem{record}},
+		ModelContext:    ModelContextSpec{ModelID: "test", ContextWindow: 96, MaxOutputTokens: 16, SafetyMarginTokens: 16},
+	})
+	if err == nil || !strings.Contains(err.Error(), "required context item") {
+		t.Fatalf("CompileWorkerContext() error = %v, want fail-closed required invariant budget error", err)
+	}
+}
+
 func TestCompileWorkerContextUsesBoundEstimatorForRequiredContent(t *testing.T) {
 	const modelID = "context-compiler-bound-worker"
 	registerContextCompilerEstimatorTestModel(t, modelID)

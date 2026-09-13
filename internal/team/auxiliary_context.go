@@ -87,7 +87,10 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 		return "", err
 	}
 	if persist {
-		manifest := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC())
+		manifest, err := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC())
+		if err != nil {
+			return "", err
+		}
 		if err := c.persistContextManifest(&manifest); err != nil {
 			return "", err
 		}
@@ -192,7 +195,10 @@ func (c *Coordinator) recordAuxiliaryFallback(ctx context.Context, purpose, outc
 	}
 	request.ActionType = fmt.Sprintf("fallback:%s:%d", purpose, c.contextRequestSeq.Add(1))
 	request.AssignRequestID()
-	manifest := BuildContextInjectionManifest(request, CompiledContext{}, nil, purpose, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, nil, purpose, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 	manifest.ModelCalled = false
 	manifest.Outcome = strings.TrimSpace(outcome)
 	manifest.Fingerprint = contextManifestFingerprint(manifest)

@@ -45,7 +45,10 @@ func (t *contextQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err != nil {
 		return fantasy.NewTextErrorResponse("context query compile failed: " + utils.RedactSecrets(err.Error())), nil
 	}
-	manifest := BuildContextInjectionManifest(request, compiled, route.Decisions, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, request.AgentName, time.Now().UTC())
+	if err != nil {
+		return fantasy.NewTextErrorResponse("context query attribution failed: " + utils.RedactSecrets(err.Error())), nil
+	}
 	if err := t.coordinator.persistContextManifest(&manifest); err != nil {
 		return fantasy.ToolResponse{}, fmt.Errorf("persist context query manifest: %w", err)
 	}
@@ -88,7 +91,10 @@ func (t *contextGetTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 		return fantasy.NewTextErrorResponse("context item is not visible: " + string(reason)), nil
 	}
 	compiled := CompiledContext{Prompt: utils.TruncateRunes(utils.RedactSecrets(item.Content), contextToolOutputMaxRunes), IncludedItems: canonicalCompilerItems([]contextstore.ContextItem{item}, PriorityRelevantLTM, "context_get", false, item.Lifecycle == contextstore.LifecycleCandidate)}
-	manifest := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: item.ID, Included: true, Reason: reason}}, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: item.ID, Included: true, Reason: reason}}, request.AgentName, time.Now().UTC())
+	if err != nil {
+		return fantasy.NewTextErrorResponse("context attribution failed: " + utils.RedactSecrets(err.Error())), nil
+	}
 	if err := t.coordinator.persistContextManifest(&manifest); err != nil {
 		return fantasy.ToolResponse{}, fmt.Errorf("persist context get manifest: %w", err)
 	}
@@ -211,7 +217,10 @@ func (c *Coordinator) GetAuthorizedContextItem(ctx context.Context, request Cont
 }
 
 func (c *Coordinator) persistContextToolDecision(request ContextRequest, itemID string, reason ContextDecisionReason) error {
-	manifest := BuildContextInjectionManifest(request, CompiledContext{}, []ContextRouteDecision{{ContextItemID: itemID, Included: false, Reason: reason}}, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, []ContextRouteDecision{{ContextItemID: itemID, Included: false, Reason: reason}}, request.AgentName, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 	manifest.ModelCalled = false
 	manifest.Outcome = "authorization_denied"
 	manifest.Fingerprint = contextManifestFingerprint(manifest)
@@ -244,7 +253,10 @@ func (c *Coordinator) prepareToolFailureRecovery(ctx context.Context, agentName,
 	if err != nil {
 		return "", err
 	}
-	manifest := BuildContextInjectionManifest(request, compiled, route.Decisions, agentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, agentName, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
 	if err := c.persistContextManifest(&manifest); err != nil {
 		return "", err
 	}

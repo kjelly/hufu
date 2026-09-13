@@ -135,3 +135,108 @@ func TestRouterReadsTypedActivationProjection(t *testing.T) {
 		t.Fatalf("typed activation projection = %#v", activation)
 	}
 }
+
+func TestContextRouterSelectsRepositoryInvariantsWithoutContextRepository(t *testing.T) {
+	tracker := NewTaskTracker()
+	task := tracker.TodoList().AddBatch([]TodoSpec{{
+		PlanTaskID: "verify-review", Agent: "reviewer", Phase: PhaseVerify,
+		InvariantVerification: InvariantVerificationReport,
+	}})[0]
+	c := &Coordinator{
+		projectDir:  "/repo",
+		taskTracker: tracker,
+		session: &TeamSession{
+			Config: agent.TeamConfig{Name: "Review Team"},
+			InvariantCatalog: []InvariantDefinition{
+				{ID: "unrelated", Statement: "preserve docs", Severity: InvariantSeverityInfo, AppliesTo: []string{"docs/"}},
+				{ID: "prefix", Statement: "preserve runtime", Severity: InvariantSeverityError, AppliesTo: []string{"internal/team/"}},
+				{ID: "global", Statement: "preserve compatibility", Severity: InvariantSeverityWarning, AppliesTo: []string{"*"}},
+				{ID: "exact", Statement: "preserve router", Severity: InvariantSeverityError, AppliesTo: []string{"internal/team/context_router.go"}},
+			},
+		},
+	}
+	request := validTestContextRequest()
+	request.TaskID = task.ID
+	request.Phase = PhaseVerify
+	request.TouchedPaths = []string{"internal/team/context_router.go"}
+	request.AssignRequestID()
+
+	route, err := c.contextRouter().Route(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(route.Bundle.RepositoryInvariants) != 3 {
+		t.Fatalf("repository invariants = %#v, want exact, global, and prefix", route.Bundle.RepositoryInvariants)
+	}
+	wantIDs := []string{"invariant:review team:exact", "invariant:review team:global", "invariant:review team:prefix"}
+	for index, wantID := range wantIDs {
+		item := route.Bundle.RepositoryInvariants[index]
+		if item.ID != wantID || item.Kind != contextstore.ContextInvariant || item.ContentHash != fullContentHash(item.Content) || !item.MustKeep {
+			t.Fatalf("repository invariant %d = %#v, want %q with stable required attribution", index, item, wantID)
+		}
+	}
+	if len(route.Decisions) != 4 {
+		t.Fatalf("decisions = %#v, want one per catalog item", route.Decisions)
+	}
+	if decision := route.Decisions[3]; decision.ContextItemID != "invariant:review team:unrelated" || decision.Included || decision.Reason != ContextOmittedNotApplicable || decision.Kind != string(contextstore.ContextInvariant) || decision.Source != repositoryInvariantSource || decision.ContentHash == "" || decision.InvariantSeverity != InvariantSeverityInfo {
+		t.Fatalf("unrelated decision lost attribution: %#v", decision)
+	}
+	compiled, err := CompileWorkerContext(t.Context(), WorkerContextInput{
+		Request: request, Goal: request.Goal, CanonicalMemory: &route.Bundle,
+		ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 4096, MaxOutputTokens: 256, SafetyMarginTokens: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, "reviewer", time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range manifest.Items {
+		if item.ID == "invariant:review team:unrelated" {
+			if item.Kind != string(contextstore.ContextInvariant) || item.Source != repositoryInvariantSource || item.ContentHash == "" || item.InvariantSeverity != InvariantSeverityInfo || item.Reason != ContextOmittedNotApplicable {
+				t.Fatalf("persisted unrelated invariant attribution = %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("persisted manifest omitted unrelated invariant decision")
+}
+
+func TestContextRouterTreatsEmptyTouchedPathsAsAllApplicable(t *testing.T) {
+	tracker := NewTaskTracker()
+	task := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "verify-all", Agent: "reviewer", Phase: PhaseVerify, InvariantVerification: InvariantVerificationGate}})[0]
+	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{Name: "review"}, InvariantCatalog: []InvariantDefinition{
+		{ID: "one", Statement: "one", Severity: InvariantSeverityError, AppliesTo: []string{"cmd/"}},
+		{ID: "two", Statement: "two", Severity: InvariantSeverityWarning, AppliesTo: []string{"docs/readme.md"}},
+	}}}
+	request := validTestContextRequest()
+	request.TaskID = task.ID
+	request.Phase = PhaseVerify
+	request.TouchedPaths = nil
+	request.AssignRequestID()
+	route, err := c.contextRouter().Route(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(route.Bundle.RepositoryInvariants) != 2 || len(route.Decisions) != 2 || !route.Decisions[0].Included || !route.Decisions[1].Included {
+		t.Fatalf("empty touched paths did not select the full catalog: %#v", route)
+	}
+}
+
+func TestContextRouterDoesNotRouteInvariantsForOrdinaryTask(t *testing.T) {
+	tracker := NewTaskTracker()
+	task := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "ordinary", Agent: "reviewer", Phase: PhaseVerify}})[0]
+	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{Name: "review"}, InvariantCatalog: []InvariantDefinition{{ID: "one", Statement: "one", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}}}}
+	request := validTestContextRequest()
+	request.TaskID = task.ID
+	request.Phase = PhaseVerify
+	request.AssignRequestID()
+	route, err := c.contextRouter().Route(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(route.Bundle.RepositoryInvariants) != 0 || len(route.Decisions) != 0 {
+		t.Fatalf("ordinary task received repository invariants: %#v", route)
+	}
+}

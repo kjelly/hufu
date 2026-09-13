@@ -207,6 +207,22 @@ func normalizedRequestTokens(values []string) []string {
 	return result
 }
 
+func canonicalRequestTouchedPaths(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func (r ContextRequest) RetrievalQuery() string {
 	parts := []string{strings.TrimSpace(r.Goal), "phase:" + strings.ToLower(string(r.Phase)), "trigger:" + string(r.Trigger)}
 	if role := strings.ToLower(strings.TrimSpace(r.AgentRole)); role != "" {
@@ -240,7 +256,7 @@ func (r ContextRequest) Fingerprint() string {
 	canonical.Constraints = utils.RedactSecrets(strings.TrimSpace(canonical.Constraints))
 	canonical.VerificationCriteria = utils.RedactSecrets(strings.TrimSpace(canonical.VerificationCriteria))
 	canonical.Capabilities = normalizedRequestTokens(canonical.Capabilities)
-	canonical.TouchedPaths = normalizedRequestTokens(canonical.TouchedPaths)
+	canonical.TouchedPaths = canonicalRequestTouchedPaths(canonical.TouchedPaths)
 	canonical.DependencyIDs = normalizedRequestTokens(canonical.DependencyIDs)
 	canonical.CandidateIDs = normalizedRequestTokens(canonical.CandidateIDs)
 	if canonical.Failure != nil {

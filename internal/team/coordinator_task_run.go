@@ -578,10 +578,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
-	canonical := false
+	canonical := task.InvariantVerification != ""
 	request := c.newTaskContextRequest(task, todoID, 1, ContextTriggerTaskDispatch, agentName, agentDef.Role, nil)
-	if !c.historicalMemoryDisabled() {
-		canonical = c.contextRepo != nil
+	if !c.historicalMemoryDisabled() && c.contextRepo != nil {
+		canonical = true
 	}
 	if !c.historicalMemoryDisabled() && !canonical {
 		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
@@ -856,7 +856,7 @@ retryLoop:
 			}
 		}
 		var routeDecisions []ContextRouteDecision
-		if canonical && !c.historicalMemoryDisabled() {
+		if canonical {
 			bundle, decisions, _, routeErr := c.canonicalContextBundleForRequest(attemptCtx, request)
 			if routeErr != nil {
 				closeTranscript()
@@ -876,7 +876,11 @@ retryLoop:
 			closeTranscript()
 			return "", fmt.Errorf("worker context preflight failed: compiled prompt is empty")
 		}
-		contextManifest := BuildContextInjectionManifest(request, compiled, routeDecisions, agentName, time.Now().UTC())
+		contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, agentName, time.Now().UTC())
+		if buildManifestErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("worker context manifest preflight failed: %w", buildManifestErr)
+		}
 		if err := c.persistContextManifest(&contextManifest); err != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker context manifest preflight failed: %w", err)

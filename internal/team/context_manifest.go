@@ -11,19 +11,21 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
-const ContextManifestSchemaVersion = 1
+const ContextManifestSchemaVersion = 2
 
 type ContextManifestItem struct {
-	ID              string                `json:"id"`
-	Kind            string                `json:"kind"`
-	Source          string                `json:"source,omitempty"`
-	Included        bool                  `json:"included"`
-	Reason          ContextDecisionReason `json:"reason"`
-	Tokens          int                   `json:"tokens"`
-	Compressed      bool                  `json:"compressed,omitempty"`
-	BaseScore       float64               `json:"base_score,omitempty"`
-	FinalScore      float64               `json:"final_score,omitempty"`
-	DisclosureLevel string                `json:"disclosure_level,omitempty"`
+	ID                string                `json:"id"`
+	Kind              string                `json:"kind"`
+	Source            string                `json:"source,omitempty"`
+	Included          bool                  `json:"included"`
+	Reason            ContextDecisionReason `json:"reason"`
+	Tokens            int                   `json:"tokens"`
+	Compressed        bool                  `json:"compressed,omitempty"`
+	BaseScore         float64               `json:"base_score,omitempty"`
+	FinalScore        float64               `json:"final_score,omitempty"`
+	DisclosureLevel   string                `json:"disclosure_level,omitempty"`
+	ContentHash       string                `json:"content_hash,omitempty"`
+	InvariantSeverity InvariantSeverity     `json:"invariant_severity,omitempty"`
 }
 
 type ContextInjectionManifest struct {
@@ -54,14 +56,14 @@ type ContextInjectionManifest struct {
 
 func manifestItemID(id string) string { return strings.TrimPrefix(id, "context:") }
 
-func BuildContextInjectionManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) ContextInjectionManifest {
+func BuildContextInjectionManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) (ContextInjectionManifest, error) {
 	decisionByID := make(map[string]ContextRouteDecision, len(decisions))
 	for _, decision := range decisions {
 		decisionByID[manifestItemID(decision.ContextItemID)] = decision
 	}
 	items := make([]ContextManifestItem, 0, len(compiled.IncludedItems)+len(compiled.OmittedItems)+len(decisions))
 	seen := make(map[string]bool)
-	appendCompiled := func(item ContextItem, included bool) {
+	appendCompiled := func(item ContextItem, included bool) error {
 		id := manifestItemID(item.ID)
 		reason := ContextIncludedRelevant
 		if item.Required {
@@ -80,21 +82,48 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		if decision.Reason != "" && included == decision.Included {
 			reason = decision.Reason
 		}
-		items = append(items, ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)})
+		manifestItem := ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)}
+		if item.Kind == string(contextstore.ContextInvariant) {
+			if item.Source != repositoryInvariantSource || !validFullContentHash(item.InvariantContentHash) || !validInvariantVerificationSeverity(item.InvariantSeverity) {
+				return fmt.Errorf("context manifest invariant %q has invalid compiler attribution", id)
+			}
+			if decision.Kind != "" && (decision.Kind != item.Kind || decision.Source != item.Source || decision.ContentHash != item.InvariantContentHash || decision.InvariantSeverity != item.InvariantSeverity) {
+				return fmt.Errorf("context manifest invariant %q route attribution does not match compiler attribution", id)
+			}
+			manifestItem.ContentHash = item.InvariantContentHash
+			manifestItem.InvariantSeverity = item.InvariantSeverity
+		}
+		items = append(items, manifestItem)
 		seen[id] = true
+		return nil
 	}
 	for _, item := range compiled.IncludedItems {
-		appendCompiled(item, true)
+		if err := appendCompiled(item, true); err != nil {
+			return ContextInjectionManifest{}, err
+		}
 	}
 	for _, item := range compiled.OmittedItems {
-		appendCompiled(item, false)
+		if err := appendCompiled(item, false); err != nil {
+			return ContextInjectionManifest{}, err
+		}
 	}
 	for _, decision := range decisions {
 		id := manifestItemID(decision.ContextItemID)
 		if seen[id] {
 			continue
 		}
-		items = append(items, ContextManifestItem{ID: id, Kind: "canonical_memory", Included: decision.Included, Reason: decision.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore})
+		manifestItem := ContextManifestItem{ID: id, Kind: decision.Kind, Source: decision.Source, Included: decision.Included, Reason: decision.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore}
+		if manifestItem.Kind == "" {
+			manifestItem.Kind = "canonical_memory"
+		}
+		if manifestItem.Kind == string(contextstore.ContextInvariant) {
+			if manifestItem.Source != repositoryInvariantSource || !validFullContentHash(decision.ContentHash) || !validInvariantVerificationSeverity(decision.InvariantSeverity) {
+				return ContextInjectionManifest{}, fmt.Errorf("context manifest invariant %q has invalid route attribution", id)
+			}
+			manifestItem.ContentHash = decision.ContentHash
+			manifestItem.InvariantSeverity = decision.InvariantSeverity
+		}
+		items = append(items, manifestItem)
 	}
 	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, CreatedAt: createdAt.UTC()}
 	if request.Failure != nil {
@@ -107,7 +136,22 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 	}
 	manifest.Fingerprint = contextManifestFingerprint(manifest)
-	return manifest
+	return manifest, nil
+}
+
+func validInvariantVerificationSeverity(severity InvariantSeverity) bool {
+	return severity == InvariantSeverityError || severity == InvariantSeverityWarning || severity == InvariantSeverityInfo
+}
+
+func (c *Coordinator) buildAndPersistContextManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) (ContextInjectionManifest, error) {
+	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, agentName, createdAt)
+	if err != nil {
+		return ContextInjectionManifest{}, err
+	}
+	if err := c.persistContextManifest(&manifest); err != nil {
+		return ContextInjectionManifest{}, err
+	}
+	return manifest, nil
 }
 
 func contextDisclosureLevel(kind string) string {

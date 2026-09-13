@@ -139,7 +139,11 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 }
 
 func (c *Coordinator) canonicalContextBundleForRequest(ctx context.Context, request ContextRequest) (*CanonicalContextBundle, []ContextRouteDecision, bool, error) {
-	if c == nil || c.contextRepo == nil {
+	if c == nil || c.session == nil {
+		return nil, nil, false, nil
+	}
+	hasInvariantRoute := c.invariantVerificationModeForRequest(request) != "" && len(c.session.InvariantCatalog) > 0
+	if (c.contextRepo == nil || c.historicalMemoryDisabled()) && !hasInvariantRoute {
 		return nil, nil, false, nil
 	}
 	route, err := c.contextRouter().Route(ctx, request)

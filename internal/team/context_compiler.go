@@ -48,27 +48,29 @@ const (
 )
 
 type ContextItem struct {
-	ID           string
-	Kind         string
-	Content      string
-	Source       string
-	Scope        ContextScope
-	Priority     int
-	TokenCount   int
-	Confidence   float64
-	Freshness    time.Time
-	Provenance   []string
-	DedupKey     string
-	Compressible bool
-	Compressed   bool
-	Required     bool
-	Authority    ContextAuthority
-	ConflictKey  string
-	Revision     string
-	ExpiresAt    time.Time
-	BaseScore    float64
-	FinalScore   float64
-	ScoreParts   MemoryScoreParts
+	ID                   string
+	Kind                 string
+	Content              string
+	Source               string
+	Scope                ContextScope
+	Priority             int
+	TokenCount           int
+	Confidence           float64
+	Freshness            time.Time
+	Provenance           []string
+	DedupKey             string
+	Compressible         bool
+	Compressed           bool
+	Required             bool
+	Authority            ContextAuthority
+	ConflictKey          string
+	Revision             string
+	ExpiresAt            time.Time
+	BaseScore            float64
+	FinalScore           float64
+	ScoreParts           MemoryScoreParts
+	InvariantSeverity    InvariantSeverity
+	InvariantContentHash string
 }
 
 type CoordinatorContextInput struct {
@@ -138,6 +140,7 @@ type WorkerContextInput struct {
 // vector records, preserving stable IDs and lifecycle-filtered provenance
 // through ranking, trace, and token-budget decisions.
 type CanonicalContextBundle struct {
+	RepositoryInvariants   []contextstore.ContextItem
 	SharedSession          []contextstore.ContextItem
 	SharedPersistent       []contextstore.ContextItem
 	SharedPersistentScores map[string]MemoryScoreParts
@@ -147,6 +150,30 @@ type CanonicalContextBundle struct {
 	// with default weights, or the manifest and the actual prompt can disagree
 	// (spec §7 HF-MEM4-004/005).
 	SharedPersistentFinalScores map[string]float64
+}
+
+func repositoryInvariantCompilerItems(records []contextstore.ContextItem) ([]ContextItem, error) {
+	items := make([]ContextItem, 0, len(records))
+	for _, record := range records {
+		severity := InvariantSeverity(record.Metadata["invariant.severity"])
+		if record.Kind != contextstore.ContextInvariant || record.Authority != contextstore.AuthorityRepository || record.TrustLevel != contextstore.TrustTrusted || !record.MustKeep || record.Lifecycle != contextstore.LifecycleConfirmed {
+			return nil, fmt.Errorf("repository invariant %q has an unauthorized context contract", record.ID)
+		}
+		if strings.TrimSpace(record.ID) == "" || strings.TrimSpace(record.Content) == "" || !validFullContentHash(record.ContentHash) || fullContentHash(record.Content) != record.ContentHash {
+			return nil, fmt.Errorf("repository invariant %q has invalid content attribution", record.ID)
+		}
+		if severity != InvariantSeverityError && severity != InvariantSeverityWarning && severity != InvariantSeverityInfo {
+			return nil, fmt.Errorf("repository invariant %q has invalid severity %q", record.ID, severity)
+		}
+		items = append(items, ContextItem{
+			ID: record.ID, Kind: string(record.Kind), Content: record.Content,
+			Source: repositoryInvariantSource, Scope: ScopeGlobal, Priority: PriorityHardConstraints,
+			DedupKey: record.ID + "\x00" + record.ContentHash, Required: true,
+			Authority: ContextAuthorityNormative, ConflictKey: "repository_invariant:" + record.ID,
+			Revision: record.ID, InvariantSeverity: severity, InvariantContentHash: record.ContentHash,
+		})
+	}
+	return items, nil
 }
 
 type CompiledContext struct {
@@ -627,6 +654,13 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 	var items []ContextItem
+	if input.CanonicalMemory != nil {
+		invariants, err := repositoryInvariantCompilerItems(input.CanonicalMemory.RepositoryInvariants)
+		if err != nil {
+			return CompiledContext{}, err
+		}
+		items = append(items, invariants...)
+	}
 	if strings.TrimSpace(input.CorePrompt) != "" {
 		items = append(items, ContextItem{ID: "coordinator_contract", Kind: "constraints", Content: input.CorePrompt, Priority: PriorityHardConstraints, Required: true, DedupKey: hashContentKey(input.CorePrompt), Authority: ContextAuthorityNormative, ConflictKey: "coordinator_contract"})
 	}
@@ -786,6 +820,13 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		}
 	}
 	items := workerNormativeContextItems(input)
+	if input.CanonicalMemory != nil {
+		invariants, err := repositoryInvariantCompilerItems(input.CanonicalMemory.RepositoryInvariants)
+		if err != nil {
+			return CompiledContext{}, err
+		}
+		items = append(items, invariants...)
+	}
 	items = append(items, workerProjectAndDependencyItems(input)...)
 	items = appendWorkerHistoricalContext(ctx, input, items)
 

@@ -407,7 +407,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	var routeDecisions []ContextRouteDecision
-	if !workerInput.DisableMemory {
+	if !workerInput.DisableMemory || taskDef.InvariantVerification != "" {
 		bundle, decisions, canonical, routeErr := c.canonicalContextBundleForRequest(ctx, request)
 		if routeErr != nil {
 			return "", fmt.Errorf("sub-agent context routing preflight failed: %w", routeErr)
@@ -415,7 +415,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		if canonical {
 			workerInput.CanonicalMemory = bundle
 			routeDecisions = decisions
-		} else {
+		} else if !workerInput.DisableMemory {
 			workerInput.RawSTM = LoadSTM(c.session.Workspace)
 			workerInput.RawLTM = LoadLTM(c.session.Workspace, c.session.Config.Name)
 			workerInput.MemoryStore = c.memoryStore
@@ -429,7 +429,10 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if strings.TrimSpace(compiled.Prompt) == "" {
 		return "", fmt.Errorf("sub-agent context preflight produced an empty prompt")
 	}
-	manifest := BuildContextInjectionManifest(request, compiled, routeDecisions, agentDef.Name, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, routeDecisions, agentDef.Name, time.Now().UTC())
+	if err != nil {
+		return "", fmt.Errorf("sub-agent context manifest preflight failed: %w", err)
+	}
 	if err := c.persistContextManifest(&manifest); err != nil {
 		return "", fmt.Errorf("sub-agent context manifest preflight failed: %w", err)
 	}

@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -28,14 +29,19 @@ const (
 	ContextOmittedInjectLimit    ContextDecisionReason = "inject_limit"
 	ContextOmittedBudget         ContextDecisionReason = "token_budget"
 	ContextOmittedDuplicate      ContextDecisionReason = "duplicate"
+	ContextOmittedNotApplicable  ContextDecisionReason = "not_applicable"
 )
 
 type ContextRouteDecision struct {
-	ContextItemID string                `json:"context_item_id"`
-	Included      bool                  `json:"included"`
-	Reason        ContextDecisionReason `json:"reason"`
-	BaseScore     float64               `json:"base_score,omitempty"`
-	FinalScore    float64               `json:"final_score,omitempty"`
+	ContextItemID     string                `json:"context_item_id"`
+	Kind              string                `json:"kind,omitempty"`
+	Source            string                `json:"source,omitempty"`
+	ContentHash       string                `json:"content_hash,omitempty"`
+	InvariantSeverity InvariantSeverity     `json:"invariant_severity,omitempty"`
+	Included          bool                  `json:"included"`
+	Reason            ContextDecisionReason `json:"reason"`
+	BaseScore         float64               `json:"base_score,omitempty"`
+	FinalScore        float64               `json:"final_score,omitempty"`
 }
 
 type ContextRoute struct {
@@ -226,8 +232,42 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		return ContextRoute{}, err
 	}
 	c := router.coordinator
-	if c == nil || c.contextRepo == nil || c.session == nil {
+	if c == nil || c.session == nil {
 		return ContextRoute{Request: request}, nil
+	}
+	route := ContextRoute{Request: request}
+	mode := c.invariantVerificationModeForRequest(request)
+	if !validInvariantVerificationMode(mode) {
+		return ContextRoute{}, fmt.Errorf("task %q has invalid invariant verification mode %q", request.TaskID, mode)
+	}
+	if mode != "" {
+		touchedPaths, err := normalizeRequestTouchedPaths(request.TouchedPaths)
+		if err != nil {
+			return ContextRoute{}, fmt.Errorf("task %q invariant routing: %w", request.TaskID, err)
+		}
+		catalog := cloneInvariantCatalog(c.session.InvariantCatalog)
+		slices.SortFunc(catalog, func(left, right InvariantDefinition) int { return strings.Compare(left.ID, right.ID) })
+		for _, definition := range catalog {
+			item, materializeErr := materializeInvariantContextItem(c, definition)
+			if materializeErr != nil {
+				return ContextRoute{}, materializeErr
+			}
+			applicable := invariantAppliesToTouchedPaths(definition, touchedPaths)
+			reason := ContextOmittedNotApplicable
+			if applicable {
+				reason = ContextIncludedRequired
+				route.Bundle.RepositoryInvariants = append(route.Bundle.RepositoryInvariants, item)
+			}
+			route.Decisions = append(route.Decisions, ContextRouteDecision{
+				ContextItemID: item.ID, Kind: string(item.Kind), Source: repositoryInvariantSource,
+				ContentHash: item.ContentHash, InvariantSeverity: definition.Severity,
+				Included: applicable, Reason: reason,
+			})
+		}
+	}
+	if c.contextRepo == nil || c.historicalMemoryDisabled() {
+		sort.SliceStable(route.Decisions, func(i, j int) bool { return route.Decisions[i].ContextItemID < route.Decisions[j].ContextItemID })
+		return route, nil
 	}
 	scope := c.contextScope()
 	sessionItems, err := c.sharedSessionPromptItems(ctx, scope)
@@ -238,7 +278,6 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if err != nil {
 		return ContextRoute{}, err
 	}
-	route := ContextRoute{Request: request}
 	now := time.Now().UTC()
 	eligibleSession := make([]contextstore.ContextItem, 0, len(sessionItems))
 	for _, item := range sessionItems {
@@ -313,6 +352,9 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		route.Decisions = append(route.Decisions, ContextRouteDecision{ContextItemID: item.ID, Reason: reason})
 	}
 	sort.SliceStable(route.Decisions, func(i, j int) bool { return route.Decisions[i].ContextItemID < route.Decisions[j].ContextItemID })
-	route.Bundle = CanonicalContextBundle{SharedSession: eligibleSession, SharedPersistent: selected, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores}
+	route.Bundle.SharedSession = eligibleSession
+	route.Bundle.SharedPersistent = selected
+	route.Bundle.SharedPersistentScores = scores
+	route.Bundle.SharedPersistentFinalScores = finalScores
 	return route, nil
 }

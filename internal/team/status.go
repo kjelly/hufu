@@ -1215,7 +1215,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	for i := range item.ContextManifests {
 		contextManifests[i] = *cloneContextInjectionManifest(&item.ContextManifests[i])
 	}
-	return &TodoItem{
+	cloned := &TodoItem{
 		ID:                  item.ID,
 		Phase:               item.Phase,
 		Action:              cloneActionPtr(item.Action),
@@ -1303,6 +1303,8 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ProviderBinding:     cloneProviderBinding(item.ProviderBinding),
 		BackendBinding:      cloneBackendBinding(item.BackendBinding),
 	}
+	cloned.InvariantVerification = item.InvariantVerification
+	return cloned
 }
 
 // TryApplyProjectedItem installs one task projection atomically and fires the

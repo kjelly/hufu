@@ -74,7 +74,7 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 		if len(entry.Inputs) != 1 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" {
 			t.Fatalf("item %s lacks opaque diff input artifact: %#v", entry.Key, entry.Inputs)
 		}
-		got.Items = append(got.Items, goldenItem{Key: entry.Key, Lens: entry.Lens, Paths: entry.Paths, DiffPath: entry.DiffPath})
+		got.Items = append(got.Items, goldenItem{Key: entry.Key, Lens: entry.Lens, Paths: entry.TouchedPaths, DiffPath: entry.DiffPath})
 		patch, err := os.ReadFile(filepath.Join(repo, "out", filepath.FromSlash(entry.DiffPath)))
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +106,7 @@ func TestPrepareLimitsRangeToMostRecentCommits(t *testing.T) {
 		t.Fatalf("commit count = %d / %v, want 2", manifest.Range.CommitCount, result.Outputs["commit_count"])
 	}
 	for _, entry := range manifest.Items {
-		for _, path := range entry.Paths {
+		for _, path := range entry.TouchedPaths {
 			if path == "internal/old.go" {
 				t.Fatalf("oldest commit path included in limited range: %#v", manifest.Items)
 			}
@@ -149,7 +149,7 @@ func TestPrepareDoesNotIncludeDirtyWorkingTree(t *testing.T) {
 		t.Fatalf("Prepare() error = %v", err)
 	}
 	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
-	if manifest.ChangedFiles != 1 || manifest.Items[0].Paths[0] != "internal/team/committed.go" {
+	if manifest.ChangedFiles != 1 || manifest.Items[0].TouchedPaths[0] != "internal/team/committed.go" {
 		t.Fatalf("manifest included dirty working tree: %#v", manifest)
 	}
 }
