@@ -161,6 +161,9 @@ type RepositoryQuery struct {
 	IncludeSuperseded bool
 	IncludeExpired    bool
 	IncludeCandidates bool
+	Lifecycles        []ContextLifecycle
+	OriginRunID       string
+	SourceTypes       []string
 	Limit             int
 }
 

@@ -54,11 +54,11 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 	}
 	defer func() { _ = repo.Close() }()
 	if !contextApplyProposal {
-		items, queryErr := repo.Query(cmd.Context(), contextstore.RepositoryQuery{Scope: contextReadScope(), Visibility: contextstore.VisibilitySubtree, Limit: 100000})
-		if queryErr != nil {
-			return queryErr
+		builder := newConsolidationClusterBuilder()
+		if iterateErr := repo.Iterate(cmd.Context(), contextstore.RepositoryQuery{Scope: contextReadScope(), Visibility: contextstore.VisibilitySubtree}, builder.Add); iterateErr != nil {
+			return iterateErr
 		}
-		clusters := consolidationClusters(items)
+		clusters := builder.Clusters()
 		if contextQueryJSON {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"dry_run": true, "clusters": clusters})
 		}
@@ -128,17 +128,26 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 	return err
 }
 
-func consolidationClusters(items []contextstore.ContextItem) [][]string {
-	groups := map[string][]string{}
-	for _, item := range items {
-		if item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" {
-			continue
-		}
-		key := item.Scope.ProjectID + "\x00" + item.Scope.TeamID + "\x00" + item.Scope.AgentID + "\x00" + string(item.Kind) + "\x00" + consolidationSignature(item)
-		groups[key] = append(groups[key], item.ID)
+type consolidationClusterBuilder struct {
+	groups map[string][]string
+}
+
+func newConsolidationClusterBuilder() *consolidationClusterBuilder {
+	return &consolidationClusterBuilder{groups: make(map[string][]string)}
+}
+
+func (b *consolidationClusterBuilder) Add(item contextstore.ContextItem) error {
+	if item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" {
+		return nil
 	}
+	key := item.Scope.ProjectID + "\x00" + item.Scope.TeamID + "\x00" + item.Scope.AgentID + "\x00" + string(item.Kind) + "\x00" + consolidationSignature(item)
+	b.groups[key] = append(b.groups[key], item.ID)
+	return nil
+}
+
+func (b *consolidationClusterBuilder) Clusters() [][]string {
 	var clusters [][]string
-	for _, ids := range groups {
+	for _, ids := range b.groups {
 		if len(ids) >= 2 {
 			sort.Strings(ids)
 			clusters = append(clusters, ids)

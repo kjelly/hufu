@@ -2,12 +2,43 @@ package context
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type iterateOnlyVectorRepository struct {
+	Repository
+	items     []ContextItem
+	iterating bool
+	updates   []string
+}
+
+func (r *iterateOnlyVectorRepository) Iterate(_ context.Context, q RepositoryQuery, visit func(ContextItem) error) error {
+	if q.Limit != 0 {
+		return fmt.Errorf("unexpected iteration limit %d", q.Limit)
+	}
+	r.iterating = true
+	defer func() { r.iterating = false }()
+	for _, item := range r.items {
+		if err := visit(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *iterateOnlyVectorRepository) UpdateEmbeddingState(_ context.Context, id, _, _ string) error {
+	if r.iterating {
+		return fmt.Errorf("embedding state updated while iterator was open")
+	}
+	r.updates = append(r.updates, id)
+	return nil
+}
 
 func testEmbedding(_ context.Context, text string) ([]float32, error) {
 	if text == "schema migration" || text == "database upgrade" {
@@ -78,6 +109,23 @@ func TestVectorStoreSupportsConcurrentRebuildAndSearch(t *testing.T) {
 	}
 	if rebuilds.Load() == 0 || searches.Load() == 0 {
 		t.Fatalf("expected both operations to run, rebuilds=%d searches=%d", rebuilds.Load(), searches.Load())
+	}
+}
+
+func TestVectorRebuildClosesIteratorBeforeEmbeddingAndStateWrites(t *testing.T) {
+	repo := &iterateOnlyVectorRepository{items: []ContextItem{
+		{ID: "first", Kind: ContextPattern, Content: "schema migration", Scope: Scope{ProjectID: "project"}},
+		{ID: "second", Kind: ContextPattern, Content: "database upgrade", Scope: Scope{ProjectID: "project"}},
+	}}
+	store, err := NewVectorStore(filepath.Join(t.TempDir(), "vectors"), "test-v1", testEmbedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(t.Context(), repo, Scope{ProjectID: "project"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.collection.Count() != 2 || !reflect.DeepEqual(repo.updates, []string{"first", "second"}) {
+		t.Fatalf("rebuild count=%d updates=%v", store.collection.Count(), repo.updates)
 	}
 }
 

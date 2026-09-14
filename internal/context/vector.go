@@ -63,8 +63,11 @@ func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope)
 	// The index is disposable and may contain only prompt-eligible canonical
 	// rows. Candidate/rejected/superseded lifecycle state always remains in
 	// SQLite; a vector document carries search hints only.
-	items, err := repo.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilitySubtree, Limit: 100000})
-	if err != nil {
+	var items []ContextItem
+	if err := repo.Iterate(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilitySubtree}, func(item ContextItem) error {
+		items = append(items, item)
+		return nil
+	}); err != nil {
 		return err
 	}
 	if err := s.db.DeleteCollection(contextVectorCollection); err != nil {

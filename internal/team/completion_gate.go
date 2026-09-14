@@ -310,19 +310,19 @@ func (c *Coordinator) rejectRunSharedContextCandidates(ctx context.Context, mani
 // SharedMemoryService.
 func (c *Coordinator) runSharedContextCandidateIDs(ctx context.Context, runID string) ([]string, error) {
 	items, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{
-		Scope:             c.contextScope(),
-		Visibility:        contextstore.VisibilityExact,
-		IncludeCandidates: true,
-		Limit:             100000,
+		Scope:       c.contextScope(),
+		Visibility:  contextstore.VisibilityExact,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: runID,
+		SourceTypes: []string{"run_shared_context"},
+		Limit:       100000,
 	})
 	if err != nil {
 		return nil, err
 	}
 	var ids []string
 	for _, item := range items {
-		if item.Lifecycle == contextstore.LifecycleCandidate && item.Source.Type == "run_shared_context" && item.Metadata["run_id"] == runID {
-			ids = append(ids, item.ID)
-		}
+		ids = append(ids, item.ID)
 	}
 	return ids, nil
 }

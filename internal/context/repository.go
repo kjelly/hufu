@@ -34,6 +34,10 @@ type Repository interface {
 	Get(context.Context, string) (ContextItem, error)
 	GetMany(context.Context, []string) ([]ContextItem, error)
 	Query(context.Context, RepositoryQuery) ([]ContextItem, error)
+	// Iterate streams one ordered read snapshot. The visitor must not call
+	// this repository or perform writes: canonical repositories intentionally
+	// own one SQLite connection, so re-entry while Rows is open can deadlock.
+	Iterate(context.Context, RepositoryQuery, func(ContextItem) error) error
 	MarkSuperseded(context.Context, []string, string) error
 	// UpdateLifecycle changes the lifecycle of explicitly selected records.
 	// Callers must authorise and select IDs before calling this method; it is
@@ -70,6 +74,8 @@ type Repository interface {
 type ReadOnlyRepository interface {
 	GetScoped(context.Context, string, ScopedReadOptions) (ContextItem, error)
 	Query(context.Context, RepositoryQuery) ([]ContextItem, error)
+	// Iterate has the same non-reentrancy contract as Repository.Iterate.
+	Iterate(context.Context, RepositoryQuery, func(ContextItem) error) error
 	SearchExact(context.Context, SearchRequest) ([]SearchResult, error)
 	SearchLexical(context.Context, SearchRequest) ([]SearchResult, error)
 	QuerySharedSessionProjection(context.Context, Scope) ([]ContextItem, error)

@@ -293,15 +293,20 @@ func (s *defaultSharedMemoryService) ConfirmRun(ctx context.Context, req SharedM
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilityExact, IncludeCandidates: true, Limit: 100000})
+	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:       scope,
+		Visibility:  contextstore.VisibilityExact,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: req.Manifest.RunID,
+		SourceTypes: []string{"shared_memory_candidate"},
+		Limit:       100000,
+	})
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0)
 	for _, item := range items {
-		if item.Lifecycle == contextstore.LifecycleCandidate && item.Source.Type == "shared_memory_candidate" && item.Metadata["run_id"] == req.Manifest.RunID {
-			ids = append(ids, item.ID)
-		}
+		ids = append(ids, item.ID)
 	}
 	if len(ids) == 0 {
 		return nil, nil
@@ -383,15 +388,20 @@ func (s *defaultSharedMemoryService) RejectRun(ctx context.Context, req SharedMe
 	s.rejectedRuns[memoryRejectionCacheKey(scope, req.RunID)] = true
 	s.mu.Unlock()
 
-	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilityExact, IncludeCandidates: true, Limit: 100000})
+	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:       scope,
+		Visibility:  contextstore.VisibilityExact,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: req.RunID,
+		SourceTypes: []string{"shared_memory_candidate"},
+		Limit:       100000,
+	})
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0)
 	for _, item := range items {
-		if item.Lifecycle == contextstore.LifecycleCandidate && item.Source.Type == "shared_memory_candidate" && item.Metadata["run_id"] == req.RunID {
-			ids = append(ids, item.ID)
-		}
+		ids = append(ids, item.ID)
 	}
 	if len(ids) == 0 {
 		return nil, nil

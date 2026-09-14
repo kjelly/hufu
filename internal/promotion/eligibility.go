@@ -14,7 +14,7 @@ import (
 )
 
 type EligibilityRepository interface {
-	Query(context.Context, contextstore.RepositoryQuery) ([]contextstore.ContextItem, error)
+	Iterate(context.Context, contextstore.RepositoryQuery, func(contextstore.ContextItem) error) error
 	ExperienceAggregate(context.Context, string, string) (contextstore.ExperienceAggregate, error)
 }
 
@@ -24,43 +24,53 @@ type EligibilityOptions struct {
 }
 
 func EligibleSources(ctx context.Context, repo EligibilityRepository, opts EligibilityOptions, policy agent.MemoryLearningPolicy) ([]EligibleSource, []Diagnostic, error) {
-	items, err := repo.Query(ctx, contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: opts.ProjectID, TeamID: opts.TeamID}, Visibility: contextstore.VisibilitySubtree, Limit: 100000})
-	if err != nil {
-		return nil, nil, err
-	}
 	now := time.Now().UTC()
-	var result []EligibleSource
 	var diagnostics []Diagnostic
-	for _, item := range items {
+	type eligibleItem struct {
+		item  contextstore.ContextItem
+		types []Type
+	}
+	var candidates []eligibleItem
+	err := repo.Iterate(ctx, contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: opts.ProjectID, TeamID: opts.TeamID}, Visibility: contextstore.VisibilitySubtree}, func(item contextstore.ContextItem) error {
 		if item.Scope.ProjectID != opts.ProjectID || item.Scope.TeamID != opts.TeamID || item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" {
-			continue
+			return nil
 		}
 		if item.Scope.SessionID != "" || item.Scope.BranchID != "" || item.Scope.TaskID != "" || item.Scope.AttemptID != "" {
-			continue
+			return nil
 		}
 		if item.ExpiresAt != nil && !item.ExpiresAt.After(now) {
-			continue
+			return nil
 		}
 		if item.Metadata == nil || (item.Metadata["memory_lifetime"] != "persistent" && item.Metadata["memory_tier"] != "persistent") {
-			continue
+			return nil
 		}
 		if utils.RedactSecrets(item.Content) != item.Content || strings.Contains(item.Content, "[REDACTED]") || strings.Contains(item.Content, "<REDACTED:") {
 			diagnostics = append(diagnostics, Diagnostic{SourceID: item.ID, Reason: "secret_like_content"})
-			continue
+			return nil
 		}
 		types := allowedPromotionTypes(item)
 		if opts.AgentID != "" && item.Scope.AgentID != opts.AgentID {
-			continue
+			return nil
 		}
 		if opts.Type != "" {
 			if !containsType(types, opts.Type) {
-				continue
+				return nil
 			}
 			types = []Type{opts.Type}
 		}
 		if len(types) == 0 {
-			continue
+			return nil
 		}
+		candidates = append(candidates, eligibleItem{item: item, types: types})
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var result []EligibleSource
+	for _, candidate := range candidates {
+		item, types := candidate.item, candidate.types
 		agg, e := repo.ExperienceAggregate(ctx, item.ID, opts.PolicyVersion)
 		if errors.Is(e, sql.ErrNoRows) {
 			continue

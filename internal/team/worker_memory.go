@@ -646,7 +646,13 @@ func (s *defaultWorkerMemoryService) Confirm(ctx context.Context, req WorkerMemo
 	// Subtree is safe here: an agent-bound request can only see its own agent
 	// records, while the coordinator's empty AgentID is a trusted maintenance
 	// caller used to settle an entire run.
-	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, Visibility: contextstore.VisibilitySubtree, IncludeCandidates: true, Limit: 100000})
+	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:       scope,
+		Visibility:  contextstore.VisibilitySubtree,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: manifest.RunID,
+		Limit:       100000,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +660,7 @@ func (s *defaultWorkerMemoryService) Confirm(ctx context.Context, req WorkerMemo
 	var ids []string
 	var promoted []contextstore.ContextItem
 	for _, item := range items {
-		if item.Lifecycle != contextstore.LifecycleCandidate || item.Metadata["visibility"] != "private" || !promotableMemoryTier(item.Metadata["memory_tier"]) || item.Metadata["run_id"] != manifest.RunID {
+		if item.Metadata["visibility"] != "private" || !promotableMemoryTier(item.Metadata["memory_tier"]) {
 			continue
 		}
 		// Persistent candidates intentionally have no branch in their canonical
@@ -773,14 +779,20 @@ func (s *defaultWorkerMemoryService) RejectRun(ctx context.Context, req WorkerMe
 	s.rejectedRuns[memoryRejectionCacheKey(req.Scope, req.RunID)] = true
 	s.mu.Unlock()
 
-	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{Scope: req.Scope, Visibility: contextstore.VisibilitySubtree, IncludeCandidates: true, Limit: 100000})
+	items, err := s.repo.Query(ctx, contextstore.RepositoryQuery{
+		Scope:       req.Scope,
+		Visibility:  contextstore.VisibilitySubtree,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: req.RunID,
+		Limit:       100000,
+	})
 	if err != nil {
 		return nil, err
 	}
 	var ids []string
 	var rejected []contextstore.ContextItem
 	for _, item := range items {
-		if item.Lifecycle == contextstore.LifecycleCandidate && item.Metadata["visibility"] == "private" && item.Metadata["run_id"] == req.RunID {
+		if item.Metadata["visibility"] == "private" {
 			ids = append(ids, item.ID)
 			rejected = append(rejected, item)
 		}

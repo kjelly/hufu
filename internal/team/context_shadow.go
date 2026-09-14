@@ -216,19 +216,16 @@ func (c *Coordinator) sharedSessionPromptItems(ctx context.Context, scope contex
 		return items, nil
 	}
 	candidates, err := c.contextRepo.Query(ctx, contextstore.RepositoryQuery{
-		Scope:             scope,
-		Visibility:        contextstore.VisibilityExact,
-		IncludeCandidates: true,
-		Limit:             100000,
+		Scope:       scope,
+		Visibility:  contextstore.VisibilityExact,
+		Lifecycles:  []contextstore.ContextLifecycle{contextstore.LifecycleCandidate},
+		OriginRunID: c.executionRunID,
+		Limit:       100000,
 	})
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range candidates {
-		if item.Lifecycle == contextstore.LifecycleCandidate && item.Metadata["run_id"] == c.executionRunID {
-			items = append(items, item)
-		}
-	}
+	items = append(items, candidates...)
 	return items, nil
 }
 

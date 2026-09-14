@@ -48,6 +48,9 @@ to re-create an abstraction that already exists in the runtime.
   replayable experience, and L3/L4 rollout boundaries.
 - [Memory promotion](architecture/memory-promotion.md) — review-gated LTM,
   policy, and skill promotion.
+- [Hybrid retrieval lineage scope](architecture/hybrid-retrieval-lineage-scope.md)
+  — draft authorization design for exact, lexical, and vector retrieval; the
+  current 100K workaround remains until the design is accepted.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.

@@ -635,8 +635,37 @@ func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args
 }
 
 func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]ContextItem, error) {
+	where, args, err := compileRepositoryPredicates(q, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	args = append(args, limit)
+	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ContextItem
+	for rows.Next() {
+		item, scanErr := scanItem(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func compileRepositoryPredicates(q RepositoryQuery, now int64) ([]string, []any, error) {
 	if q.Scope.ProjectID == "" {
-		return nil, errors.New("project scope is required")
+		return nil, nil, errors.New("project scope is required")
+	}
+	if len(q.Lifecycles) > 0 && q.IncludeCandidates {
+		return nil, nil, errors.New("repository query cannot combine lifecycles with include candidates")
 	}
 	var args []any
 	where := scopeAuthorize("", q.Scope, q.Visibility, &args)
@@ -645,12 +674,32 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 	}
 	if !q.IncludeExpired {
 		where = append(where, "(expires_at IS NULL OR expires_at>?)")
-		args = append(args, time.Now().UnixMilli())
+		args = append(args, now)
 	}
-	if !q.IncludeCandidates {
+	if len(q.Lifecycles) > 0 {
+		lifecycles := make([]ContextLifecycle, 0, len(q.Lifecycles))
+		seen := make(map[ContextLifecycle]struct{}, len(q.Lifecycles))
+		for _, lifecycle := range q.Lifecycles {
+			switch lifecycle {
+			case LifecycleCandidate, LifecycleConfirmed, LifecycleRejected:
+			default:
+				return nil, nil, fmt.Errorf("invalid context lifecycle %q", lifecycle)
+			}
+			if _, ok := seen[lifecycle]; ok {
+				continue
+			}
+			seen[lifecycle] = struct{}{}
+			lifecycles = append(lifecycles, lifecycle)
+		}
+		placeholders := make([]string, len(lifecycles))
+		for i, lifecycle := range lifecycles {
+			placeholders[i] = "?"
+			args = append(args, lifecycle)
+		}
+		where = append(where, "lifecycle IN ("+strings.Join(placeholders, ",")+")")
+	} else if !q.IncludeCandidates {
 		where = append(where, "lifecycle='confirmed'")
 	}
-	now := time.Now().UnixMilli()
 	where = append(where, "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
 	args = append(args, now, now)
 	if len(q.Kinds) > 0 {
@@ -661,25 +710,69 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 		}
 		where = append(where, "kind IN ("+strings.Join(ps, ",")+")")
 	}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = 100
+	if q.OriginRunID != "" {
+		where = append(where, "json_extract(metadata_json, '$.run_id') = ?")
+		args = append(args, q.OriginRunID)
 	}
-	args = append(args, limit)
-	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
-	if e != nil {
-		return nil, e
+	if len(q.SourceTypes) > 0 {
+		sources := make([]string, 0, len(q.SourceTypes))
+		seen := make(map[string]struct{}, len(q.SourceTypes))
+		for _, sourceType := range q.SourceTypes {
+			sourceType = strings.TrimSpace(sourceType)
+			if sourceType == "" {
+				continue
+			}
+			if _, ok := seen[sourceType]; ok {
+				continue
+			}
+			seen[sourceType] = struct{}{}
+			sources = append(sources, sourceType)
+		}
+		if len(sources) == 0 {
+			return nil, nil, errors.New("repository source types contain no non-empty values")
+		}
+		placeholders := make([]string, len(sources))
+		for i, sourceType := range sources {
+			placeholders[i] = "?"
+			args = append(args, sourceType)
+		}
+		where = append(where, "json_extract(source_json, '$.type') IN ("+strings.Join(placeholders, ",")+")")
+	}
+	return where, args, nil
+}
+
+// Iterate executes one ordered SELECT and closes its cursor before returning.
+// The visitor must not re-enter the repository or perform writes because this
+// repository deliberately serializes access through one SQLite connection.
+func (r *SQLiteRepository) Iterate(ctx context.Context, q RepositoryQuery, visit func(ContextItem) error) error {
+	if q.Limit != 0 {
+		return errors.New("repository iteration requires a zero limit")
+	}
+	if visit == nil {
+		return errors.New("repository iteration requires a visitor")
+	}
+	where, args, err := compileRepositoryPredicates(q, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC", args...)
+	if err != nil {
+		return fmt.Errorf("iterate context items: query: %w", err)
 	}
 	defer rows.Close()
-	var out []ContextItem
 	for rows.Next() {
-		i, e := scanItem(rows)
-		if e != nil {
-			return nil, e
+		item, scanErr := scanItem(rows)
+		if scanErr != nil {
+			return fmt.Errorf("iterate context items: scan row: %w", scanErr)
 		}
-		out = append(out, i)
+		if visitErr := visit(item); visitErr != nil {
+			return visitErr
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate context items: rows: %w", err)
+	}
+	return nil
 }
 
 // QuerySharedProjection returns only shared-scope items (agent_id, task_id,
@@ -688,13 +781,12 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 // projections so private records never leak into shared prompt files.
 func (r *SQLiteRepository) QuerySharedProjection(ctx context.Context, scope Scope) ([]ContextItem, error) {
 	sharedScope := Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID, SessionID: scope.SessionID}
-	return r.Query(ctx, RepositoryQuery{
+	return r.collectIterated(ctx, RepositoryQuery{
 		Scope:             sharedScope,
 		Visibility:        VisibilityExact,
 		IncludeSuperseded: true,
 		IncludeExpired:    true,
 		IncludeCandidates: true,
-		Limit:             100000,
 	})
 }
 
@@ -709,21 +801,30 @@ func (r *SQLiteRepository) QuerySharedSessionProjection(ctx context.Context, sco
 		// query to every session.
 		return nil, nil
 	}
-	return r.Query(ctx, RepositoryQuery{
+	return r.collectIterated(ctx, RepositoryQuery{
 		Scope:      Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID, SessionID: scope.SessionID},
 		Visibility: contextVisibilityExact(),
-		Limit:      100000,
 	})
 }
 
 // QuerySharedPersistentProjection returns prompt-eligible shared knowledge
 // that deliberately has no session, branch, agent, task, or attempt scope.
 func (r *SQLiteRepository) QuerySharedPersistentProjection(ctx context.Context, scope Scope) ([]ContextItem, error) {
-	return r.Query(ctx, RepositoryQuery{
+	return r.collectIterated(ctx, RepositoryQuery{
 		Scope:      Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID},
 		Visibility: contextVisibilityExact(),
-		Limit:      100000,
 	})
+}
+
+func (r *SQLiteRepository) collectIterated(ctx context.Context, q RepositoryQuery) ([]ContextItem, error) {
+	var items []ContextItem
+	if err := r.Iterate(ctx, q, func(item ContextItem) error {
+		items = append(items, item)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // contextVisibilityExact exists only to keep the two projection constructors
