@@ -30,6 +30,10 @@ Inspector 的職責是查詢、排序、格式化與指出 projection drift；�
 第一版只支援單一 workspace 內的 run/task/attempt 查詢，不引入 tracing backend、
 OTel collector 或外部 observability service。
 
+新增的 `overview` kind、Operator Snapshot、active-run selection 與 deterministic Next Action
+由 [Operator experience](operator-experience.md) 定義。它是 additive extension：既有
+run/task/trace/evidence/context/replay/storage payload、exit code 與 read-only invariant 不變。
+
 ## 2. 權威來源與 projection matrix
 
 | 顯示內容 | canonical source | 允許使用的 projection | 禁止信任的來源 |

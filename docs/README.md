@@ -40,6 +40,9 @@ to re-create an abstraction that already exists in the runtime.
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)
   — read-only run, task, evidence, context, trace, and replay projections.
+- [Operator experience](architecture/operator-experience.md) — implementation-ready
+  scope, overview snapshot, deterministic next-action, CLI/TUI presentation,
+  compatibility, and incremental delivery contract.
 - [Model metadata](architecture/model-metadata.md) — model profile evidence,
   runtime introspection, and effective context admission.
 - [Workset](architecture/workset.md) — artifact-backed fan-out, immutable
