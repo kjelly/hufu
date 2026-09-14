@@ -1124,6 +1124,7 @@ retryLoop:
 							attemptResult.CanonicalResult = nil
 							attemptResult.invariantClaims = nil
 						} else {
+							c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.CanonicalResult)
 							c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
 						}
 					}

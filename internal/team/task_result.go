@@ -312,6 +312,10 @@ type TaskResult struct {
 	// expose only invariant_assessments claims and cannot populate this
 	// envelope or its manifest attribution.
 	InvariantVerification *InvariantVerificationResult `json:"invariant_verification,omitempty"`
+	// KnowledgeCoverage is a runtime-computed, report-only diagnostic. It does
+	// not participate in completion, semantic regression, retry, or escalation.
+	// Legacy results and results without a valid attributable manifest leave it nil.
+	KnowledgeCoverage *TaskKnowledgeCoverage `json:"knowledge_coverage,omitempty"`
 
 	Confidence float64 `json:"confidence"`
 	// Source is "submitted" (the local provider's own submit_result tool

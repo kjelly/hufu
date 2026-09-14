@@ -483,6 +483,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		if err := t.coordinator.attestInvariantClaims(t.todoID, identity.Attempt, metadata.ModelExecutionID, input.InvariantAssessments, &res); err != nil {
 			return fantasy.NewTextErrorResponse("invalid invariant assessment: " + err.Error()), nil
 		}
+		t.coordinator.attachTaskKnowledgeCoverage(t.todoID, identity.Attempt, metadata.ModelExecutionID, &res)
 		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
 		if txErr != nil {
 			return fantasy.NewTextErrorResponse("store submitted result: " + txErr.Error()), nil

@@ -88,6 +88,9 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 		}
 		copyResult.InvariantVerification = &copyVerification
 	}
+	if result.KnowledgeCoverage != nil {
+		copyResult.KnowledgeCoverage = new(*result.KnowledgeCoverage)
+	}
 	if result.RawOutputRef != nil {
 		copyRef := *result.RawOutputRef
 		copyResult.RawOutputRef = &copyRef
