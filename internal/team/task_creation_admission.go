@@ -13,7 +13,13 @@ import (
 // this point, so validation is performed directly against the prospective
 // projection rather than through validateTaskOccurrenceAdmission.
 func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *TodoItem) error {
-	if c == nil || item == nil || !c.requiresTaskCreationAdmission() {
+	if c == nil || item == nil {
+		return nil
+	}
+	if err := validateActionOccurrenceBinding(item); err != nil {
+		return fmt.Errorf("validate task %s action input binding: %w", item.ID, err)
+	}
+	if !c.requiresTaskCreationAdmission() {
 		return nil
 	}
 	journal, err := c.decisionJournalFor()
@@ -41,6 +47,25 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	}
 	if strings.TrimSpace(admission.TaskInputDigest) == "" || digest != admission.TaskInputDigest {
 		return fmt.Errorf("task %s attempt %d decision admission does not match task input", item.ID, attempt)
+	}
+	return nil
+}
+
+func validateActionOccurrenceBinding(item *TodoItem) error {
+	if item == nil || len(item.ActionInputBindings) == 0 {
+		return nil
+	}
+	if item.Action == nil || item.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(item.RunInputSnapshotHash) ||
+		!runInputHashPattern.MatchString(item.MaterializedActionPayloadHash) || len(item.BoundInputs) == 0 {
+		return fmt.Errorf("execution_input_drift: incomplete materialized action identity")
+	}
+	if runInputHash([]byte(item.Action.Payload)) != item.MaterializedActionPayloadHash {
+		return fmt.Errorf("execution_input_drift: materialized action payload hash mismatch")
+	}
+	for _, binding := range item.ActionInputBindings {
+		if !runInputHashPattern.MatchString(item.BoundInputs[strings.TrimSpace(binding.Input)]) {
+			return fmt.Errorf("execution_input_drift: input %q is not bound", binding.Input)
+		}
 	}
 	return nil
 }

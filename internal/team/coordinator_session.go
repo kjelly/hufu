@@ -1287,7 +1287,9 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	}
 	id := it.PlanTaskID
 	return TaskDef{
-		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), InvariantVerification: it.InvariantVerification, PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
+		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), ActionInputBindings: append([]ActionInputBinding(nil), it.ActionInputBindings...), RunInputSnapshotID: it.RunInputSnapshotID,
+		RunInputSnapshotHash: it.RunInputSnapshotHash, MaterializedActionPayloadHash: it.MaterializedActionPayloadHash,
+		BoundInputs: cloneStringMap(it.BoundInputs), InvariantVerification: it.InvariantVerification, PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
 		Agent: it.Agent, Goal: goal, Constraints: it.Constraints, Model: it.Model, ModelTopology: cloneModelTopology(it.ModelTopology),
 		ResolvedExecutionTarget: it.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(it.ExecutionTopology),
 		Sidecar: it.Sidecar, Summarize: it.Summarize, OutputMode: it.OutputMode,

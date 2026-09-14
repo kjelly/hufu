@@ -370,7 +370,17 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 	}
 	c := &Coordinator{session: session, taskTracker: tracker, phaseWorkflow: w, eventStore: events, executionRunID: "run-action"}
 	c.SetEventJournal(eventStoreJournal{store: events})
-	task, item := createAdmittedTestTask(t, c, TaskDef{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}})
+	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
+	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
+	c.session.RunInputDefinitions = definitions
+	c.sessionData = &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID}
+	materialized, err := c.materializeTaskActions([]TaskDef{{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{
+		Capability: "structured-actions", Type: "apply", Payload: `{"scope":{"count":1}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}},
+	}}})
+	if err != nil {
+		t.Fatalf("materializeTaskActions: %v", err)
+	}
+	task, item := createAdmittedTestTask(t, c, materialized[0])
 	if _, err := c.executeTask(context.Background(), task, item.ID); err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}
@@ -393,10 +403,13 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 		t.Fatalf("provider lifecycle events missing: started=%v completed=%v", started != nil, completed != nil)
 	}
 	var payload struct {
-		Provider   string        `json:"provider"`
-		Capability string        `json:"capability"`
-		ToolName   string        `json:"tool_name"`
-		Artifacts  []ArtifactRef `json:"artifacts"`
+		Provider                      string            `json:"provider"`
+		Capability                    string            `json:"capability"`
+		ToolName                      string            `json:"tool_name"`
+		Artifacts                     []ArtifactRef     `json:"artifacts"`
+		RunInputSnapshotHash          string            `json:"run_input_snapshot_hash"`
+		MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash"`
+		BoundInputs                   map[string]string `json:"bound_inputs"`
 	}
 	if err := json.Unmarshal(completed.Payload, &payload); err != nil {
 		t.Fatal(err)
@@ -404,12 +417,26 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 	if payload.Provider != "fake-action-adapter" || payload.Capability != "structured-actions" || payload.ToolName != "apply" {
 		t.Fatalf("provider lifecycle discriminator = %#v", payload)
 	}
+	if payload.RunInputSnapshotHash != snapshot.SnapshotHash || payload.MaterializedActionPayloadHash != task.MaterializedActionPayloadHash || payload.BoundInputs["scope"] == "" {
+		t.Fatalf("provider lifecycle input binding = %#v", payload)
+	}
 	if len(payload.Artifacts) != 1 || payload.Artifacts[0].Kind != "receipt" {
 		t.Fatalf("provider lifecycle artifacts = %#v, want one receipt", payload.Artifacts)
 	}
 	receiptPath := filepath.Join(session.Workspace, filepath.FromSlash(payload.Artifacts[0].Path))
 	if _, err := os.Stat(receiptPath); err != nil {
 		t.Fatalf("runtime action receipt missing at %s: %v", receiptPath, err)
+	}
+	receiptBytes, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt runtimeActionReceipt
+	if err := json.Unmarshal(receiptBytes, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.RunInputSnapshotID != snapshot.ID || receipt.MaterializedActionPayloadHash != task.MaterializedActionPayloadHash || receipt.BoundInputs["scope"] == "" {
+		t.Fatalf("runtime action receipt input binding = %#v", receipt)
 	}
 }
 

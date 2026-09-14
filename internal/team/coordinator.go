@@ -97,15 +97,23 @@ type TaskDef struct {
 	Phase Phase `json:"-" yaml:"phase,omitempty"`
 	// Action is a static execute-phase contract. Its JSON omission prevents a
 	// coordinator from choosing a provider, action type, or payload at runtime.
-	Action           *Action  `json:"-" yaml:"action,omitempty"`
-	ContractID       string   `json:"contract_id,omitempty"`
-	ContractHash     string   `json:"contract_hash,omitempty"`
-	ContractRevision int      `json:"contract_revision,omitempty"`
-	Agent            string   `json:"agent"`
-	Goal             string   `json:"goal"`
-	Constraints      string   `json:"constraints,omitempty"`
-	Model            string   `json:"model,omitempty"`
-	ModelTopology    []string `json:"model_topology,omitempty"`
+	Action              *Action              `json:"-" yaml:"action,omitempty"`
+	ActionInputBindings []ActionInputBinding `json:"-" yaml:"-"`
+	// The following action-binding fields are runtime-owned occurrence
+	// identity. They are populated from a frozen RunInputSnapshot and omitted
+	// from coordinator/config decoding.
+	RunInputSnapshotID            string            `json:"-" yaml:"-"`
+	RunInputSnapshotHash          string            `json:"-" yaml:"-"`
+	MaterializedActionPayloadHash string            `json:"-" yaml:"-"`
+	BoundInputs                   map[string]string `json:"-" yaml:"-"`
+	ContractID                    string            `json:"contract_id,omitempty"`
+	ContractHash                  string            `json:"contract_hash,omitempty"`
+	ContractRevision              int               `json:"contract_revision,omitempty"`
+	Agent                         string            `json:"agent"`
+	Goal                          string            `json:"goal"`
+	Constraints                   string            `json:"constraints,omitempty"`
+	Model                         string            `json:"model,omitempty"`
+	ModelTopology                 []string          `json:"model_topology,omitempty"`
 	// ResolvedExecutionTarget is trusted runtime-owned state. It is never
 	// exposed through coordinator task JSON and is frozen into TodoItem at
 	// admission alongside the legacy model/provider fields during migration.

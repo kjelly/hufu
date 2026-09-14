@@ -108,33 +108,37 @@ type LifecycleEventPayload struct {
 	FailureSignature string        `json:"failure_signature"`
 
 	// Extended fields used for specific events (e.g. run_started, run_finished, reliability_eval)
-	Team                  string                  `json:"team,omitempty"`
-	Outcome               RunOutcome              `json:"outcome"`
-	GoalSatisfied         bool                    `json:"goal_satisfied"`
-	GoalMode              GoalMode                `json:"goal_mode,omitempty"`
-	StopReason            StopReason              `json:"stop_reason,omitempty"`
-	ExitCode              int                     `json:"exit_code,omitempty"`
-	Reason                string                  `json:"reason,omitempty"`
-	Response              string                  `json:"response,omitempty"`
-	UnresolvedTasks       []TaskReference         `json:"unresolved_tasks,omitempty"`
-	CompletedReview       bool                    `json:"completed_review,omitempty"`
-	FindingsPresent       bool                    `json:"findings_present,omitempty"`
-	FixedAndVerified      bool                    `json:"fixed_and_verified,omitempty"`
-	AcceptanceAdvisory    bool                    `json:"acceptance_advisory,omitempty"`
-	AcceptanceState       AcceptanceState         `json:"acceptance_state,omitempty"`
-	AcceptancePassed      bool                    `json:"acceptance_passed,omitempty"`
-	Acceptance            *AcceptanceResult       `json:"acceptance,omitempty"`
-	Worksets              []WorksetGroupState     `json:"worksets,omitempty"`
-	Stats                 *RunStats               `json:"stats,omitempty"`
-	Metrics               *RunMetrics             `json:"metrics,omitempty"`
-	Telemetry             *RunTelemetry           `json:"telemetry,omitempty"`
-	EvidenceManifest      *EvidenceManifest       `json:"evidence_manifest,omitempty"`
-	ReliabilityMetrics    *ReliabilityEvalMetrics `json:"reliability_metrics,omitempty"`
-	ProductionObservation *ReliabilityObservation `json:"production_observation,omitempty"`
-	ActionID              string                  `json:"action_id,omitempty"`
-	Capability            string                  `json:"capability,omitempty"`
-	ToolName              string                  `json:"tool_name,omitempty"`
-	ActionStatus          string                  `json:"action_status,omitempty"`
+	Team                          string                  `json:"team,omitempty"`
+	Outcome                       RunOutcome              `json:"outcome"`
+	GoalSatisfied                 bool                    `json:"goal_satisfied"`
+	GoalMode                      GoalMode                `json:"goal_mode,omitempty"`
+	StopReason                    StopReason              `json:"stop_reason,omitempty"`
+	ExitCode                      int                     `json:"exit_code,omitempty"`
+	Reason                        string                  `json:"reason,omitempty"`
+	Response                      string                  `json:"response,omitempty"`
+	UnresolvedTasks               []TaskReference         `json:"unresolved_tasks,omitempty"`
+	CompletedReview               bool                    `json:"completed_review,omitempty"`
+	FindingsPresent               bool                    `json:"findings_present,omitempty"`
+	FixedAndVerified              bool                    `json:"fixed_and_verified,omitempty"`
+	AcceptanceAdvisory            bool                    `json:"acceptance_advisory,omitempty"`
+	AcceptanceState               AcceptanceState         `json:"acceptance_state,omitempty"`
+	AcceptancePassed              bool                    `json:"acceptance_passed,omitempty"`
+	Acceptance                    *AcceptanceResult       `json:"acceptance,omitempty"`
+	Worksets                      []WorksetGroupState     `json:"worksets,omitempty"`
+	Stats                         *RunStats               `json:"stats,omitempty"`
+	Metrics                       *RunMetrics             `json:"metrics,omitempty"`
+	Telemetry                     *RunTelemetry           `json:"telemetry,omitempty"`
+	EvidenceManifest              *EvidenceManifest       `json:"evidence_manifest,omitempty"`
+	ReliabilityMetrics            *ReliabilityEvalMetrics `json:"reliability_metrics,omitempty"`
+	ProductionObservation         *ReliabilityObservation `json:"production_observation,omitempty"`
+	ActionID                      string                  `json:"action_id,omitempty"`
+	Capability                    string                  `json:"capability,omitempty"`
+	ToolName                      string                  `json:"tool_name,omitempty"`
+	ActionStatus                  string                  `json:"action_status,omitempty"`
+	RunInputSnapshotID            string                  `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string                  `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string                  `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string       `json:"bound_inputs,omitempty"`
 }
 
 type executionEventLogger struct {

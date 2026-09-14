@@ -259,7 +259,7 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		SideEffect            SideEffectClass           `json:"side_effect,omitempty"`
 		Recovery              RecoveryPolicy            `json:"recovery,omitempty"`
 		MaxRetries            int                       `json:"max_retries,omitempty"`
-		Action                *Action                   `json:"action,omitempty"`
+		Action                any                       `json:"action,omitempty"`
 		FanOut                *FanOutSpec               `json:"fan_out,omitempty"`
 		Optional              bool                      `json:"optional,omitempty"`
 		InvariantVerification InvariantVerificationMode `json:"invariant_verification,omitempty"`
@@ -269,7 +269,7 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		DecisionBaseRates     []BaseRateEvidence        `json:"decision_base_rates,omitempty"`
 		DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
 		DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, cloneActionPtr(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil}
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
 		payload.InvariantVerification = declared.InvariantVerification
@@ -288,6 +288,18 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 	return hex.EncodeToString(digest[:]), nil
 }
 
+func actionContractIdentity(action *Action) any {
+	if action == nil {
+		return nil
+	}
+	return struct {
+		Capability string                  `json:"capability"`
+		Type       string                  `json:"type"`
+		Payload    string                  `json:"payload"`
+		Bindings   []actionBindingIdentity `json:"input_bindings,omitempty"`
+	}{action.Capability, action.Type, action.Payload, canonicalActionBindings(action.InputBindings)}
+}
+
 // ValidateTeamTaskContracts validates static contracts without interpreting
 // worker/coordinator prose. It is safe to run at load time and from the CLI.
 func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
@@ -297,6 +309,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	var findings []ContractFinding
 	for index, task := range session.ContractTasks {
 		findings = append(findings, validateInvariantVerificationContract(session, index, task)...)
+		if err := validateActionInputBindings(task.Action, session.RunInputDefinitions); err != nil {
+			findings = append(findings, contractFinding(fmt.Sprintf("tasks[%d].action.input-bindings", index), "action_input_binding_invalid", err.Error()))
+		}
 	}
 	if minimum := session.Config.MinimumCoordinatorRounds; minimum > 0 && session.Config.MaxRounds > 0 && session.Config.MaxRounds < minimum {
 		findings = append(findings, contractFinding("max-rounds", "max_rounds_below_minimum_coordinator_rounds", fmt.Sprintf("max-rounds (%d) must be at least minimum-coordinator-rounds (%d); coordinator progress and task retry budgets are separate", session.Config.MaxRounds, minimum)))

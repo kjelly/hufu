@@ -523,13 +523,17 @@ type EvidenceResult struct {
 // requirement. Reports may project this binding, but may not reconstruct it
 // by joining a run ID to an arbitrary receipt.
 type EvidenceBinding struct {
-	RunID            string   `json:"run_id"`
-	TaskID           string   `json:"task_id"`
-	Attempt          int      `json:"attempt"`
-	ModelExecutionID string   `json:"model_execution_id"`
-	ProducerID       string   `json:"producer_id"`
-	TranscriptRef    string   `json:"transcript_ref"`
-	ArtifactIDs      []string `json:"artifact_ids"`
+	RunID                         string            `json:"run_id"`
+	TaskID                        string            `json:"task_id"`
+	Attempt                       int               `json:"attempt"`
+	ModelExecutionID              string            `json:"model_execution_id"`
+	ProducerID                    string            `json:"producer_id"`
+	TranscriptRef                 string            `json:"transcript_ref"`
+	ArtifactIDs                   []string          `json:"artifact_ids"`
+	RunInputSnapshotID            string            `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 }
 
 type EvidenceManifest struct {
@@ -608,6 +612,17 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {
 		return fmt.Errorf("evidence requirement %q transcript is outside artifact membership", result.RequirementID)
 	}
+	if b.RunInputSnapshotID != "" || b.RunInputSnapshotHash != "" || b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0 {
+		if b.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(b.RunInputSnapshotHash) ||
+			!runInputHashPattern.MatchString(b.MaterializedActionPayloadHash) || len(b.BoundInputs) == 0 {
+			return fmt.Errorf("evidence requirement %q has incomplete action input binding", result.RequirementID)
+		}
+		for name, hash := range b.BoundInputs {
+			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
+				return fmt.Errorf("evidence requirement %q has invalid bound input", result.RequirementID)
+			}
+		}
+	}
 	wantIDs := make([]string, 0, len(result.ArtifactRefs))
 	if len(result.ArtifactRefs) == 0 {
 		return fmt.Errorf("evidence requirement %q has no transcript/artifact membership", result.RequirementID)
@@ -654,6 +669,7 @@ func (m EvidenceManifest) VerifiedTaskBinding(taskID string) (*EvidenceBinding, 
 		}
 		binding := *result.Binding
 		binding.ArtifactIDs = append([]string(nil), result.Binding.ArtifactIDs...)
+		binding.BoundInputs = cloneStringMap(result.Binding.BoundInputs)
 		return &binding, true
 	}
 	return nil, false

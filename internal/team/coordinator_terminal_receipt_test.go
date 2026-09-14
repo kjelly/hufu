@@ -38,6 +38,50 @@ printf '%s' '{"outputs":{"ok":true},"artifacts":[{"path":"result.txt","kind":"pr
 	}
 }
 
+func TestRuntimeActionBindsFrozenInputsAcrossReceiptResultAndEvidence(t *testing.T) {
+	command := []string{"/bin/sh", "-c", `set -eu
+printf '%s' '{"outputs":{"ok":true}}'
+`}
+	c, _ := newCommandActionCoordinator(t, command, "run-bound-action")
+	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
+	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
+	c.session.RunInputDefinitions = definitions
+	c.sessionData = &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID}
+	tasks, err := c.materializeTaskActions([]TaskDef{{
+		ID: "action", Agent: "executor", Goal: "apply", Phase: PhaseExecute,
+		Action: &Action{Capability: "structured-actions", Type: "apply", Payload: `{"scope":{"count":1}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}}},
+	}})
+	if err != nil {
+		t.Fatalf("materializeTaskActions: %v", err)
+	}
+	task := tasks[0]
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		PlanTaskID: task.ID, Phase: task.Phase, ContractID: task.ID, ContractHash: task.ContractHash,
+		Action: task.Action, Agent: task.Agent, Desc: task.Goal,
+		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: task.BoundInputs,
+	}})[0]
+	if _, err := c.executeRuntimeAction(context.Background(), task, item.ID); err != nil {
+		t.Fatalf("executeRuntimeAction: %v", err)
+	}
+
+	got := c.todoItemByID(item.ID)
+	if got.ExecutionReceipt == nil || got.ExecutionReceipt.RunInputSnapshotHash != snapshot.SnapshotHash || got.ExecutionReceipt.MaterializedActionPayloadHash != task.MaterializedActionPayloadHash {
+		t.Fatalf("execution receipt binding = %#v", got.ExecutionReceipt)
+	}
+	if got.TypedResult == nil || got.TypedResult.RunInputSnapshotID != snapshot.ID || got.TypedResult.BoundInputs["scope"] == "" {
+		t.Fatalf("runtime result binding = %#v", got.TypedResult)
+	}
+	manifest, err := c.buildEvidenceManifest(context.Background(), true)
+	if err != nil {
+		t.Fatalf("buildEvidenceManifest: %v", err)
+	}
+	binding := manifest.EvidenceResults[0].Binding
+	if binding == nil || binding.RunInputSnapshotHash != snapshot.SnapshotHash || binding.BoundInputs["scope"] == "" {
+		t.Fatalf("evidence binding = %#v", binding)
+	}
+}
+
 func TestStructuredCoordinatorTaskPersistsTaskReceiptBeforeDone(t *testing.T) {
 	workspace := t.TempDir()
 	contract := ExecutionContract{Steps: []ExecutionStep{{ID: "inspect", Tool: "inspector", Effect: ExecutionEffectRead}}}

@@ -22,6 +22,10 @@ type Action struct {
 	Capability string `json:"capability" yaml:"capability"`
 	Type       string `json:"type" yaml:"type"`
 	Payload    string `json:"payload" yaml:"payload"`
+	// InputBindings are repository-authored replacements into Payload. They are
+	// consumed before task admission and must never cross the coordinator or
+	// provider JSON boundary.
+	InputBindings []ActionInputBinding `json:"-" yaml:"input-bindings,omitempty"`
 }
 
 // ActionResult is the provider-neutral result envelope. Artifact identity and

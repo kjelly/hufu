@@ -201,6 +201,8 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	clone.Execution = cloneExecutionContract(td.Execution)
 	clone.ModelTopology = cloneModelTopology(td.ModelTopology)
 	clone.Action = cloneActionPtr(td.Action)
+	clone.ActionInputBindings = append([]ActionInputBinding(nil), td.ActionInputBindings...)
+	clone.BoundInputs = cloneStringMap(td.BoundInputs)
 	clone.FanOut = cloneFanOutSpec(td.FanOut)
 	clone.DecisionFacts = cloneDecisionFacts(td.DecisionFacts)
 	clone.DecisionArtifacts = append([]ArtifactRef(nil), td.DecisionArtifacts...)
@@ -298,6 +300,6 @@ func cloneActionPtr(action *Action) *Action {
 	if action == nil {
 		return nil
 	}
-	clone := *action
+	clone := cloneActionValue(*action)
 	return &clone
 }

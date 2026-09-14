@@ -51,6 +51,7 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 		return nil
 	}
 	copyResult := *result
+	copyResult.BoundInputs = cloneStringMap(result.BoundInputs)
 	copyResult.Artifacts = append([]ArtifactRef(nil), result.Artifacts...)
 	copyResult.Evidence = append([]EvidenceRef(nil), result.Evidence...)
 	copyResult.FilesRead = append([]FileRef(nil), result.FilesRead...)

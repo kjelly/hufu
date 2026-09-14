@@ -263,6 +263,12 @@ type TaskResult struct {
 	Agent   string `json:"agent,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Summary string `json:"summary"`
+	// Action input identity is always overwritten by the runtime for
+	// action-backed tasks; worker-authored values cannot grant authority.
+	RunInputSnapshotID            string            `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	// Details is the complete textual deliverable when a task produces a plan,
 	// analysis, review, or other handoff that does not need a separate file.
 	// It is part of the typed result, so downstream coordinators can consume it

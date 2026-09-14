@@ -127,9 +127,13 @@ type ToolExecutionDisposition struct {
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
-	RunID   string `json:"run_id"`
-	TaskID  string `json:"task_id"`
-	Attempt int    `json:"attempt"`
+	RunID                         string            `json:"run_id"`
+	TaskID                        string            `json:"task_id"`
+	Attempt                       int               `json:"attempt"`
+	RunInputSnapshotID            string            `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	// Backend is the canonical execution backend admitted for this attempt.
 	// SubagentProvider remains a read-compatible legacy field only while the
 	// execution-identity sunset is in progress.

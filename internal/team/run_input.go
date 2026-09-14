@@ -625,10 +625,17 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Capability < providers[j].Capability })
 	definitions := cloneRunInputDefinitions(session.RunInputDefinitions)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
+	actions := make([]any, 0)
+	for _, task := range session.ContractTasks {
+		if task.Action != nil && len(task.Action.InputBindings) > 0 {
+			actions = append(actions, actionContractIdentity(task.Action))
+		}
+	}
 	encoded, err := json.Marshal(struct {
 		Definitions []RunInputDefinition `json:"definitions"`
 		Providers   []providerIdentity   `json:"providers,omitempty"`
-	}{definitions, providers})
+		Actions     []any                `json:"actions,omitempty"`
+	}{definitions, providers, actions})
 	if err != nil {
 		return "", fmt.Errorf("encode run input policy: %w", err)
 	}

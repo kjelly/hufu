@@ -199,21 +199,25 @@ func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
 }
 
 type canonicalReceipt struct {
-	RunID            string                     `json:"run_id,omitempty"`
-	TaskID           string                     `json:"task_id,omitempty"`
-	Attempt          int                        `json:"attempt"`
-	Backend          string                     `json:"backend,omitempty"`
-	ExitCode         *int                       `json:"exit_code,omitempty"`
-	ProducerID       string                     `json:"producer_id,omitempty"`
-	TranscriptRef    string                     `json:"transcript_ref,omitempty"`
-	SubmittedResult  *TaskResult                `json:"submitted_result,omitempty"`
-	RepairProvenance *RepairProvenance          `json:"repair_provenance,omitempty"`
-	VerifyResult     *canonicalVerifyResult     `json:"verify_result,omitempty"`
-	StepBudget       *StepBudgetUsage           `json:"step_budget,omitempty"`
-	ToolDispositions []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
-	HandoffState     ResultHandoffState         `json:"handoff_state,omitempty"`
-	MemoryManifest   *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
-	ContextManifest  *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+	RunID                         string                     `json:"run_id,omitempty"`
+	TaskID                        string                     `json:"task_id,omitempty"`
+	Attempt                       int                        `json:"attempt"`
+	RunInputSnapshotID            string                     `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string                     `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string                     `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string          `json:"bound_inputs,omitempty"`
+	Backend                       string                     `json:"backend,omitempty"`
+	ExitCode                      *int                       `json:"exit_code,omitempty"`
+	ProducerID                    string                     `json:"producer_id,omitempty"`
+	TranscriptRef                 string                     `json:"transcript_ref,omitempty"`
+	SubmittedResult               *TaskResult                `json:"submitted_result,omitempty"`
+	RepairProvenance              *RepairProvenance          `json:"repair_provenance,omitempty"`
+	VerifyResult                  *canonicalVerifyResult     `json:"verify_result,omitempty"`
+	StepBudget                    *StepBudgetUsage           `json:"step_budget,omitempty"`
+	ToolDispositions              []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
+	HandoffState                  ResultHandoffState         `json:"handoff_state,omitempty"`
+	MemoryManifest                *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest               *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) []canonicalReceipt {
@@ -230,21 +234,25 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 	out := make([]canonicalReceipt, 0, len(merged))
 	for _, r := range merged {
 		out = append(out, canonicalReceipt{
-			RunID:            r.RunID,
-			TaskID:           r.TaskID,
-			Attempt:          r.Attempt,
-			Backend:          r.Backend,
-			ExitCode:         r.ExitCode,
-			ProducerID:       r.ProducerID,
-			TranscriptRef:    r.TranscriptRef,
-			SubmittedResult:  r.SubmittedResult,
-			RepairProvenance: r.RepairProvenance,
-			VerifyResult:     toCanonicalVerifyResult(r.VerifyResult),
-			StepBudget:       r.StepBudget,
-			ToolDispositions: append([]ToolExecutionDisposition(nil), r.ToolDispositions...),
-			HandoffState:     r.HandoffState,
-			MemoryManifest:   r.MemoryManifest,
-			ContextManifest:  r.ContextManifest,
+			RunID:                         r.RunID,
+			TaskID:                        r.TaskID,
+			Attempt:                       r.Attempt,
+			RunInputSnapshotID:            r.RunInputSnapshotID,
+			RunInputSnapshotHash:          r.RunInputSnapshotHash,
+			MaterializedActionPayloadHash: r.MaterializedActionPayloadHash,
+			BoundInputs:                   cloneStringMap(r.BoundInputs),
+			Backend:                       r.Backend,
+			ExitCode:                      r.ExitCode,
+			ProducerID:                    r.ProducerID,
+			TranscriptRef:                 r.TranscriptRef,
+			SubmittedResult:               r.SubmittedResult,
+			RepairProvenance:              r.RepairProvenance,
+			VerifyResult:                  toCanonicalVerifyResult(r.VerifyResult),
+			StepBudget:                    r.StepBudget,
+			ToolDispositions:              append([]ToolExecutionDisposition(nil), r.ToolDispositions...),
+			HandoffState:                  r.HandoffState,
+			MemoryManifest:                r.MemoryManifest,
+			ContextManifest:               r.ContextManifest,
 		})
 	}
 	return out
@@ -279,79 +287,84 @@ func normalizeContextManifests(manifests []ContextInjectionManifest) []ContextIn
 }
 
 type canonicalTaskShadow struct {
-	ID                  string                      `json:"id"`
-	Phase               string                      `json:"phase,omitempty"`
-	Action              *Action                     `json:"action,omitempty"`
-	PlanTaskID          string                      `json:"plan_task_id,omitempty"`
-	PlanFirst           bool                        `json:"plan_first,omitzero"`
-	PlanID              string                      `json:"plan_id,omitempty"`
-	ContractID          string                      `json:"contract_id,omitempty"`
-	ContractHash        string                      `json:"contract_hash,omitempty"`
-	ContractRevision    int                         `json:"contract_revision,omitempty"`
-	Agent               string                      `json:"agent"`
-	Desc                string                      `json:"desc"`
-	Goal                string                      `json:"goal,omitempty"`
-	Constraints         string                      `json:"constraints,omitempty"`
-	Status              string                      `json:"status"`
-	Detail              string                      `json:"detail,omitempty"`
-	Output              string                      `json:"output,omitempty"`
-	Model               string                      `json:"model,omitempty"`
-	ModelTopology       []string                    `json:"model_topology,omitempty"`
-	ExecutionTarget     execution.ExecutionTarget   `json:"execution_target,omitzero"`
-	ExecutionTopology   []execution.ExecutionTarget `json:"execution_topology,omitempty"`
-	Sidecar             bool                        `json:"sidecar,omitempty"`
-	Summarize           bool                        `json:"summarize,omitempty"`
-	OutputMode          string                      `json:"output_mode,omitempty"`
-	ContextFiles        []string                    `json:"context_files,omitempty"`
-	Requires            []string                    `json:"requires,omitempty"`
-	Skills              []string                    `json:"skills,omitempty"`
-	InjectedSkills      []string                    `json:"injected_skills,omitempty"`
-	LoadedSkills        []string                    `json:"loaded_skills,omitempty"`
-	Source              string                      `json:"source,omitempty"`
-	ParentID            string                      `json:"parent_id,omitempty"`
-	DependsOn           []string                    `json:"depends_on,omitempty"`
-	MaxRetries          int                         `json:"max_retries,omitempty"`
-	Retries             int                         `json:"retries,omitempty"`
-	OnFailure           string                      `json:"on_failure,omitempty"`
-	Escalate            bool                        `json:"escalate,omitempty"`
-	AdversarialVerify   int                         `json:"adversarial_verify,omitempty"`
-	Verify              string                      `json:"verify,omitempty"`
-	VerifyMode          string                      `json:"verify_mode,omitempty"`
-	VerifySpec          *VerificationSpec           `json:"verify_spec,omitempty"`
-	VerifyResult        *canonicalVerifyResult      `json:"verify_result,omitempty"`
-	WorksetBinding      *WorksetBinding             `json:"workset_binding,omitempty"`
-	WorksetReceipt      *WorksetExpansionReceipt    `json:"workset_receipt,omitempty"`
-	ExecutionReceipts   []canonicalReceipt          `json:"execution_receipts,omitempty"`
-	FailureEvent        *FailureEventPayload        `json:"failure_event,omitempty"`
-	FailureFingerprints []FailureFingerprint        `json:"failure_fingerprints,omitempty"`
-	SideEffect          string                      `json:"side_effect,omitempty"`
-	Recovery            string                      `json:"recovery,omitempty"`
-	ReconcileTool       string                      `json:"reconcile_tool,omitempty"`
-	RecoveryHypothesis  *RecoveryHypothesis         `json:"recovery_hypothesis,omitempty"`
-	RecoveryState       string                      `json:"recovery_state,omitempty"`
-	TypedResult         *TaskResult                 `json:"typed_result,omitempty"`
-	Resolution          *TaskResolution             `json:"resolution,omitempty"`
-	Kind                string                      `json:"kind,omitempty"`
-	Advances            []string                    `json:"advances,omitempty"`
-	ExpectedStateChange string                      `json:"expected_state_change,omitempty"`
-	Progress            string                      `json:"progress,omitempty"`
-	ProgressCriteria    []string                    `json:"progress_criteria,omitempty"`
-	Execution           ExecutionContract           `json:"execution,omitempty"`
-	Optional            bool                        `json:"optional,omitempty"`
-	ResourceClaims      []string                    `json:"resource_claims,omitempty"`
-	Resources           []ResourceClaim             `json:"resources,omitempty"`
-	DecisionProfile     string                      `json:"decision_profile,omitempty"`
-	DecisionOptions     []DecisionOption            `json:"decision_options,omitempty"`
-	DecisionAssumptions []DecisionAssumption        `json:"decision_assumptions,omitempty"`
-	DecisionFacts       map[string]any              `json:"decision_facts,omitempty"`
-	DecisionArtifacts   []ArtifactRef               `json:"decision_artifacts,omitempty"`
-	DecisionBaseRates   []BaseRateEvidence          `json:"decision_base_rates,omitempty"`
-	DecisionProvenance  []EvidenceProvenance        `json:"decision_provenance,omitempty"`
-	MemoryManifests     []MemoryInjectionManifest   `json:"memory_manifests,omitempty"`
-	ContextManifests    []ContextInjectionManifest  `json:"context_manifests,omitempty"`
-	SubagentProvider    string                      `json:"subagent_provider,omitempty"`
-	ProviderBinding     *ProviderBinding            `json:"provider_binding,omitempty"`
-	BackendBinding      *BackendBinding             `json:"backend_binding,omitempty"`
+	ID                            string                      `json:"id"`
+	Phase                         string                      `json:"phase,omitempty"`
+	Action                        *Action                     `json:"action,omitempty"`
+	ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings,omitempty"`
+	RunInputSnapshotID            string                      `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string                      `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string           `json:"bound_inputs,omitempty"`
+	PlanTaskID                    string                      `json:"plan_task_id,omitempty"`
+	PlanFirst                     bool                        `json:"plan_first,omitzero"`
+	PlanID                        string                      `json:"plan_id,omitempty"`
+	ContractID                    string                      `json:"contract_id,omitempty"`
+	ContractHash                  string                      `json:"contract_hash,omitempty"`
+	ContractRevision              int                         `json:"contract_revision,omitempty"`
+	Agent                         string                      `json:"agent"`
+	Desc                          string                      `json:"desc"`
+	Goal                          string                      `json:"goal,omitempty"`
+	Constraints                   string                      `json:"constraints,omitempty"`
+	Status                        string                      `json:"status"`
+	Detail                        string                      `json:"detail,omitempty"`
+	Output                        string                      `json:"output,omitempty"`
+	Model                         string                      `json:"model,omitempty"`
+	ModelTopology                 []string                    `json:"model_topology,omitempty"`
+	ExecutionTarget               execution.ExecutionTarget   `json:"execution_target,omitzero"`
+	ExecutionTopology             []execution.ExecutionTarget `json:"execution_topology,omitempty"`
+	Sidecar                       bool                        `json:"sidecar,omitempty"`
+	Summarize                     bool                        `json:"summarize,omitempty"`
+	OutputMode                    string                      `json:"output_mode,omitempty"`
+	ContextFiles                  []string                    `json:"context_files,omitempty"`
+	Requires                      []string                    `json:"requires,omitempty"`
+	Skills                        []string                    `json:"skills,omitempty"`
+	InjectedSkills                []string                    `json:"injected_skills,omitempty"`
+	LoadedSkills                  []string                    `json:"loaded_skills,omitempty"`
+	Source                        string                      `json:"source,omitempty"`
+	ParentID                      string                      `json:"parent_id,omitempty"`
+	DependsOn                     []string                    `json:"depends_on,omitempty"`
+	MaxRetries                    int                         `json:"max_retries,omitempty"`
+	Retries                       int                         `json:"retries,omitempty"`
+	OnFailure                     string                      `json:"on_failure,omitempty"`
+	Escalate                      bool                        `json:"escalate,omitempty"`
+	AdversarialVerify             int                         `json:"adversarial_verify,omitempty"`
+	Verify                        string                      `json:"verify,omitempty"`
+	VerifyMode                    string                      `json:"verify_mode,omitempty"`
+	VerifySpec                    *VerificationSpec           `json:"verify_spec,omitempty"`
+	VerifyResult                  *canonicalVerifyResult      `json:"verify_result,omitempty"`
+	WorksetBinding                *WorksetBinding             `json:"workset_binding,omitempty"`
+	WorksetReceipt                *WorksetExpansionReceipt    `json:"workset_receipt,omitempty"`
+	ExecutionReceipts             []canonicalReceipt          `json:"execution_receipts,omitempty"`
+	FailureEvent                  *FailureEventPayload        `json:"failure_event,omitempty"`
+	FailureFingerprints           []FailureFingerprint        `json:"failure_fingerprints,omitempty"`
+	SideEffect                    string                      `json:"side_effect,omitempty"`
+	Recovery                      string                      `json:"recovery,omitempty"`
+	ReconcileTool                 string                      `json:"reconcile_tool,omitempty"`
+	RecoveryHypothesis            *RecoveryHypothesis         `json:"recovery_hypothesis,omitempty"`
+	RecoveryState                 string                      `json:"recovery_state,omitempty"`
+	TypedResult                   *TaskResult                 `json:"typed_result,omitempty"`
+	Resolution                    *TaskResolution             `json:"resolution,omitempty"`
+	Kind                          string                      `json:"kind,omitempty"`
+	Advances                      []string                    `json:"advances,omitempty"`
+	ExpectedStateChange           string                      `json:"expected_state_change,omitempty"`
+	Progress                      string                      `json:"progress,omitempty"`
+	ProgressCriteria              []string                    `json:"progress_criteria,omitempty"`
+	Execution                     ExecutionContract           `json:"execution,omitempty"`
+	Optional                      bool                        `json:"optional,omitempty"`
+	ResourceClaims                []string                    `json:"resource_claims,omitempty"`
+	Resources                     []ResourceClaim             `json:"resources,omitempty"`
+	DecisionProfile               string                      `json:"decision_profile,omitempty"`
+	DecisionOptions               []DecisionOption            `json:"decision_options,omitempty"`
+	DecisionAssumptions           []DecisionAssumption        `json:"decision_assumptions,omitempty"`
+	DecisionFacts                 map[string]any              `json:"decision_facts,omitempty"`
+	DecisionArtifacts             []ArtifactRef               `json:"decision_artifacts,omitempty"`
+	DecisionBaseRates             []BaseRateEvidence          `json:"decision_base_rates,omitempty"`
+	DecisionProvenance            []EvidenceProvenance        `json:"decision_provenance,omitempty"`
+	MemoryManifests               []MemoryInjectionManifest   `json:"memory_manifests,omitempty"`
+	ContextManifests              []ContextInjectionManifest  `json:"context_manifests,omitempty"`
+	SubagentProvider              string                      `json:"subagent_provider,omitempty"`
+	ProviderBinding               *ProviderBinding            `json:"provider_binding,omitempty"`
+	BackendBinding                *BackendBinding             `json:"backend_binding,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -373,79 +386,84 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		providerBinding = nil
 	}
 	return canonicalTaskShadow{
-		ID:                  item.ID,
-		Phase:               string(item.Phase),
-		Action:              cloneActionPtr(item.Action),
-		PlanTaskID:          item.PlanTaskID,
-		PlanFirst:           item.PlanFirst,
-		PlanID:              item.PlanID,
-		ContractID:          item.ContractID,
-		ContractHash:        item.ContractHash,
-		ContractRevision:    item.ContractRevision,
-		Agent:               strings.ToLower(strings.TrimSpace(item.Agent)),
-		Desc:                item.Desc,
-		Goal:                item.Goal,
-		Constraints:         item.Constraints,
-		Status:              string(item.Status),
-		Detail:              item.Detail,
-		Output:              item.Output,
-		Model:               model,
-		ModelTopology:       modelTopology,
-		ExecutionTarget:     item.ExecutionTarget,
-		ExecutionTopology:   cloneExecutionTopology(item.ExecutionTopology),
-		Sidecar:             item.Sidecar,
-		Summarize:           item.Summarize,
-		OutputMode:          item.OutputMode,
-		ContextFiles:        normalizeStringSlice(item.ContextFiles),
-		Requires:            normalizeStringSlice(item.Requires),
-		Skills:              normalizeStringSlice(item.Skills),
-		InjectedSkills:      normalizeStringSlice(item.InjectedSkills),
-		LoadedSkills:        normalizeStringSlice(item.LoadedSkills),
-		Source:              item.Source,
-		ParentID:            item.ParentID,
-		DependsOn:           normalizeStringSlice(item.DependsOn),
-		MaxRetries:          item.MaxRetries,
-		Retries:             item.Retries,
-		OnFailure:           item.OnFailure,
-		Escalate:            item.Escalate,
-		AdversarialVerify:   item.AdversarialVerify,
-		Verify:              item.Verify,
-		VerifyMode:          item.VerifyMode,
-		VerifySpec:          cloneVerificationSpecPtr(item.VerifySpec),
-		VerifyResult:        toCanonicalVerifyResult(item.VerifyResult),
-		WorksetBinding:      cloneWorksetBinding(item.WorksetBinding),
-		WorksetReceipt:      cloneWorksetReceipt(item.WorksetReceipt),
-		ExecutionReceipts:   toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
-		FailureEvent:        RedactedFailureEvent(item.FailureEvent),
-		FailureFingerprints: normalizeFingerprints(item.FailureFingerprints),
-		SideEffect:          string(item.SideEffect),
-		Recovery:            string(item.Recovery),
-		ReconcileTool:       item.ReconcileTool,
-		RecoveryHypothesis:  cloneRecoveryHypothesis(item.RecoveryHypothesis),
-		RecoveryState:       item.RecoveryState,
-		TypedResult:         item.TypedResult,
-		Resolution:          item.Resolution,
-		Kind:                string(item.Kind),
-		Advances:            normalizeStringSlice(item.Advances),
-		ExpectedStateChange: item.ExpectedStateChange,
-		Progress:            string(item.Progress),
-		ProgressCriteria:    normalizeStringSlice(item.ProgressCriteria),
-		Execution:           cloneExecutionContract(item.Execution),
-		Optional:            item.Optional,
-		ResourceClaims:      normalizeStringSlice(item.ResourceClaims),
-		Resources:           append([]ResourceClaim(nil), item.Resources...),
-		DecisionProfile:     item.DecisionProfile,
-		DecisionOptions:     append([]DecisionOption(nil), item.DecisionOptions...),
-		DecisionAssumptions: cloneDecisionAssumptions(item.DecisionAssumptions),
-		DecisionFacts:       cloneDecisionFacts(item.DecisionFacts),
-		DecisionArtifacts:   append([]ArtifactRef(nil), item.DecisionArtifacts...),
-		DecisionBaseRates:   cloneBaseRateEvidence(item.DecisionBaseRates),
-		DecisionProvenance:  cloneEvidenceProvenance(item.DecisionProvenance),
-		MemoryManifests:     normalizeMemoryManifests(item.MemoryManifests),
-		ContextManifests:    normalizeContextManifests(item.ContextManifests),
-		SubagentProvider:    subagentProvider,
-		ProviderBinding:     providerBinding,
-		BackendBinding:      cloneBackendBinding(item.BackendBinding),
+		ID:                            item.ID,
+		Phase:                         string(item.Phase),
+		Action:                        cloneActionPtr(item.Action),
+		ActionInputBindings:           append([]ActionInputBinding(nil), item.ActionInputBindings...),
+		RunInputSnapshotID:            item.RunInputSnapshotID,
+		RunInputSnapshotHash:          item.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
+		BoundInputs:                   cloneStringMap(item.BoundInputs),
+		PlanTaskID:                    item.PlanTaskID,
+		PlanFirst:                     item.PlanFirst,
+		PlanID:                        item.PlanID,
+		ContractID:                    item.ContractID,
+		ContractHash:                  item.ContractHash,
+		ContractRevision:              item.ContractRevision,
+		Agent:                         strings.ToLower(strings.TrimSpace(item.Agent)),
+		Desc:                          item.Desc,
+		Goal:                          item.Goal,
+		Constraints:                   item.Constraints,
+		Status:                        string(item.Status),
+		Detail:                        item.Detail,
+		Output:                        item.Output,
+		Model:                         model,
+		ModelTopology:                 modelTopology,
+		ExecutionTarget:               item.ExecutionTarget,
+		ExecutionTopology:             cloneExecutionTopology(item.ExecutionTopology),
+		Sidecar:                       item.Sidecar,
+		Summarize:                     item.Summarize,
+		OutputMode:                    item.OutputMode,
+		ContextFiles:                  normalizeStringSlice(item.ContextFiles),
+		Requires:                      normalizeStringSlice(item.Requires),
+		Skills:                        normalizeStringSlice(item.Skills),
+		InjectedSkills:                normalizeStringSlice(item.InjectedSkills),
+		LoadedSkills:                  normalizeStringSlice(item.LoadedSkills),
+		Source:                        item.Source,
+		ParentID:                      item.ParentID,
+		DependsOn:                     normalizeStringSlice(item.DependsOn),
+		MaxRetries:                    item.MaxRetries,
+		Retries:                       item.Retries,
+		OnFailure:                     item.OnFailure,
+		Escalate:                      item.Escalate,
+		AdversarialVerify:             item.AdversarialVerify,
+		Verify:                        item.Verify,
+		VerifyMode:                    item.VerifyMode,
+		VerifySpec:                    cloneVerificationSpecPtr(item.VerifySpec),
+		VerifyResult:                  toCanonicalVerifyResult(item.VerifyResult),
+		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
+		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
+		ExecutionReceipts:             toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
+		FailureEvent:                  RedactedFailureEvent(item.FailureEvent),
+		FailureFingerprints:           normalizeFingerprints(item.FailureFingerprints),
+		SideEffect:                    string(item.SideEffect),
+		Recovery:                      string(item.Recovery),
+		ReconcileTool:                 item.ReconcileTool,
+		RecoveryHypothesis:            cloneRecoveryHypothesis(item.RecoveryHypothesis),
+		RecoveryState:                 item.RecoveryState,
+		TypedResult:                   item.TypedResult,
+		Resolution:                    item.Resolution,
+		Kind:                          string(item.Kind),
+		Advances:                      normalizeStringSlice(item.Advances),
+		ExpectedStateChange:           item.ExpectedStateChange,
+		Progress:                      string(item.Progress),
+		ProgressCriteria:              normalizeStringSlice(item.ProgressCriteria),
+		Execution:                     cloneExecutionContract(item.Execution),
+		Optional:                      item.Optional,
+		ResourceClaims:                normalizeStringSlice(item.ResourceClaims),
+		Resources:                     append([]ResourceClaim(nil), item.Resources...),
+		DecisionProfile:               item.DecisionProfile,
+		DecisionOptions:               append([]DecisionOption(nil), item.DecisionOptions...),
+		DecisionAssumptions:           cloneDecisionAssumptions(item.DecisionAssumptions),
+		DecisionFacts:                 cloneDecisionFacts(item.DecisionFacts),
+		DecisionArtifacts:             append([]ArtifactRef(nil), item.DecisionArtifacts...),
+		DecisionBaseRates:             cloneBaseRateEvidence(item.DecisionBaseRates),
+		DecisionProvenance:            cloneEvidenceProvenance(item.DecisionProvenance),
+		MemoryManifests:               normalizeMemoryManifests(item.MemoryManifests),
+		ContextManifests:              normalizeContextManifests(item.ContextManifests),
+		SubagentProvider:              subagentProvider,
+		ProviderBinding:               providerBinding,
+		BackendBinding:                cloneBackendBinding(item.BackendBinding),
 	}
 }
 

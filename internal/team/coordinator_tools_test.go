@@ -232,7 +232,7 @@ func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
 	if !ok || strings.Join(agents, ",") != "surface,reader" {
 		t.Fatalf("fresh agent enum = %#v, want only ordered initial workers", agentSchema["enum"])
 	}
-	for _, forbidden := range []string{"execution", "output_mode", "context_files"} {
+	for _, forbidden := range []string{"execution", "output_mode", "context_files", "action", "input_bindings", "input-bindings"} {
 		if _, exists := properties[forbidden]; exists {
 			t.Fatalf("fresh initial task schema exposed runtime-bound field %q", forbidden)
 		}

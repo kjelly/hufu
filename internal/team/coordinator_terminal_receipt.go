@@ -57,6 +57,12 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 		ProducerID:       producer,
 		TranscriptRef:    transcriptRef.ID,
 	}
+	if item := c.todoItemByID(todoID); item != nil {
+		receipt.RunInputSnapshotID = item.RunInputSnapshotID
+		receipt.RunInputSnapshotHash = item.RunInputSnapshotHash
+		receipt.MaterializedActionPayloadHash = item.MaterializedActionPayloadHash
+		receipt.BoundInputs = cloneStringMap(item.BoundInputs)
+	}
 	if strings.TrimSpace(receipt.ModelExecutionID) == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
 		return fmt.Errorf("coordinator task receipt is missing execution identity or transcript reference")
 	}

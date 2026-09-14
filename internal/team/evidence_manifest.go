@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,6 +253,12 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 	if receipt.RunID != runID || receipt.TaskID != item.ID || receipt.Attempt <= 0 || receipt.ModelExecutionID == "" || receipt.ProducerID == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
 		return fmt.Errorf("receipt is not fully bound to run, task, attempt, producer, and transcript")
 	}
+	if item.MaterializedActionPayloadHash != "" && (receipt.RunInputSnapshotID != item.RunInputSnapshotID ||
+		receipt.RunInputSnapshotHash != item.RunInputSnapshotHash ||
+		receipt.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash ||
+		!maps.Equal(receipt.BoundInputs, item.BoundInputs)) {
+		return fmt.Errorf("receipt action input binding conflicts with task occurrence")
+	}
 	ids := make([]string, 0, len(result.ArtifactRefs))
 	for _, ref := range result.ArtifactRefs {
 		if ref.ID == "" {
@@ -263,6 +270,8 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 		RunID: runID, TaskID: item.ID, Attempt: receipt.Attempt,
 		ModelExecutionID: receipt.ModelExecutionID, ProducerID: receipt.ProducerID,
 		TranscriptRef: receipt.TranscriptRef, ArtifactIDs: ids,
+		RunInputSnapshotID: receipt.RunInputSnapshotID, RunInputSnapshotHash: receipt.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: receipt.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(receipt.BoundInputs),
 	}
 	return nil
 }

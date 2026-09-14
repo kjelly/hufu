@@ -606,6 +606,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	}
 	agentKey := strings.ToLower(td.Agent)
 	cacheKey := agentKey + ":" + taskCacheIdentityWithSpec(desc, td.VerifySpec, td.Verify, td.VerifyMode)
+	cacheKey += taskExecutionInputCacheIdentity(td)
 	// Actions can have external side effects. They must never be satisfied by
 	// an output cache or coalesced with an identical in-flight request.
 	if td.Action != nil {
@@ -759,6 +760,14 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		s.inflightMu.Unlock()
 	}
 	s.eventCh <- result
+}
+
+func taskExecutionInputCacheIdentity(task TaskDef) string {
+	if task.RunInputSnapshotHash == "" && task.MaterializedActionPayloadHash == "" {
+		return ""
+	}
+	return "\nrun_input_snapshot_hash:" + task.RunInputSnapshotHash +
+		"\nmaterialized_action_payload_hash:" + task.MaterializedActionPayloadHash
 }
 
 // validateOnFailureTargets checks that every on_failure index is in range and

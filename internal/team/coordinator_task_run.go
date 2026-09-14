@@ -2221,6 +2221,9 @@ func runtimeActionGateName(action *Action) string {
 }
 
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	if err := c.validateMaterializedActionIdentity(task); err != nil {
+		return "", err
+	}
 	startedAt := time.Now().UTC()
 	actionID, actionRoot, err := c.allocateRuntimeActionWorkspace(todoID, startedAt)
 	if err != nil {
@@ -2310,6 +2313,8 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
 		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
 		Facts: actionResult.Outputs, Confidence: 1,
+		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 	}
 	c.storeSubmittedTaskResult(todoID, typedResult)
 	if item := c.todoItemByID(todoID); item != nil {
@@ -2437,18 +2442,22 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, actionR
 }
 
 type runtimeActionReceipt struct {
-	Version    int       `json:"version"`
-	RunID      string    `json:"run_id,omitempty"`
-	TaskID     string    `json:"task_id"`
-	Agent      string    `json:"agent,omitempty"`
-	ActionID   string    `json:"action_id"`
-	Capability string    `json:"capability"`
-	Type       string    `json:"type"`
-	Status     string    `json:"status"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
-	Output     string    `json:"output,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	Version                       int               `json:"version"`
+	RunID                         string            `json:"run_id,omitempty"`
+	TaskID                        string            `json:"task_id"`
+	Agent                         string            `json:"agent,omitempty"`
+	ActionID                      string            `json:"action_id"`
+	Capability                    string            `json:"capability"`
+	Type                          string            `json:"type"`
+	Status                        string            `json:"status"`
+	StartedAt                     time.Time         `json:"started_at"`
+	FinishedAt                    time.Time         `json:"finished_at"`
+	Output                        string            `json:"output,omitempty"`
+	Error                         string            `json:"error,omitempty"`
+	RunInputSnapshotID            string            `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 }
 
 func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, actionID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
@@ -2470,9 +2479,11 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	}
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
-			Version: 1, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
+			Version: 2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
 			Capability: capability, Type: task.Action.Type, Status: status,
 			StartedAt: startedAt, FinishedAt: finishedAt,
+			RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+			MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 			Output: utils.TruncateString(utils.RedactSecrets(output), 1000),
 			Error: func() string {
 				if actionErr == nil {
@@ -2499,6 +2510,8 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,
 		Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
 		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
+		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 	})
 }
 
