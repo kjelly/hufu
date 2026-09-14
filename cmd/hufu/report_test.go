@@ -513,6 +513,24 @@ func TestBuildReportMDIncludesInvariantAssessments(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDIncludesKnowledgeCoverage(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		Todos: []*team.TodoItem{{
+			ID: "knowledge-task", Agent: "worker", Status: team.TaskDone,
+			TypedResult: &team.TaskResult{KnowledgeCoverage: &team.TaskKnowledgeCoverage{
+				OutcomeCoverage:   team.OutcomeCoverageSignal{IncludedItemCount: 7, KnownCount: 5, AssumedCount: 2},
+				InvariantCoverage: team.InvariantCoverageSignal{TouchedPathCount: 3, ApplicableInvariantCount: 4},
+			}},
+		}},
+	}
+	report := buildReportMD(data, "demo", "")
+	want := "knowledge: 5 known, 2 assumed, 0 stale · invariants: 3/3 paths covered"
+	if !strings.Contains(report, want) {
+		t.Fatalf("report missing %q:\n%s", want, report)
+	}
+}
+
 func TestBuildReportMDAuditUnavailableDoesNotFabricateStatus(t *testing.T) {
 	data := &reportData{StartedAt: time.Now(), AuditUnavailableReason: "run %q was not found"}
 	report := buildReportMD(data, "demo", "")

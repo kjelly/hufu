@@ -274,6 +274,12 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		}
 		_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
 			refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
+		if err == nil && data.KnowledgeCoverage != nil {
+			outcome := data.KnowledgeCoverage.OutcomeCoverage
+			invariants := data.KnowledgeCoverage.InvariantCoverage
+			coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
+			_, err = fmt.Fprintf(writer, "Knowledge: %d known, %d assumed, %d stale; invariants: %d/%d paths covered\n", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, coveredPaths, invariants.TouchedPathCount)
+		}
 		return err
 	case inspectpkg.EvidenceData:
 		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nManifest: %s (%s)\nAudit verdict: %s\nAcceptance: %s\n",

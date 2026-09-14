@@ -48,21 +48,22 @@ type AttemptData struct {
 }
 
 type TaskData struct {
-	RunID             string        `json:"run_id"`
-	TaskID            string        `json:"task_id"`
-	Status            string        `json:"status"`
-	Phase             string        `json:"phase,omitempty"`
-	AgentID           string        `json:"agent_id,omitempty"`
-	ExecutionTarget   string        `json:"execution_target,omitempty"`
-	ExecutionTopology []string      `json:"execution_topology"`
-	Attempts          []AttemptData `json:"attempts"`
-	RetryDisposition  string        `json:"retry_disposition,omitempty"`
-	FailureClass      string        `json:"failure_class,omitempty"`
-	ReasonCode        string        `json:"reason_code,omitempty"`
-	RecoveryState     string        `json:"recovery_state,omitempty"`
-	ArtifactRefs      []string      `json:"artifact_refs"`
-	ContextRefs       []string      `json:"context_refs"`
-	MemoryRefs        []string      `json:"memory_refs"`
+	RunID             string                 `json:"run_id"`
+	TaskID            string                 `json:"task_id"`
+	Status            string                 `json:"status"`
+	Phase             string                 `json:"phase,omitempty"`
+	AgentID           string                 `json:"agent_id,omitempty"`
+	ExecutionTarget   string                 `json:"execution_target,omitempty"`
+	ExecutionTopology []string               `json:"execution_topology"`
+	Attempts          []AttemptData          `json:"attempts"`
+	RetryDisposition  string                 `json:"retry_disposition,omitempty"`
+	FailureClass      string                 `json:"failure_class,omitempty"`
+	ReasonCode        string                 `json:"reason_code,omitempty"`
+	RecoveryState     string                 `json:"recovery_state,omitempty"`
+	ArtifactRefs      []string               `json:"artifact_refs"`
+	ContextRefs       []string               `json:"context_refs"`
+	MemoryRefs        []string               `json:"memory_refs"`
+	KnowledgeCoverage *KnowledgeCoverageData `json:"knowledge_coverage,omitempty"`
 }
 
 type selectedRun struct {
@@ -314,6 +315,9 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, receipt.ProviderTranscriptRef)
 	}
 	if item.TypedResult != nil {
+		if query.Attempt == 0 || item.TypedResult.Attempt == query.Attempt {
+			data.KnowledgeCoverage = projectKnowledgeCoverage(item.TypedResult.KnowledgeCoverage)
+		}
 		for _, ref := range item.TypedResult.Artifacts {
 			data.ArtifactRefs = appendOpaqueRef(data.ArtifactRefs, ref.ID, ref.SHA256)
 		}

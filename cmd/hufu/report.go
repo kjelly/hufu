@@ -50,6 +50,16 @@ func hasInvariantAssessments(todos []*team.TodoItem) bool {
 	return false
 }
 
+func formatKnowledgeCoverage(coverage *team.TaskKnowledgeCoverage) string {
+	if coverage == nil {
+		return ""
+	}
+	outcome := coverage.OutcomeCoverage
+	invariants := coverage.InvariantCoverage
+	coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
+	return fmt.Sprintf("knowledge: %d known, %d assumed, %d stale · invariants: %d/%d paths covered", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, coveredPaths, invariants.TouchedPathCount)
+}
+
 // generateReport creates a markdown execution report for every loaded team.
 // It is the explicit --report behavior.
 func generateReport(loadedTeams map[string]*teamContext, combinedResult string) {
@@ -906,6 +916,15 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 				t.ID, statusIcon, t.Agent, reportExecutionTarget(t), reportProviderIdentity(t), t.Desc, detail, verify, dur)
+		}
+		b.WriteString("\n")
+		for _, item := range data.Todos {
+			if item == nil || item.TypedResult == nil {
+				continue
+			}
+			if summary := formatKnowledgeCoverage(item.TypedResult.KnowledgeCoverage); summary != "" {
+				fmt.Fprintf(&b, "- **%s:** %s\n", reportSafeMetadata(item.ID, 120), summary)
+			}
 		}
 		b.WriteString("\n---\n\n")
 	}

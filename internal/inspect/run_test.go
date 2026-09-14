@@ -103,6 +103,27 @@ func TestProjectTaskUsesAttemptAnchoredTargetsAndBothTranscriptRefs(t *testing.T
 	}
 }
 
+func TestProjectTaskIncludesReadOnlyKnowledgeCoverage(t *testing.T) {
+	item := &team.TodoItem{
+		ID: "task-1",
+		TypedResult: &team.TaskResult{Attempt: 2, KnowledgeCoverage: &team.TaskKnowledgeCoverage{
+			InvariantCoverage: team.InvariantCoverageSignal{TouchedPathCount: 4, ApplicableInvariantCount: 3, UncoveredPathCount: 1},
+			OutcomeCoverage:   team.OutcomeCoverageSignal{IncludedItemCount: 6, KnownCount: 4, AssumedCount: 1, StaleCount: 1},
+		}},
+	}
+	data := projectTask(item, InspectQuery{RunID: "run-1", TaskID: item.ID, Attempt: 2})
+	if data.KnowledgeCoverage == nil || data.KnowledgeCoverage.OutcomeCoverage.KnownCount != 4 || data.KnowledgeCoverage.InvariantCoverage.UncoveredPathCount != 1 {
+		t.Fatalf("knowledge coverage projection = %#v", data.KnowledgeCoverage)
+	}
+	data.KnowledgeCoverage.OutcomeCoverage.KnownCount = 99
+	if item.TypedResult.KnowledgeCoverage.OutcomeCoverage.KnownCount != 4 {
+		t.Fatal("inspect projection aliases task result coverage")
+	}
+	if otherAttempt := projectTask(item, InspectQuery{RunID: "run-1", TaskID: item.ID, Attempt: 1}); otherAttempt.KnowledgeCoverage != nil {
+		t.Fatalf("attempt 1 projected attempt 2 coverage: %#v", otherAttempt.KnowledgeCoverage)
+	}
+}
+
 func TestInspectTaskRequiresExistingAttempt(t *testing.T) {
 	fixture := buildRunFixture(t)
 	_, err := InspectTask(t.Context(), InspectQuery{

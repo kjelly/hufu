@@ -39,6 +39,27 @@ func TestInspectCommandRunJSON(t *testing.T) {
 	}
 }
 
+func TestRenderInspectTaskKnowledgeCoverage(t *testing.T) {
+	var output bytes.Buffer
+	envelope := &inspectpkg.Envelope{
+		Kind: inspectpkg.KindTask,
+		Data: inspectpkg.TaskData{
+			RunID: "run-1", TaskID: "task-1",
+			ExecutionTopology: []string{}, Attempts: []inspectpkg.AttemptData{}, ArtifactRefs: []string{}, ContextRefs: []string{}, MemoryRefs: []string{},
+			KnowledgeCoverage: &inspectpkg.KnowledgeCoverageData{
+				OutcomeCoverage:   inspectpkg.OutcomeCoverageData{KnownCount: 3, AssumedCount: 1, StaleCount: 1},
+				InvariantCoverage: inspectpkg.InvariantCoverageData{TouchedPathCount: 4, UncoveredPathCount: 1},
+			},
+		},
+	}
+	if err := renderInspectText(&output, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Knowledge: 3 known, 1 assumed, 1 stale; invariants: 3/4 paths covered"; !strings.Contains(output.String(), want) {
+		t.Fatalf("inspect output missing %q:\n%s", want, output.String())
+	}
+}
+
 func TestInspectTextAndJSONUseSameRunProjection(t *testing.T) {
 	workspace, runID, _ := buildInspectCommandFixture(t)
 	jsonCommand := newInspectCommand()

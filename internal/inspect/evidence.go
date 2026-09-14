@@ -57,6 +57,24 @@ type EvidenceFindingData struct {
 	Ref      string `json:"ref,omitempty"`
 }
 
+type InvariantCoverageData struct {
+	TouchedPathCount         int `json:"touched_path_count"`
+	ApplicableInvariantCount int `json:"applicable_invariant_count"`
+	UncoveredPathCount       int `json:"uncovered_path_count"`
+}
+
+type OutcomeCoverageData struct {
+	IncludedItemCount int `json:"included_item_count"`
+	KnownCount        int `json:"known_count"`
+	AssumedCount      int `json:"assumed_count"`
+	StaleCount        int `json:"stale_count"`
+}
+
+type KnowledgeCoverageData struct {
+	InvariantCoverage InvariantCoverageData `json:"invariant_coverage"`
+	OutcomeCoverage   OutcomeCoverageData   `json:"outcome_coverage"`
+}
+
 type EvidenceData struct {
 	RunID        string                    `json:"run_id"`
 	Manifest     EvidenceManifestData      `json:"manifest"`
@@ -166,4 +184,23 @@ func normalizeOpaqueRefs(refs []string) []string {
 		out = appendOpaqueRef(out, ref)
 	}
 	return normalizeRefs(out)
+}
+
+func projectKnowledgeCoverage(coverage *team.TaskKnowledgeCoverage) *KnowledgeCoverageData {
+	if coverage == nil {
+		return nil
+	}
+	return &KnowledgeCoverageData{
+		InvariantCoverage: InvariantCoverageData{
+			TouchedPathCount:         coverage.InvariantCoverage.TouchedPathCount,
+			ApplicableInvariantCount: coverage.InvariantCoverage.ApplicableInvariantCount,
+			UncoveredPathCount:       coverage.InvariantCoverage.UncoveredPathCount,
+		},
+		OutcomeCoverage: OutcomeCoverageData{
+			IncludedItemCount: coverage.OutcomeCoverage.IncludedItemCount,
+			KnownCount:        coverage.OutcomeCoverage.KnownCount,
+			AssumedCount:      coverage.OutcomeCoverage.AssumedCount,
+			StaleCount:        coverage.OutcomeCoverage.StaleCount,
+		},
+	}
 }
