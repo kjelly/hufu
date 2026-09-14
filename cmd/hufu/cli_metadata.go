@@ -49,7 +49,7 @@ var cliFlagGroups = map[string][]string{
 	"safety":     {"rbash", "no-net", "force-mcp", "allow-path", "unattended", "auto-approve"},
 	"security":   {"rbash", "no-net", "force-mcp", "allow-path", "direnv"},
 	"unattended": {"unattended", "max-duration", "max-total-tokens", "auto-approve"},
-	"display":    {"tui", "tui-compact", "display-mode", "theme", "display-preset", "no-color", "no-spinner"},
+	"display":    {"tui", "tui-compact", "display-mode", "theme", "display-preset", "no-color", "no-spinner", "no-summary"},
 	"advanced":   {"provider-url", "provider-api-key", "profile", "var", "var-file", "memory", "template"},
 }
 

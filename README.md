@@ -246,6 +246,7 @@ go run ./cmd/hufu
 | `--display-preset` | — | `string` | config or `default` | Rendering policy: `default` or low-refresh `epaper` |
 | `--no-color` | — | `bool` | `false` | Disable ANSI color; also honors `NO_COLOR` |
 | `--no-spinner` | — | `bool` | `false` | Disable the waiting spinner; also honors `NO_SPINNER` |
+| `--no-summary` | — | `bool` | `false` | Suppress the operator execution summary while preserving the final result and runtime behavior |
 | `--enable-pty-terminal` | — | `bool` | `false` | Eagerly initialize experimental Linux/macOS PTY handoff; `pty:true` starts it automatically |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
@@ -663,15 +664,15 @@ Confirmed persistent context with repeated verified support can be promoted thro
 
 ```bash
 hufu context promotion analyze --workspace workspace --project my-project --team my-team
-hufu context promotion show promo-abc123 --workspace workspace --project my-project --team my-team --show-content
-hufu context promotion approve promo-abc123 --workspace workspace --project my-project --team my-team
-hufu context promotion apply promo-abc123 --workspace workspace --project my-project --team my-team
+hufu context learning --workspace workspace --project my-project --team my-team
+hufu context promotion review promo-abc123 --workspace workspace --project my-project --team my-team
 ```
 
 Analysis never changes team Markdown or installed skills, approval never applies a draft, and `apply` fails closed if its source evidence or target changed. Use `reject --reason ...` to close a proposal or `edit --draft-file ...` while it is still proposed. Team-policy promotion appends policy only to the team's single coordinator/orchestrator; it is not a team-wide runtime security contract. Proposed and rejected drafts are never loaded by the runtime.
 
 See the [documentation map](docs/README.md) for the authority order and
-current architecture references. In particular, use the [L3/L4 outcome-driven
+current architecture references and [operator journeys](docs/guides/operator-journeys.md).
+In particular, use the [L3/L4 outcome-driven
 memory specification](docs/architecture/memory-learning.md) for contracts and
 rollout gates, and the [LTM promotion specification](docs/architecture/memory-promotion.md)
 for promotion lifecycle and safety boundaries.

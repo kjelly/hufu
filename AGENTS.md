@@ -146,6 +146,7 @@ Results joined and printed to stdout
 | `--display-preset` | — | config or `default` | Rendering policy: `default` or low-refresh `epaper` |
 | `--no-color` | — | `false` | Disable ANSI color output; also honors `NO_COLOR` |
 | `--no-spinner` | — | `false` | Disable the waiting spinner; also honors `NO_SPINNER` |
+| `--no-summary` | — | `false` | Suppress the operator execution summary while preserving the final result and runtime behavior |
 | `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `false` | Block all network access for agent subprocesses |
 | `--force-mcp` | — | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |

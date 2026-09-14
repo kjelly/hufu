@@ -26,14 +26,25 @@ render() {
 	echo
 	echo "Mode: $mode"
 	echo
-	echo "Record one row per participant and scenario. Score State, What, and Next against the answer key after the session; do not reveal it during the task."
+	echo "Participant cohort: new | existing"
+	echo "Interface mode: plain | terminal | tui"
+	echo "Counterbalanced order: _____"
+	echo "Recording consent obtained: yes | no"
 	echo
-	echo "| Participant | Scenario | Order | State correct | What correct | Next correct | Seconds | Actions | Safety incidents | Notes |"
-	echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---|"
+	echo "Record one row per participant and scenario. Score State, What, and Next against the answer key after the session; do not reveal it during the task. Do not record prompts, secrets, complete paths, tool arguments, memory, or document content."
+	echo
+	echo "| Participant | Cohort | Scenario | Order | State correct | What correct | Next correct | Seconds | Actions | Safety incidents | Error category | Incomplete reason | Notes |"
+	echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|"
 	while IFS=$'\t' read -r id journey _scenario _state _what _next _safety; do
 		[[ "$id" == "id" ]] && continue
-		printf '|  | %s (%s) |  |  |  |  |  |  |  |  |\n' "$journey" "$id"
+		printf '|  |  | %s (%s) |  |  |  |  |  |  |  |  |  |  |\n' "$journey" "$id"
 	done <"$corpus"
+	echo
+	echo "## First verified run timing"
+	echo
+	echo "| Participant | Cohort | Environment provisioned seconds | Install/model-loading seconds | Verified-run seconds | Completed | Incomplete reason |"
+	echo "|---|---|---:|---:|---:|---:|---|"
+	echo "|  |  |  |  |  |  |  |"
 	echo
 	echo "## Facilitator answer key"
 	echo

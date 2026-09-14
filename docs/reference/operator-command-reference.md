@@ -81,7 +81,7 @@ hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor
 
 - **advanced:** `--provider-url`, `--provider-api-key`, `--profile`, `--var`, `--var-file`, `--memory`, `--template`
 - **core:** `--team`, `--agent-team`, `--model`, `--coordinator-model`, `--default`, `--workspace`, `--workspace-root`
-- **display:** `--tui`, `--tui-compact`, `--display-mode`, `--theme`, `--display-preset`, `--no-color`, `--no-spinner`
+- **display:** `--tui`, `--tui-compact`, `--display-mode`, `--theme`, `--display-preset`, `--no-color`, `--no-spinner`, `--no-summary`
 - **execution:** `--route`, `--plan`, `--auto-skills`, `--steps`, `--dry-run`, `--timeout`, `--max-rounds`, `--input`, `--input-file`
 - **output:** `--verbose`, `--quiet`, `--output`, `--event-format`, `--report`, `--think`
 - **safety:** `--rbash`, `--no-net`, `--force-mcp`, `--allow-path`, `--unattended`, `--auto-approve`

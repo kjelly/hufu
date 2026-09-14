@@ -47,7 +47,7 @@ func TestCanonicalRunFactoryFlagsAreInstanceScoped(t *testing.T) {
 
 func TestCanonicalRunExposesPresentationFlags(t *testing.T) {
 	command := newRunCommand()
-	for _, name := range []string{"theme", "display-preset", "display-mode", "no-spinner", "tui-compact"} {
+	for _, name := range []string{"theme", "display-preset", "display-mode", "no-spinner", "no-summary", "tui-compact"} {
 		if command.Flags().Lookup(name) == nil {
 			t.Errorf("canonical run missing --%s", name)
 		}

@@ -2,11 +2,11 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `ba30643754d8d6cd85f91624a3f9bedf9d32457a`
+> Verified-Commit: 2026-09-14
 > Supersedes: —
 > Superseded-By: —
 > Implementation-Ready: yes（依 §1.3 的 PR 邊界與 phase gates 漸進實作）
-> 文件性質：已採納的增量 implementation contract；不是已實作功能清單
+> 文件性質：已採納的增量 implementation 與 release contract；phase 表記錄目前實作狀態
 > 文件版本：1.0｜日期：2026-09-14
 > 查核基準：`kjelly/hufu @ ba30643754d8d6cd85f91624a3f9bedf9d32457a`
 > 對象：coding agent、reviewer、hufu 維護者
@@ -1549,12 +1549,16 @@ migration 與三問式 troubleshooting 只引用已註冊命令；Nushell 的 se
 
 | 工作 ID | 工作 | 完成條件 |
 |---|---|---|
-| HF-UX-070 | baseline vs candidate 真人 task tests | 依第 18 節產生 report，不用模型主觀評分代替 |
-| HF-UX-071 | cross-platform / legacy automation / performance | supported platform matrix 明確，未測平台不得標已驗收 |
-| HF-UX-072 | release notes、opt-in rollout、fallback 路徑 | 舊入口、plain renderer、舊 theme 或關閉新摘要的退回路徑可用 |
-| HF-UX-073 | 最終 no-regression 與 source docs 更新 | 每個 requirement 有 test/evidence 或明列未交付；無假完成 |
+| HF-UX-070 | **未完成：**baseline vs candidate 真人 task tests | report 已建立但 participant count = 0；不用模型主觀評分代替 |
+| HF-UX-071 | **完成（engineering evidence）：**cross-platform / legacy automation / performance | supported platform matrix 明確；未測 native 平台只列 cross-build，不標已驗收 |
+| HF-UX-072 | **完成：**release notes、opt-in rollout、fallback 路徑 | 舊入口、plain renderer、default theme 與 `--no-summary` 退回路徑可用 |
+| HF-UX-073 | **完成（engineering evidence）：**最終 no-regression 與 source docs 更新 | release-readiness map 將未驗證平台與 HF-UX-070 明列未交付，無假完成 |
 
-**Gate P7：**關鍵 safety/compatibility gates 零失敗；其餘目標未達就調整 UI，不降低 verification 或 authorization 來換取較少步驟。
+**Gate P7（2026-09-14 未通過，維持 preview）：**Linux amd64 的 safety/compatibility gates、
+overview performance 與 Bash/Fish/Nushell parse smoke 已通過；Linux arm64 與 Darwin 只有 CGO-free
+cross-build，native terminal 尚未驗收。真人 baseline/candidate task test 為 0 位參與者，因此不得升為
+stable，也不得搬移本 active contract。證據與剩餘項目見
+`docs/reference/operator-release-readiness.md` 與 `docs/reference/operator-usability-evaluation.md`。
 
 
 ---
@@ -1888,4 +1892,6 @@ Reviewer 優先審查 scope、authority、state inference、idempotency、output
 | [E01] | Cobra 原生 command grouping / help 的擴充接縫；不因此要求升級 framework |
 | [E02] | NO_COLOR 的非空環境變數與 explicit preference 原則；不把 no-color 誤當 no-animation |
 
-本文件的 state projection、action contract 與 phase sequencing 是已採納但尚待實作的新增契約；UX／performance targets 與使用性測試方案則是 release 驗收目標。兩者都不是原始碼中已存在的功能，也不是外部研究已證實 hufu 已達到的效益。
+本文件的 state projection、action contract 與 Phase 0～6 已落地；Phase 7 的 engineering evidence
+已完成，但真人使用性與部分 native 平台驗收尚未完成。現有測試證明的是實作 contract，不是外部
+研究已證實的普遍 UX 效益；在 HF-UX-070 通過前相關介面維持 preview。

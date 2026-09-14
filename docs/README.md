@@ -68,12 +68,15 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator journeys](guides/operator-journeys.md)
 - [Operator CLI migration](guides/operator-cli-migration.md)
 - [Operator troubleshooting and recovery](guides/operator-troubleshooting.md)
+- [Operator experience preview and fallback](guides/operator-experience-preview.md)
 - [SSH tool](guides/ssh-tool.md)
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.
 - [Generated operator command reference](reference/operator-command-reference.md)
+- [Operator release readiness](reference/operator-release-readiness.md)
+- [Operator usability evaluation](reference/operator-usability-evaluation.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)

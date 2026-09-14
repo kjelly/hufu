@@ -15,7 +15,7 @@ type canonicalRunOptions struct {
 	temperature, maxTokens, topP, topK, reasoningEffort   string
 	sidecarModel, guardModel, judgeModel, planReviewer    string
 	quiet, verbose, dryRun, defaultTeam, noNet, forceMCP  bool
-	noSpinner, tuiCompact                                 bool
+	noSpinner, noSummary, tuiCompact                      bool
 	unattended, plan, autoSkills, report, steps, tui      bool
 	rbash, direnv, noJournal, autoApprove, think          bool
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
@@ -79,6 +79,7 @@ which the team name is joined exactly once. Omit both to use
 			opts.themeMode = options.theme
 			opts.displayPreset = options.displayPreset
 			opts.noSpinner = options.noSpinner
+			opts.noSummary = options.noSummary
 			opts.tuiCompact = options.tuiCompact
 			opts.quietMode = options.quiet
 			opts.verbose = options.verbose
@@ -140,6 +141,7 @@ which the team name is joined exactly once. Omit both to use
 	flags.StringVar(&options.theme, "theme", "", "Display theme: auto, light, dark, or mono")
 	flags.StringVar(&options.displayPreset, "display-preset", "", "Display preset: default or epaper")
 	flags.BoolVar(&options.noSpinner, "no-spinner", false, "Disable the TUI waiting spinner (also honors NO_SPINNER)")
+	flags.BoolVar(&options.noSummary, "no-summary", false, "Suppress the execution summary written to stderr")
 	flags.BoolVar(&options.tuiCompact, "tui-compact", false, "Force the compact three-column TUI layout")
 	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Suppress status output")
 	flags.BoolVarP(&options.verbose, "verbose", "v", false, "Show full agent output")

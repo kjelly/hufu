@@ -139,6 +139,7 @@ export extern "hufu" [
   --display-preset: string # Display preset: default or epaper
   --no-color # Disable ANSI color output
   --no-spinner # Disable the TUI waiting spinner
+  --no-summary # Suppress the operator execution summary
   --rbash # Use restricted bash (rbash) for the bash tool
   --no-net # Block all network access for agent subprocesses
   --force-mcp # Force MCP mode

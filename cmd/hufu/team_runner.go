@@ -209,7 +209,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		fmt.Println(result)
 		if !opts.quietMode {
 			renderSkillSummary(allSkillUsage)
-			if !opts.noSummary {
+			if executionSummaryEnabled(opts) {
 				renderExecutionSummary(os.Stderr, loadedTeams, time.Since(startedAt))
 			}
 		}
@@ -253,6 +253,10 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	}
 
 	return nil
+}
+
+func executionSummaryEnabled(options runOptions) bool {
+	return !options.quietMode && !options.noSummary && options.outputFormat != "json"
 }
 
 func formatUnresolvedTaskError(teamName string, item *team.TodoItem) error {

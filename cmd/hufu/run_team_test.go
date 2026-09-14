@@ -207,6 +207,17 @@ func TestRenderExecutionSummary(t *testing.T) {
 	}
 }
 
+func TestExecutionSummaryFallbacks(t *testing.T) {
+	if !executionSummaryEnabled(runOptions{}) {
+		t.Fatal("default text mode should render the operator summary")
+	}
+	for _, options := range []runOptions{{noSummary: true}, {quietMode: true}, {outputFormat: "json"}} {
+		if executionSummaryEnabled(options) {
+			t.Fatalf("summary should be disabled for fallback options: %#v", options)
+		}
+	}
+}
+
 func TestMultiTeamFinishedMsgAggregationPrecedence(t *testing.T) {
 	tc1 := &teamContext{teamName: "teamA", coordinator: &team.Coordinator{}}
 	tc1.coordinator.SetLastRunResult(&team.RunResult{
