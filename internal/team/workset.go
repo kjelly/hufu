@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	WorksetSchemaVersion = 1
-	maxWorksetItems      = 2000
-	maxWorksetKeyBytes   = 256
-	maxWorksetValueBytes = 4096
-	maxWorksetBytes      = 4 * 1024 * 1024
+	WorksetSchemaVersion  = 1
+	worksetSchemaVersion2 = 2
+	maxWorksetItems       = 2000
+	maxWorksetKeyBytes    = 256
+	maxWorksetValueBytes  = 4096
+	maxWorksetBytes       = 4 * 1024 * 1024
 )
 
 // WorksetManifest is the provider-neutral normalized source for a fan-out.
@@ -180,8 +181,8 @@ func equivalentWorksetReceipts(first, second *WorksetExpansionReceipt) bool {
 }
 
 func validateWorksetManifest(manifest WorksetManifest) error {
-	if manifest.SchemaVersion != WorksetSchemaVersion {
-		return fmt.Errorf("unsupported workset schema_version %d (want %d)", manifest.SchemaVersion, WorksetSchemaVersion)
+	if manifest.SchemaVersion != WorksetSchemaVersion && manifest.SchemaVersion != worksetSchemaVersion2 {
+		return fmt.Errorf("unsupported workset schema_version %d (want %d or %d)", manifest.SchemaVersion, WorksetSchemaVersion, worksetSchemaVersion2)
 	}
 	if len(manifest.Items) == 0 {
 		return fmt.Errorf("workset manifest must contain at least one item")

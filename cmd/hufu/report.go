@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,6 +119,7 @@ type reportData struct {
 	CanonicalRunError     string
 	HistoricalTodoCount   int
 	ModelProfiles         []modelprofile.TelemetryProjection
+	ReviewScope           *reviewScopeReport
 
 	// AuditResult is the independent audit re-verification of this run
 	// (spec.md §38), computed by calling auditverify.VerifyWorkspaceRun --
@@ -125,6 +127,25 @@ type reportData struct {
 	// verifier could not run at all; AuditUnavailableReason then explains why.
 	AuditResult            *auditverify.AuditVerificationResult
 	AuditUnavailableReason string
+}
+
+type reviewScopeReport struct {
+	Requested struct {
+		Kind    string `json:"kind"`
+		Count   int    `json:"count"`
+		History string `json:"history"`
+		Head    string `json:"head"`
+	} `json:"requested"`
+	Resolved struct {
+		Base                 string `json:"base"`
+		Head                 string `json:"head"`
+		SelectedCommitCount  int    `json:"selected_commit_count"`
+		AvailableCommitCount int    `json:"available_commit_count"`
+		HistoryExhausted     bool   `json:"history_exhausted"`
+		RepositoryShallow    bool   `json:"repository_shallow"`
+	} `json:"resolved"`
+	Satisfied   bool   `json:"satisfied"`
+	InputDigest string `json:"input_digest"`
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -319,7 +340,40 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		}
 	}
 
+	d.ReviewScope = gatherRuntimeReviewScope(d.Todos)
 	return d
+}
+
+func gatherRuntimeReviewScope(todos []*team.TodoItem) *reviewScopeReport {
+	const maxScopeOutputBytes = 64 * 1024
+	for _, item := range todos {
+		if item == nil || item.TypedResult == nil || item.TypedResult.Source != "runtime" {
+			continue
+		}
+		raw, ok := item.TypedResult.Facts["scope"]
+		if !ok {
+			continue
+		}
+		encoded, err := json.Marshal(raw)
+		if err != nil || len(encoded) > maxScopeOutputBytes {
+			continue
+		}
+		var scope reviewScopeReport
+		if err := json.Unmarshal(encoded, &scope); err != nil || !validReviewScopeReport(&scope) {
+			continue
+		}
+		return &scope
+	}
+	return nil
+}
+
+func validReviewScopeReport(scope *reviewScopeReport) bool {
+	return scope != nil && scope.Requested.Kind == "last_n" &&
+		scope.Requested.Count >= 1 && scope.Requested.Count <= 100 &&
+		scope.Requested.History == "first_parent" && strings.TrimSpace(scope.Requested.Head) != "" &&
+		strings.TrimSpace(scope.Resolved.Base) != "" && strings.TrimSpace(scope.Resolved.Head) != "" &&
+		scope.Resolved.SelectedCommitCount > 0 && scope.Resolved.AvailableCommitCount >= scope.Resolved.SelectedCommitCount &&
+		!scope.Resolved.RepositoryShallow && scope.Satisfied && strings.HasPrefix(scope.InputDigest, "sha256:")
 }
 
 // renderReportAuditSection formats the independent audit re-verification of
@@ -531,6 +585,17 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	fmt.Fprintf(&b, "- **Evidence identity:** `%s`\n\n", reportSafeMetadata(data.EvidenceIdentity, 160))
 	if data.CanonicalRunError != "" {
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
+	}
+	if data.ReviewScope != nil {
+		scope := data.ReviewScope
+		b.WriteString("## Resolved Review Scope\n\n")
+		fmt.Fprintf(&b, "- **Configured review scope:** last %d first-parent commits ending at `%s`\n", scope.Requested.Count, reportSafeMetadata(scope.Requested.Head, 160))
+		fmt.Fprintf(&b, "- **Resolved range:** `%s..%s`\n", reportSafeMetadata(scope.Resolved.Base, 160), reportSafeMetadata(scope.Resolved.Head, 160))
+		fmt.Fprintf(&b, "- **Selected commits:** %d (available: %d; history exhausted: %t)\n", scope.Resolved.SelectedCommitCount, scope.Resolved.AvailableCommitCount, scope.Resolved.HistoryExhausted)
+		b.WriteString("- **Scope source:** `compatibility_var`\n")
+		b.WriteString("- **Scope assertion:** `producer_attested` (not yet core-bound)\n")
+		fmt.Fprintf(&b, "- **Satisfied:** %t\n", scope.Satisfied)
+		fmt.Fprintf(&b, "- **Input digest:** `%s`\n\n", reportSafeMetadata(scope.InputDigest, 160))
 	}
 	if len(data.Decisions) > 0 {
 		b.WriteString("## Decision State\n\n")

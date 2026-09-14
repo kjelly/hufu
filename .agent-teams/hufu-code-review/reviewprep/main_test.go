@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,9 @@ import (
 
 func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	repo := newFixtureRepo(t)
+	for i := 1; i <= 10; i++ {
+		writeAndCommit(t, repo, filepath.Join("internal", "team", fmt.Sprintf("runtime-%02d.go", i)), "package team\n", fmt.Sprintf("runtime change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
+	}
 	config := fixtureConfig(repo, "out")
 	payload, err := json.Marshal(wireConfig{
 		Repository: config.Repository, OutputDir: config.OutputDir, ArtifactRoot: config.ArtifactRoot,
@@ -38,6 +42,17 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 	if result.Outputs["manifest_path"] == nil {
 		t.Fatalf("action result omitted manifest_path: %#v", result)
+	}
+	scopeJSON, err := json.Marshal(result.Outputs["scope"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scope scopeAttestation
+	if err := json.Unmarshal(scopeJSON, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if scope.Requested.Count != 10 || scope.Resolved.SelectedCommitCount != 10 || !scope.Satisfied {
+		t.Fatalf("canonical action scope = %#v, want exactly 10 selected commits", scope)
 	}
 }
 
@@ -95,6 +110,22 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 		t.Fatalf("item_count = %v, want %d", got, want)
 	}
 	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+	if manifest.Scope.Requested != (requestedScope{Kind: "last_n", Count: 10, History: "first_parent", Head: "HEAD"}) {
+		t.Fatalf("requested scope = %#v", manifest.Scope.Requested)
+	}
+	if manifest.Scope.Resolved.SelectedCommitCount != 3 || manifest.Scope.Resolved.AvailableCommitCount != 3 || !manifest.Scope.Resolved.HistoryExhausted || manifest.Scope.Resolved.RepositoryShallow || !manifest.Scope.Satisfied {
+		t.Fatalf("resolved scope = %#v", manifest.Scope)
+	}
+	if got, want := manifest.Scope.InputDigest, scopeInputDigest(manifest.Scope.Requested); got != want || !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("input digest = %q, want %q", got, want)
+	}
+	outputScope, ok := result.Outputs["scope"].(scopeAttestation)
+	if !ok || outputScope != manifest.Scope {
+		t.Fatalf("runtime scope = %#v, want manifest scope %#v", result.Outputs["scope"], manifest.Scope)
+	}
+	if result.Outputs["total_diff_bytes"] != manifest.Observed.TotalDiffBytes || result.Outputs["total_diff_lines"] != manifest.Observed.TotalDiffLines {
+		t.Fatalf("runtime totals = %#v, want manifest totals %#v", result.Outputs, manifest.Observed)
+	}
 	got := goldenSummary{SchemaVersion: manifest.SchemaVersion, CommitCount: manifest.Range.CommitCount, ChangedFiles: manifest.ChangedFiles}
 	for _, entry := range manifest.Items {
 		if len(entry.Inputs) != 1 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" {
@@ -148,12 +179,15 @@ func TestResolveRangeCharacterizesFirstParentCardinality(t *testing.T) {
 
 	for _, count := range []int{1, 3, 10} {
 		t.Run(fmt.Sprintf("last_%d", count), func(t *testing.T) {
-			r, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", count)
+			resolution, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", count)
 			if err != nil {
 				t.Fatalf("resolveRange(%d): %v", count, err)
 			}
-			if r.CommitCount != count {
-				t.Fatalf("CommitCount = %d, want %d", r.CommitCount, count)
+			if resolution.Range.CommitCount != count {
+				t.Fatalf("CommitCount = %d, want %d", resolution.Range.CommitCount, count)
+			}
+			if resolution.AvailableCommitCount != 10 || resolution.HistoryExhausted {
+				t.Fatalf("resolution = %#v, want 10 available and non-exhausted", resolution)
 			}
 		})
 	}
@@ -165,12 +199,31 @@ func TestResolveRangeCharacterizesExhaustedHistory(t *testing.T) {
 		writeAndCommit(t, repo, filepath.Join("internal", fmt.Sprintf("commit-%02d.go", i)), "package internal\n", fmt.Sprintf("change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
 	}
 
-	r, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", 10)
+	resolution, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", 10)
 	if err != nil {
 		t.Fatalf("resolveRange: %v", err)
 	}
-	if r.CommitCount != 3 {
-		t.Fatalf("CommitCount = %d, want all 3 available commits", r.CommitCount)
+	if resolution.Range.CommitCount != 3 || resolution.AvailableCommitCount != 3 || !resolution.HistoryExhausted {
+		t.Fatalf("resolution = %#v, want all 3 available commits and exhausted history", resolution)
+	}
+}
+
+func TestResolveRangeIncludesRootCommitWhenHistoryIsExhausted(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/one.go", "package internal\n", "one", "2025-01-02T00:00:00Z")
+	resolution, err := resolveRange(t.Context(), repo, "1970-01-01", 10)
+	if err != nil {
+		t.Fatalf("resolveRange including root: %v", err)
+	}
+	if resolution.Range.CommitCount != 2 || resolution.AvailableCommitCount != 2 || !resolution.HistoryExhausted {
+		t.Fatalf("resolution = %#v, want root plus one commit and exhausted history", resolution)
+	}
+	paths, err := changedPaths(t.Context(), repo, resolution.Range)
+	if err != nil {
+		t.Fatalf("changedPaths from empty tree: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("changed paths = %#v, want root and later paths", paths)
 	}
 }
 
@@ -288,10 +341,10 @@ func TestPrepareArtifactRootMatchesRuntimeWorkspace(t *testing.T) {
 	}
 }
 
-func TestPrepareHandlesEmptyRange(t *testing.T) {
+func TestPrepareRejectsEmptyRangeWithoutPublishingManifest(t *testing.T) {
 	repo := newFixtureRepo(t)
 	outputDir := filepath.Join(repo, "review-output")
-	result, err := Prepare(context.Background(), Config{
+	_, err := Prepare(context.Background(), Config{
 		Repository:   repo,
 		OutputDir:    outputDir,
 		Since:        "2025-01-01T12:00:00Z",
@@ -299,16 +352,11 @@ func TestPrepareHandlesEmptyRange(t *testing.T) {
 		MaxDiffLines: 100,
 		MaxPaths:     5,
 	})
-	if err != nil {
-		t.Fatalf("Prepare() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "scope_empty") {
+		t.Fatalf("Prepare() error = %v, want scope_empty", err)
 	}
-
-	manifest := readManifest(t, filepath.Join(outputDir, "workset-manifest.json"))
-	if manifest.ChangedFiles != 0 || len(manifest.Items) != 0 {
-		t.Fatalf("empty range manifest = %+v, want no files or items", manifest)
-	}
-	if result.Outputs["item_count"] != 0 || result.Outputs["changed_files"] != 0 {
-		t.Fatalf("result outputs = %+v, want no files or items", result.Outputs)
+	if _, statErr := os.Stat(outputDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("empty range published output directory: %v", statErr)
 	}
 }
 
@@ -384,6 +432,39 @@ func TestPrepareRejectsInvalidConfigAndNonEmptyOutput(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsEveryTotalCapWithoutPublishingOutput(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/one.go", "package team\n\nfunc One() int { return 1 }\n", "one", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/team/two.go", "package team\n\nfunc Two() int { return 2 }\n", "two", "2025-01-03T00:00:00Z")
+
+	tests := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{name: "bytes", edit: func(config *Config) { config.MaxTotalDiffBytes = 1 }},
+		{name: "lines", edit: func(config *Config) { config.MaxTotalDiffLines = 1 }},
+		{name: "paths", edit: func(config *Config) { config.MaxChangedPaths = 1 }},
+		{name: "items", edit: func(config *Config) {
+			config.MaxPaths = 1
+			config.MaxWorksetItems = 1
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := "out-" + test.name
+			config := fixtureConfig(repo, output)
+			test.edit(&config)
+			_, err := Prepare(t.Context(), config)
+			if err == nil || !strings.Contains(err.Error(), "scope_too_large") || !strings.Contains(err.Error(), "remediation:") {
+				t.Fatalf("Prepare() error = %v, want scope_too_large with remediation", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(repo, output)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("cap failure published output directory: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestPrepareUsesHufuEnvironmentVariables(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "internal/team/foo.go", "package team\n", "foo change", "2025-01-02T00:00:00Z")
@@ -426,7 +507,12 @@ type goldenItem struct {
 }
 
 func fixtureConfig(repo, output string) Config {
-	return Config{Repository: repo, OutputDir: output, Since: "2025-01-01T12:00:00Z", MaxCommits: 10, MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16}
+	return Config{
+		Repository: repo, OutputDir: output, Since: "2025-01-01T12:00:00Z", MaxCommits: 10,
+		MaxTotalDiffBytes: defaultMaxTotalDiffBytes, MaxTotalDiffLines: defaultMaxTotalDiffLines,
+		MaxChangedPaths: defaultMaxChangedPaths, MaxWorksetItems: defaultMaxWorksetItems,
+		MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16,
+	}
 }
 
 func newFixtureRepo(t *testing.T) string {

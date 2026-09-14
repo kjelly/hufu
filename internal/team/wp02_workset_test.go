@@ -76,7 +76,7 @@ func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 		"zero-byte source": "",
 		"duplicate key":    `{"schema_version":1,"items":[{"key":"same","bindings":{"x":"1"}},{"key":"same","bindings":{"x":"2"}}]}`,
 		"empty key":        `{"schema_version":1,"items":[{"key":"","bindings":{"x":"1"}}]}`,
-		"bad schema":       `{"schema_version":2,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
+		"bad schema":       `{"schema_version":3,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -89,6 +89,16 @@ func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 				t.Fatalf("invalid manifest was partially expanded: expanded=%#v err=%v", expanded, err)
 			}
 		})
+	}
+}
+
+func TestStructuredFanOutAcceptsProducerManifestV2(t *testing.T) {
+	manifest, err := decodeWorksetManifest([]byte(`{"schema_version":2,"scope":{"satisfied":true},"items":[{"key":"one","bindings":{"x":"1"}}]}`))
+	if err != nil {
+		t.Fatalf("decode v2 workset manifest: %v", err)
+	}
+	if manifest.SchemaVersion != 2 || len(manifest.Items) != 1 || manifest.Items[0].Key != "one" {
+		t.Fatalf("decoded manifest = %#v", manifest)
 	}
 }
 

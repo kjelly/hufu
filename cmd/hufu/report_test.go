@@ -413,18 +413,52 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 	}
 }
 
-func TestBuildReportMDCharacterizesMissingCanonicalReviewScope(t *testing.T) {
+func TestBuildReportMDUsesRuntimeProducerScopeInsteadOfFinalResult(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now(),
+		Todos: []*team.TodoItem{{
+			ID: "producer", PlanTaskID: "produce-workset", Status: team.TaskDone,
+			TypedResult: &team.TaskResult{Source: "runtime", Facts: map[string]any{
+				"scope": map[string]any{
+					"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"},
+					"resolved": map[string]any{
+						"base": "base-sha", "head": "head-sha", "selected_commit_count": 10,
+						"available_commit_count": 12, "history_exhausted": false, "repository_shallow": false,
+					},
+					"satisfied": true, "input_digest": "sha256:attested",
+				},
+			}},
+		}},
 		RunResult: &team.RunResult{
 			RunID:         "run-review",
 			Outcome:       team.RunOutcomeCompleted,
 			GoalSatisfied: true,
 		},
 	}
-	report := buildReportMD(data, "hufu-code-review", "# Review of the Last 10 Commits")
-	if strings.Contains(report, "## Resolved Review Scope") || strings.Contains(report, "## Resolved Run Inputs") {
-		t.Fatalf("current report unexpectedly contains canonical review scope:\n%s", report)
+	data.ReviewScope = gatherRuntimeReviewScope(data.Todos)
+	report := buildReportMD(data, "hufu-code-review", "# Review of the Last 99 Commits")
+	for _, want := range []string{
+		"## Resolved Review Scope", "last 10 first-parent commits", "`base-sha..head-sha`",
+		"Selected commits:** 10", "Scope source:** `compatibility_var`",
+		"Scope assertion:** `producer_attested` (not yet core-bound)", "`sha256:attested`",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing runtime scope %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, "Configured review scope:** last 99") {
+		t.Fatalf("report inferred scope from model-authored final result:\n%s", report)
+	}
+}
+
+func TestGatherRuntimeReviewScopeRejectsModelOwnedFacts(t *testing.T) {
+	scope := map[string]any{
+		"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"},
+		"resolved":  map[string]any{"base": "a", "head": "b", "selected_commit_count": 10, "available_commit_count": 10},
+		"satisfied": true, "input_digest": "sha256:digest",
+	}
+	if got := gatherRuntimeReviewScope([]*team.TodoItem{{TypedResult: &team.TaskResult{Source: "submitted", Facts: map[string]any{"scope": scope}}}}); got != nil {
+		t.Fatalf("model-owned scope entered report: %#v", got)
 	}
 }
 

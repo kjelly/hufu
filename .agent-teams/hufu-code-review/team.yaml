@@ -86,7 +86,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"since":"1970-01-01","max_commits":{@ printf "%q" .review.scope.max_commits @},"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}
+          {"since":"1970-01-01","max_commits":{@ printf "%q" .review.scope.max_commits @},"max_total_diff_bytes":1048576,"max_total_diff_lines":20000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}
 
     - id: review-workset
       agent: reviewer

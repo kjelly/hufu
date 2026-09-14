@@ -20,7 +20,14 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
-const manifestSchemaVersion = 1
+const manifestSchemaVersion = 2
+
+const (
+	defaultMaxTotalDiffBytes = 1_048_576
+	defaultMaxTotalDiffLines = 20_000
+	defaultMaxChangedPaths   = 256
+	defaultMaxWorksetItems   = 64
+)
 
 type actionRequest struct {
 	Type    string `json:"type"`
@@ -30,25 +37,33 @@ type actionRequest struct {
 // Config intentionally contains only team-owned workset semantics. Hufu
 // passes it as an opaque Action payload and does not interpret these fields.
 type Config struct {
-	Repository   string `json:"repository"`
-	OutputDir    string `json:"output_dir"`
-	ArtifactRoot string `json:"artifact_root"`
-	Since        string `json:"since"`
-	MaxCommits   int    `json:"max_commits"`
-	MaxDiffBytes int    `json:"max_diff_bytes"`
-	MaxDiffLines int    `json:"max_diff_lines"`
-	MaxPaths     int    `json:"max_paths"`
+	Repository        string `json:"repository"`
+	OutputDir         string `json:"output_dir"`
+	ArtifactRoot      string `json:"artifact_root"`
+	Since             string `json:"since"`
+	MaxCommits        int    `json:"max_commits"`
+	MaxTotalDiffBytes int    `json:"max_total_diff_bytes"`
+	MaxTotalDiffLines int    `json:"max_total_diff_lines"`
+	MaxChangedPaths   int    `json:"max_changed_paths"`
+	MaxWorksetItems   int    `json:"max_workset_items"`
+	MaxDiffBytes      int    `json:"max_diff_bytes"`
+	MaxDiffLines      int    `json:"max_diff_lines"`
+	MaxPaths          int    `json:"max_paths"`
 }
 
 type wireConfig struct {
-	Repository   string `json:"repository"`
-	OutputDir    string `json:"output_dir"`
-	ArtifactRoot string `json:"artifact_root"`
-	Since        string `json:"since"`
-	MaxCommits   string `json:"max_commits"`
-	MaxDiffBytes int    `json:"max_diff_bytes"`
-	MaxDiffLines int    `json:"max_diff_lines"`
-	MaxPaths     int    `json:"max_paths"`
+	Repository        string `json:"repository"`
+	OutputDir         string `json:"output_dir"`
+	ArtifactRoot      string `json:"artifact_root"`
+	Since             string `json:"since"`
+	MaxCommits        string `json:"max_commits"`
+	MaxTotalDiffBytes int    `json:"max_total_diff_bytes"`
+	MaxTotalDiffLines int    `json:"max_total_diff_lines"`
+	MaxChangedPaths   int    `json:"max_changed_paths"`
+	MaxWorksetItems   int    `json:"max_workset_items"`
+	MaxDiffBytes      int    `json:"max_diff_bytes"`
+	MaxDiffLines      int    `json:"max_diff_lines"`
+	MaxPaths          int    `json:"max_paths"`
 }
 
 type actionResult struct {
@@ -66,10 +81,49 @@ type artifact struct {
 }
 
 type manifest struct {
-	SchemaVersion int         `json:"schema_version"`
-	Range         reviewRange `json:"range"`
-	ChangedFiles  int         `json:"changed_files"`
-	Items         []item      `json:"items"`
+	SchemaVersion int              `json:"schema_version"`
+	Scope         scopeAttestation `json:"scope"`
+	Observed      observedBudget   `json:"observed_budget"`
+	Range         reviewRange      `json:"range"`
+	ChangedFiles  int              `json:"changed_files"`
+	Items         []item           `json:"items"`
+}
+
+type requestedScope struct {
+	Kind    string `json:"kind"`
+	Count   int    `json:"count"`
+	History string `json:"history"`
+	Head    string `json:"head"`
+}
+
+type resolvedScope struct {
+	Base                 string `json:"base"`
+	Head                 string `json:"head"`
+	SelectedCommitCount  int    `json:"selected_commit_count"`
+	AvailableCommitCount int    `json:"available_commit_count"`
+	HistoryExhausted     bool   `json:"history_exhausted"`
+	RepositoryShallow    bool   `json:"repository_shallow"`
+}
+
+type scopeAttestation struct {
+	Requested   requestedScope `json:"requested"`
+	Resolved    resolvedScope  `json:"resolved"`
+	Satisfied   bool           `json:"satisfied"`
+	InputDigest string         `json:"input_digest"`
+}
+
+type observedBudget struct {
+	TotalDiffBytes int `json:"total_diff_bytes"`
+	TotalDiffLines int `json:"total_diff_lines"`
+	ChangedPaths   int `json:"changed_paths"`
+	WorksetItems   int `json:"workset_items"`
+}
+
+type rangeResolution struct {
+	Range                reviewRange
+	AvailableCommitCount int
+	HistoryExhausted     bool
+	RepositoryShallow    bool
 }
 
 type reviewRange struct {
@@ -141,8 +195,10 @@ func decodeWireConfig(payload string) (Config, error) {
 	}
 	config := Config{
 		Repository: wire.Repository, OutputDir: wire.OutputDir, ArtifactRoot: wire.ArtifactRoot,
-		Since: wire.Since, MaxCommits: maxCommits, MaxDiffBytes: wire.MaxDiffBytes,
-		MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
+		Since: wire.Since, MaxCommits: maxCommits,
+		MaxTotalDiffBytes: wire.MaxTotalDiffBytes, MaxTotalDiffLines: wire.MaxTotalDiffLines,
+		MaxChangedPaths: wire.MaxChangedPaths, MaxWorksetItems: wire.MaxWorksetItems,
+		MaxDiffBytes: wire.MaxDiffBytes, MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
 	}
 	if err := validateMaxCommits(config.MaxCommits); err != nil {
 		return Config{}, err
@@ -188,24 +244,45 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
 
-	reviewRangeValue, err := resolveRange(ctx, repo, config.Since, config.MaxCommits)
+	resolution, err := resolveRange(ctx, repo, config.Since, config.MaxCommits)
 	if err != nil {
 		return actionResult{}, err
+	}
+	reviewRangeValue := resolution.Range
+	if reviewRangeValue.CommitCount == 0 {
+		return actionResult{}, fmt.Errorf("scope_empty: requested last %d first-parent commits ending at HEAD selected no commits", config.MaxCommits)
 	}
 	paths, err := changedPaths(ctx, repo, reviewRangeValue)
 	if err != nil {
 		return actionResult{}, err
 	}
+	batches, err := buildBatches(ctx, repo, reviewRangeValue, paths, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	observed := observeBudget(batches, paths)
+	if err := enforceTotalBudget(config, observed); err != nil {
+		return actionResult{}, err
+	}
+	requested := requestedScope{Kind: "last_n", Count: config.MaxCommits, History: "first_parent", Head: "HEAD"}
+	scope := scopeAttestation{
+		Requested: requested,
+		Resolved: resolvedScope{
+			Base: reviewRangeValue.Start, Head: reviewRangeValue.End,
+			SelectedCommitCount: reviewRangeValue.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
+			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
+		},
+		Satisfied: true, InputDigest: scopeInputDigest(requested),
+	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
 	}
-
-	items, err := buildItems(ctx, repo, artifactRoot, outputDir, reviewRangeValue, paths, config)
+	items, err := writeItems(artifactRoot, outputDir, batches)
 	if err != nil {
 		return actionResult{}, err
 	}
 	manifestPath := filepath.Join(outputDir, "workset-manifest.json")
-	m := manifest{SchemaVersion: manifestSchemaVersion, Range: reviewRangeValue, ChangedFiles: len(paths), Items: items}
+	m := manifest{SchemaVersion: manifestSchemaVersion, Scope: scope, Observed: observed, Range: reviewRangeValue, ChangedFiles: len(paths), Items: items}
 	encoded, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return actionResult{}, fmt.Errorf("encode manifest: %w", err)
@@ -231,12 +308,15 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		artifacts = append(artifacts, diffArtifact)
 	}
 	return actionResult{Outputs: map[string]any{
-		"manifest_path": manifestArtifact.Path,
-		"range_start":   reviewRangeValue.Start,
-		"range_end":     reviewRangeValue.End,
-		"commit_count":  reviewRangeValue.CommitCount,
-		"changed_files": len(paths),
-		"item_count":    len(items),
+		"manifest_path":    manifestArtifact.Path,
+		"scope":            scope,
+		"range_start":      reviewRangeValue.Start,
+		"range_end":        reviewRangeValue.End,
+		"commit_count":     reviewRangeValue.CommitCount,
+		"changed_files":    len(paths),
+		"item_count":       len(items),
+		"total_diff_bytes": observed.TotalDiffBytes,
+		"total_diff_lines": observed.TotalDiffLines,
 	}, Artifacts: artifacts}, nil
 }
 
@@ -264,6 +344,12 @@ func applyConfigDefaults(config *Config) {
 	if config.MaxCommits == 0 {
 		config.MaxCommits = 10
 	}
+	if config.MaxTotalDiffBytes == 0 && config.MaxTotalDiffLines == 0 && config.MaxChangedPaths == 0 && config.MaxWorksetItems == 0 {
+		config.MaxTotalDiffBytes = defaultMaxTotalDiffBytes
+		config.MaxTotalDiffLines = defaultMaxTotalDiffLines
+		config.MaxChangedPaths = defaultMaxChangedPaths
+		config.MaxWorksetItems = defaultMaxWorksetItems
+	}
 	if config.MaxDiffBytes == 0 && config.MaxDiffLines == 0 && config.MaxPaths == 0 {
 		config.MaxDiffBytes = 24000
 		config.MaxDiffLines = 600
@@ -286,6 +372,9 @@ func validateConfig(config Config) error {
 	}
 	if config.MaxDiffBytes <= 0 || config.MaxDiffLines <= 0 || config.MaxPaths <= 0 {
 		return errors.New("max_diff_bytes, max_diff_lines, and max_paths must be positive")
+	}
+	if config.MaxTotalDiffBytes <= 0 || config.MaxTotalDiffLines <= 0 || config.MaxChangedPaths <= 0 || config.MaxWorksetItems <= 0 {
+		return errors.New("max_total_diff_bytes, max_total_diff_lines, max_changed_paths, and max_workset_items must be positive")
 	}
 	return nil
 }
@@ -357,10 +446,17 @@ func ensureEmptyOutputDir(path string) error {
 	return nil
 }
 
-func resolveRange(ctx context.Context, repo, since string, maxCommits int) (reviewRange, error) {
+func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rangeResolution, error) {
+	shallowText, err := git(ctx, repo, "rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("detect shallow repository: %w", err)
+	}
+	if strings.TrimSpace(shallowText) == "true" {
+		return rangeResolution{}, errors.New("history_incomplete: shallow repository cannot prove the requested first-parent history")
+	}
 	end, err := git(ctx, repo, "rev-parse", "HEAD")
 	if err != nil {
-		return reviewRange{}, fmt.Errorf("resolve HEAD: %w", err)
+		return rangeResolution{}, fmt.Errorf("resolve HEAD: %w", err)
 	}
 	// Review selection follows the repository's first-parent history. Without
 	// this, selecting the last N commits from a merge-heavy repository and then
@@ -368,29 +464,42 @@ func resolveRange(ctx context.Context, repo, since string, maxCommits int) (revi
 	// range to include side-branch commits that were not selected.
 	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+since, "HEAD")
 	if err != nil {
-		return reviewRange{}, fmt.Errorf("list commits: %w", err)
+		return rangeResolution{}, fmt.Errorf("list commits: %w", err)
 	}
 	commits := nonEmptyLines(commitsText)
+	available := len(commits)
 	if maxCommits > 0 && len(commits) > maxCommits {
 		commits = commits[len(commits)-maxCommits:]
 	}
 	r := reviewRange{End: strings.TrimSpace(end), Since: since, CommitCount: len(commits)}
+	resolution := rangeResolution{Range: r, AvailableCommitCount: available, HistoryExhausted: available < maxCommits}
 	if len(commits) == 0 {
-		return r, nil
+		return resolution, nil
 	}
 	start, err := git(ctx, repo, "rev-parse", commits[0]+"^")
 	if err != nil {
-		return reviewRange{}, fmt.Errorf("resolve parent of first selected commit: %w", err)
+		root, rootErr := git(ctx, repo, "rev-list", "--max-parents=0", commits[0])
+		if rootErr != nil || strings.TrimSpace(root) != commits[0] {
+			return rangeResolution{}, fmt.Errorf("history_incomplete: resolve parent of first selected commit: %w", err)
+		}
+		start, err = gitWithInput(ctx, repo, nil, "hash-object", "-t", "tree", "--stdin")
+		if err != nil {
+			return rangeResolution{}, fmt.Errorf("resolve empty tree for root commit: %w", err)
+		}
+		r.Start = strings.TrimSpace(start)
+		resolution.Range = r
+		return resolution, nil
 	}
 	r.Start = strings.TrimSpace(start)
 	verified, err := git(ctx, repo, "rev-list", "--first-parent", "--count", r.Start+".."+r.End)
 	if err != nil {
-		return reviewRange{}, fmt.Errorf("verify commit count: %w", err)
+		return rangeResolution{}, fmt.Errorf("verify commit count: %w", err)
 	}
 	if strings.TrimSpace(verified) != fmt.Sprintf("%d", r.CommitCount) {
-		return reviewRange{}, fmt.Errorf("commit range count mismatch: expected %d, got %s", r.CommitCount, strings.TrimSpace(verified))
+		return rangeResolution{}, fmt.Errorf("commit range count mismatch: expected %d, got %s", r.CommitCount, strings.TrimSpace(verified))
 	}
-	return r, nil
+	resolution.Range = r
+	return resolution, nil
 }
 
 func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, error) {
@@ -423,7 +532,7 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 	return paths, nil
 }
 
-func buildItems(ctx context.Context, repo, artifactRoot, outputDir string, r reviewRange, paths []string, config Config) ([]item, error) {
+func buildBatches(ctx context.Context, repo string, r reviewRange, paths []string, config Config) ([]*batch, error) {
 	var batches []*batch
 	for _, path := range paths {
 		diff, err := git(ctx, repo, "diff", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
@@ -446,6 +555,10 @@ func buildItems(ctx context.Context, repo, artifactRoot, outputDir string, r rev
 		}
 	}
 
+	return batches, nil
+}
+
+func writeItems(artifactRoot, outputDir string, batches []*batch) ([]item, error) {
 	items := make([]item, 0, len(batches))
 	for index, current := range batches {
 		key := fmt.Sprintf("unit-%04d", index)
@@ -476,6 +589,37 @@ func buildItems(ctx context.Context, repo, artifactRoot, outputDir string, r rev
 		})
 	}
 	return items, nil
+}
+
+func observeBudget(batches []*batch, paths []string) observedBudget {
+	observed := observedBudget{ChangedPaths: len(paths), WorksetItems: len(batches)}
+	for _, current := range batches {
+		observed.TotalDiffBytes += current.diff.Len()
+		observed.TotalDiffLines += current.lines
+	}
+	return observed
+}
+
+func enforceTotalBudget(config Config, observed observedBudget) error {
+	if observed.TotalDiffBytes <= config.MaxTotalDiffBytes &&
+		observed.TotalDiffLines <= config.MaxTotalDiffLines &&
+		observed.ChangedPaths <= config.MaxChangedPaths &&
+		observed.WorksetItems <= config.MaxWorksetItems {
+		return nil
+	}
+	return fmt.Errorf("scope_too_large\nrequested scope: last %d first-parent commits ending at HEAD\nobserved totals: bytes=%d lines=%d paths=%d items=%d\nconfigured caps: bytes=%d lines=%d paths=%d items=%d\nremediation: narrow --input review.scope, raise an explicit budget, or split the run",
+		config.MaxCommits,
+		observed.TotalDiffBytes, observed.TotalDiffLines, observed.ChangedPaths, observed.WorksetItems,
+		config.MaxTotalDiffBytes, config.MaxTotalDiffLines, config.MaxChangedPaths, config.MaxWorksetItems,
+	)
+}
+
+func scopeInputDigest(requested requestedScope) string {
+	encoded, err := json.Marshal(requested)
+	if err != nil {
+		panic(fmt.Sprintf("encode requested scope: %v", err))
+	}
+	return "sha256:" + sha256Hex(encoded)
 }
 
 func findBatch(batches []*batch, lens string) *batch {
@@ -572,8 +716,13 @@ func sha256Hex(data []byte) string {
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	return gitWithInput(ctx, dir, nil, args...)
+}
+
+func gitWithInput(ctx context.Context, dir string, input []byte, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
