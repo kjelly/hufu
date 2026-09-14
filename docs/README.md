@@ -83,7 +83,8 @@ to re-create an abstraction that already exists in the runtime.
   specifications, including the former `SubagentProvider`-first model and the
   old coding-team implementation spec.
 - `archive/implementation-plans/` contains plans whose implementation has
-  landed or whose remaining work is tracked elsewhere.
+  landed or whose remaining work is tracked elsewhere, including the
+  [SQLite optimization implementation record](archive/implementation-plans/hufu-sqlite-optimization-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for
