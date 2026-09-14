@@ -23,6 +23,7 @@ import (
 type sqliteAnalyticsSession struct {
 	db          *sql.DB
 	conn        *sql.Conn
+	executor    analyticsQueryExecutor
 	diagnostics *AnalyticsDiagnostics
 
 	// selectedRunsReady freezes the run scope before task projection begins.
@@ -53,7 +54,7 @@ func openSQLiteAnalyticsSession(ctx context.Context) (*sqliteAnalyticsSession, e
 		return nil, newAnalyticsError(AnalyticsStageOpen, fmt.Errorf("pin analytics connection: %w", err))
 	}
 
-	session := &sqliteAnalyticsSession{db: db, conn: conn}
+	session := &sqliteAnalyticsSession{db: db, conn: conn, executor: conn}
 	if err := session.createSchema(ctx); err != nil {
 		_ = session.Close()
 		return nil, newAnalyticsError(AnalyticsStageSchema, err)

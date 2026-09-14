@@ -74,11 +74,15 @@ func TestSQLMemoryMetricsParityAllTenFields(t *testing.T) {
 	if _, _, err := session.sqlSelectRecentRunSummaries(t.Context(), "dev", 1); err != nil {
 		t.Fatal(err)
 	}
-	got, err := session.sqlCollectExecutionMetrics(t.Context(), allSelectedRunOrdinals)
+	got, err := session.sqlCollectExecutionMetrics(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.sqlCollectMemoryMetrics(t.Context(), allSelectedRunOrdinals, &got); err != nil {
+	memory, err := session.sqlCollectMemoryAnalytics(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.apply(&got, allSelectedRunOrdinals); err != nil {
 		t.Fatal(err)
 	}
 	wantSnapshot := memoryMetricsSnapshot{

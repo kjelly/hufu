@@ -9,8 +9,6 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
-
-	"github.com/kjelly/hufu/internal/team"
 )
 
 // selectedRun is one row in the frozen selected_runs scope.
@@ -21,8 +19,6 @@ type selectedRun struct {
 	StartUnixNS sql.NullInt64
 	EndUnixNS   sql.NullInt64
 }
-
-const allSelectedRunOrdinals = -1
 
 // runSummaryCTE is the single semantic source for selection. A run's team is
 // its first qualifying event's team, and its time window ignores timestamps
@@ -149,7 +145,7 @@ func (s *sqliteAnalyticsSession) sqlSelectedRuns(ctx context.Context) ([]selecte
 	if !s.selectedRunsReady {
 		return nil, fmt.Errorf("run selection has not completed")
 	}
-	rows, err := s.conn.QueryContext(ctx, `
+	rows, err := s.executor.QueryContext(ctx, `
 SELECT run_id, ordinal, team, start_ns, end_ns
 FROM selected_runs
 ORDER BY ordinal`)
@@ -173,14 +169,12 @@ ORDER BY ordinal`)
 
 // sqlEventWindow computes the [min, max] over every
 // parseable timestamp among events in scope, independent of task_id.
-func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context, ordinal int) (time.Time, time.Time, error) {
+func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context) (time.Time, time.Time, error) {
 	const query = `
-SELECT MIN(e.timestamp_unix_ns), MAX(e.timestamp_unix_ns)
-FROM execution_events e
-JOIN selected_runs sr ON sr.run_id = e.run_id
-WHERE e.team <> '' AND (? < 0 OR sr.ordinal = ?)`
+SELECT MIN(start_ns), MAX(end_ns)
+FROM selected_runs`
 	var startNS, endNS sql.NullInt64
-	if err := s.conn.QueryRowContext(ctx, query, ordinal, ordinal).Scan(&startNS, &endNS); err != nil {
+	if err := s.executor.QueryRowContext(ctx, query).Scan(&startNS, &endNS); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("query event window: %w", err)
 	}
 	return unixNSToTime(startNS), unixNSToTime(endNS), nil
@@ -214,18 +208,16 @@ const taskSummaryQuery = `
 SELECT t.run_id, t.task_id, t.agent, t.model, t.task_type, t.terminal, t.attempts, t.total_attempts, t.total_tokens
 FROM task_summary t
 JOIN selected_runs sr ON sr.run_id = t.run_id
-WHERE (? < 0 OR sr.ordinal = ?)
 ORDER BY sr.ordinal ASC, t.task_id ASC`
 
 const taskSkillsQuery = `
 SELECT ts.run_id, ts.task_id, ts.skill
 FROM task_skills ts
 JOIN selected_runs sr ON sr.run_id = ts.run_id
-WHERE (? < 0 OR sr.ordinal = ?)
 ORDER BY sr.ordinal ASC, ts.task_id ASC, ts.skill ASC`
 
 // sqlTaskSummaries reads the selected-only task_summary/task_skills tables.
-func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, ordinal int) ([]sqlTaskSummary, error) {
+func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context) ([]sqlTaskSummary, error) {
 	if err := s.ensureTaskViews(ctx); err != nil {
 		return nil, err
 	}
@@ -242,7 +234,7 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, ordinal i
 		return t
 	}
 
-	rows, err := s.conn.QueryContext(ctx, taskSummaryQuery, ordinal, ordinal)
+	rows, err := s.executor.QueryContext(ctx, taskSummaryQuery)
 	if err != nil {
 		return nil, fmt.Errorf("query task summary: %w", err)
 	}
@@ -263,7 +255,7 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, ordinal i
 	}
 	_ = rows.Close()
 
-	skillRows, err := s.conn.QueryContext(ctx, taskSkillsQuery, ordinal, ordinal)
+	skillRows, err := s.executor.QueryContext(ctx, taskSkillsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("query task skills: %w", err)
 	}
@@ -289,34 +281,50 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, ordinal i
 	return out, nil
 }
 
-// sqlSelectedExecutionProjection returns only the team-revision field still
-// needed after SQL aggregation. It intentionally does not materialize task
-// content, usage, prompts, output, tool arguments, or any other execution
-// telemetry content.
-func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Context) (map[string][]team.ExecutionEvent, error) {
-	const query = `
-SELECT e.run_id, e.team_revision
+// sqlSelectedRevisions returns the sorted overall revision set and the latest
+// non-empty revision for each selected ordinal without projecting execution
+// rows into Go.
+func (s *sqliteAnalyticsSession) sqlSelectedRevisions(ctx context.Context) ([]string, map[int]string, error) {
+	const overallQuery = `
+SELECT DISTINCT e.team_revision
 FROM execution_events e
 JOIN selected_runs sr ON sr.run_id = e.run_id
-WHERE e.team <> ''
-ORDER BY sr.ordinal ASC, e.event_seq ASC`
-	projection := make(map[string][]team.ExecutionEvent)
-	rows, err := s.conn.QueryContext(ctx, query)
+WHERE e.team <> '' AND e.team_revision <> ''
+ORDER BY e.team_revision`
+	overall, err := queryStrings(ctx, s, overallQuery)
 	if err != nil {
-		return nil, fmt.Errorf("query selected execution projection: %w", err)
+		return nil, nil, fmt.Errorf("query selected team revisions: %w", err)
+	}
+	const latestByRunQuery = `
+WITH ranked AS (
+    SELECT sr.ordinal, e.team_revision,
+           ROW_NUMBER() OVER (PARTITION BY sr.ordinal ORDER BY e.event_seq DESC) AS rank
+    FROM selected_runs sr
+    JOIN execution_events e ON e.run_id = sr.run_id
+    WHERE e.team <> '' AND e.team_revision <> ''
+)
+SELECT ordinal, team_revision
+FROM ranked
+WHERE rank = 1
+ORDER BY ordinal`
+	rows, err := s.executor.QueryContext(ctx, latestByRunQuery)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query latest team revisions: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	byOrdinal := make(map[int]string)
 	for rows.Next() {
-		var event team.ExecutionEvent
-		if err := rows.Scan(&event.RunID, &event.TeamRevision); err != nil {
-			return nil, fmt.Errorf("scan selected execution projection: %w", err)
+		var ordinal int
+		var revision string
+		if err := rows.Scan(&ordinal, &revision); err != nil {
+			return nil, nil, fmt.Errorf("scan latest team revision: %w", err)
 		}
-		projection[event.RunID] = append(projection[event.RunID], event)
+		byOrdinal[ordinal] = revision
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate selected execution projection: %w", err)
+		return nil, nil, fmt.Errorf("iterate latest team revisions: %w", err)
 	}
-	return projection, nil
+	return overall, byOrdinal, nil
 }
 
 // sqlTokensByAgent provides the per-event agent attribution
@@ -330,12 +338,12 @@ const tokensByAgentQuery = `
 SELECT CASE WHEN e.agent = '' THEN 'unspecified' ELSE e.agent END AS agent_key, SUM(e.total_tokens)
 FROM execution_events e
 JOIN selected_runs sr ON sr.run_id = e.run_id
-WHERE e.task_id <> '' AND e.team <> '' AND (? < 0 OR sr.ordinal = ?)
+WHERE e.task_id <> '' AND e.team <> ''
 GROUP BY agent_key`
 
-func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, ordinal int) (map[string]int, error) {
+func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context) (map[string]int, error) {
 	result := map[string]int{}
-	rows, err := s.conn.QueryContext(ctx, tokensByAgentQuery, ordinal, ordinal)
+	rows, err := s.executor.QueryContext(ctx, tokensByAgentQuery)
 	if err != nil {
 		return nil, fmt.Errorf("query tokens by agent: %w", err)
 	}
@@ -359,34 +367,24 @@ func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, ordinal i
 // It leaves ToolCalls*/ToolErrors*/Memory* fields
 // zero — those are populated by the audit and memory SQL aggregations,
 // respectively, exactly as the public metrics contract composes them.
-func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context, ordinal int) (Metrics, error) {
+func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context) (Metrics, error) {
 	metrics := Metrics{TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
 	selected, err := s.sqlSelectedRuns(ctx)
 	if err != nil {
 		return Metrics{}, err
-	}
-	if ordinal >= 0 {
-		filtered := selected[:0]
-		for _, run := range selected {
-			if run.Ordinal == ordinal {
-				filtered = append(filtered, run)
-				break
-			}
-		}
-		selected = filtered
 	}
 	metrics.RunCount = len(selected)
 	if metrics.RunCount == 1 {
 		metrics.RunID = selected[0].RunID
 	}
 
-	start, end, err := s.sqlEventWindow(ctx, ordinal)
+	start, end, err := s.sqlEventWindow(ctx)
 	if err != nil {
 		return Metrics{}, err
 	}
 	metrics.StartedAt, metrics.EndedAt = start.Format(time.RFC3339), end.Format(time.RFC3339)
 
-	tasks, err := s.sqlTaskSummaries(ctx, ordinal)
+	tasks, err := s.sqlTaskSummaries(ctx)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -406,7 +404,7 @@ func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context,
 		}
 	}
 
-	tokensByAgent, err := s.sqlTokensByAgent(ctx, ordinal)
+	tokensByAgent, err := s.sqlTokensByAgent(ctx)
 	if err != nil {
 		return Metrics{}, err
 	}

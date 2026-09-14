@@ -450,7 +450,7 @@ func BenchmarkExecutionTelemetryLegacyVsSQL(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				metrics, err := session.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
+				metrics, err := session.sqlCollectExecutionMetrics(ctx)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -461,6 +461,84 @@ func BenchmarkExecutionTelemetryLegacyVsSQL(b *testing.B) {
 				_ = session.Close()
 				if teamName != "bench" || metrics.TotalTasks == 0 || len(groups.ByAgent) == 0 {
 					b.Fatal("empty result")
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkSQLiteAnalyticsIndexSets(b *testing.B) {
+	benchmarkSQLiteAnalyticsIndexSets(b, analyticsBenchmarkProfile{name: "medium", events: 100_000, runs: 1_000})
+}
+
+func BenchmarkSQLiteAnalyticsIndexSetsTiny(b *testing.B) {
+	benchmarkSQLiteAnalyticsIndexSets(b, analyticsBenchmarkProfile{name: "tiny", events: 100, runs: 5})
+}
+
+func benchmarkSQLiteAnalyticsIndexSets(b *testing.B, profile analyticsBenchmarkProfile) {
+	workspace, _ := writeAnalyticsBenchmarkFixture(b, profile)
+	candidates := []struct {
+		name       string
+		statements []string
+	}{
+		{name: "legacy", statements: []string{
+			`CREATE INDEX temp.idx_execution_team_run ON execution_events(team, run_id, event_seq)`,
+			`CREATE INDEX temp.idx_execution_task_attempt ON execution_events(run_id, task_id, attempt, event_seq)`,
+			`CREATE INDEX temp.idx_execution_agent ON execution_events(agent, run_id)`,
+			`CREATE INDEX temp.idx_execution_model ON execution_events(model, run_id)`,
+			`CREATE INDEX temp.idx_execution_task_type ON execution_events(task_type, run_id)`,
+			`CREATE INDEX temp.idx_skill_task ON execution_event_skills(skill, run_id, task_id)`,
+			`CREATE INDEX temp.idx_audit_team_time ON audit_events(team, timestamp_unix_ns, agent, event)`,
+			`CREATE INDEX temp.idx_memory_type_run ON memory_events(type, run_id, event_seq)`,
+		}},
+		{name: "current", statements: analyticsIndexStatements},
+	}
+	for _, candidate := range candidates {
+		b.Run("index="+candidate.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				ctx := b.Context()
+				session, err := openSQLiteAnalyticsSession(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadMemoryEvents(ctx, workspace); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.createIndexesFrom(ctx, candidate.statements); err != nil {
+					b.Fatal(err)
+				}
+				if _, _, err := session.sqlSelectRecentRunSummaries(ctx, "dev", 10); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.materializeTaskViews(ctx); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectExecutionMetrics(ctx); err != nil {
+					b.Fatal(err)
+				}
+				_, revisions, err := session.sqlSelectedRevisions(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				memory, err := session.sqlCollectMemoryAnalytics(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectTrend(ctx, memory, revisions); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectGroupedMetrics(ctx); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.Close(); err != nil {
+					b.Fatal(err)
 				}
 			}
 		})

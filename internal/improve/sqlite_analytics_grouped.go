@@ -82,7 +82,7 @@ func (s *sqliteAnalyticsSession) sqlGroupMetricsBySkill(ctx context.Context) ([]
 }
 
 func (s *sqliteAnalyticsSession) scanGroupMetrics(ctx context.Context, query string, args []any) ([]GroupMetric, error) {
-	rows, err := s.conn.QueryContext(ctx, query, args...)
+	rows, err := s.executor.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query grouped metrics: %w", err)
 	}

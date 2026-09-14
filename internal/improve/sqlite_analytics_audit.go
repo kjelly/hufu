@@ -113,6 +113,15 @@ func (s *sqliteAnalyticsSession) sqlCollectAuditMetrics(ctx context.Context, tea
 	if metrics == nil {
 		return fmt.Errorf("collect audit metrics: nil metrics")
 	}
+	if metrics.ToolCallsByAgent == nil {
+		metrics.ToolCallsByAgent = make(map[string]int)
+	}
+	if metrics.ToolErrorsByAgent == nil {
+		metrics.ToolErrorsByAgent = make(map[string]int)
+	}
+	if start.IsZero() || end.IsZero() {
+		return nil
+	}
 
 	const totalsQuery = `
 SELECT
@@ -121,7 +130,7 @@ SELECT
 FROM audit_events
 WHERE team = ? AND timestamp_unix_ns >= ? AND timestamp_unix_ns <= ?`
 	var toolCalls, toolErrors int
-	if err := s.conn.QueryRowContext(ctx, totalsQuery, teamName, start.UnixNano(), end.UnixNano()).Scan(&toolCalls, &toolErrors); err != nil {
+	if err := s.executor.QueryRowContext(ctx, totalsQuery, teamName, start.UnixNano(), end.UnixNano()).Scan(&toolCalls, &toolErrors); err != nil {
 		return fmt.Errorf("query audit totals: %w", err)
 	}
 
@@ -134,7 +143,7 @@ WHERE team = ? AND timestamp_unix_ns >= ? AND timestamp_unix_ns <= ?
   AND event IN ('tool_call', 'tool_error')
 GROUP BY agent
 ORDER BY agent ASC`
-	rows, err := s.conn.QueryContext(ctx, byAgentQuery, teamName, start.UnixNano(), end.UnixNano())
+	rows, err := s.executor.QueryContext(ctx, byAgentQuery, teamName, start.UnixNano(), end.UnixNano())
 	if err != nil {
 		return fmt.Errorf("query audit metrics by agent: %w", err)
 	}
@@ -158,12 +167,6 @@ ORDER BY agent ASC`
 		return fmt.Errorf("iterate audit metrics by agent: %w", err)
 	}
 
-	if metrics.ToolCallsByAgent == nil {
-		metrics.ToolCallsByAgent = make(map[string]int)
-	}
-	if metrics.ToolErrorsByAgent == nil {
-		metrics.ToolErrorsByAgent = make(map[string]int)
-	}
 	metrics.ToolCalls += toolCalls
 	metrics.ToolErrors += toolErrors
 	for agent, calls := range toolCallsByAgent {

@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kjelly/hufu/internal/team"
-
 	"gopkg.in/yaml.v3"
 )
 
@@ -259,7 +257,7 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 		runIDs[i] = run.RunID
 	}
 	started = time.Now()
-	metrics, err := analytics.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
+	metrics, err := analytics.sqlCollectExecutionMetrics(ctx)
 	diagnostics.record(diagnosticAggregateExecution, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
@@ -274,17 +272,18 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 	diagnostics.record(diagnosticAggregateAudit, started)
 
 	started = time.Now()
-	projectionByRun, err := analytics.sqlSelectedExecutionProjection(ctx)
+	teamRevisions, revisionsByOrdinal, err := analytics.sqlSelectedRevisions(ctx)
 	diagnostics.record(diagnosticAggregateExecution, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
-	selectedProjection := make([]team.ExecutionEvent, 0)
-	for _, runID := range runIDs {
-		selectedProjection = append(selectedProjection, projectionByRun[runID]...)
-	}
 	started = time.Now()
-	if err := analytics.sqlCollectMemoryMetrics(ctx, allSelectedRunOrdinals, &metrics); err != nil {
+	memoryMetrics, err := analytics.sqlCollectMemoryAnalytics(ctx)
+	if err != nil {
+		diagnostics.record(diagnosticAggregateMemory, started)
+		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
+	}
+	if err := memoryMetrics.apply(&metrics, allSelectedRunOrdinals); err != nil {
 		diagnostics.record(diagnosticAggregateMemory, started)
 		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
@@ -295,25 +294,10 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 	}
 
 	started = time.Now()
-	trend := make([]TrendPoint, 0, len(selectedRuns))
-	teamRevisions := uniqueTeamRevisions(selectedProjection)
-	for _, run := range selectedRuns {
-		runMetrics, err := analytics.sqlCollectExecutionMetrics(ctx, run.Ordinal)
-		if err != nil {
-			return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
-		}
-		runStart, _ := time.Parse(time.RFC3339, runMetrics.StartedAt)
-		runEnd, _ := time.Parse(time.RFC3339, runMetrics.EndedAt)
-		if err := analytics.sqlCollectAuditMetrics(ctx, teamName, runStart, runEnd, &runMetrics); err != nil {
-			return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
-		}
-		if err := analytics.sqlCollectMemoryMetrics(ctx, run.Ordinal, &runMetrics); err != nil {
-			return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
-		}
-		revision := latestTeamRevision(projectionByRun[run.RunID])
-		trend = append(trend, TrendPoint{
-			RunID: run.RunID, StartedAt: unixNSToTime(run.StartUnixNS).Format(time.RFC3339), EndedAt: unixNSToTime(run.EndUnixNS).Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
-		})
+	trend, err := analytics.sqlCollectTrend(ctx, memoryMetrics, revisionsByOrdinal)
+	if err != nil {
+		diagnostics.record(diagnosticAggregateTrend, started)
+		return nil, err
 	}
 	diagnostics.record(diagnosticAggregateTrend, started)
 	if len(teamRevisions) == 0 {
@@ -343,32 +327,6 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 		Findings:             analyze(def, metrics, provenance),
 	}
 	return report, nil
-}
-
-func uniqueTeamRevisions(events []team.ExecutionEvent) []string {
-	seen := make(map[string]struct{})
-	revisions := make([]string, 0)
-	for _, event := range events {
-		if event.TeamRevision == "" {
-			continue
-		}
-		if _, ok := seen[event.TeamRevision]; ok {
-			continue
-		}
-		seen[event.TeamRevision] = struct{}{}
-		revisions = append(revisions, event.TeamRevision)
-	}
-	sort.Strings(revisions)
-	return revisions
-}
-
-func latestTeamRevision(events []team.ExecutionEvent) string {
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].TeamRevision != "" {
-			return events[i].TeamRevision
-		}
-	}
-	return ""
 }
 
 // definitionRevision matches the metadata-only revision written by new

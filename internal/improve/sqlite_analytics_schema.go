@@ -123,7 +123,7 @@ var analyticsSchemaStatements = []string{
 
 func (s *sqliteAnalyticsSession) createSchema(ctx context.Context) error {
 	for _, stmt := range analyticsSchemaStatements {
-		if _, err := s.conn.ExecContext(ctx, stmt); err != nil {
+		if _, err := s.executor.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create analytics schema: %w", err)
 		}
 	}
@@ -136,11 +136,7 @@ func (s *sqliteAnalyticsSession) createSchema(ctx context.Context) error {
 // per-row index maintenance.
 var analyticsIndexStatements = []string{
 	`CREATE INDEX temp.idx_execution_team_run ON execution_events(team, run_id, event_seq)`,
-	`CREATE INDEX temp.idx_execution_task_attempt ON execution_events(run_id, task_id, attempt, event_seq)`,
-	`CREATE INDEX temp.idx_execution_agent ON execution_events(agent, run_id)`,
-	`CREATE INDEX temp.idx_execution_model ON execution_events(model, run_id)`,
-	`CREATE INDEX temp.idx_execution_task_type ON execution_events(task_type, run_id)`,
-	`CREATE INDEX temp.idx_skill_task ON execution_event_skills(skill, run_id, task_id)`,
+	`CREATE INDEX temp.idx_execution_run_task_seq ON execution_events(run_id, task_id, event_seq)`,
 	`CREATE INDEX temp.idx_audit_team_time ON audit_events(team, timestamp_unix_ns, agent, event)`,
 	`CREATE INDEX temp.idx_memory_type_run ON memory_events(type, run_id, event_seq)`,
 }
@@ -148,8 +144,12 @@ var analyticsIndexStatements = []string{
 // createIndexes builds every analytics index. Safe to call once, after all
 // ingestion for the session has finished.
 func (s *sqliteAnalyticsSession) createIndexes(ctx context.Context) error {
-	for _, stmt := range analyticsIndexStatements {
-		if _, err := s.conn.ExecContext(ctx, stmt); err != nil {
+	return s.createIndexesFrom(ctx, analyticsIndexStatements)
+}
+
+func (s *sqliteAnalyticsSession) createIndexesFrom(ctx context.Context, statements []string) error {
+	for _, stmt := range statements {
+		if _, err := s.executor.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create analytics index: %w", err)
 		}
 	}

@@ -54,7 +54,7 @@ func TestSQLExecutionMetricsFixedRegression(t *testing.T) {
 		t.Fatalf("selection = %q/%v, want dev/[latest]", gotTeam, gotRunIDs)
 	}
 
-	got, err := session.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
+	got, err := session.sqlCollectExecutionMetrics(ctx)
 	if err != nil {
 		t.Fatalf("sqlCollectExecutionMetrics: %v", err)
 	}

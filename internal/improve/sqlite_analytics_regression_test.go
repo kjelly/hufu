@@ -53,10 +53,18 @@ func TestSQLRunSelectionFixedOrderingAndFiltering(t *testing.T) {
 		if !reflect.DeepEqual(runIDs, []string{"invalid", "window"}) {
 			t.Fatalf("run IDs = %v, want [invalid window]", runIDs)
 		}
-		metrics, err := session.sqlCollectExecutionMetrics(ctx, 1)
+		memory, err := session.sqlCollectMemoryAnalytics(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err := session.materializeTaskViews(ctx); err != nil {
+			t.Fatal(err)
+		}
+		trend, err := session.sqlCollectTrend(ctx, memory, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metrics := trend[1].Metrics
 		if metrics.StartedAt != "2026-07-12T09:00:00Z" || metrics.EndedAt != "2026-07-12T09:00:05Z" {
 			t.Fatalf("window = %s..%s, want 09:00:00..09:00:05", metrics.StartedAt, metrics.EndedAt)
 		}
@@ -95,7 +103,7 @@ func TestSQLTaskProjectionFixedMetadataRetryTokensAndSkillOverlap(t *testing.T) 
 	if _, _, err := session.sqlSelectRecentRunSummaries(ctx, "dev", 1); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := session.sqlTaskSummaries(ctx, allSelectedRunOrdinals)
+	tasks, err := session.sqlTaskSummaries(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +116,7 @@ func TestSQLTaskProjectionFixedMetadataRetryTokensAndSkillOverlap(t *testing.T) 
 		t.Fatalf("task summaries = %+v, want %+v", tasks, wantTasks)
 	}
 
-	metrics, err := session.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
+	metrics, err := session.sqlCollectExecutionMetrics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
