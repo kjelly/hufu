@@ -47,9 +47,17 @@ type agentFrontmatter struct {
 }
 
 type listedTeam struct {
-	Name   string        `json:"name"`
-	Dir    string        `json:"dir"`
-	Agents []listedAgent `json:"agents"`
+	Name   string           `json:"name"`
+	Dir    string           `json:"dir"`
+	Agents []listedAgent    `json:"agents"`
+	Inputs []listedRunInput `json:"inputs,omitempty"`
+}
+
+type listedRunInput struct {
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	Required bool            `json:"required,omitzero"`
+	Default  json.RawMessage `json:"default,omitempty"`
 }
 
 type listedAgent struct {
@@ -127,6 +135,11 @@ func runList(cmd *cobra.Command, args []string) error {
 
 func collectListedTeam(name, dir string) listedTeam {
 	record := listedTeam{Name: name, Dir: dir}
+	if definitions, err := team.LoadRunInputDefinitions(dir, nil); err == nil {
+		for _, definition := range definitions {
+			record.Inputs = append(record.Inputs, listedRunInput{Name: definition.Name, Type: definition.Schema.Type, Required: definition.Required, Default: definition.Default})
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return record
@@ -218,6 +231,16 @@ func printTeam(name, dir string) {
 		}
 		if fm.MemoryID != "" {
 			fmt.Printf("      memory-id: %s\n", fm.MemoryID)
+		}
+	}
+	if definitions, err := team.LoadRunInputDefinitions(dir, nil); err == nil && len(definitions) > 0 {
+		fmt.Println("  typed run inputs:")
+		for _, definition := range definitions {
+			defaultValue := "(none)"
+			if len(definition.Default) > 0 {
+				defaultValue = string(definition.Default)
+			}
+			fmt.Printf("      %s (%s, required=%t, default=%s)\n", definition.Name, definition.Schema.Type, definition.Required, defaultValue)
 		}
 	}
 	fmt.Println()

@@ -61,6 +61,8 @@ func init() {
 	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
 	f.StringArrayVar(&opts.varFlags, "var", nil, "Set template variable key=value (repeatable)")
 	f.StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
+	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
+	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
 	f.BoolVar(&opts.planMode, "plan", false, "Force plan-first mode")
 	f.BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection")
 	f.BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
@@ -124,6 +126,9 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 	}
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
+	}
+	if err := configureRunInputAssignments(map[string]*teamContext{teamName: tc}); err != nil {
+		return err
 	}
 	defer func() {
 		runErr = errors.Join(runErr, tc.Close())

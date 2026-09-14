@@ -78,6 +78,7 @@ type SessionData struct {
 	// freezes scheduler limits, model routing, execution worlds, and inherited
 	// environment values before any task or provider call can begin.
 	ExecutionPolicySnapshot *ExecutionPolicySnapshot `json:"execution_policy_snapshot,omitempty"`
+	RunInputSnapshot        *RunInputSnapshot        `json:"run_input_snapshot,omitempty"`
 	// RequiredResourceLockSet is the durable, metadata-only record of every
 	// required resource (skill/prompt/project_rules/schema) resolved and
 	// hash-locked before dispatch (spec.md "Generic Required Resource
@@ -249,6 +250,7 @@ func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone := *orig
 	clone.Workspace = newWorkspace
 	clone.InvariantCatalog = cloneInvariantCatalog(orig.InvariantCatalog)
+	clone.RunInputDefinitions = cloneRunInputDefinitions(orig.RunInputDefinitions)
 	return &clone
 }
 

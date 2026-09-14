@@ -28,6 +28,9 @@ type TeamSession struct {
 	MCPServers    map[string]mcp.MCPServerConfig
 	Skills        []*skill.SkillDef
 	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// RunInputDefinitions is the normalized, immutable typed invocation-input
+	// contract declared by the team manifest.
+	RunInputDefinitions []RunInputDefinition
 	// InvariantCatalog is immutable repository-owned policy loaded from the
 	// team's invariants.yaml. It is never populated from model output or memory.
 	InvariantCatalog []InvariantDefinition
@@ -1256,6 +1259,27 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 	return yc.Tasks, nil
 }
 
+// LoadRunInputDefinitions reads and validates a team's typed run-input
+// contract without constructing a session or creating workspace state.
+func LoadRunInputDefinitions(teamDir string, vars map[string]string) ([]RunInputDefinition, error) {
+	data, filename, found, err := readTeamManifestSource(teamDir, vars)
+	if err != nil {
+		return nil, fmt.Errorf("read team run inputs: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	yc, _, err := decodeTeamManifestYAML(filename, data)
+	if err != nil {
+		return nil, fmt.Errorf("parse team run inputs: %w", err)
+	}
+	definitions, err := normalizeRunInputDefinitions(yc.Inputs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid team run inputs: %w", err)
+	}
+	return definitions, nil
+}
+
 func loadTeamMCPServers(teamDir string, vars map[string]string) (map[string]mcp.MCPServerConfig, error) {
 	data, filename, found, err := readTeamManifestSource(teamDir, vars)
 	if err != nil {
@@ -1315,6 +1339,10 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if err != nil {
 		return nil, err
 	}
+	runInputDefinitions, err := LoadRunInputDefinitions(absDir, vars)
+	if err != nil {
+		return nil, err
+	}
 	mcpServers, err := loadTeamMCPServers(absDir, vars)
 	if err != nil {
 		return nil, err
@@ -1345,14 +1373,15 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, err
 	}
 	session := &TeamSession{
-		Config:           cfg,
-		Dir:              absDir,
-		Workspace:        workspace,
-		Agents:           make(map[string]*agent.AgentDef),
-		MCPServers:       mcpServers,
-		ContractTasks:    contractTasks,
-		InvariantCatalog: cloneInvariantCatalog(invariantCatalog),
-		ProviderRegistry: effectiveRegistry,
+		Config:              cfg,
+		Dir:                 absDir,
+		Workspace:           workspace,
+		Agents:              make(map[string]*agent.AgentDef),
+		MCPServers:          mcpServers,
+		ContractTasks:       contractTasks,
+		RunInputDefinitions: runInputDefinitions,
+		InvariantCatalog:    cloneInvariantCatalog(invariantCatalog),
+		ProviderRegistry:    effectiveRegistry,
 	}
 
 	// Inject built-in vars BEFORE loading agents

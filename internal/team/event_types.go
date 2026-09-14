@@ -40,6 +40,7 @@ const (
 	EventContextWindowDownshift                  EventType = "context_window_downshift"
 	EventModelProfileResolved                    EventType = "model_profile_resolved"
 	EventExecutionPolicySnapshot                 EventType = "execution_policy_snapshot"
+	EventRunInputsResolved                       EventType = "run_inputs_resolved"
 	EventDecisionAdmitted                        EventType = "decision_admitted"
 	// EventProviderSessionBound records an external SubagentProvider's
 	// durable session identity (e.g. a Codex thread_id) established mid-attempt,
@@ -90,7 +91,7 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
-		EventModelProfileResolved, EventExecutionPolicySnapshot, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
+		EventModelProfileResolved, EventExecutionPolicySnapshot, EventRunInputsResolved, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
 		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
 		EventResourceLocked:
 		return true

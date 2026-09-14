@@ -1,8 +1,10 @@
 package team
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/executioncompat"
@@ -93,6 +95,25 @@ func ValidateEventPayload(event RunEvent) error {
 		}
 		if payload.Outcome == "" {
 			return fmt.Errorf("run_finished payload lacks outcome")
+		}
+	case EventRunInputsResolved:
+		var snapshot RunInputSnapshot
+		decoder := json.NewDecoder(bytes.NewReader(event.Payload))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&snapshot); err != nil {
+			return fmt.Errorf("decode run_inputs_resolved payload: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err == nil {
+			return fmt.Errorf("decode run_inputs_resolved payload: trailing JSON value")
+		} else if err != io.EOF {
+			return fmt.Errorf("decode run_inputs_resolved trailing JSON: %w", err)
+		}
+		if err := ValidateRunInputSnapshot(&snapshot); err != nil {
+			return fmt.Errorf("invalid run_inputs_resolved payload: %w", err)
+		}
+		if snapshot.RunID != event.RunID {
+			return fmt.Errorf("run_inputs_resolved payload run_id does not match event envelope")
 		}
 	case EventExecutionCompatibilityObserved:
 		var payload ExecutionCompatibilityObservedPayload

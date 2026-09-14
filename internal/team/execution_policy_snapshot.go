@@ -32,13 +32,15 @@ const (
 // digest. The actual allowlisted child environment remains process-local and is
 // never written to session.json or the event store.
 type ExecutionPolicySnapshot struct {
-	Version           int                              `json:"version"`
-	TeamMaxConcurrent int                              `json:"team_max_concurrent"`
-	DefaultLLMBackend string                           `json:"default_llm_backend"`
-	Backends          []ExecutionBackendPolicySnapshot `json:"backends"`
-	ModelRoutes       []ExecutionModelRouteSnapshot    `json:"model_routes"`
-	ExecutionWorlds   []ExecutionWorldPolicySnapshot   `json:"execution_worlds"`
-	ConfigurationHash string                           `json:"configuration_hash"`
+	Version            int                              `json:"version"`
+	TeamMaxConcurrent  int                              `json:"team_max_concurrent"`
+	DefaultLLMBackend  string                           `json:"default_llm_backend"`
+	Backends           []ExecutionBackendPolicySnapshot `json:"backends"`
+	ModelRoutes        []ExecutionModelRouteSnapshot    `json:"model_routes"`
+	ExecutionWorlds    []ExecutionWorldPolicySnapshot   `json:"execution_worlds"`
+	RunInputSchemaHash string                           `json:"run_input_schema_hash,omitempty"`
+	RunInputPolicyHash string                           `json:"run_input_policy_hash,omitempty"`
+	ConfigurationHash  string                           `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -237,6 +239,18 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		Version:           version,
 		TeamMaxConcurrent: c.maxConcurrent,
 		DefaultLLMBackend: defaultBackend,
+	}
+	if version == executionPolicySnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
+		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
+		if err != nil {
+			return nil, fmt.Errorf("hash run input schema: %w", err)
+		}
+		snapshot.RunInputSchemaHash = schemaHash
+		policyHash, err := executionRunInputPolicyHash(c.session)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.RunInputPolicyHash = policyHash
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,

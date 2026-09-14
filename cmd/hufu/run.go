@@ -148,6 +148,9 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if err := configureRunInputAssignments(loadedTeams); err != nil {
+		return err
+	}
 
 	segments, err := expandSegmentsWithAgents(initialSegments, loadedTeams, registry)
 	if err != nil {

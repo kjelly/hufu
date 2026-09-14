@@ -653,6 +653,7 @@ type Coordinator struct {
 	executionEvents       *executionEventLogger
 	executionRunID        string
 	executionTeamRevision string
+	runInputAssignments   []RunInputAssignment
 	// executionCompatibilityObserver contains only a read-only, content-free
 	// preflight summary. It is flushed after a public invocation has allocated
 	// its durable run/branch identities; failures are telemetry gaps only.

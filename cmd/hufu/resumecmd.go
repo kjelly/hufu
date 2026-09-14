@@ -90,6 +90,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	defer setupInterruptHandler(injector, activeCoord, &loadedTeams, cancel)()
 
 	loadedTeams = map[string]*teamContext{teamName: tc}
+	if err := configureRunInputAssignments(loadedTeams); err != nil {
+		return err
+	}
 	segments := []team.PromptSegment{{
 		Type:    team.SegmentSwitchTeam,
 		Name:    teamName,
@@ -129,6 +132,8 @@ func init() {
 	f.Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
 	f.StringArrayVar(&opts.varFlags, "var", nil, "Set template variable key=value (repeatable)")
 	f.StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
+	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
+	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
 	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
 	f.BoolVar(&opts.verbose, "verbose", false, "Show full agent text output in real-time")
 	f.BoolVar(&opts.quietMode, "quiet", false, "Suppress status output")

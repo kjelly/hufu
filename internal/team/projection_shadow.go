@@ -25,6 +25,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if err := compareExecutionPolicySnapshotProjection(live.ExecutionPolicySnapshot, replayed.ExecutionPolicySnapshot); err != nil {
 		return err
 	}
+	if err := compareRunInputSnapshotProjection(live.RunInputSnapshot, replayed.RunInputSnapshot); err != nil {
+		return err
+	}
 	if !sameConversationProjection(live.Entries, replayed.Entries) {
 		return fmt.Errorf("conversation entries differ")
 	}
@@ -33,6 +36,25 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	}
 	if !reflect.DeepEqual(live.CriterionResults, replayed.CriterionResults) || !reflect.DeepEqual(live.CriterionCheckpoints, replayed.CriterionCheckpoints) || live.LastCriterionProgressAt != replayed.LastCriterionProgressAt {
 		return fmt.Errorf("criterion projection differs")
+	}
+	return nil
+}
+
+func compareRunInputSnapshotProjection(live, replayed *RunInputSnapshot) error {
+	if live == nil && replayed == nil {
+		return nil
+	}
+	if live == nil || replayed == nil {
+		return fmt.Errorf("run input snapshot differs between checkpoint and event store")
+	}
+	if err := ValidateRunInputSnapshot(live); err != nil {
+		return fmt.Errorf("checkpoint run input snapshot is invalid: %w", err)
+	}
+	if err := ValidateRunInputSnapshot(replayed); err != nil {
+		return fmt.Errorf("event-store run input snapshot is invalid: %w", err)
+	}
+	if live.SnapshotHash != replayed.SnapshotHash {
+		return fmt.Errorf("run input snapshot differs: checkpoint=%s event_store=%s", live.SnapshotHash, replayed.SnapshotHash)
 	}
 	return nil
 }
@@ -457,7 +479,7 @@ func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 			continue
 		}
 		switch EventType(event.Type) {
-		case EventExecutionPolicySnapshot, EventUserMessageAdded, EventAssistantMessageAdded, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
+		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
 			return true
 		}
 	}

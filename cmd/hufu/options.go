@@ -86,6 +86,8 @@ type runOptions struct {
 	// Prompt sources / template variables
 	varFlags         []string
 	varFiles         []string
+	inputFlags       []string
+	inputFiles       []string
 	templateName     string
 	initTemplateName string
 	profileName      string

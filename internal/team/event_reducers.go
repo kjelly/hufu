@@ -85,6 +85,11 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
 				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
 			}
+		case string(EventRunInputsResolved):
+			var snapshot RunInputSnapshot
+			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && ValidateRunInputSnapshot(&snapshot) == nil {
+				session.RunInputSnapshot = CloneRunInputSnapshot(&snapshot)
+			}
 		case string(EventExecutionPolicySnapshotMigrated):
 			var payload ExecutionPolicySnapshotMigratedPayload
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && validateExecutionPolicyCompatibilityMigrationPayload(payload) == nil {

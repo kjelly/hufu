@@ -46,6 +46,9 @@ type DryRunResult struct {
 }
 
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
+	if _, err := c.previewRunInputs(); err != nil {
+		return nil, err
+	}
 	orchDef := c.GetOrchestratorDef()
 
 	result := &DryRunResult{

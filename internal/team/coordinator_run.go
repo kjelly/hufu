@@ -365,6 +365,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err := c.checkRunAdmission(); err != nil {
 		return nil, c.finalizePublicInvocationFailureError(err)
 	}
+	if err := c.resolveRunInputsForInvocation(task); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		err := fmt.Errorf("direct agent invocation is disabled for runtime workflows; dispatch the active phase through the coordinator")
 		c.finalizePublicInvocationFailure(err)
@@ -2093,6 +2097,10 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
+	if err := c.resolveRunInputsForInvocation(userPrompt); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
@@ -2262,6 +2270,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	defer endExecutionRun()
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
+	}
+	if err := c.resolveRunInputsForInvocation(additionalPrompt); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
 	}
 	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
 		c.finalizePublicInvocationFailure(err)
