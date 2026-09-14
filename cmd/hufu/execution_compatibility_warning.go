@@ -18,6 +18,7 @@ type executionCompatibilityWarningState struct {
 	workspaceArgument string
 	workspaceWarned   bool
 	authoredWarned    bool
+	reviewScopeWarned bool
 	warningWriter     io.Writer
 }
 
@@ -25,12 +26,15 @@ func newExecutionCompatibilityWarningState(workspaceArgument string) *executionC
 	return &executionCompatibilityWarningState{workspaceArgument: strings.TrimSpace(workspaceArgument), warningWriter: os.Stderr}
 }
 
-func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc *teamContext) {
+func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc *teamContext, vars map[string]string) {
 	if s == nil || tc == nil || tc.session == nil || tc.coordinator == nil {
 		return
 	}
 	if team.HasAuthoredLegacyLocalExecutionBackend(tc.session) {
 		s.warnAuthoredAlias()
+	}
+	if strings.EqualFold(strings.TrimSpace(tc.session.Config.Name), "hufu-code-review") && strings.TrimSpace(vars["review.scope.max_commits"]) != "" {
+		s.warnReviewScopeVar()
 	}
 	// The inspector is intentionally the only detection implementation. It
 	// opens no writer and changes no workspace state. A scan failure is not a
@@ -45,6 +49,14 @@ func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc
 	if observer.HasActionableState() {
 		s.warnWorkspaceState()
 	}
+}
+
+func (s *executionCompatibilityWarningState) warnReviewScopeVar() {
+	if s == nil || s.reviewScopeWarned {
+		return
+	}
+	s.reviewScopeWarned = true
+	s.writeWarning("warning: --var review.scope.max_commits is deprecated and no longer controls review scope; use --input review.scope=<json>")
 }
 
 func (s *executionCompatibilityWarningState) warnWorkspaceState() {

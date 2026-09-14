@@ -1,16 +1,24 @@
-# Review scope template-variable compatibility bridge
+# Review scope template-variable deprecation
 
-The bundled `hufu-code-review` team temporarily accepts
-`--var review.scope.max_commits=N` as an execution-scope compatibility bridge.
-The team default is 10 first-parent commits ending at `HEAD`; `N` must be a
-base-10 integer from 1 through 100.
+The bundled `hufu-code-review` team now uses the typed `review.scope` run input.
+Its default is the last 10 first-parent commits ending at `HEAD`.
 
-This bridge does not parse natural-language scope. A prompt that says “last 7
-commits” does not override the configured value. Until typed run inputs are
-enabled, operators must pair any non-default request with the explicit
-`--var review.scope.max_commits=N` option and treat the producer's runtime
-scope output—not a model-authored heading—as the actual reviewed range.
+Use one of these explicit inputs when automation must pin the scope:
 
-The template variable will be deprecated as an execution input when the team
-migrates to `--input review.scope=...`. Ordinary `--var` prompt and
-configuration templating remains supported.
+```bash
+hufu --agent-team hufu-code-review \
+  --input 'review.scope={"kind":"last_n","count":3,"history":"first_parent","head":"HEAD"}' \
+  'Review the selected changes'
+
+hufu --profile hufu-code-review-ci 'Review the selected changes'
+```
+
+`--var review.scope.max_commits=N` is deprecated and no longer controls the
+producer payload. Supplying it emits a warning on stderr. Remove it or replace
+it with `--input review.scope=...`; ordinary `--var` prompt/configuration
+templating remains supported.
+
+When the prompt also contains a scope expression, it must agree with an
+explicit typed input. A conflict fails before coordinator or worker model
+execution. Reports and acceptance use the frozen input snapshot and the
+producer's runtime-owned scope attestation, not model-authored prose.

@@ -72,6 +72,35 @@ func TestCoordinatorRuntimeGuidanceTreatsArtifactsAsOutputStaging(t *testing.T) 
 	}
 }
 
+func TestCoordinatorPromptDisplaysCanonicalResolvedRunInputs(t *testing.T) {
+	snapshot := mustRunInputSnapshot(t, []RunInputDefinition{{
+		Name: "review.scope", Schema: RunInputSchema{Type: "object"}, Required: true,
+	}}, []RunInputAssignment{{
+		Name: "review.scope", RawValue: []byte(`{"kind":"last_n","count":3}`), Source: RunInputSourceCLI,
+	}})
+	c := &Coordinator{
+		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "review-team"}, Agents: map[string]*agent.AgentDef{
+			"coordinator": {Name: "coordinator", Role: "coordinator"},
+		}},
+		sessionData: &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID},
+		taskTracker: NewTaskTracker(),
+	}
+	prompt := c.BuildOrchestratorPrompt()
+	for _, fragment := range []string{
+		"## Canonical Run Inputs",
+		snapshot.ID,
+		snapshot.SnapshotHash,
+		"`review.scope` = `",
+		`{"count":3,"kind":"last_n"}`,
+		snapshot.Inputs[0].ValueHash,
+		"Natural-language summaries cannot change these values",
+	} {
+		if !strings.Contains(prompt, fragment) {
+			t.Fatalf("coordinator prompt omitted canonical input fragment %q:\n%s", fragment, prompt)
+		}
+	}
+}
+
 func TestCoordinatorPromptMatchesDelegationAllowlist(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{

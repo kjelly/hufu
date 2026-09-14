@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -22,9 +21,10 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 		writeAndCommit(t, repo, filepath.Join("internal", "team", fmt.Sprintf("runtime-%02d.go", i)), "package team\n", fmt.Sprintf("runtime change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
 	}
 	config := fixtureConfig(repo, "out")
+	requestScope := resolverScope{Kind: "last_n", Count: config.MaxCommits, History: "first_parent", Head: "HEAD"}
 	payload, err := json.Marshal(wireConfig{
 		Repository: config.Repository, OutputDir: config.OutputDir, ArtifactRoot: config.ArtifactRoot,
-		Since: config.Since, MaxCommits: strconv.Itoa(config.MaxCommits), MaxDiffBytes: config.MaxDiffBytes,
+		Scope: &requestScope, MaxDiffBytes: config.MaxDiffBytes,
 		MaxDiffLines: config.MaxDiffLines, MaxPaths: config.MaxPaths,
 	})
 	if err != nil {
@@ -55,6 +55,43 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 	if scope.Requested.Count != 10 || scope.Resolved.SelectedCommitCount != 10 || !scope.Satisfied {
 		t.Fatalf("canonical action scope = %#v, want exactly 10 selected commits", scope)
+	}
+}
+
+func TestPrepareSupportsTypedReviewScopeVariants(t *testing.T) {
+	repo := newFixtureRepo(t)
+	for index := 1; index <= 4; index++ {
+		writeAndCommit(t, repo, filepath.Join("internal", fmt.Sprintf("scope-%d.go", index)), "package internal\n", fmt.Sprintf("scope %d", index), fmt.Sprintf("2025-01-0%dT00:00:00Z", index+1))
+	}
+	tests := []struct {
+		name      string
+		scope     resolverScope
+		wantCount int
+	}{
+		{name: "last_n", scope: resolverScope{Kind: "last_n", Count: 3, History: "first_parent", Head: "HEAD"}, wantCount: 3},
+		{name: "revision_range", scope: resolverScope{Kind: "revision_range", History: "first_parent", Base: "HEAD~2", Head: "HEAD"}, wantCount: 2},
+		{name: "since", scope: resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: "2025-01-04"}, wantCount: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := fixtureConfig(repo, "out-"+test.name)
+			config.Scope = test.scope
+			config.Since = ""
+			result, err := Prepare(t.Context(), config)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			manifest := readManifest(t, filepath.Join(repo, "out-"+test.name, "workset-manifest.json"))
+			if manifest.Scope.Requested != test.scope || manifest.Scope.Resolved.SelectedCommitCount != test.wantCount || !manifest.Scope.Satisfied {
+				t.Fatalf("scope = %#v, want requested %#v and count %d", manifest.Scope, test.scope, test.wantCount)
+			}
+			if manifest.Scope.ObservedBudget != manifest.Observed {
+				t.Fatalf("scope observed budget = %#v, manifest observed = %#v", manifest.Scope.ObservedBudget, manifest.Observed)
+			}
+			if result.Outputs["scope"] != manifest.Scope {
+				t.Fatalf("runtime output scope = %#v, manifest scope = %#v", result.Outputs["scope"], manifest.Scope)
+			}
+		})
 	}
 }
 
@@ -118,6 +155,16 @@ func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
 	}
 }
 
+func TestResolveReviewScopeInputRejectsInvalidExplicitScope(t *testing.T) {
+	response := resolveReviewScopeInput(team.RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
+		ExplicitValue: json.RawMessage(`{"kind":"revision_range","history":"first_parent","head":"HEAD"}`),
+	})
+	if response.Status != "invalid" || !strings.Contains(response.Diagnostic, "requires a valid base") {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestDecodeWireConfigRejectsInvalidMaxCommitsAndJSON(t *testing.T) {
 	for _, value := range []string{"0", "-1", "10.0", "text", `10\",\"unexpected\":true`, "101", "999999999999999999999999999999999999"} {
 		t.Run(value, func(t *testing.T) {
@@ -178,7 +225,7 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	if manifest.Scope.Resolved.SelectedCommitCount != 3 || manifest.Scope.Resolved.AvailableCommitCount != 3 || !manifest.Scope.Resolved.HistoryExhausted || manifest.Scope.Resolved.RepositoryShallow || !manifest.Scope.Satisfied {
 		t.Fatalf("resolved scope = %#v", manifest.Scope)
 	}
-	if got, want := manifest.Scope.InputDigest, scopeInputDigest(manifest.Scope.Requested); got != want || !strings.HasPrefix(got, "sha256:") {
+	if got, want := manifest.Scope.RequestedInputHash, scopeInputDigest(manifest.Scope.Requested); got != want || !strings.HasPrefix(got, "sha256:") {
 		t.Fatalf("input digest = %q, want %q", got, want)
 	}
 	outputScope, ok := result.Outputs["scope"].(scopeAttestation)

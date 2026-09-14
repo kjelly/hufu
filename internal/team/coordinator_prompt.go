@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/skill"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // runtimeArtifactStorageGuidance is shared by coordinator and worker prompts.
@@ -54,6 +55,24 @@ func (c *Coordinator) appendRuntimeWorkflowPrompt(b *strings.Builder) {
 	}
 }
 
+func (c *Coordinator) appendCanonicalRunInputsPrompt(b *strings.Builder) {
+	snapshot := c.RunInputSnapshot()
+	if snapshot == nil || len(snapshot.Inputs) == 0 {
+		return
+	}
+	b.WriteString("## Canonical Run Inputs\n\n")
+	fmt.Fprintf(b, "Runtime-frozen input snapshot `%s` (`%s`) is authoritative for this invocation. Natural-language summaries cannot change these values.\n\n", snapshot.ID, snapshot.SnapshotHash)
+	const maxRenderedInputBytes = 4096
+	for _, input := range snapshot.Inputs {
+		value := input.CanonicalValue
+		if redacted, err := utils.RedactJSONCompact(value); err == nil {
+			value = redacted
+		}
+		fmt.Fprintf(b, "- `%s` = `%s` (source: `%s`, value hash: `%s`)\n", input.Name, utils.TruncateString(string(value), maxRenderedInputBytes), input.Source, input.ValueHash)
+	}
+	b.WriteString("\nUse these canonical values and hashes when describing scope, constructing tasks, and evaluating producer attestations.\n\n")
+}
+
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
 	// Use the same policy-filtered worker names exposed by the `agent` tool.
 	// LoadTeam always injects a built-in Helper, but teams can deliberately
@@ -85,6 +104,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
 	c.appendRuntimeWorkflowPrompt(&b)
+	c.appendCanonicalRunInputsPrompt(&b)
 
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 	if c.session.Config.Delegation.RequireExactInitialBatch {

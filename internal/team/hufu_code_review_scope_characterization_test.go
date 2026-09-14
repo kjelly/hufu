@@ -26,8 +26,18 @@ func loadHufuCodeReviewTeam(t *testing.T) *TeamSession {
 	return session
 }
 
-func TestHufuCodeReviewUsesTenCommitCompatibilityDefault(t *testing.T) {
+func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
+	if len(session.RunInputDefinitions) != 1 {
+		t.Fatalf("run input definitions = %#v", session.RunInputDefinitions)
+	}
+	definition := session.RunInputDefinitions[0]
+	if definition.Name != "review.scope" || definition.Resolver == nil || definition.Resolver.ID != "review-scope-v1" {
+		t.Fatalf("review scope definition = %#v", definition)
+	}
+	if string(definition.Default) != `{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}` {
+		t.Fatalf("review scope default = %s", definition.Default)
+	}
 	var producer *TaskDef
 	for i := range session.ContractTasks {
 		if session.ContractTasks[i].ID == "produce-workset" {
@@ -39,16 +49,23 @@ func TestHufuCodeReviewUsesTenCommitCompatibilityDefault(t *testing.T) {
 		t.Fatal("hufu-code-review produce-workset static action is missing")
 	}
 	var payload struct {
-		MaxCommits string `json:"max_commits"`
+		Scope map[string]any `json:"scope"`
 	}
 	if err := json.Unmarshal([]byte(producer.Action.Payload), &payload); err != nil {
 		t.Fatalf("decode produce-workset payload: %v", err)
 	}
-	if payload.MaxCommits != "10" {
-		t.Fatalf("max_commits = %q, want compatibility default 10", payload.MaxCommits)
+	if payload.Scope["kind"] != "last_n" || payload.Scope["count"] != float64(10) {
+		t.Fatalf("static scope = %#v, want typed last_n 10", payload.Scope)
 	}
-	if coordinator := session.Agents["coordinator"]; coordinator == nil || !strings.Contains(coordinator.System, "last 10 first-parent") {
-		t.Fatalf("coordinator prompt does not carry configured scope: %#v", coordinator)
+	if len(producer.Action.InputBindings) != 1 || producer.Action.InputBindings[0] != (ActionInputBinding{Input: "review.scope", Target: "/scope"}) {
+		t.Fatalf("producer input bindings = %#v", producer.Action.InputBindings)
+	}
+	acceptance := session.Config.AcceptanceSpec
+	if acceptance == nil || len(acceptance.Verifications) != 2 || acceptance.Verifications[0].Type != VerifyTaskOutputAssert || acceptance.Verifications[1].Type != VerifyWorksetComplete {
+		t.Fatalf("acceptance wiring = %#v", acceptance)
+	}
+	if coordinator := session.Agents["coordinator"]; coordinator == nil || strings.Contains(coordinator.System, "Natural-language scope text cannot override") {
+		t.Fatalf("coordinator retained compatibility scope warning: %#v", coordinator)
 	}
 }
 
@@ -67,17 +84,17 @@ func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T)
 		t.Fatalf("bound tasks = %#v", bound)
 	}
 	var payload struct {
-		MaxCommits string `json:"max_commits"`
+		Scope map[string]any `json:"scope"`
 	}
 	if err := json.Unmarshal([]byte(bound[0].Action.Payload), &payload); err != nil {
 		t.Fatalf("decode bound payload: %v", err)
 	}
-	if payload.MaxCommits != "10" {
-		t.Fatalf("prompt/model payload changed static scope to %q, want configured default 10", payload.MaxCommits)
+	if payload.Scope["count"] != float64(10) {
+		t.Fatalf("prompt/model payload changed static scope to %#v, want configured default 10", payload.Scope)
 	}
 }
 
-func TestHufuCodeReviewCompatibilityScopeCanBeOverridden(t *testing.T) {
+func TestHufuCodeReviewCompatibilityVarNoLongerControlsScope(t *testing.T) {
 	session, err := LoadTeam(hufuCodeReviewTeamDir(t), map[string]string{"review.scope.max_commits": "3"}, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam(hufu-code-review): %v", err)
@@ -87,16 +104,16 @@ func TestHufuCodeReviewCompatibilityScopeCanBeOverridden(t *testing.T) {
 			continue
 		}
 		var payload struct {
-			MaxCommits string `json:"max_commits"`
+			Scope map[string]any `json:"scope"`
 		}
 		if err := json.Unmarshal([]byte(task.Action.Payload), &payload); err != nil {
 			t.Fatalf("decode produce-workset payload: %v", err)
 		}
-		if payload.MaxCommits != "3" {
-			t.Fatalf("max_commits = %q, want override 3", payload.MaxCommits)
+		if payload.Scope["count"] != float64(10) {
+			t.Fatalf("deprecated compatibility var changed typed scope: %#v", payload.Scope)
 		}
-		if coordinator := session.Agents["coordinator"]; coordinator == nil || !strings.Contains(coordinator.System, "last 3 first-parent") {
-			t.Fatalf("coordinator prompt does not carry overridden scope: %#v", coordinator)
+		if coordinator := session.Agents["coordinator"]; coordinator == nil || strings.Contains(coordinator.System, "last 3 first-parent") {
+			t.Fatalf("deprecated compatibility var leaked into coordinator prompt: %#v", coordinator)
 		}
 		return
 	}

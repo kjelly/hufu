@@ -19,10 +19,45 @@ spec:
   no-net: true
   allow-free-text-results: false
 
-  vars:
-    review:
-      scope:
-        max_commits: 10
+  inputs:
+    review.scope:
+      type: object
+      required: true
+      default:
+        kind: last_n
+        count: 10
+        history: first_parent
+        head: HEAD
+      properties:
+        kind:
+          type: string
+          enum: [last_n, revision_range, since]
+        count:
+          type: integer
+          minimum: 1
+          maximum: 100
+        history:
+          type: string
+          enum: [first_parent]
+        head:
+          type: string
+          min-length: 1
+          max-length: 160
+        base:
+          type: string
+          max-length: 160
+        since:
+          type: string
+          max-length: 80
+      required-properties: [kind, history, head]
+      additional-properties: false
+      resolver:
+        id: review-scope-v1
+        capability: resolve-review-scope
+        type: resolve_review_scope
+        source: invocation_prompt
+        side_effect: none
+        timeout: 10
 
   subagent-providers:
     codex:
@@ -53,6 +88,10 @@ spec:
       max_attempts_per_failure_signature: 1
 
   action-providers:
+    resolve-review-scope:
+      command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
+      dir: .
+      timeout: 30
     produce-workset:
       command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
       dir: .
@@ -67,6 +106,14 @@ spec:
     mode: blocking
     require-no-unresolved-tasks: true
     verifications:
+      - type: task_output_assert
+        source-task: produce-workset
+        output: scope
+        assertions:
+          - { pointer: /requested, op: equals_input, input: review.scope }
+          - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
+          - { pointer: /satisfied, op: equals, value: true }
+          - { pointer: /resolved/selected_commit_count, op: minimum, value: 1 }
       - type: workset_complete
         source-task: review-workset
         require-all-terminal: true
@@ -86,7 +133,10 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"since":"1970-01-01","max_commits":{@ printf "%q" .review.scope.max_commits @},"max_total_diff_bytes":1048576,"max_total_diff_lines":20000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"max_total_diff_bytes":1048576,"max_total_diff_lines":20000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}
+        input-bindings:
+          - input: review.scope
+            target: /scope
 
     - id: review-workset
       agent: reviewer

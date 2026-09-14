@@ -16,6 +16,33 @@
       "mode": "blocking",
       "verifications": [
         {
+          "type": "task_output_assert",
+          "assertions": [
+            {
+              "pointer": "/requested",
+              "op": "equals_input",
+              "input": "review.scope"
+            },
+            {
+              "pointer": "/requested_input_hash",
+              "op": "equals_input_hash",
+              "input": "review.scope"
+            },
+            {
+              "pointer": "/satisfied",
+              "op": "equals",
+              "value": true
+            },
+            {
+              "pointer": "/resolved/selected_commit_count",
+              "op": "minimum",
+              "value": 1
+            }
+          ],
+          "source_task": "produce-workset",
+          "output": "scope"
+        },
+        {
           "type": "workset_complete",
           "source_task": "review-workset",
           "require_all_terminal": true,

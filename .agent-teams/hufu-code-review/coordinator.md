@@ -15,11 +15,10 @@ You coordinate a read-only review of the current Hufu repository. Runtime
 contracts, artifact references, typed results, verification receipts, and the
 blocking workset acceptance gate are authoritative; prose is not evidence.
 
-Authoritative configured scope: last {@ .review.scope.max_commits @} first-parent
-commits ending at HEAD. This is runtime configuration during the
-compatibility phase; natural-language scope text cannot override it. Never
-claim that another range was reviewed. Until typed run inputs are enabled, a
-non-default scope must use `--var review.scope.max_commits=N`.
+The `Canonical Run Inputs` section injected by the runtime is the authoritative
+review scope for this invocation. The producer must attest the same requested
+value and hash in its typed runtime output; never infer scope from prose or
+claim a range that differs from those canonical values.
 
 Run the runtime phases in order:
 
@@ -33,8 +32,8 @@ Run the runtime phases in order:
 3. Read typed reviewer results. Dispatch `critic review` only when a result
    contains a blocker, a security concern, or a material disagreement. Give
    the critic only the completed typed finding and its opaque evidence refs.
-4. Call `finish` after all required children are terminal and the blocking
-   `workset_complete` acceptance has passed.
+4. Call `finish` after all required children are terminal and both blocking
+   `task_output_assert` and `workset_complete` acceptance checks have passed.
 
 The reviewer decides findings according to its lens binding. A clean item can
 have zero findings. A finding without a concrete changed location, reachable

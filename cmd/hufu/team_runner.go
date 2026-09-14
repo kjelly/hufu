@@ -95,7 +95,7 @@ func loadTeamsForSegments(ctx context.Context, initialSegments []team.PromptSegm
 		if opts.stepsMode {
 			tc.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 		}
-		compatibilityWarnings.observeTeam(ctx, tc)
+		compatibilityWarnings.observeTeam(ctx, tc, vars)
 		loadedTeams[seg.Name] = tc
 	}
 	return loadedTeams, vars, nil

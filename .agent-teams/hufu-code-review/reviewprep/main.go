@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,18 +53,22 @@ type scopeCandidate struct {
 }
 
 var (
-	lastCommitsPattern = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commits?\b`)
-	headRangePattern   = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
-	revisionPattern    = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/-]{0,159})`)
-	sincePattern       = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
+	lastCommitsPattern  = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commits?\b`)
+	headRangePattern    = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
+	revisionPattern     = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/-]{0,159})`)
+	revisionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
+	sincePattern        = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
 )
 
 // Config intentionally contains only team-owned workset semantics. Hufu
 // passes it as an opaque Action payload and does not interpret these fields.
 type Config struct {
-	Repository        string `json:"repository"`
-	OutputDir         string `json:"output_dir"`
-	ArtifactRoot      string `json:"artifact_root"`
+	Repository   string        `json:"repository"`
+	OutputDir    string        `json:"output_dir"`
+	ArtifactRoot string        `json:"artifact_root"`
+	Scope        resolverScope `json:"scope"`
+	// Since and MaxCommits are retained for direct Go callers during the
+	// provider payload migration. New action requests use Scope exclusively.
 	Since             string `json:"since"`
 	MaxCommits        int    `json:"max_commits"`
 	MaxTotalDiffBytes int    `json:"max_total_diff_bytes"`
@@ -76,18 +81,19 @@ type Config struct {
 }
 
 type wireConfig struct {
-	Repository        string `json:"repository"`
-	OutputDir         string `json:"output_dir"`
-	ArtifactRoot      string `json:"artifact_root"`
-	Since             string `json:"since"`
-	MaxCommits        string `json:"max_commits"`
-	MaxTotalDiffBytes int    `json:"max_total_diff_bytes"`
-	MaxTotalDiffLines int    `json:"max_total_diff_lines"`
-	MaxChangedPaths   int    `json:"max_changed_paths"`
-	MaxWorksetItems   int    `json:"max_workset_items"`
-	MaxDiffBytes      int    `json:"max_diff_bytes"`
-	MaxDiffLines      int    `json:"max_diff_lines"`
-	MaxPaths          int    `json:"max_paths"`
+	Repository        string         `json:"repository"`
+	OutputDir         string         `json:"output_dir"`
+	ArtifactRoot      string         `json:"artifact_root"`
+	Scope             *resolverScope `json:"scope,omitempty"`
+	Since             string         `json:"since,omitempty"`
+	MaxCommits        string         `json:"max_commits,omitempty"`
+	MaxTotalDiffBytes int            `json:"max_total_diff_bytes"`
+	MaxTotalDiffLines int            `json:"max_total_diff_lines"`
+	MaxChangedPaths   int            `json:"max_changed_paths"`
+	MaxWorksetItems   int            `json:"max_workset_items"`
+	MaxDiffBytes      int            `json:"max_diff_bytes"`
+	MaxDiffLines      int            `json:"max_diff_lines"`
+	MaxPaths          int            `json:"max_paths"`
 }
 
 type actionResult struct {
@@ -113,12 +119,7 @@ type manifest struct {
 	Items         []item           `json:"items"`
 }
 
-type requestedScope struct {
-	Kind    string `json:"kind"`
-	Count   int    `json:"count"`
-	History string `json:"history"`
-	Head    string `json:"head"`
-}
+type requestedScope = resolverScope
 
 type resolvedScope struct {
 	Base                 string `json:"base"`
@@ -130,10 +131,11 @@ type resolvedScope struct {
 }
 
 type scopeAttestation struct {
-	Requested   requestedScope `json:"requested"`
-	Resolved    resolvedScope  `json:"resolved"`
-	Satisfied   bool           `json:"satisfied"`
-	InputDigest string         `json:"input_digest"`
+	Requested          requestedScope `json:"requested"`
+	RequestedInputHash string         `json:"requested_input_hash"`
+	Resolved           resolvedScope  `json:"resolved"`
+	ObservedBudget     observedBudget `json:"observed_budget"`
+	Satisfied          bool           `json:"satisfied"`
 }
 
 type observedBudget struct {
@@ -246,6 +248,19 @@ func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInput
 		response.Diagnostic = "resolver request identity is unsupported"
 		return response
 	}
+	if len(request.ExplicitValue) > 0 && string(request.ExplicitValue) != "null" {
+		var explicit resolverScope
+		if err := decodeStrictJSON(request.ExplicitValue, &explicit); err != nil {
+			response.Status = "invalid"
+			response.Diagnostic = "explicit review scope is not a valid scope object"
+			return response
+		}
+		if err := validateRequestedScope(explicit); err != nil {
+			response.Status = "invalid"
+			response.Diagnostic = err.Error()
+			return response
+		}
+	}
 	candidates, invalid := parseScopeCandidates(request.Prompt)
 	if invalid != "" {
 		response.Status = "invalid"
@@ -352,21 +367,73 @@ func decodeWireConfig(payload string) (Config, error) {
 	if err := ensureJSONEOF(decoder); err != nil {
 		return Config{}, err
 	}
-	maxCommits, err := strconv.Atoi(wire.MaxCommits)
-	if err != nil {
-		return Config{}, fmt.Errorf("max_commits must be a base-10 integer string between 1 and 100: %w", err)
+	if wire.Scope != nil && strings.TrimSpace(wire.MaxCommits) != "" {
+		return Config{}, errors.New("scope and deprecated max_commits cannot be combined")
+	}
+	var scope resolverScope
+	maxCommits := 0
+	if wire.Scope != nil {
+		scope = *wire.Scope
+	} else if strings.TrimSpace(wire.MaxCommits) != "" {
+		parsed, err := strconv.Atoi(wire.MaxCommits)
+		if err != nil {
+			return Config{}, fmt.Errorf("max_commits must be a base-10 integer string between 1 and 100: %w", err)
+		}
+		maxCommits = parsed
+		scope = lastNScopeCandidate(parsed, 0, 0, "compatibility").value
+	}
+	if scope.Kind != "" {
+		if err := validateRequestedScope(scope); err != nil {
+			return Config{}, err
+		}
+		if scope.Kind == "last_n" {
+			maxCommits = scope.Count
+		}
 	}
 	config := Config{
 		Repository: wire.Repository, OutputDir: wire.OutputDir, ArtifactRoot: wire.ArtifactRoot,
-		Since: wire.Since, MaxCommits: maxCommits,
+		Scope: scope, Since: wire.Since, MaxCommits: maxCommits,
 		MaxTotalDiffBytes: wire.MaxTotalDiffBytes, MaxTotalDiffLines: wire.MaxTotalDiffLines,
 		MaxChangedPaths: wire.MaxChangedPaths, MaxWorksetItems: wire.MaxWorksetItems,
 		MaxDiffBytes: wire.MaxDiffBytes, MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
 	}
-	if err := validateMaxCommits(config.MaxCommits); err != nil {
-		return Config{}, err
-	}
 	return config, nil
+}
+
+func validateRequestedScope(scope resolverScope) error {
+	if scope.History != "first_parent" {
+		return fmt.Errorf("review scope history must be first_parent")
+	}
+	if !validRevision(scope.Head) {
+		return fmt.Errorf("review scope head %q is invalid", scope.Head)
+	}
+	switch scope.Kind {
+	case "last_n":
+		if err := validateMaxCommits(scope.Count); err != nil {
+			return err
+		}
+		if scope.Base != "" || scope.Since != "" {
+			return errors.New("last_n review scope cannot set base or since")
+		}
+	case "revision_range":
+		if scope.Count != 0 || scope.Since != "" || !validRevision(scope.Base) {
+			return errors.New("revision_range review scope requires a valid base and cannot set count or since")
+		}
+	case "since":
+		if scope.Count != 0 || scope.Base != "" {
+			return errors.New("since review scope cannot set count or base")
+		}
+		if _, err := time.Parse(time.DateOnly, scope.Since); err != nil {
+			return errors.New("since review scope requires a valid YYYY-MM-DD date")
+		}
+	default:
+		return fmt.Errorf("unsupported review scope kind %q", scope.Kind)
+	}
+	return nil
+}
+
+func validRevision(value string) bool {
+	return revisionNamePattern.MatchString(value)
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {
@@ -407,13 +474,13 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
 
-	resolution, err := resolveRange(ctx, repo, config.Since, config.MaxCommits)
+	resolution, err := resolveRequestedRange(ctx, repo, config)
 	if err != nil {
 		return actionResult{}, err
 	}
 	reviewRangeValue := resolution.Range
 	if reviewRangeValue.CommitCount == 0 {
-		return actionResult{}, fmt.Errorf("scope_empty: requested last %d first-parent commits ending at HEAD selected no commits", config.MaxCommits)
+		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no commits", compactScope(config.Scope))
 	}
 	paths, err := changedPaths(ctx, repo, reviewRangeValue)
 	if err != nil {
@@ -427,15 +494,17 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	if err := enforceTotalBudget(config, observed); err != nil {
 		return actionResult{}, err
 	}
-	requested := requestedScope{Kind: "last_n", Count: config.MaxCommits, History: "first_parent", Head: "HEAD"}
+	requested := config.Scope
 	scope := scopeAttestation{
-		Requested: requested,
+		Requested:          requested,
+		RequestedInputHash: scopeInputDigest(requested),
 		Resolved: resolvedScope{
 			Base: reviewRangeValue.Start, Head: reviewRangeValue.End,
 			SelectedCommitCount: reviewRangeValue.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
 			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
 		},
-		Satisfied: true, InputDigest: scopeInputDigest(requested),
+		ObservedBudget: observed,
+		Satisfied:      true,
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
@@ -484,6 +553,7 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 }
 
 func applyConfigDefaults(config *Config) {
+	legacyScope := config.Scope.Kind == ""
 	if strings.TrimSpace(config.Repository) == "" {
 		if repo := os.Getenv("HUFU_REPOSITORY"); repo != "" {
 			config.Repository = repo
@@ -501,11 +571,16 @@ func applyConfigDefaults(config *Config) {
 			config.OutputDir = filepath.Join(config.ArtifactRoot, "workset")
 		}
 	}
-	if strings.TrimSpace(config.Since) == "" {
+	if legacyScope && strings.TrimSpace(config.Since) == "" {
 		config.Since = "2.days.ago"
 	}
-	if config.MaxCommits == 0 {
+	if legacyScope && config.MaxCommits == 0 {
 		config.MaxCommits = 10
+	}
+	if legacyScope {
+		config.Scope = lastNScopeCandidate(config.MaxCommits, 0, 0, "compatibility").value
+	} else if config.Scope.Kind == "last_n" {
+		config.MaxCommits = config.Scope.Count
 	}
 	if config.MaxTotalDiffBytes == 0 && config.MaxTotalDiffLines == 0 && config.MaxChangedPaths == 0 && config.MaxWorksetItems == 0 {
 		config.MaxTotalDiffBytes = defaultMaxTotalDiffBytes
@@ -527,10 +602,7 @@ func validateConfig(config Config) error {
 	if strings.TrimSpace(config.OutputDir) == "" {
 		return errors.New("output_dir is required")
 	}
-	if strings.TrimSpace(config.Since) == "" {
-		return errors.New("since is required")
-	}
-	if err := validateMaxCommits(config.MaxCommits); err != nil {
+	if err := validateRequestedScope(config.Scope); err != nil {
 		return err
 	}
 	if config.MaxDiffBytes <= 0 || config.MaxDiffLines <= 0 || config.MaxPaths <= 0 {
@@ -609,7 +681,7 @@ func ensureEmptyOutputDir(path string) error {
 	return nil
 }
 
-func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rangeResolution, error) {
+func resolveRequestedRange(ctx context.Context, repo string, config Config) (rangeResolution, error) {
 	shallowText, err := git(ctx, repo, "rev-parse", "--is-shallow-repository")
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("detect shallow repository: %w", err)
@@ -617,15 +689,40 @@ func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rang
 	if strings.TrimSpace(shallowText) == "true" {
 		return rangeResolution{}, errors.New("history_incomplete: shallow repository cannot prove the requested first-parent history")
 	}
-	end, err := git(ctx, repo, "rev-parse", "HEAD")
+	switch config.Scope.Kind {
+	case "last_n":
+		return resolveLastNRange(ctx, repo, config.Scope.Head, config.Since, config.Scope.Count)
+	case "revision_range":
+		return resolveRevisionRange(ctx, repo, config.Scope)
+	case "since":
+		return resolveSinceRange(ctx, repo, config.Scope)
+	default:
+		return rangeResolution{}, fmt.Errorf("unsupported review scope kind %q", config.Scope.Kind)
+	}
+}
+
+// resolveRange preserves the direct helper contract used by the producer's
+// focused tests while action requests migrate to typed Scope payloads.
+func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rangeResolution, error) {
+	config := Config{Since: since, MaxCommits: maxCommits, Scope: lastNScopeCandidate(maxCommits, 0, 0, "compatibility").value}
+	return resolveRequestedRange(ctx, repo, config)
+}
+
+func resolveLastNRange(ctx context.Context, repo, head, since string, maxCommits int) (rangeResolution, error) {
+	end, err := resolveCommit(ctx, repo, head)
 	if err != nil {
-		return rangeResolution{}, fmt.Errorf("resolve HEAD: %w", err)
+		return rangeResolution{}, fmt.Errorf("resolve review head %q: %w", head, err)
 	}
 	// Review selection follows the repository's first-parent history. Without
 	// this, selecting the last N commits from a merge-heavy repository and then
 	// representing them as a single parent..HEAD range can silently expand the
 	// range to include side-branch commits that were not selected.
-	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+since, "HEAD")
+	args := []string{"rev-list", "--first-parent", "--reverse"}
+	if since != "" {
+		args = append(args, "--since="+since)
+	}
+	args = append(args, end)
+	commitsText, err := git(ctx, repo, args...)
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("list commits: %w", err)
 	}
@@ -636,6 +733,55 @@ func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rang
 	}
 	r := reviewRange{End: strings.TrimSpace(end), Since: since, CommitCount: len(commits)}
 	resolution := rangeResolution{Range: r, AvailableCommitCount: available, HistoryExhausted: available < maxCommits}
+	return finalizeSelectedRange(ctx, repo, commits, resolution)
+}
+
+func resolveRevisionRange(ctx context.Context, repo string, scope resolverScope) (rangeResolution, error) {
+	base, err := resolveCommit(ctx, repo, scope.Base)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("resolve review base %q: %w", scope.Base, err)
+	}
+	head, err := resolveCommit(ctx, repo, scope.Head)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("resolve review head %q: %w", scope.Head, err)
+	}
+	base, head = strings.TrimSpace(base), strings.TrimSpace(head)
+	chainText, err := git(ctx, repo, "rev-list", "--first-parent", head)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("list first-parent history: %w", err)
+	}
+	if !slices.Contains(nonEmptyLines(chainText), base) {
+		return rangeResolution{}, fmt.Errorf("scope_not_first_parent: base %q is not on the first-parent history of %q", scope.Base, scope.Head)
+	}
+	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", base+".."+head)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("list revision range: %w", err)
+	}
+	commits := nonEmptyLines(commitsText)
+	return rangeResolution{Range: reviewRange{Start: base, End: head, CommitCount: len(commits)}, AvailableCommitCount: len(commits)}, nil
+}
+
+func resolveSinceRange(ctx context.Context, repo string, scope resolverScope) (rangeResolution, error) {
+	head, err := resolveCommit(ctx, repo, scope.Head)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("resolve review head %q: %w", scope.Head, err)
+	}
+	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+scope.Since, head)
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("list commits since %q: %w", scope.Since, err)
+	}
+	commits := nonEmptyLines(commitsText)
+	resolution := rangeResolution{Range: reviewRange{End: strings.TrimSpace(head), Since: scope.Since, CommitCount: len(commits)}, AvailableCommitCount: len(commits)}
+	return finalizeSelectedRange(ctx, repo, commits, resolution)
+}
+
+func resolveCommit(ctx context.Context, repo, revision string) (string, error) {
+	resolved, err := git(ctx, repo, "rev-parse", "--verify", revision+"^{commit}")
+	return strings.TrimSpace(resolved), err
+}
+
+func finalizeSelectedRange(ctx context.Context, repo string, commits []string, resolution rangeResolution) (rangeResolution, error) {
+	r := resolution.Range
 	if len(commits) == 0 {
 		return resolution, nil
 	}
@@ -770,8 +916,8 @@ func enforceTotalBudget(config Config, observed observedBudget) error {
 		observed.WorksetItems <= config.MaxWorksetItems {
 		return nil
 	}
-	return fmt.Errorf("scope_too_large\nrequested scope: last %d first-parent commits ending at HEAD\nobserved totals: bytes=%d lines=%d paths=%d items=%d\nconfigured caps: bytes=%d lines=%d paths=%d items=%d\nremediation: narrow --input review.scope, raise an explicit budget, or split the run",
-		config.MaxCommits,
+	return fmt.Errorf("scope_too_large\nrequested scope: %s\nobserved totals: bytes=%d lines=%d paths=%d items=%d\nconfigured caps: bytes=%d lines=%d paths=%d items=%d\nremediation: narrow --input review.scope, raise an explicit budget, or split the run",
+		compactScope(config.Scope),
 		observed.TotalDiffBytes, observed.TotalDiffLines, observed.ChangedPaths, observed.WorksetItems,
 		config.MaxTotalDiffBytes, config.MaxTotalDiffLines, config.MaxChangedPaths, config.MaxWorksetItems,
 	)
@@ -782,7 +928,23 @@ func scopeInputDigest(requested requestedScope) string {
 	if err != nil {
 		panic(fmt.Sprintf("encode requested scope: %v", err))
 	}
-	return "sha256:" + sha256Hex(encoded)
+	var generic any
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		panic(fmt.Sprintf("canonicalize requested scope: %v", err))
+	}
+	canonical, err := json.Marshal(generic)
+	if err != nil {
+		panic(fmt.Sprintf("encode canonical requested scope: %v", err))
+	}
+	return "sha256:" + sha256Hex(canonical)
+}
+
+func compactScope(scope resolverScope) string {
+	encoded, err := json.Marshal(scope)
+	if err != nil {
+		return scope.Kind
+	}
+	return string(encoded)
 }
 
 func findBatch(batches []*batch, lens string) *batch {

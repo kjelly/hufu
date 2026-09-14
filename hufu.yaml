@@ -1,0 +1,5 @@
+profiles:
+  hufu-code-review-ci:
+    agent-team: hufu-code-review
+    unattended: "true"
+    input: 'review.scope={"kind":"last_n","count":1,"history":"first_parent","head":"HEAD"}'
