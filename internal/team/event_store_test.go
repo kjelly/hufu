@@ -55,6 +55,70 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestEventStoreIdempotencyIsScopedToBranch(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-branch-idempotency", "session-branch-idempotency")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const key = "same-logical-transition"
+	appendOnBranch := func(branchID string) RunEvent {
+		t.Helper()
+		store.SetBranchID(branchID)
+		persisted, err := store.AppendPersistedContext(t.Context(), RunEvent{
+			Type:           "branch_idempotency_probe",
+			Actor:          "test",
+			IdempotencyKey: key,
+			Payload:        []byte(`{"branch":"` + branchID + `"}`),
+		})
+		if err != nil {
+			t.Fatalf("append on branch %q: %v", branchID, err)
+		}
+		return persisted
+	}
+
+	mainEvent := appendOnBranch("main")
+	if retry := appendOnBranch("main"); retry.ID != mainEvent.ID {
+		t.Fatalf("main retry event ID = %q, want %q", retry.ID, mainEvent.ID)
+	}
+	featureEvent := appendOnBranch("feature")
+	if featureEvent.ID == mainEvent.ID {
+		t.Fatalf("different branches reused event ID %q for the same idempotency key", mainEvent.ID)
+	}
+	if featureEvent.BranchID != "feature" {
+		t.Fatalf("feature event branch = %q, want feature", featureEvent.BranchID)
+	}
+	if retry := appendOnBranch("feature"); retry.ID != featureEvent.ID {
+		t.Fatalf("feature retry event ID = %q, want %q", retry.ID, featureEvent.ID)
+	}
+	if retry := appendOnBranch("main"); retry.ID != mainEvent.ID {
+		t.Fatalf("main retry after feature append = %q, want %q", retry.ID, mainEvent.ID)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if retry := appendOnBranch("main"); retry.ID != mainEvent.ID {
+		t.Fatalf("reopened main retry event ID = %q, want %q", retry.ID, mainEvent.ID)
+	}
+	if retry := appendOnBranch("feature"); retry.ID != featureEvent.ID {
+		t.Fatalf("reopened feature retry event ID = %q, want %q", retry.ID, featureEvent.ID)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("durable event count = %d, want one event per branch", len(events))
+	}
+}
+
 func TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent(t *testing.T) {
 	store, err := NewEventStore(t.TempDir(), "run-missing-sync", "session-missing-sync")
 	if err != nil {

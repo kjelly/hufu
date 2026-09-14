@@ -51,6 +51,18 @@ type RunEvent struct {
 	Hash           string          `json:"hash,omitempty"`
 }
 
+type eventIdempotencyIdentity struct {
+	branchID string
+	key      string
+}
+
+func newEventIdempotencyIdentity(branchID, key string) eventIdempotencyIdentity {
+	if branchID == "" {
+		branchID = "main"
+	}
+	return eventIdempotencyIdentity{branchID: branchID, key: key}
+}
+
 // EventStore manages durable append-only event logging with hash chain verification.
 type EventStore struct {
 	// mu is a one-token semaphore so emergency callers can cancel lock
@@ -72,7 +84,7 @@ type EventStore struct {
 	cacheHitCount   int
 	cachedEvents    []RunEvent
 	syncFile        func() error
-	idempotencyKeys map[string]RunEvent
+	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
 }
 
 // SetBranchID binds the store to a session branch: subsequent events appended
@@ -116,7 +128,7 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 		runID:           runID,
 		sessionID:       sessionID,
 		syncFile:        f.Sync,
-		idempotencyKeys: make(map[string]RunEvent),
+		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
 	}
 	es.mu <- struct{}{}
 
@@ -297,8 +309,15 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	// A failed Sync leaves durability uncertain: the event may nevertheless be
 	// visible after reopen. Treat a persisted idempotency key as success so a
 	// retry cannot fork the logical event stream with a duplicate observation.
+	// Branch identity is part of the logical operation: sibling and independent
+	// root branches must be able to record the same transition independently.
 	if event.IdempotencyKey != "" {
-		if durable, exists := es.idempotencyKeys[event.IdempotencyKey]; exists {
+		branchID := event.BranchID
+		if branchID == "" {
+			branchID = es.branchID
+		}
+		identity := newEventIdempotencyIdentity(branchID, event.IdempotencyKey)
+		if durable, exists := es.idempotencyKeys[identity]; exists {
 			// The event was already acknowledged as durable. Callers may safely
 			// apply their idempotent projection using its original identity; no
 			// second transition is written.
@@ -380,7 +399,8 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	es.lastEventID = event.ID
 	es.lastHash = event.Hash
 	if event.IdempotencyKey != "" {
-		es.idempotencyKeys[event.IdempotencyKey] = cloneRunEvent(event)
+		identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+		es.idempotencyKeys[identity] = cloneRunEvent(event)
 	}
 	es.cachedEvents = append(es.cachedEvents, cloneRunEvent(event))
 	return event, nil
@@ -453,7 +473,7 @@ type eventStoreState struct {
 	runID           string
 	sessionID       string
 	events          []RunEvent
-	idempotencyKeys map[string]RunEvent
+	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
 }
 
 // scanFile is the one strict durable scanner. It never mutates EventStore;
@@ -463,7 +483,7 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 	state := eventStoreState{
 		runID:           es.runID,
 		sessionID:       es.sessionID,
-		idempotencyKeys: make(map[string]RunEvent),
+		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
 	}
 	if f == nil {
 		return eventStoreState{}, fmt.Errorf("event store file is unavailable")
@@ -498,7 +518,8 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 		state.lastEventID = event.ID
 		state.lastHash = event.Hash
 		if event.IdempotencyKey != "" {
-			state.idempotencyKeys[event.IdempotencyKey] = cloneRunEvent(event)
+			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+			state.idempotencyKeys[identity] = cloneRunEvent(event)
 		}
 		state.sequence++
 		if state.runID == "" && event.RunID != "" {
