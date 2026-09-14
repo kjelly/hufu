@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
@@ -53,6 +55,66 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 	if scope.Requested.Count != 10 || scope.Resolved.SelectedCommitCount != 10 || !scope.Satisfied {
 		t.Fatalf("canonical action scope = %#v, want exactly 10 selected commits", scope)
+	}
+}
+
+func TestResolveReviewScopeInputGrammar(t *testing.T) {
+	tests := []struct {
+		name       string
+		prompt     string
+		wantStatus string
+		wantValue  string
+	}{
+		{name: "last commits", prompt: "Review the last 10 commits", wantStatus: "matched", wantValue: `{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}`},
+		{name: "head relative", prompt: "Review HEAD~3..HEAD", wantStatus: "matched", wantValue: `{"kind":"last_n","count":3,"history":"first_parent","head":"HEAD"}`},
+		{name: "revision range", prompt: "Review release-1..feature/head", wantStatus: "matched", wantValue: `{"kind":"revision_range","history":"first_parent","head":"feature/head","base":"release-1"}`},
+		{name: "since", prompt: "Review changes since 2026-09-01", wantStatus: "matched", wantValue: `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-01"}`},
+		{name: "absent", prompt: "Review the recent code", wantStatus: "no_match"},
+		{name: "ambiguous", prompt: "Review last 10 commits but only HEAD~3..HEAD", wantStatus: "ambiguous"},
+		{name: "invalid count", prompt: "Review last 0 commits", wantStatus: "invalid"},
+		{name: "invalid date", prompt: "Review since 2026-02-30", wantStatus: "invalid"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := resolveReviewScopeInput(team.RunInputResolverRequest{
+				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
+			})
+			if response.Status != test.wantStatus {
+				t.Fatalf("status = %q diagnostic=%q, want %q", response.Status, response.Diagnostic, test.wantStatus)
+			}
+			if test.wantValue != "" && string(response.Value) != test.wantValue {
+				t.Fatalf("value = %s, want %s", response.Value, test.wantValue)
+			}
+			if response.Status == "matched" && (response.ResolverVersion != "1" || len(response.Evidence) == 0) {
+				t.Fatalf("matched response lacks provenance: %#v", response)
+			}
+		})
+	}
+}
+
+func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
+	request := team.RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review last 7 commits",
+		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run(t.Context(), bytes.NewReader(encoded), &output); err != nil {
+		t.Fatal(err)
+	}
+	var response team.RunInputResolverResponse
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "matched" || !bytes.Contains(response.Value, []byte(`"count":7`)) {
+		t.Fatalf("response = %#v", response)
+	}
+	bad := append(encoded[:len(encoded)-1], []byte(`,"unknown":true}`)...)
+	if err := run(t.Context(), bytes.NewReader(bad), &bytes.Buffer{}); err == nil {
+		t.Fatal("resolver accepted an unknown request field")
 	}
 }
 

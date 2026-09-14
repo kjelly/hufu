@@ -25,7 +25,7 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if err := compareExecutionPolicySnapshotProjection(live.ExecutionPolicySnapshot, replayed.ExecutionPolicySnapshot); err != nil {
 		return err
 	}
-	if err := compareRunInputSnapshotProjection(live.RunInputSnapshot, replayed.RunInputSnapshot); err != nil {
+	if err := compareRunInputSnapshotProjection(live.RunInputSnapshots, live.ActiveRunInputSnapshotID, replayed.RunInputSnapshots, replayed.ActiveRunInputSnapshotID); err != nil {
 		return err
 	}
 	if !sameConversationProjection(live.Entries, replayed.Entries) {
@@ -40,21 +40,20 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	return nil
 }
 
-func compareRunInputSnapshotProjection(live, replayed *RunInputSnapshot) error {
-	if live == nil && replayed == nil {
-		return nil
+func compareRunInputSnapshotProjection(live []RunInputSnapshot, liveActive string, replayed []RunInputSnapshot, replayedActive string) error {
+	if len(live) != len(replayed) || liveActive != replayedActive {
+		return fmt.Errorf("run input snapshots differ between checkpoint and event store")
 	}
-	if live == nil || replayed == nil {
-		return fmt.Errorf("run input snapshot differs between checkpoint and event store")
-	}
-	if err := ValidateRunInputSnapshot(live); err != nil {
-		return fmt.Errorf("checkpoint run input snapshot is invalid: %w", err)
-	}
-	if err := ValidateRunInputSnapshot(replayed); err != nil {
-		return fmt.Errorf("event-store run input snapshot is invalid: %w", err)
-	}
-	if live.SnapshotHash != replayed.SnapshotHash {
-		return fmt.Errorf("run input snapshot differs: checkpoint=%s event_store=%s", live.SnapshotHash, replayed.SnapshotHash)
+	for index := range live {
+		if err := ValidateRunInputSnapshot(&live[index]); err != nil {
+			return fmt.Errorf("checkpoint run input snapshot %d is invalid: %w", index, err)
+		}
+		if err := ValidateRunInputSnapshot(&replayed[index]); err != nil {
+			return fmt.Errorf("event-store run input snapshot %d is invalid: %w", index, err)
+		}
+		if live[index].SnapshotHash != replayed[index].SnapshotHash {
+			return fmt.Errorf("run input snapshot %d differs: checkpoint=%s event_store=%s", index, live[index].SnapshotHash, replayed[index].SnapshotHash)
+		}
 	}
 	return nil
 }

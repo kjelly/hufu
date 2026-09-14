@@ -37,8 +37,19 @@ func TestConfigureRunInputAssignmentsRequiresQualificationForMultipleTeams(t *te
 	t.Cleanup(func() { opts = saved })
 	opts.inputFlags = []string{"value=1"}
 	err := configureRunInputAssignments(map[string]*teamContext{"one": {}, "two": {}})
-	if err == nil || err.Error() != `input_team_ambiguous: unqualified input "value" requires exactly one selected team` {
+	if err == nil || err.Error() != `input_team_ambiguous: unqualified input "value" does not uniquely match one selected team` {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestConfigureRunInputAssignmentsInfersUniqueDeclaringTeam(t *testing.T) {
+	saved := opts
+	t.Cleanup(func() { opts = saved })
+	opts.inputFlags = []string{"value=1"}
+	first := &teamContext{session: &team.TeamSession{RunInputDefinitions: []team.RunInputDefinition{{Name: "value", Schema: team.RunInputSchema{Type: "integer"}}}}, coordinator: new(team.Coordinator)}
+	second := &teamContext{session: &team.TeamSession{}, coordinator: new(team.Coordinator)}
+	if err := configureRunInputAssignments(map[string]*teamContext{"one": first, "two": second}); err != nil {
+		t.Fatal(err)
 	}
 }
 

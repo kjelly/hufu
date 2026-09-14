@@ -1888,6 +1888,14 @@ func renderDryRun(result *team.DryRunResult) {
 			}
 		}
 	}
+	if result.ResolvedRunInputs != nil {
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("─── Resolved Run Inputs ───"))
+		b.WriteString("\n")
+		for _, input := range result.ResolvedRunInputs.Inputs {
+			fmt.Fprintf(&b, "  %s = %s  %s\n", boldStyle.Render(input.Name), dimStyle.Render(string(input.CanonicalValue)), dimStyle.Render("["+string(input.Source)+"; "+input.ValueHash+"]"))
+		}
+	}
 
 	b.WriteString("\n")
 	b.WriteString(headerStyle.Render("─── Agents ───"))

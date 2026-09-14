@@ -89,6 +89,14 @@ type ActionProvider interface {
 	Execute(ctx context.Context, action Action) (interface{}, error)
 }
 
+// RunInputResolverProvider is the provider-neutral admission seam for a
+// deterministic, side-effect-free run-input resolver. Implementations receive
+// the resolver envelope directly rather than an Action so coordinator-authored
+// payload fields cannot enter this boundary.
+type RunInputResolverProvider interface {
+	ResolveRunInput(context.Context, RunInputResolverRequest) (RunInputResolverResponse, error)
+}
+
 // NamedActionProvider optionally exposes the stable adapter identity used in
 // lifecycle telemetry. Capability and provider are deliberately separate:
 // one capability may be backed by different adapters in different teams.
@@ -285,31 +293,7 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	cmd := exec.CommandContext(ctx, p.command[0], p.command[1:]...)
 	cmd.Dir = p.dir
 	cmd.Stdin = bytes.NewReader(payload)
-	env := os.Environ()
-	if actionEnv := ActionEnvironmentFromContext(ctx); actionEnv.Workspace != "" || actionEnv.Repository != "" || actionEnv.TeamName != "" || actionEnv.RunID != "" || actionEnv.TaskID != "" || actionEnv.Attempt > 0 || actionEnv.ActionInvocationID != "" {
-		if actionEnv.Workspace != "" {
-			env = append(env, "HUFU_WORKSPACE="+actionEnv.Workspace)
-		}
-		if actionEnv.Repository != "" {
-			env = append(env, "HUFU_REPOSITORY="+actionEnv.Repository)
-		}
-		if actionEnv.TeamName != "" {
-			env = append(env, "HUFU_TEAM="+actionEnv.TeamName)
-		}
-		if actionEnv.RunID != "" {
-			env = append(env, "HUFU_RUN_ID="+actionEnv.RunID)
-		}
-		if actionEnv.TaskID != "" {
-			env = append(env, "HUFU_TASK_ID="+actionEnv.TaskID)
-		}
-		if actionEnv.Attempt > 0 {
-			env = append(env, fmt.Sprintf("HUFU_ATTEMPT=%d", actionEnv.Attempt))
-		}
-		if actionEnv.ActionInvocationID != "" {
-			env = append(env, "HUFU_ACTION_INVOCATION_ID="+actionEnv.ActionInvocationID)
-		}
-	}
-	cmd.Env = env
+	cmd.Env = actionCommandEnvironment(ctx)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -328,6 +312,82 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 		return nil, fmt.Errorf("adapter command returned invalid JSON: %w", err)
 	}
 	return result, nil
+}
+
+func (p *commandActionProvider) ResolveRunInput(ctx context.Context, request RunInputResolverRequest) (RunInputResolverResponse, error) {
+	if p == nil || len(p.command) == 0 {
+		return RunInputResolverResponse{}, fmt.Errorf("resolver provider is not configured")
+	}
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("encode resolver request: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, p.command[0], p.command[1:]...)
+	cmd.Dir = p.dir
+	cmd.Stdin = bytes.NewReader(payload)
+	cmd.Env = actionCommandEnvironment(ctx)
+	stdout := newBoundedBuffer(maxRunInputResolverOutputBytes)
+	stderr := newBoundedBuffer(maxRunInputResolverDiagnosticBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return RunInputResolverResponse{}, ctx.Err()
+		}
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return RunInputResolverResponse{}, fmt.Errorf("resolver command failed: %s", utils.RedactSecrets(detail))
+	}
+	if stdout.Truncated() {
+		return RunInputResolverResponse{}, fmt.Errorf("resolver output exceeds %d bytes", maxRunInputResolverOutputBytes)
+	}
+	var response RunInputResolverResponse
+	decoder := json.NewDecoder(strings.NewReader(stdout.String()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("decode resolver response: %w", err)
+	}
+	if err := ensureRunInputJSONEOF(decoder); err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("decode resolver response: %w", err)
+	}
+	if err := validateRunInputResolverResponse(response); err != nil {
+		return RunInputResolverResponse{}, err
+	}
+	return response, nil
+}
+
+func actionCommandEnvironment(ctx context.Context) []string {
+	env := os.Environ()
+	actionEnv := ActionEnvironmentFromContext(ctx)
+	if actionEnv.Workspace != "" {
+		env = append(env, "HUFU_WORKSPACE="+actionEnv.Workspace)
+	}
+	if actionEnv.Repository != "" {
+		env = append(env, "HUFU_REPOSITORY="+actionEnv.Repository)
+	}
+	if actionEnv.TeamName != "" {
+		env = append(env, "HUFU_TEAM="+actionEnv.TeamName)
+	}
+	if actionEnv.RunID != "" {
+		env = append(env, "HUFU_RUN_ID="+actionEnv.RunID)
+	}
+	if actionEnv.TaskID != "" {
+		env = append(env, "HUFU_TASK_ID="+actionEnv.TaskID)
+	}
+	if actionEnv.Attempt > 0 {
+		env = append(env, fmt.Sprintf("HUFU_ATTEMPT=%d", actionEnv.Attempt))
+	}
+	if actionEnv.ActionInvocationID != "" {
+		env = append(env, "HUFU_ACTION_INVOCATION_ID="+actionEnv.ActionInvocationID)
+	}
+	return env
 }
 
 // ActionProviderError represents a provider execution error.

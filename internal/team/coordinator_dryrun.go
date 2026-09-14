@@ -4,6 +4,7 @@ package team
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -42,18 +43,24 @@ type DryRunResult struct {
 	OrchestratorPrompt string
 	FirstRoundTasks    []TaskDef
 	ContractFindings   []ContractFinding
+	ResolvedRunInputs  *RunInputSnapshot
 	Error              string
 }
 
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
-	if _, err := c.previewRunInputs(); err != nil {
+	if err := c.validateDryRunExecutionPolicy(); err != nil {
+		return nil, err
+	}
+	resolvedInputs, err := c.previewRunInputs(ctx, userPrompt)
+	if err != nil {
 		return nil, err
 	}
 	orchDef := c.GetOrchestratorDef()
 
 	result := &DryRunResult{
-		UserPrompt:      userPrompt,
-		ResolvedProfile: c.ExecutionProfile(),
+		UserPrompt:        userPrompt,
+		ResolvedProfile:   c.ExecutionProfile(),
+		ResolvedRunInputs: resolvedInputs,
 	}
 	if c.session != nil && c.session.Config.Name != "" {
 		result.TeamName = c.session.Config.Name
@@ -149,6 +156,29 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	c.report(c.newEvent("done").withAgent("coordinator").withMessage("dry-run complete (no LLM calls)").withTodoID(CoordTodoID))
 
 	return result, nil
+}
+
+func (c *Coordinator) validateDryRunExecutionPolicy() error {
+	if c != nil && c.session != nil {
+		hasResolver := false
+		for _, definition := range c.session.RunInputDefinitions {
+			hasResolver = hasResolver || definition.Resolver != nil
+		}
+		if !hasResolver {
+			return nil
+		}
+	}
+	if c == nil || c.executionPolicy == nil || c.executionPolicy.snapshot == nil {
+		return fmt.Errorf("dry-run requires a frozen execution policy")
+	}
+	live, err := newExecutionPolicyState(c)
+	if err != nil {
+		return err
+	}
+	if live.snapshot.ConfigurationHash != c.executionPolicy.snapshot.ConfigurationHash {
+		return fmt.Errorf("dry-run execution policy drift: frozen=%s live=%s", c.executionPolicy.snapshot.ConfigurationHash, live.snapshot.ConfigurationHash)
+	}
+	return nil
 }
 
 func canonicalDryRunTarget(raw, defaultBackend string) string {

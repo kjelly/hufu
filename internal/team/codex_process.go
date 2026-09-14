@@ -197,3 +197,9 @@ func (b *boundedBuffer) String() string {
 	}
 	return b.buf.String()
 }
+
+func (b *boundedBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
+}

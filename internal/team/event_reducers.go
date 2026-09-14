@@ -88,7 +88,8 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 		case string(EventRunInputsResolved):
 			var snapshot RunInputSnapshot
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && ValidateRunInputSnapshot(&snapshot) == nil {
-				session.RunInputSnapshot = CloneRunInputSnapshot(&snapshot)
+				session.RunInputSnapshots = appendRunInputSnapshot(session.RunInputSnapshots, snapshot)
+				session.ActiveRunInputSnapshotID = snapshot.ID
 			}
 		case string(EventExecutionPolicySnapshotMigrated):
 			var payload ExecutionPolicySnapshotMigratedPayload

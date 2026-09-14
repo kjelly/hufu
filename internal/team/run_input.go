@@ -14,18 +14,23 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 const (
-	runInputSnapshotVersion  = 1
-	maxRunInputDefinitions   = 64
-	maxRunInputValueBytes    = 64 * 1024
-	maxRunInputSnapshotBytes = 256 * 1024
-	maxRunInputDepth         = 8
-	maxRunInputArrayItems    = 256
-	maxRunInputProperties    = 128
-	maxRunInputEvidenceItems = 128
-	maxRunInputLocationBytes = 4 * 1024
+	runInputSnapshotVersion            = 1
+	maxRunInputDefinitions             = 64
+	maxRunInputValueBytes              = 64 * 1024
+	maxRunInputSnapshotBytes           = 256 * 1024
+	maxRunInputDepth                   = 8
+	maxRunInputArrayItems              = 256
+	maxRunInputProperties              = 128
+	maxRunInputEvidenceItems           = 128
+	maxRunInputLocationBytes           = 4 * 1024
+	maxRunInputPromptBytes             = 256 * 1024
+	maxRunInputResolverOutputBytes     = 128 * 1024
+	maxRunInputResolverDiagnosticBytes = 8 * 1024
 )
 
 var runInputNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -127,10 +132,45 @@ type RunInputSnapshot struct {
 }
 
 type RunInputAssignment struct {
-	Name     string
-	RawValue []byte
-	Source   RunInputSource
-	Location string
+	Name            string
+	RawValue        []byte
+	Source          RunInputSource
+	Location        string
+	ResolverID      string
+	ResolverVersion string
+	Evidence        []InputEvidence
+}
+
+type runInputCandidate struct {
+	value           json.RawMessage
+	source          RunInputSource
+	evidence        []InputEvidence
+	resolverID      string
+	resolverVersion string
+}
+
+type RunInputResolverRequest struct {
+	Type          string          `json:"type"`
+	InputName     string          `json:"input_name"`
+	Prompt        string          `json:"prompt"`
+	ExplicitValue json.RawMessage `json:"explicit_value"`
+	SchemaHash    string          `json:"schema_hash"`
+	ResolverID    string          `json:"resolver_id"`
+}
+
+type RunInputResolverEvidence struct {
+	Source string `json:"source"`
+	Start  int    `json:"start,omitzero"`
+	End    int    `json:"end,omitzero"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+type RunInputResolverResponse struct {
+	Status          string                     `json:"status"`
+	Value           json.RawMessage            `json:"value,omitempty"`
+	Evidence        []RunInputResolverEvidence `json:"evidence,omitempty"`
+	ResolverVersion string                     `json:"resolver_version,omitempty"`
+	Diagnostic      string                     `json:"diagnostic,omitempty"`
 }
 
 func normalizeRunInputDefinitions(raw map[string]runInputDefinitionYAML) ([]RunInputDefinition, error) {
@@ -152,7 +192,7 @@ func normalizeRunInputDefinitions(raw map[string]runInputDefinitionYAML) ([]RunI
 		if err != nil {
 			return nil, fmt.Errorf("inputs.%s: %w", name, err)
 		}
-		definition := RunInputDefinition{Name: name, Schema: schema, Required: authored.Required, Resolver: cloneRunInputResolver(authored.Resolver)}
+		definition := RunInputDefinition{Name: name, Schema: schema, Required: authored.Required, Resolver: normalizeRunInputResolver(authored.Resolver)}
 		if authored.Default != nil {
 			encoded, err := canonicalJSONValue(authored.Default)
 			if err != nil {
@@ -291,6 +331,55 @@ func validateRunInputResolver(resolver *RunInputResolverSpec) error {
 	}
 	if resolver.Timeout <= 0 {
 		return errors.New("timeout must be positive")
+	}
+	if resolver.Timeout > 300 {
+		return errors.New("timeout must not exceed 300 seconds")
+	}
+	if len(resolver.ID) > 256 || len(resolver.Capability) > 256 || len(resolver.Type) > 256 {
+		return errors.New("id, capability, and type must not exceed 256 bytes")
+	}
+	return nil
+}
+
+func validateRunInputResolverResponse(response RunInputResolverResponse) error {
+	switch response.Status {
+	case "matched":
+		if len(response.Value) == 0 || !json.Valid(response.Value) {
+			return errors.New("input_resolver_failed: matched response requires one valid JSON value")
+		}
+		if strings.TrimSpace(response.ResolverVersion) == "" {
+			return errors.New("input_resolver_failed: matched response requires resolver_version")
+		}
+	case "no_match":
+		if len(response.Value) > 0 && string(response.Value) != "null" {
+			return errors.New("input_resolver_failed: no_match response must not contain a value")
+		}
+	case "ambiguous", "invalid":
+		if len(response.Value) > 0 && string(response.Value) != "null" {
+			return fmt.Errorf("input_resolver_failed: %s response must not contain a value", response.Status)
+		}
+		if strings.TrimSpace(response.Diagnostic) == "" {
+			return fmt.Errorf("input_resolver_failed: %s response requires a diagnostic", response.Status)
+		}
+	default:
+		return fmt.Errorf("input_resolver_failed: unsupported resolver status %q", response.Status)
+	}
+	if len(response.Evidence) > maxRunInputEvidenceItems {
+		return fmt.Errorf("input_resolver_failed: %d evidence records exceed maximum %d", len(response.Evidence), maxRunInputEvidenceItems)
+	}
+	if len(response.Diagnostic) > maxRunInputResolverDiagnosticBytes {
+		return fmt.Errorf("input_resolver_failed: diagnostic exceeds %d bytes", maxRunInputResolverDiagnosticBytes)
+	}
+	for _, evidence := range response.Evidence {
+		if evidence.Source != "prompt" {
+			return fmt.Errorf("input_resolver_failed: evidence source must be prompt, got %q", evidence.Source)
+		}
+		if evidence.Start < 0 || evidence.End <= evidence.Start || evidence.End > maxRunInputPromptBytes {
+			return errors.New("input_resolver_failed: evidence range is invalid")
+		}
+		if len(evidence.Kind) > 256 {
+			return errors.New("input_resolver_failed: evidence kind is too long")
+		}
 	}
 	return nil
 }
@@ -489,7 +578,17 @@ func canonicalJSONValue(value any) (json.RawMessage, error) {
 func RunInputSchemaHash(definitions []RunInputDefinition) (string, error) {
 	definitions = cloneRunInputDefinitions(definitions)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
-	encoded, err := json.Marshal(definitions)
+	type schemaIdentity struct {
+		Name     string          `json:"name"`
+		Schema   RunInputSchema  `json:"schema"`
+		Required bool            `json:"required"`
+		Default  json.RawMessage `json:"default,omitempty"`
+	}
+	identity := make([]schemaIdentity, len(definitions))
+	for index, definition := range definitions {
+		identity[index] = schemaIdentity{Name: definition.Name, Schema: definition.Schema, Required: definition.Required, Default: definition.Default}
+	}
+	encoded, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("encode run input schema: %w", err)
 	}
@@ -516,7 +615,7 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 		if _, ok := seen[capability]; ok {
 			continue
 		}
-		provider, ok := session.Config.ActionProviders[capability]
+		provider, ok := configuredActionProvider(session.Config.ActionProviders, capability)
 		if !ok {
 			return "", fmt.Errorf("run input resolver capability %q has no action provider", capability)
 		}
@@ -536,6 +635,15 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 	return runInputHash(encoded), nil
 }
 
+func configuredActionProvider(providers map[string]agent.ActionProviderConfig, capability string) (agent.ActionProviderConfig, bool) {
+	for name, provider := range providers {
+		if normalizeCapability(name) == normalizeCapability(capability) {
+			return provider, true
+		}
+	}
+	return agent.ActionProviderConfig{}, false
+}
+
 func ResolveRunInputSnapshot(definitions []RunInputDefinition, assignments []RunInputAssignment, runID, invocationID, teamName string) (*RunInputSnapshot, error) {
 	if len(definitions) > maxRunInputDefinitions {
 		return nil, fmt.Errorf("input_schema_invalid: %d definitions exceed maximum %d", len(definitions), maxRunInputDefinitions)
@@ -546,89 +654,17 @@ func ResolveRunInputSnapshot(definitions []RunInputDefinition, assignments []Run
 		}
 		return nil, nil
 	}
-	definitions = cloneRunInputDefinitions(definitions)
-	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
-	byName := make(map[string]RunInputDefinition, len(definitions))
-	for index := range definitions {
-		definition := &definitions[index]
-		if !runInputNamePattern.MatchString(definition.Name) {
-			return nil, fmt.Errorf("input schema contains invalid name %q", definition.Name)
-		}
-		if _, duplicate := byName[definition.Name]; duplicate {
-			return nil, fmt.Errorf("input schema repeats name %q", definition.Name)
-		}
-		if err := validateRunInputSchemaRecursive(definition.Schema, 1); err != nil {
-			return nil, fmt.Errorf("input schema %q: %w", definition.Name, err)
-		}
-		if len(definition.Default) > 0 {
-			canonical, err := validateAndCanonicalizeRunInput(definition.Schema, definition.Default)
-			if err != nil {
-				return nil, fmt.Errorf("input schema %q default: %w", definition.Name, err)
-			}
-			definition.Default = canonical
-		}
-		byName[definition.Name] = *definition
+	definitions, byName, err := validateAndIndexRunInputDefinitions(definitions)
+	if err != nil {
+		return nil, err
 	}
-	type candidate struct {
-		value    json.RawMessage
-		source   RunInputSource
-		evidence []InputEvidence
+	candidates, err := collectRunInputCandidates(byName, assignments, teamName)
+	if err != nil {
+		return nil, err
 	}
-	candidates := make(map[string]map[RunInputSource]*candidate)
-	for _, assignment := range assignments {
-		definition, ok := byName[assignment.Name]
-		if !ok {
-			return nil, fmt.Errorf("input_unknown: %q is not declared by team %q", assignment.Name, teamName)
-		}
-		if assignment.Source != RunInputSourceCLI && assignment.Source != RunInputSourceFile {
-			return nil, fmt.Errorf("input_source_invalid: %q", assignment.Source)
-		}
-		canonical, err := parseRunInputAssignment(definition.Schema, assignment.RawValue)
-		if err != nil {
-			return nil, fmt.Errorf("input_invalid: %s: %w", assignment.Name, err)
-		}
-		if candidates[assignment.Name] == nil {
-			candidates[assignment.Name] = make(map[RunInputSource]*candidate)
-		}
-		existing := candidates[assignment.Name][assignment.Source]
-		if existing != nil && !bytes.Equal(existing.value, canonical) {
-			return nil, fmt.Errorf("input_explicit_conflict: %s has different %s values", assignment.Name, assignment.Source)
-		}
-		if existing == nil {
-			existing = &candidate{value: canonical, source: assignment.Source}
-			candidates[assignment.Name][assignment.Source] = existing
-		}
-		existing.evidence = append(existing.evidence, InputEvidence{Source: assignment.Source, Location: assignment.Location})
-	}
-
-	resolved := make([]ResolvedRunInput, 0, len(definitions))
-	for _, definition := range definitions {
-		perSource := candidates[definition.Name]
-		cli, file := perSource[RunInputSourceCLI], perSource[RunInputSourceFile]
-		if cli != nil && file != nil && !bytes.Equal(cli.value, file.value) {
-			return nil, fmt.Errorf("input_explicit_conflict: %s differs between CLI and file", definition.Name)
-		}
-		chosen := cli
-		if chosen == nil {
-			chosen = file
-		}
-		if chosen == nil && len(definition.Default) > 0 {
-			chosen = &candidate{value: slices.Clone(definition.Default), source: RunInputSourceDefault, evidence: []InputEvidence{{Source: RunInputSourceDefault, Location: "team manifest default"}}}
-		}
-		if chosen == nil {
-			if definition.Required {
-				return nil, fmt.Errorf("input_missing: required input %q has no value", definition.Name)
-			}
-			continue
-		}
-		evidence := slices.Clone(chosen.evidence)
-		if cli != nil && file != nil {
-			evidence = append(evidence, file.evidence...)
-		}
-		resolved = append(resolved, ResolvedRunInput{
-			Name: definition.Name, Type: definition.Schema.Type, CanonicalValue: slices.Clone(chosen.value),
-			ValueHash: runInputHash(chosen.value), Source: chosen.source, Evidence: evidence,
-		})
+	resolved, err := selectResolvedRunInputs(definitions, candidates)
+	if err != nil {
+		return nil, err
 	}
 	schemaHash, err := RunInputSchemaHash(definitions)
 	if err != nil {
@@ -655,6 +691,160 @@ func ResolveRunInputSnapshot(definitions []RunInputDefinition, assignments []Run
 		return nil, fmt.Errorf("resolved run input snapshot is invalid: %w", err)
 	}
 	return snapshot, nil
+}
+
+func validateAndIndexRunInputDefinitions(definitions []RunInputDefinition) ([]RunInputDefinition, map[string]RunInputDefinition, error) {
+	definitions = cloneRunInputDefinitions(definitions)
+	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
+	byName := make(map[string]RunInputDefinition, len(definitions))
+	for index := range definitions {
+		definition := &definitions[index]
+		if !runInputNamePattern.MatchString(definition.Name) {
+			return nil, nil, fmt.Errorf("input schema contains invalid name %q", definition.Name)
+		}
+		if _, duplicate := byName[definition.Name]; duplicate {
+			return nil, nil, fmt.Errorf("input schema repeats name %q", definition.Name)
+		}
+		if err := validateRunInputSchemaRecursive(definition.Schema, 1); err != nil {
+			return nil, nil, fmt.Errorf("input schema %q: %w", definition.Name, err)
+		}
+		if len(definition.Default) > 0 {
+			canonical, err := validateAndCanonicalizeRunInput(definition.Schema, definition.Default)
+			if err != nil {
+				return nil, nil, fmt.Errorf("input schema %q default: %w", definition.Name, err)
+			}
+			definition.Default = canonical
+		}
+		byName[definition.Name] = *definition
+	}
+	return definitions, byName, nil
+}
+
+func collectRunInputCandidates(byName map[string]RunInputDefinition, assignments []RunInputAssignment, teamName string) (map[string]map[RunInputSource]*runInputCandidate, error) {
+	candidates := make(map[string]map[RunInputSource]*runInputCandidate)
+	for _, assignment := range assignments {
+		definition, ok := byName[assignment.Name]
+		if !ok {
+			return nil, fmt.Errorf("input_unknown: %q is not declared by team %q", assignment.Name, teamName)
+		}
+		if assignment.Source != RunInputSourceCLI && assignment.Source != RunInputSourceFile && assignment.Source != RunInputSourceResolver {
+			return nil, fmt.Errorf("input_source_invalid: %q", assignment.Source)
+		}
+		canonical, err := parseRunInputAssignment(definition.Schema, assignment.RawValue)
+		if err != nil {
+			return nil, fmt.Errorf("input_invalid: %s: %w", assignment.Name, err)
+		}
+		if candidates[assignment.Name] == nil {
+			candidates[assignment.Name] = make(map[RunInputSource]*runInputCandidate)
+		}
+		existing := candidates[assignment.Name][assignment.Source]
+		if existing != nil && !bytes.Equal(existing.value, canonical) {
+			if assignment.Source == RunInputSourceResolver {
+				return nil, fmt.Errorf("input_resolver_failed: %s resolver returned conflicting values", assignment.Name)
+			}
+			return nil, fmt.Errorf("input_explicit_conflict: %s has different %s values", assignment.Name, assignment.Source)
+		}
+		if existing == nil {
+			existing = &runInputCandidate{value: canonical, source: assignment.Source, resolverID: assignment.ResolverID, resolverVersion: assignment.ResolverVersion}
+			candidates[assignment.Name][assignment.Source] = existing
+		}
+		if assignment.Source == RunInputSourceResolver {
+			existing.evidence = append(existing.evidence, assignment.Evidence...)
+		} else {
+			existing.evidence = append(existing.evidence, InputEvidence{Source: assignment.Source, Location: assignment.Location})
+		}
+	}
+	return candidates, nil
+}
+
+func selectResolvedRunInputs(definitions []RunInputDefinition, candidates map[string]map[RunInputSource]*runInputCandidate) ([]ResolvedRunInput, error) {
+	resolved := make([]ResolvedRunInput, 0, len(definitions))
+	for _, definition := range definitions {
+		input, present, err := selectResolvedRunInput(definition, candidates[definition.Name])
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			resolved = append(resolved, input)
+		}
+	}
+	return resolved, nil
+}
+
+func selectResolvedRunInput(definition RunInputDefinition, perSource map[RunInputSource]*runInputCandidate) (ResolvedRunInput, bool, error) {
+	cli, file, resolver := perSource[RunInputSourceCLI], perSource[RunInputSourceFile], perSource[RunInputSourceResolver]
+	if cli != nil && file != nil && !bytes.Equal(cli.value, file.value) {
+		return ResolvedRunInput{}, false, fmt.Errorf("input_explicit_conflict: %s differs between CLI and file", definition.Name)
+	}
+	chosen := cli
+	if chosen == nil {
+		chosen = file
+	}
+	if chosen != nil && resolver != nil && !bytes.Equal(chosen.value, resolver.value) {
+		return ResolvedRunInput{}, false, fmt.Errorf("input_prompt_conflict: %s explicit value differs from resolver candidate", definition.Name)
+	}
+	if chosen == nil {
+		chosen = resolver
+	}
+	if chosen == nil && len(definition.Default) > 0 {
+		chosen = &runInputCandidate{value: slices.Clone(definition.Default), source: RunInputSourceDefault, evidence: []InputEvidence{{Source: RunInputSourceDefault, Location: "team manifest default"}}}
+	}
+	if chosen == nil {
+		if definition.Required {
+			return ResolvedRunInput{}, false, fmt.Errorf("input_missing: required input %q has no value", definition.Name)
+		}
+		return ResolvedRunInput{}, false, nil
+	}
+	evidence := slices.Clone(chosen.evidence)
+	if cli != nil && file != nil {
+		evidence = append(evidence, file.evidence...)
+	}
+	if resolver != nil && resolver != chosen {
+		evidence = append(evidence, resolver.evidence...)
+	}
+	resolverID, resolverVersion := chosen.resolverID, chosen.resolverVersion
+	if resolver != nil {
+		resolverID, resolverVersion = resolver.resolverID, resolver.resolverVersion
+	}
+	return ResolvedRunInput{
+		Name: definition.Name, Type: definition.Schema.Type, CanonicalValue: slices.Clone(chosen.value),
+		ValueHash: runInputHash(chosen.value), Source: chosen.source, ResolverID: resolverID,
+		ResolverVersion: resolverVersion, Evidence: evidence,
+	}, true, nil
+}
+
+func resolveExplicitRunInputValues(definitions []RunInputDefinition, assignments []RunInputAssignment, teamName string) (map[string]json.RawMessage, error) {
+	byName := make(map[string]RunInputDefinition, len(definitions))
+	for _, definition := range definitions {
+		byName[definition.Name] = definition
+	}
+	values := make(map[string]json.RawMessage)
+	counts := make(map[string]int)
+	for _, assignment := range assignments {
+		if assignment.Source != RunInputSourceCLI && assignment.Source != RunInputSourceFile {
+			continue
+		}
+		definition, ok := byName[assignment.Name]
+		if !ok {
+			return nil, fmt.Errorf("input_unknown: %q is not declared by team %q", assignment.Name, teamName)
+		}
+		counts[assignment.Name]++
+		if counts[assignment.Name] > maxRunInputEvidenceItems {
+			return nil, fmt.Errorf("input_invalid: %s has more than %d explicit source records", assignment.Name, maxRunInputEvidenceItems)
+		}
+		if len(assignment.Location) > maxRunInputLocationBytes {
+			return nil, fmt.Errorf("input_invalid: %s source location exceeds %d bytes", assignment.Name, maxRunInputLocationBytes)
+		}
+		canonical, err := parseRunInputAssignment(definition.Schema, assignment.RawValue)
+		if err != nil {
+			return nil, fmt.Errorf("input_invalid: %s: %w", assignment.Name, err)
+		}
+		if prior, exists := values[assignment.Name]; exists && !bytes.Equal(prior, canonical) {
+			return nil, fmt.Errorf("input_explicit_conflict: %s has different explicit values", assignment.Name)
+		}
+		values[assignment.Name] = canonical
+	}
+	return values, nil
 }
 
 func validateRunInputSchemaRecursive(schema RunInputSchema, depth int) error {
@@ -749,6 +939,12 @@ func validateResolvedRunInput(input ResolvedRunInput) error {
 	if !isRunInputSource(input.Source) {
 		return fmt.Errorf("run input %q has invalid source %q", input.Name, input.Source)
 	}
+	if input.Source == RunInputSourceResolver && (strings.TrimSpace(input.ResolverID) == "" || strings.TrimSpace(input.ResolverVersion) == "") {
+		return fmt.Errorf("run input %q resolved by a resolver lacks resolver identity", input.Name)
+	}
+	if len(input.ResolverID) > 256 || len(input.ResolverVersion) > 128 {
+		return fmt.Errorf("run input %q resolver identity is too long", input.Name)
+	}
 	if len(input.Evidence) > maxRunInputEvidenceItems {
 		return fmt.Errorf("run input %q has too many evidence records", input.Name)
 	}
@@ -772,6 +968,9 @@ func validateRunInputEvidence(inputName string, evidence InputEvidence) error {
 	}
 	if evidence.Start < 0 || evidence.End < 0 || evidence.End != 0 && evidence.End < evidence.Start {
 		return fmt.Errorf("run input %q has invalid evidence range", inputName)
+	}
+	if len(evidence.Kind) > 256 {
+		return fmt.Errorf("run input %q evidence kind is too long", inputName)
 	}
 	return nil
 }
@@ -831,6 +1030,19 @@ func cloneRunInputResolver(src *RunInputResolverSpec) *RunInputResolverSpec {
 	return &clone
 }
 
+func normalizeRunInputResolver(src *RunInputResolverSpec) *RunInputResolverSpec {
+	resolver := cloneRunInputResolver(src)
+	if resolver == nil {
+		return nil
+	}
+	resolver.ID = strings.TrimSpace(resolver.ID)
+	resolver.Capability = normalizeCapability(resolver.Capability)
+	resolver.Type = strings.TrimSpace(resolver.Type)
+	resolver.Source = strings.ToLower(strings.TrimSpace(resolver.Source))
+	resolver.SideEffect = strings.ToLower(strings.TrimSpace(resolver.SideEffect))
+	return resolver
+}
+
 func cloneRunInputSchema(src RunInputSchema) RunInputSchema {
 	clone := src
 	clone.Enum = make([]json.RawMessage, len(src.Enum))
@@ -873,4 +1085,21 @@ func CloneRunInputSnapshot(src *RunInputSnapshot) *RunInputSnapshot {
 		clone.Inputs[index].Evidence = slices.Clone(src.Inputs[index].Evidence)
 	}
 	return &clone
+}
+
+func CloneRunInputSnapshots(src []RunInputSnapshot) []RunInputSnapshot {
+	clone := make([]RunInputSnapshot, len(src))
+	for index := range src {
+		clone[index] = *CloneRunInputSnapshot(&src[index])
+	}
+	return clone
+}
+
+func appendRunInputSnapshot(snapshots []RunInputSnapshot, snapshot RunInputSnapshot) []RunInputSnapshot {
+	for index := range snapshots {
+		if snapshots[index].ID == snapshot.ID {
+			return snapshots
+		}
+	}
+	return append(snapshots, *CloneRunInputSnapshot(&snapshot))
 }

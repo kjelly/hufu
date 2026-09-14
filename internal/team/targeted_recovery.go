@@ -68,6 +68,10 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
+	if err := c.resolveRunInputsForInvocation(invocationCtx, ""); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
+	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err

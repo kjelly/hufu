@@ -109,3 +109,24 @@ func TestCommandActionProviderInjectsEnvironment(t *testing.T) {
 		t.Fatalf("injected environment mismatch: %#v", resMap)
 	}
 }
+
+func TestCommandActionProviderRunsStrictResolverEnvelope(t *testing.T) {
+	provider := &commandActionProvider{
+		capability: "resolve-demo",
+		command:    []string{"/bin/sh", "-c", `cat >/dev/null; printf '{"status":"matched","value":3,"evidence":[{"source":"prompt","start":7,"end":8,"kind":"count"}],"resolver_version":"1"}'`},
+	}
+	response, err := provider.ResolveRunInput(t.Context(), RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "count", Prompt: "last 3", SchemaHash: "sha256:fixture", ResolverID: "count-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "matched" || string(response.Value) != "3" || response.ResolverVersion != "1" {
+		t.Fatalf("response = %#v", response)
+	}
+
+	provider.command = []string{"/bin/sh", "-c", `cat >/dev/null; printf '{"status":"matched","value":3,"resolver_version":"1","unknown":true}'`}
+	if _, err := provider.ResolveRunInput(t.Context(), RunInputResolverRequest{}); err == nil {
+		t.Fatal("resolver provider accepted an unknown response field")
+	}
+}

@@ -2,13 +2,32 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
+
+type testRunInputResolverProvider struct {
+	response RunInputResolverResponse
+	err      error
+	requests []RunInputResolverRequest
+}
+
+func (*testRunInputResolverProvider) Validate(Action) error { return nil }
+func (*testRunInputResolverProvider) Execute(context.Context, Action) (any, error) {
+	return nil, errors.New("action execution is not expected")
+}
+func (p *testRunInputResolverProvider) ResolveRunInput(_ context.Context, request RunInputResolverRequest) (RunInputResolverResponse, error) {
+	p.requests = append(p.requests, request)
+	return p.response, p.err
+}
 
 func TestLoadTeamNormalizesStrictTypedInputManifest(t *testing.T) {
 	dir := t.TempDir()
@@ -116,6 +135,145 @@ func TestResolveRunInputSnapshotFailsClosedOnConflictAndInvalidValues(t *testing
 	}
 }
 
+func TestResolveRunInputSnapshotMergesResolverWithoutSilentPrecedence(t *testing.T) {
+	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
+	resolver := RunInputAssignment{
+		Name: "count", RawValue: []byte("3"), Source: RunInputSourceResolver,
+		ResolverID: "count-v1", ResolverVersion: "1",
+		Evidence: []InputEvidence{{Source: RunInputSourceResolver, Location: "invocation_prompt", Start: 7, End: 8, Kind: "count"}},
+	}
+	snapshot, err := ResolveRunInputSnapshot(definitions, []RunInputAssignment{
+		{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI, Location: "--input[1]"}, resolver,
+	}, "run", "invocation", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := snapshot.Inputs[0]
+	if input.Source != RunInputSourceCLI || input.ResolverID != "count-v1" || input.ResolverVersion != "1" || len(input.Evidence) != 2 {
+		t.Fatalf("merged input = %#v", input)
+	}
+	resolver.RawValue = []byte("4")
+	if _, err := ResolveRunInputSnapshot(definitions, []RunInputAssignment{
+		{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}, resolver,
+	}, "run", "invocation", "demo"); err == nil || !strings.Contains(err.Error(), "input_prompt_conflict") {
+		t.Fatalf("conflict error = %v", err)
+	}
+}
+
+func TestRunInputResolverResponseFailsClosed(t *testing.T) {
+	for name, response := range map[string]RunInputResolverResponse{
+		"unknown status":     {Status: "guessed"},
+		"matched no version": {Status: "matched", Value: json.RawMessage(`1`)},
+		"no match value":     {Status: "no_match", Value: json.RawMessage(`1`)},
+		"bad evidence":       {Status: "matched", Value: json.RawMessage(`1`), ResolverVersion: "1", Evidence: []RunInputResolverEvidence{{Source: "artifact", Start: 1, End: 2}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateRunInputResolverResponse(response); err == nil {
+				t.Fatalf("accepted response %#v", response)
+			}
+		})
+	}
+}
+
+func TestCoordinatorResolverUsesPromptAndExplicitCandidateBeforeSnapshot(t *testing.T) {
+	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
+	resolver := &testRunInputResolverProvider{response: RunInputResolverResponse{
+		Status: "matched", Value: json.RawMessage(`3`), ResolverVersion: "1",
+		Evidence: []RunInputResolverEvidence{{Source: "prompt", Start: 5, End: 6, Kind: "count"}},
+	}}
+	coordinator.session.RunInputDefinitions = []RunInputDefinition{{
+		Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true,
+		Resolver: &RunInputResolverSpec{ID: "count-v1", Capability: "resolve-count", Type: "resolve_count", Source: "invocation_prompt", SideEffect: "none", Timeout: 1},
+	}}
+	coordinator.session.Config.ActionProviders = map[string]agent.ActionProviderConfig{
+		"resolve-count": {Command: []string{"resolver-fixture"}},
+	}
+	coordinator.session.ProviderRegistry = NewProviderRegistry()
+	coordinator.session.ProviderRegistry.Register("resolve-count", resolver)
+	coordinator.SetRunInputAssignments([]RunInputAssignment{{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}})
+	state, err := newExecutionPolicyState(coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.executionPolicy = state
+	ctx, end := coordinator.beginInvocationExecutionRun(t.Context())
+	defer end()
+	if err := coordinator.checkRunAdmission(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.resolveRunInputsForInvocation(ctx, "last 3 commits"); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.requests) != 1 || string(resolver.requests[0].ExplicitValue) != "3" || resolver.requests[0].Prompt != "last 3 commits" {
+		t.Fatalf("resolver requests = %#v", resolver.requests)
+	}
+	snapshot := coordinator.RunInputSnapshot()
+	if snapshot == nil || snapshot.Inputs[0].Source != RunInputSourceCLI || snapshot.Inputs[0].ResolverID != "count-v1" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestCoordinatorResolverAmbiguityFailsBeforeTaskOrModelBoundary(t *testing.T) {
+	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
+	resolver := &testRunInputResolverProvider{response: RunInputResolverResponse{Status: "ambiguous", Diagnostic: "two incompatible scopes"}}
+	coordinator.session.RunInputDefinitions = []RunInputDefinition{{
+		Name: "scope", Schema: RunInputSchema{Type: "string"},
+		Resolver: &RunInputResolverSpec{ID: "scope-v1", Capability: "resolve-scope", Type: "resolve_scope", Source: "invocation_prompt", SideEffect: "none", Timeout: 1},
+	}}
+	coordinator.session.Config.ActionProviders = map[string]agent.ActionProviderConfig{"resolve-scope": {Command: []string{"resolver-fixture"}}}
+	coordinator.session.ProviderRegistry = NewProviderRegistry()
+	coordinator.session.ProviderRegistry.Register("resolve-scope", resolver)
+	state, err := newExecutionPolicyState(coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.executionPolicy = state
+	ctx, end := coordinator.beginInvocationExecutionRun(t.Context())
+	defer end()
+	if err := coordinator.checkRunAdmission(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.resolveRunInputsForInvocation(ctx, "ambiguous"); err == nil || !strings.Contains(err.Error(), "input_ambiguous") {
+		t.Fatalf("error = %v", err)
+	}
+	events, err := coordinator.EventStore().ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if EventType(event.Type) == EventTaskCreated || EventType(event.Type) == EventTaskStarted || EventType(event.Type) == EventRunInputsResolved {
+			t.Fatalf("execution/input event escaped failed resolver admission: %#v", event)
+		}
+	}
+}
+
+func TestInterruptedRunReusesFrozenInputsAndRejectsResumeDrift(t *testing.T) {
+	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
+	coordinator.SetSessionData(NewSession())
+	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
+	coordinator.session.RunInputDefinitions = definitions
+	snapshot, err := ResolveRunInputSnapshot(definitions, []RunInputAssignment{{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}}, "run-old", "run-old:invocation", coordinator.session.Config.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.sessionData.RunInputSnapshots = []RunInputSnapshot{*snapshot}
+	coordinator.sessionData.ActiveRunInputSnapshotID = snapshot.ID
+	coordinator.taskTracker.TodoList().SetRunID("run-old")
+	items := coordinator.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "interrupted"}})
+	items[0].Status = TaskInProgress
+
+	frozen, interrupted := coordinator.interruptedRunInputSnapshot()
+	if !interrupted || frozen == nil || frozen.SnapshotHash != snapshot.SnapshotHash {
+		t.Fatalf("frozen=%#v interrupted=%t", frozen, interrupted)
+	}
+	if err := validateResumeRunInputAssignments(definitions, []RunInputAssignment{{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}}, frozen, coordinator.session.Config.Name); err != nil {
+		t.Fatalf("same resume input rejected: %v", err)
+	}
+	if err := validateResumeRunInputAssignments(definitions, []RunInputAssignment{{Name: "count", RawValue: []byte("4"), Source: RunInputSourceCLI}}, frozen, coordinator.session.Config.Name); err == nil || !strings.Contains(err.Error(), "resume_input_conflict") {
+		t.Fatalf("resume drift error = %v", err)
+	}
+}
+
 func TestRunInputSchemasEnforceSupportedScalarArrayAndSizeBounds(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -210,8 +368,29 @@ func TestRunInputsResolvedEventReplaysFrozenSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := ReduceToSessionData([]RunEvent{{Type: string(EventRunInputsResolved), Payload: payload}})
-	if session.RunInputSnapshot == nil || session.RunInputSnapshot.SnapshotHash != snapshot.SnapshotHash {
-		t.Fatalf("replayed snapshot = %#v", session.RunInputSnapshot)
+	if len(session.RunInputSnapshots) != 1 || session.RunInputSnapshots[0].SnapshotHash != snapshot.SnapshotHash || session.ActiveRunInputSnapshotID != snapshot.ID {
+		t.Fatalf("replayed snapshots = %#v active=%q", session.RunInputSnapshots, session.ActiveRunInputSnapshotID)
+	}
+}
+
+func TestRunInputsResolvedEventRetainsChatInvocationHistory(t *testing.T) {
+	definition := []RunInputDefinition{{Name: "value", Schema: RunInputSchema{Type: "integer"}, Required: true}}
+	first, err := ResolveRunInputSnapshot(definition, []RunInputAssignment{{Name: "value", RawValue: []byte("1"), Source: RunInputSourceCLI}}, "run-1", "run-1:invocation", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ResolveRunInputSnapshot(definition, []RunInputAssignment{{Name: "value", RawValue: []byte("2"), Source: RunInputSourceCLI}}, "run-2", "run-2:invocation", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPayload, _ := json.Marshal(first)
+	secondPayload, _ := json.Marshal(second)
+	session := ReduceToSessionData([]RunEvent{
+		{Type: string(EventRunInputsResolved), Payload: firstPayload},
+		{Type: string(EventRunInputsResolved), Payload: secondPayload},
+	})
+	if len(session.RunInputSnapshots) != 2 || session.ActiveRunInputSnapshotID != second.ID {
+		t.Fatalf("snapshots=%#v active=%q", session.RunInputSnapshots, session.ActiveRunInputSnapshotID)
 	}
 }
 
@@ -242,7 +421,7 @@ func TestRunInputSnapshotIsPersistedAfterPolicyAndBeforeProviderBoundary(t *test
 	if err := coordinator.checkRunAdmission(); err != nil {
 		t.Fatalf("checkRunAdmission: %v", err)
 	}
-	if err := coordinator.resolveRunInputsForInvocation("prompt"); err != nil {
+	if err := coordinator.resolveRunInputsForInvocation(t.Context(), "prompt"); err != nil {
 		t.Fatalf("resolveRunInputsForInvocation: %v", err)
 	}
 	events, err := coordinator.EventStore().ReadEvents()
@@ -256,6 +435,9 @@ func TestRunInputSnapshotIsPersistedAfterPolicyAndBeforeProviderBoundary(t *test
 			policyIndex = index
 		case EventRunInputsResolved:
 			inputsIndex = index
+			if !strings.HasPrefix(event.IdempotencyKey, "run-inputs:") {
+				t.Fatalf("run_inputs_resolved idempotency key = %q", event.IdempotencyKey)
+			}
 		case EventTaskCreated, EventTaskStarted:
 			t.Fatalf("task/provider boundary event appeared during input admission: %#v", event)
 		}

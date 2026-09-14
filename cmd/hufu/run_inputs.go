@@ -28,11 +28,26 @@ func configureRunInputAssignments(loadedTeams map[string]*teamContext) error {
 	for _, qualified := range assignments {
 		teamName := strings.ToLower(strings.TrimSpace(qualified.teamName))
 		if teamName == "" {
-			if len(loadedTeams) != 1 {
-				return fmt.Errorf("input_team_ambiguous: unqualified input %q requires exactly one selected team", qualified.assignment.Name)
+			matches := make([]string, 0, 1)
+			for name, context := range loadedTeams {
+				if context == nil || context.session == nil {
+					continue
+				}
+				for _, definition := range context.session.RunInputDefinitions {
+					if definition.Name == qualified.assignment.Name {
+						matches = append(matches, name)
+						break
+					}
+				}
 			}
-			for name := range loadedTeams {
-				teamName = name
+			if len(matches) == 1 {
+				teamName = matches[0]
+			} else if len(loadedTeams) == 1 {
+				for name := range loadedTeams {
+					teamName = name
+				}
+			} else {
+				return fmt.Errorf("input_team_ambiguous: unqualified input %q does not uniquely match one selected team", qualified.assignment.Name)
 			}
 		}
 		if _, ok := loadedTeams[teamName]; !ok {

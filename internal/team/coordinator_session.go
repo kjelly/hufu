@@ -1313,7 +1313,7 @@ func (c *Coordinator) SessionData() *SessionData {
 	c.viewSessionData(func(sd *SessionData) {
 		copySD := *sd
 		copySD.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(sd.ExecutionPolicySnapshot)
-		copySD.RunInputSnapshot = CloneRunInputSnapshot(sd.RunInputSnapshot)
+		copySD.RunInputSnapshots = CloneRunInputSnapshots(sd.RunInputSnapshots)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)
 		copySD.Tasks = append([]*TodoItem(nil), sd.Tasks...)
 		snapshot = &copySD

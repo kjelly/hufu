@@ -13,9 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -30,9 +32,31 @@ const (
 )
 
 type actionRequest struct {
-	Type    string `json:"type"`
-	Payload string `json:"payload"`
+	Capability string `json:"capability,omitempty"`
+	Type       string `json:"type"`
+	Payload    string `json:"payload"`
 }
+
+type resolverScope struct {
+	Kind    string `json:"kind"`
+	Count   int    `json:"count,omitempty"`
+	History string `json:"history"`
+	Head    string `json:"head"`
+	Base    string `json:"base,omitempty"`
+	Since   string `json:"since,omitempty"`
+}
+
+type scopeCandidate struct {
+	value    resolverScope
+	evidence team.RunInputResolverEvidence
+}
+
+var (
+	lastCommitsPattern = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commits?\b`)
+	headRangePattern   = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
+	revisionPattern    = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/-]{0,159})`)
+	sincePattern       = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
+)
 
 // Config intentionally contains only team-owned workset semantics. Hufu
 // passes it as an opaque Action payload and does not interpret these fields.
@@ -161,8 +185,33 @@ func main() {
 }
 
 func run(ctx context.Context, in io.Reader, out io.Writer) error {
+	decoder := json.NewDecoder(io.LimitReader(in, maxRunInputRequestBytes+1))
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return fmt.Errorf("decode action request: %w", err)
+	}
+	if len(raw) > maxRunInputRequestBytes {
+		return fmt.Errorf("request exceeds %d bytes", maxRunInputRequestBytes)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return fmt.Errorf("decode action request: %w", err)
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode request type: %w", err)
+	}
+	if envelope.Type == "resolve_run_input" {
+		var request team.RunInputResolverRequest
+		if err := decodeStrictJSON(raw, &request); err != nil {
+			return fmt.Errorf("decode resolver request: %w", err)
+		}
+		response := resolveReviewScopeInput(request)
+		return json.NewEncoder(out).Encode(response)
+	}
 	var request actionRequest
-	if err := json.NewDecoder(in).Decode(&request); err != nil {
+	if err := decodeStrictJSON(raw, &request); err != nil {
 		return fmt.Errorf("decode action request: %w", err)
 	}
 	if request.Type != "prepare_review_workset" && request.Type != "prepare" {
@@ -177,6 +226,120 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(out).Encode(result)
+}
+
+const maxRunInputRequestBytes = 512 * 1024
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
+
+func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInputResolverResponse {
+	response := team.RunInputResolverResponse{ResolverVersion: "1"}
+	if request.Type != "resolve_run_input" || request.InputName != "review.scope" || request.ResolverID != "review-scope-v1" {
+		response.Status = "invalid"
+		response.Diagnostic = "resolver request identity is unsupported"
+		return response
+	}
+	candidates, invalid := parseScopeCandidates(request.Prompt)
+	if invalid != "" {
+		response.Status = "invalid"
+		response.Diagnostic = invalid
+		return response
+	}
+	if len(candidates) == 0 {
+		response.Status = "no_match"
+		return response
+	}
+	byValue := make(map[string][]team.RunInputResolverEvidence)
+	for _, candidate := range candidates {
+		encoded, err := json.Marshal(candidate.value)
+		if err != nil {
+			response.Status = "invalid"
+			response.Diagnostic = "scope candidate could not be encoded"
+			return response
+		}
+		byValue[string(encoded)] = append(byValue[string(encoded)], candidate.evidence)
+	}
+	if len(byValue) != 1 {
+		response.Status = "ambiguous"
+		response.Diagnostic = "prompt contains incompatible review scope expressions"
+		return response
+	}
+	for value, evidence := range byValue {
+		response.Status = "matched"
+		response.Value = json.RawMessage(value)
+		response.Evidence = evidence
+	}
+	return response
+}
+
+func parseScopeCandidates(prompt string) ([]scopeCandidate, string) {
+	candidates := make([]scopeCandidate, 0)
+	headRanges := headRangePattern.FindAllStringSubmatchIndex(prompt, -1)
+	for _, match := range lastCommitsPattern.FindAllStringSubmatchIndex(prompt, -1) {
+		count, err := parseScopeCount(prompt[match[2]:match[3]])
+		if err != nil {
+			return nil, err.Error()
+		}
+		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "last_n_commits"))
+	}
+	for _, match := range headRanges {
+		count, err := parseScopeCount(prompt[match[2]:match[3]])
+		if err != nil {
+			return nil, err.Error()
+		}
+		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "head_relative_range"))
+	}
+	for _, match := range revisionPattern.FindAllStringSubmatchIndex(prompt, -1) {
+		if overlapsAny(match[0], match[1], headRanges) {
+			continue
+		}
+		candidates = append(candidates, scopeCandidate{
+			value:    resolverScope{Kind: "revision_range", History: "first_parent", Base: prompt[match[2]:match[3]], Head: prompt[match[4]:match[5]]},
+			evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "revision_range"},
+		})
+	}
+	for _, match := range sincePattern.FindAllStringSubmatchIndex(prompt, -1) {
+		date := prompt[match[2]:match[3]]
+		if _, err := time.Parse(time.DateOnly, date); err != nil {
+			return nil, "since date must use a valid YYYY-MM-DD calendar date"
+		}
+		candidates = append(candidates, scopeCandidate{
+			value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
+			evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "since_date"},
+		})
+	}
+	return candidates, ""
+}
+
+func parseScopeCount(value string) (int, error) {
+	count, err := strconv.Atoi(value)
+	if err != nil || count < 1 || count > 100 {
+		return 0, fmt.Errorf("review commit count must be a base-10 integer between 1 and 100")
+	}
+	return count, nil
+}
+
+func lastNScopeCandidate(count, start, end int, kind string) scopeCandidate {
+	return scopeCandidate{
+		value:    resolverScope{Kind: "last_n", Count: count, History: "first_parent", Head: "HEAD"},
+		evidence: team.RunInputResolverEvidence{Source: "prompt", Start: start, End: end, Kind: kind},
+	}
+}
+
+func overlapsAny(start, end int, ranges [][]int) bool {
+	for _, match := range ranges {
+		if start < match[1] && end > match[0] {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeWireConfig(payload string) (Config, error) {

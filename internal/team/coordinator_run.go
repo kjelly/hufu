@@ -365,7 +365,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if err := c.checkRunAdmission(); err != nil {
 		return nil, c.finalizePublicInvocationFailureError(err)
 	}
-	if err := c.resolveRunInputsForInvocation(task); err != nil {
+	if err := c.resolveRunInputsForInvocation(ctx, task); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
@@ -2097,7 +2097,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
-	if err := c.resolveRunInputsForInvocation(userPrompt); err != nil {
+	if err := c.resolveRunInputsForInvocation(ctx, userPrompt); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
@@ -2271,7 +2271,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	if err := c.checkRunAdmission(); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
-	if err := c.resolveRunInputsForInvocation(additionalPrompt); err != nil {
+	if err := c.resolveRunInputsForInvocation(ctx, additionalPrompt); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
