@@ -15,6 +15,7 @@ package improve
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 const createTaskSummarySchema = `
@@ -112,6 +113,8 @@ ORDER BY lse.run_id ASC, lse.task_id ASC, s.skill ASC`
 // task_summary/task_skills query; calling it twice on the same session is
 // rejected as a lifecycle error.
 func (s *sqliteAnalyticsSession) materializeTaskViews(ctx context.Context) error {
+	started := time.Now()
+	defer s.diagnostics.record(diagnosticProjectTasks, started)
 	if s.taskViewsReady {
 		return fmt.Errorf("task projections already materialized")
 	}
@@ -128,8 +131,14 @@ func (s *sqliteAnalyticsSession) materializeTaskViews(ctx context.Context) error
 	if _, err := tx.ExecContext(ctx, createTaskSummarySchema); err != nil {
 		return fmt.Errorf("create task summary schema: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, populateTaskSummarySQL); err != nil {
+	result, err := tx.ExecContext(ctx, populateTaskSummarySQL)
+	if err != nil {
 		return fmt.Errorf("populate task summary: %w", err)
+	}
+	if s.diagnostics != nil {
+		if rows, rowsErr := result.RowsAffected(); rowsErr == nil {
+			s.diagnostics.ProjectedTasks = int(rows)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, populateTaskSkillsSQL); err != nil {
 		return fmt.Errorf("populate task skills: %w", err)

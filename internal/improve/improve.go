@@ -177,31 +177,68 @@ func Analyze(workspace, teamName, teamDir string) (*Report, error) {
 // runs of one team. teamDir is read directly and does not load a TeamSession or
 // create folders.
 func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, error) {
+	return analyzeRecent(context.Background(), workspace, teamName, teamDir, runCount, nil)
+}
+
+func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, runCount int, diagnostics *AnalyticsDiagnostics) (*Report, error) {
+	startedTotal := time.Now()
+	diagnostics.reset()
+	defer diagnostics.record(diagnosticTotal, startedTotal)
 	if runCount < 1 {
 		return nil, fmt.Errorf("run count must be at least 1")
 	}
-	ctx := context.Background()
+	started := time.Now()
 	analytics, err := openSQLiteAnalyticsSession(ctx)
+	diagnostics.record(diagnosticOpen, started)
 	if err != nil {
 		return nil, err
 	}
+	analytics.diagnostics = diagnostics
 	defer func() { _ = analytics.Close() }()
-	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+	started = time.Now()
+	executionStats, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath))
+	diagnostics.record(diagnosticLoadExecution, started)
+	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageLoadExecution, err)
 	}
-	if _, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
+	if diagnostics != nil {
+		diagnostics.ExecutionLinesRead = executionStats.LinesRead
+		diagnostics.ExecutionRows = executionStats.RowsLoaded
+	}
+	started = time.Now()
+	auditStats, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit"))
+	diagnostics.record(diagnosticLoadAudit, started)
+	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageLoadAudit, err)
 	}
-	if _, err := analytics.loadMemoryEvents(ctx, workspace); err != nil {
+	if diagnostics != nil {
+		diagnostics.AuditLinesRead = auditStats.LinesRead
+		diagnostics.AuditRows = auditStats.RowsLoaded
+	}
+	started = time.Now()
+	memoryStats, err := analytics.loadMemoryEvents(ctx, workspace)
+	diagnostics.record(diagnosticLoadMemory, started)
+	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageLoadMemory, err)
 	}
+	if diagnostics != nil {
+		diagnostics.MemoryRows = memoryStats.RowsLoaded
+	}
+	started = time.Now()
 	if err := analytics.createIndexes(ctx); err != nil {
+		diagnostics.record(diagnosticBuildIndexes, started)
 		return nil, newAnalyticsError(AnalyticsStageSchema, err)
 	}
+	diagnostics.record(diagnosticBuildIndexes, started)
 
+	started = time.Now()
 	teamName, selectedRuns, err := analytics.sqlSelectRecentRunSummaries(ctx, teamName, runCount)
+	diagnostics.record(diagnosticSelectRuns, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageSelectRuns, err)
+	}
+	if diagnostics != nil {
+		diagnostics.SelectedRuns = len(selectedRuns)
 	}
 	if len(selectedRuns) == 0 {
 		return nil, ErrNoExecutionData
@@ -218,17 +255,24 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	for i, run := range selectedRuns {
 		runIDs[i] = run.RunID
 	}
+	started = time.Now()
 	metrics, err := analytics.sqlCollectExecutionMetrics(ctx, runIDs)
+	diagnostics.record(diagnosticAggregateExecution, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
 	start, _ := time.Parse(time.RFC3339, metrics.StartedAt)
 	end, _ := time.Parse(time.RFC3339, metrics.EndedAt)
+	started = time.Now()
 	if err := analytics.sqlCollectAuditMetrics(ctx, teamName, start, end, &metrics); err != nil {
+		diagnostics.record(diagnosticAggregateAudit, started)
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
+	diagnostics.record(diagnosticAggregateAudit, started)
 
+	started = time.Now()
 	projectionByRun, err := analytics.sqlSelectedExecutionProjection(ctx, runIDs)
+	diagnostics.record(diagnosticAggregateExecution, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
@@ -236,14 +280,18 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 	for _, runID := range runIDs {
 		selectedProjection = append(selectedProjection, projectionByRun[runID]...)
 	}
+	started = time.Now()
 	if err := analytics.sqlCollectMemoryMetrics(ctx, runIDs, &metrics); err != nil {
+		diagnostics.record(diagnosticAggregateMemory, started)
 		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
 	memoryPolicyVersions, appliedContextRefs, err := analytics.sqlMemoryEvidence(ctx, runIDs)
+	diagnostics.record(diagnosticAggregateMemory, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateMemory, err)
 	}
 
+	started = time.Now()
 	trend := make([]TrendPoint, 0, len(selectedRuns))
 	teamRevisions := uniqueTeamRevisions(selectedProjection)
 	for _, run := range selectedRuns {
@@ -264,12 +312,15 @@ func AnalyzeRecent(workspace, teamName, teamDir string, runCount int) (*Report, 
 			RunID: run.RunID, StartedAt: unixNSToTime(run.StartUnixNS).Format(time.RFC3339), EndedAt: unixNSToTime(run.EndUnixNS).Format(time.RFC3339), TeamRevision: revision, Metrics: runMetrics,
 		})
 	}
+	diagnostics.record(diagnosticAggregateTrend, started)
 	if len(teamRevisions) == 0 {
 		if revision := definitionRevision(teamDir); revision != "" {
 			teamRevisions = []string{revision}
 		}
 	}
+	started = time.Now()
 	groups, err := analytics.sqlCollectGroupedMetrics(ctx, runIDs)
+	diagnostics.record(diagnosticAggregateGroups, started)
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateGroups, err)
 	}

@@ -2,6 +2,7 @@ package improve
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,5 +47,31 @@ func BenchmarkAnalyzeRecentSQLiteAnalytics(b *testing.B) {
 		if _, err := AnalyzeRecent(workspace, "dev", teamDir, 1); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkAnalyzeRecentSelectedScope(b *testing.B) {
+	for _, profile := range analyticsBenchmarkProfiles {
+		if profile.name == "large" && os.Getenv("HUFU_BENCH_LARGE") != "1" {
+			continue
+		}
+		b.Run(fmt.Sprintf("%s/events=%d/runs=%d", profile.name, profile.events, profile.runs), func(b *testing.B) {
+			workspace, teamDir := writeAnalyticsBenchmarkFixture(b, profile)
+			for _, runCount := range []int{1, 10, 100} {
+				b.Run(fmt.Sprintf("runCount=%d", runCount), func(b *testing.B) {
+					var total AnalyticsDiagnostics
+					b.ReportAllocs()
+					b.ResetTimer()
+					for b.Loop() {
+						var current AnalyticsDiagnostics
+						if _, err := analyzeRecent(b.Context(), workspace, "dev", teamDir, runCount, &current); err != nil {
+							b.Fatal(err)
+						}
+						addAnalyticsDiagnostics(&total, current)
+					}
+					reportAnalyticsDiagnostics(b, total)
+				})
+			}
+		})
 	}
 }

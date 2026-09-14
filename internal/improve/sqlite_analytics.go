@@ -21,8 +21,9 @@ import (
 // could land on a different connection than the one that created a TEMP
 // table and fail with "no such table" (spec.md §5.1).
 type sqliteAnalyticsSession struct {
-	db   *sql.DB
-	conn *sql.Conn
+	db          *sql.DB
+	conn        *sql.Conn
+	diagnostics *AnalyticsDiagnostics
 
 	// taskViewsReady is set once materializeTaskViews has populated
 	// task_summary/task_skills for this session, so ensureTaskViews (used by

@@ -1,0 +1,140 @@
+{
+  "team": "dev",
+  "workspace": "\u003cworkspace\u003e",
+  "generated_at": "\u003cgenerated-at\u003e",
+  "run_ids": [
+    "dev-legacy",
+    "dev-same-a",
+    "dev-same-b",
+    "dev-latest"
+  ],
+  "team_revisions": [
+    "revision-a",
+    "revision-b",
+    "revision-c"
+  ],
+  "memory_policy_versions": [
+    "policy-v2"
+  ],
+  "applied_context_refs": [
+    {
+      "kind": "context_item",
+      "id": "context-selected",
+      "revision": "hash-selected"
+    }
+  ],
+  "metrics": {
+    "run_id": "",
+    "run_count": 4,
+    "started_at": "2026-07-12T10:00:00Z",
+    "ended_at": "2026-07-12T11:00:02Z",
+    "total_tasks": 4,
+    "done": 2,
+    "error": 1,
+    "planned": 1,
+    "total_attempts": 3,
+    "retried_tasks": 1,
+    "total_tokens": 49,
+    "tool_calls": 1,
+    "tool_errors": 1,
+    "tokens_by_agent": {
+      "developer": 31,
+      "legacy": 1,
+      "old-agent": 10,
+      "reviewer": 7
+    },
+    "tool_calls_by_agent": {
+      "developer": 1
+    },
+    "tool_errors_by_agent": {
+      "developer": 1
+    },
+    "memory_retrieval_count": 2,
+    "memory_exposure_count": 2,
+    "memory_applied_count": 1,
+    "memory_attribution_coverage": 0.5,
+    "memory_verified_assist_rate": 1,
+    "memory_harmful_use_rate": 0,
+    "memory_stale_retrieval_rate": 0.5,
+    "memory_token_overhead": 0.35294117647058826,
+    "memory_assisted_retry_rate": 0,
+    "memory_unassisted_retry_rate": 0.3333333333333333
+  },
+  "trend": [
+    {
+      "run_id": "dev-legacy",
+      "started_at": "0001-01-01T00:00:00Z",
+      "ended_at": "0001-01-01T00:00:00Z",
+      "total_tasks": 1,
+      "done": 0,
+      "error": 0,
+      "planned": 1,
+      "retried_tasks": 0,
+      "total_tokens": 1
+    },
+    {
+      "run_id": "dev-same-a",
+      "started_at": "2026-07-12T10:00:00Z",
+      "ended_at": "2026-07-12T10:00:01Z",
+      "team_revision": "revision-a",
+      "total_tasks": 1,
+      "done": 1,
+      "error": 0,
+      "planned": 0,
+      "retried_tasks": 1,
+      "total_tokens": 16
+    },
+    {
+      "run_id": "dev-same-b",
+      "started_at": "2026-07-12T10:00:00Z",
+      "ended_at": "2026-07-12T10:00:01Z",
+      "team_revision": "revision-b",
+      "total_tasks": 1,
+      "done": 0,
+      "error": 1,
+      "planned": 0,
+      "retried_tasks": 0,
+      "total_tokens": 7
+    },
+    {
+      "run_id": "dev-latest",
+      "started_at": "2026-07-12T11:00:00Z",
+      "ended_at": "2026-07-12T11:00:02Z",
+      "team_revision": "revision-c",
+      "total_tasks": 1,
+      "done": 1,
+      "error": 0,
+      "planned": 0,
+      "retried_tasks": 0,
+      "total_tokens": 25
+    }
+  ],
+  "agents": [
+    "developer",
+    "legacy",
+    "reviewer"
+  ],
+  "task_types": [
+    "agent",
+    "legacy/unspecified",
+    "review",
+    "verification"
+  ],
+  "models": [
+    "model-a",
+    "model-b",
+    "model-c",
+    "unspecified"
+  ],
+  "skills": [
+    "memory",
+    "new-skill",
+    "none",
+    "review",
+    "shared"
+  ],
+  "finding_rules": [
+    "agent_prompt_short",
+    "retry_rate"
+  ]
+}
