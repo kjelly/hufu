@@ -12,6 +12,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/execution"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/spf13/cobra"
 )
@@ -62,8 +63,54 @@ func TestInspectCommandOverviewJSONUsesQuerySuccessContract(t *testing.T) {
 	if envelope.Data.Snapshot.Outcome.RunOutcome != string(team.RunOutcomePartial) || envelope.Data.Snapshot.Scope.RunID != runID {
 		t.Fatalf("overview snapshot = %#v", envelope.Data.Snapshot)
 	}
+	if envelope.Data.Snapshot.PrimaryAction == nil || envelope.Data.Snapshot.PrimaryAction.ID != operatorpkg.ActionReviewResult {
+		t.Fatalf("overview action = %#v", envelope.Data.Snapshot.PrimaryAction)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("overview JSON wrote stderr: %q", stderr.String())
+	}
+}
+
+func TestInspectOverviewTextUsesUnifiedOperatorSummary(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "overview", "--run", runID})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"State:", "What:", "Next:", "Data:"} {
+		if strings.Count(stdout.String(), label) != 1 {
+			t.Fatalf("overview summary label %q missing or duplicated:\n%s", label, stdout.String())
+		}
+	}
+}
+
+func TestInspectOverviewSummaryDoesNotEmitPersistedTerminalControls(t *testing.T) {
+	snapshot := operatorpkg.OperatorSnapshot{
+		Scope:         operatorpkg.ResolvedScope{WorkspaceExact: "/work/\x1b]8;;https://evil.example\x07link\x1b]8;;\x07", TeamName: "team\x1b[31mred", RunID: "run\nnext", BranchID: "main"},
+		Activity:      operatorpkg.ActivityView{State: operatorpkg.ActivityBlocked},
+		Outcome:       operatorpkg.OutcomeView{RunOutcome: "blocked"},
+		Integrity:     operatorpkg.IntegrityView{Status: "valid"},
+		Freshness:     operatorpkg.FreshnessView{EventID: "event", LiveState: "not_applicable"},
+		LatestChanges: []operatorpkg.ChangeView{{EventOrdinal: 1, Kind: "task_failed\x1b[2J", Refs: []string{"ref\x07"}}},
+	}
+	action, err := operatorpkg.BuildAction(operatorpkg.ActionInspectTaskRecovery, operatorpkg.ActionBuildInput{
+		Target:     operatorpkg.ActionTarget{Workspace: snapshot.Scope.WorkspaceExact, RunID: snapshot.Scope.RunID, TaskID: "task"},
+		ReasonCode: "external_effect_unknown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.PrimaryAction = &action
+	var output bytes.Buffer
+	if err := renderInspectText(&output, &inspectpkg.Envelope{Kind: inspectpkg.KindOverview, Data: inspectpkg.OverviewData{Snapshot: &snapshot}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(output.String(), "\x1b\x07") || strings.Contains(output.String(), "https://evil.example") {
+		t.Fatalf("overview emitted terminal controls: %q", output.String())
 	}
 }
 

@@ -1458,12 +1458,16 @@ legacy workspace characterization 與 inspector JSON/text contract tests 全過�
 
 | 工作 ID | 直接依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-020A | 011A/012A | pure action selector + v1 registry | §6.2 actions；unknown effect 不推薦 retry；未發布 façade blocked/empty argv |
-| HF-UX-020B | 011B | existing recovery/policy read-only eligibility adapter | policy deny 不給繞過操作；沒有 capability 不虛構 probe |
-| HF-UX-021 | 020A/020B | typed argv builder、Bash/PowerShell renderer、target revalidation | §6.1/§6.3；metacharacter/secret/ANSI tests 全過 |
-| HF-UX-022 | 012A/020A/021 | CLI State/What/Next summary 與 typed diagnostics | start、block、interrupt、terminal、partial cases 一致 |
+| HF-UX-020A | 011A/012A | **完成：**pure action selector + v1 registry | §6.2 actions；unknown effect 不推薦 retry；未發布 façade blocked/empty argv |
+| HF-UX-020B | 011B | **完成：**existing recovery/policy read-only eligibility adapter | policy deny 不給繞過操作；沒有 capability 不虛構 probe |
+| HF-UX-021 | 020A/020B | **完成：**typed argv builder、Bash/PowerShell renderer、target revalidation | §6.1/§6.3；metacharacter/secret/ANSI tests 全過 |
+| HF-UX-022 | 012A/020A/021 | **完成：**CLI State/What/Next summary 與 typed diagnostics | start、block、interrupt、terminal、partial cases 一致 |
 
-**Gate P2：**所有安全情境有 deterministic recommendation；不能生成不存在的 command/flag。未發布的 mutation façade 不提供可執行建議。
+**Gate P2（2026-09-14 已通過）：**安全情境已有 deterministic recommendation；typed registry
+只產生現存 read-only command/flag，Bash/PowerShell renderer、target-specific freshness、ANSI/OSC
+清理與 bounded summary 契約測試全過。既有 `RepairController` 是 recovery eligibility 的唯一
+policy decision seam；未發布的 resume/reconcile/retry façade 一律為 blocked 且 `argv=[]`。
+Linux amd64、Go 1.26.6 的 `go test ./...`、`go vet ./...`、`golangci-lint run` 成功。
 
 ### Phase 3 — CLI Discovery、Canonical Facades、Team Check
 

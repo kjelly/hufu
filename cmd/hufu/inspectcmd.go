@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 )
 
 type inspectCLIOptions struct {
@@ -358,17 +361,19 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			return fmt.Errorf("overview snapshot is unavailable")
 		}
 		snapshot := data.Snapshot
-		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nBranch: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
-			snapshot.Scope.WorkspaceExact, valueOrUnavailable(snapshot.Scope.TeamName), snapshot.Scope.RunID,
-			snapshot.Scope.BranchID, snapshot.Activity.State, snapshot.Attention,
+		summary := operatorpkg.BuildSummaryForShell(*snapshot, filepath.Base(os.Getenv("SHELL")))
+		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nBranch: %s\nState: %s\nWhat: %s\nNext: %s\nData: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
+			safeOverviewValue(snapshot.Scope.WorkspaceExact), safeOverviewValue(valueOrUnavailable(snapshot.Scope.TeamName)), safeOverviewValue(snapshot.Scope.RunID),
+			safeOverviewValue(snapshot.Scope.BranchID), summary.State, summary.What, summary.Next, summary.Data,
+			snapshot.Activity.State, snapshot.Attention,
 			valueOrUnavailable(snapshot.Outcome.RunOutcome), snapshot.Outcome.AcceptanceState,
 			snapshot.Outcome.CompletionState, snapshot.Integrity.Status); err != nil {
 			return err
 		}
 		for _, change := range snapshot.LatestChanges {
 			if _, err := fmt.Fprintf(writer, "Change %d: %s status=%s reason=%s refs=%s\n",
-				change.EventOrdinal, change.Kind, valueOrUnavailable(change.Status),
-				valueOrUnavailable(change.ReasonCode), refsOrNone(change.Refs)); err != nil {
+				change.EventOrdinal, safeOverviewValue(change.Kind), safeOverviewValue(valueOrUnavailable(change.Status)),
+				safeOverviewValue(valueOrUnavailable(change.ReasonCode)), safeOverviewValue(refsOrNone(change.Refs))); err != nil {
 				return err
 			}
 		}
@@ -465,6 +470,10 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 	default:
 		return fmt.Errorf("unsupported inspect data %T", envelope.Data)
 	}
+}
+
+func safeOverviewValue(value string) string {
+	return operatorpkg.SafeDisplayText(value, 320)
 }
 
 func intsOrNone(values []int) string {

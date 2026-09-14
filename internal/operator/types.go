@@ -7,6 +7,20 @@ package operator
 const SchemaVersion = 1
 
 const (
+	ActionSelectScope         = "select-scope"
+	ActionInspectIntegrity    = "inspect-integrity"
+	ActionInspectTaskRecovery = "inspect-task-recovery"
+	ActionProvideInput        = "provide-input"
+	ActionReviewApproval      = "review-approval"
+	ActionWaitRuntime         = "wait-runtime"
+	ActionResumeSession       = "resume-session"
+	ActionReconcileTask       = "reconcile-task"
+	ActionRetryTask           = "retry-task"
+	ActionReviewResult        = "review-result"
+	ActionNoneRequired        = "none-required"
+)
+
+const (
 	ActivityUnconfigured    = "unconfigured"
 	ActivityReady           = "ready"
 	ActivityPreflight       = "preflight"
@@ -170,6 +184,41 @@ type ActionPreconditions struct {
 	ExpectedPolicy      string `json:"expected_policy"`
 	ExpectedRevision    string `json:"expected_revision"`
 	ExternalEffectState string `json:"external_effect_state"`
+}
+
+// RecoveryEligibility is a read-only projection of the existing runtime
+// recovery and policy decision. It does not grant permission to mutate.
+type RecoveryEligibility struct {
+	TaskID              string
+	Attempt             int
+	TaskStatus          string
+	ExpectedEventID     string
+	ExpectedEventHash   string
+	ExternalEffectState string
+	EffectivePolicy     string
+	PolicyRevision      string
+	ExpectedRevision    string
+	PolicyDenied        bool
+	ResumeEligible      bool
+	ReconcileEligible   bool
+	RetryEligible       bool
+	CapabilityKnown     bool
+	ReasonCode          string
+	SourceRefs          []string
+}
+
+type ActionSelectionFacts struct {
+	Snapshot                OperatorSnapshot
+	Recovery                *RecoveryEligibility
+	SessionExpectedRevision string
+	SessionSourceRefs       []string
+}
+
+type OperatorSummary struct {
+	State string
+	What  string
+	Next  string
+	Data  string
 }
 
 type WorkspaceRequest struct {

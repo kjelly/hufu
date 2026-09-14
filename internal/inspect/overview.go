@@ -91,6 +91,17 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Learning:         operatorpkg.LearningView{Status: "unavailable", UnavailableReason: "phase_not_implemented"},
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
+	recovery := RecoveryEligibilityForTasks(tasks, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
+	if recovery != nil {
+		snapshot.Attention = operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", recovery.ExternalEffectState)
+	}
+	sessionRevision, sessionRefs := SessionRecoveryRevision(bound.Session, bound.Scope.BranchID)
+	snapshot.PrimaryAction, snapshot.SecondaryActions, err = operatorpkg.SelectActions(operatorpkg.ActionSelectionFacts{
+		Snapshot: snapshot, Recovery: recovery, SessionExpectedRevision: sessionRevision, SessionSourceRefs: sessionRefs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: select operator action: %v", ErrIntegrity, err)
+	}
 	snapshot, err = operatorpkg.FinalizeSnapshot(snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("%w: finalize operator snapshot: %v", ErrIntegrity, err)

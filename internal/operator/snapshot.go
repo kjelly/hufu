@@ -136,6 +136,19 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 			return fmt.Errorf("operator snapshot diagnostic %q has invalid severity %q", diagnostic.Code, diagnostic.Severity)
 		}
 	}
+	if len(snapshot.SecondaryActions) > 2 {
+		return fmt.Errorf("operator snapshot has more than two secondary actions")
+	}
+	if snapshot.PrimaryAction != nil {
+		if err := validateAction(*snapshot.PrimaryAction); err != nil {
+			return fmt.Errorf("operator snapshot primary action: %w", err)
+		}
+	}
+	for _, action := range snapshot.SecondaryActions {
+		if err := validateAction(action); err != nil {
+			return fmt.Errorf("operator snapshot secondary action %q: %w", action.ID, err)
+		}
+	}
 	counters := []struct {
 		name  string
 		value *int64
@@ -148,6 +161,50 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 	for _, counter := range counters {
 		if counter.value != nil && *counter.value < 0 {
 			return fmt.Errorf("operator snapshot learning counter %s must not be negative", counter.name)
+		}
+	}
+	return nil
+}
+
+func validateAction(action ActionSuggestion) error {
+	definition, ok := actionDefinitionFor(action.ID)
+	if !ok {
+		return fmt.Errorf("action id %q is not registered", action.ID)
+	}
+	if action.Kind != definition.kind || action.Actor != definition.actor || action.Risk != definition.risk || action.Confirmation != definition.confirmation {
+		return fmt.Errorf("action fields do not match registry contract")
+	}
+	if !contains([]string{"wait", "inspect", "configure", "provide_input", "review", "mutate", "none"}, action.Kind) {
+		return fmt.Errorf("action kind %q is invalid", action.Kind)
+	}
+	if !contains([]string{"user", "runtime", "external-owner"}, action.Actor) {
+		return fmt.Errorf("action actor %q is invalid", action.Actor)
+	}
+	if !contains([]string{"available", "blocked", "unknown"}, action.Availability) {
+		return fmt.Errorf("action availability %q is invalid", action.Availability)
+	}
+	if !contains([]string{"read-only", "local-write", "external-effect", "approval"}, action.Risk) {
+		return fmt.Errorf("action risk %q is invalid", action.Risk)
+	}
+	if !contains([]string{"none", "existing-runtime-gate", "explicit-review"}, action.Confirmation) {
+		return fmt.Errorf("action confirmation %q is invalid", action.Confirmation)
+	}
+	if (action.Kind == "wait" || action.Kind == "none" || action.Availability != "available") && len(action.Argv) != 0 {
+		return fmt.Errorf("non-executable action must have empty argv")
+	}
+	if action.Availability == "available" {
+		expected := buildRegisteredArgv(definition.command, action.Target)
+		if definition.command != "" && !slices.Equal(action.Argv, expected) {
+			return fmt.Errorf("action argv does not match registry contract")
+		}
+		if definition.command == "" && len(action.Argv) != 0 {
+			return fmt.Errorf("action without a command must have empty argv")
+		}
+	}
+	if action.Kind == "mutate" && action.RevalidationKey != "" {
+		expected, err := ComputeActionRevalidationKey(action)
+		if err != nil || action.RevalidationKey != expected {
+			return fmt.Errorf("mutation action revalidation key is invalid")
 		}
 	}
 	return nil

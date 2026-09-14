@@ -111,7 +111,11 @@ func TestSnapshotIDIgnoresQueryTimeLiveStateAndActions(t *testing.T) {
 	changed := base
 	changed.Freshness.QueriedAt = "later"
 	changed.Freshness.LiveState = "connected"
-	changed.PrimaryAction = &ActionSuggestion{ID: "wait-runtime", Argv: []string{}, SourceRefs: []string{}}
+	wait, err := BuildAction(ActionWaitRuntime, ActionBuildInput{Availability: "available", ReasonCode: "runtime_active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.PrimaryAction = &wait
 	changed.Blockers = []DiagnosticView{{Code: "blocked", Severity: "error", Message: "translated presentation text", Ref: "task-1"}}
 	base.Blockers = []DiagnosticView{{Code: "blocked", Severity: "error", Message: "original presentation text", Ref: "task-1"}}
 	first, err = FinalizeSnapshot(base)
