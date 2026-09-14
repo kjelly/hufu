@@ -25,17 +25,19 @@ type TaskTransitionEventPayload struct {
 }
 
 type RunFinishedEventPayload struct {
-	Outcome         RunOutcome        `json:"outcome"`
-	GoalSatisfied   bool              `json:"goal_satisfied,omitempty"`
-	GoalMode        GoalMode          `json:"goal_mode,omitempty"`
-	Response        string            `json:"response,omitempty"`
-	Reason          string            `json:"reason,omitempty"`
-	StopReason      StopReason        `json:"stop_reason,omitempty"`
-	ExitCode        int               `json:"exit_code,omitempty"`
-	UnresolvedTasks []TaskReference   `json:"unresolved_tasks,omitempty"`
-	Acceptance      *AcceptanceResult `json:"acceptance,omitempty"`
-	Stats           *RunStats         `json:"stats,omitempty"`
-	Metrics         *RunMetrics       `json:"metrics,omitempty"`
+	Outcome              RunOutcome                   `json:"outcome"`
+	GoalSatisfied        bool                         `json:"goal_satisfied,omitempty"`
+	GoalMode             GoalMode                     `json:"goal_mode,omitempty"`
+	Response             string                       `json:"response,omitempty"`
+	Reason               string                       `json:"reason,omitempty"`
+	StopReason           StopReason                   `json:"stop_reason,omitempty"`
+	ExitCode             int                          `json:"exit_code,omitempty"`
+	UnresolvedTasks      []TaskReference              `json:"unresolved_tasks,omitempty"`
+	Acceptance           *AcceptanceResult            `json:"acceptance,omitempty"`
+	Stats                *RunStats                    `json:"stats,omitempty"`
+	Metrics              *RunMetrics                  `json:"metrics,omitempty"`
+	RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 }
 
 // ValidateEventPayload validates an event after EventStore has filled its
@@ -89,13 +91,7 @@ func ValidateEventPayload(event RunEvent) error {
 			return fmt.Errorf("%s payload lacks task transition identity", event.Type)
 		}
 	case EventRunFinished:
-		var payload RunFinishedEventPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return fmt.Errorf("decode run_finished payload: %w", err)
-		}
-		if payload.Outcome == "" {
-			return fmt.Errorf("run_finished payload lacks outcome")
-		}
+		return validateRunFinishedEventPayload(event)
 	case EventRunInputsResolved:
 		var snapshot RunInputSnapshot
 		decoder := json.NewDecoder(bytes.NewReader(event.Payload))
@@ -122,6 +118,42 @@ func ValidateEventPayload(event RunEvent) error {
 		}
 		if err := validateExecutionCompatibilityObservedPayload(payload); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateRunFinishedEventPayload(event RunEvent) error {
+	var payload RunFinishedEventPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("decode run_finished payload: %w", err)
+	}
+	if payload.Outcome == "" {
+		return fmt.Errorf("run_finished payload lacks outcome")
+	}
+	if payload.RunInputs != nil {
+		if err := ValidateRunInputSnapshot(payload.RunInputs); err != nil {
+			return fmt.Errorf("run_finished payload has invalid run inputs: %w", err)
+		}
+		if payload.RunInputs.RunID != event.RunID {
+			return fmt.Errorf("run_finished run input snapshot does not match event run")
+		}
+	}
+	if len(payload.InputBoundAssertions) > maxRunInputEvidenceItems {
+		return fmt.Errorf("run_finished payload has too many input-bound assertions")
+	}
+	if len(payload.InputBoundAssertions) > 0 && payload.RunInputs == nil {
+		return fmt.Errorf("run_finished payload has input-bound assertions without run inputs")
+	}
+	for index, assertion := range payload.InputBoundAssertions {
+		if strings.TrimSpace(assertion.Criterion) == "" || strings.TrimSpace(assertion.SourceTask) == "" || strings.TrimSpace(assertion.Output) == "" || len(assertion.Assertion) > maxRunInputResolverDiagnosticBytes {
+			return fmt.Errorf("run_finished input-bound assertion %d is invalid", index)
+		}
+		if assertion.State != "passed" && assertion.State != "failed" {
+			return fmt.Errorf("run_finished input-bound assertion %d has invalid state %q", index, assertion.State)
+		}
+		if len(assertion.Evidence) > maxRunInputEvidenceItems {
+			return fmt.Errorf("run_finished input-bound assertion %d has too much evidence", index)
 		}
 	}
 	return nil

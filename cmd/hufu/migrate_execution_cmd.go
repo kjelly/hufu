@@ -106,6 +106,11 @@ func renderExecutionCompatibilityInspection(writer io.Writer, report *executionc
 		{"migratable_policy_snapshots", report.MigratablePolicySnapshots},
 		{"ambiguous_policy_snapshots", report.AmbiguousPolicySnapshots},
 		{"unmigratable_policy_snapshots", report.UnmigratablePolicySnapshots},
+		{"canonical_run_input_snapshots", report.CanonicalRunInputSnapshots},
+		{"input_bound_tasks", report.InputBoundTasks},
+		{"legacy_unbound_runtime_outputs", report.LegacyUnboundRuntimeOutputs},
+		{"input_binding_conflicts", report.InputBindingConflicts},
+		{"session_input_projection_conflicts", report.SessionInputProjectionConflicts},
 	}
 	if _, err := fmt.Fprintf(writer, "schema_version: %d\nscope: %s\n", report.SchemaVersion, report.Scope); err != nil {
 		return err

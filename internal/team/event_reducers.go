@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -194,25 +195,27 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case "run_finished":
 			var payload struct {
-				RunID              string              `json:"run_id"`
-				Outcome            RunOutcome          `json:"outcome"`
-				GoalSatisfied      bool                `json:"goal_satisfied"`
-				GoalMode           GoalMode            `json:"goal_mode"`
-				Response           string              `json:"response"`
-				Reason             string              `json:"reason"`
-				StopReason         StopReason          `json:"stop_reason"`
-				ExitCode           int                 `json:"exit_code"`
-				UnresolvedTasks    []TaskReference     `json:"unresolved_tasks"`
-				CompletedReview    bool                `json:"completed_review,omitempty"`
-				FindingsPresent    bool                `json:"findings_present,omitempty"`
-				FixedAndVerified   bool                `json:"fixed_and_verified,omitempty"`
-				AcceptanceAdvisory bool                `json:"acceptance_advisory,omitempty"`
-				Acceptance         *AcceptanceResult   `json:"acceptance"`
-				Worksets           []WorksetGroupState `json:"worksets"`
-				Stats              RunStats            `json:"stats"`
-				Metrics            RunMetrics          `json:"metrics"`
-				Telemetry          *RunTelemetry       `json:"telemetry"`
-				EvidenceManifest   *EvidenceManifest   `json:"evidence_manifest"`
+				RunID                string                       `json:"run_id"`
+				Outcome              RunOutcome                   `json:"outcome"`
+				GoalSatisfied        bool                         `json:"goal_satisfied"`
+				GoalMode             GoalMode                     `json:"goal_mode"`
+				Response             string                       `json:"response"`
+				Reason               string                       `json:"reason"`
+				StopReason           StopReason                   `json:"stop_reason"`
+				ExitCode             int                          `json:"exit_code"`
+				UnresolvedTasks      []TaskReference              `json:"unresolved_tasks"`
+				CompletedReview      bool                         `json:"completed_review,omitempty"`
+				FindingsPresent      bool                         `json:"findings_present,omitempty"`
+				FixedAndVerified     bool                         `json:"fixed_and_verified,omitempty"`
+				AcceptanceAdvisory   bool                         `json:"acceptance_advisory,omitempty"`
+				Acceptance           *AcceptanceResult            `json:"acceptance"`
+				Worksets             []WorksetGroupState          `json:"worksets"`
+				Stats                RunStats                     `json:"stats"`
+				Metrics              RunMetrics                   `json:"metrics"`
+				Telemetry            *RunTelemetry                `json:"telemetry"`
+				EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest"`
+				RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+				InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
 				runID := payload.RunID
@@ -228,6 +231,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					FixedAndVerified: payload.FixedAndVerified, AcceptanceAdvisory: payload.AcceptanceAdvisory,
 					Acceptance: payload.Acceptance, Stats: payload.Stats, Worksets: payload.Worksets,
 					Metrics: payload.Metrics, Telemetry: payload.Telemetry, EvidenceManifest: payload.EvidenceManifest,
+					RunInputs: CloneRunInputSnapshot(payload.RunInputs), InputBoundAssertions: slices.Clone(payload.InputBoundAssertions),
 				}
 				session.WorksetStates = append([]WorksetGroupState(nil), payload.Worksets...)
 			}

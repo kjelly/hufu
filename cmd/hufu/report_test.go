@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -418,14 +419,14 @@ func TestBuildReportMDUsesRuntimeProducerScopeInsteadOfFinalResult(t *testing.T)
 		StartedAt: time.Now(),
 		Todos: []*team.TodoItem{{
 			ID: "producer", PlanTaskID: "produce-workset", Status: team.TaskDone,
-			TypedResult: &team.TaskResult{Source: "runtime", Facts: map[string]any{
+			TypedResult: &team.TaskResult{Source: "runtime", RuntimeOutputs: map[string]any{
 				"scope": map[string]any{
 					"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"},
 					"resolved": map[string]any{
 						"base": "base-sha", "head": "head-sha", "selected_commit_count": 10,
 						"available_commit_count": 12, "history_exhausted": false, "repository_shallow": false,
 					},
-					"satisfied": true, "input_digest": "sha256:attested",
+					"satisfied": true, "requested_input_hash": "sha256:attested",
 				},
 			}},
 		}},
@@ -433,14 +434,22 @@ func TestBuildReportMDUsesRuntimeProducerScopeInsteadOfFinalResult(t *testing.T)
 			RunID:         "run-review",
 			Outcome:       team.RunOutcomeCompleted,
 			GoalSatisfied: true,
+			RunInputs: &team.RunInputSnapshot{ID: "input-1", SnapshotHash: "sha256:snapshot", Inputs: []team.ResolvedRunInput{{
+				Name: "review.scope", CanonicalValue: json.RawMessage(`{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}`),
+				ValueHash: "sha256:attested", Source: team.RunInputSourceResolver, ResolverID: "review-scope-v1", ResolverVersion: "1",
+			}}},
+			InputBoundAssertions: []team.InputBoundAssertionSummary{{
+				Criterion: "scope-binding", SourceTask: "produce-workset", Output: "scope", Assertion: "/requested equals_input `review.scope`", State: "passed",
+			}},
 		},
 	}
 	data.ReviewScope = gatherRuntimeReviewScope(data.Todos)
 	report := buildReportMD(data, "hufu-code-review", "# Review of the Last 99 Commits")
 	for _, want := range []string{
-		"## Resolved Review Scope", "last 10 first-parent commits", "`base-sha..head-sha`",
-		"Selected commits:** 10", "Scope source:** `compatibility_var`",
-		"Scope assertion:** `producer_attested` (not yet core-bound)", "`sha256:attested`",
+		"## Resolved Run Inputs", "review.scope", "review-scope-v1@1", "## Input-bound Assertions", "scope-binding",
+		"## Resolved Review Scope", "`last_n` ending at `HEAD` (count: 10)", "`base-sha..head-sha`",
+		"Selected commits:** 10", "Scope source:** `runtime_output`",
+		"Scope assertion:** `core_bound`", "`sha256:attested`", "Model-authored heading names 99 commits",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing runtime scope %q:\n%s", want, report)
@@ -457,7 +466,7 @@ func TestGatherRuntimeReviewScopeRejectsModelOwnedFacts(t *testing.T) {
 		"resolved":  map[string]any{"base": "a", "head": "b", "selected_commit_count": 10, "available_commit_count": 10},
 		"satisfied": true, "input_digest": "sha256:digest",
 	}
-	if got := gatherRuntimeReviewScope([]*team.TodoItem{{TypedResult: &team.TaskResult{Source: "submitted", Facts: map[string]any{"scope": scope}}}}); got != nil {
+	if got := gatherRuntimeReviewScope([]*team.TodoItem{{TypedResult: &team.TaskResult{Source: "submitted", Facts: map[string]any{"scope": scope}, RuntimeOutputs: map[string]any{"scope": scope}}}}); got != nil {
 		t.Fatalf("model-owned scope entered report: %#v", got)
 	}
 }

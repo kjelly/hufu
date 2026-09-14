@@ -231,6 +231,7 @@ func failResultf(runID, code, format string, args ...any) *AuditVerificationResu
 	reason := fmt.Sprintf(format, args...)
 	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID,
 		Integrity:          AuditDimensionResult{Status: AuditDimensionFail, Reason: reason},
+		RunInputBinding:    AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"},
 		SemanticRegression: AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}}
 	result.addFinding(code, FindingSeverityCritical, reason, "", 0, "")
 	result.finalizeVerdict()

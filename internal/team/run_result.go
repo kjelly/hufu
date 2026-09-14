@@ -505,6 +505,10 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		acceptanceAdvisory = acceptanceAdvisory || result.AcceptanceAdvisory
 		mergeWorksetStates(worksets, result.Worksets)
 		mergeContextWindowTelemetrySummary(&contextTelemetry, result.Metrics.ContextWindowTelemetry)
+		input.Metrics.TypedRunInputsResolved += result.Metrics.TypedRunInputsResolved
+		input.Metrics.InputBoundActions += result.Metrics.InputBoundActions
+		input.Metrics.InputBoundAssertionsPassed += result.Metrics.InputBoundAssertionsPassed
+		input.Metrics.InputBoundAssertionsFailed += result.Metrics.InputBoundAssertionsFailed
 
 		if result.Acceptance != nil {
 			switch result.Acceptance.EffectiveState() {
@@ -729,10 +733,14 @@ type RunMetrics struct {
 	TurnsSinceCriterionProgress int `json:"turns_since_criterion_progress,omitempty"`
 	TasksSinceCriterionProgress int `json:"tasks_since_criterion_progress,omitempty"`
 	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
-	MaxTokensWithoutProgress int64                         `json:"max_tokens_without_progress,omitempty"`
-	MaxTurnsWithoutProgress  int                           `json:"max_turns_without_progress,omitempty"`
-	MaxTasksWithoutProgress  int                           `json:"max_tasks_without_progress,omitempty"`
-	ContextWindowTelemetry   ContextWindowTelemetrySummary `json:"context_window_telemetry,omitempty"`
+	MaxTokensWithoutProgress   int64                         `json:"max_tokens_without_progress,omitempty"`
+	MaxTurnsWithoutProgress    int                           `json:"max_turns_without_progress,omitempty"`
+	MaxTasksWithoutProgress    int                           `json:"max_tasks_without_progress,omitempty"`
+	ContextWindowTelemetry     ContextWindowTelemetrySummary `json:"context_window_telemetry,omitempty"`
+	TypedRunInputsResolved     int                           `json:"typed_run_inputs_resolved,omitzero"`
+	InputBoundActions          int                           `json:"input_bound_actions,omitzero"`
+	InputBoundAssertionsPassed int                           `json:"input_bound_assertions_passed,omitzero"`
+	InputBoundAssertionsFailed int                           `json:"input_bound_assertions_failed,omitzero"`
 }
 
 // RepairCost is the quantitative cost of recovery decisions made during a
@@ -805,22 +813,24 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
-	RunID            string              `json:"run_id,omitempty"`
-	Outcome          RunOutcome          `json:"outcome"`
-	GoalSatisfied    bool                `json:"goal_satisfied"`
-	GoalMode         GoalMode            `json:"goal_mode,omitempty"`
-	Response         string              `json:"response"`
-	Reason           string              `json:"reason,omitempty"`
-	StopReason       StopReason          `json:"stop_reason,omitempty"`
-	ExitCode         int                 `json:"exit_code,omitempty"`
-	Acceptance       *AcceptanceResult   `json:"acceptance,omitempty"`
-	Worksets         []WorksetGroupState `json:"worksets,omitempty"`
-	UnresolvedTasks  []TaskReference     `json:"unresolved_tasks,omitempty"`
-	Continuation     *ContinuationInfo   `json:"continuation,omitempty"`
-	Stats            RunStats            `json:"stats"`
-	Metrics          RunMetrics          `json:"metrics,omitempty"`
-	EvidenceManifest *EvidenceManifest   `json:"evidence_manifest,omitempty"`
-	Telemetry        *RunTelemetry       `json:"telemetry,omitempty"`
+	RunID                string                       `json:"run_id,omitempty"`
+	Outcome              RunOutcome                   `json:"outcome"`
+	GoalSatisfied        bool                         `json:"goal_satisfied"`
+	GoalMode             GoalMode                     `json:"goal_mode,omitempty"`
+	Response             string                       `json:"response"`
+	Reason               string                       `json:"reason,omitempty"`
+	StopReason           StopReason                   `json:"stop_reason,omitempty"`
+	ExitCode             int                          `json:"exit_code,omitempty"`
+	Acceptance           *AcceptanceResult            `json:"acceptance,omitempty"`
+	Worksets             []WorksetGroupState          `json:"worksets,omitempty"`
+	UnresolvedTasks      []TaskReference              `json:"unresolved_tasks,omitempty"`
+	Continuation         *ContinuationInfo            `json:"continuation,omitempty"`
+	Stats                RunStats                     `json:"stats"`
+	Metrics              RunMetrics                   `json:"metrics,omitempty"`
+	EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest,omitempty"`
+	Telemetry            *RunTelemetry                `json:"telemetry,omitempty"`
+	RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 	// Review completion is intentionally separate from an implementation
 	// outcome: a completed exploratory review may surface findings but never
 	// proves they were fixed.
@@ -828,6 +838,18 @@ type RunResult struct {
 	FindingsPresent    bool `json:"findings_present,omitempty"`
 	FixedAndVerified   bool `json:"fixed_and_verified,omitempty"`
 	AcceptanceAdvisory bool `json:"acceptance_advisory,omitempty"`
+}
+
+// InputBoundAssertionSummary is the bounded, presentation-safe terminal
+// projection of one task_output_assert verifier. Exact expected/actual hashes
+// remain in Evidence; values are never copied into the summary.
+type InputBoundAssertionSummary struct {
+	Criterion  string                      `json:"criterion"`
+	SourceTask string                      `json:"source_task"`
+	Output     string                      `json:"output"`
+	Assertion  string                      `json:"assertion"`
+	State      string                      `json:"state"`
+	Evidence   []TaskOutputAssertionResult `json:"evidence,omitempty"`
 }
 
 type TaskFailureClass string

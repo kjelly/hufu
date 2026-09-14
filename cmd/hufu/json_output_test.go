@@ -171,6 +171,46 @@ func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
 	}
 }
 
+func TestJSONOutputIncludesRedactedRunInputsAndAssertions(t *testing.T) {
+	c := &team.Coordinator{}
+	c.SetLastRunResult(&team.RunResult{
+		Outcome: team.RunOutcomeCompleted, GoalSatisfied: true,
+		RunInputs: &team.RunInputSnapshot{ID: "snapshot-1", SnapshotHash: "sha256:snapshot", Inputs: []team.ResolvedRunInput{{
+			Name: "review.scope", CanonicalValue: json.RawMessage(`{"kind":"last_n","count":1,"password":"do-not-print"}`),
+			ValueHash: "sha256:value", Source: team.RunInputSourceCLI,
+		}}},
+		InputBoundAssertions: []team.InputBoundAssertionSummary{{
+			Criterion: "scope-binding", SourceTask: "produce-workset", Output: "scope", Assertion: "/requested equals_input `review.scope`", State: "passed",
+		}},
+	})
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"demo": {teamName: "demo", coordinator: c}}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Teams) != 1 || out.Teams[0].RunInputs == nil || out.Teams[0].RunInputs.SnapshotID != "snapshot-1" || len(out.Teams[0].InputBoundAssertions) != 1 {
+		t.Fatalf("typed input JSON = %#v", out.Teams)
+	}
+	encoded, err := json.Marshal(out.Teams[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "do-not-print") || !strings.Contains(string(encoded), "REDACTED") {
+		t.Fatalf("typed input JSON was not defensively redacted: %s", encoded)
+	}
+}
+
 func TestJSONOutputProjectsFinalizationRedactionAndPreservesTypedScalars(t *testing.T) {
 	workspace := t.TempDir()
 	session := &team.TeamSession{

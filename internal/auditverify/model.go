@@ -13,7 +13,7 @@ package auditverify
 import "github.com/kjelly/hufu/internal/team"
 
 // AuditSchemaVersion is the schema version for AuditVerificationResult.
-const AuditSchemaVersion = 2
+const AuditSchemaVersion = 3
 
 // AuditVerdict is the top-level pass/fail/incomplete verdict for a run audit.
 type AuditVerdict string
@@ -86,6 +86,7 @@ const (
 	CodeInvariantViolated           = "AUDIT-INVARIANT-VIOLATED"
 	CodeInvariantAttestationInvalid = "AUDIT-INVARIANT-ATTESTATION-INVALID"
 	CodeInvariantWitnessMismatch    = "AUDIT-INVARIANT-WITNESS-MISMATCH"
+	CodeRunInputBindingInvalid      = "AUDIT-RUN-INPUT-BINDING-INVALID"
 )
 
 // AuditVerificationResult is the complete output of hufu audit verify.
@@ -99,6 +100,7 @@ type AuditVerificationResult struct {
 	Provenance         AuditDimensionResult `json:"provenance"`
 	Evidence           AuditDimensionResult `json:"evidence"`
 	Acceptance         AuditDimensionResult `json:"acceptance"`
+	RunInputBinding    AuditDimensionResult `json:"run_input_binding"`
 	SemanticRegression AuditDimensionResult `json:"semantic_regression"`
 	Completion         AuditDimensionResult `json:"completion"`
 	Recheck            AuditDimensionResult `json:"recheck"`
@@ -124,7 +126,7 @@ func (r *AuditVerificationResult) addFinding(code, severity, message, taskID str
 // mandatoryDimensions returns the dimensions that participate in the
 // overall verdict per spec.md §35. Recheck is deliberately excluded.
 func (r *AuditVerificationResult) mandatoryDimensions() []AuditDimensionResult {
-	return []AuditDimensionResult{r.Integrity, r.Provenance, r.Evidence, r.Acceptance, r.SemanticRegression, r.Completion}
+	return []AuditDimensionResult{r.Integrity, r.Provenance, r.Evidence, r.Acceptance, r.RunInputBinding, r.SemanticRegression, r.Completion}
 }
 
 // finalizeVerdict derives the overall Verdict from the mandatory dimensions.

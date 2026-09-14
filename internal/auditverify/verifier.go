@@ -2,7 +2,10 @@ package auditverify
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -50,6 +53,7 @@ func runWorkspaceAudit(ctx context.Context, workspace string, runID string, opts
 		result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
 		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
+		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -80,6 +84,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		reason := strings.Join(chain.Findings, "; ")
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
+		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeEventHashMismatch, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -93,6 +98,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		reason := fmt.Sprintf("run %q has %d conflicting terminal run_finished events", runID, len(terminals))
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
+		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
 		result.addFinding(CodeTerminalConflict, FindingSeverityCritical, reason, "", 0, "")
 		result.finalizeVerdict()
 		return result, nil, nil
@@ -103,6 +109,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.Completion = AuditDimensionResult{Status: AuditDimensionIncomplete, Reason: reason}
 		result.Evidence = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind evidence to"}
 		result.Acceptance = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind acceptance to"}
+		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind run inputs to"}
 		result.Provenance = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event to bind provenance to"}
 		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal projection"}
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no terminal event"}
@@ -136,6 +143,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.Completion = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.Evidence = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.Acceptance = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.Provenance = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionFail, Reason: "canonical projection invalid"}
 		result.Recheck = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: reason}
@@ -156,6 +164,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 
 	// Phase E: acceptance.
 	result.Acceptance = verifyAcceptanceDimension(runResult, requiredCriteria, result)
+	result.RunInputBinding = verifyRunInputBindingDimension(runID, runResult, session.Tasks, session.RunInputSnapshots, result)
 
 	// Phase F: semantic regression. Use the runtime's pure validator and
 	// evaluator exclusively against the terminal event projection.
@@ -195,6 +204,160 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		tasks: session.Tasks, requiredCriteria: requiredCriteria,
 	}
 	return result, projection, nil
+}
+
+func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tasks []*team.TodoItem, snapshots []team.RunInputSnapshot, audit *AuditVerificationResult) AuditDimensionResult {
+	if runResult.RunInputs == nil {
+		for _, item := range tasks {
+			if item != nil && (len(item.BoundInputs) > 0 || item.RunInputSnapshotID != "" || item.MaterializedActionPayloadHash != "") {
+				return failRunInputBinding(audit, item.ID, "input-bound task exists but the terminal run input snapshot is missing")
+			}
+		}
+		return AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "run has no typed input binding"}
+	}
+	snapshot := runResult.RunInputs
+	if err := validateAuditRunInputSnapshot(runID, snapshot, snapshots); err != nil {
+		return failRunInputBinding(audit, "", err.Error())
+	}
+	inputHashes := make(map[string]string, len(snapshot.Inputs))
+	for _, input := range snapshot.Inputs {
+		inputHashes[input.Name] = input.ValueHash
+	}
+	boundActions := 0
+	for _, item := range tasks {
+		if item == nil || (len(item.BoundInputs) == 0 && item.RunInputSnapshotID == "" && item.MaterializedActionPayloadHash == "") {
+			continue
+		}
+		boundActions++
+		if err := verifyInputBoundTask(runID, item, snapshot, inputHashes); err != nil {
+			return failRunInputBinding(audit, item.ID, err.Error())
+		}
+	}
+	assertions, taskID, err := replayInputBoundAssertions(runID, runResult, tasks, snapshot)
+	if err != nil {
+		return failRunInputBinding(audit, taskID, err.Error())
+	}
+	reason, err := json.Marshal(map[string]int{"inputs": len(snapshot.Inputs), "bound_actions": boundActions, "assertions": assertions})
+	if err != nil {
+		return failRunInputBinding(audit, "", "encode run input binding summary")
+	}
+	return AuditDimensionResult{Status: AuditDimensionPass, Reason: string(reason)}
+}
+
+func validateAuditRunInputSnapshot(runID string, snapshot *team.RunInputSnapshot, snapshots []team.RunInputSnapshot) error {
+	if err := team.ValidateRunInputSnapshot(snapshot); err != nil || snapshot.RunID != runID {
+		reason := "terminal run input snapshot is invalid or belongs to another run"
+		if err != nil {
+			reason += ": " + err.Error()
+		}
+		return errors.New(reason)
+	}
+	matchingSnapshots := 0
+	for index := range snapshots {
+		candidate := &snapshots[index]
+		if candidate.ID != snapshot.ID || candidate.RunID != runID {
+			continue
+		}
+		matchingSnapshots++
+		if !reflect.DeepEqual(candidate, snapshot) {
+			return errors.New("terminal run input snapshot disagrees with the resolved event projection")
+		}
+	}
+	if matchingSnapshots != 1 {
+		return fmt.Errorf("terminal run input snapshot resolved to %d matching event projections; exactly one is required", matchingSnapshots)
+	}
+	return nil
+}
+
+func verifyInputBoundTask(runID string, item *team.TodoItem, snapshot *team.RunInputSnapshot, inputHashes map[string]string) error {
+	if item.RunInputSnapshotID != snapshot.ID || item.RunInputSnapshotHash != snapshot.SnapshotHash || item.MaterializedActionPayloadHash == "" || len(item.BoundInputs) == 0 {
+		return errors.New("task materialization identity does not match the terminal run input snapshot")
+	}
+	for name, hash := range item.BoundInputs {
+		if inputHashes[name] == "" || inputHashes[name] != hash {
+			return fmt.Errorf("task bound input %q does not match the frozen input hash", name)
+		}
+	}
+	receipt := latestRunInputReceipt(item, runID)
+	if receipt == nil || strings.TrimSpace(receipt.ActionInvocationID) == "" || receipt.RunInputSnapshotID != snapshot.ID || receipt.RunInputSnapshotHash != snapshot.SnapshotHash ||
+		receipt.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash || !sameHashes(receipt.BoundInputs, item.BoundInputs) {
+		return errors.New("action receipt does not match task input materialization")
+	}
+	if item.Status == team.TaskDone && receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+		return errors.New("completed input-bound task has an unsuccessful action receipt")
+	}
+	if item.TypedResult != nil && (item.TypedResult.RunInputSnapshotID != snapshot.ID ||
+		item.TypedResult.RunInputSnapshotHash != snapshot.SnapshotHash ||
+		item.TypedResult.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash ||
+		!sameHashes(item.TypedResult.BoundInputs, item.BoundInputs)) {
+		return errors.New("task result identity does not match task input materialization")
+	}
+	if receipt.RuntimeOutputsHash == "" && (item.TypedResult == nil || len(item.TypedResult.RuntimeOutputs) == 0) {
+		return nil
+	}
+	if item.TypedResult == nil || item.TypedResult.Source != "runtime" {
+		return errors.New("action receipt output digest has no runtime-owned task result")
+	}
+	_, digest, err := team.CanonicalizeRuntimeOutputs(item.TypedResult.RuntimeOutputs)
+	if err != nil || digest != item.TypedResult.RuntimeOutputsHash || digest != receipt.RuntimeOutputsHash {
+		return errors.New("runtime output digest does not match the successful action receipt")
+	}
+	return nil
+}
+
+func replayInputBoundAssertions(runID string, runResult *team.RunResult, tasks []*team.TodoItem, snapshot *team.RunInputSnapshot) (int, string, error) {
+	assertions := 0
+	if runResult.Acceptance != nil {
+		for _, verification := range runResult.Acceptance.VerificationEvidence {
+			if verification == nil || verification.Spec == nil || verification.Spec.Type != team.VerifyTaskOutputAssert {
+				continue
+			}
+			assertions++
+			replayed, replayErr := team.ReplayTaskOutputAssertions(tasks, runID, snapshot, *verification.Spec)
+			persistedPassed := verification.ExitCode == 0
+			if persistedPassed == (replayErr != nil) || !reflect.DeepEqual(replayed, verification.TaskOutputAssertions) {
+				return 0, verification.Spec.WorksetSourceTask, errors.New("persisted task_output_assert result does not match independent replay")
+			}
+		}
+	}
+	if expected := team.SummarizeInputBoundAssertions(runResult.Acceptance); !reflect.DeepEqual(expected, runResult.InputBoundAssertions) {
+		return 0, "", errors.New("terminal input-bound assertion summary disagrees with independently replayed acceptance evidence")
+	}
+	return assertions, "", nil
+}
+
+func latestRunInputReceipt(item *team.TodoItem, runID string) *team.ExecutionReceipt {
+	if item == nil {
+		return nil
+	}
+	var latest *team.ExecutionReceipt
+	for index := range item.ExecutionReceipts {
+		receipt := &item.ExecutionReceipts[index]
+		if receipt.RunID == runID && (latest == nil || receipt.Attempt >= latest.Attempt) {
+			latest = receipt
+		}
+	}
+	if receipt := item.ExecutionReceipt; receipt != nil && receipt.RunID == runID && (latest == nil || receipt.Attempt >= latest.Attempt) {
+		latest = receipt
+	}
+	return latest
+}
+
+func failRunInputBinding(result *AuditVerificationResult, taskID, reason string) AuditDimensionResult {
+	result.addFinding(CodeRunInputBindingInvalid, FindingSeverityCritical, reason, taskID, 0, "")
+	return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+}
+
+func sameHashes(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func verifySemanticRegressionDimension(runID string, tasks []*team.TodoItem, decision team.SemanticRegressionDecision, result *AuditVerificationResult) AuditDimensionResult {

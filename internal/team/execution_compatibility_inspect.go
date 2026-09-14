@@ -73,7 +73,12 @@ func InspectExecutionCompatibility(ctx context.Context, workspace, branch string
 		if err := inspectCompatibilityLineage(report, branchID, lineage); err != nil {
 			return nil, err
 		}
+		inspectRunInputCompatibility(report, lineage)
 		if session != nil && branchID == tree.ActiveBranch {
+			projected := ReduceToSessionData(lineage)
+			if projected == nil || compareRunInputSnapshotProjection(session.RunInputSnapshots, session.ActiveRunInputSnapshotID, projected.RunInputSnapshots, projected.ActiveRunInputSnapshotID) != nil {
+				report.SessionInputProjectionConflicts++
+			}
 			if err := inspectSessionOnlyCompatibilityTasks(report, branchID, lineage, session); err != nil {
 				return nil, err
 			}
@@ -84,6 +89,50 @@ func InspectExecutionCompatibility(ctx context.Context, workspace, branch string
 	}
 	sortCompatibilityFindings(report.Findings)
 	return report, nil
+}
+
+func inspectRunInputCompatibility(report *executioncompat.InspectionReport, lineage []RunEvent) {
+	if report == nil {
+		return
+	}
+	session := ReduceToSessionData(lineage)
+	if session == nil {
+		return
+	}
+	report.CanonicalRunInputSnapshots += len(session.RunInputSnapshots)
+	snapshots := make(map[string]RunInputSnapshot, len(session.RunInputSnapshots))
+	for _, snapshot := range session.RunInputSnapshots {
+		snapshots[snapshot.ID] = snapshot
+	}
+	for _, item := range session.Tasks {
+		if item == nil || item.TypedResult == nil {
+			continue
+		}
+		hasRuntimeOutput := len(item.TypedResult.RuntimeOutputs) > 0 || (item.TypedResult.Source == "runtime" && len(item.TypedResult.Facts) > 0)
+		bound := len(item.BoundInputs) > 0 || item.RunInputSnapshotID != "" || item.MaterializedActionPayloadHash != ""
+		if hasRuntimeOutput && !bound {
+			report.LegacyUnboundRuntimeOutputs++
+		}
+		if !bound {
+			continue
+		}
+		report.InputBoundTasks++
+		snapshot, ok := snapshots[item.RunInputSnapshotID]
+		if !ok || ValidateRunInputSnapshot(&snapshot) != nil || snapshot.SnapshotHash != item.RunInputSnapshotHash || item.MaterializedActionPayloadHash == "" || len(item.BoundInputs) == 0 {
+			report.InputBindingConflicts++
+			continue
+		}
+		inputHashes := make(map[string]string, len(snapshot.Inputs))
+		for _, input := range snapshot.Inputs {
+			inputHashes[input.Name] = input.ValueHash
+		}
+		for name, hash := range item.BoundInputs {
+			if inputHashes[name] != hash {
+				report.InputBindingConflicts++
+				break
+			}
+		}
+	}
 }
 
 func compatibilityBranches(tree *SessionTree, requested string) ([]string, string, error) {

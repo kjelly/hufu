@@ -31,7 +31,9 @@ func TestMigrateInspectExecutionCommandUsesRootWorkspaceAndStableJSON(t *testing
 		t.Fatalf("execute inspect command: %v", err)
 	}
 	got := output.String()
-	if !bytes.Contains([]byte(got), []byte(`"schema_version":1`)) || !bytes.Contains([]byte(got), []byte(`"migratable_tasks":1`)) {
+	if !bytes.Contains([]byte(got), []byte(`"schema_version":2`)) ||
+		!bytes.Contains([]byte(got), []byte(`"migratable_tasks":1`)) ||
+		!bytes.Contains([]byte(got), []byte(`"legacy_unbound_runtime_outputs":0`)) {
 		t.Fatalf("JSON output = %s", got)
 	}
 }

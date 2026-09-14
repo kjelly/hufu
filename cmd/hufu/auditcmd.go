@@ -182,6 +182,7 @@ func renderAuditVerifyText(w io.Writer, result *auditverify.AuditVerificationRes
 	renderAuditDimension(w, "Provenance", result.Provenance)
 	renderAuditDimension(w, "Evidence", result.Evidence)
 	renderAuditDimension(w, "Acceptance", result.Acceptance)
+	renderAuditDimension(w, "Run input binding", result.RunInputBinding)
 	renderAuditDimension(w, "Semantic regression", result.SemanticRegression)
 	renderAuditDimension(w, "Completion", result.Completion)
 	renderAuditDimension(w, "Recheck", result.Recheck)
@@ -322,7 +323,7 @@ func auditConclusionReason(v *auditverify.AuditVerificationResult) string {
 	if v == nil {
 		return "no verification result available"
 	}
-	for _, dim := range []auditverify.AuditDimensionResult{v.Integrity, v.Provenance, v.Evidence, v.Acceptance, v.SemanticRegression, v.Completion} {
+	for _, dim := range []auditverify.AuditDimensionResult{v.Integrity, v.Provenance, v.Evidence, v.Acceptance, v.RunInputBinding, v.SemanticRegression, v.Completion} {
 		if dim.Status == auditverify.AuditDimensionFail && dim.Reason != "" {
 			return dim.Reason
 		}

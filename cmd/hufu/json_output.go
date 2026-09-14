@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
@@ -33,13 +35,21 @@ type jsonRunOutput struct {
 }
 
 type jsonRunTeam struct {
-	Name             string                           `json:"name"`
-	Tokens           int64                            `json:"tokens"`
-	Tasks            []jsonRunTask                    `json:"tasks,omitempty"`
-	MemoryLearning   team.MemoryLearningReport        `json:"memory_learning,omitempty"`
-	DeprecatedMemory []team.DeprecatedMemoryToolUsage `json:"deprecated_memory_tools,omitempty"`
-	ContextRouting   team.ContextManifestSummary      `json:"context_routing"`
-	Decisions        []team.DecisionIndexEntry        `json:"decisions,omitempty"`
+	Name                 string                            `json:"name"`
+	Tokens               int64                             `json:"tokens"`
+	Tasks                []jsonRunTask                     `json:"tasks,omitempty"`
+	MemoryLearning       team.MemoryLearningReport         `json:"memory_learning,omitempty"`
+	DeprecatedMemory     []team.DeprecatedMemoryToolUsage  `json:"deprecated_memory_tools,omitempty"`
+	ContextRouting       team.ContextManifestSummary       `json:"context_routing"`
+	Decisions            []team.DecisionIndexEntry         `json:"decisions,omitempty"`
+	RunInputs            *jsonRunInputs                    `json:"run_inputs,omitempty"`
+	InputBoundAssertions []team.InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
+}
+
+type jsonRunInputs struct {
+	SnapshotID   string                  `json:"snapshot_id"`
+	SnapshotHash string                  `json:"snapshot_hash"`
+	Inputs       []team.ResolvedRunInput `json:"inputs"`
 }
 
 type jsonRunTask struct {
@@ -87,6 +97,10 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)
 		}
 		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport(), DeprecatedMemory: tc.coordinator.DeprecatedMemoryToolReport(), ContextRouting: tc.coordinator.ContextManifestReport()}
+		if lastRes := tc.coordinator.LastRunResult(); lastRes != nil {
+			jt.RunInputs = redactedJSONRunInputs(lastRes.RunInputs)
+			jt.InputBoundAssertions = slices.Clone(lastRes.InputBoundAssertions)
+		}
 		jt.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 		jt.Decisions = team.RedactedDecisionIndexEntries(jt.Decisions)
 		var items []*team.TodoItem
@@ -145,6 +159,23 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(out)
+}
+
+func redactedJSONRunInputs(snapshot *team.RunInputSnapshot) *jsonRunInputs {
+	if snapshot == nil {
+		return nil
+	}
+	result := &jsonRunInputs{SnapshotID: snapshot.ID, SnapshotHash: snapshot.SnapshotHash, Inputs: slices.Clone(snapshot.Inputs)}
+	for index := range result.Inputs {
+		value := result.Inputs[index].CanonicalValue
+		if redacted, err := utils.RedactJSONCompact(value); err == nil {
+			result.Inputs[index].CanonicalValue = redacted
+		} else {
+			result.Inputs[index].CanonicalValue = json.RawMessage(`"[REDACTED:invalid-json]"`)
+		}
+		result.Inputs[index].Evidence = slices.Clone(result.Inputs[index].Evidence)
+	}
+	return result
 }
 
 func isHistoricalUnresolvedTask(teamName string, item *team.TodoItem, priorUnresolved map[string]map[string]time.Time) bool {

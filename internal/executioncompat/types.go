@@ -2,7 +2,7 @@
 // inspecting and materializing historical durable execution identity.
 package executioncompat
 
-const InspectionReportSchemaVersion = 1
+const InspectionReportSchemaVersion = 2
 
 // Feature identifies one historical execution-identity surface. A subject can
 // report more than one feature while retaining exactly one classification.
@@ -22,26 +22,31 @@ const (
 // compatibility inventory. It intentionally contains no model, provider URL,
 // credential, prompt, output, or workspace path.
 type InspectionReport struct {
-	SchemaVersion                 int       `json:"schema_version"`
-	Scope                         string    `json:"scope"`
-	LegacyLocalAliasEvents        int       `json:"legacy_local_alias_events"`
-	LegacyProviderShadowEvents    int       `json:"legacy_provider_shadow_events"`
-	LegacyExecutionEventProviders int       `json:"legacy_execution_event_providers"`
-	LegacyProviderBindings        int       `json:"legacy_provider_bindings"`
-	LegacyProviderSessionEvents   int       `json:"legacy_provider_session_events"`
-	LegacyReceiptProviders        int       `json:"legacy_receipt_providers"`
-	LegacyPolicyRoutes            int       `json:"legacy_policy_routes"`
-	CanonicalTasks                int       `json:"canonical_tasks"`
-	MigratedTasks                 int       `json:"migrated_tasks"`
-	MigratableTasks               int       `json:"migratable_tasks"`
-	AmbiguousTasks                int       `json:"ambiguous_tasks"`
-	UnmigratableTasks             int       `json:"unmigratable_tasks"`
-	CanonicalPolicySnapshots      int       `json:"canonical_policy_snapshots"`
-	MigratedPolicySnapshots       int       `json:"migrated_policy_snapshots"`
-	MigratablePolicySnapshots     int       `json:"migratable_policy_snapshots"`
-	AmbiguousPolicySnapshots      int       `json:"ambiguous_policy_snapshots"`
-	UnmigratablePolicySnapshots   int       `json:"unmigratable_policy_snapshots"`
-	Findings                      []Finding `json:"findings"`
+	SchemaVersion                   int       `json:"schema_version"`
+	Scope                           string    `json:"scope"`
+	LegacyLocalAliasEvents          int       `json:"legacy_local_alias_events"`
+	LegacyProviderShadowEvents      int       `json:"legacy_provider_shadow_events"`
+	LegacyExecutionEventProviders   int       `json:"legacy_execution_event_providers"`
+	LegacyProviderBindings          int       `json:"legacy_provider_bindings"`
+	LegacyProviderSessionEvents     int       `json:"legacy_provider_session_events"`
+	LegacyReceiptProviders          int       `json:"legacy_receipt_providers"`
+	LegacyPolicyRoutes              int       `json:"legacy_policy_routes"`
+	CanonicalTasks                  int       `json:"canonical_tasks"`
+	MigratedTasks                   int       `json:"migrated_tasks"`
+	MigratableTasks                 int       `json:"migratable_tasks"`
+	AmbiguousTasks                  int       `json:"ambiguous_tasks"`
+	UnmigratableTasks               int       `json:"unmigratable_tasks"`
+	CanonicalPolicySnapshots        int       `json:"canonical_policy_snapshots"`
+	MigratedPolicySnapshots         int       `json:"migrated_policy_snapshots"`
+	MigratablePolicySnapshots       int       `json:"migratable_policy_snapshots"`
+	AmbiguousPolicySnapshots        int       `json:"ambiguous_policy_snapshots"`
+	UnmigratablePolicySnapshots     int       `json:"unmigratable_policy_snapshots"`
+	CanonicalRunInputSnapshots      int       `json:"canonical_run_input_snapshots"`
+	InputBoundTasks                 int       `json:"input_bound_tasks"`
+	LegacyUnboundRuntimeOutputs     int       `json:"legacy_unbound_runtime_outputs"`
+	InputBindingConflicts           int       `json:"input_binding_conflicts"`
+	SessionInputProjectionConflicts int       `json:"session_input_projection_conflicts"`
+	Findings                        []Finding `json:"findings"`
 }
 
 // Finding is a deterministic, content-free compatibility subject result.

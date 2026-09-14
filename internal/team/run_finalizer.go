@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 )
@@ -161,7 +162,63 @@ func (c *Coordinator) prepareTerminalResult(result *RunResult) {
 		result.RunID = result.EvidenceManifest.RunID
 	}
 	result.Worksets = c.WorksetGroupStates()
+	result.RunInputs = c.RunInputSnapshot()
+	result.InputBoundAssertions = SummarizeInputBoundAssertions(result.Acceptance)
+	result.Metrics.TypedRunInputsResolved = 0
+	result.Metrics.InputBoundActions = 0
+	result.Metrics.InputBoundAssertionsPassed = 0
+	result.Metrics.InputBoundAssertionsFailed = 0
+	if result.RunInputs != nil {
+		result.Metrics.TypedRunInputsResolved = len(result.RunInputs.Inputs)
+	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item != nil && len(item.BoundInputs) > 0 {
+				result.Metrics.InputBoundActions++
+			}
+		}
+	}
+	for _, assertion := range result.InputBoundAssertions {
+		if assertion.State == "passed" {
+			result.Metrics.InputBoundAssertionsPassed++
+		} else {
+			result.Metrics.InputBoundAssertionsFailed++
+		}
+	}
 	c.annotateRunCompletionSemantics(result)
+}
+
+// SummarizeInputBoundAssertions derives the bounded terminal projection of
+// task_output_assert evidence. Offline audit uses the same deterministic
+// projection after independently replaying every assertion.
+func SummarizeInputBoundAssertions(acceptance *AcceptanceResult) []InputBoundAssertionSummary {
+	if acceptance == nil {
+		return nil
+	}
+	var summaries []InputBoundAssertionSummary
+	for index, verification := range acceptance.VerificationEvidence {
+		if verification == nil || verification.Spec == nil || verification.Spec.Type != VerifyTaskOutputAssert {
+			continue
+		}
+		parts := make([]string, 0, len(verification.Spec.Assertions))
+		for _, assertion := range verification.Spec.Assertions {
+			part := assertion.Pointer + " " + assertion.Op
+			if assertion.Input != "" {
+				part += " `" + assertion.Input + "`"
+			}
+			parts = append(parts, part)
+		}
+		state := "failed"
+		if verification.ExitCode == 0 {
+			state = "passed"
+		}
+		summaries = append(summaries, InputBoundAssertionSummary{
+			Criterion: fmt.Sprintf("task_output_assert:%d", index+1), SourceTask: verification.Spec.WorksetSourceTask,
+			Output: verification.Spec.TaskOutputName, Assertion: strings.Join(parts, "; "), State: state,
+			Evidence: slices.Clone(verification.TaskOutputAssertions),
+		})
+	}
+	return summaries
 }
 
 func cloneRunResult(result *RunResult) (*RunResult, error) {
@@ -210,6 +267,8 @@ func terminalLifecyclePayload(c *Coordinator, result *RunResult) LifecycleEventP
 	payload.Stats = &result.Stats
 	payload.Metrics = &result.Metrics
 	payload.Telemetry = result.Telemetry
+	payload.RunInputs = CloneRunInputSnapshot(result.RunInputs)
+	payload.InputBoundAssertions = slices.Clone(result.InputBoundAssertions)
 	if result.EvidenceManifest != nil {
 		payload.EvidenceManifest = result.EvidenceManifest
 	}

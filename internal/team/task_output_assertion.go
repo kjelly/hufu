@@ -26,64 +26,74 @@ func (c *Coordinator) executeTaskOutputAssertVerification(_ context.Context, spe
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fail(errors.New("coordinator task occurrence state is unavailable"))
 	}
-
-	source, err := uniqueTaskOutputSource(c.taskTracker.TodoList().Items(), spec.WorksetSourceTask, coordinatorRuntimeRunID(c))
+	snapshot := c.RunInputSnapshot()
+	evidence, err := ReplayTaskOutputAssertions(c.taskTracker.TodoList().Items(), coordinatorRuntimeRunID(c), snapshot, spec)
+	res.TaskOutputAssertions = evidence
 	if err != nil {
 		return fail(err)
-	}
-	if source.Status != TaskDone || source.TypedResult == nil {
-		return fail(fmt.Errorf("source task %q is not a completed canonical occurrence", spec.WorksetSourceTask))
-	}
-	result := cloneTaskResult(source.TypedResult)
-	if err := validateCompletedTaskResult(result); err != nil {
-		return fail(fmt.Errorf("source task result is not successful: %w", err))
-	}
-	if result.Source != "runtime" {
-		return fail(fmt.Errorf("source task result has untrusted source %q", result.Source))
-	}
-	if err := validateRuntimeTaskResult(result); err != nil {
-		return fail(fmt.Errorf("source runtime outputs are invalid: %w", err))
-	}
-	canonicalOutputs := result.RuntimeOutputs
-	digest := result.RuntimeOutputsHash
-
-	snapshot := c.RunInputSnapshot()
-	if snapshot == nil || source.RunInputSnapshotID == "" || source.RunInputSnapshotHash == "" ||
-		source.RunInputSnapshotID != snapshot.ID || source.RunInputSnapshotHash != snapshot.SnapshotHash ||
-		result.RunInputSnapshotID != snapshot.ID || result.RunInputSnapshotHash != snapshot.SnapshotHash {
-		return fail(errors.New("source task input snapshot is stale or does not match this invocation"))
-	}
-	receipt := latestSuccessfulExecutionReceipt(source, coordinatorRuntimeRunID(c))
-	if receipt == nil || strings.TrimSpace(receipt.ActionInvocationID) == "" {
-		return fail(errors.New("source task has no valid action invocation receipt for this run"))
-	}
-	if receipt.RuntimeOutputsHash != digest || receipt.RunInputSnapshotID != snapshot.ID ||
-		receipt.RunInputSnapshotHash != snapshot.SnapshotHash ||
-		receipt.MaterializedActionPayloadHash != source.MaterializedActionPayloadHash ||
-		!equalStringMaps(receipt.BoundInputs, source.BoundInputs) {
-		return fail(errors.New("source action receipt identity does not match the completed task occurrence"))
-	}
-
-	root, ok := canonicalOutputs[strings.TrimSpace(spec.TaskOutputName)]
-	if !ok {
-		return fail(fmt.Errorf("runtime output %q does not exist", spec.TaskOutputName))
-	}
-	inputs := make(map[string]ResolvedRunInput, len(snapshot.Inputs))
-	for _, input := range snapshot.Inputs {
-		inputs[input.Name] = input
-	}
-
-	for index, assertion := range spec.Assertions {
-		evidence, assertionErr := evaluateTaskOutputAssertion(root, assertion, inputs, source, spec.TaskOutputName)
-		res.TaskOutputAssertions = append(res.TaskOutputAssertions, evidence)
-		if assertionErr != nil {
-			return fail(fmt.Errorf("assertion %d: %w", index, assertionErr))
-		}
 	}
 	res.ExitCode = 0
 	res.Stdout = fmt.Sprintf("task_output_assert passed (%d assertion(s))", len(spec.Assertions))
 	res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
 	return applyVerificationMode(res, nil, spec.Mode)
+}
+
+// ReplayTaskOutputAssertions independently re-evaluates a task_output_assert
+// against event-replayed task and input state. It performs no I/O and is the
+// shared trust boundary used by both live acceptance and offline audit.
+func ReplayTaskOutputAssertions(items []*TodoItem, runID string, snapshot *RunInputSnapshot, spec VerificationSpec) ([]TaskOutputAssertionResult, error) {
+	if err := validateVerificationSpec(spec); err != nil {
+		return nil, fmt.Errorf("malformed verification spec: %w", err)
+	}
+	source, err := uniqueTaskOutputSource(items, spec.WorksetSourceTask, runID)
+	if err != nil {
+		return nil, err
+	}
+	if source.Status != TaskDone || source.TypedResult == nil {
+		return nil, fmt.Errorf("source task %q is not a completed canonical occurrence", spec.WorksetSourceTask)
+	}
+	result := cloneTaskResult(source.TypedResult)
+	if err := validateCompletedTaskResult(result); err != nil {
+		return nil, fmt.Errorf("source task result is not successful: %w", err)
+	}
+	if result.Source != "runtime" {
+		return nil, fmt.Errorf("source task result has untrusted source %q", result.Source)
+	}
+	if err := validateRuntimeTaskResult(result); err != nil {
+		return nil, fmt.Errorf("source runtime outputs are invalid: %w", err)
+	}
+	if snapshot == nil || source.RunInputSnapshotID == "" || source.RunInputSnapshotHash == "" ||
+		source.RunInputSnapshotID != snapshot.ID || source.RunInputSnapshotHash != snapshot.SnapshotHash ||
+		result.RunInputSnapshotID != snapshot.ID || result.RunInputSnapshotHash != snapshot.SnapshotHash {
+		return nil, errors.New("source task input snapshot is stale or does not match this invocation")
+	}
+	receipt := latestSuccessfulExecutionReceipt(source, runID)
+	if receipt == nil || strings.TrimSpace(receipt.ActionInvocationID) == "" {
+		return nil, errors.New("source task has no valid action invocation receipt for this run")
+	}
+	if receipt.RuntimeOutputsHash != result.RuntimeOutputsHash || receipt.RunInputSnapshotID != snapshot.ID ||
+		receipt.RunInputSnapshotHash != snapshot.SnapshotHash ||
+		receipt.MaterializedActionPayloadHash != source.MaterializedActionPayloadHash ||
+		!equalStringMaps(receipt.BoundInputs, source.BoundInputs) {
+		return nil, errors.New("source action receipt identity does not match the completed task occurrence")
+	}
+	root, ok := result.RuntimeOutputs[strings.TrimSpace(spec.TaskOutputName)]
+	if !ok {
+		return nil, fmt.Errorf("runtime output %q does not exist", spec.TaskOutputName)
+	}
+	inputs := make(map[string]ResolvedRunInput, len(snapshot.Inputs))
+	for _, input := range snapshot.Inputs {
+		inputs[input.Name] = input
+	}
+	evidence := make([]TaskOutputAssertionResult, 0, len(spec.Assertions))
+	for index, assertion := range spec.Assertions {
+		item, assertionErr := evaluateTaskOutputAssertion(root, assertion, inputs, source, spec.TaskOutputName)
+		evidence = append(evidence, item)
+		if assertionErr != nil {
+			return evidence, fmt.Errorf("assertion %d: %w", index, assertionErr)
+		}
+	}
+	return evidence, nil
 }
 
 func uniqueTaskOutputSource(items []*TodoItem, logicalID, runID string) (*TodoItem, error) {

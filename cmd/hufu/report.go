@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,6 +137,8 @@ type reviewScopeReport struct {
 		Count   int    `json:"count"`
 		History string `json:"history"`
 		Head    string `json:"head"`
+		Base    string `json:"base,omitempty"`
+		Since   string `json:"since,omitempty"`
 	} `json:"requested"`
 	Resolved struct {
 		Base                 string `json:"base"`
@@ -144,8 +148,8 @@ type reviewScopeReport struct {
 		HistoryExhausted     bool   `json:"history_exhausted"`
 		RepositoryShallow    bool   `json:"repository_shallow"`
 	} `json:"resolved"`
-	Satisfied   bool   `json:"satisfied"`
-	InputDigest string `json:"input_digest"`
+	Satisfied          bool   `json:"satisfied"`
+	RequestedInputHash string `json:"requested_input_hash"`
 }
 
 // SkillPatternReport holds detected skill pattern info for reports
@@ -341,6 +345,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	}
 
 	d.ReviewScope = gatherRuntimeReviewScope(d.Todos)
+	if !reviewScopeBoundToRunResult(d.ReviewScope, d.RunResult) {
+		d.ReviewScope = nil
+	}
 	return d
 }
 
@@ -350,7 +357,7 @@ func gatherRuntimeReviewScope(todos []*team.TodoItem) *reviewScopeReport {
 		if item == nil || item.TypedResult == nil || item.TypedResult.Source != "runtime" {
 			continue
 		}
-		raw, ok := item.TypedResult.Facts["scope"]
+		raw, ok := item.TypedResult.RuntimeOutputs["scope"]
 		if !ok {
 			continue
 		}
@@ -368,12 +375,33 @@ func gatherRuntimeReviewScope(todos []*team.TodoItem) *reviewScopeReport {
 }
 
 func validReviewScopeReport(scope *reviewScopeReport) bool {
-	return scope != nil && scope.Requested.Kind == "last_n" &&
-		scope.Requested.Count >= 1 && scope.Requested.Count <= 100 &&
+	return scope != nil && strings.TrimSpace(scope.Requested.Kind) != "" &&
 		scope.Requested.History == "first_parent" && strings.TrimSpace(scope.Requested.Head) != "" &&
 		strings.TrimSpace(scope.Resolved.Base) != "" && strings.TrimSpace(scope.Resolved.Head) != "" &&
 		scope.Resolved.SelectedCommitCount > 0 && scope.Resolved.AvailableCommitCount >= scope.Resolved.SelectedCommitCount &&
-		!scope.Resolved.RepositoryShallow && scope.Satisfied && strings.HasPrefix(scope.InputDigest, "sha256:")
+		!scope.Resolved.RepositoryShallow && scope.Satisfied && strings.HasPrefix(scope.RequestedInputHash, "sha256:")
+}
+
+func reviewScopeBoundToRunResult(scope *reviewScopeReport, result *team.RunResult) bool {
+	if scope == nil || result == nil || result.RunInputs == nil {
+		return false
+	}
+	boundInput := false
+	for _, input := range result.RunInputs.Inputs {
+		if input.Name == "review.scope" && input.ValueHash == scope.RequestedInputHash {
+			boundInput = true
+			break
+		}
+	}
+	if !boundInput {
+		return false
+	}
+	for _, assertion := range result.InputBoundAssertions {
+		if assertion.SourceTask == "produce-workset" && assertion.Output == "scope" && assertion.State == "passed" {
+			return true
+		}
+	}
+	return false
 }
 
 // renderReportAuditSection formats the independent audit re-verification of
@@ -401,7 +429,7 @@ func renderReportAuditSection(data *reportData) string {
 		d    auditverify.AuditDimensionResult
 	}{
 		{"Integrity", result.Integrity}, {"Provenance", result.Provenance}, {"Evidence", result.Evidence},
-		{"Acceptance", result.Acceptance}, {"Semantic regression", result.SemanticRegression}, {"Completion", result.Completion}, {"Recheck", result.Recheck},
+		{"Acceptance", result.Acceptance}, {"Run input binding", result.RunInputBinding}, {"Semantic regression", result.SemanticRegression}, {"Completion", result.Completion}, {"Recheck", result.Recheck},
 	} {
 		fmt.Fprintf(&b, "  - %s: `%s`", dim.name, strings.ToUpper(string(dim.d.Status)))
 		if dim.d.Reason != "" {
@@ -473,6 +501,92 @@ func reportSafeMetadata(value string, max int) string {
 	}, value)
 	value = strings.ReplaceAll(value, "`", "'")
 	return limitStr(strings.TrimSpace(value), max)
+}
+
+var reportCommitHeadingPattern = regexp.MustCompile(`(?im)^#{1,6}[^\n]*(?:last|review)[^\n]*?([0-9]+)[ \t]+commits?\b`)
+
+func renderResolvedRunInputs(snapshot *team.RunInputSnapshot, finalResult string) string {
+	if snapshot == nil || len(snapshot.Inputs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Resolved Run Inputs\n\n")
+	fmt.Fprintf(&b, "- **Snapshot ID:** `%s`\n- **Snapshot hash:** `%s`\n\n", reportSafeMetadata(snapshot.ID, 160), reportSafeMetadata(snapshot.SnapshotHash, 160))
+	b.WriteString("| Input | Source | Canonical value | Value hash | Resolver |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, input := range snapshot.Inputs {
+		value := input.CanonicalValue
+		if redacted, err := utils.RedactJSONCompact(value); err == nil {
+			value = redacted
+		} else {
+			value = json.RawMessage(`"[REDACTED:invalid-json]"`)
+		}
+		resolver := "—"
+		if input.ResolverID != "" {
+			resolver = input.ResolverID
+			if input.ResolverVersion != "" {
+				resolver += "@" + input.ResolverVersion
+			}
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | `%s` | `%s` |\n",
+			reportTableValue(input.Name, 140), reportTableValue(string(input.Source), 40), reportTableValue(string(value), 4096),
+			reportTableValue(input.ValueHash, 160), reportTableValue(resolver, 180))
+	}
+	if warning := canonicalScopeHeadingWarning(snapshot, finalResult); warning != "" {
+		fmt.Fprintf(&b, "\n> ⚠️ %s\n", warning)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func renderInputBoundAssertions(assertions []team.InputBoundAssertionSummary) string {
+	if len(assertions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Input-bound Assertions\n\n")
+	b.WriteString("| Criterion | Source task | Output | Assertion | State |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, assertion := range assertions {
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %s | `%s` |\n",
+			reportTableValue(assertion.Criterion, 120), reportTableValue(assertion.SourceTask, 120), reportTableValue(assertion.Output, 120),
+			reportTableValue(assertion.Assertion, 500), reportTableValue(assertion.State, 40))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func reportTableValue(value string, max int) string {
+	return strings.ReplaceAll(reportSafeMetadata(value, max), "|", "\\|")
+}
+
+func canonicalScopeHeadingWarning(snapshot *team.RunInputSnapshot, finalResult string) string {
+	var canonicalCount int
+	for _, input := range snapshot.Inputs {
+		if input.Name != "review.scope" {
+			continue
+		}
+		var scope struct {
+			Kind  string `json:"kind"`
+			Count int    `json:"count"`
+		}
+		if json.Unmarshal(input.CanonicalValue, &scope) == nil && scope.Kind == "last_n" {
+			canonicalCount = scope.Count
+		}
+	}
+	if canonicalCount == 0 {
+		return ""
+	}
+	for _, match := range reportCommitHeadingPattern.FindAllStringSubmatch(finalResult, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		count, err := strconv.Atoi(match[1])
+		if err == nil && count != canonicalCount {
+			return fmt.Sprintf("Model-authored heading names %d commits, but the canonical review.scope input is %d; the heading is presentation only.", count, canonicalCount)
+		}
+	}
+	return ""
 }
 
 // latestRunTodos excludes only tasks whose durable receipts positively bind
@@ -586,16 +700,24 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	if data.CanonicalRunError != "" {
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
 	}
+	if data.RunResult != nil {
+		b.WriteString(renderResolvedRunInputs(data.RunResult.RunInputs, finalResult))
+		b.WriteString(renderInputBoundAssertions(data.RunResult.InputBoundAssertions))
+	}
 	if data.ReviewScope != nil {
 		scope := data.ReviewScope
 		b.WriteString("## Resolved Review Scope\n\n")
-		fmt.Fprintf(&b, "- **Configured review scope:** last %d first-parent commits ending at `%s`\n", scope.Requested.Count, reportSafeMetadata(scope.Requested.Head, 160))
+		fmt.Fprintf(&b, "- **Requested review scope:** `%s` ending at `%s`", reportSafeMetadata(scope.Requested.Kind, 40), reportSafeMetadata(scope.Requested.Head, 160))
+		if scope.Requested.Count > 0 {
+			fmt.Fprintf(&b, " (count: %d)", scope.Requested.Count)
+		}
+		b.WriteString("\n")
 		fmt.Fprintf(&b, "- **Resolved range:** `%s..%s`\n", reportSafeMetadata(scope.Resolved.Base, 160), reportSafeMetadata(scope.Resolved.Head, 160))
 		fmt.Fprintf(&b, "- **Selected commits:** %d (available: %d; history exhausted: %t)\n", scope.Resolved.SelectedCommitCount, scope.Resolved.AvailableCommitCount, scope.Resolved.HistoryExhausted)
-		b.WriteString("- **Scope source:** `compatibility_var`\n")
-		b.WriteString("- **Scope assertion:** `producer_attested` (not yet core-bound)\n")
+		b.WriteString("- **Scope source:** `runtime_output`\n")
+		b.WriteString("- **Scope assertion:** `core_bound`\n")
 		fmt.Fprintf(&b, "- **Satisfied:** %t\n", scope.Satisfied)
-		fmt.Fprintf(&b, "- **Input digest:** `%s`\n\n", reportSafeMetadata(scope.InputDigest, 160))
+		fmt.Fprintf(&b, "- **Requested input hash:** `%s`\n\n", reportSafeMetadata(scope.RequestedInputHash, 160))
 	}
 	if len(data.Decisions) > 0 {
 		b.WriteString("## Decision State\n\n")
@@ -682,6 +804,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		metrics := data.RunResult.Metrics
 		b.WriteString("\n### Reliability Metrics\n\n")
 		fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
+		fmt.Fprintf(&b, "- **Typed run inputs resolved:** %d\n", metrics.TypedRunInputsResolved)
+		fmt.Fprintf(&b, "- **Input-bound actions:** %d\n", metrics.InputBoundActions)
+		fmt.Fprintf(&b, "- **Input-bound assertions:** %d passed, %d failed\n", metrics.InputBoundAssertionsPassed, metrics.InputBoundAssertionsFailed)
 		fmt.Fprintf(&b, "- **Protocol repairs:** %d attempted, %d succeeded\n", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
 		fmt.Fprintf(&b, "- **Policy-denied tool calls:** %d (safe fresh attempts: %d; schema repairs: %d; budget wrap-ups: %d)\n", metrics.PolicyDeniedToolCalls, metrics.SafeFreshAttempts, metrics.SchemaRepairDenials, metrics.StepBudgetWrapUps)
 		fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
