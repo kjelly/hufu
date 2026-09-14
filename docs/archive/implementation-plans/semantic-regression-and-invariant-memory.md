@@ -1,10 +1,12 @@
 # Repository Invariant Catalog + Semantic Regression 實作計畫
 
-> Status: implementation-ready
+> Status: implemented and archived
 > Priority: P0
 > Baseline: `623964ab12b067a9614615fdbf2d46eaceaa8660`
+> Completed: 2026-09-14 (PR-1..5: `288ae4b`, `7b1838b`, `1009234`, `0cffb45`, `10bc6e7`)
 > Risk: high — 變更 typed-result、context、completion 與 audit contract
-> Normative: 本文件是 `docs/tmp/now/spec.md` 第一版的唯一實作契約
+> Normative: 本文件是 [AI 時代仍需記憶](../analyses/ai-era-memory-runtime-principles.md)
+> 第一版的唯一實作契約
 
 ## 1. 決策摘要
 
