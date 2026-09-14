@@ -429,7 +429,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if strings.TrimSpace(compiled.Prompt) == "" {
 		return "", fmt.Errorf("sub-agent context preflight produced an empty prompt")
 	}
-	manifest, err := BuildContextInjectionManifest(request, compiled, routeDecisions, agentDef.Name, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, routeDecisions, agentDef.Name, time.Now().UTC(), c.session.Config.MemoryLearning)
 	if err != nil {
 		return "", fmt.Errorf("sub-agent context manifest preflight failed: %w", err)
 	}

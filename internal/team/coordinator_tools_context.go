@@ -45,7 +45,7 @@ func (t *contextQueryTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err != nil {
 		return fantasy.NewTextErrorResponse("context query compile failed: " + utils.RedactSecrets(err.Error())), nil
 	}
-	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, request.AgentName, time.Now().UTC(), t.coordinator.session.Config.MemoryLearning)
 	if err != nil {
 		return fantasy.NewTextErrorResponse("context query attribution failed: " + utils.RedactSecrets(err.Error())), nil
 	}
@@ -91,7 +91,7 @@ func (t *contextGetTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 		return fantasy.NewTextErrorResponse("context item is not visible: " + string(reason)), nil
 	}
 	compiled := CompiledContext{Prompt: utils.TruncateRunes(utils.RedactSecrets(item.Content), contextToolOutputMaxRunes), IncludedItems: canonicalCompilerItems([]contextstore.ContextItem{item}, PriorityRelevantLTM, "context_get", false, item.Lifecycle == contextstore.LifecycleCandidate)}
-	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: item.ID, Included: true, Reason: reason}}, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: item.ID, Included: true, Reason: reason}}, request.AgentName, time.Now().UTC(), t.coordinator.session.Config.MemoryLearning)
 	if err != nil {
 		return fantasy.NewTextErrorResponse("context attribution failed: " + utils.RedactSecrets(err.Error())), nil
 	}
@@ -217,7 +217,7 @@ func (c *Coordinator) GetAuthorizedContextItem(ctx context.Context, request Cont
 }
 
 func (c *Coordinator) persistContextToolDecision(request ContextRequest, itemID string, reason ContextDecisionReason) error {
-	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, []ContextRouteDecision{{ContextItemID: itemID, Included: false, Reason: reason}}, request.AgentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, []ContextRouteDecision{{ContextItemID: itemID, Included: false, Reason: reason}}, request.AgentName, time.Now().UTC(), c.session.Config.MemoryLearning)
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ func (c *Coordinator) prepareToolFailureRecovery(ctx context.Context, agentName,
 	if err != nil {
 		return "", err
 	}
-	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, agentName, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, agentName, time.Now().UTC(), c.session.Config.MemoryLearning)
 	if err != nil {
 		return "", err
 	}

@@ -194,6 +194,7 @@ type rawMemoryLearningPolicy struct {
 	MinConfirmedSupport *int     `yaml:"min-confirmed-support"`
 	MinIndependentTasks *int     `yaml:"min-independent-tasks"`
 	MaxHarmRate         *float64 `yaml:"max-harm-rate"`
+	StaleAfter          string   `yaml:"stale-after"`
 }
 
 type rawDelegationPolicy struct {
@@ -964,7 +965,10 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	} else {
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
-	cfg.MemoryLearning = resolveMemoryLearningPolicy(yc.MemoryLearning)
+	cfg.MemoryLearning, err = resolveMemoryLearningPolicy(yc.MemoryLearning)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid memory-learning config: %w", err)
+	}
 	if err := validateMemoryLearningPolicy(cfg.MemoryLearning); err != nil {
 		return cfg, fmt.Errorf("invalid memory-learning config: %w", err)
 	}
@@ -1172,7 +1176,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	return cfg, nil
 }
 
-func resolveMemoryLearningPolicy(raw rawMemoryLearningPolicy) agent.MemoryLearningPolicy {
+func resolveMemoryLearningPolicy(raw rawMemoryLearningPolicy) (agent.MemoryLearningPolicy, error) {
 	p := agent.DefaultMemoryLearningPolicy()
 	if raw.Mode != "" {
 		p.Mode = agent.MemoryLearningMode(strings.TrimSpace(raw.Mode))
@@ -1201,7 +1205,14 @@ func resolveMemoryLearningPolicy(raw rawMemoryLearningPolicy) agent.MemoryLearni
 	if raw.MaxHarmRate != nil {
 		p.MaxHarmRate = *raw.MaxHarmRate
 	}
-	return p
+	if raw.StaleAfter != "" {
+		staleAfter, err := time.ParseDuration(strings.TrimSpace(raw.StaleAfter))
+		if err != nil {
+			return agent.MemoryLearningPolicy{}, fmt.Errorf("stale-after: %w", err)
+		}
+		p.StaleAfter = staleAfter
+	}
+	return p, nil
 }
 
 func validateMemoryLearningPolicy(p agent.MemoryLearningPolicy) error {
@@ -1227,6 +1238,9 @@ func validateMemoryLearningPolicy(p agent.MemoryLearningPolicy) error {
 	}
 	if p.MaxHarmRate < 0 || p.MaxHarmRate > 1 {
 		return errors.New("max-harm-rate must be between 0 and 1")
+	}
+	if p.StaleAfter < 0 {
+		return errors.New("stale-after must be non-negative")
 	}
 	return nil
 }

@@ -124,7 +124,7 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 	if err != nil {
 		return nil, true, err
 	}
-	ltm, scores, finalScores, rankErr := c.rankSharedPersistentMemory(ctx, query, baseLTM)
+	ltm, scores, finalScores, aggregates, rankErr := c.rankSharedPersistentMemory(ctx, query, baseLTM)
 	if rankErr != nil {
 		mode := c.session.Config.MemoryLearning.Mode
 		if mode == agent.MemoryLearningShadow || mode == agent.MemoryLearningActive {
@@ -133,9 +133,9 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 			c.persistMemoryRankingTrace(MemoryRankingTrace{CreatedAt: time.Now().UTC(), Mode: mode, PolicyVersion: c.session.Config.MemoryLearning.PolicyVersion, QueryHash: hashContentKey(query), Error: redactedErr})
 			_ = c.emitEvent("observability_degraded", "memory_ranker", "", map[string]any{"component": "memory_learning", "mode": mode, "policy_version": c.session.Config.MemoryLearning.PolicyVersion, "error": redactedErr})
 		}
-		ltm, scores, finalScores = baseLTM, nil, nil
+		ltm, scores, finalScores, aggregates = baseLTM, nil, nil, nil
 	}
-	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores}, true, nil
+	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates}, true, nil
 }
 
 func (c *Coordinator) canonicalContextBundleForRequest(ctx context.Context, request ContextRequest) (*CanonicalContextBundle, []ContextRouteDecision, bool, error) {

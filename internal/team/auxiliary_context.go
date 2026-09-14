@@ -87,7 +87,7 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 		return "", err
 	}
 	if persist {
-		manifest, err := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC())
+		manifest, err := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC(), c.session.Config.MemoryLearning)
 		if err != nil {
 			return "", err
 		}
@@ -195,7 +195,7 @@ func (c *Coordinator) recordAuxiliaryFallback(ctx context.Context, purpose, outc
 	}
 	request.ActionType = fmt.Sprintf("fallback:%s:%d", purpose, c.contextRequestSeq.Add(1))
 	request.AssignRequestID()
-	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, nil, purpose, time.Now().UTC())
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, nil, purpose, time.Now().UTC(), c.session.Config.MemoryLearning)
 	if err != nil {
 		return err
 	}

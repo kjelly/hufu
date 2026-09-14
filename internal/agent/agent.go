@@ -259,6 +259,10 @@ type MemoryLearningPolicy struct {
 	MinConfirmedSupport int                `yaml:"min-confirmed-support" json:"min_confirmed_support"`
 	MinIndependentTasks int                `yaml:"min-independent-tasks" json:"min_independent_tasks"`
 	MaxHarmRate         float64            `yaml:"max-harm-rate" json:"max_harm_rate"`
+	// StaleAfter marks fully verified knowledge stale when its most recent
+	// outcome observation is older than this duration. Zero disables stale
+	// classification.
+	StaleAfter time.Duration `yaml:"stale-after" json:"stale_after"`
 }
 
 func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
@@ -267,6 +271,7 @@ func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
 		PriorAlpha: 1, PriorBeta: 1, UtilityPercentile: 0.10,
 		MaxCreditPerSignal: 1, MinConfirmedSupport: 2,
 		MinIndependentTasks: 2, MaxHarmRate: 0,
+		StaleAfter: 30 * 24 * time.Hour,
 	}
 }
 

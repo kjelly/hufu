@@ -876,7 +876,7 @@ retryLoop:
 			closeTranscript()
 			return "", fmt.Errorf("worker context preflight failed: compiled prompt is empty")
 		}
-		contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, agentName, time.Now().UTC())
+		contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, agentName, time.Now().UTC(), c.session.Config.MemoryLearning)
 		if buildManifestErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker context manifest preflight failed: %w", buildManifestErr)

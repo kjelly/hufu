@@ -17,7 +17,7 @@ import (
 
 func TestUtilityCannotOverrideLowRelevance(t *testing.T) {
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningActive)
-	entries, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: rankingItem("low", 1), Score: .001}}, c.session.Config.MemoryLearning)
+	entries, _, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: rankingItem("low", 1), Score: .001}}, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,11 +32,11 @@ func TestActiveRankingIsDeterministic(t *testing.T) {
 		{Item: rankingItem("a", 10), Score: .5},
 		{Item: rankingItem("b", 20), Score: .5},
 	}
-	first, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
+	first, _, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
+	second, _, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestVerifiedEvidenceRaisesComparableMemoryRank(t *testing.T) {
 		t.Fatal(err)
 	}
 	results := []contextstore.SearchResult{{Item: rankingItem("b", 10), Score: .5}, {Item: rankingItem("a", 10), Score: .5}}
-	entries, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
+	entries, _, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestActiveRankingExcludesStaleAndCausallyHarmfulMemory(t *testing.T) {
 	}
 	stale := rankingItem("a", 10)
 	stale.Metadata = map[string]string{"stale_environment": "true"}
-	entries, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: stale, Score: .8}, {Item: rankingItem("b", 10), Score: .8}}, c.session.Config.MemoryLearning)
+	entries, _, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: stale, Score: .8}, {Item: rankingItem("b", 10), Score: .8}}, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestActiveRankingPolicyMatchesCompilerSelection(t *testing.T) {
 		{Item: stale, Score: 0.8},
 		{Item: fresh, Score: 0.6},
 	}
-	entries, scores, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
+	entries, scores, _, err := c.reinforceSearchResults(context.Background(), results, c.session.Config.MemoryLearning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,11 +169,11 @@ func TestShadowModeDoesNotChangePrompt(t *testing.T) {
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningShadow)
 	observe, _ := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	base := []contextstore.ContextItem{rankingItem("base-a", 10), rankingItem("base-b", 20)}
-	got, scores, finalScores, err := c.rankSharedPersistentMemory(context.Background(), "procedure", base)
+	got, scores, finalScores, _, err := c.rankSharedPersistentMemory(context.Background(), "procedure", base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _, _, err := observe.rankSharedPersistentMemory(context.Background(), "procedure", base)
+	want, _, _, _, err := observe.rankSharedPersistentMemory(context.Background(), "procedure", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestEmptyQueryNeverDropsMustKeepForInjectLimit(t *testing.T) {
 		{ID: "required-a", MustKeep: true},
 		{ID: "required-b", MustKeep: true},
 	}
-	selected, _, _, err := c.rankSharedPersistentMemory(context.Background(), "", base)
+	selected, _, _, _, err := c.rankSharedPersistentMemory(context.Background(), "", base)
 	if err != nil {
 		t.Fatal(err)
 	}

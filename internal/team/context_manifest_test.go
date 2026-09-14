@@ -78,7 +78,7 @@ func TestContextManifestIsContentFreeAndMergesReasons(t *testing.T) {
 		OmittedItems:  []ContextItem{{ID: "context:memory-2", Kind: "observation", Content: "omitted private body", Source: "shared_persistent", TokenCount: 5}},
 	}
 	decisions := []ContextRouteDecision{{ContextItemID: "memory-1", Included: true, Reason: ContextIncludedRelevant, BaseScore: .8, FinalScore: .9}, {ContextItemID: "memory-2", Reason: ContextOmittedPhase}}
-	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, "worker", time.Unix(100, 0))
+	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +98,9 @@ func TestContextManifestIsContentFreeAndMergesReasons(t *testing.T) {
 	if manifest.Items[2].Reason != ContextOmittedPhase {
 		t.Fatalf("router omission reason was not preserved: %#v", manifest.Items)
 	}
+	if manifest.Items[0].KnowledgeState != KnowledgeKnown || manifest.Items[1].KnowledgeState != KnowledgeAssumed || manifest.Items[2].KnowledgeState != "" {
+		t.Fatalf("knowledge attribution = %#v", manifest.Items)
+	}
 	copyManifest := manifest
 	copyManifest.CreatedAt = time.Unix(999, 0)
 	if contextManifestFingerprint(copyManifest) != manifest.Fingerprint {
@@ -108,7 +111,7 @@ func TestContextManifestIsContentFreeAndMergesReasons(t *testing.T) {
 func TestContextManifestCompilerOmissionOverridesPriorRouterInclusion(t *testing.T) {
 	request := validTestContextRequest()
 	compiled := CompiledContext{OmittedItems: []ContextItem{{ID: "context:memory-1", Kind: "observation", Source: "shared_persistent", TokenCount: 5}}}
-	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: "memory-1", Included: true, Reason: ContextIncludedRelevant, BaseScore: .8, FinalScore: .8}}, "worker", time.Unix(100, 0))
+	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: "memory-1", Included: true, Reason: ContextIncludedRelevant, BaseScore: .8, FinalScore: .8}}, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +126,7 @@ func TestContextManifestProjectsParentInvocationWithoutContent(t *testing.T) {
 	request.ParentRequestID = "ctx-parent"
 	request.ParentManifestFingerprint = "manifest-parent"
 	request.AssignRequestID()
-	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, nil, "worker", time.Unix(100, 0))
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{}, nil, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +145,7 @@ func TestContextManifestProjectsParentInvocationWithoutContent(t *testing.T) {
 func TestMemoryManifestIsProjectionOfGeneralManifestSubset(t *testing.T) {
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "current_task", Kind: "current_task", Required: true, TokenCount: 3}, {ID: "context:memory-a", Kind: "pattern", Source: "shared_persistent", TokenCount: 7, BaseScore: .8, FinalScore: .9}, {ID: "context:memory-b", Kind: "observation", Source: "worker_long_term", TokenCount: 5, BaseScore: .6, FinalScore: .7}}}
-	general, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0))
+	general, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +195,7 @@ func TestContextManifestV2PreservesInvariantAttribution(t *testing.T) {
 	}
 	request := validTestContextRequest()
 	decision := ContextRouteDecision{ContextItemID: record.ID, Kind: string(record.Kind), Source: repositoryInvariantSource, ContentHash: record.ContentHash, InvariantSeverity: InvariantSeverityWarning, Included: true, Reason: ContextIncludedRequired}
-	manifest, err := BuildContextInjectionManifest(request, CompiledContext{IncludedItems: compilerItems}, []ContextRouteDecision{decision}, "worker", time.Unix(100, 0))
+	manifest, err := BuildContextInjectionManifest(request, CompiledContext{IncludedItems: compilerItems}, []ContextRouteDecision{decision}, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +205,9 @@ func TestContextManifestV2PreservesInvariantAttribution(t *testing.T) {
 	item := manifest.Items[0]
 	if item.ID != record.ID || item.Kind != string(contextstore.ContextInvariant) || item.Source != repositoryInvariantSource || item.ContentHash != record.ContentHash || item.InvariantSeverity != InvariantSeverityWarning || !item.Included || item.Reason != ContextIncludedRequired {
 		t.Fatalf("invariant attribution = %#v", item)
+	}
+	if item.KnowledgeState != "" {
+		t.Fatalf("invariant knowledge state = %q, want empty", item.KnowledgeState)
 	}
 	copyManifest := manifest
 	copyManifest.Items[0].ContentHash = strings.Repeat("a", 64)
@@ -213,19 +219,22 @@ func TestContextManifestV2PreservesInvariantAttribution(t *testing.T) {
 func TestContextManifestRejectsInvalidInvariantAttribution(t *testing.T) {
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "invariant:review:safe", Kind: string(contextstore.ContextInvariant), Source: repositoryInvariantSource, Content: "content", Required: true, InvariantContentHash: "invalid", InvariantSeverity: InvariantSeverityError}}}
-	if _, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0)); err == nil {
+	if _, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy()); err == nil {
 		t.Fatal("invalid invariant content hash was accepted")
 	}
 }
 
 func TestContextManifestLegacyV1Replays(t *testing.T) {
-	raw := []byte(`{"schema_version":1,"request_id":"legacy","request_hash":"hash","run_id":"run","attempt":1,"agent":"worker","phase":"EXECUTE","trigger":"task_dispatch","model_called":true,"items":[],"fingerprint":"legacy","created_at":"2025-01-01T00:00:00Z"}`)
+	raw := []byte(`{"schema_version":1,"request_id":"legacy","request_hash":"hash","run_id":"run","attempt":1,"agent":"worker","phase":"EXECUTE","trigger":"task_dispatch","model_called":true,"items":[{"id":"memory","kind":"pattern","included":true,"reason":"included_relevant","tokens":1}],"fingerprint":"legacy","created_at":"2025-01-01T00:00:00Z"}`)
 	var manifest ContextInjectionManifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	if manifest.SchemaVersion != 1 || manifest.Fingerprint != "legacy" {
 		t.Fatalf("legacy manifest replay = %#v", manifest)
+	}
+	if len(manifest.Items) != 1 || manifest.Items[0].KnowledgeState != "" {
+		t.Fatalf("legacy manifest unexpectedly gained knowledge attribution: %#v", manifest.Items)
 	}
 }
 
@@ -370,14 +379,18 @@ func TestContextToolConsultedObservationIsDistinctAndIdempotent(t *testing.T) {
 
 func TestTodoContextManifestCheckpointClone(t *testing.T) {
 	list := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
-	manifest := ContextInjectionManifest{RequestID: "request-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, Items: []ContextManifestItem{{ID: "goal", Included: true}}}
+	manifest := ContextInjectionManifest{RequestID: "request-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, Items: []ContextManifestItem{{ID: "goal", Included: true, KnowledgeState: KnowledgeKnown}}}
 	if err := list.SetContextManifest("task-1", &manifest); err != nil {
 		t.Fatal(err)
 	}
 	items := list.Items()
 	items[0].ContextManifests[0].Items[0].ID = "mutated"
+	items[0].ContextManifests[0].Items[0].KnowledgeState = KnowledgeStale
 	if got := list.Items()[0].ContextManifests[0].Items[0].ID; got != "goal" {
 		t.Fatalf("manifest clone leaked mutation: %q", got)
+	}
+	if got := list.Items()[0].ContextManifests[0].Items[0].KnowledgeState; got != KnowledgeKnown {
+		t.Fatalf("manifest knowledge state clone leaked mutation: %q", got)
 	}
 }
 
@@ -428,7 +441,7 @@ func TestContextManifestKeepsConcurrentModelExecutionsDistinct(t *testing.T) {
 func TestContextManifestRecordsSkillDisclosureLevelWithoutSkillContent(t *testing.T) {
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "skill:review", Kind: "skill_summary", Content: "summary only", Required: true, TokenCount: 3}}}
-	manifest, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Now())
+	manifest, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Now(), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

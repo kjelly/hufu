@@ -71,6 +71,7 @@ type ContextItem struct {
 	ScoreParts           MemoryScoreParts
 	InvariantSeverity    InvariantSeverity
 	InvariantContentHash string
+	Aggregate            *contextstore.ExperienceAggregate
 }
 
 type CoordinatorContextInput struct {
@@ -150,6 +151,10 @@ type CanonicalContextBundle struct {
 	// with default weights, or the manifest and the actual prompt can disagree
 	// (spec §7 HF-MEM4-004/005).
 	SharedPersistentFinalScores map[string]float64
+	// SharedPersistentAggregates reuses outcome evidence already loaded by
+	// the active/shadow reranker. The compiler and manifest builder must not
+	// query the repository a second time for knowledge attribution.
+	SharedPersistentAggregates map[string]*contextstore.ExperienceAggregate
 }
 
 func repositoryInvariantCompilerItems(records []contextstore.ContextItem) ([]ContextItem, error) {
@@ -242,10 +247,13 @@ func canonicalCompilerItems(records []contextstore.ContextItem, priority int, so
 	return items
 }
 
-func canonicalCompilerItemsScored(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, scores map[string]MemoryScoreParts, finalScores map[string]float64) []ContextItem {
+func canonicalCompilerItemsScored(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, scores map[string]MemoryScoreParts, finalScores map[string]float64, aggregates map[string]*contextstore.ExperienceAggregate) []ContextItem {
 	items := canonicalCompilerItems(records, priority, source, workerSTMOnly, false)
 	for i := range items {
 		id := strings.TrimPrefix(items[i].ID, "context:")
+		if aggregate := aggregates[id]; aggregate != nil {
+			items[i].Aggregate = new(*aggregate)
+		}
 		parts, ok := scores[id]
 		if !ok {
 			continue
@@ -724,7 +732,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	}
 
 	if input.CanonicalMemory != nil && !input.DisableMemory {
-		items = append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores)...)
+		items = append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates)...)
 	} else if input.RawLTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawLTM)
 		if len(sections) > 0 {
@@ -897,7 +905,7 @@ func appendWorkerSessionContext(input WorkerContextInput, items []ContextItem, v
 
 func appendWorkerPersistentContext(ctx context.Context, input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
 	if input.CanonicalMemory != nil && !input.DisableMemory {
-		return append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores)...)
+		return append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates)...)
 	}
 	if input.DisableMemory || verifyOnly {
 		return items

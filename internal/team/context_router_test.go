@@ -188,7 +188,7 @@ func TestContextRouterSelectsRepositoryInvariantsWithoutContextRepository(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, "reviewer", time.Unix(100, 0))
+	manifest, err := BuildContextInjectionManifest(request, compiled, route.Decisions, "reviewer", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

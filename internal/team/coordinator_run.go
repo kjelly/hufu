@@ -692,7 +692,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context preflight produced an empty prompt")}, nil
 	}
 	prompt = compiled.Prompt
-	contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, resolvedName, time.Now().UTC())
+	contextManifest, buildManifestErr := BuildContextInjectionManifest(request, compiled, routeDecisions, resolvedName, time.Now().UTC(), c.session.Config.MemoryLearning)
 	if buildManifestErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)}, nil

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
@@ -26,6 +27,7 @@ type ContextManifestItem struct {
 	DisclosureLevel   string                `json:"disclosure_level,omitempty"`
 	ContentHash       string                `json:"content_hash,omitempty"`
 	InvariantSeverity InvariantSeverity     `json:"invariant_severity,omitempty"`
+	KnowledgeState    KnowledgeState        `json:"knowledge_state,omitempty"`
 }
 
 type ContextInjectionManifest struct {
@@ -56,7 +58,7 @@ type ContextInjectionManifest struct {
 
 func manifestItemID(id string) string { return strings.TrimPrefix(id, "context:") }
 
-func BuildContextInjectionManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) (ContextInjectionManifest, error) {
+func BuildContextInjectionManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time, policy agent.MemoryLearningPolicy) (ContextInjectionManifest, error) {
 	decisionByID := make(map[string]ContextRouteDecision, len(decisions))
 	for _, decision := range decisions {
 		decisionByID[manifestItemID(decision.ContextItemID)] = decision
@@ -92,6 +94,10 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 			}
 			manifestItem.ContentHash = item.InvariantContentHash
 			manifestItem.InvariantSeverity = item.InvariantSeverity
+		} else if included {
+			if state, ok := classifyKnowledgeState(normalizedContextAuthority(item), item.Aggregate, createdAt, policy); ok && validKnowledgeState(state) {
+				manifestItem.KnowledgeState = state
+			}
 		}
 		items = append(items, manifestItem)
 		seen[id] = true
@@ -144,7 +150,7 @@ func validInvariantVerificationSeverity(severity InvariantSeverity) bool {
 }
 
 func (c *Coordinator) buildAndPersistContextManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) (ContextInjectionManifest, error) {
-	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, agentName, createdAt)
+	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, agentName, createdAt, c.session.Config.MemoryLearning)
 	if err != nil {
 		return ContextInjectionManifest{}, err
 	}

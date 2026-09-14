@@ -312,7 +312,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		eligiblePersistent = append(eligiblePersistent, item)
 		allowedPersistent[item.ID] = true
 	}
-	selected, scores, finalScores, err := c.rankSharedPersistentMemoryAllowed(ctx, request.RetrievalQuery(), eligiblePersistent, allowedPersistent)
+	selected, scores, finalScores, aggregates, err := c.rankSharedPersistentMemoryAllowed(ctx, request.RetrievalQuery(), eligiblePersistent, allowedPersistent)
 	if err != nil {
 		return ContextRoute{}, err
 	}
@@ -356,5 +356,6 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	route.Bundle.SharedPersistent = selected
 	route.Bundle.SharedPersistentScores = scores
 	route.Bundle.SharedPersistentFinalScores = finalScores
+	route.Bundle.SharedPersistentAggregates = aggregates
 	return route, nil
 }
