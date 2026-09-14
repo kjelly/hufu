@@ -246,26 +246,18 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 }
 
 func (options *inspectCLIOptions) resolveFormat(command *cobra.Command) (string, error) {
-	format := strings.ToLower(strings.TrimSpace(options.format))
-	output := strings.ToLower(strings.TrimSpace(options.output))
-	if output != "" {
-		if flagChanged(command, "format") && format != output {
-			return "", &inspectExitError{
-				code: inspectpkg.ExitUsage,
-				err:  fmt.Errorf("hufu inspect: --format %q conflicts with --output %q", options.format, options.output),
+	format, err := resolveOutputAlias("format", options.format, flagChanged(command, "format"), "output", options.output, flagChanged(command, "output"), string(inspectpkg.FormatText), []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "invalid --format") {
+			value := options.format
+			if flagChanged(command, "output") {
+				value = options.output
 			}
+			err = fmt.Errorf("invalid format %q (must be text or json)", value)
 		}
-		format = output
+		return "", &inspectExitError{code: inspectpkg.ExitUsage, err: fmt.Errorf("hufu inspect: %w", err)}
 	}
-	switch inspectpkg.Format(format) {
-	case inspectpkg.FormatText, inspectpkg.FormatJSON:
-		return format, nil
-	default:
-		return "", &inspectExitError{
-			code: inspectpkg.ExitUsage,
-			err:  fmt.Errorf("hufu inspect: invalid format %q (must be text or json)", format),
-		}
-	}
+	return format, nil
 }
 
 func flagChanged(command *cobra.Command, name string) bool {

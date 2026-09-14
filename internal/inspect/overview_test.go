@@ -189,6 +189,10 @@ func TestInspectOverviewUsesGlobalOrdinalsAndLimitsLatestChanges(t *testing.T) {
 	if len(snapshot.LatestChanges) != 3 {
 		t.Fatalf("latest changes = %d, want 3", len(snapshot.LatestChanges))
 	}
+	worker := snapshot.RoleTargets[len(snapshot.RoleTargets)-1]
+	if worker.Role != "worker" || worker.Effective != "ollama/frozen-model" || worker.Source != "durable_task" || worker.Availability != "verified" {
+		t.Fatalf("historical worker target = %#v", worker)
+	}
 	if snapshot.LatestChanges[0].EventOrdinal != 2 || snapshot.LatestChanges[2].EventOrdinal != 4 || snapshot.Freshness.EventOrdinal != 4 {
 		t.Fatalf("global ordinals = changes %#v freshness %#v", snapshot.LatestChanges, snapshot.Freshness)
 	}
@@ -227,6 +231,37 @@ func TestInspectOverviewNonterminalVerifyingIsNotInferredInterrupted(t *testing.
 	}
 	if got := envelope.Data.(OverviewData).Snapshot.Activity.State; got != operatorpkg.ActivityVerifying {
 		t.Fatalf("activity = %q, want verifying", got)
+	}
+}
+
+func TestInspectOverviewPublishesExactResumeFacadeForInterruptedSession(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := team.NewEventStore(workspace, "run-resume", "session-resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendOverviewEvent(t, store, team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: []byte(`{"scope":{"team_id":"resume-team"}}`)})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SaveSession(workspace, &team.SessionData{
+		RecoveryRequired:         true,
+		ActiveRunInputSnapshotID: "input-resume",
+		RunInputSnapshots:        []team.RunInputSnapshot{{ID: "input-resume", RunID: "run-resume"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := InspectOverview(t.Context(), InspectQuery{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := envelope.Data.(OverviewData).Snapshot.PrimaryAction
+	if action == nil || action.ID != operatorpkg.ActionResumeSession || action.Availability != "available" || action.RevalidationKey == "" {
+		t.Fatalf("resume action = %#v", action)
+	}
+	wantPrefix := []string{"hufu", "session", "resume", "--workspace", workspace, "--team", "resume-team", "--run", "run-resume", "--branch", "main"}
+	if !slices.Equal(action.Argv, wantPrefix) {
+		t.Fatalf("resume argv = %#v, want %#v", action.Argv, wantPrefix)
 	}
 }
 

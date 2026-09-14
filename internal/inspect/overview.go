@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
@@ -87,7 +88,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Attention:        operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", ""),
 		Blockers:         blockers,
 		LatestChanges:    latestChanges(bound.Lineage.Events, bound.Scope.RunID, 3),
-		RoleTargets:      unavailableRoleTargets(),
+		RoleTargets:      roleTargetsFromTasks(tasks),
 		Learning:         operatorpkg.LearningView{Status: "unavailable", UnavailableReason: "phase_not_implemented"},
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
@@ -98,6 +99,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	sessionRevision, sessionRefs := SessionRecoveryRevision(bound.Session, bound.Scope.BranchID)
 	snapshot.PrimaryAction, snapshot.SecondaryActions, err = operatorpkg.SelectActions(operatorpkg.ActionSelectionFacts{
 		Snapshot: snapshot, Recovery: recovery, SessionExpectedRevision: sessionRevision, SessionSourceRefs: sessionRefs,
+		MutationFacadeAvailable: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: select operator action: %v", ErrIntegrity, err)
@@ -252,13 +254,45 @@ func isOverviewChange(eventType string) bool {
 	}
 }
 
-func unavailableRoleTargets() []operatorpkg.RoleTargetView {
+func roleTargetsFromTasks(tasks []*team.TodoItem) []operatorpkg.RoleTargetView {
 	roles := []string{"coordinator", "guard", "judge", "plan_reviewer", "sidecar", "worker"}
 	result := make([]operatorpkg.RoleTargetView, 0, len(roles))
 	for _, role := range roles {
-		result = append(result, operatorpkg.RoleTargetView{
-			Role: role, Availability: "unavailable", ReasonCode: "phase_not_implemented",
-		})
+		view := operatorpkg.RoleTargetView{Role: role, Availability: "unavailable", ReasonCode: "not_persisted_for_role"}
+		if role == "worker" {
+			var targets []string
+			backends := make(map[string]string)
+			for _, item := range tasks {
+				if item == nil {
+					continue
+				}
+				target := item.ExecutionTarget.String()
+				if target == "" {
+					target = strings.TrimSpace(item.Model)
+				}
+				if target == "" {
+					continue
+				}
+				targets = append(targets, target)
+				backends[target] = item.ExecutionTarget.Backend
+			}
+			slices.Sort(targets)
+			targets = slices.Compact(targets)
+			switch len(targets) {
+			case 1:
+				view.Effective = targets[0]
+				view.BackendKind = backends[targets[0]]
+				view.Source = "durable_task"
+				view.Availability = "verified"
+				view.ReasonCode = "persisted_execution_target"
+			default:
+				if len(targets) > 1 {
+					view.Source = "durable_task"
+					view.ReasonCode = "multiple_persisted_targets"
+				}
+			}
+		}
+		result = append(result, view)
 	}
 	return result
 }

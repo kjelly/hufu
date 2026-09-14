@@ -141,6 +141,11 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if opts.canonicalRun {
+		if err := validateCanonicalRunSegments(initialSegments, initialTeam, opts.workspaceMode); err != nil {
+			return err
+		}
+	}
 
 	pathConsent := newPathConsent()
 
@@ -162,6 +167,28 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
+}
+
+func validateCanonicalRunSegments(segments []team.PromptSegment, explicitTeam, workspaceMode string) error {
+	explicitTeam = strings.ToLower(strings.TrimSpace(explicitTeam))
+	teams := make(map[string]struct{})
+	for _, segment := range segments {
+		if segment.Type != team.SegmentSwitchTeam {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(segment.Name))
+		if name == "" {
+			continue
+		}
+		teams[name] = struct{}{}
+		if explicitTeam != "" && name != explicitTeam {
+			return fmt.Errorf("canonical run selected team %q but prompt switches to %q; remove the switch or omit --team", explicitTeam, name)
+		}
+	}
+	if workspaceMode == "exact" && len(teams) > 1 {
+		return fmt.Errorf("an exact --workspace cannot be shared by multiple teams; use --workspace-root or run each team separately")
+	}
+	return nil
 }
 
 func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {

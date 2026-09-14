@@ -29,7 +29,9 @@ func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error 
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 	mode := "default"
-	if opts.workspace != "" {
+	if opts.workspaceMode != "" {
+		mode = opts.workspaceMode
+	} else if opts.workspace != "" {
 		mode = "legacy_base"
 		if strings.TrimSpace(teamName) == "" {
 			mode = "exact"

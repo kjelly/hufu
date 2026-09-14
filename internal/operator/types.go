@@ -212,6 +212,7 @@ type ActionSelectionFacts struct {
 	Recovery                *RecoveryEligibility
 	SessionExpectedRevision string
 	SessionSourceRefs       []string
+	MutationFacadeAvailable bool
 }
 
 type OperatorSummary struct {

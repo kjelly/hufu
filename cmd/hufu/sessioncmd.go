@@ -276,4 +276,8 @@ func init() {
 	sessionCmd.AddCommand(sessionCheckoutCmd)
 	sessionCmd.AddCommand(sessionLabelCmd)
 	sessionCmd.AddCommand(sessionDiffCmd)
+	sessionCmd.AddCommand(newSessionStatusCommand())
+	sessionCmd.AddCommand(newSessionResumeCommand())
+	sessionCmd.AddCommand(newSessionRecoveryCommand(team.TargetedRecoveryRetry))
+	sessionCmd.AddCommand(newSessionRecoveryCommand(team.TargetedRecoveryReconcile))
 }

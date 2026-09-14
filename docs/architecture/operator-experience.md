@@ -1475,15 +1475,20 @@ Linux amd64、Go 1.26.6 的 `go test ./...`、`go vet ./...`、`golangci-lint ru
 
 | 工作 ID | 依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-030 | 001A | help grouping / progressive disclosure / shared metadata | `help --all` 可見完整命令；安全 flags 不失蹤 |
-| HF-UX-031A | 010B | `run` exact/root façade、team list alias | 舊 root/new run equivalent effects；新 -w 不 double-join；factory 無污染 |
-| HF-UX-031B | 011B/020B/021 | `session status/resume/retry/reconcile` exact-scope façades | 指定 run/branch/task/attempt；只操作 active compatible target；舊入口不變 |
-| HF-UX-023 | 031B | scope-safe mutation intents | stale target、double submit、historical selection安全拒絕或 idempotent |
-| HF-UX-032 | 001A | common `--output` selection、alias conflict guard | 舊 JSON/exit golden 不變；Mermaid 等 domain format正常 |
-| HF-UX-033 | 001A/020A | `team check` static composition、opt-in online checks | §9.1 schema/exit；static 零 provider/MCP/verifier/write |
-| HF-UX-034 | 011A | model role target explanation | -m worker-only；歷史 target 不被新 config改寫 |
+| HF-UX-030 | 001A | **完成：**help grouping / progressive disclosure / shared metadata | `help --all` 可見完整命令；安全 flags 不失蹤 |
+| HF-UX-031A | 010B | **完成：**`run` exact/root façade、team list alias | 舊 root/new run equivalent effects；新 -w 不 double-join；factory 無污染 |
+| HF-UX-031B | 011B/020B/021 | **完成：**`session status/resume/retry/reconcile` exact-scope façades | 指定 run/branch/task/attempt；只操作 active compatible target；舊入口不變 |
+| HF-UX-023 | 031B | **完成：**scope-safe mutation intents | stale target、double submit、historical selection安全拒絕或 idempotent |
+| HF-UX-032 | 001A | **完成：**common `--output` selection、alias conflict guard | 舊 JSON/exit golden 不變；Mermaid 等 domain format正常 |
+| HF-UX-033 | 001A/020A | **完成：**`team check` static composition、opt-in online checks | §9.1 schema/exit；static 零 provider/MCP/verifier/write |
+| HF-UX-034 | 011A | **完成：**model role target explanation | -m worker-only；歷史 target 不被新 config改寫 |
 
-**Gate P3：**onboarding、日常執行、crash recovery 三條 CLI journeys 可完成。這是第一個完整核心交付，不必等全部 TUI 功能。
+**Gate P3（2026-09-14 已通過）：**onboarding、日常執行、crash recovery 三條 CLI journeys
+已有 deterministic contract tests；canonical `run` 的 exact/root 與 selector 衝突、session mutation
+的 active run/branch/task/attempt、team check static/online timeout 與 common output alias 均已驗證。
+Legacy root/status/resume/retry/reconcile 與 domain-specific format保持既有入口。Linux amd64、Go 1.26.6
+的 `go test ./...`、`go vet ./...`、`golangci-lint run` 與 `bin/check-docs` 成功。這是第一個完整
+核心交付，不必等全部 TUI 功能。
 
 ### Phase 4 — TUI Summary、Theme 與低刷新
 

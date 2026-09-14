@@ -16,11 +16,12 @@ const actionHashDomain = "hufu-operator-action-v1\x00"
 var ErrStaleAction = errors.New("stale_action")
 
 type ActionBuildInput struct {
-	Target        ActionTarget
-	Preconditions ActionPreconditions
-	ReasonCode    string
-	Availability  string
-	SourceRefs    []string
+	Target                  ActionTarget
+	Preconditions           ActionPreconditions
+	ReasonCode              string
+	Availability            string
+	SourceRefs              []string
+	MutationFacadeAvailable bool
 }
 
 type actionDefinition struct {
@@ -61,8 +62,8 @@ func actionDefinitionFor(id string) (actionDefinition, bool) {
 }
 
 // BuildAction is the sole v1 action registry and typed argv builder. Mutation
-// facades remain deliberately unpublished in Phase 2, so their suggestions
-// are retained for explanation but can never contain executable argv.
+// argv is published only when the caller declares the exact-scope facade
+// available and supplies a durable revision for mandatory revalidation.
 func BuildAction(id string, input ActionBuildInput) (ActionSuggestion, error) {
 	definition, ok := actionDefinitionFor(id)
 	if !ok {
@@ -82,7 +83,9 @@ func BuildAction(id string, input ActionBuildInput) (ActionSuggestion, error) {
 		return ActionSuggestion{}, fmt.Errorf("operator action %q has invalid availability %q", id, action.Availability)
 	}
 	if definition.kind == "mutate" {
-		action.Availability = "blocked"
+		if !input.MutationFacadeAvailable || action.Preconditions.ExpectedRevision == "" {
+			action.Availability = "blocked"
+		}
 		if action.Preconditions.ExpectedRevision != "" {
 			key, err := ComputeActionRevalidationKey(action)
 			if err != nil {
@@ -218,7 +221,7 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 			selectedPreconditions.ExternalEffectState = recovery.ExternalEffectState
 			refs = recovery.SourceRefs
 		}
-		return BuildAction(id, ActionBuildInput{Target: selectedTarget, Preconditions: selectedPreconditions, ReasonCode: reason, Availability: availability, SourceRefs: refs})
+		return BuildAction(id, ActionBuildInput{Target: selectedTarget, Preconditions: selectedPreconditions, ReasonCode: reason, Availability: availability, SourceRefs: refs, MutationFacadeAvailable: facts.MutationFacadeAvailable})
 	}
 
 	var primary ActionSuggestion
@@ -242,7 +245,7 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 	case facts.Recovery != nil && facts.Recovery.ExternalEffectState == "unknown":
 		primary, err = build(ActionInspectTaskRecovery, "external_effect_unknown", inspectionAvailability(facts.Recovery), facts.Recovery)
 		if facts.Recovery.ReconcileEligible {
-			addSecondary(ActionReconcileTask, "reconcile_eligible_facade_unpublished", "blocked", facts.Recovery)
+			addSecondary(ActionReconcileTask, "reconcile_eligible", "available", facts.Recovery)
 		}
 	case facts.Recovery != nil && facts.Recovery.PolicyDenied:
 		primary, err = build(ActionInspectTaskRecovery, "recovery_policy_denied", inspectionAvailability(facts.Recovery), facts.Recovery)
@@ -256,16 +259,17 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 		if facts.Recovery != nil && facts.Recovery.TaskID != "" {
 			primary, err = build(ActionInspectTaskRecovery, "interrupted_task_requires_inspection", inspectionAvailability(facts.Recovery), facts.Recovery)
 			if facts.Recovery.ReconcileEligible {
-				addSecondary(ActionReconcileTask, "reconcile_eligible_facade_unpublished", "blocked", facts.Recovery)
+				addSecondary(ActionReconcileTask, "reconcile_eligible", "available", facts.Recovery)
 			} else if facts.Recovery.RetryEligible {
-				addSecondary(ActionRetryTask, "retry_eligible_facade_unpublished", "blocked", facts.Recovery)
+				addSecondary(ActionRetryTask, "retry_eligible", "available", facts.Recovery)
 			}
 		} else {
 			resumePreconditions := preconditions
 			resumePreconditions.ExpectedRevision = facts.SessionExpectedRevision
 			primary, err = BuildAction(ActionResumeSession, ActionBuildInput{
 				Target: target, Preconditions: resumePreconditions,
-				ReasonCode: "resume_eligible_facade_unpublished", Availability: "blocked", SourceRefs: facts.SessionSourceRefs,
+				ReasonCode: "resume_eligible", Availability: "available", SourceRefs: facts.SessionSourceRefs,
+				MutationFacadeAvailable: facts.MutationFacadeAvailable,
 			})
 		}
 	case slices.Contains([]string{ActivityPlanning, ActivityExecuting, ActivityVerifying, ActivityWrappingUp, ActivityPreflight}, snapshot.Activity.State):

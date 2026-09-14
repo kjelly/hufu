@@ -214,8 +214,12 @@ func collectDoctorContractFindings(session *team.TeamSession, projectDir string)
 }
 
 func fetchModels(providerURL, apiKey string) ([]string, error) {
+	return fetchModelsContext(context.Background(), providerURL, apiKey)
+}
+
+func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]string, error) {
 	url := strings.TrimRight(providerURL, "/") + "/models"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

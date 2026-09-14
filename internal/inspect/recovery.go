@@ -18,6 +18,16 @@ const recoveryPolicyRevisionDomain = "hufu-operator-recovery-policy-v1\x00"
 // engine without invoking callbacks or changing persisted state.
 func RecoveryEligibilityForTasks(tasks []*team.TodoItem, events []IndexedEvent, runID string, interrupted bool) *operatorpkg.RecoveryEligibility {
 	item := recoveryCandidate(tasks)
+	return recoveryEligibilityForItem(item, events, runID, interrupted)
+}
+
+// RecoveryEligibilityForTask evaluates one already-bound task through the
+// same read-only RepairController seam used by the overview selector.
+func RecoveryEligibilityForTask(item *team.TodoItem, events []IndexedEvent, runID string, interrupted bool) *operatorpkg.RecoveryEligibility {
+	return recoveryEligibilityForItem(item, events, runID, interrupted)
+}
+
+func recoveryEligibilityForItem(item *team.TodoItem, events []IndexedEvent, runID string, interrupted bool) *operatorpkg.RecoveryEligibility {
 	if item == nil {
 		return nil
 	}

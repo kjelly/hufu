@@ -31,6 +31,10 @@ type runOptions struct {
 
 	// Workspace / session lifecycle
 	workspace string
+	// workspaceMode is runtime-only. Empty preserves the legacy root command;
+	// canonical facades set exact, root, or default explicitly.
+	workspaceMode string
+	canonicalRun  bool
 	// decisionProfile is the run-scoped --decision-profile override, the top
 	// layer of the decision profile precedence chain
 	// (docs/architecture/decision-runtime.md §8).

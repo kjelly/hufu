@@ -50,6 +50,31 @@ func TestMutationFacadesRemainBlockedWithEmptyArgv(t *testing.T) {
 	}
 }
 
+func TestMutationActionPublishesOnlyWithFacadeAndRevision(t *testing.T) {
+	target := ActionTarget{Workspace: "/work/team", TeamID: "team", RunID: "run", BranchID: "main", TaskID: "task", Attempt: 2}
+	action, err := BuildAction(ActionRetryTask, ActionBuildInput{
+		Target: target, Availability: "available", MutationFacadeAvailable: true,
+		Preconditions: ActionPreconditions{ExpectedRevision: "sha256:revision"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"hufu", "session", "retry", "--workspace", "/work/team", "--team", "team", "--run", "run", "--branch", "main", "--task", "task", "--attempt", "2"}
+	if !reflect.DeepEqual(action.Argv, want) || action.Availability != "available" || action.RevalidationKey == "" {
+		t.Fatalf("published action = %#v", action)
+	}
+
+	withoutRevision, err := BuildAction(ActionRetryTask, ActionBuildInput{
+		Target: target, Availability: "available", MutationFacadeAvailable: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutRevision.Availability != "blocked" || len(withoutRevision.Argv) != 0 {
+		t.Fatalf("revision-free mutation became executable: %#v", withoutRevision)
+	}
+}
+
 func TestSelectActionsUnknownExternalEffectInspectsAndNeverRetries(t *testing.T) {
 	snapshot := selectionTestSnapshot(ActivityBlocked, "")
 	recovery := &RecoveryEligibility{

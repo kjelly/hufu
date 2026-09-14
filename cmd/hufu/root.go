@@ -43,6 +43,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 
 	// Add skill management commands
 	rootCmd.AddCommand(skillCmd)
+	rootCmd.AddCommand(newRunCommand())
 	rootCmd.AddCommand(replCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)
@@ -209,6 +210,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		}
 		return names, cobra.ShellCompDirectiveNoFileComp
 	})
+	configureCommandDiscovery(rootCmd)
 
 	rootCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		matches := completeAtNames(toComplete)

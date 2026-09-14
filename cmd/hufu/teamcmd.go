@@ -56,6 +56,8 @@ deterministic task categories, so generation does not make an LLM call.`,
 }
 
 func init() {
+	teamCmd.AddCommand(newTeamCheckCommand())
+	teamCmd.AddCommand(newTeamListCommand())
 	teamCmd.AddCommand(teamGenerateCmd)
 	teamCmd.AddCommand(teamValidateCmd)
 	teamGenerateCmd.Flags().StringVar(&teamGeneratePrompt, "from-prompt", "", "Task description used to design the team (required)")

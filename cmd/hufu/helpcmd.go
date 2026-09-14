@@ -10,39 +10,33 @@ import (
 )
 
 var examplesCmd = &cobra.Command{Use: "examples", Short: "Show common hufu commands", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
-	_, err := fmt.Fprint(os.Stdout, `Quick start:
-  hufu doctor
-  hufu init dev-team --template dev
-  hufu @dev-team "review this codebase"
-
-Interactive:
-  hufu chat --agent-team dev-team
-  hufu --tui @dev-team "implement a feature"
-
-Automation:
-  hufu --quiet --output json --event-format jsonl @dev-team "run checks"
-  hufu --unattended --max-duration 600 @ops-team "check service health"
-`)
+	var output strings.Builder
+	section := ""
+	for _, example := range canonicalExamples {
+		if example.Section != section {
+			if section != "" {
+				output.WriteByte('\n')
+			}
+			section = example.Section
+			output.WriteString(section)
+			output.WriteString(":\n")
+		}
+		output.WriteString("  ")
+		output.WriteString(example.Argv)
+		output.WriteByte('\n')
+	}
+	_, err := fmt.Fprint(os.Stdout, output.String())
 	return err
 }}
 
 var helpFlagsCmd = &cobra.Command{Use: "help-flags <group>", Short: "Show flags in a named group", Args: cobra.ExactArgs(1), RunE: runHelpFlags}
 
-var flagGroups = map[string][]string{
-	"core":       {"model", "agent-team", "default", "workspace"},
-	"execution":  {"plan", "auto-skills", "steps", "dry-run", "timeout", "max-rounds"},
-	"output":     {"verbose", "quiet", "output", "event-format", "report", "think", "tui", "no-color"},
-	"security":   {"rbash", "no-net", "force-mcp", "allow-path", "direnv"},
-	"unattended": {"unattended", "max-duration", "max-total-tokens", "auto-approve"},
-	"advanced":   {"provider-url", "provider-api-key", "profile", "var", "var-file", "memory", "template"},
-}
-
 func runHelpFlags(cmd *cobra.Command, args []string) error {
 	group := strings.ToLower(args[0])
-	flags, ok := flagGroups[group]
+	flags, ok := cliFlagGroups[group]
 	if !ok {
-		names := make([]string, 0, len(flagGroups))
-		for name := range flagGroups {
+		names := make([]string, 0, len(cliFlagGroups))
+		for name := range cliFlagGroups {
 			names = append(names, name)
 		}
 		sort.Strings(names)
@@ -53,6 +47,11 @@ func runHelpFlags(cmd *cobra.Command, args []string) error {
 		flag := root.Flags().Lookup(name)
 		if flag == nil {
 			flag = root.PersistentFlags().Lookup(name)
+		}
+		if flag == nil {
+			if run, _, err := root.Find([]string{"run"}); err == nil {
+				flag = run.Flags().Lookup(name)
+			}
 		}
 		if flag == nil {
 			continue
