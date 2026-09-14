@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {
+      "id": "completed",
+      "facts": {"binding_status": "verified", "terminal_outcome": "completed", "completion_state": "complete", "external_effect_state": "known"},
+      "expected": {"activity": "finished", "run_outcome": "completed", "attention": "none", "primary_action": "none-required", "availability": "available"}
+    },
+    {
+      "id": "failed",
+      "facts": {"binding_status": "verified", "terminal_outcome": "failed", "stop_reason": "run_failed", "external_effect_state": "known"},
+      "expected": {"activity": "finished", "run_outcome": "failed", "attention": "review_required", "primary_action": "review-result", "availability": "available"}
+    },
+    {
+      "id": "verifying",
+      "facts": {"binding_status": "verified", "task_states": ["verifying"], "terminal_outcome": "", "external_effect_state": "known"},
+      "expected": {"activity": "verifying", "run_outcome": "", "attention": "informational", "primary_action": "wait-runtime", "availability": "available"}
+    },
+    {
+      "id": "interrupted",
+      "facts": {"binding_status": "verified", "durable_interruption": true, "resume_eligible": true, "terminal_outcome": ""},
+      "expected": {"activity": "interrupted", "run_outcome": "", "attention": "action_available", "primary_action": "resume-session", "availability": "blocked"}
+    },
+    {
+      "id": "external_effect_unknown",
+      "facts": {"binding_status": "verified", "task_states": ["error"], "external_effect_state": "unknown", "receipt_ref": "receipt-fixture"},
+      "expected": {"activity": "blocked", "run_outcome": "", "attention": "review_required", "primary_action": "inspect-task-recovery", "availability": "available"}
+    },
+    {
+      "id": "ambiguous_scope",
+      "facts": {"binding_status": "ambiguous", "candidate_runs": ["run-a", "run-b"]},
+      "expected": {"activity": "unknown", "run_outcome": "", "attention": "human_required", "primary_action": "select-scope", "availability": "blocked"}
+    }
+  ]
+}

@@ -133,6 +133,7 @@ ownership、schema 名稱或 MVP 範圍選擇。真人 usability 與電子紙實
 | `inspect storage` 已能提供 SQLite/WAL 等 metadata，且明確不 migrate/optimize/rebuild | 不應再另建 workspace database inspector | inspect guide [S07] |
 | TUI 已有 tasks、detail、result、memory、activity、search、quit confirmation、PTY 關聯 | 不應推倒重寫或重複建立同類畫面 | `internal/tui/tui.go` [S08] |
 | TUI styles 存在 package-level 固定色碼，spinner/compact 也有預設開關 | 動態 palette 應移到 instance-scoped rendering | `internal/tui/tui.go` [S08] |
+| `internal/tui/tui.go` 現為 3021 行，已超過 CLAUDE.md 建議的 800 行/檔案上限約 4 倍（package 內已有 `overlay.go`、`ask_user.go` 等分檔前例） | 新增 summary strip、theme resolver、snapshot rendering 前必須先分解此檔案，否則既有違規只會惡化 | `internal/tui/tui.go` [S08] |
 | `team show/explain/validate/lint` 分工已存在 | `team check` 應是組合入口，不是新驗證引擎 | 前文查讀的對應 CLI [S09] |
 | `context promotion` 已有 analyze/list/show/edit/approve/reject/apply | 增加 review façade，沿用 lifecycle | `context_promotion_cmd.go` [S10] |
 | promotion 共用 `openPromotion` 會 `OpenSQLite` 並 `flushPromotionEvents` | 不可把現有 CLI handler 當絕對 read-only UI query 直接呼叫 | `context_promotion_cmd.go` [S10] |
@@ -1380,6 +1381,10 @@ non-TTY invocation
 上述 ownership 已由 §5.1 決定。若實作發現 package cycle，先把 canonical input DTO 縮小，
 不得把 storage query 搬進 `internal/operator` 或另建平行 package。
 
+`internal/tui/tui.go` 目前已達 3021 行，超過 CLAUDE.md 的 800 行/檔案上限。Phase 4 開始前
+必須先完成 HF-UX-039（檔案分解，零行為變更），新增的 summary strip、theme resolver、
+snapshot rendering 一律落在分解後的新檔案，不得再對 `tui.go` 淨增行數。
+
 ### 15.2 Read/query 與 mutation 的硬分界
 
 Query adapter 不依賴「建立 coordinator」來讀資料。不调用 `loadTeam...` 的 runtime startup path 只為取得畫面。Read-only interface 與 mutation interface 必須能用測試 double 明確檢查：讀取時任何 write/provider callback 被呼叫就失敗。
@@ -1422,12 +1427,14 @@ Command factories 每次建立獨立 options；測試同一 process 連續建立
 | 工作 ID | 工作 | 交付物 | 完成條件 |
 |---|---|---|---|
 | HF-UX-000 | **完成：**以 HEAD `ba306437...` 核對 baseline、docs authority、主要 package 接縫 | 本文件 §1、§2、§5、§7 | ownership/schema/scope 決策已凍結；後續差異走 §1.3 |
-| HF-UX-001A | 新增 commands、flags、JSON、exit、scope、TTY side-effect characterization | contract inventory、golden fixtures | 最低覆蓋 root/chat/resume/recovery/context/promotion/inspect/skill/team；production diff 為零 |
-| HF-UX-001B | 建立 deterministic journey fixtures | fake event/context/runtime corpus | completed/failed/verifying/interrupted/external-effect-unknown/ambiguous scope 各有 fixture |
-| HF-UX-002 | 建立 usability measurement script | baseline task corpus與評分表 | 三問有事先定義答案；此項可在 P1/P2 工程進行時並行，不阻擋 PR 合併 |
+| HF-UX-001A | **完成：**新增 commands、flags、JSON、exit、scope、TTY side-effect characterization | [Phase 0 baseline](../reference/operator-phase0-baseline.md)、contract inventory、golden fixtures | root/chat/resume/recovery/context/promotion/inspect/skill/team 已覆蓋；production diff 為零 |
+| HF-UX-001B | **完成：**建立 deterministic journey fixtures | `cmd/hufu/testdata/operator/journeys.json` | completed/failed/verifying/interrupted/external-effect-unknown/ambiguous scope 各有 fixture |
+| HF-UX-002 | **完成：**建立 usability measurement script | `docs/reference/operator-usability-corpus.tsv`、`scripts/operator-usability-measure.sh` | 六條 journey 的三問與 safety gate 有事先定義答案，可產生 baseline/candidate 評分表 |
 
-**Gate P0：**HF-UX-001A/001B 通過，`go test ./...` 與 repository-required lint gate成功，並保存
-任何既有失敗基線。不能把既有失敗當本計畫新增 regression，也不能刪測試讓基線變綠。
+**Gate P0（2026-09-14 已通過）：**HF-UX-001A/001B 通過；Linux amd64、Go 1.26.6 的
+`go test ./...`、`go vet ./...`、`golangci-lint run` 與 `bin/check-docs` 成功。既有 docs lifecycle
+metadata 缺漏只補標頭、不改技術內容。後續仍不能把既有失敗當本計畫新增 regression，也不能
+刪測試讓基線變綠。
 
 ### Phase 1 — Scope 與 Read-only Operator Snapshot
 
@@ -1473,17 +1480,20 @@ Command factories 每次建立獨立 options；測試同一 process 連續建立
 
 ### Phase 4 — TUI Summary、Theme 與低刷新
 
-以下工作可與 Phase 3 無直接依賴的部分並行。
+以下工作可與 Phase 3 無直接依賴的部分並行。HF-UX-039 是本 phase 其餘工作項的共同前置：
+`internal/tui/tui.go` 現況 3021 行，任何在其上疊加的新程式碼都會讓 CLAUDE.md 的 800 行/檔案
+違規更嚴重，必須先分解。
 
 | 工作 ID | 直接依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-040 | 012A/020A/022 | summary strip + stable task/detail navigation | 與 CLI snapshot 一致；新 event 不搶焦點 |
-| HF-UX-041 | 001A | instance-scoped semantic theme | live light/dark/mono 切換不重啟、不改 runtime、不遺失輸入 |
+| HF-UX-039 | 001A | `internal/tui` 檔案分解：拆分 `tui.go`（現況 3021 行）為多個 <800 行檔案，純搬移不改行為 | 既有 TUI unit/integration/race tests 全過且零行為差異；拆分後每個檔案 <800 行；之後的 HF-UX-040/041/044 不得再對 `tui.go` 淨增行數 |
+| HF-UX-040 | 012A/020A/022/039 | summary strip + stable task/detail navigation | 與 CLI snapshot 一致；新 event 不搶焦點 |
+| HF-UX-041 | 001A/039 | instance-scoped semantic theme | live light/dark/mono 切換不重啟、不改 runtime、不遺失輸入 |
 | HF-UX-042 | 041 | epaper renderer policy / bounded redraw | idle 0 repaint；背景 <=1Hz；input/gate 及時處理 |
 | HF-UX-043 | 020B/040 | owner/passive/quit/PTY boundary | 不把 close view 當 kill；不把 owner退出當虛構 detach |
 | HF-UX-044 | 040/041 | compact layout、CJK、keyboard/copy/escape safety | 各 terminal sizes 與 terminal injection fixtures 全過 |
 
-**Gate P4：**CLI/TUI parity、keyboard journeys、theme/race/epaper tests 全過。不得只提供 theme flag 而未替換 overlays 的固定色碼。
+**Gate P4：**CLI/TUI parity、keyboard journeys、theme/race/epaper tests 全過。不得只提供 theme flag 而未替換 overlays 的固定色碼；HF-UX-039 未完成前，不得將新程式碼疊加進未分解的 `tui.go`。
 
 ### Phase 5 — Evidence／Context／Learning 與 Review
 

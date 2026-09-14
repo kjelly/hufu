@@ -1,5 +1,11 @@
 # Typed run inputs migration
 
+> Status: active
+> Authority: guide
+> Verified-Commit: `5e3c2c5c720fede6efb1abf057b22f7977601456`
+> Supersedes: —
+> Superseded-By: —
+
 Typed run inputs replace prompt/config template variables when a value changes
 execution authority, scope, or provider payloads. Ordinary `--var` templating
 remains supported for prose and non-authoritative configuration.

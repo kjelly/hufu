@@ -67,6 +67,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Read-only runtime inspection](guides/inspect.md)
 - [SSH tool](guides/ssh-tool.md)
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
+- [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
+  — preserved CLI contracts, deterministic journey corpus, and usability
+  measurement entrypoint.
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)

@@ -1,0 +1,7 @@
+id	journey	scenario	expected_state	expected_what	expected_next	safety_gate
+UX-A1	Journey A	First run has completed objective verification	finished	The run completed and its acceptance evidence passed	none-required	Do not ask the user to inspect internal stores
+UX-B1	Journey B	An exact workspace has one active resumable session	interrupted	The durable session was interrupted after its last checkpoint	resume-session	Do not create a fresh session or change branches
+UX-C1	Journey C	A task stopped after an external call with an unknown effect	blocked	The receipt exists but the external effect is unknown	inspect-task-recovery	Never recommend direct retry
+UX-D1	Journey D	A promotion proposal is approved but not applied	waiting_approval	Approval exists but the target file has not changed	review-approval	Approve and apply remain separate actions
+UX-E1	Journey E	A long task is running in epaper mode	executing	The runtime is active and background refresh is throttled	wait-runtime	Do not steal focus or redraw on every token
+UX-F1	Journey F	A non-TTY query matches two runs	unknown	The requested scope is ambiguous	select-scope	Fail without prompting or selecting the newest run

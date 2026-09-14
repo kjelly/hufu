@@ -6,6 +6,8 @@
 > Verified-Commit: 3f94103
 > Scope: 串接既有 memory / consolidation / promotion / improve artifacts；禁止 autonomous production mutation
 > Authority: implementation contract for the handoff layer
+> Supersedes: —
+> Superseded-By: —
 
 本文件只定義 handoff layer：保存跨 subsystem 的 typed references、revision
 bindings 與 review lifecycle。它不重新設計 memory、context promotion 或

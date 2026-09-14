@@ -1,0 +1,48 @@
+{
+  "outcome": "completed",
+  "goal_satisfied": true,
+  "goal_mode": "outcome",
+  "result": "completed result",
+  "stop_reason": "completed",
+  "acceptance": {
+    "state": "passed",
+    "passed": true
+  },
+  "fixed_and_verified": true,
+  "acceptance_advisory": true,
+  "stats": {
+    "tasks_total": 0,
+    "tasks_done": 0,
+    "tasks_unresolved": 0,
+    "attempts_total": 0,
+    "attempts_failed": 0
+  },
+  "metrics": {
+    "compactions": 0,
+    "context_window_telemetry": {}
+  },
+  "teams": [
+    {
+      "name": "demo",
+      "tokens": 0,
+      "memory_learning": {
+        "mode": "",
+        "policy_version": "",
+        "retrieval_count": 0,
+        "exposure_count": 0,
+        "applied_count": 0,
+        "outcome_count": 0,
+        "pending_repair_gaps": 0
+      },
+      "context_routing": {
+        "requests": 0,
+        "model_calls": 0,
+        "fallbacks": 0,
+        "included": 0,
+        "omitted": 0,
+        "included_tokens": 0,
+        "omitted_tokens": 0
+      }
+    }
+  ]
+}

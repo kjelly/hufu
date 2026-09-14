@@ -1,5 +1,11 @@
 # Review scope template-variable deprecation
 
+> Status: deprecated
+> Authority: reference
+> Verified-Commit: `0a68f3e1547fbb25c4ae78a2fd9f091934a13b11`
+> Supersedes: —
+> Superseded-By: typed `review.scope` run input
+
 The bundled `hufu-code-review` team now uses the typed `review.scope` run input.
 Its default is the last 10 first-parent commits ending at `HEAD`.
 

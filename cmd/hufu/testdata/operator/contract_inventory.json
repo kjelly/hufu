@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "verified_commit": "3affc92",
+  "surfaces": [
+    {
+      "name": "root",
+      "workspace_semantics": "--workspace is a base directory; the selected team name is appended",
+      "output_contract": "--output=json emits one jsonRunOutput document on stdout",
+      "exit_contract": "canonical RunResult exit code; success 0, general failure 1, acceptance failure 7, cancellation 130",
+      "characterized_by": ["TestOperatorPhase0RootWorkspaceRemainsLegacyBase", "TestOperatorPhase0RootJSONGolden", "TestCLIProcessExitContract"]
+    },
+    {
+      "name": "chat",
+      "workspace_semantics": "uses the root legacy base workspace and retains one loaded team across turns",
+      "output_contract": "interactive text stream; help is side-effect free",
+      "exit_contract": "command/setup errors are non-zero; per-turn cancellation stays inside the REPL",
+      "characterized_by": ["TestOperatorPhase0HelpAndCompletionCreateNothing", "TestResolveInitialPrompt"]
+    },
+    {
+      "name": "resume",
+      "workspace_semantics": "explicit --workspace is exact; otherwise --agent-team is appended to the default root",
+      "output_contract": "shares root text/json run reporting",
+      "exit_contract": "missing or ambiguous session is non-zero before execution",
+      "characterized_by": ["TestOperatorPhase0WorkspaceContract", "TestResolveCommandWorkspaceAndTeam"]
+    },
+    {
+      "name": "retry",
+      "workspace_semantics": "uses the same exact-or-inferred resolver as resume",
+      "output_contract": "text TargetedRecoveryReport or one JSON report",
+      "exit_contract": "policy/service error is non-zero",
+      "characterized_by": ["TestOperatorPhase0WorkspaceContract", "TestRetryTaskUsesCanonicalResetBeforeWorkerExecution"]
+    },
+    {
+      "name": "reconcile",
+      "workspace_semantics": "uses the same exact-or-inferred resolver as resume",
+      "output_contract": "text TargetedRecoveryReport or one JSON report",
+      "exit_contract": "policy/service error is non-zero",
+      "characterized_by": ["TestOperatorPhase0WorkspaceContract", "TestReconcileTask_Success"]
+    },
+    {
+      "name": "context",
+      "workspace_semantics": "--workspace is exact for context maintenance commands",
+      "output_contract": "command-specific text or JSON; private content requires explicit selectors",
+      "exit_contract": "validation and repository errors are non-zero",
+      "characterized_by": ["TestContextListFiltersWorkerMemoryAndUsesStableRedactedJSON", "TestContextHelpDocumentsReadOnlyMemoryCommands"]
+    },
+    {
+      "name": "promotion",
+      "workspace_semantics": "--workspace is exact and project/team are explicit",
+      "output_contract": "list defaults to content-free output; approve and apply remain separate",
+      "exit_contract": "invalid lifecycle transitions and stale proposals are non-zero",
+      "characterized_by": ["TestContextPromotionNoEligibleAndDefaultOutputIsContentFree", "TestCLIAcceptanceCase6_IdempotentReapplyAndStale"]
+    },
+    {
+      "name": "inspect",
+      "workspace_semantics": "--workspace is exact and never created by inspection",
+      "output_contract": "schema_version=1 envelope; JSON is one document",
+      "exit_contract": "0 query success, 1 integrity failure, 2 usage or selection failure",
+      "characterized_by": ["TestOperatorPhase0InspectJSONGolden", "TestInspectStorageMissingDatabaseUsesIntegrityExitAndCreatesNothing", "TestInspectCommandUsageErrorsExitTwo"]
+    },
+    {
+      "name": "skill",
+      "workspace_semantics": "named-team lifecycle resolves the team definition separately from its usage workspace",
+      "output_contract": "human-readable lifecycle output",
+      "exit_contract": "invalid team, draft, or lifecycle operation is non-zero",
+      "characterized_by": ["TestSkillLifecycleCommandsRegisterNamedTeamFlags", "TestSkillLifecycleTargetsNamedTeam"]
+    },
+    {
+      "name": "team",
+      "workspace_semantics": "authoring targets team definitions; lint/show do not create a runtime workspace",
+      "output_contract": "team lint JSON v1 is a single stable document",
+      "exit_contract": "lint threshold 1; CLI/load error 2; success 0",
+      "characterized_by": ["TestTeamLintJSONStable", "TestTeamLintProcessExitContract", "TestRunTeamShow_NonexistentDirectoryFails"]
+    }
+  ]
+}
