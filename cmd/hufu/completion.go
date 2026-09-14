@@ -227,14 +227,17 @@ export extern "hufu inspect" [
   --branch: string # Exact branch ID, name, or label
   --session: string # Exact session ID filter
   --format: string@'nu-complete hufu inspect formats' # text or json
+  --output: string@'nu-complete hufu inspect formats' # text or json
 ]
 
-export extern "hufu inspect run" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect task" [task_id: string --run: string --attempt: int --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect evidence" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect context" [task_id: string --run: string --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect trace" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect replay" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect overview" [--run: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect run" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect task" [task_id: string --run: string --attempt: int --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect evidence" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect context" [task_id: string --run: string --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect trace" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect replay" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect storage" [--workspace(-w): string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 `
 	_, err := fmt.Fprint(w, script)
 	return err

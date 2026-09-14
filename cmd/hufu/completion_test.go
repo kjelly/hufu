@@ -21,12 +21,15 @@ func TestNushellCompletionIncludesInspectCommands(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`def "nu-complete hufu inspect formats"`,
+		`export extern "hufu inspect overview"`,
 		`export extern "hufu inspect run"`,
 		`export extern "hufu inspect task"`,
 		`export extern "hufu inspect evidence"`,
 		`export extern "hufu inspect context"`,
 		`export extern "hufu inspect trace"`,
 		`export extern "hufu inspect replay"`,
+		`export extern "hufu inspect storage"`,
+		`--output: string@'nu-complete hufu inspect formats'`,
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("Nushell completion does not contain %q", expected)

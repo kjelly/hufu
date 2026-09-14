@@ -39,6 +39,116 @@ func TestInspectCommandRunJSON(t *testing.T) {
 	}
 }
 
+func TestInspectCommandOverviewJSONUsesQuerySuccessContract(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"--workspace", workspace, "--output", "json", "overview", "--run", runID})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Kind inspectpkg.Kind         `json:"kind"`
+		Data inspectpkg.OverviewData `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode overview: %v\n%s", err, stdout.String())
+	}
+	if envelope.Kind != inspectpkg.KindOverview || envelope.Data.Operation.Status != "succeeded" || envelope.Data.Snapshot == nil || envelope.Data.Error != nil {
+		t.Fatalf("overview envelope = %#v", envelope)
+	}
+	if envelope.Data.Snapshot.Outcome.RunOutcome != string(team.RunOutcomePartial) || envelope.Data.Snapshot.Scope.RunID != runID {
+		t.Fatalf("overview snapshot = %#v", envelope.Data.Snapshot)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("overview JSON wrote stderr: %q", stderr.String())
+	}
+}
+
+func TestInspectOverviewJSONFailureIsSingleDocumentAndSilentOnStderr(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "missing")
+	command := newInspectCommand()
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"--workspace", workspace, "--output", "json", "overview"})
+	err := command.Execute()
+	var exitError interface{ ProcessExitCode() int }
+	if !errors.As(err, &exitError) || exitError.ProcessExitCode() != inspectpkg.ExitUsage {
+		t.Fatalf("error = %v, want usage exit %d", err, inspectpkg.ExitUsage)
+	}
+	var envelope struct {
+		Kind inspectpkg.Kind         `json:"kind"`
+		Data inspectpkg.OverviewData `json:"data"`
+	}
+	if decodeErr := json.Unmarshal(stdout.Bytes(), &envelope); decodeErr != nil {
+		t.Fatalf("failure output is not one JSON document: %v\n%s", decodeErr, stdout.String())
+	}
+	if envelope.Kind != inspectpkg.KindOverview || envelope.Data.Operation.Status != "failed" || envelope.Data.Snapshot != nil || envelope.Data.Error == nil || envelope.Data.Error.Code != "target_not_found" {
+		t.Fatalf("failure envelope = %#v", envelope)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("JSON failure duplicated stderr: %q", stderr.String())
+	}
+	if _, statErr := os.Stat(workspace); !os.IsNotExist(statErr) {
+		t.Fatalf("overview created missing workspace: %v", statErr)
+	}
+}
+
+func TestInspectOverviewTextFailureUsesOneStderrTemplate(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "missing")
+	command := newInspectCommand()
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"--workspace", workspace, "overview"})
+	if err := command.Execute(); err == nil {
+		t.Fatal("missing overview unexpectedly succeeded")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("text failure wrote stdout: %q", stdout.String())
+	}
+	if strings.Count(stderr.String(), "Error [target_not_found]") != 1 || !strings.Contains(stderr.String(), "no data was modified") {
+		t.Fatalf("text failure stderr = %q", stderr.String())
+	}
+}
+
+func TestInspectOutputAliasConflictFailsBeforeReadingWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	logsDir := filepath.Join(workspace, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := newInspectCommand()
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "text", "--output", "json", "overview"})
+	err := command.Execute()
+	if !strings.Contains(fmt.Sprint(err), "conflicts") || strings.Contains(fmt.Sprint(err), "event") {
+		t.Fatalf("conflict validation did not precede workspace read: %v", err)
+	}
+}
+
+func TestInspectEquivalentFormatAndOutputAliasesAreAccepted(t *testing.T) {
+	workspace, runID, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "--format", "JSON", "--output", "json", "run", runID})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(stdout.Bytes()) {
+		t.Fatalf("equivalent aliases did not produce JSON: %q", stdout.String())
+	}
+}
+
 func TestRenderInspectTaskKnowledgeCoverage(t *testing.T) {
 	var output bytes.Buffer
 	envelope := &inspectpkg.Envelope{
@@ -234,6 +344,16 @@ func TestRootCommandIncludesInspect(t *testing.T) {
 	}
 }
 
+func TestRootCommandIncludesInspectOverview(t *testing.T) {
+	command, _, err := newRootCommand().Find([]string{"inspect", "overview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Name() != "overview" || command.Parent().Name() != "inspect" {
+		t.Fatalf("resolved command = %s", command.CommandPath())
+	}
+}
+
 func TestInspectCommandHelpDescribesReadOnlyFacade(t *testing.T) {
 	command := newInspectCommand()
 	var stdout bytes.Buffer
@@ -242,7 +362,7 @@ func TestInspectCommandHelpDescribesReadOnlyFacade(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"read-only facade", "run", "task", "evidence", "context", "trace", "replay"} {
+	for _, expected := range []string{"read-only facade", "overview", "run", "task", "evidence", "context", "trace", "replay", "--output"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, stdout.String())
 		}
@@ -261,6 +381,14 @@ func TestInspectCommandCompletesFormatWithoutFiles(t *testing.T) {
 	}
 	if directive != cobra.ShellCompDirectiveNoFileComp {
 		t.Fatalf("format completion directive = %v", directive)
+	}
+	complete, ok = command.GetFlagCompletionFunc("output")
+	if !ok {
+		t.Fatal("output completion is not registered")
+	}
+	values, directive = complete(command, nil, "t")
+	if len(values) != 1 || values[0] != "text" || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("output completions = %v directive=%v", values, directive)
 	}
 	runCommand, _, err := command.Find([]string{"run"})
 	if err != nil {

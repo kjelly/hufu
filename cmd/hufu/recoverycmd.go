@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -85,15 +86,28 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr erro
 func resolveCommandWorkspaceAndTeam(workspace, requestedTeam string, workspaceExplicit bool) (string, string, error) {
 	workspace = filepath.Clean(strings.TrimSpace(workspace))
 	teamName := strings.ToLower(strings.TrimSpace(requestedTeam))
-	if teamName != "" && !workspaceExplicit {
-		workspace = filepath.Join(workspace, teamName)
-	}
 	if teamName == "" {
 		base := filepath.Base(workspace)
 		if base == "." || base == "workspace" || base == "" {
 			return "", "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspace)
 		}
 		teamName = strings.ToLower(base)
+	}
+	mode := "exact"
+	if !workspaceExplicit {
+		mode = "root"
+	}
+	if _, err := operatorpkg.ResolveWorkspacePath(operatorpkg.WorkspaceRequest{
+		RequestedPath: workspace,
+		Mode:          mode,
+		TeamName:      teamName,
+	}); err != nil {
+		return "", "", fmt.Errorf("invalid workspace path: %w", err)
+	}
+	// Recovery/resume are legacy adapters: retain their characterized relative
+	// path spelling even though the shared resolver validates canonical scope.
+	if !workspaceExplicit {
+		workspace = filepath.Join(workspace, teamName)
 	}
 	return workspace, teamName, nil
 }

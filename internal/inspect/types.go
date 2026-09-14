@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 )
 
 const SchemaVersion = 1
@@ -20,6 +22,7 @@ const (
 	KindContext  Kind = "context"
 	KindReplay   Kind = "replay"
 	KindStorage  Kind = "storage"
+	KindOverview Kind = "overview"
 )
 
 type Format string
@@ -81,6 +84,11 @@ func (q InspectQuery) Validate(kind Kind) error {
 		}
 		if strings.TrimSpace(q.ProjectID) == "" {
 			return fmt.Errorf("%w: project id is required for context", ErrInvalidQuery)
+		}
+	case KindOverview:
+		if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" ||
+			strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+			return fmt.Errorf("%w: overview accepts only workspace, run, branch, and session", ErrInvalidQuery)
 		}
 	case KindStorage:
 		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
@@ -151,6 +159,23 @@ type Envelope struct {
 	Integrity     Integrity    `json:"integrity"`
 	Data          any          `json:"data"`
 	Diagnostics   []Diagnostic `json:"diagnostics"`
+}
+
+type OverviewData struct {
+	Operation OperationView                 `json:"operation"`
+	Snapshot  *operatorpkg.OperatorSnapshot `json:"snapshot"`
+	Error     *OperatorErrorView            `json:"error"`
+	Warnings  []operatorpkg.DiagnosticView  `json:"warnings"`
+}
+
+type OperationView struct {
+	Status string `json:"status"`
+}
+
+type OperatorErrorView struct {
+	Kind    string `json:"kind"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type ProjectionCheck struct {

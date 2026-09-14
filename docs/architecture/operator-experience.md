@@ -1442,14 +1442,17 @@ metadata 缺漏只補標頭、不改技術內容。後續仍不能把既有失�
 
 | 工作 ID | 直接依賴 | 工作 | 主要接縫 | 完成條件 |
 |---|---|---|---|---|
-| HF-UX-010A | — | `internal/operator.ResolveWorkspacePath` + legacy/exact/root modes | §7.2、CLI workspace loaders | pure path matrix通過；尚不切換 production callers |
-| HF-UX-010B | 010A | root/recovery/inspect adapters 使用 resolver | CLI workspace loaders | legacy path與 goldens不變；新 exact/root cases通過；不搬資料 |
-| HF-UX-011A | — | v1 immutable types、validation、hash、activity/attention pure mapping | `internal/operator` | §3.3/§5.2 fixtures 全過；unknown fail closed |
-| HF-UX-011B | 010A/011A | exact target binding/provenance | `internal/inspect` | active/explicit/single/ambiguous matrix；project ID 不重算；collision不誤 join |
-| HF-UX-012A | 010B/011B | `inspect overview` read-only endpoint與JSON/text renderer | `inspectcmd.go` | §5.4/§10.2；missing DB不建立；零 provider/tool/write；舊 inspector goldens不變 |
-| HF-UX-013 | 012A | bounded latest changes、role/learning unavailable adapters | overview assembly | v1完整 shape；最多3 changes；未知 counters為null |
+| HF-UX-010A | — | **完成：**`internal/operator.ResolveWorkspacePath` + legacy/exact/root modes | §7.2、CLI workspace loaders | pure path matrix通過；尚不切換 production callers |
+| HF-UX-010B | 010A | **完成：**root/recovery/inspect adapters 使用 resolver | CLI workspace loaders | legacy path與 goldens不變；新 exact/root cases通過；不搬資料 |
+| HF-UX-011A | — | **完成：**v1 immutable types、validation、hash、activity/attention pure mapping | `internal/operator` | §3.3/§5.2 fixtures 全過；unknown fail closed |
+| HF-UX-011B | 010A/011A | **完成：**exact target binding/provenance | `internal/inspect` | active/explicit/single/ambiguous matrix；project ID 不重算；collision不誤 join |
+| HF-UX-012A | 010B/011B | **完成：**`inspect overview` read-only endpoint與JSON/text renderer | `inspectcmd.go` | §5.4/§10.2；missing DB不建立；零 provider/tool/write；舊 inspector goldens不變 |
+| HF-UX-013 | 012A | **完成：**bounded latest changes、role/learning unavailable adapters | overview assembly | v1完整 shape；最多3 changes；未知 counters為null |
 
-**Gate P1：**read-only no-side-effect suite ＋ scope matrix 全過；此時可只發布新的 read-only overview。
+**Gate P1（2026-09-14 已通過）：**read-only no-side-effect suite、scope selection/collision matrix、
+legacy workspace characterization 與 inspector JSON/text contract tests 全過；Linux amd64、Go 1.26.6
+的 `go test ./...`、`go vet ./...`、`golangci-lint run` 成功。Phase 1 只發布新的 read-only
+`inspect overview`；role/learning 明確回報 unavailable，尚未加入 mutation recommendation。
 
 ### Phase 2 — Next Action 與統一操作摘要
 

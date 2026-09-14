@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/notify"
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -23,21 +24,27 @@ import (
 // The computed directory path is assigned to session.Workspace and
 // session.Config.WorkspaceDir before returning.
 func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error {
-	var baseWorkspace string
-	if opts.workspace != "" {
-		abs, err := filepath.Abs(opts.workspace)
-		if err != nil {
-			return fmt.Errorf("invalid workspace path: %w", err)
-		}
-		baseWorkspace = canonicalRuntimePath(abs)
-	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get working directory: %w", err)
-		}
-		baseWorkspace = filepath.Join(canonicalRuntimePath(cwd), "workspace")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	teamWorkspace := filepath.Join(baseWorkspace, teamName)
+	mode := "default"
+	if opts.workspace != "" {
+		mode = "legacy_base"
+		if strings.TrimSpace(teamName) == "" {
+			mode = "exact"
+		}
+	}
+	resolution, err := operatorpkg.ResolveWorkspacePath(operatorpkg.WorkspaceRequest{
+		RequestedPath: opts.workspace,
+		Mode:          mode,
+		TeamName:      teamName,
+		ProjectDir:    cwd,
+	})
+	if err != nil {
+		return fmt.Errorf("invalid workspace path: %w", err)
+	}
+	teamWorkspace := resolution.WorkspaceExact
 	session.Workspace = teamWorkspace
 	session.Config.WorkspaceDir = teamWorkspace
 	return nil

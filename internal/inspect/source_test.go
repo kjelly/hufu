@@ -43,6 +43,7 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 	}
 
 	tree := team.NewSessionTree()
+	tree.Branches["main"].State.SelectedTeam = "reviewers"
 	tree.Branches["feature"] = &team.SessionBranch{
 		ID:          "feature",
 		Name:        "feature",
@@ -73,7 +74,7 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 	if active.BranchID != "main" || len(active.Events) != 1 || active.Events[0].Event.ID != "event-main" {
 		t.Fatalf("active lineage = %#v", active)
 	}
-	if active.ActiveBranchID != "main" || len(active.GlobalEvents) != 2 || active.GlobalEvents[1].Ordinal != 2 {
+	if active.ActiveBranchID != "main" || active.SelectedTeam != "reviewers" || len(active.GlobalEvents) != 2 || active.GlobalEvents[1].Ordinal != 2 {
 		t.Fatalf("active global lineage metadata = %#v", active)
 	}
 	feature, err := LoadLineage(t.Context(), InspectQuery{Workspace: workspace, BranchID: "feature"})

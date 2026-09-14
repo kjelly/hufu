@@ -16,6 +16,7 @@ type inspectCLIOptions struct {
 	branch    string
 	session   string
 	format    string
+	output    string
 }
 
 type inspectExitError struct {
@@ -37,6 +38,7 @@ context, decision, and terminal projections. It never executes agents,
 providers, verifiers, migrations, or recovery actions, and it does not replace
 the detailed audit, context, or decision maintenance commands.`,
 		Example: `  hufu inspect run run-123 --workspace ./workspace
+  hufu inspect overview --workspace ./workspace --output json
   hufu inspect task task-7 --run run-123 --format json
   hufu inspect trace run-123 --branch incident-fix
   hufu inspect replay run-123 --format json
@@ -48,8 +50,11 @@ the detailed audit, context, or decision maintenance commands.`,
 	command.PersistentFlags().StringVar(&options.branch, "branch", "", "Exact branch ID, name, or branch label (default: active branch)")
 	command.PersistentFlags().StringVar(&options.session, "session", "", "Optional exact session ID filter")
 	command.PersistentFlags().StringVar(&options.format, "format", string(inspectpkg.FormatText), "Output format: text or json")
+	command.PersistentFlags().StringVar(&options.output, "output", "", "Output format alias: text or json")
 	registerStaticFlagCompletion(command, "format", []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
+	registerStaticFlagCompletion(command, "output", []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
 	command.AddCommand(
+		newInspectOverviewCommand(options),
 		newInspectRunCommand(options),
 		newInspectTaskCommand(options),
 		newInspectEvidenceCommand(options),
@@ -61,6 +66,28 @@ the detailed audit, context, or decision maintenance commands.`,
 	return command
 }
 
+func newInspectOverviewCommand(options *inspectCLIOptions) *cobra.Command {
+	var runID string
+	command := &cobra.Command{
+		Use:               "overview",
+		Short:             "Show a read-only operator overview for one exact workspace",
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(command *cobra.Command, _ []string) error {
+			format, err := options.resolveFormat(command)
+			if err != nil {
+				return err
+			}
+			query := options.query()
+			query.RunID = runID
+			envelope, inspectErr := inspectpkg.InspectOverview(command.Context(), query)
+			return finishInspectOverview(command, format, query, envelope, inspectErr)
+		},
+	}
+	command.Flags().StringVar(&runID, "run", "", "Optional exact run ID (default: active binding or sole candidate)")
+	return command
+}
+
 func newInspectStorageCommand(options *inspectCLIOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:               "storage",
@@ -68,11 +95,12 @@ func newInspectStorageCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
-			envelope, err := inspectpkg.InspectStorage(command.Context(), options.query())
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectStorage(command.Context(), options.query())
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 }
@@ -84,13 +112,14 @@ func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
 			query.RunID = args[0]
-			envelope, err := inspectpkg.InspectReplay(command.Context(), query)
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectReplay(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 }
@@ -102,13 +131,14 @@ func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
 			query.RunID = args[0]
-			envelope, err := inspectpkg.InspectTrace(command.Context(), query)
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectTrace(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 }
@@ -120,13 +150,14 @@ func newInspectEvidenceCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
 			query.RunID = args[0]
-			envelope, err := inspectpkg.InspectEvidence(command.Context(), query)
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectEvidence(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 }
@@ -141,7 +172,8 @@ func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
@@ -151,8 +183,8 @@ func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
 			query.ProjectID = projectID
 			query.TeamID = teamID
 			query.AgentID = agentID
-			envelope, err := inspectpkg.InspectContext(command.Context(), query, inspectpkg.ContextOptions{ShowContent: showContent, AllAgents: allAgents})
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectContext(command.Context(), query, inspectpkg.ContextOptions{ShowContent: showContent, AllAgents: allAgents})
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 	command.Flags().StringVar(&runID, "run", "", "Run ID containing the task (required)")
@@ -172,13 +204,14 @@ func newInspectRunCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
 			query.RunID = args[0]
-			envelope, err := inspectpkg.InspectRun(command.Context(), query)
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectRun(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 }
@@ -192,15 +225,16 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
-			if err := options.validateFormat(); err != nil {
+			format, err := options.resolveFormat(command)
+			if err != nil {
 				return err
 			}
 			query := options.query()
 			query.RunID = runID
 			query.TaskID = args[0]
 			query.Attempt = attempt
-			envelope, err := inspectpkg.InspectTask(command.Context(), query)
-			return finishInspect(command, options.format, envelope, err)
+			envelope, inspectErr := inspectpkg.InspectTask(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
 	command.Flags().StringVar(&runID, "run", "", "Run ID containing the task (required)")
@@ -208,16 +242,32 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 	return command
 }
 
-func (options *inspectCLIOptions) validateFormat() error {
-	switch inspectpkg.Format(strings.ToLower(strings.TrimSpace(options.format))) {
+func (options *inspectCLIOptions) resolveFormat(command *cobra.Command) (string, error) {
+	format := strings.ToLower(strings.TrimSpace(options.format))
+	output := strings.ToLower(strings.TrimSpace(options.output))
+	if output != "" {
+		if flagChanged(command, "format") && format != output {
+			return "", &inspectExitError{
+				code: inspectpkg.ExitUsage,
+				err:  fmt.Errorf("hufu inspect: --format %q conflicts with --output %q", options.format, options.output),
+			}
+		}
+		format = output
+	}
+	switch inspectpkg.Format(format) {
 	case inspectpkg.FormatText, inspectpkg.FormatJSON:
-		return nil
+		return format, nil
 	default:
-		return &inspectExitError{
+		return "", &inspectExitError{
 			code: inspectpkg.ExitUsage,
-			err:  fmt.Errorf("hufu inspect: invalid format %q (must be text or json)", options.format),
+			err:  fmt.Errorf("hufu inspect: invalid format %q (must be text or json)", format),
 		}
 	}
+}
+
+func flagChanged(command *cobra.Command, name string) bool {
+	flag := command.Flag(name)
+	return flag != nil && flag.Changed
 }
 
 func (options *inspectCLIOptions) query() inspectpkg.InspectQuery {
@@ -254,6 +304,38 @@ func finishInspect(command *cobra.Command, format string, envelope *inspectpkg.E
 	}
 }
 
+func finishInspectOverview(command *cobra.Command, format string, query inspectpkg.InspectQuery, envelope *inspectpkg.Envelope, inspectErr error) error {
+	if inspectErr == nil {
+		return finishInspect(command, format, envelope, nil)
+	}
+	command.Root().SilenceErrors = true
+	command.Root().SilenceUsage = true
+	exitErr := &inspectExitError{code: inspectpkg.ExitCodeFor(inspectErr), err: fmt.Errorf("hufu inspect overview: %w", inspectErr)}
+	if inspectpkg.Format(format) == inspectpkg.FormatJSON {
+		failure := inspectpkg.OverviewFailure(query, inspectErr)
+		encoder := json.NewEncoder(command.OutOrStdout())
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(failure); err != nil {
+			return &inspectExitError{code: inspectpkg.ExitIntegrity, err: fmt.Errorf("hufu inspect overview: encode JSON failure: %w", err)}
+		}
+		return exitErr
+	}
+	data := inspectpkg.OverviewFailure(query, inspectErr).Data.(inspectpkg.OverviewData)
+	if err := renderOverviewError(command.ErrOrStderr(), data.Error, query.Workspace); err != nil {
+		return &inspectExitError{code: inspectpkg.ExitIntegrity, err: fmt.Errorf("hufu inspect overview: render error: %w", err)}
+	}
+	return exitErr
+}
+
+func renderOverviewError(writer io.Writer, view *inspectpkg.OperatorErrorView, target string) error {
+	if view == nil {
+		return fmt.Errorf("nil operator error")
+	}
+	_, err := fmt.Fprintf(writer, "Error [%s]\nState: Operation did not start; no data was modified.\nWhat: %s.\nTarget: %s\nNext: Verify the exact workspace and selectors with inspect overview.\n",
+		view.Code, view.Message, valueOrUnavailable(target))
+	return err
+}
+
 func inspectProjectionExit(command *cobra.Command, envelope *inspectpkg.Envelope) error {
 	if envelope == nil || envelope.Kind != inspectpkg.KindReplay {
 		return nil
@@ -271,6 +353,26 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		return fmt.Errorf("nil inspect envelope")
 	}
 	switch data := envelope.Data.(type) {
+	case inspectpkg.OverviewData:
+		if data.Snapshot == nil {
+			return fmt.Errorf("overview snapshot is unavailable")
+		}
+		snapshot := data.Snapshot
+		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nBranch: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
+			snapshot.Scope.WorkspaceExact, valueOrUnavailable(snapshot.Scope.TeamName), snapshot.Scope.RunID,
+			snapshot.Scope.BranchID, snapshot.Activity.State, snapshot.Attention,
+			valueOrUnavailable(snapshot.Outcome.RunOutcome), snapshot.Outcome.AcceptanceState,
+			snapshot.Outcome.CompletionState, snapshot.Integrity.Status); err != nil {
+			return err
+		}
+		for _, change := range snapshot.LatestChanges {
+			if _, err := fmt.Fprintf(writer, "Change %d: %s status=%s reason=%s refs=%s\n",
+				change.EventOrdinal, change.Kind, valueOrUnavailable(change.Status),
+				valueOrUnavailable(change.ReasonCode), refsOrNone(change.Refs)); err != nil {
+				return err
+			}
+		}
+		return nil
 	case inspectpkg.RunData:
 		_, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nTasks: %d total, %d done, %d unresolved\nAttempts: %d total, %d failed\nEvidence refs: %s\n",
 			data.RunID, envelope.Query.BranchID, valueOrUnavailable(data.Outcome), data.Acceptance, data.Completion,

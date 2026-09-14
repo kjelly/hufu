@@ -17,6 +17,7 @@ type IndexedEvent struct {
 type Lineage struct {
 	BranchID         string
 	ActiveBranchID   string
+	SelectedTeam     string
 	GlobalEventCount int
 	GlobalEvents     []IndexedEvent
 	Events           []IndexedEvent
@@ -70,7 +71,14 @@ func LoadLineage(ctx context.Context, query InspectQuery) (Lineage, error) {
 	for index, event := range global {
 		globalIndexed[index] = IndexedEvent{Ordinal: int64(index + 1), Event: event}
 	}
-	return Lineage{BranchID: branchID, ActiveBranchID: tree.ActiveBranch, GlobalEventCount: len(global), GlobalEvents: globalIndexed, Events: indexed}, nil
+	selectedTeam := ""
+	if branch := tree.Branches[branchID]; branch != nil {
+		selectedTeam = strings.TrimSpace(branch.State.SelectedTeam)
+	}
+	return Lineage{
+		BranchID: branchID, ActiveBranchID: tree.ActiveBranch, SelectedTeam: selectedTeam,
+		GlobalEventCount: len(global), GlobalEvents: globalIndexed, Events: indexed,
+	}, nil
 }
 
 func resolveBranch(tree *team.SessionTree, requested string) (string, error) {

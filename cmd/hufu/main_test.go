@@ -104,4 +104,3 @@ func TestCommandErrorDoesNotPrintUsage(t *testing.T) {
 		t.Fatalf("expected output not to contain Usage: on error, got:\n%s", output)
 	}
 }
-

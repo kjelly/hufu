@@ -81,17 +81,25 @@ func InspectRun(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	selected, err := selectRun(lineage, query)
+	data, _, err := projectRunData(ctx, query, lineage)
 	if err != nil {
 		return nil, err
 	}
+	return envelope(KindRun, query, lineage.BranchID, data), nil
+}
+
+func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (RunData, selectedRun, error) {
+	selected, err := selectRun(lineage, query)
+	if err != nil {
+		return RunData{}, selectedRun{}, err
+	}
 	tasks, err := team.ReplayTodoList(selected.runEvents)
 	if err != nil {
-		return nil, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
+		return RunData{}, selectedRun{}, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}
 	explanation, err := auditverify.ExplainLineageRun(ctx, query.Workspace, query.RunID, selected.raw)
 	if err != nil {
-		return nil, classifyProjectionError(query.RunID, err)
+		return RunData{}, selectedRun{}, classifyProjectionError(query.RunID, err)
 	}
 
 	data := RunData{
@@ -106,7 +114,7 @@ func InspectRun(ctx context.Context, query InspectQuery) (*Envelope, error) {
 		data.TerminalEventID = selected.terminal.ID
 		projected := team.ReduceToSessionData(selected.raw[:selected.terminalIndex+1])
 		if projected == nil || projected.RunResult == nil || projected.RunResult.RunID != query.RunID {
-			return nil, fmt.Errorf("%w: terminal event %q did not reduce to run %q", ErrIntegrity, selected.terminal.ID, query.RunID)
+			return RunData{}, selectedRun{}, fmt.Errorf("%w: terminal event %q did not reduce to run %q", ErrIntegrity, selected.terminal.ID, query.RunID)
 		}
 		result := projected.RunResult
 		data.Outcome = string(result.Outcome)
@@ -124,7 +132,7 @@ func InspectRun(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if explanation != nil && explanation.Verification != nil {
 		data.Completion = string(explanation.Verification.Completion.Status)
 	}
-	return envelope(KindRun, query, lineage.BranchID, data), nil
+	return data, selected, nil
 }
 
 func InspectTask(ctx context.Context, query InspectQuery) (*Envelope, error) {
