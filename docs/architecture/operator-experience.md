@@ -1493,19 +1493,22 @@ Legacy root/status/resume/retry/reconcile 與 domain-specific format保持既有
 ### Phase 4 — TUI Summary、Theme 與低刷新
 
 以下工作可與 Phase 3 無直接依賴的部分並行。HF-UX-039 是本 phase 其餘工作項的共同前置：
-`internal/tui/tui.go` 現況 3021 行，任何在其上疊加的新程式碼都會讓 CLAUDE.md 的 800 行/檔案
-違規更嚴重，必須先分解。
+`internal/tui/tui.go` 在本 phase 開始時為 3021 行；已先純搬移分解，再加入本 phase 功能。
 
 | 工作 ID | 直接依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-039 | 001A | `internal/tui` 檔案分解：拆分 `tui.go`（現況 3021 行）為多個 <800 行檔案，純搬移不改行為 | 既有 TUI unit/integration/race tests 全過且零行為差異；拆分後每個檔案 <800 行；之後的 HF-UX-040/041/044 不得再對 `tui.go` 淨增行數 |
-| HF-UX-040 | 012A/020A/022/039 | summary strip + stable task/detail navigation | 與 CLI snapshot 一致；新 event 不搶焦點 |
-| HF-UX-041 | 001A/039 | instance-scoped semantic theme | live light/dark/mono 切換不重啟、不改 runtime、不遺失輸入 |
-| HF-UX-042 | 041 | epaper renderer policy / bounded redraw | idle 0 repaint；背景 <=1Hz；input/gate 及時處理 |
-| HF-UX-043 | 020B/040 | owner/passive/quit/PTY boundary | 不把 close view 當 kill；不把 owner退出當虛構 detach |
-| HF-UX-044 | 040/041 | compact layout、CJK、keyboard/copy/escape safety | 各 terminal sizes 與 terminal injection fixtures 全過 |
+| HF-UX-039 | 001A | **完成：**`internal/tui` 檔案分解：`tui.go` 與拆出 production files 均 <800 行，純搬移先通過既有測試 | 既有 TUI unit/integration/race tests 全過且零行為差異；後續功能未使 `tui.go` 回到單體檔案 |
+| HF-UX-040 | 012A/020A/022/039 | **完成：**shared snapshot summary strip + stable task/detail navigation + unread badge | TUI 使用 `operator.BuildSummary`；背景 event 不改 detail/focus/scroll |
+| HF-UX-041 | 001A/039 | **完成：**instance-scoped semantic theme | CLI/TUI 共用 semantic resolver；live auto/light/dark/mono 切換保留輸入、focus、scroll與PTY mapping；無 package-global TUI style hot-swap |
+| HF-UX-042 | 041 | **完成：**epaper renderer policy / bounded redraw | 1 FPS renderer cap、無 spinner/blink；auto theme 無變化時不送 repaint message；input/gate仍直接進 Update |
+| HF-UX-043 | 020B/040 | **完成：**owner/passive/quit/PTY boundary | passive q/esc只關 view且不送 wrap-up；owner不提供虛構 detach；PTY仍由 `tea.ExecProcess` exclusive takeover |
+| HF-UX-044 | 040/041 | **完成：**compact layout、CJK、keyboard/copy/escape safety | 120/80/60/極小 terminal fixtures、cell-width truncation、ANSI/OSC/DCS清理與 explicit OSC52 copy tests 全過 |
 
-**Gate P4：**CLI/TUI parity、keyboard journeys、theme/race/epaper tests 全過。不得只提供 theme flag 而未替換 overlays 的固定色碼；HF-UX-039 未完成前，不得將新程式碼疊加進未分解的 `tui.go`。
+**Gate P4（2026-09-14 已通過）：**CLI/TUI summary parity、keyboard journeys、theme instance
+isolation、epaper idle、owner/passive、terminal injection、TUI race與既有 PTY tests 全過；真實 tmux
+`-eink` session 的 auto theme smoke test通過。`go test ./...`、`go vet ./...`、
+`golangci-lint run`與`bin/check-docs`成功。`--theme`、`--display-preset` 已同步 root/canonical
+run help、completion、README 與 config reference；plain/JSON mode拒絕 TUI terminal controls。
 
 ### Phase 5 — Evidence／Context／Learning 與 Review
 

@@ -133,6 +133,12 @@ export extern "hufu" [
   --steps(-s) # Pause for user confirmation before executing each batch of worker tasks
   --dry-run # Preview skill matching and task delegation without executing agents
   --tui # Show a Bubble Tea TUI for real-time task tracking
+  --tui-compact # Force the compact three-column TUI layout
+  --display-mode: string # Status display mode: auto, terminal, or plain
+  --theme: string # Display theme: auto, light, dark, or mono
+  --display-preset: string # Display preset: default or epaper
+  --no-color # Disable ANSI color output
+  --no-spinner # Disable the TUI waiting spinner
   --rbash # Use restricted bash (rbash) for the bash tool
   --no-net # Block all network access for agent subprocesses
   --force-mcp # Force MCP mode

@@ -240,6 +240,12 @@ go run ./cmd/hufu
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
 | `--tui` | — | `bool` | `false` | Show a Bubble Tea TUI for real-time task tracking |
+| `--tui-compact` | — | `bool` | `false` | Force the compact three-column TUI layout |
+| `--display-mode` | — | `string` | `auto` | Status transport: `auto`, `terminal`, or `plain`; plain never emits terminal controls |
+| `--theme` | — | `string` | config or `auto` | Semantic palette: `auto`, `light`, `dark`, or `mono` |
+| `--display-preset` | — | `string` | config or `default` | Rendering policy: `default` or low-refresh `epaper` |
+| `--no-color` | — | `bool` | `false` | Disable ANSI color; also honors `NO_COLOR` |
+| `--no-spinner` | — | `bool` | `false` | Disable the waiting spinner; also honors `NO_SPINNER` |
 | `--enable-pty-terminal` | — | `bool` | `false` | Eagerly initialize experimental Linux/macOS PTY handoff; `pty:true` starts it automatically |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
@@ -1437,6 +1443,9 @@ The report includes:
 ```yaml
 provider-url: http://localhost:11434/v1
 embedding-model: ollama/nomic-embed-text:latest
+presentation:
+  theme: auto
+  display-preset: default
 ```
 
 ### Configuration Priority

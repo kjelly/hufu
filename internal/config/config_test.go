@@ -66,6 +66,25 @@ func TestLoadConfigProfiles(t *testing.T) {
 	}
 }
 
+func TestLoadConfigPresentationPreferences(t *testing.T) {
+	isolateHome(t)
+	tmpDir := t.TempDir()
+	configContent := "presentation:\n  theme: light\n  display-preset: epaper\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "hufu.yaml"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+
+	cfg := LoadConfig()
+	if cfg.Presentation.Theme != "light" || cfg.Presentation.DisplayPreset != "epaper" {
+		t.Fatalf("presentation = %#v", cfg.Presentation)
+	}
+}
+
 func TestLoadConfigWithProviderURL(t *testing.T) {
 	isolateHome(t)
 	// Create a temporary directory for testing

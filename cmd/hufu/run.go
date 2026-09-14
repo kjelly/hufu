@@ -38,8 +38,6 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// default or resolved absolute path.
 	compatibilityWarnings := newExecutionCompatibilityWarningState(opts.workspace)
 	configureOutputRendering()
-	tuipkg.SetSpinnerEnabled(!opts.noSpinner)
-	tuipkg.SetCompactMode(opts.tuiCompact)
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
@@ -391,6 +389,25 @@ func validateRunFlags() error {
 	default:
 		return fmt.Errorf("invalid --display-mode %q: use 'auto', 'terminal', or 'plain'", opts.displayMode)
 	}
+	presentationConfig := config.LoadConfig().Presentation
+	themeValue := opts.themeMode
+	if themeValue == "" {
+		themeValue = presentationConfig.Theme
+	}
+	if themeValue != "" {
+		if _, err := tuipkg.ParseThemeMode(themeValue); err != nil {
+			return err
+		}
+	}
+	presetValue := opts.displayPreset
+	if presetValue == "" {
+		presetValue = presentationConfig.DisplayPreset
+	}
+	if presetValue != "" {
+		if _, err := tuipkg.ParseDisplayPreset(presetValue); err != nil {
+			return err
+		}
+	}
 	if opts.eventFormat != "text" && opts.eventFormat != "jsonl" {
 		return fmt.Errorf("invalid --event-format %q: use 'text' or 'jsonl'", opts.eventFormat)
 	}
@@ -413,6 +430,12 @@ func validateRunFlags() error {
 	}
 	if opts.stepsMode && opts.tuiMode {
 		return fmt.Errorf("cannot use --steps (step confirmation) with --tui (TUI mode); remove one flag")
+	}
+	if opts.tuiMode && opts.displayMode == "plain" {
+		return fmt.Errorf("cannot use --tui with --display-mode plain; plain mode never emits alternate-screen or cursor controls")
+	}
+	if opts.tuiMode && opts.outputFormat == "json" {
+		return fmt.Errorf("cannot use --tui with --output json; machine output never emits alternate-screen or cursor controls")
 	}
 	if opts.defaultTeam && opts.agentTeamName != "" {
 		return fmt.Errorf("cannot use --default with --agent-team; pick one")

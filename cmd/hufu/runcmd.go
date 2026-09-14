@@ -11,9 +11,11 @@ type canonicalRunOptions struct {
 	team, agentTeam, workspace, workspaceRoot, searchPath string
 	providerURL, providerAPIKey                           string
 	model, coordinatorModel, output, eventFormat          string
+	displayMode, theme, displayPreset                     string
 	temperature, maxTokens, topP, topK, reasoningEffort   string
 	sidecarModel, guardModel, judgeModel, planReviewer    string
 	quiet, verbose, dryRun, defaultTeam, noNet, forceMCP  bool
+	noSpinner, tuiCompact                                 bool
 	unattended, plan, autoSkills, report, steps, tui      bool
 	rbash, direnv, noJournal, autoApprove, think          bool
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
@@ -73,6 +75,11 @@ which the team name is joined exactly once. Omit both to use
 			opts.planReviewerModelOverride = options.planReviewer
 			opts.outputFormat = options.output
 			opts.eventFormat = options.eventFormat
+			opts.displayMode = options.displayMode
+			opts.themeMode = options.theme
+			opts.displayPreset = options.displayPreset
+			opts.noSpinner = options.noSpinner
+			opts.tuiCompact = options.tuiCompact
 			opts.quietMode = options.quiet
 			opts.verbose = options.verbose
 			opts.dryRun = options.dryRun
@@ -129,6 +136,11 @@ which the team name is joined exactly once. Omit both to use
 	flags.StringVar(&options.planReviewer, "plan-reviewer-model", "", "Override plan reviewer LLM target")
 	flags.StringVar(&options.output, "output", "", "Final-result format: text or json")
 	flags.StringVar(&options.eventFormat, "event-format", "text", "Status event format: text or jsonl")
+	flags.StringVar(&options.displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")
+	flags.StringVar(&options.theme, "theme", "", "Display theme: auto, light, dark, or mono")
+	flags.StringVar(&options.displayPreset, "display-preset", "", "Display preset: default or epaper")
+	flags.BoolVar(&options.noSpinner, "no-spinner", false, "Disable the TUI waiting spinner (also honors NO_SPINNER)")
+	flags.BoolVar(&options.tuiCompact, "tui-compact", false, "Force the compact three-column TUI layout")
 	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Suppress status output")
 	flags.BoolVarP(&options.verbose, "verbose", "v", false, "Show full agent output")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "Preview without executing agents")
@@ -160,6 +172,9 @@ which the team name is joined exactly once. Omit both to use
 	flags.StringArrayVar(&options.skills, "skill", nil, "Force-load a skill (repeatable)")
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "event-format", []string{"text", "jsonl"})
+	registerStaticFlagCompletion(command, "display-mode", []string{"auto", "terminal", "plain"})
+	registerStaticFlagCompletion(command, "theme", []string{"auto", "light", "dark", "mono"})
+	registerStaticFlagCompletion(command, "display-preset", []string{"default", "epaper"})
 	return command
 }
 

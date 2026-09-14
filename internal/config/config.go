@@ -155,6 +155,7 @@ type Config struct {
 	NoNet             bool                      `yaml:"no-net"`
 	ForceMCP          bool                      `yaml:"force-mcp"`
 	ProjectContext    bool                      `yaml:"project-context"`
+	Presentation      PresentationConfig        `yaml:"presentation"`
 	Shell             string                    `yaml:"shell"`
 	RawVars           interface{}               `yaml:"vars"`
 	Hooks             map[string]string         `yaml:"hooks"`
@@ -164,6 +165,13 @@ type Config struct {
 	//   profiles:
 	//     batch: {unattended: "true", max-duration: "600"}
 	Profiles map[string]map[string]string `yaml:"profiles"`
+}
+
+// PresentationConfig contains user-interface preferences only. These values
+// never participate in runtime policy or session binding.
+type PresentationConfig struct {
+	Theme         string `yaml:"theme"`
+	DisplayPreset string `yaml:"display-preset"`
 }
 
 func (c *Config) GetVars() map[string]string {
@@ -260,6 +268,8 @@ func (c *Config) mergeScalarFields(fileCfg *Config) {
 		{&c.SidecarModel, &fileCfg.SidecarModel}, {&c.PlanReviewerModel, &fileCfg.PlanReviewerModel},
 		{&c.GuardModel, &fileCfg.GuardModel}, {&c.JudgeModel, &fileCfg.JudgeModel},
 		{&c.StallThreshold, &fileCfg.StallThreshold},
+		{&c.Presentation.Theme, &fileCfg.Presentation.Theme},
+		{&c.Presentation.DisplayPreset, &fileCfg.Presentation.DisplayPreset},
 	} {
 		if *field.src != "" {
 			*field.dst = *field.src

@@ -8,8 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/kjelly/hufu/internal/utils"
 )
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -43,19 +41,6 @@ type askState struct {
 func (s *askState) isFreeText() bool {
 	return s.freeMode || (s.req != nil && s.req.Type == "free_text")
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-var (
-	askBoxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("4")).Padding(1, 2)
-	askQuestionStyle = lipgloss.NewStyle().Bold(true)
-	askCursorStr     = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true).Render(">")
-	askActiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
-	askCheckOn       = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Render("[✓]")
-	askCheckOff      = lipgloss.NewStyle().Faint(true).Render("[ ]")
-	askCustomStyle   = lipgloss.NewStyle().Faint(true)
-	askHintStyle     = lipgloss.NewStyle().Faint(true)
-)
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -192,21 +177,21 @@ func (m Model) askUserView() string {
 	innerW := dialogW - 6 // border(1) + padding(2) each side
 
 	var sb strings.Builder
-	sb.WriteString(askQuestionStyle.Render(wordWrap(req.Question, innerW)))
+	sb.WriteString(m.styles.askQuestion.Render(wordWrap(req.Question, innerW)))
 	sb.WriteString("\n")
 
 	if st.isFreeText() {
 		sb.WriteString("\n")
-		sb.WriteString(askActiveStyle.Render("> "))
+		sb.WriteString(m.styles.askActive.Render("> "))
 		sb.WriteString(st.ti.View())
 		sb.WriteString("\n\n")
-		sb.WriteString(askHintStyle.Render("enter  submit  ctrl+c cancel"))
+		sb.WriteString(m.styles.askHint.Render("enter  submit  ctrl+c cancel"))
 	} else if len(req.Options) == 0 && !req.AllowAny && req.Type != "mixed" {
 		sb.WriteString("\n")
-		sb.WriteString(askActiveStyle.Render("> "))
+		sb.WriteString(m.styles.askActive.Render("> "))
 		sb.WriteString(st.ti.View())
 		sb.WriteString("\n\n")
-		sb.WriteString(askHintStyle.Render("enter submit  ctrl+c cancel"))
+		sb.WriteString(m.styles.askHint.Render("enter submit  ctrl+c cancel"))
 	} else {
 		opts := req.Options
 		hasCustom := req.AllowAny || req.Type == "mixed"
@@ -218,21 +203,21 @@ func (m Model) askUserView() string {
 		sb.WriteString("\n")
 		for i, opt := range opts {
 			sel := st.cursor == i
-			label := utils.TruncateLine(opt.Label, innerW-8)
+			label := truncateLineCells(opt.Label, innerW-8)
 			var line string
 			if req.Type == "multiple_choice" {
-				check := askCheckOff
+				check := m.styles.askCheckOff.Render("[ ]")
 				if st.selected[i] {
-					check = askCheckOn
+					check = m.styles.askCheckOn.Render("[✓]")
 				}
 				if sel {
-					line = askCursorStr + " " + check + " " + askActiveStyle.Render(label)
+					line = m.styles.askCursor.Render(">") + " " + check + " " + m.styles.askActive.Render(label)
 				} else {
 					line = "  " + check + " " + label
 				}
 			} else {
 				if sel {
-					line = askCursorStr + " " + askActiveStyle.Render(label)
+					line = m.styles.askCursor.Render(">") + " " + m.styles.askActive.Render(label)
 				} else {
 					line = "  " + label
 				}
@@ -240,11 +225,11 @@ func (m Model) askUserView() string {
 			sb.WriteString(line + "\n")
 		}
 		if hasCustom {
-			custom := utils.TruncatePreview("Type your own answer…", innerW-4)
+			custom := truncateCells("Type your own answer…", innerW-4)
 			if st.cursor == total-1 {
-				sb.WriteString(askCursorStr + " " + askActiveStyle.Render(custom) + "\n")
+				sb.WriteString(m.styles.askCursor.Render(">") + " " + m.styles.askActive.Render(custom) + "\n")
 			} else {
-				sb.WriteString("  " + askCustomStyle.Render(custom) + "\n")
+				sb.WriteString("  " + m.styles.askCustom.Render(custom) + "\n")
 			}
 		}
 
@@ -253,10 +238,10 @@ func (m Model) askUserView() string {
 		if req.Type == "multiple_choice" {
 			hint = "↑↓/tab navigate  space toggle  enter confirm  ctrl+c cancel"
 		}
-		sb.WriteString(askHintStyle.Render(hint))
+		sb.WriteString(m.styles.askHint.Render(hint))
 	}
 
-	box := askBoxStyle.Width(innerW).Render(sb.String())
+	box := m.styles.askBox.Width(innerW).Render(sb.String())
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 

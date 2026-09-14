@@ -140,6 +140,12 @@ Results joined and printed to stdout
 | `--show-history` | — | `false` | Show previous session history on resume |
 | `--dry-run` | — | `false` | LLM-free preview of skill matching and available agents (does not call the model, does not execute agents) |
 | `--tui` | — | `false` | Show a Bubble Tea TUI for real-time task tracking |
+| `--tui-compact` | — | `false` | Force the compact three-column TUI layout |
+| `--display-mode` | — | `auto` | Status transport: `auto`, `terminal`, or `plain`; plain never emits terminal controls |
+| `--theme` | — | config or `auto` | Semantic palette: `auto`, `light`, `dark`, or `mono` |
+| `--display-preset` | — | config or `default` | Rendering policy: `default` or low-refresh `epaper` |
+| `--no-color` | — | `false` | Disable ANSI color output; also honors `NO_COLOR` |
+| `--no-spinner` | — | `false` | Disable the waiting spinner; also honors `NO_SPINNER` |
 | `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `false` | Block all network access for agent subprocesses |
 | `--force-mcp` | — | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
@@ -319,6 +325,7 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `c` | Open prompt injection dialog |
 | `a` | Toggle activity log |
 | `m` | Toggle mouse |
+| `T` | Cycle `auto` / `light` / `dark` / `mono` theme without restarting the runtime |
 | `M` | Open memory view |
 | `q` | Quit (only when finished) |
 | `r` | Generate report (only when finished) |

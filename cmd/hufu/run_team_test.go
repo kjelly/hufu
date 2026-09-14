@@ -23,6 +23,8 @@ func TestValidateRunFlags(t *testing.T) {
 	origAgentTeam := opts.agentTeamName
 	origDisplayMode := opts.displayMode
 	origEventFormat := opts.eventFormat
+	origThemeMode := opts.themeMode
+	origDisplayPreset := opts.displayPreset
 	defer func() {
 		opts.outputFormat = origOutput
 		opts.stepsMode = origSteps
@@ -32,6 +34,8 @@ func TestValidateRunFlags(t *testing.T) {
 		opts.agentTeamName = origAgentTeam
 		opts.displayMode = origDisplayMode
 		opts.eventFormat = origEventFormat
+		opts.themeMode = origThemeMode
+		opts.displayPreset = origDisplayPreset
 	}()
 
 	// resetAll sets all flags to their default (non-conflicting) values
@@ -44,6 +48,8 @@ func TestValidateRunFlags(t *testing.T) {
 		opts.defaultTeam = false
 		opts.agentTeamName = ""
 		opts.displayMode = "auto"
+		opts.themeMode = ""
+		opts.displayPreset = ""
 		opts.eventFormat = "text"
 	}
 
@@ -77,6 +83,30 @@ func TestValidateRunFlags(t *testing.T) {
 		err := validateRunFlags()
 		if err == nil || !strings.Contains(err.Error(), "invalid --display-mode") {
 			t.Errorf("expected invalid display mode error, got %v", err)
+		}
+	})
+	t.Run("rejects unknown theme and preset", func(t *testing.T) {
+		resetAll()
+		opts.themeMode = "sepia"
+		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "invalid theme") {
+			t.Fatalf("invalid theme error = %v", err)
+		}
+		resetAll()
+		opts.displayPreset = "animated"
+		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "invalid display preset") {
+			t.Fatalf("invalid preset error = %v", err)
+		}
+	})
+	t.Run("machine and plain modes reject TUI control sequences", func(t *testing.T) {
+		resetAll()
+		opts.tuiMode, opts.displayMode = true, "plain"
+		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "alternate-screen") {
+			t.Fatalf("plain TUI error = %v", err)
+		}
+		resetAll()
+		opts.tuiMode, opts.outputFormat = true, "json"
+		if err := validateRunFlags(); err == nil || !strings.Contains(err.Error(), "machine output") {
+			t.Fatalf("JSON TUI error = %v", err)
 		}
 	})
 	t.Run("rejects unknown event format", func(t *testing.T) {

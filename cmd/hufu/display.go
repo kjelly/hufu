@@ -20,6 +20,8 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
 
+	"github.com/kjelly/hufu/internal/config"
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/notify"
@@ -670,9 +672,29 @@ func (d *taskDisplay) clear() {
 }
 
 func configureOutputRendering() {
-	if shouldDisableColor(opts.noColorMode, opts.outputFormat, os.Getenv("NO_COLOR")) {
+	noColor := shouldDisableColor(opts.noColorMode, opts.outputFormat, os.Getenv("NO_COLOR")) || opts.displayMode == "plain"
+	if noColor {
 		lipgloss.SetColorProfile(termenv.Ascii)
 	}
+	themeValue := opts.themeMode
+	if themeValue == "" {
+		themeValue = config.LoadConfig().Presentation.Theme
+	}
+	if themeValue == "" {
+		themeValue = string(tuipkg.ThemeAuto)
+	}
+	theme, err := tuipkg.ParseThemeMode(themeValue)
+	if err != nil {
+		theme = tuipkg.ThemeAuto
+	}
+	styles := tuipkg.NewCLIStyleSet(theme, noColor)
+	boldStyle, dimStyle, agentStyle, toolStyle = styles.Bold, styles.Dim, styles.Agent, styles.Tool
+	resultStyle, errStyle, stepStyle, doneStyle = styles.Result, styles.Error, styles.Step, styles.Done
+	textStyle, thinkStyle, headerStyle = styles.Text, styles.Think, styles.Header
+	pendingIcon, progressIcon, pausedIcon = styles.PendingIcon, styles.ProgressIcon, styles.PausedIcon
+	doneIcon, errorIcon = styles.DoneIcon, styles.ErrorIcon
+	skipTagStyle, doneTagStyle, errTagStyle = styles.SkipTag, styles.DoneTag, styles.ErrorTag
+	teamStyle, wrapUpStyle = styles.Team, styles.WrapUp
 }
 
 func shouldDisableColor(noColor bool, format, noColorEnv string) bool {
@@ -1203,6 +1225,11 @@ func (d *coordDisplay) finalizeTasks() {
 func newCoordDisplay(tc *teamContext) *coordDisplay {
 	if p := activeTUIProgram.Load(); p != nil {
 		tuiReporter, stopAll := makeTUIReporter(p)
+		requestSnapshot, stopSnapshots := newTUISnapshotReporter(p, tc.session.Workspace)
+		stopTUI := func() {
+			stopAll()
+			stopSnapshots()
+		}
 
 		// Open session log file for post-hoc traceability
 		logPath := filepath.Join(tc.session.Workspace, "execution_trace.log")
@@ -1214,6 +1241,9 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 
 		compositeReporter := func(event team.StatusEvent) {
 			tuiReporter(event)
+			if isTUISnapshotRefreshEvent(event.Type) {
+				requestSnapshot()
+			}
 			fileRep(event)
 		}
 		if tc.notifier != nil {
@@ -1225,7 +1255,8 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 		}
 
 		tc.coordinator.SetStatusReporter(compositeReporter)
-		return &coordDisplay{stopThinking: stopAll, logFile: logFile}
+		requestSnapshot()
+		return &coordDisplay{stopThinking: stopTUI, logFile: logFile}
 	}
 	if opts.eventFormat == "jsonl" {
 		tc.coordinator.SetStatusReporter(makeJSONLReporter(tc.notifier))
@@ -1239,6 +1270,51 @@ func newCoordDisplay(tc *teamContext) *coordDisplay {
 	setupStatusReporter(w, tc.coordinator, taskDisp, skillDisp, idleTimer, tc.notifier)
 	setStatusFlusher(w, taskDisp, skillDisp)
 	return &coordDisplay{idleTimer: idleTimer, taskDisp: taskDisp}
+}
+
+func isTUISnapshotRefreshEvent(eventType string) bool {
+	switch eventType {
+	case "todos_updated", "plan_approved", "wrap_up_phase", "done", "error", "terminal_started":
+		return true
+	default:
+		return false
+	}
+}
+
+func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := make(chan struct{}, 1)
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-requests:
+				queryCtx, queryCancel := context.WithTimeout(ctx, time.Second)
+				envelope, err := inspectpkg.InspectOverview(queryCtx, inspectpkg.InspectQuery{Workspace: workspace})
+				queryCancel()
+				if err != nil || envelope == nil {
+					continue
+				}
+				data, ok := envelope.Data.(inspectpkg.OverviewData)
+				if ok && data.Snapshot != nil {
+					program.Send(tuipkg.OperatorSnapshotMsg{Snapshot: *data.Snapshot})
+				}
+			}
+		}
+	})
+	request := func() {
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+	}
+	stop := func() {
+		cancel()
+		workers.Wait()
+	}
+	return request, stop
 }
 
 type jsonStatusEvent struct {
@@ -1720,11 +1796,19 @@ func syncLogState() {
 // runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo, route RouteDecision) (string, error) {
-	model := tuipkg.New(prompt, teamInfo)
+	presentationOptions, err := resolvedTUIOptions(ctx)
+	if err != nil {
+		return "", err
+	}
+	model := tuipkg.NewWithOptions(prompt, teamInfo, presentationOptions)
 	if opts.isChatTUI {
 		model.IsChat = true
 	}
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
+	programOptions := []tea.ProgramOption{tea.WithAltScreen(), tea.WithoutSignalHandler()}
+	if presentationOptions.DisplayPreset == tuipkg.DisplayEpaper {
+		programOptions = append(programOptions, tea.WithFPS(1))
+	}
+	p := tea.NewProgram(model, programOptions...)
 
 	activeTUIProgram.Store(p)
 	syncLogState()
@@ -1824,6 +1908,40 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 		return "", errInterrupted{}
 	}
 	return execResult, execErr
+}
+
+func resolvedTUIOptions(ctx context.Context) (tuipkg.Options, error) {
+	loaded := config.LoadConfig()
+	themeValue := opts.themeMode
+	if themeValue == "" {
+		themeValue = loaded.Presentation.Theme
+	}
+	if themeValue == "" {
+		themeValue = string(tuipkg.ThemeAuto)
+	}
+	theme, err := tuipkg.ParseThemeMode(themeValue)
+	if err != nil {
+		return tuipkg.Options{}, fmt.Errorf("presentation.theme: %w", err)
+	}
+
+	presetValue := opts.displayPreset
+	if presetValue == "" {
+		presetValue = loaded.Presentation.DisplayPreset
+	}
+	if presetValue == "" {
+		presetValue = string(tuipkg.DisplayDefault)
+	}
+	preset, err := tuipkg.ParseDisplayPreset(presetValue)
+	if err != nil {
+		return tuipkg.Options{}, fmt.Errorf("presentation.display-preset: %w", err)
+	}
+
+	return tuipkg.Options{
+		Theme: theme, DisplayPreset: preset,
+		NoColor: opts.noColorMode || os.Getenv("NO_COLOR") != "" || opts.displayMode == "plain" || opts.outputFormat == "json",
+		Spinner: !opts.noSpinner && os.Getenv("NO_SPINNER") == "", Compact: opts.tuiCompact,
+		Owner: true, Context: ctx,
+	}, nil
 }
 
 func waitWithTimeoutAndFinalize(finished chan struct{}, emergencyFinalize func(), exit func(int)) {

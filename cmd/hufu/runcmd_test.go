@@ -45,6 +45,15 @@ func TestCanonicalRunFactoryFlagsAreInstanceScoped(t *testing.T) {
 	}
 }
 
+func TestCanonicalRunExposesPresentationFlags(t *testing.T) {
+	command := newRunCommand()
+	for _, name := range []string{"theme", "display-preset", "display-mode", "no-spinner", "tui-compact"} {
+		if command.Flags().Lookup(name) == nil {
+			t.Errorf("canonical run missing --%s", name)
+		}
+	}
+}
+
 func TestCanonicalRunAcceptsHyphenLeadingPromptAfterSeparator(t *testing.T) {
 	command := newRunCommand()
 	if err := command.ParseFlags([]string{"--team", "alpha", "--", "-audit the result"}); err != nil {

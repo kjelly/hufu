@@ -102,6 +102,8 @@ type runOptions struct {
 	quietMode         bool
 	outputFormat      string
 	displayMode       string
+	themeMode         string
+	displayPreset     string
 	noColorMode       bool
 	noSummary         bool
 	noSpinner         bool
