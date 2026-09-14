@@ -39,7 +39,8 @@ the detailed audit, context, or decision maintenance commands.`,
 		Example: `  hufu inspect run run-123 --workspace ./workspace
   hufu inspect task task-7 --run run-123 --format json
   hufu inspect trace run-123 --branch incident-fix
-  hufu inspect replay run-123 --format json`,
+  hufu inspect replay run-123 --format json
+  hufu inspect storage --workspace ./workspace --format json`,
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 	}
@@ -55,8 +56,25 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
 		newInspectReplayCommand(options),
+		newInspectStorageCommand(options),
 	)
 	return command
+}
+
+func newInspectStorageCommand(options *inspectCLIOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:               "storage",
+		Short:             "Show read-only SQLite storage diagnostics",
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := options.validateFormat(); err != nil {
+				return err
+			}
+			envelope, err := inspectpkg.InspectStorage(command.Context(), options.query())
+			return finishInspect(command, options.format, envelope, err)
+		},
+	}
 }
 
 func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
@@ -327,6 +345,11 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			}
 		}
 		return nil
+	case inspectpkg.StorageData:
+		_, err := fmt.Fprintf(writer, "Page count: %d\nFreelist count: %d\nPage size: %d\nJournal mode: %s\nWAL autocheckpoint: %d\nSchema version: %d\nDatabase bytes: %d\nWAL bytes: %d\nFTS rows: %d\nContext rows: %d\n",
+			data.PageCount, data.FreelistCount, data.PageSize, data.JournalMode, data.WALAutoCheckpoint,
+			data.SchemaVersion, data.DatabaseBytes, data.WALBytes, data.FTSRows, data.ContextRows)
+		return err
 	case inspectpkg.ReplayData:
 		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nEvent chain: %s\nOverall: %s\n", data.RunID, envelope.Query.BranchID, data.EventChain, data.OverallStatus); err != nil {
 			return err

@@ -83,5 +83,18 @@ type ReadOnlyRepository interface {
 	Revision(context.Context) (int64, error)
 	ExperienceAggregate(context.Context, string, string) (ExperienceAggregate, error)
 	ListExperienceAggregates(context.Context, string) ([]ExperienceAggregate, error)
+	StorageDiagnostics(context.Context) (StorageDiagnostics, error)
 	Close() error
+}
+
+// StorageDiagnostics contains content-free, read-only SQLite health facts.
+type StorageDiagnostics struct {
+	PageCount         int64
+	FreelistCount     int64
+	PageSize          int64
+	JournalMode       string
+	WALAutoCheckpoint int64
+	SchemaVersion     int64
+	FTSRows           int64
+	ContextRows       int64
 }

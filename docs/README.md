@@ -51,6 +51,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Hybrid retrieval lineage scope](architecture/hybrid-retrieval-lineage-scope.md)
   — draft authorization design for exact, lexical, and vector retrieval; the
   current 100K workaround remains until the design is accepted.
+- [SQLite maintenance policy](architecture/sqlite-maintenance-policy.md) —
+  discovery evidence and the still-unmet authorization contract for any
+  explicit maintenance operation.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.

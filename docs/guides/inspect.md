@@ -26,16 +26,19 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
                      [--agent <agent-id> | --all-agents] [--show-content]
 hufu inspect trace <run-id>
 hufu inspect replay <run-id>
+hufu inspect storage
 ```
 
-All subcommands accept these common flags:
+All subcommands accept workspace and format:
 
 ```text
 --workspace, -w <path>   workspace to inspect; defaults to <cwd>/workspace
---branch <id|name|label> exact branch selector; defaults to the active branch
---session <id>           optional exact session filter
 --format text|json       output format; defaults to text
 ```
+
+Run-scoped subcommands also accept `--branch <id|name|label>` and optional
+`--session <id>`. Storage diagnostics reject those selectors because they
+describe the single canonical database, not a branch or session projection.
 
 When `--branch` is omitted, inspection is limited to the active branch. It
 does not search sibling branches for a matching ID. Task and context queries
@@ -50,7 +53,14 @@ hufu inspect evidence run-123
 hufu inspect context task-7 --run run-123 --project project-1 --agent worker-1
 hufu inspect trace run-123 --branch incident-fix
 hufu inspect replay run-123 --format json
+hufu inspect storage --workspace ./workspace --format json
 ```
+
+`inspect storage` reports content-free SQLite facts: page/freelist counts, page
+size, journal mode, WAL autocheckpoint, schema version, database/WAL byte sizes,
+and FTS/context row counts. A missing WAL is reported as zero bytes. The command
+does not create storage, migrate, checkpoint, optimize, vacuum, or rebuild a
+projection.
 
 ## Output and exit status
 

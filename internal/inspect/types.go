@@ -19,6 +19,7 @@ const (
 	KindEvidence Kind = "evidence"
 	KindContext  Kind = "context"
 	KindReplay   Kind = "replay"
+	KindStorage  Kind = "storage"
 )
 
 type Format string
@@ -80,6 +81,12 @@ func (q InspectQuery) Validate(kind Kind) error {
 		}
 		if strings.TrimSpace(q.ProjectID) == "" {
 			return fmt.Errorf("%w: project id is required for context", ErrInvalidQuery)
+		}
+	case KindStorage:
+		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
+			strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
+			strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+			return fmt.Errorf("%w: storage inspection accepts only workspace and format", ErrInvalidQuery)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidQuery, kind)

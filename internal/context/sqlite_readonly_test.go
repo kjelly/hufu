@@ -114,6 +114,40 @@ func TestOpenSQLiteReadOnlyQueriesExistingContext(t *testing.T) {
 	}
 }
 
+func TestOpenSQLiteReadOnlyQueriesCommittedWALContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	writable, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writable.Close()
+	item := ContextItem{
+		ID: "ctx-in-wal", Kind: ContextObservation, Content: "committed WAL observation",
+		Scope: Scope{ProjectID: "project"}, Authority: AuthorityTool, TrustLevel: TrustInternal,
+	}
+	if err := writable.Append(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + "-wal"); err != nil {
+		t.Fatalf("fixture WAL: %v", err)
+	}
+
+	readOnly, err := OpenSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	got, err := readOnly.GetScoped(t.Context(), item.ID, ScopedReadOptions{
+		Scope: Scope{ProjectID: "project"}, IncludeContent: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != item.ID || got.Content != item.Content {
+		t.Fatalf("read-only WAL Get = %#v, want %q", got, item.ID)
+	}
+}
+
 func TestSQLiteReadOnlyGetScopedAuthorizesBeforeContentHydration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	writable, err := OpenSQLite(path)

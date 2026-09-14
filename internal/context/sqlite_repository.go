@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,8 +48,9 @@ func migrationChecksum(sql string) string {
 }
 
 type SQLiteRepository struct {
-	db   *sql.DB
-	path string
+	db          *sql.DB
+	path        string
+	busyRetries atomic.Int64
 }
 
 func OpenSQLite(path string) (*SQLiteRepository, error) {
@@ -92,6 +95,13 @@ func OpenSQLiteReadOnly(path string) (ReadOnlyRepository, error) {
 	dsn := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
 	query := dsn.Query()
 	query.Set("mode", "ro")
+	// A read-only SQLite open of a WAL-mode database creates an empty -wal
+	// sidecar when none exists. In that quiescent case immutable mode prevents
+	// filesystem writes. When a WAL is present, retain normal read-only locking
+	// so committed records that have not yet been checkpointed remain visible.
+	if _, statErr := os.Stat(path + "-wal"); errors.Is(statErr, os.ErrNotExist) {
+		query.Set("immutable", "1")
+	}
 	query.Add("_pragma", "query_only(1)")
 	query.Add("_pragma", "busy_timeout(5000)")
 	dsn.RawQuery = query.Encode()
@@ -109,6 +119,60 @@ func OpenSQLiteReadOnly(path string) (ReadOnlyRepository, error) {
 }
 
 func (r *SQLiteRepository) Close() error { return r.db.Close() }
+
+// StorageDiagnostics reads content-free database facts. It is safe on the
+// query-only handle returned by OpenSQLiteReadOnly and performs no maintenance
+// PRAGMA, migration, checkpoint, or projection work.
+func (r *SQLiteRepository) StorageDiagnostics(ctx context.Context) (StorageDiagnostics, error) {
+	var diagnostics StorageDiagnostics
+	queries := []struct {
+		name   string
+		query  string
+		target any
+	}{
+		{name: "page count", query: "PRAGMA page_count", target: &diagnostics.PageCount},
+		{name: "freelist count", query: "PRAGMA freelist_count", target: &diagnostics.FreelistCount},
+		{name: "page size", query: "PRAGMA page_size", target: &diagnostics.PageSize},
+		{name: "WAL autocheckpoint", query: "PRAGMA wal_autocheckpoint", target: &diagnostics.WALAutoCheckpoint},
+		{name: "schema version", query: "SELECT COALESCE(MAX(version), 0) FROM schema_migrations", target: &diagnostics.SchemaVersion},
+		{name: "FTS rows", query: "SELECT COUNT(*) FROM context_items_fts", target: &diagnostics.FTSRows},
+		{name: "context rows", query: "SELECT COUNT(*) FROM context_items", target: &diagnostics.ContextRows},
+	}
+	for _, query := range queries {
+		if err := r.db.QueryRowContext(ctx, query.query).Scan(query.target); err != nil {
+			return StorageDiagnostics{}, fmt.Errorf("read storage %s: %w", query.name, err)
+		}
+	}
+	journalMode, err := sqliteJournalModeFromHeader(r.path)
+	if err != nil {
+		return StorageDiagnostics{}, fmt.Errorf("read storage journal mode: %w", err)
+	}
+	diagnostics.JournalMode = journalMode
+	return diagnostics, nil
+}
+
+func sqliteJournalModeFromHeader(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	header := make([]byte, 20)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return "", fmt.Errorf("read SQLite header: %w", err)
+	}
+	if string(header[:16]) != "SQLite format 3\x00" {
+		return "", errors.New("invalid SQLite header")
+	}
+	switch header[18] {
+	case 1:
+		return "delete", nil
+	case 2:
+		return "wal", nil
+	default:
+		return "", fmt.Errorf("unknown SQLite write version %d", header[18])
+	}
+}
 
 // migrate applies any not-yet-applied migrationDef in order, verifying the
 // checksum of every already-applied one first so a silently edited migration
@@ -455,6 +519,7 @@ func (r *SQLiteRepository) withBusyRetry(ctx context.Context, fn func() error) e
 		if err = fn(); err == nil || (!strings.Contains(strings.ToLower(err.Error()), "database is locked") && !strings.Contains(strings.ToLower(err.Error()), "database is busy")) {
 			return err
 		}
+		r.busyRetries.Add(1)
 		timer := time.NewTimer(time.Duration(attempt+1) * 20 * time.Millisecond)
 		select {
 		case <-ctx.Done():
