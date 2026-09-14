@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,6 +74,32 @@ type DecisionStateMsg struct{ Decisions []team.DecisionIndexEntry }
 // inspect overview and the TUI summary strip.
 type OperatorSnapshotMsg struct{ Snapshot operator.OperatorSnapshot }
 
+type OperatorEvidenceDetail struct {
+	Available      bool
+	ManifestStatus string
+	Verdict        string
+	Acceptance     string
+	Requirements   int
+	Artifacts      int
+	Findings       int
+}
+
+type OperatorPromotionDetail struct {
+	ID          string
+	Type        string
+	Status      string
+	TargetPath  string
+	SourceCount int
+}
+
+type OperatorDetailsMsg struct {
+	Evidence         OperatorEvidenceDetail
+	Promotions       []OperatorPromotionDetail
+	PromotionStatus  string
+	PromotionTotal   int
+	PromotionLimited bool
+}
+
 type SSHSessionsMsg struct{ Count int }
 
 // TerminalSessionMsg maps a task to the PTY session created by its terminal
@@ -122,37 +149,46 @@ type Model struct {
 	vpReady  bool
 	inResult bool
 
-	inMemory    bool
-	memoryVP    viewport.Model
-	memoryReady bool
+	inMemory      bool
+	memoryVP      viewport.Model
+	memoryReady   bool
+	inOperator    bool
+	operatorVP    viewport.Model
+	operatorReady bool
 
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes 2=force
 
-	width              int
-	height             int
-	finished           bool
-	IsChat             bool
-	runResult          *team.RunResult
-	statusText         string // current status shown in the status bar
-	spinnerFrame       int
-	spinnerEnabled     bool
-	forceCompact       bool
-	themeMode          ThemeMode
-	effectiveTheme     ThemeMode
-	displayPreset      DisplayPreset
-	noColor            bool
-	owner              bool
-	themeContext       context.Context
-	themeDetector      func(context.Context) ThemeMode
-	themePoll          time.Duration
-	themeGeneration    uint64
-	styles             styleSet
-	operatorSummary    operator.OperatorSummary
-	operatorScope      operator.ResolvedScope
-	hasOperatorSummary bool
-	unread             map[string]int
-	result             string // final coordinator answer shown when finished
+	width                    int
+	height                   int
+	finished                 bool
+	IsChat                   bool
+	runResult                *team.RunResult
+	statusText               string // current status shown in the status bar
+	spinnerFrame             int
+	spinnerEnabled           bool
+	forceCompact             bool
+	themeMode                ThemeMode
+	effectiveTheme           ThemeMode
+	displayPreset            DisplayPreset
+	noColor                  bool
+	owner                    bool
+	themeContext             context.Context
+	themeDetector            func(context.Context) ThemeMode
+	themePoll                time.Duration
+	themeGeneration          uint64
+	styles                   styleSet
+	operatorSummary          operator.OperatorSummary
+	operatorScope            operator.ResolvedScope
+	operatorSnapshot         operator.OperatorSnapshot
+	operatorEvidence         OperatorEvidenceDetail
+	operatorPromotions       []OperatorPromotionDetail
+	operatorPromotionStatus  string
+	operatorPromotionTotal   int
+	operatorPromotionLimited bool
+	hasOperatorSummary       bool
+	unread                   map[string]int
+	result                   string // final coordinator answer shown when finished
 
 	inAskUser bool
 	ask       askState
@@ -313,6 +349,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inActivityLog {
 			m.vp.SetContent(m.formatActivityLogContent())
 		}
+		if m.operatorReady {
+			m.operatorVP.Width = max(msg.Width-4, 10)
+			m.operatorVP.Height = max(msg.Height-2, 3)
+			if m.inOperator {
+				offset := m.operatorVP.YOffset
+				m.operatorVP.SetContent(m.buildOperatorContent())
+				m.operatorVP.SetYOffset(offset)
+			}
+		}
 		m.clampScroll()
 		if command := m.probeThemeCmd(); command != nil {
 			return m, command
@@ -423,7 +468,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OperatorSnapshotMsg:
 		m.operatorSummary = operator.BuildSummary(msg.Snapshot)
 		m.operatorScope = msg.Snapshot.Scope
+		m.operatorSnapshot = msg.Snapshot
 		m.hasOperatorSummary = true
+		if m.inOperator && m.operatorReady {
+			offset := m.operatorVP.YOffset
+			m.operatorVP.SetContent(m.buildOperatorContent())
+			m.operatorVP.SetYOffset(offset)
+		}
+
+	case OperatorDetailsMsg:
+		m.operatorEvidence = msg.Evidence
+		m.operatorPromotions = slices.Clone(msg.Promotions)
+		m.operatorPromotionStatus = msg.PromotionStatus
+		m.operatorPromotionTotal = msg.PromotionTotal
+		m.operatorPromotionLimited = msg.PromotionLimited
+		if m.inOperator && m.operatorReady {
+			offset := m.operatorVP.YOffset
+			m.operatorVP.SetContent(m.buildOperatorContent())
+			m.operatorVP.SetYOffset(offset)
+		}
 
 	case SSHSessionsMsg:
 		m.teamInfo.SSHSessions = msg.Count
@@ -681,6 +744,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMemory(msg)
 		case OverlayActivityLog:
 			return m.updateActivityLog(msg)
+		case OverlayOperator:
+			return m.updateOperator(msg)
 		}
 		return m.updateColumns(msg)
 	}

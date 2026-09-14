@@ -21,10 +21,12 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/notify"
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 	tuipkg "github.com/kjelly/hufu/internal/tui"
@@ -1293,14 +1295,16 @@ func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), fun
 			case <-requests:
 				queryCtx, queryCancel := context.WithTimeout(ctx, time.Second)
 				envelope, err := inspectpkg.InspectOverview(queryCtx, inspectpkg.InspectQuery{Workspace: workspace})
-				queryCancel()
 				if err != nil || envelope == nil {
+					queryCancel()
 					continue
 				}
 				data, ok := envelope.Data.(inspectpkg.OverviewData)
 				if ok && data.Snapshot != nil {
 					program.Send(tuipkg.OperatorSnapshotMsg{Snapshot: *data.Snapshot})
+					program.Send(loadTUIOperatorDetails(queryCtx, workspace, *data.Snapshot))
 				}
+				queryCancel()
 			}
 		}
 	})
@@ -1315,6 +1319,56 @@ func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), fun
 		workers.Wait()
 	}
 	return request, stop
+}
+
+func loadTUIOperatorDetails(ctx context.Context, workspace string, snapshot operatorpkg.OperatorSnapshot) tuipkg.OperatorDetailsMsg {
+	details := tuipkg.OperatorDetailsMsg{
+		Evidence:        tuipkg.OperatorEvidenceDetail{ManifestStatus: "unavailable", Verdict: "unavailable", Acceptance: "unavailable"},
+		Promotions:      []tuipkg.OperatorPromotionDetail{},
+		PromotionStatus: "unavailable",
+	}
+	evidenceEnvelope, err := inspectpkg.InspectEvidence(ctx, inspectpkg.InspectQuery{
+		Workspace: workspace, RunID: snapshot.Scope.RunID, BranchID: snapshot.Scope.BranchID,
+	})
+	if err == nil && evidenceEnvelope != nil {
+		if evidence, ok := evidenceEnvelope.Data.(inspectpkg.EvidenceData); ok {
+			details.Evidence = tuipkg.OperatorEvidenceDetail{
+				Available:      true,
+				ManifestStatus: evidence.Manifest.Status,
+				Verdict:        evidence.Verification.Verdict,
+				Acceptance:     evidence.Acceptance,
+				Requirements:   len(evidence.Requirements),
+				Artifacts:      len(evidence.ArtifactRefs),
+				Findings:       len(evidence.Findings),
+			}
+		}
+	}
+	if snapshot.Scope.ProjectID == "" || snapshot.Scope.TeamName == "" {
+		return details
+	}
+	repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		return details
+	}
+	defer func() { _ = repo.Close() }()
+	proposals, err := repo.ListPromotions(ctx, snapshot.Scope.ProjectID, snapshot.Scope.TeamName)
+	if err != nil {
+		return details
+	}
+	details.PromotionStatus = "available"
+	details.PromotionTotal = len(proposals)
+	const promotionDisplayLimit = 100
+	if len(proposals) > promotionDisplayLimit {
+		proposals = proposals[:promotionDisplayLimit]
+		details.PromotionLimited = true
+	}
+	for _, proposal := range proposals {
+		details.Promotions = append(details.Promotions, tuipkg.OperatorPromotionDetail{
+			ID: proposal.ID, Type: string(proposal.Type), Status: string(proposal.Status),
+			TargetPath: proposal.TargetPath, SourceCount: len(proposal.Sources),
+		})
+	}
+	return details
 }
 
 type jsonStatusEvent struct {

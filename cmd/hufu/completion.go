@@ -209,6 +209,24 @@ export extern "hufu context promotion show" [
   --show-content
 ]
 
+export extern "hufu context promotion review" [
+  proposal_id?: string
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --policy-version: string
+  --unattended
+]
+
+export extern "hufu context learning" [
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --team-search-path: string
+  --json
+]
+
 export extern "hufu context promotion edit" [
   proposal_id: string
   --workspace(-w): string

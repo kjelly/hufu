@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"math"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +15,49 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestContextLearningEmptyAndQueryFailureStayDistinct(t *testing.T) {
+	search := t.TempDir()
+	helperSetupTeam(t, search, "demo")
+	emptyWorkspace := t.TempDir()
+	root := newRootCommand()
+	output := new(bytes.Buffer)
+	root.SetOut(output)
+	root.SetArgs([]string{"context", "learning", "--workspace", emptyWorkspace, "--project", "project", "--team", "demo", "--team-search-path", search})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"exposed=0", "eligible=unknown", "State: no_recall_data", "separate draft lifecycle"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("empty learning output missing %q: %s", want, output.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(emptyWorkspace, "context.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("empty learning view created a database: %v", err)
+	}
+
+	brokenWorkspace := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(brokenWorkspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(t.Context(), "CREATE TABLE sentinel (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root = newRootCommand()
+	output.Reset()
+	root.SetOut(output)
+	root.SetArgs([]string{"context", "learning", "--workspace", brokenWorkspace, "--project", "project", "--team", "demo", "--team-search-path", search})
+	if err = root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Learning: unknown (learning_policy_query_failed)") || strings.Contains(output.String(), "exposed=0") {
+		t.Fatalf("query failure was rendered as empty: %s", output.String())
+	}
+}
 
 // TestContextExplainMemoryUsesAdoptedPolicyAndRetrievalID is the CLI/JSON
 // regression for spec §7 HF-MEM4-005: explain-memory must report the final
@@ -90,13 +136,13 @@ func TestContextExplainMemoryUsesAdoptedPolicyAndRetrievalID(t *testing.T) {
 	// The final score must be computed with the adopted runtime weights
 	// (utility and freshness ignored), not the default policy.
 	parts := explanation.ScoreParts
-	want := parts.BaseRelevance * parts.Applicability * (0.75 + 0*parts.UtilityLowerBound) * math.Pow(parts.Freshness, 0) * parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
+	want := parts.BaseRelevance*parts.Applicability*(0.75+0*parts.UtilityLowerBound)*math.Pow(parts.Freshness, 0)*parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
 	if math.Abs(explanation.FinalScore-want) > 1e-9 {
 		t.Fatalf("final score = %f, want %f (base=%f)", explanation.FinalScore, want, parts.BaseRelevance)
 	}
 	// Sanity: the default policy would produce a different score, proving the
 	// adopted policy actually changed the explained result.
-	defaultScore := parts.BaseRelevance * parts.Applicability * (0.75 + 0.5*parts.UtilityLowerBound) * math.Pow(parts.Freshness, 1) * parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
+	defaultScore := parts.BaseRelevance*parts.Applicability*(0.75+0.5*parts.UtilityLowerBound)*math.Pow(parts.Freshness, 1)*parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
 	if math.Abs(defaultScore-want) < 1e-9 {
 		t.Fatalf("test setup: default and adopted policies should differ (both %f)", want)
 	}
@@ -204,13 +250,13 @@ func TestContextExplainMemoryBindsPolicyAndRetrievalID(t *testing.T) {
 		t.Fatalf("v1 retrieval id = %q, want retrieval-v1", explanation.RetrievalID)
 	}
 	parts := explanation.ScoreParts
-	wantV1 := parts.BaseRelevance * parts.Applicability * (0.75 + 0*parts.UtilityLowerBound) * math.Pow(parts.Freshness, 0) * parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
+	wantV1 := parts.BaseRelevance*parts.Applicability*(0.75+0*parts.UtilityLowerBound)*math.Pow(parts.Freshness, 0)*parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
 	if math.Abs(explanation.FinalScore-wantV1) > 1e-9 {
 		t.Fatalf("v1 final score = %f, want %f (base=%f)", explanation.FinalScore, wantV1, parts.BaseRelevance)
 	}
 	// The v2 weights on the same parts must produce a different score, proving
 	// the v1 request did not silently use the active/v2 weights.
-	wrongV1 := parts.BaseRelevance * parts.Applicability * (0.75 + 0.5*parts.UtilityLowerBound) * math.Pow(parts.Freshness, 1) * parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
+	wrongV1 := parts.BaseRelevance*parts.Applicability*(0.75+0.5*parts.UtilityLowerBound)*math.Pow(parts.Freshness, 1)*parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
 	if math.Abs(wantV1-wrongV1) < 1e-9 {
 		t.Fatalf("test setup: v1 and v2 weights should differ on the same parts (both %f)", wantV1)
 	}
@@ -234,7 +280,7 @@ func TestContextExplainMemoryBindsPolicyAndRetrievalID(t *testing.T) {
 		t.Fatalf("v2 retrieval id = %q, want retrieval-v2", explanation.RetrievalID)
 	}
 	parts = explanation.ScoreParts
-	wantV2 := parts.BaseRelevance * parts.Applicability * (0.75 + 0.5*parts.UtilityLowerBound) * math.Pow(parts.Freshness, 1) * parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
+	wantV2 := parts.BaseRelevance*parts.Applicability*(0.75+0.5*parts.UtilityLowerBound)*math.Pow(parts.Freshness, 1)*parts.TrustFactor - parts.HarmfulUsePenalty - parts.StaleEnvironmentPenalty
 	if math.Abs(explanation.FinalScore-wantV2) > 1e-9 {
 		t.Fatalf("v2 final score = %f, want %f (base=%f)", explanation.FinalScore, wantV2, parts.BaseRelevance)
 	}

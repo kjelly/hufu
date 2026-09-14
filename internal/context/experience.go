@@ -166,6 +166,26 @@ func (r *SQLiteRepository) ListExperienceAggregates(ctx context.Context, policyV
 	return out, rows.Err()
 }
 
+// ListExperienceAggregatesForScope returns shared aggregate rows for one
+// canonical project/team scope. Private agent memory is deliberately omitted;
+// callers that need it must use an explicitly authorized item-level query.
+func (r *SQLiteRepository) ListExperienceAggregatesForScope(ctx context.Context, policyVersion string, scope Scope) ([]ExperienceAggregate, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT e.context_item_id,e.policy_version,e.positive_weight,e.negative_weight,e.exposure_count,e.consulted_count,e.applied_count,e.rejected_count,e.verified_support_count,e.causal_failure_count,e.independent_task_count,e.independent_project_count,e.utility_lower_bound,e.last_observed_at,e.revision FROM experience_aggregates e JOIN context_items c ON c.id=e.context_item_id WHERE e.policy_version=? AND c.project_id=? AND (?='' OR COALESCE(c.team_id,'')=?) AND c.agent_id IS NULL ORDER BY e.context_item_id`, policyVersion, scope.ProjectID, scope.TeamID, scope.TeamID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ExperienceAggregate
+	for rows.Next() {
+		item, scanErr := scanExperienceAggregate(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func scanExperienceAggregate(row interface{ Scan(...any) error }) (ExperienceAggregate, error) {
 	var item ExperienceAggregate
 	var observed int64

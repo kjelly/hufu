@@ -89,7 +89,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Blockers:         blockers,
 		LatestChanges:    latestChanges(bound.Lineage.Events, bound.Scope.RunID, 3),
 		RoleTargets:      roleTargetsFromTasks(tasks),
-		Learning:         operatorpkg.LearningView{Status: "unavailable", UnavailableReason: "phase_not_implemented"},
+		Learning:         learningView(ctx, workspace.WorkspaceExact, bound.Scope.ProjectID, bound.Scope.TeamName),
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
 	recovery := RecoveryEligibilityForTasks(tasks, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)

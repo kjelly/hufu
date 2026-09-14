@@ -22,8 +22,9 @@ const (
 	OverlayConfirm
 	OverlayDetail
 	OverlayResult
-	OverlayMemory
 	OverlayActivityLog
+	OverlayOperator
+	OverlayMemory
 )
 
 // String returns a stable, lowercase name for each overlay. Useful for
@@ -52,6 +53,8 @@ func (o Overlay) String() string {
 		return "memory"
 	case OverlayActivityLog:
 		return "activity_log"
+	case OverlayOperator:
+		return "operator"
 	}
 	return "unknown"
 }
@@ -79,10 +82,12 @@ func (m *Model) currentOverlay() Overlay {
 		return OverlayDetail
 	case m.inResult:
 		return OverlayResult
-	case m.inMemory:
-		return OverlayMemory
 	case m.inActivityLog:
 		return OverlayActivityLog
+	case m.inOperator:
+		return OverlayOperator
+	case m.inMemory:
+		return OverlayMemory
 	}
 	return OverlayNone
 }
@@ -122,6 +127,8 @@ func (m *Model) setOverlay(o Overlay) Overlay {
 		m.inMemory = true
 	case OverlayActivityLog:
 		m.inActivityLog = true
+	case OverlayOperator:
+		m.inOperator = true
 	case OverlayNone:
 		// no-op; bools are already cleared
 	default:
@@ -143,4 +150,5 @@ func (m *Model) clearAllOverlays() {
 	m.inResult = false
 	m.inMemory = false
 	m.inActivityLog = false
+	m.inOperator = false
 }

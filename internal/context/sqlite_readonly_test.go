@@ -114,6 +114,71 @@ func TestOpenSQLiteReadOnlyQueriesExistingContext(t *testing.T) {
 	}
 }
 
+func TestOpenSQLiteReadOnlyQueriesPromotionsWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "context.sqlite")
+	writable, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := "## Policy\n- Preserve the read-only boundary."
+	proposal := PromotionProposal{
+		ProjectID: "project", TeamID: "team", Type: PromotionTypeTeamPolicy,
+		TargetPath: "coordinator.md", Draft: draft, DraftHash: HashPromotionContent(draft),
+		PolicyVersion: "policy-v1", Status: PromotionStatusProposed,
+		Sources: []PromotionSourceSnapshot{{ContextItemID: "source", ContentHash: "source-hash", AggregateRevision: 3}},
+	}
+	proposal.ID = PromotionProposalID(proposal)
+	if _, _, err = writable.CreatePromotion(t.Context(), proposal, PromotionOutboxEvent{
+		IdempotencyKey: proposal.ID + ":proposed", EventType: "memory_promotion_proposed", Payload: []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeNames := directoryNames(t, dir)
+	readOnly, err := OpenSQLiteReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := readOnly.GetPromotion(t.Context(), proposal.ID, "project", "team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := readOnly.ListPromotions(t.Context(), "project", "team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = readOnly.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != proposal.ID || len(got.Sources) != 1 || len(listed) != 1 || listed[0].ID != proposal.ID {
+		t.Fatalf("read-only promotion query mismatch: got=%#v listed=%#v", got, listed)
+	}
+	if got.Draft != draft {
+		t.Fatalf("explicit promotion lookup omitted its draft: %q", got.Draft)
+	}
+	if listed[0].Draft != "" {
+		t.Fatalf("promotion list exposed draft content: %q", listed[0].Draft)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("read-only promotion query changed database bytes")
+	}
+	if afterNames := directoryNames(t, dir); !slices.Equal(beforeNames, afterNames) {
+		t.Fatalf("read-only promotion query changed directory entries: before=%v after=%v", beforeNames, afterNames)
+	}
+}
+
 func TestOpenSQLiteReadOnlyQueriesCommittedWALContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	writable, err := OpenSQLite(path)

@@ -141,9 +141,16 @@ type LearningView struct {
 	EffectiveMode      string `json:"effective_mode"`
 	PolicyVersion      string `json:"policy_version"`
 	Exposures          *int64 `json:"exposures"`
+	Consulted          *int64 `json:"consulted"`
 	Applied            *int64 `json:"applied"`
+	Rejected           *int64 `json:"rejected"`
 	VerifiedSupport    *int64 `json:"verified_support"`
+	CausalFailures     *int64 `json:"causal_failures"`
 	EligiblePromotions *int64 `json:"eligible_promotions"`
+	ProposedPromotions *int64 `json:"proposed_promotions"`
+	ApprovedPromotions *int64 `json:"approved_not_applied"`
+	AppliedPromotions  *int64 `json:"applied_promotions"`
+	EmptyState         string `json:"empty_state"`
 	UnavailableReason  string `json:"unavailable_reason"`
 }
 

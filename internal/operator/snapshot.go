@@ -26,9 +26,15 @@ func FinalizeSnapshot(snapshot OperatorSnapshot) (OperatorSnapshot, error) {
 func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
 	snapshot.Outcome.GoalSatisfied = clonePointer(snapshot.Outcome.GoalSatisfied)
 	snapshot.Learning.Exposures = clonePointer(snapshot.Learning.Exposures)
+	snapshot.Learning.Consulted = clonePointer(snapshot.Learning.Consulted)
 	snapshot.Learning.Applied = clonePointer(snapshot.Learning.Applied)
+	snapshot.Learning.Rejected = clonePointer(snapshot.Learning.Rejected)
 	snapshot.Learning.VerifiedSupport = clonePointer(snapshot.Learning.VerifiedSupport)
+	snapshot.Learning.CausalFailures = clonePointer(snapshot.Learning.CausalFailures)
 	snapshot.Learning.EligiblePromotions = clonePointer(snapshot.Learning.EligiblePromotions)
+	snapshot.Learning.ProposedPromotions = clonePointer(snapshot.Learning.ProposedPromotions)
+	snapshot.Learning.ApprovedPromotions = clonePointer(snapshot.Learning.ApprovedPromotions)
+	snapshot.Learning.AppliedPromotions = clonePointer(snapshot.Learning.AppliedPromotions)
 	snapshot.Activity.RawTaskStates = cloneSorted(snapshot.Activity.RawTaskStates)
 	snapshot.Activity.RawReasonCodes = cloneSorted(snapshot.Activity.RawReasonCodes)
 	snapshot.Integrity.ReasonCodes = cloneSorted(snapshot.Integrity.ReasonCodes)
@@ -154,9 +160,15 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 		value *int64
 	}{
 		{name: "exposures", value: snapshot.Learning.Exposures},
+		{name: "consulted", value: snapshot.Learning.Consulted},
 		{name: "applied", value: snapshot.Learning.Applied},
+		{name: "rejected", value: snapshot.Learning.Rejected},
 		{name: "verified_support", value: snapshot.Learning.VerifiedSupport},
+		{name: "causal_failures", value: snapshot.Learning.CausalFailures},
 		{name: "eligible_promotions", value: snapshot.Learning.EligiblePromotions},
+		{name: "proposed_promotions", value: snapshot.Learning.ProposedPromotions},
+		{name: "approved_not_applied", value: snapshot.Learning.ApprovedPromotions},
+		{name: "applied_promotions", value: snapshot.Learning.AppliedPromotions},
 	}
 	for _, counter := range counters {
 		if counter.value != nil && *counter.value < 0 {

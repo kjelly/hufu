@@ -12,12 +12,21 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 )
 
 var contextMemoryQuery string
 var contextPolicyVersion string
 var contextLearningCheck bool
+var contextLearningSearchPath string
+
+var contextLearningCmd = &cobra.Command{
+	Use:   "learning",
+	Short: "Show recall, usage, outcome, policy, and promotion state without mutation",
+	Args:  cobra.NoArgs,
+	RunE:  runContextLearning,
+}
 
 var contextOutcomesCmd = &cobra.Command{
 	Use:   "outcomes <id>",
@@ -41,6 +50,12 @@ var contextLearningDoctorCmd = &cobra.Command{
 }
 
 func init() {
+	contextLearningCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace containing context.sqlite")
+	contextLearningCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID (required)")
+	contextLearningCmd.Flags().StringVar(&contextTeam, "team", "", "Canonical team ID (required)")
+	contextLearningCmd.Flags().StringVar(&contextLearningSearchPath, "team-search-path", "", "Comma-separated team search paths")
+	contextLearningCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
+	contextCmd.AddCommand(contextLearningCmd)
 	for _, command := range []*cobra.Command{contextOutcomesCmd, contextExplainMemoryCmd, contextLearningDoctorCmd} {
 		command.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and event_store.jsonl")
 		command.Flags().StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version")
@@ -51,6 +66,58 @@ func init() {
 	contextExplainMemoryCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope")
 	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryQuery, "query", "", "Goal/query used to calculate base relevance (required)")
 	contextLearningDoctorCmd.Flags().BoolVar(&contextLearningCheck, "learning", false, "Check outcome-driven memory learning state")
+}
+
+func runContextLearning(cmd *cobra.Command, _ []string) error {
+	if strings.TrimSpace(contextProject) == "" || strings.TrimSpace(contextTeam) == "" {
+		return fmt.Errorf("--project and --team are required")
+	}
+	paths := team.DefaultSearchPaths()
+	if contextLearningSearchPath != "" {
+		paths = strings.Split(contextLearningSearchPath, ",")
+	}
+	registry := team.NewTeamRegistry(paths)
+	if err := registry.Discover(); err != nil {
+		return err
+	}
+	dir, err := registry.Resolve(contextTeam)
+	if err != nil {
+		return err
+	}
+	session, err := team.LoadTeam(dir, nil, nil, team.DefaultProviderRegistry)
+	if err != nil {
+		return err
+	}
+	view := inspectpkg.InspectLearning(cmd.Context(), getContextWorkspace(), contextProject, contextTeam, string(session.Config.MemoryLearning.Mode))
+	if contextQueryJSON {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "learning": view})
+	}
+	if view.Status == "unknown" || view.Status == "unavailable" {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Learning: %s (%s)\n", view.Status, view.UnavailableReason)
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Learning: requested=%s effective=%s policy=%s\nRecall: exposed=%s consulted=%s\nUsage: applied=%s rejected=%s\nOutcome: verified=%s causal_failures=%s\nPromotion: eligible=unknown proposed=%s approved-not-applied=%s applied=%s\n",
+		view.RequestedMode, view.EffectiveMode, view.PolicyVersion,
+		learningCount(view.Exposures), learningCount(view.Consulted), learningCount(view.Applied), learningCount(view.Rejected),
+		learningCount(view.VerifiedSupport), learningCount(view.CausalFailures), learningCount(view.ProposedPromotions),
+		learningCount(view.ApprovedPromotions), learningCount(view.AppliedPromotions))
+	if err == nil && view.EmptyState != "" {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "State: %s\n", view.EmptyState)
+	}
+	if err == nil && view.UnavailableReason == "requested_mode_not_effective" {
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Note: the requested learning mode is not the effective adopted mode; inspect policy state before expecting ranking changes.")
+	}
+	if err == nil {
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Next: use context promotion list/review for evidence-backed publication; skill review/promote is a separate draft lifecycle; improve reports execution evidence without publishing either.")
+	}
+	return err
+}
+
+func learningCount(value *int64) string {
+	if value == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%d", *value)
 }
 
 func runContextOutcomes(cmd *cobra.Command, args []string) error {

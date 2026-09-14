@@ -48,7 +48,7 @@ func (m Model) footer() string {
 		}
 		return m.styles.footer.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
-	return m.styles.footer.Render("owner view · esc quit options · ctrl+c finish tasks/force · / search · i info · c prompt · T theme · ? help · enter detail")
+	return m.styles.footer.Render("owner view · esc quit options · ctrl+c finish tasks/force · / search · i info · L learning/evidence · c prompt · T theme · ? help · enter detail")
 }
 
 func (m Model) helpView() string {
@@ -71,6 +71,7 @@ Actions
   i                 show team info panel
   a                 full-screen activity log
   M                 memory (STM/LTM) view
+  L                 evidence/context/learning/promotion panel
   m                 toggle mouse support
   T                 cycle auto/light/dark/mono theme
   r                 generate report (only when finished)

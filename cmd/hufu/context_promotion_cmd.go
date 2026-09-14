@@ -19,7 +19,7 @@ import (
 )
 
 var promotionWorkspace, promotionProject, promotionTeam, promotionSearchPath, promotionPolicyVersion, promotionType, promotionAgent, promotionModel, promotionDraftFile, promotionRejectReason string
-var promotionJSON, ltmPromotionDryRun, promotionShowContent bool
+var promotionJSON, ltmPromotionDryRun, promotionShowContent, promotionReviewUnattended bool
 
 var promotionGeneratorFactory = newPromotionGenerator
 
@@ -27,6 +27,7 @@ var contextPromotionCmd = &cobra.Command{Use: "promotion", Short: "Promote prove
 var contextPromotionAnalyzeCmd = &cobra.Command{Use: "analyze", Short: "Analyze eligible LTM and create reviewable proposals", Args: cobra.NoArgs, RunE: runPromotionAnalyze}
 var contextPromotionListCmd = &cobra.Command{Use: "list", Short: "List promotion proposals without draft content", Args: cobra.NoArgs, RunE: runPromotionList}
 var contextPromotionShowCmd = &cobra.Command{Use: "show <proposal-id>", Short: "Show a promotion proposal", Args: cobra.ExactArgs(1), RunE: runPromotionShow}
+var contextPromotionReviewCmd = &cobra.Command{Use: "review [proposal-id]", Short: "Interactively review, approve, and optionally apply one proposal", Args: cobra.MaximumNArgs(1), RunE: runPromotionReview}
 var contextPromotionEditCmd = &cobra.Command{Use: "edit <proposal-id>", Short: "Replace a proposed draft from a file", Args: cobra.ExactArgs(1), RunE: runPromotionEdit}
 var contextPromotionApproveCmd = &cobra.Command{Use: "approve <proposal-id>", Short: "Explicitly approve a proposed promotion", Args: cobra.ExactArgs(1), RunE: runPromotionApprove}
 var contextPromotionRejectCmd = &cobra.Command{Use: "reject <proposal-id>", Short: "Reject a proposed promotion", Args: cobra.ExactArgs(1), RunE: runPromotionReject}
@@ -45,9 +46,10 @@ func init() {
 	contextPromotionAnalyzeCmd.Flags().StringVar(&promotionModel, "model", "", "Model used to classify and draft proposals")
 	contextPromotionAnalyzeCmd.Flags().BoolVar(&ltmPromotionDryRun, "dry-run", false, "List eligible source metadata without calling a model or creating proposals")
 	contextPromotionShowCmd.Flags().BoolVar(&promotionShowContent, "show-content", false, "Show the redacted draft and source summaries")
+	contextPromotionReviewCmd.Flags().BoolVar(&promotionReviewUnattended, "unattended", false, "Refuse interactive review because no human is present")
 	contextPromotionEditCmd.Flags().StringVar(&promotionDraftFile, "draft-file", "", "File containing the complete replacement draft (required)")
 	contextPromotionRejectCmd.Flags().StringVar(&promotionRejectReason, "reason", "", "Operator rejection reason (required)")
-	contextPromotionCmd.AddCommand(contextPromotionAnalyzeCmd, contextPromotionListCmd, contextPromotionShowCmd, contextPromotionEditCmd, contextPromotionApproveCmd, contextPromotionRejectCmd, contextPromotionApplyCmd)
+	contextPromotionCmd.AddCommand(contextPromotionAnalyzeCmd, contextPromotionListCmd, contextPromotionShowCmd, contextPromotionReviewCmd, contextPromotionEditCmd, contextPromotionApproveCmd, contextPromotionRejectCmd, contextPromotionApplyCmd)
 }
 
 func promotionScopeValid() error {
@@ -73,6 +75,10 @@ func promotionRegistry() *team.TeamRegistry {
 	return team.NewTeamRegistry(paths)
 }
 func openPromotion(cmd *cobra.Command) (*contextstore.SQLiteRepository, promotion.Service, error) {
+	return openPromotionContext(cmd.Context())
+}
+
+func openPromotionContext(ctx context.Context) (*contextstore.SQLiteRepository, promotion.Service, error) {
 	if err := promotionScopeValid(); err != nil {
 		return nil, promotion.Service{}, err
 	}
@@ -80,11 +86,18 @@ func openPromotion(cmd *cobra.Command) (*contextstore.SQLiteRepository, promotio
 	if err != nil {
 		return nil, promotion.Service{}, err
 	}
-	if err = flushPromotionEvents(cmd.Context(), repo); err != nil {
+	if err = flushPromotionEvents(ctx, repo); err != nil {
 		_ = repo.Close()
 		return nil, promotion.Service{}, err
 	}
 	return repo, promotion.Service{Repo: repo}, nil
+}
+
+func openPromotionReadOnly() (contextstore.ReadOnlyRepository, error) {
+	if err := promotionScopeValid(); err != nil {
+		return nil, err
+	}
+	return contextstore.OpenSQLiteReadOnly(filepath.Join(promotionWorkspacePath(), "context.sqlite"))
 }
 func finishPromotion(ctx context.Context, repo *contextstore.SQLiteRepository) error {
 	return flushPromotionEvents(ctx, repo)
@@ -158,12 +171,12 @@ func runPromotionAnalyze(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 func runPromotionList(cmd *cobra.Command, _ []string) error {
-	repo, svc, err := openPromotion(cmd)
+	repo, err := openPromotionReadOnly()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	items, err := svc.List(cmd.Context(), promotionProject, promotionTeam)
+	items, err := repo.ListPromotions(cmd.Context(), promotionProject, promotionTeam)
 	if err != nil {
 		return err
 	}
@@ -182,19 +195,22 @@ func runPromotionList(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 func runPromotionShow(cmd *cobra.Command, args []string) error {
-	repo, svc, err := openPromotion(cmd)
+	repo, err := openPromotionReadOnly()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	p, err := svc.Get(cmd.Context(), args[0], promotionProject, promotionTeam)
+	p, err := repo.GetPromotion(cmd.Context(), args[0], promotionProject, promotionTeam)
 	if err != nil {
 		return err
 	}
 	view := newPromotionView(p, promotionShowContent)
 	if promotionShowContent {
 		for _, s := range p.Sources {
-			item, e := repo.Get(cmd.Context(), s.ContextItemID)
+			item, e := repo.GetScoped(cmd.Context(), s.ContextItemID, contextstore.ScopedReadOptions{
+				Scope:          contextstore.Scope{ProjectID: promotionProject, TeamID: promotionTeam, AgentID: p.AgentID},
+				IncludeContent: true,
+			})
 			if e == nil {
 				summary := utils.RedactSecrets(item.Content)
 				if len([]rune(summary)) > 240 {

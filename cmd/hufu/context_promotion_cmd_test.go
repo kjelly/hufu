@@ -144,6 +144,7 @@ func helperRunCLI(args ...string) (string, error) {
 	promotionJSON = false
 	ltmPromotionDryRun = false
 	promotionShowContent = false
+	promotionReviewUnattended = false
 
 	root := newRootCommand()
 	out := new(bytes.Buffer)
@@ -684,15 +685,24 @@ func TestContextPromotionNoEligibleAndDefaultOutputIsContentFree(t *testing.T) {
 		t.Fatalf("default JSON leaked draft: %s", outList)
 	}
 
-	events, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
+	// A passive list is query-only: it must not deliver the pending outbox
+	// event or create the event store as a side effect of observation.
+	if _, err = os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("read-only promotion list created or changed the event store: %v", err)
+	}
+	repo, err = contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(events), "Distinctive draft material") {
-		t.Fatal("audit event leaked draft")
+	pending, err := repo.PendingPromotionEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(events), "memory_promotion_proposed") {
-		t.Fatalf("missing audit event: %s", events)
+	if err = repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].EventType != "memory_promotion_proposed" {
+		t.Fatalf("read-only list delivered pending promotion events: %#v", pending)
 	}
 }
 

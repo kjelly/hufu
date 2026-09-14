@@ -211,7 +211,9 @@ func (r *SQLiteRepository) GetPromotion(ctx context.Context, id, projectID, team
 }
 
 func (r *SQLiteRepository) ListPromotions(ctx context.Context, projectID, teamID string) ([]PromotionProposal, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash,draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at FROM promotion_proposals WHERE project_id=? AND team_id=? ORDER BY created_at DESC,id`, projectID, teamID)
+	// Lists are content-free by contract. Draft content is available only from
+	// an explicit, scoped GetPromotion detail action.
+	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash,'' AS draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at FROM promotion_proposals WHERE project_id=? AND team_id=? ORDER BY created_at DESC,id`, projectID, teamID)
 	if err != nil {
 		return nil, err
 	}

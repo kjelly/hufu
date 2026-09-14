@@ -42,6 +42,8 @@ func (m Model) View() string {
 		return m.activityLogView()
 	case OverlayMemory:
 		return m.memoryView()
+	case OverlayOperator:
+		return m.operatorView()
 	}
 	return m.columnsView()
 }

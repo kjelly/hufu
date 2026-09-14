@@ -194,6 +194,10 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inMemory = true
 		m.loadMemoryContent()
 		return m, nil
+	case "L":
+		m.inOperator = true
+		m.loadOperatorContent()
+		return m, nil
 	}
 	return m, nil
 }

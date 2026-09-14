@@ -83,6 +83,12 @@ type ReadOnlyRepository interface {
 	Revision(context.Context) (int64, error)
 	ExperienceAggregate(context.Context, string, string) (ExperienceAggregate, error)
 	ListExperienceAggregates(context.Context, string) ([]ExperienceAggregate, error)
+	ListExperienceAggregatesForScope(context.Context, string, Scope) ([]ExperienceAggregate, error)
+	ActiveMemoryPolicyVersion(context.Context) (MemoryPolicyVersionRecord, error)
+	// Promotion queries belong on the read-only surface so operator list,
+	// detail, completion, and refresh paths never need a writable repository.
+	GetPromotion(context.Context, string, string, string) (PromotionProposal, error)
+	ListPromotions(context.Context, string, string) ([]PromotionProposal, error)
 	StorageDiagnostics(context.Context) (StorageDiagnostics, error)
 	Close() error
 }

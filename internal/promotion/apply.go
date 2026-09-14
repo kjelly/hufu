@@ -19,6 +19,34 @@ type ApplyResult struct {
 	AlreadyApplied bool     `json:"already_applied"`
 }
 
+// CurrentTargetHash resolves the canonical team target with the same path
+// safety checks used by Apply and returns its current content hash. A missing
+// target has an empty hash, which is the expected base state for a new skill.
+func CurrentTargetHash(p Proposal, registry *team.TeamRegistry) (string, error) {
+	if registry == nil {
+		return "", fmt.Errorf("team registry is required")
+	}
+	if err := registry.Discover(); err != nil {
+		return "", err
+	}
+	teamDir, err := registry.Resolve(p.TeamID)
+	if err != nil {
+		return "", err
+	}
+	target, err := secureTarget(teamDir, p.TargetPath)
+	if err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(target)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return contextstore.HashPromotionContent(string(content)), nil
+}
+
 func (s Service) Apply(ctx context.Context, id, project, teamID string, registry *team.TeamRegistry) (ApplyResult, error) {
 	p, err := s.Get(ctx, id, project, teamID)
 	if err != nil {

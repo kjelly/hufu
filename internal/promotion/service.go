@@ -43,17 +43,23 @@ func (s Service) Approve(ctx context.Context, id, project, team string) (Proposa
 	if err != nil {
 		return p, err
 	}
+	if p.Status == StatusApproved || p.Status == StatusApplied {
+		return p, nil
+	}
 	return s.Repo.TransitionPromotion(ctx, id, project, team, StatusApproved, "", lifecycleEvent("memory_promotion_approved", p, "approve", "operator"))
 }
 func (s Service) Reject(ctx context.Context, id, project, team, reason string) (Proposal, error) {
 	if reason == "" {
 		return Proposal{}, fmt.Errorf("rejection reason is required")
 	}
+	reason = utils.RedactSecrets(reason)
 	p, err := s.Get(ctx, id, project, team)
 	if err != nil {
 		return p, err
 	}
-	reason = utils.RedactSecrets(reason)
+	if p.Status == StatusRejected && p.RejectionReason == reason {
+		return p, nil
+	}
 	return s.Repo.TransitionPromotion(ctx, id, project, team, StatusRejected, reason, lifecycleEvent("memory_promotion_rejected", p, "reject", "operator"))
 }
 

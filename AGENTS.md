@@ -259,6 +259,9 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `inMemory` | `bool` | Memory view overlay active |
 | `memoryVP` | `viewport.Model` | Separate viewport for memory content |
 | `memoryReady` | `bool` | Memory viewport initialized |
+| `inOperator` | `bool` | Read-only Evidence/Context/Learning/Promotion panel active |
+| `operatorVP` | `viewport.Model` | Separate viewport for operator detail projections |
+| `operatorReady` | `bool` | Operator detail viewport initialized |
 | `inConfirm` | `bool` | Quit confirmation dialog |
 | `confirmChoice` | `int` | 0=No, 1=Yes, 2=Force |
 | `width` / `height` | `int` | Terminal dimensions |
@@ -301,9 +304,11 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 5. `inPromptInput` — Prompt injection textinput, centered
 6. `inConfirm` — Quit confirmation (No/Yes/Force), centered
 7. `inDetail` — Task log viewport + header + footer
-8. `inActivityLog` — Full-screen recent logs viewport
-9. `inMemory` — STM/LTM content viewport
-10. Default — 6-column Kanban dashboard
+8. `inResult` — Final result viewport
+9. `inActivityLog` — Full-screen recent logs viewport
+10. `inOperator` — Read-only Evidence/Context/Learning/Promotion panel
+11. `inMemory` — STM/LTM content viewport
+12. Default — 6-column Kanban dashboard
 
 ### Key Bindings Reference
 
@@ -327,6 +332,7 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `m` | Toggle mouse |
 | `T` | Cycle `auto` / `light` / `dark` / `mono` theme without restarting the runtime |
 | `M` | Open memory view |
+| `L` | Open the read-only Evidence/Context/Learning/Promotion panel |
 | `q` | Quit (only when finished) |
 | `r` | Generate report (only when finished) |
 | `esc` | Quit confirmation (or clear search) |
@@ -371,6 +377,15 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `g` / `G` | Top / bottom |
 | `q` / `ctrl+c` | Handle quit/wrap-up |
 | *(others)* | Forwarded to memoryVP |
+
+#### Operator Panel
+
+| Key | Action |
+|-----|--------|
+| `esc` / `backspace` / `q` / `L` | Return to dashboard |
+| `j` / `k` / `↓` / `↑` | Scroll |
+| `g` / `G` | Top / bottom |
+| `ctrl+c` | Handle quit/wrap-up |
 
 #### Team Info Panel
 
@@ -441,6 +456,8 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `StatusBarMsg` | `Text string` | Update 1-line status bar |
 | `ResultMsg` | `Text string` | Display final result |
 | `TeamInfoMsg` | `Info TeamInfo` | Load team metadata |
+| `OperatorSnapshotMsg` | `Snapshot operator.OperatorSnapshot` | Refresh the shared read-only operator summary and learning projection |
+| `OperatorDetailsMsg` | `Evidence OperatorEvidenceDetail, Promotions []OperatorPromotionDetail` | Refresh audit-verified/content-free operator detail data |
 | `WrapUpMsg` | (none) | Wrap-up request |
 | `AskUserCancelMsg` | (none) | Cancel ask_user dialog |
 

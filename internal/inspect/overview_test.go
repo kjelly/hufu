@@ -162,8 +162,8 @@ func TestInspectOverviewReturnsCompleteStableSnapshotForFailedRun(t *testing.T) 
 	if snapshot.SnapshotID != second.Snapshot.SnapshotID || snapshot.Freshness.QueriedAt == "" {
 		t.Fatalf("snapshot identity changed across query time: %q != %q", snapshot.SnapshotID, second.Snapshot.SnapshotID)
 	}
-	if len(snapshot.LatestChanges) != 2 || len(snapshot.RoleTargets) != 6 || snapshot.Learning.Exposures != nil || snapshot.Learning.Status != "unavailable" {
-		t.Fatalf("bounded/unavailable adapters = changes:%#v roles:%#v learning:%#v", snapshot.LatestChanges, snapshot.RoleTargets, snapshot.Learning)
+	if len(snapshot.LatestChanges) != 2 || len(snapshot.RoleTargets) != 6 || snapshot.Learning.Exposures == nil || *snapshot.Learning.Exposures != 0 || snapshot.Learning.Status != "available" || snapshot.Learning.EmptyState != "no_recall_data" {
+		t.Fatalf("bounded learning adapters = changes:%#v roles:%#v learning:%#v", snapshot.LatestChanges, snapshot.RoleTargets, snapshot.Learning)
 	}
 	encoded, err := json.Marshal(firstEnvelope)
 	if err != nil {
