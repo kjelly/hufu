@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,11 @@ import (
 func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	repo := newFixtureRepo(t)
 	config := fixtureConfig(repo, "out")
-	payload, err := json.Marshal(config)
+	payload, err := json.Marshal(wireConfig{
+		Repository: config.Repository, OutputDir: config.OutputDir, ArtifactRoot: config.ArtifactRoot,
+		Since: config.Since, MaxCommits: strconv.Itoa(config.MaxCommits), MaxDiffBytes: config.MaxDiffBytes,
+		MaxDiffLines: config.MaxDiffLines, MaxPaths: config.MaxPaths,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +29,7 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := run(context.Background(), bytes.NewReader(request), &output); err != nil {
+	if err := run(t.Context(), bytes.NewReader(request), &output); err != nil {
 		t.Fatalf("run canonical action: %v", err)
 	}
 	var result actionResult
@@ -33,6 +38,26 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 	if result.Outputs["manifest_path"] == nil {
 		t.Fatalf("action result omitted manifest_path: %#v", result)
+	}
+}
+
+func TestDecodeWireConfigRejectsInvalidMaxCommitsAndJSON(t *testing.T) {
+	for _, value := range []string{"0", "-1", "10.0", "text", `10\",\"unexpected\":true`, "101", "999999999999999999999999999999999999"} {
+		t.Run(value, func(t *testing.T) {
+			payload, err := json.Marshal(wireConfig{MaxCommits: value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeWireConfig(string(payload)); err == nil {
+				t.Fatalf("decodeWireConfig accepted max_commits %q", value)
+			}
+		})
+	}
+	if _, err := decodeWireConfig(`{"max_commits":"10","unexpected":true}`); err == nil {
+		t.Fatal("decodeWireConfig accepted an unknown field")
+	}
+	if _, err := decodeWireConfig(`{"max_commits":"10"} {"max_commits":"3"}`); err == nil {
+		t.Fatal("decodeWireConfig accepted trailing JSON")
 	}
 }
 
@@ -401,7 +426,7 @@ type goldenItem struct {
 }
 
 func fixtureConfig(repo, output string) Config {
-	return Config{Repository: repo, OutputDir: output, Since: "2025-01-01T12:00:00Z", MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16}
+	return Config{Repository: repo, OutputDir: output, Since: "2025-01-01T12:00:00Z", MaxCommits: 10, MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16}
 }
 
 func newFixtureRepo(t *testing.T) string {

@@ -68,10 +68,12 @@ func BuildTeamSourceIndex(teamDir string, vars map[string]string) (*TeamSourceIn
 	}
 	if found {
 		index.ManifestFile = manifestFile
-		rendered, renderErr := applyTemplate(string(rawManifest), manifestFile, vars)
+		renderedBytes, effectiveVars, renderErr := renderTeamManifest(rawManifest, manifestFile, vars)
 		if renderErr != nil {
-			return nil, fmt.Errorf("template error in team config: %w", renderErr)
+			return nil, renderErr
 		}
+		vars = effectiveVars
+		rendered := string(renderedBytes)
 		root, status, parseErr := parseSourceYAML(rawManifest, []byte(rendered))
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse team source index: %w", parseErr)

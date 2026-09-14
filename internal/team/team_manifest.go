@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
 // Schema versions a team.yaml/team.yml manifest can declare. See
@@ -212,6 +214,100 @@ type manifestEnvelope struct {
 	Kind       string `yaml:"kind"`
 }
 
+const (
+	maxManifestTemplateVars      = 256
+	maxManifestTemplateVarKeyLen = 256
+	maxManifestTemplateVarValue  = 64 << 10
+	maxManifestTemplateVarsBytes = 256 << 10
+	manifestTemplateProbeMarker  = "__HUFU_BOOTSTRAP_TEMPLATE_PLACEHOLDER__"
+)
+
+type manifestVarsEnvelope struct {
+	APIVersion string         `yaml:"apiVersion"`
+	Vars       map[string]any `yaml:"vars"`
+	Spec       struct {
+		Vars map[string]any `yaml:"vars"`
+	} `yaml:"spec"`
+}
+
+func manifestTemplateVars(data []byte, filename string, overrides map[string]string) (map[string]string, error) {
+	var envelope manifestVarsEnvelope
+	probeData := placeholderRegex.ReplaceAll(data, []byte(manifestTemplateProbeMarker))
+	if err := yaml.Unmarshal(probeData, &envelope); err != nil {
+		return nil, fmt.Errorf("bootstrap template vars from %s: %w", filename, err)
+	}
+	raw := envelope.Vars
+	if strings.TrimSpace(envelope.APIVersion) != "" {
+		raw = envelope.Spec.Vars
+	}
+	teamVars := make(map[string]string)
+	if err := yamlutil.FlattenYAML(raw, "", teamVars); err != nil {
+		return nil, fmt.Errorf("bootstrap template vars from %s: %w", filename, err)
+	}
+	effective := maps.Clone(teamVars)
+	if effective == nil {
+		effective = make(map[string]string)
+	}
+	maps.Copy(effective, overrides)
+	if err := validateManifestTemplateVars(effective, filename); err != nil {
+		return nil, err
+	}
+	return effective, nil
+}
+
+func validateManifestTemplateVars(vars map[string]string, filename string) error {
+	if len(vars) > maxManifestTemplateVars {
+		return fmt.Errorf("bootstrap template vars from %s: %d variables exceeds limit %d", filename, len(vars), maxManifestTemplateVars)
+	}
+	total := 0
+	for key, value := range vars {
+		if strings.Contains(key, manifestTemplateProbeMarker) || strings.Contains(value, manifestTemplateProbeMarker) || strings.Contains(key, "{@") || strings.Contains(key, "@}") || strings.Contains(value, "{@") || strings.Contains(value, "@}") {
+			return fmt.Errorf("bootstrap template vars from %s: variable %q contains a recursive template delimiter", filename, key)
+		}
+		if len(key) == 0 || len(key) > maxManifestTemplateVarKeyLen {
+			return fmt.Errorf("bootstrap template vars from %s: variable key length must be between 1 and %d bytes", filename, maxManifestTemplateVarKeyLen)
+		}
+		if len(value) > maxManifestTemplateVarValue {
+			return fmt.Errorf("bootstrap template vars from %s: variable %q exceeds %d bytes", filename, key, maxManifestTemplateVarValue)
+		}
+		total += len(key) + len(value)
+		if total > maxManifestTemplateVarsBytes {
+			return fmt.Errorf("bootstrap template vars from %s: variables exceed %d bytes", filename, maxManifestTemplateVarsBytes)
+		}
+	}
+	return nil
+}
+
+func renderTeamManifest(data []byte, filename string, overrides map[string]string) ([]byte, map[string]string, error) {
+	vars, err := manifestTemplateVars(data, filename, overrides)
+	if err != nil {
+		return nil, nil, err
+	}
+	rendered, err := applyTemplate(string(data), filename, vars)
+	if err != nil {
+		return nil, nil, fmt.Errorf("template error in team config: %w", err)
+	}
+	if strings.Contains(rendered, "{@") || strings.Contains(rendered, "@}") {
+		return nil, nil, fmt.Errorf("template error in team config: unresolved template placeholder remains in %s", filename)
+	}
+	return []byte(rendered), vars, nil
+}
+
+func resolveTeamManifestTemplateVars(teamDir string, overrides map[string]string) (map[string]string, error) {
+	data, filename, found, err := findTeamManifestFile(teamDir)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		vars := maps.Clone(overrides)
+		if vars == nil {
+			vars = make(map[string]string)
+		}
+		return vars, nil
+	}
+	return manifestTemplateVars(data, filename, overrides)
+}
+
 // readTeamManifestSource finds team.yml/team.yaml under teamDir, applies
 // templating, and returns its bytes. found is false only when neither file
 // exists — that is not an error; a team.yaml is optional and callers fall
@@ -221,11 +317,11 @@ func readTeamManifestSource(teamDir string, vars map[string]string) (data []byte
 	if err != nil || !found {
 		return data, filename, found, err
 	}
-	templated, err := applyTemplate(string(data), filename, vars)
+	templated, _, err := renderTeamManifest(data, filename, vars)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("template error in team config: %w", err)
+		return nil, filename, true, err
 	}
-	return []byte(templated), filename, true, nil
+	return templated, filename, true, nil
 }
 
 // findTeamManifestFile locates team.yml/team.yaml under teamDir and returns

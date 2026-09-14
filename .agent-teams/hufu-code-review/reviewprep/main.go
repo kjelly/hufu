@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -34,6 +35,17 @@ type Config struct {
 	ArtifactRoot string `json:"artifact_root"`
 	Since        string `json:"since"`
 	MaxCommits   int    `json:"max_commits"`
+	MaxDiffBytes int    `json:"max_diff_bytes"`
+	MaxDiffLines int    `json:"max_diff_lines"`
+	MaxPaths     int    `json:"max_paths"`
+}
+
+type wireConfig struct {
+	Repository   string `json:"repository"`
+	OutputDir    string `json:"output_dir"`
+	ArtifactRoot string `json:"artifact_root"`
+	Since        string `json:"since"`
+	MaxCommits   string `json:"max_commits"`
 	MaxDiffBytes int    `json:"max_diff_bytes"`
 	MaxDiffLines int    `json:"max_diff_lines"`
 	MaxPaths     int    `json:"max_paths"`
@@ -102,8 +114,8 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if request.Type != "prepare_review_workset" && request.Type != "prepare" {
 		return fmt.Errorf("unsupported action type %q", request.Type)
 	}
-	var config Config
-	if err := json.Unmarshal([]byte(request.Payload), &config); err != nil {
+	config, err := decodeWireConfig(request.Payload)
+	if err != nil {
 		return fmt.Errorf("decode action payload: %w", err)
 	}
 	result, err := Prepare(ctx, config)
@@ -111,6 +123,42 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(out).Encode(result)
+}
+
+func decodeWireConfig(payload string) (Config, error) {
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var wire wireConfig
+	if err := decoder.Decode(&wire); err != nil {
+		return Config{}, err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return Config{}, err
+	}
+	maxCommits, err := strconv.Atoi(wire.MaxCommits)
+	if err != nil {
+		return Config{}, fmt.Errorf("max_commits must be a base-10 integer string between 1 and 100: %w", err)
+	}
+	config := Config{
+		Repository: wire.Repository, OutputDir: wire.OutputDir, ArtifactRoot: wire.ArtifactRoot,
+		Since: wire.Since, MaxCommits: maxCommits, MaxDiffBytes: wire.MaxDiffBytes,
+		MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
+	}
+	if err := validateMaxCommits(config.MaxCommits); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value is not allowed")
+		}
+		return fmt.Errorf("decode trailing JSON: %w", err)
+	}
+	return nil
 }
 
 // Prepare materialises a deterministic, bounded review workset. It never
@@ -213,6 +261,9 @@ func applyConfigDefaults(config *Config) {
 	if strings.TrimSpace(config.Since) == "" {
 		config.Since = "2.days.ago"
 	}
+	if config.MaxCommits == 0 {
+		config.MaxCommits = 10
+	}
 	if config.MaxDiffBytes == 0 && config.MaxDiffLines == 0 && config.MaxPaths == 0 {
 		config.MaxDiffBytes = 24000
 		config.MaxDiffLines = 600
@@ -230,11 +281,18 @@ func validateConfig(config Config) error {
 	if strings.TrimSpace(config.Since) == "" {
 		return errors.New("since is required")
 	}
-	if config.MaxCommits < 0 {
-		return errors.New("max_commits must not be negative")
+	if err := validateMaxCommits(config.MaxCommits); err != nil {
+		return err
 	}
 	if config.MaxDiffBytes <= 0 || config.MaxDiffLines <= 0 || config.MaxPaths <= 0 {
 		return errors.New("max_diff_bytes, max_diff_lines, and max_paths must be positive")
+	}
+	return nil
+}
+
+func validateMaxCommits(value int) error {
+	if value < 1 || value > 100 {
+		return fmt.Errorf("max_commits must be between 1 and 100, got %d", value)
 	}
 	return nil
 }

@@ -644,12 +644,9 @@ func ResolveTeamTemplateVars(teamDir string, cliVars map[string]string) (map[str
 	if cfg.Name == "" {
 		cfg.Name = filepath.Base(absDir)
 	}
-	templateVars := make(map[string]string)
-	for k, v := range cfg.Vars {
-		templateVars[k] = fmt.Sprintf("%v", v)
-	}
-	for k, v := range cliVars {
-		templateVars[k] = v
+	templateVars, err := resolveTeamManifestTemplateVars(absDir, cliVars)
+	if err != nil {
+		return nil, err
 	}
 	if _, ok := templateVars["TEAM_NAME"]; !ok && cfg.Name != "" {
 		templateVars["TEAM_NAME"] = cfg.Name
@@ -1323,16 +1320,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, err
 	}
 
-	// Build template vars: CLI --var (string) + team.yaml vars (interface{}) + built-in
-	// CLI --var takes precedence over team.yaml vars for the same key
-	templateVars := make(map[string]string)
-	// Copy team.yaml vars first (lower priority)
-	for k, v := range cfg.Vars {
-		templateVars[k] = fmt.Sprintf("%v", v)
-	}
-	// Copy CLI --var (higher priority, can override)
-	for k, v := range vars {
-		templateVars[k] = v
+	// Build the same flattened, bounded template-variable map used to render
+	// the manifest. Caller variables remain authoritative over team defaults.
+	templateVars, err := resolveTeamManifestTemplateVars(absDir, vars)
+	if err != nil {
+		return nil, err
 	}
 
 	var workspace string

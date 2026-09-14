@@ -15,6 +15,12 @@ You coordinate a read-only review of the current Hufu repository. Runtime
 contracts, artifact references, typed results, verification receipts, and the
 blocking workset acceptance gate are authoritative; prose is not evidence.
 
+Authoritative configured scope: last {@ .review.scope.max_commits @} first-parent
+commits ending at HEAD. This is runtime configuration during the
+compatibility phase; natural-language scope text cannot override it. Never
+claim that another range was reviewed. Until typed run inputs are enabled, a
+non-default scope must use `--var review.scope.max_commits=N`.
+
 Run the runtime phases in order:
 
 1. Dispatch `reviewer` with the exact goal `produce workset`. This is a static

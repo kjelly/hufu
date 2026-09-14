@@ -353,3 +353,22 @@ System instructions using {@ .missing_agent_var @}.
 		}
 	})
 }
+
+func TestFindMissingVarsUsesManifestDefaults(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `name: bootstrap
+vars:
+  review:
+    scope:
+      max_commits: 10
+model: {@ .model @}
+description: review {@ .review.scope.max_commits @} commits
+`)
+	missing, err := FindMissingVars(dir, nil)
+	if err != nil {
+		t.Fatalf("FindMissingVars: %v", err)
+	}
+	if len(missing) != 1 || missing[0] != "model" {
+		t.Fatalf("missing = %v, want only model", missing)
+	}
+}

@@ -74,6 +74,85 @@ spec:
 	}
 }
 
+func TestTeamManifestVarsBootstrapTemplates(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+	}{
+		{name: "legacy", manifest: `name: bootstrap
+vars:
+  review:
+    scope:
+      max_commits: 10
+tasks:
+  - id: produce
+    agent: worker
+    action:
+      capability: produce
+      type: prepare
+      payload: '{"max_commits":{@ printf "%q" .review.scope.max_commits @}}'
+`},
+		{name: "v1alpha1", manifest: `apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: bootstrap
+spec:
+  vars:
+    review:
+      scope:
+        max_commits: 10
+  tasks:
+    - id: produce
+      agent: worker
+      action:
+        capability: produce
+        type: prepare
+        payload: '{"max_commits":{@ printf "%q" .review.scope.max_commits @}}'
+`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTeamManifest(t, dir, test.manifest)
+			for _, tc := range []struct {
+				name string
+				vars map[string]string
+				want string
+			}{{name: "default", want: `{"max_commits":"10"}`}, {name: "override", vars: map[string]string{"review.scope.max_commits": "3"}, want: `{"max_commits":"3"}`}} {
+				t.Run(tc.name, func(t *testing.T) {
+					tasks, err := loadTeamContractTasks(dir, tc.vars)
+					if err != nil {
+						t.Fatalf("loadTeamContractTasks: %v", err)
+					}
+					if len(tasks) != 1 || tasks[0].Action == nil || tasks[0].Action.Payload != tc.want {
+						t.Fatalf("tasks = %#v, want payload %s", tasks, tc.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestTeamManifestVarsBootstrapFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		manifest string
+		want     string
+	}{
+		{name: "unresolved", manifest: "name: bootstrap\nmodel: {@ .missing @}\n", want: "unresolved template placeholder"},
+		{name: "recursive value", manifest: "name: bootstrap\nvars:\n  value: '{@ .other @}'\nmodel: {@ .value @}\n", want: "recursive template delimiter"},
+		{name: "list value", manifest: "name: bootstrap\nvars:\n  values: [one, two]\n", want: "only scalar values"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTeamManifest(t, dir, test.manifest)
+			if _, err := parseTeamYML(dir, nil); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("parseTeamYML error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestUnknownAPIVersionFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v99

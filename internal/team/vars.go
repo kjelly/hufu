@@ -128,6 +128,10 @@ func FindMissingVars(teamDir string, vars map[string]string) ([]string, error) {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
 	}
 
+	effectiveVars, err := resolveTeamManifestTemplateVars(absDir, vars)
+	if err != nil {
+		return nil, err
+	}
 	foundKeys := make(map[string]bool)
 
 	scanFile := func(path string) error {
@@ -149,10 +153,10 @@ func FindMissingVars(teamDir string, vars map[string]string) ([]string, error) {
 				if parentKey == "TEAM_NAME" || parentKey == "AGENT_COUNT" || parentKey == "AGENT_NAMES" {
 					continue
 				}
-				if _, ok := vars[keyPath]; ok {
+				if _, ok := effectiveVars[keyPath]; ok {
 					continue
 				}
-				if _, ok := vars[parentKey]; ok {
+				if _, ok := effectiveVars[parentKey]; ok {
 					continue
 				}
 
