@@ -29,12 +29,17 @@ type exampleMetadata struct {
 
 var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu doctor"},
-	{Section: "Quick start", Argv: "hufu init dev-team --template dev"},
+	{Section: "Quick start", Argv: "hufu team create dev-team --wizard"},
+	{Section: "Quick start", Argv: "hufu team check dev-team"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
-	{Section: "Interactive", Argv: "hufu chat --agent-team dev-team"},
-	{Section: "Interactive", Argv: `hufu run --team dev-team -- "implement a feature"`},
+	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main"},
+	{Section: "Learning and publication", Argv: "hufu context learning --workspace ./workspace/dev-team --project project-id --team dev-team"},
+	{Section: "Learning and publication", Argv: "hufu context promotion review --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Automation", Argv: `hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"`},
 	{Section: "Automation", Argv: `hufu run --team ops-team --unattended -- "check service health"`},
+	{Section: "Display", Argv: `hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor a long task"`},
 }
 
 var cliFlagGroups = map[string][]string{

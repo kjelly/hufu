@@ -725,6 +725,36 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 	return out, rows.Err()
 }
 
+// ListContextMetadataForScope returns only project/team-level shared records
+// in one exact scope. It deliberately does not select content or records tied
+// to a session, branch, agent, task, or attempt, making it suitable for shell
+// completion when those narrower selectors are unavailable.
+func (r *SQLiteRepository) ListContextMetadataForScope(ctx context.Context, scope Scope, limit int) ([]ContextMetadata, error) {
+	if scope.ProjectID == "" {
+		return nil, errors.New("project scope is required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,kind,lifecycle FROM context_items
+		WHERE project_id=? AND ((?='' AND team_id IS NULL) OR (?<>'' AND team_id=?))
+		AND session_id IS NULL AND branch_id IS NULL AND agent_id IS NULL AND task_id IS NULL AND attempt_id IS NULL
+		ORDER BY id LIMIT ?`, scope.ProjectID, scope.TeamID, scope.TeamID, scope.TeamID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ContextMetadata, 0)
+	for rows.Next() {
+		var item ContextMetadata
+		if err = rows.Scan(&item.ID, &item.Kind, &item.Lifecycle); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func compileRepositoryPredicates(q RepositoryQuery, now int64) ([]string, []any, error) {
 	if q.Scope.ProjectID == "" {
 		return nil, nil, errors.New("project scope is required")

@@ -175,12 +175,15 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		registry := team.NewTeamRegistry(resolveSearchPaths())
 		if err := registry.Discover(); err != nil {
-			return nil, cobra.ShellCompDirectiveError
+			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 		var matches []string
 		for _, name := range registry.ListTeams() {
 			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(toComplete)) {
 				matches = append(matches, name)
+				if len(matches) == completionResultLimit {
+					break
+				}
 			}
 		}
 		return matches, cobra.ShellCompDirectiveNoFileComp
@@ -190,6 +193,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	registerStaticFlagCompletion(rootCmd, "theme", []string{"auto", "light", "dark", "mono"})
 	registerStaticFlagCompletion(rootCmd, "display-preset", []string{"default", "epaper"})
 	registerStaticFlagCompletion(rootCmd, "event-format", []string{"text", "jsonl"})
+	registerStaticFlagCompletion(examplesCmd, "format", []string{"text", "markdown"})
 	registerStaticFlagCompletion(contextQueryCmd, "tier", []string{"session", "persistent"})
 	registerStaticFlagCompletion(contextQueryCmd, "lifecycle", []string{"candidate", "confirmed", "rejected"})
 	registerStaticFlagCompletion(contextListCmd, "tier", []string{"session", "persistent"})
@@ -203,6 +207,9 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 			}
 		}
 		sort.Strings(names)
+		if len(names) > completionResultLimit {
+			names = names[:completionResultLimit]
+		}
 		return names, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = initCmd.RegisterFlagCompletionFunc("template", func(_ *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
@@ -215,6 +222,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		return names, cobra.ShellCompDirectiveNoFileComp
 	})
 	configureCommandDiscovery(rootCmd)
+	configureDynamicCompletions(rootCmd)
 
 	rootCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		matches := completeAtNames(toComplete)

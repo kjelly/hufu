@@ -65,11 +65,15 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Decision authoring](guides/decision-authoring.md)
 - [Read-only runtime inspection](guides/inspect.md)
+- [Operator journeys](guides/operator-journeys.md)
+- [Operator CLI migration](guides/operator-cli-migration.md)
+- [Operator troubleshooting and recovery](guides/operator-troubleshooting.md)
 - [SSH tool](guides/ssh-tool.md)
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.
+- [Generated operator command reference](reference/operator-command-reference.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)

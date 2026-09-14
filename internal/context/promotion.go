@@ -242,6 +242,29 @@ func (r *SQLiteRepository) ListPromotions(ctx context.Context, projectID, teamID
 	return out, nil
 }
 
+func (r *SQLiteRepository) ListPromotionMetadataForScope(ctx context.Context, projectID, teamID string, limit int) ([]PromotionMetadata, error) {
+	if projectID == "" || teamID == "" {
+		return nil, fmt.Errorf("promotion project and team scope are required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,type,status FROM promotion_proposals WHERE project_id=? AND team_id=? ORDER BY id LIMIT ?`, projectID, teamID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]PromotionMetadata, 0)
+	for rows.Next() {
+		var item PromotionMetadata
+		if err = rows.Scan(&item.ID, &item.Type, &item.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func scanPromotion(row interface{ Scan(...any) error }) (PromotionProposal, error) {
 	var p PromotionProposal
 	var metrics string

@@ -242,6 +242,22 @@ export extern "hufu context promotion approve" [proposal_id: string --workspace(
 export extern "hufu context promotion reject" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
 export extern "hufu context promotion apply" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
 
+export extern "hufu team create" [
+  name: string
+  --preset: string
+  --from: string
+  --model: string
+  --force
+  --expanded
+  --wizard
+]
+
+export extern "hufu session status" [--workspace(-w): string --team: string --run: string --branch: string --output: string]
+export extern "hufu session resume" [--workspace(-w): string --team: string --run: string --branch: string]
+export extern "hufu session retry" [--workspace(-w): string --team: string --run: string --branch: string --task: string --attempt: int --output: string]
+export extern "hufu session reconcile" [--workspace(-w): string --team: string --run: string --branch: string --task: string --attempt: int --output: string]
+export extern "hufu examples" [--format: string]
+
 def "nu-complete hufu inspect formats" [] {
   [text json]
 }

@@ -1516,14 +1516,16 @@ Read-only CLI adapters 不依賴 Phase 4；只有把它們接入 TUI view 時才
 
 | 工作 ID | 依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-050 | 011B | Evidence/Context detail adapters | scope/privacy 與 inspect契約一致；raw claim不成 verified |
-| HF-UX-051 | 011A/050 | Learning overview / empty states / effective mode | exposure/usage/outcome/promotion區分；unknown不變0 |
-| HF-UX-052 | 001A | promotion read-only query 接縫 | list/refresh 不 flush outbox、不 migrate |
-| HF-UX-053 | 021/052 | interactive promotion review | approve/apply分開；stale/double-submit/secret tests全過 |
-| HF-UX-054 | 050/051 | skill drafts 與 improve evidence導覽 | 不混淆 lifecycle；只連既有可用能力 |
-| HF-UX-055 | 040/050/051/052 | 將 Evidence/Context/Learning/Promotion detail 接入 TUI | passive refresh純讀；owner mutation仍走typed intent |
+| HF-UX-050 | 011B | **完成：**Evidence/Context detail adapters | scope/privacy 與 inspect契約一致；raw claim不成 verified |
+| HF-UX-051 | 011A/050 | **完成：**Learning overview / empty states / effective mode | exposure/usage/outcome/promotion區分；unknown不變0 |
+| HF-UX-052 | 001A | **完成：**promotion read-only query 接縫 | list/refresh 不 flush outbox、不 migrate |
+| HF-UX-053 | 021/052 | **完成：**interactive promotion review | approve/apply分開；stale/double-submit/secret tests全過 |
+| HF-UX-054 | 050/051 | **完成：**skill drafts 與 improve evidence導覽 | 不混淆 lifecycle；只連既有可用能力 |
+| HF-UX-055 | 040/050/051/052 | **完成：**將 Evidence/Context/Learning/Promotion detail 接入 TUI | passive refresh純讀；owner mutation仍走typed intent |
 
-**Gate P5：**有證據的 learning journey 與安全 publication 全流程通過；不能以開一個 Learning tab 當完成。
+**Gate P5（2026-09-14 已通過）：**read-only evidence/context/learning projection、互動 promotion
+review、approve/apply 分離、stale revision 與秘密／終端控制清理測試均通過；TUI panel 只做唯讀
+導覽，mutation 仍由 CLI typed intent 與既有 promotion service 擁有。
 
 ### Phase 6 — Wizard、Completion、Documentation
 
@@ -1531,12 +1533,15 @@ Read-only CLI adapters 不依賴 Phase 4；只有把它們接入 TUI view 時才
 
 | 工作 ID | 依賴 | 工作 | 完成條件 |
 |---|---|---|---|
-| HF-UX-060 | 033 | optional wizard + preview/validate/write | non-TTY不掛起；不覆寫 team；不自動跑任務 |
-| HF-UX-061 | 011B/052 | scope-aware ID completion | bounded read-only；不跨 private/branch；不 call network |
-| HF-UX-062 | 030/031A/032/033 | journey guides / migration / generated command reference | examples可parse；只列已落地 syntax |
-| HF-UX-063 | 022/031B/050 | user-facing troubleshooting 與恢復步驟 | 三問可由正常介面回答 |
+| HF-UX-060 | 033 | **完成：**optional wizard + preview/validate/write | non-TTY不掛起；不覆寫 team；不自動跑任務 |
+| HF-UX-061 | 011B/052 | **完成：**scope-aware ID completion | bounded read-only；不跨 private/branch；不 call network |
+| HF-UX-062 | 030/031A/032/033 | **完成：**journey guides / migration / generated command reference | examples可parse；只列已落地 syntax |
+| HF-UX-063 | 022/031B/050 | **完成：**user-facing troubleshooting 與恢復步驟 | 三問可由正常介面回答 |
 
-**Gate P6：**文件、help、completion 共用 metadata；無未實作命令出現在已發布指南。
+**Gate P6（2026-09-14 已通過）：**wizard 的 cancel/non-TTY/collision/no-run contract、150ms／100筆
+scope-safe completion、產生式 command reference 與 examples parse tests 均通過。Journey A～F、legacy
+migration 與三問式 troubleshooting 只引用已註冊命令；Nushell 的 selector-aware dynamic ID completion
+仍明列為未支援，不以跨 scope fallback 冒充完成。
 
 ### Phase 7 — Usability Gate、發布與 Rollback
 

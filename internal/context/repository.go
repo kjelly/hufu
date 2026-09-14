@@ -89,8 +89,25 @@ type ReadOnlyRepository interface {
 	// detail, completion, and refresh paths never need a writable repository.
 	GetPromotion(context.Context, string, string, string) (PromotionProposal, error)
 	ListPromotions(context.Context, string, string) ([]PromotionProposal, error)
+	ListPromotionMetadataForScope(context.Context, string, string, int) ([]PromotionMetadata, error)
+	ListContextMetadataForScope(context.Context, Scope, int) ([]ContextMetadata, error)
 	StorageDiagnostics(context.Context) (StorageDiagnostics, error)
 	Close() error
+}
+
+// ContextMetadata is the content-free subset exposed to bounded operator
+// discovery surfaces such as shell completion.
+type ContextMetadata struct {
+	ID        string
+	Kind      ContextKind
+	Lifecycle ContextLifecycle
+}
+
+// PromotionMetadata excludes draft, target path, sources, and rejection text.
+type PromotionMetadata struct {
+	ID     string
+	Type   PromotionType
+	Status PromotionStatus
 }
 
 // StorageDiagnostics contains content-free, read-only SQLite health facts.
