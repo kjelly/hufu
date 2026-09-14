@@ -919,6 +919,66 @@ func TestFreezeExecutionPolicyAtStartupClosesSetupJournalAfterDurability(t *test
 	}
 }
 
+func TestFreezeExecutionPolicyAtStartupPersistsPolicyForEachFreshRootBranch(t *testing.T) {
+	workspace := t.TempDir()
+
+	freezeFresh := func() (string, string) {
+		t.Helper()
+		c := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
+		c.SetFreshSession(true)
+		c.SetSessionData(NewSession())
+		if err := c.FreezeExecutionPolicyAtStartup(); err != nil {
+			t.Fatalf("freeze fresh execution policy: %v", err)
+		}
+		tree, err := LoadSessionTree(workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tree.ActiveBranch == "" || tree.ActiveBranch == "main" {
+			t.Fatalf("fresh active branch = %q, want an independent root branch", tree.ActiveBranch)
+		}
+		return tree.ActiveBranch, c.ExecutionPolicySnapshot().ConfigurationHash
+	}
+
+	firstBranch, policyHash := freezeFresh()
+	secondBranch, secondPolicyHash := freezeFresh()
+	if secondBranch == firstBranch {
+		t.Fatalf("fresh freezes reused branch %q", firstBranch)
+	}
+	if secondPolicyHash != policyHash {
+		t.Fatalf("equivalent fresh policies have different hashes: %q != %q", policyHash, secondPolicyHash)
+	}
+
+	store, err := OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey := "execution-policy-snapshot:" + policyHash
+	seen := make(map[string]RunEvent)
+	for _, event := range events {
+		if EventType(event.Type) == EventExecutionPolicySnapshot && event.IdempotencyKey == wantKey {
+			seen[event.BranchID] = event
+		}
+	}
+	if seen[firstBranch].ID == "" || seen[secondBranch].ID == "" {
+		t.Fatalf("policy events by branch = %#v, want %q and %q", seen, firstBranch, secondBranch)
+	}
+	if seen[firstBranch].ID == seen[secondBranch].ID {
+		t.Fatalf("fresh branches share policy event ID %q", seen[firstBranch].ID)
+	}
+
+	resumed := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
+	resumed.SetSessionData(LoadSession(workspace))
+	if err := resumed.AdmitExecutionPolicy(); err != nil {
+		t.Fatalf("admit policy from latest fresh branch: %v", err)
+	}
+}
+
 func TestExecutionPolicySnapshotEventJournalOwnsProjection(t *testing.T) {
 	policyA := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 3).ExecutionPolicySnapshot()
 	policyB := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 3, 3).ExecutionPolicySnapshot()

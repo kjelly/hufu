@@ -762,6 +762,16 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 	}); err != nil {
 		return fmt.Errorf("append execution policy snapshot: %w", err)
 	}
+	journalSnapshot, err = c.canonicalExecutionPolicySnapshot()
+	if err != nil {
+		return fmt.Errorf("verify appended execution policy snapshot: %w", err)
+	}
+	if journalSnapshot == nil {
+		return fmt.Errorf("appended execution policy snapshot is not visible in the active event journal lineage")
+	}
+	if journalSnapshot.ConfigurationHash != c.executionPolicy.snapshot.ConfigurationHash {
+		return fmt.Errorf("appended execution policy snapshot does not match the active policy (event_store=%s current=%s)", journalSnapshot.ConfigurationHash, c.executionPolicy.snapshot.ConfigurationHash)
+	}
 	if err := c.mutateSessionData(func(sd *SessionData) error {
 		sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(c.executionPolicy.snapshot)
 		return nil
