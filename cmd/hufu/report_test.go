@@ -413,6 +413,21 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDCharacterizesMissingCanonicalReviewScope(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(),
+		RunResult: &team.RunResult{
+			RunID:         "run-review",
+			Outcome:       team.RunOutcomeCompleted,
+			GoalSatisfied: true,
+		},
+	}
+	report := buildReportMD(data, "hufu-code-review", "# Review of the Last 10 Commits")
+	if strings.Contains(report, "## Resolved Review Scope") || strings.Contains(report, "## Resolved Run Inputs") {
+		t.Fatalf("current report unexpectedly contains canonical review scope:\n%s", report)
+	}
+}
+
 func TestBuildReportMDIncludesAuditSection(t *testing.T) {
 	data := &reportData{
 		StartedAt:        time.Now(),

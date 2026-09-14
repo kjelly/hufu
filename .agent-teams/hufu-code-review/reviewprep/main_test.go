@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +112,57 @@ func TestPrepareLimitsRangeToMostRecentCommits(t *testing.T) {
 				t.Fatalf("oldest commit path included in limited range: %#v", manifest.Items)
 			}
 		}
+	}
+}
+
+func TestResolveRangeCharacterizesFirstParentCardinality(t *testing.T) {
+	repo := newFixtureRepo(t)
+	for i := 1; i <= 10; i++ {
+		writeAndCommit(t, repo, filepath.Join("internal", "history", fmt.Sprintf("commit-%02d.go", i)), "package history\n", fmt.Sprintf("change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
+	}
+
+	for _, count := range []int{1, 3, 10} {
+		t.Run(fmt.Sprintf("last_%d", count), func(t *testing.T) {
+			r, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", count)
+			if err != nil {
+				t.Fatalf("resolveRange(%d): %v", count, err)
+			}
+			if r.CommitCount != count {
+				t.Fatalf("CommitCount = %d, want %d", r.CommitCount, count)
+			}
+		})
+	}
+}
+
+func TestResolveRangeCharacterizesExhaustedHistory(t *testing.T) {
+	repo := newFixtureRepo(t)
+	for i := 1; i <= 3; i++ {
+		writeAndCommit(t, repo, filepath.Join("internal", fmt.Sprintf("commit-%02d.go", i)), "package internal\n", fmt.Sprintf("change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
+	}
+
+	r, err := resolveRange(t.Context(), repo, "2025-01-01T12:00:00Z", 10)
+	if err != nil {
+		t.Fatalf("resolveRange: %v", err)
+	}
+	if r.CommitCount != 3 {
+		t.Fatalf("CommitCount = %d, want all 3 available commits", r.CommitCount)
+	}
+}
+
+func TestResolveRangeCharacterizesShallowHistoryFailure(t *testing.T) {
+	source := newFixtureRepo(t)
+	for i := 1; i <= 3; i++ {
+		writeAndCommit(t, source, filepath.Join("internal", fmt.Sprintf("commit-%02d.go", i)), "package internal\n", fmt.Sprintf("change %02d", i), fmt.Sprintf("2025-01-%02dT00:00:00Z", i+1))
+	}
+	cloneRoot := t.TempDir()
+	shallow := filepath.Join(cloneRoot, "shallow")
+	cmd := exec.Command("git", "clone", "--depth", "2", "file://"+filepath.ToSlash(source), shallow)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git clone --depth 2: %v\n%s", err, output)
+	}
+
+	if _, err := resolveRange(t.Context(), shallow, "1970-01-01", 10); err == nil {
+		t.Fatal("resolveRange on incomplete shallow history succeeded; current behavior must fail closed")
 	}
 }
 
