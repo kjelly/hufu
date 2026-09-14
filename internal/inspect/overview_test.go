@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -273,6 +274,50 @@ func TestInspectOverviewMissingWorkspaceIsReadOnly(t *testing.T) {
 	}
 	if _, statErr := os.Stat(workspace); !os.IsNotExist(statErr) {
 		t.Fatalf("read-only overview created workspace: %v", statErr)
+	}
+}
+
+func TestInspectOverviewLearningFailureDegradesToDiagnosisWithoutRetry(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := team.NewEventStore(workspace, "run-learning", "session-learning")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendOverviewEvent(t, store, team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: jsonBytes(t, map[string]any{
+		"scope": map[string]string{"project_id": "project", "team_id": "team"},
+	})})
+	appendOverviewEvent(t, store, team.RunEvent{Type: "run_finished", Actor: "coordinator", Payload: jsonBytes(t, team.RunResult{
+		RunID: "run-learning", Outcome: team.RunOutcomeCompleted,
+	})})
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(t.Context(), "CREATE TABLE sentinel (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	envelope, err := InspectOverview(t.Context(), InspectQuery{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := envelope.Data.(OverviewData).Snapshot
+	if snapshot.Learning.Status != "unknown" || snapshot.Integrity.Status != "degraded" {
+		t.Fatalf("learning failure snapshot = %#v", snapshot)
+	}
+	if snapshot.PrimaryAction == nil || snapshot.PrimaryAction.ID != operatorpkg.ActionInspectIntegrity {
+		t.Fatalf("learning failure action = %#v, want diagnosis", snapshot.PrimaryAction)
+	}
+	for _, action := range append([]operatorpkg.ActionSuggestion{*snapshot.PrimaryAction}, snapshot.SecondaryActions...) {
+		if action.ID == operatorpkg.ActionRetryTask || action.ID == operatorpkg.ActionReconcileTask {
+			t.Fatalf("learning degradation recommended runtime mutation: %#v", action)
+		}
 	}
 }
 

@@ -53,7 +53,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 		return fmt.Errorf("--dry-run requires a prompt")
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%s Running dry-run for team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(dryRunTeamName))
+	stderrLog("\n%s Running dry-run for team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(dryRunTeamName))
 
 	dryDisp := newCoordDisplay(tc)
 	result, err := tc.coordinator.DryRun(ctx, dryRunPrompt)
@@ -223,7 +223,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 
 	if opts.tempWorkspace {
 		absWS, _ := filepath.Abs(opts.workspace)
-		fmt.Fprintf(os.Stderr, "\n%s\n  Path: %s\n",
+		stderrLog("\n%s\n  Path: %s\n",
 			boldStyle.Render("─── Temporary Workspace ───"),
 			absWS)
 	}
@@ -256,7 +256,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 }
 
 func executionSummaryEnabled(options runOptions) bool {
-	return !options.quietMode && !options.noSummary && options.outputFormat != "json"
+	return !options.quietMode && !options.noSummary && options.outputFormat != "json" && options.eventFormat != "jsonl"
 }
 
 func formatUnresolvedTaskError(teamName string, item *team.TodoItem) error {

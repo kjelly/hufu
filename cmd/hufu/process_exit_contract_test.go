@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -305,6 +306,218 @@ func TestCLIProcessExitContract(t *testing.T) {
 			t.Fatalf("JSON acceptance = %#v, want failed/not-passed", output.Acceptance)
 		}
 	})
+}
+
+func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
+	binary := buildProcessContractBinary(t)
+	var chatCalls atomic.Int64
+	server := newContractTextServer(t, &chatCalls)
+	defer server.Close()
+
+	teamRoot := t.TempDir()
+	teamName := "equivalent-run"
+	teamDir := filepath.Join(teamRoot, teamName)
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("name: %s\nmodel: test\nprovider-url: %s/v1\ncontext-window: 32768\nmax-rounds: 2\ntimeout: 10\n", teamName, server.URL)
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyRoot := t.TempDir()
+	legacyWorkspace := filepath.Join(legacyRoot, teamName)
+	legacyCode, legacyStdout, legacyStderr := runProcessContract(t, binary,
+		"--agent-team", teamName, "--agent-team-search-path", teamRoot,
+		"--workspace", legacyRoot, "--provider-url", server.URL+"/v1", "--model", "test",
+		"--context-window", "32768", "--route", "fast", "--output", "json", "--timeout", "10", "calculate")
+	legacyCalls := chatCalls.Load()
+
+	canonicalWorkspace := filepath.Join(t.TempDir(), "exact-workspace")
+	canonicalCode, canonicalStdout, canonicalStderr := runProcessContract(t, binary,
+		"run", "--team", teamName, "--agent-team-search-path", teamRoot,
+		"--workspace", canonicalWorkspace, "--provider-url", server.URL+"/v1", "--model", "test",
+		"--context-window", "32768", "--route", "fast", "--output", "json", "--timeout", "10", "--", "calculate")
+	canonicalCalls := chatCalls.Load() - legacyCalls
+	if canonicalCode != legacyCode {
+		t.Fatalf("exit codes differ: legacy=%d canonical=%d\nlegacy stderr=%s\ncanonical stderr=%s", legacyCode, canonicalCode, legacyStderr, canonicalStderr)
+	}
+	if legacyCalls == 0 || canonicalCalls != legacyCalls {
+		t.Fatalf("provider calls legacy=%d canonical=%d", legacyCalls, canonicalCalls)
+	}
+
+	var legacyOutput, canonicalOutput jsonRunOutput
+	if err := json.Unmarshal(legacyStdout, &legacyOutput); err != nil {
+		t.Fatalf("decode legacy output: %v\n%s", err, legacyStdout)
+	}
+	if err := json.Unmarshal(canonicalStdout, &canonicalOutput); err != nil {
+		t.Fatalf("decode canonical output: %v\n%s", err, canonicalStdout)
+	}
+	if legacyOutput.Outcome != canonicalOutput.Outcome || legacyOutput.GoalSatisfied != canonicalOutput.GoalSatisfied || legacyOutput.Result != canonicalOutput.Result || legacyOutput.ExitCode != canonicalOutput.ExitCode {
+		t.Fatalf("run results differ: legacy=%#v canonical=%#v", legacyOutput, canonicalOutput)
+	}
+
+	legacyEffects := contractExecutionEffects(t, legacyWorkspace)
+	canonicalEffects := contractExecutionEffects(t, canonicalWorkspace)
+	if !slices.Equal(legacyEffects, canonicalEffects) {
+		t.Fatalf("durable effects differ:\nlegacy=%v\ncanonical=%v", legacyEffects, canonicalEffects)
+	}
+	if !slices.Contains(legacyEffects, "task_completed:receipt") {
+		t.Fatalf("equivalent scenario did not persist an execution receipt: %v", legacyEffects)
+	}
+}
+
+func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
+	binary := buildProcessContractBinary(t)
+	var chatCalls atomic.Int64
+	server := newContractTextServer(t, &chatCalls)
+	defer server.Close()
+
+	teamRoot := t.TempDir()
+	teamName := "jsonl-run"
+	teamDir := filepath.Join(teamRoot, teamName)
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("name: %s\nmodel: test\nprovider-url: %s/v1\ncontext-window: 32768\nmax-rounds: 2\ntimeout: 10\n", teamName, server.URL)
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runProcessContract(t, binary,
+		"run", "--team", teamName, "--agent-team-search-path", teamRoot,
+		"--workspace", filepath.Join(t.TempDir(), "workspace"),
+		"--provider-url", server.URL+"/v1", "--model", "test",
+		"--context-window", "32768", "--route", "fast", "--output", "json",
+		"--event-format", "jsonl", "--timeout", "10", "--", "calculate")
+	if code == 0 {
+		t.Fatalf("fixture unexpectedly completed; want a nonzero final outcome to exercise command error JSONL\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	var output jsonRunOutput
+	if err := json.Unmarshal(stdout, &output); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, stdout)
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(stderr), []byte{'\n'})
+	if len(lines) < 2 {
+		t.Fatalf("stderr JSONL lines = %d, want runtime events plus command error\nstderr=%s", len(lines), stderr)
+	}
+	foundCommandError := false
+	for index, line := range lines {
+		var event jsonStatusEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("stderr line %d is not a JSON status event: %v\nline=%q\nall stderr=%s", index+1, err, line, stderr)
+		}
+		if event.Type == "" || event.Time == "" {
+			t.Fatalf("stderr line %d lacks type/time: %#v", index+1, event)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, event.Time); err != nil {
+			t.Fatalf("stderr line %d time = %q: %v", index+1, event.Time, err)
+		}
+		if event.Type == "error" && strings.Contains(event.Message, "task") {
+			foundCommandError = true
+		}
+	}
+	if !foundCommandError {
+		t.Fatalf("stderr lacks structured command-boundary error:\n%s", stderr)
+	}
+}
+
+func newContractTextServer(t *testing.T, calls *atomic.Int64) *httptest.Server {
+	t.Helper()
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/models":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(writer, `{"object":"list","data":[{"id":"test","object":"model"}]}`)
+			return
+		case "/v1/chat/completions":
+		default:
+			http.NotFound(writer, request)
+			return
+		}
+		var chat contractChatRequest
+		if err := json.NewDecoder(request.Body).Decode(&chat); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		call := calls.Add(1)
+		useSubmitResult := false
+		for _, tool := range chat.Tools {
+			name := tool.Name
+			if name == "" {
+				name = tool.Function.Name
+			}
+			if name == "submit_result" {
+				useSubmitResult = true
+				break
+			}
+		}
+		arguments := `{"status":"success","summary":"fixture verified result"}`
+		if chat.Stream {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			if useSubmitResult {
+				_, _ = fmt.Fprintf(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"submit-%d\",\"type\":\"function\",\"function\":{\"name\":\"submit_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", call, arguments)
+				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			} else {
+				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"fixture verified result\"},\"finish_reason\":null}]}\n\n")
+				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			}
+			_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			return
+		}
+		message := map[string]any{"role": "assistant", "content": "fixture verified result"}
+		finishReason := "stop"
+		if useSubmitResult {
+			message = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
+				"id": fmt.Sprintf("submit-%d", call), "type": "function",
+				"function": map[string]string{"name": "submit_result", "arguments": arguments},
+			}}}
+			finishReason = "tool_calls"
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"id": "fixture", "object": "chat.completion", "created": 1, "model": "test",
+			"choices": []any{map[string]any{"index": 0, "finish_reason": finishReason, "message": message}},
+			"usage":   map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			t.Skipf("sandbox does not permit TCP fixture listener: %v", err)
+		}
+		t.Fatalf("start TCP fixture listener: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
+}
+
+func contractExecutionEffects(t *testing.T, workspace string) []string {
+	t.Helper()
+	store, err := team.OpenEventStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := make([]string, 0, len(events))
+	for _, event := range events {
+		signature := event.Type
+		if event.Type == string(team.EventTaskCompleted) {
+			var payload struct {
+				ExecutionReceipt *team.ExecutionReceipt `json:"execution_receipt"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil && payload.ExecutionReceipt != nil {
+				signature += ":receipt"
+			}
+		}
+		effects = append(effects, signature)
+	}
+	return effects
 }
 
 func truncateContractOutput(data []byte) string {

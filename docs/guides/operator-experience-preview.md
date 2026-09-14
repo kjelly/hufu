@@ -38,7 +38,7 @@ Use preview commands explicitly:
 hufu inspect overview --workspace ./workspace/dev-team
 hufu run --team dev-team -- "implement and verify the change"
 hufu run --team dev-team --tui --theme auto --display-preset epaper -- "inspect the run"
-hufu context promotion review --project-id <project> --team-id <team> --workspace <path>
+hufu context promotion review --project <project> --team <team> --workspace <path>
 ```
 
 Opening a review or TUI panel does not authorize a mutation. Confirm only an

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func TestCanonicalRunFactoryFlagsAreInstanceScoped(t *testing.T) {
 
 func TestCanonicalRunExposesPresentationFlags(t *testing.T) {
 	command := newRunCommand()
-	for _, name := range []string{"theme", "display-preset", "display-mode", "no-spinner", "no-summary", "tui-compact"} {
+	for _, name := range []string{"theme", "display-preset", "display-mode", "no-spinner", "no-summary", "tui-compact", "route"} {
 		if command.Flags().Lookup(name) == nil {
 			t.Errorf("canonical run missing --%s", name)
 		}
@@ -67,10 +68,18 @@ func TestCanonicalRunAcceptsHyphenLeadingPromptAfterSeparator(t *testing.T) {
 
 func TestCanonicalRunRejectsFlagConflictsBeforeExecution(t *testing.T) {
 	command := newRunCommand()
-	command.SetArgs([]string{"--workspace", "/tmp/exact", "--workspace-root", "/tmp/root", "task"})
+	parent := t.TempDir()
+	exact := filepath.Join(parent, "exact-must-not-exist")
+	root := filepath.Join(parent, "root-must-not-exist")
+	command.SetArgs([]string{"--workspace", exact, "--workspace-root", root, "task"})
 	err := command.Execute()
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, path := range []string{exact, root} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("conflicting workspace flags mutated %q: %v", path, statErr)
+		}
 	}
 
 	command = newRunCommand()

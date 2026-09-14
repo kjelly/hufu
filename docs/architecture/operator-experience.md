@@ -1558,7 +1558,8 @@ migration 與三問式 troubleshooting 只引用已註冊命令；Nushell 的 se
 overview performance 與 Bash/Fish/Nushell parse smoke 已通過；Linux arm64 與 Darwin 只有 CGO-free
 cross-build，native terminal 尚未驗收。真人 baseline/candidate task test 為 0 位參與者，因此不得升為
 stable，也不得搬移本 active contract。證據與剩餘項目見
-`docs/reference/operator-release-readiness.md` 與 `docs/reference/operator-usability-evaluation.md`。
+`docs/reference/operator-release-readiness.md`、`docs/reference/operator-requirement-traceability.md`
+與 `docs/reference/operator-usability-evaluation.md`。
 
 
 ---

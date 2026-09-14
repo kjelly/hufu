@@ -71,8 +71,12 @@ type TeamInfoMsg struct{ Info TeamInfo }
 type DecisionStateMsg struct{ Decisions []team.DecisionIndexEntry }
 
 // OperatorSnapshotMsg refreshes the shared read-only snapshot used by both
-// inspect overview and the TUI summary strip.
-type OperatorSnapshotMsg struct{ Snapshot operator.OperatorSnapshot }
+// inspect overview and the TUI summary strip. Generation orders asynchronous
+// queries so a late result cannot replace a newer scope.
+type OperatorSnapshotMsg struct {
+	Generation uint64
+	Snapshot   operator.OperatorSnapshot
+}
 
 type OperatorEvidenceDetail struct {
 	Available      bool
@@ -93,6 +97,7 @@ type OperatorPromotionDetail struct {
 }
 
 type OperatorDetailsMsg struct {
+	Generation       uint64
 	Evidence         OperatorEvidenceDetail
 	Promotions       []OperatorPromotionDetail
 	PromotionStatus  string
@@ -179,6 +184,7 @@ type Model struct {
 	themeGeneration          uint64
 	styles                   styleSet
 	operatorSummary          operator.OperatorSummary
+	operatorGeneration       uint64
 	operatorScope            operator.ResolvedScope
 	operatorSnapshot         operator.OperatorSnapshot
 	operatorEvidence         OperatorEvidenceDetail
@@ -466,6 +472,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.teamInfo.Decisions = team.RedactedDecisionIndexEntries(msg.Decisions)
 
 	case OperatorSnapshotMsg:
+		if !m.acceptOperatorGeneration(msg.Generation) {
+			break
+		}
 		m.operatorSummary = operator.BuildSummary(msg.Snapshot)
 		m.operatorScope = msg.Snapshot.Scope
 		m.operatorSnapshot = msg.Snapshot
@@ -477,6 +486,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case OperatorDetailsMsg:
+		if !m.acceptOperatorDetailsGeneration(msg.Generation) {
+			break
+		}
 		m.operatorEvidence = msg.Evidence
 		m.operatorPromotions = slices.Clone(msg.Promotions)
 		m.operatorPromotionStatus = msg.PromotionStatus

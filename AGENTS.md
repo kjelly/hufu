@@ -265,6 +265,7 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `inOperator` | `bool` | Read-only Evidence/Context/Learning/Promotion panel active |
 | `operatorVP` | `viewport.Model` | Separate viewport for operator detail projections |
 | `operatorReady` | `bool` | Operator detail viewport initialized |
+| `operatorGeneration` | `uint64` | Latest accepted async operator query generation; rejects late older scopes |
 | `inConfirm` | `bool` | Quit confirmation dialog |
 | `confirmChoice` | `int` | 0=No, 1=Yes, 2=Force |
 | `width` / `height` | `int` | Terminal dimensions |
@@ -459,8 +460,8 @@ The TUI is built on the **Bubble Tea** framework. `Model.Update(msg)` is a **pur
 | `StatusBarMsg` | `Text string` | Update 1-line status bar |
 | `ResultMsg` | `Text string` | Display final result |
 | `TeamInfoMsg` | `Info TeamInfo` | Load team metadata |
-| `OperatorSnapshotMsg` | `Snapshot operator.OperatorSnapshot` | Refresh the shared read-only operator summary and learning projection |
-| `OperatorDetailsMsg` | `Evidence OperatorEvidenceDetail, Promotions []OperatorPromotionDetail` | Refresh audit-verified/content-free operator detail data |
+| `OperatorSnapshotMsg` | `Generation uint64, Snapshot operator.OperatorSnapshot` | Refresh the shared read-only operator summary and learning projection; stale generations are ignored |
+| `OperatorDetailsMsg` | `Generation uint64, Evidence OperatorEvidenceDetail, Promotions []OperatorPromotionDetail` | Refresh audit-verified/content-free operator detail data; stale generations are ignored |
 | `WrapUpMsg` | (none) | Wrap-up request |
 | `AskUserCancelMsg` | (none) | Cancel ask_user dialog |
 

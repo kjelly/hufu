@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	hulog "github.com/kjelly/hufu/internal/log"
 )
 
 // TokenCounter measures token counts for text, messages, and tool definitions.
@@ -116,10 +116,10 @@ var observedContextCapacityRE = regexp.MustCompile(`(?i)(?:available context siz
 
 // estimatedModelLogger is invoked once per process for each model whose spec is
 // derived from a fallback estimator rather than a known registry entry (§5.3:
-// "log 標記 estimated"). It defaults to a stderr warning via the stdlib log
-// package and is swappable for tests.
+// "log 標記 estimated"). It defaults to the centralized stderr logger so
+// quiet, JSON, JSONL, and TUI modes remain coherent, and is swappable for tests.
 var estimatedModelLogger = func(modelID, estimator string) {
-	log.Printf("warning: no exact tokenizer for model %q; using %q estimator fallback (token counts are estimated)", modelID, estimator)
+	hulog.Printf("warning: no exact tokenizer for model %q; using %q estimator fallback (token counts are estimated)\n", modelID, estimator)
 }
 
 // estimatedWarnSeen dedups estimated-model warnings so each model is logged once.

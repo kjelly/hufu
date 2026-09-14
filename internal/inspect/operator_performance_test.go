@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -37,7 +40,7 @@ func TestOperatorOverviewPerformance(t *testing.T) {
 			}
 			slices.Sort(warm)
 			p95 := warm[(len(warm)*95+99)/100-1]
-			t.Logf("events=%d cold=%s warm_p95=%s samples=%d", taskCount+1, cold, p95, len(warm))
+			t.Logf("events=%d context_items=%d cold=%s warm_p95=%s samples=%d", taskCount+1, taskCount, cold, p95, len(warm))
 		})
 	}
 }
@@ -63,7 +66,47 @@ func buildOperatorPerformanceFixture(t *testing.T, taskCount int) string {
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	buildContextPerformanceFixture(t, workspace, taskCount)
 	return workspace
+}
+
+func buildContextPerformanceFixture(t *testing.T, workspace string, itemCount int) {
+	t.Helper()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	items := make([]contextstore.ContextItem, itemCount)
+	observations := make([]contextstore.ExperienceObservation, itemCount)
+	for index := range itemCount {
+		id := fmt.Sprintf("context-%04d", index)
+		items[index] = contextstore.ContextItem{
+			ID: id, Kind: contextstore.ContextPattern, Content: "performance item " + id,
+			Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Lifecycle: contextstore.LifecycleConfirmed,
+		}
+		observations[index] = contextstore.ExperienceObservation{
+			IdempotencyKey: "observation-" + id, ContextItemID: id, PolicyVersion: "policy-performance",
+			ProjectID: "project", TaskID: fmt.Sprintf("task-%04d", index), ObservedAt: now,
+			ExposureDelta: 1, ConsultedDelta: 1,
+		}
+	}
+	if err = repo.Append(t.Context(), items...); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.RebuildExperienceAggregates(t.Context(), observations); err != nil {
+		t.Fatal(err)
+	}
+	policy := agent.DefaultMemoryLearningPolicy()
+	policy.Mode = agent.MemoryLearningObserve
+	policy.PolicyVersion = "policy-performance"
+	snapshot := operatorPerformanceJSON(t, map[string]any{"learning": policy})
+	if err = repo.SaveMemoryPolicyVersion(t.Context(), policy.PolicyVersion, snapshot, "revision-performance", "active", now); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func operatorPerformanceJSON(t *testing.T, value any) []byte {

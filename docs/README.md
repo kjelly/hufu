@@ -76,6 +76,7 @@ to re-create an abstraction that already exists in the runtime.
   measurement entrypoint.
 - [Generated operator command reference](reference/operator-command-reference.md)
 - [Operator release readiness](reference/operator-release-readiness.md)
+- [Operator requirement traceability](reference/operator-requirement-traceability.md)
 - [Operator usability evaluation](reference/operator-usability-evaluation.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
 - [Agent definition format](reference/agent-format.md)

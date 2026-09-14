@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"maps"
 	"regexp"
 	"slices"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -432,7 +432,7 @@ func (d *SkillPatternDetector) calculateQualityScore(candidate PatternCandidate,
 func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCandidate {
 	// Check sidecar availability - skip if unavailable (no fallback)
 	if !d.sidecarEnabled || d.modelInvoker == nil {
-		log.Printf("[INFO] Skill generation skipped: sidecar unavailable")
+		hulog.Printf("[INFO] Skill generation skipped: sidecar unavailable\n")
 		return nil
 	}
 
@@ -471,7 +471,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	before := len(candidates)
 	candidates = dedupPrefixes(candidates)
 	if len(candidates) < before {
-		log.Printf("[INFO] Deduplicated %d prefix-overlapping candidates", before-len(candidates))
+		hulog.Printf("[INFO] Deduplicated %d prefix-overlapping candidates\n", before-len(candidates))
 	}
 
 	// Filtering statistics
@@ -490,7 +490,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		requiredFreq := d.dynamicMinFrequency(len(candidates[i].Sequence.Tools))
 		if candidates[i].Sequence.Count < requiredFreq {
 			filteredByFrequency++
-			log.Printf("[INFO] Filtered candidate (frequency %d < %d for len %d): %v",
+			hulog.Printf("[INFO] Filtered candidate (frequency %d < %d for len %d): %v\n",
 				candidates[i].Sequence.Count, requiredFreq, len(candidates[i].Sequence.Tools), candidates[i].Sequence.Tools)
 			continue
 		}
@@ -499,7 +499,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		candidates[i].IsSingleTool = d.isSingleToolRepeat(candidates[i].Sequence)
 		if candidates[i].IsSingleTool {
 			filteredBySingleTool++
-			log.Printf("[INFO] Filtered candidate (single tool): %v (×%d)",
+			hulog.Printf("[INFO] Filtered candidate (single tool): %v (×%d)\n",
 				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
 			continue
 		}
@@ -507,7 +507,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		// High-value sequence filter: must include at least one non-generic tool
 		if !d.isHighValueSequence(candidates[i].Sequence) {
 			filteredByLowValue++
-			log.Printf("[INFO] Filtered candidate (low-value, all generic tools): %v (×%d)",
+			hulog.Printf("[INFO] Filtered candidate (low-value, all generic tools): %v (×%d)\n",
 				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
 			continue
 		}
@@ -515,7 +515,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		// Action tool filter: must include at least one mutating/executing tool
 		if !d.hasActionTool(candidates[i].Sequence) {
 			filteredByNoAction++
-			log.Printf("[INFO] Filtered candidate (no action tool): %v (×%d)",
+			hulog.Printf("[INFO] Filtered candidate (no action tool): %v (×%d)\n",
 				candidates[i].Sequence.Tools, candidates[i].Sequence.Count)
 			continue
 		}
@@ -528,7 +528,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		// Parameter generalization hard floor: reject overly specific sequences
 		if paramScore < minParamScore {
 			filteredByParamFloor++
-			log.Printf("[INFO] Filtered candidate (param score %.2f < %.2f floor): %s - %s",
+			hulog.Printf("[INFO] Filtered candidate (param score %.2f < %.2f floor): %s - %s\n",
 				paramScore, minParamScore, candidates[i].SuggestedName, reason)
 			continue
 		}
@@ -539,7 +539,7 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 		// Quality filter
 		if candidates[i].QualityScore < qualityThreshold {
 			filteredByQuality++
-			log.Printf("[INFO] Filtered candidate (quality %.2f < %.2f): %s - %s",
+			hulog.Printf("[INFO] Filtered candidate (quality %.2f < %.2f): %s - %s\n",
 				candidates[i].QualityScore, qualityThreshold, candidates[i].SuggestedName, reason)
 			continue
 		}
@@ -554,21 +554,21 @@ func (d *SkillPatternDetector) FindCandidates(ctx context.Context) []PatternCand
 	})
 
 	if len(highQualityCandidates) > maxSkillCandidates {
-		log.Printf("[INFO] Capping candidates from %d to %d (maxSkillCandidates)",
+		hulog.Printf("[INFO] Capping candidates from %d to %d (maxSkillCandidates)\n",
 			len(highQualityCandidates), maxSkillCandidates)
 		highQualityCandidates = highQualityCandidates[:maxSkillCandidates]
 	}
 
 	// Filtering summary
-	log.Printf("[INFO] Skill pattern filtering summary:")
-	log.Printf("  Total candidates: %d", len(candidates))
-	log.Printf("  Filtered by frequency (dynamic): %d", filteredByFrequency)
-	log.Printf("  Filtered by single tool: %d", filteredBySingleTool)
-	log.Printf("  Filtered by low-value (all generic): %d", filteredByLowValue)
-	log.Printf("  Filtered by no action tool: %d", filteredByNoAction)
-	log.Printf("  Filtered by param floor (<%.2f): %d", minParamScore, filteredByParamFloor)
-	log.Printf("  Filtered by quality (<%.2f): %d", qualityThreshold, filteredByQuality)
-	log.Printf("  High-quality candidates: %d", len(highQualityCandidates))
+	hulog.Printf("[INFO] Skill pattern filtering summary:\n")
+	hulog.Printf("  Total candidates: %d\n", len(candidates))
+	hulog.Printf("  Filtered by frequency (dynamic): %d\n", filteredByFrequency)
+	hulog.Printf("  Filtered by single tool: %d\n", filteredBySingleTool)
+	hulog.Printf("  Filtered by low-value (all generic): %d\n", filteredByLowValue)
+	hulog.Printf("  Filtered by no action tool: %d\n", filteredByNoAction)
+	hulog.Printf("  Filtered by param floor (<%.2f): %d\n", minParamScore, filteredByParamFloor)
+	hulog.Printf("  Filtered by quality (<%.2f): %d\n", qualityThreshold, filteredByQuality)
+	hulog.Printf("  High-quality candidates: %d\n", len(highQualityCandidates))
 
 	return highQualityCandidates
 }

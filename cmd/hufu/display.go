@@ -1285,14 +1285,16 @@ func isTUISnapshotRefreshEvent(eventType string) bool {
 
 func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), func()) {
 	ctx, cancel := context.WithCancel(context.Background())
-	requests := make(chan struct{}, 1)
+	requests := make(chan uint64, 1)
+	var latestGeneration atomic.Uint64
+	var requestMu sync.Mutex
 	var workers sync.WaitGroup
 	workers.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-requests:
+			case generation := <-requests:
 				queryCtx, queryCancel := context.WithTimeout(ctx, time.Second)
 				envelope, err := inspectpkg.InspectOverview(queryCtx, inspectpkg.InspectQuery{Workspace: workspace})
 				if err != nil || envelope == nil {
@@ -1300,19 +1302,27 @@ func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), fun
 					continue
 				}
 				data, ok := envelope.Data.(inspectpkg.OverviewData)
-				if ok && data.Snapshot != nil {
-					program.Send(tuipkg.OperatorSnapshotMsg{Snapshot: *data.Snapshot})
-					program.Send(loadTUIOperatorDetails(queryCtx, workspace, *data.Snapshot))
+				if ok && data.Snapshot != nil && generation == latestGeneration.Load() {
+					program.Send(tuipkg.OperatorSnapshotMsg{Generation: generation, Snapshot: *data.Snapshot})
+					details := loadTUIOperatorDetails(queryCtx, workspace, *data.Snapshot)
+					if generation == latestGeneration.Load() {
+						details.Generation = generation
+						program.Send(details)
+					}
 				}
 				queryCancel()
 			}
 		}
 	})
 	request := func() {
+		generation := latestGeneration.Add(1)
+		requestMu.Lock()
+		defer requestMu.Unlock()
 		select {
-		case requests <- struct{}{}:
+		case <-requests:
 		default:
 		}
+		requests <- generation
 	}
 	stop := func() {
 		cancel()
@@ -1398,6 +1408,21 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		defer mu.Unlock()
 		_ = json.NewEncoder(os.Stderr).Encode(encoded)
 	}
+}
+
+// emitJSONLCommandError keeps Cobra's terminal error from corrupting a JSONL
+// status stream. Runtime status events and the command-boundary failure use
+// the same stable envelope; successful commands emit nothing here.
+func emitJSONLCommandError(err error) {
+	if err == nil {
+		return
+	}
+	encoded := jsonStatusEvent{
+		Type:    "error",
+		Message: err.Error(),
+		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	_ = json.NewEncoder(os.Stderr).Encode(encoded)
 }
 
 // thinkingEntry tracks one agent's LLM wait so the TUI status bar keeps
@@ -1843,7 +1868,7 @@ func stderrLog(format string, args ...any) {
 // syncLogState pushes the current quiet/JSON/TUI state to internal/log so
 // any internal/* package that logs through it stays in sync with the CLI.
 func syncLogState() {
-	hulog.SetQuiet(opts.quietMode || opts.outputFormat == "json")
+	hulog.SetQuiet(opts.quietMode || opts.outputFormat == "json" || opts.eventFormat == "jsonl")
 	hulog.SetTUIActive(activeTUIProgram.Load() != nil)
 }
 

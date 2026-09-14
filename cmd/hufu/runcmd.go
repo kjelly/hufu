@@ -11,6 +11,7 @@ type canonicalRunOptions struct {
 	team, agentTeam, workspace, workspaceRoot, searchPath string
 	providerURL, providerAPIKey                           string
 	model, coordinatorModel, output, eventFormat          string
+	route                                                 string
 	displayMode, theme, displayPreset                     string
 	temperature, maxTokens, topP, topK, reasoningEffort   string
 	sidecarModel, guardModel, judgeModel, planReviewer    string
@@ -38,7 +39,16 @@ which the team name is joined exactly once. Omit both to use
 <project>/workspace/<team>.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
-		RunE: func(command *cobra.Command, args []string) error {
+		RunE: func(command *cobra.Command, args []string) (runErr error) {
+			delegated := false
+			if options.eventFormat == "jsonl" {
+				command.Root().SilenceErrors = true
+				defer func() {
+					if !delegated {
+						emitJSONLCommandError(runErr)
+					}
+				}()
+			}
 			teamName, err := resolveCanonicalTeamAlias(command, options)
 			if err != nil {
 				return err
@@ -52,7 +62,10 @@ which the team name is joined exactly once. Omit both to use
 			}
 
 			previous := opts
-			defer func() { opts = previous }()
+			defer func() {
+				opts = previous
+				syncLogState()
+			}()
 			opts.agentTeamName = teamName
 			opts.agentTeamSearchPath = options.searchPath
 			opts.workspace = path
@@ -75,6 +88,7 @@ which the team name is joined exactly once. Omit both to use
 			opts.planReviewerModelOverride = options.planReviewer
 			opts.outputFormat = options.output
 			opts.eventFormat = options.eventFormat
+			opts.routeMode = options.route
 			opts.displayMode = options.displayMode
 			opts.themeMode = options.theme
 			opts.displayPreset = options.displayPreset
@@ -110,6 +124,7 @@ which the team name is joined exactly once. Omit both to use
 			opts.inputFlags = append([]string(nil), options.inputs...)
 			opts.inputFiles = append([]string(nil), options.inputFiles...)
 			opts.forcedSkills = append([]string(nil), options.skills...)
+			delegated = true
 			return runTeam(command, args)
 		},
 	}
@@ -137,6 +152,7 @@ which the team name is joined exactly once. Omit both to use
 	flags.StringVar(&options.planReviewer, "plan-reviewer-model", "", "Override plan reviewer LLM target")
 	flags.StringVar(&options.output, "output", "", "Final-result format: text or json")
 	flags.StringVar(&options.eventFormat, "event-format", "text", "Status event format: text or jsonl")
+	flags.StringVar(&options.route, "route", "auto", "Execution route selection mode: auto, fast, or team")
 	flags.StringVar(&options.displayMode, "display-mode", "auto", "Status display mode: auto, terminal, or plain")
 	flags.StringVar(&options.theme, "theme", "", "Display theme: auto, light, dark, or mono")
 	flags.StringVar(&options.displayPreset, "display-preset", "", "Display preset: default or epaper")
@@ -174,6 +190,7 @@ which the team name is joined exactly once. Omit both to use
 	flags.StringArrayVar(&options.skills, "skill", nil, "Force-load a skill (repeatable)")
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "event-format", []string{"text", "jsonl"})
+	registerStaticFlagCompletion(command, "route", []string{"auto", "fast", "team"})
 	registerStaticFlagCompletion(command, "display-mode", []string{"auto", "terminal", "plain"})
 	registerStaticFlagCompletion(command, "theme", []string{"auto", "light", "dark", "mono"})
 	registerStaticFlagCompletion(command, "display-preset", []string{"default", "epaper"})

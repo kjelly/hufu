@@ -73,14 +73,20 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		outcome.GoalSatisfied = new(runData.GoalSatisfied)
 	}
 	anchor := latestRunEvent(bound.Lineage.Events, bound.Scope.RunID)
+	learning := learningView(ctx, workspace.WorkspaceExact, bound.Scope.ProjectID, bound.Scope.TeamName)
+	integrity := operatorpkg.IntegrityView{
+		Status: "valid", EventChain: "verified", Projection: "consistent", ReasonCodes: []string{},
+	}
+	if learning.Status == "unknown" || learning.Status == "unavailable" {
+		integrity.Status = "degraded"
+		integrity.ReasonCodes = []string{"learning_projection_unavailable"}
+	}
 	snapshot := operatorpkg.OperatorSnapshot{
 		SchemaVersion: operatorpkg.SchemaVersion,
 		Scope:         bound.Scope,
 		Activity:      activity,
 		Outcome:       outcome,
-		Integrity: operatorpkg.IntegrityView{
-			Status: "valid", EventChain: "verified", Projection: "consistent", ReasonCodes: []string{},
-		},
+		Integrity:     integrity,
 		Freshness: operatorpkg.FreshnessView{
 			QueriedAt: time.Now().UTC().Format(time.RFC3339Nano), EventID: anchor.Event.ID,
 			EventHash: anchor.Event.Hash, EventOrdinal: anchor.Ordinal, LiveState: "not_applicable",
@@ -89,7 +95,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Blockers:         blockers,
 		LatestChanges:    latestChanges(bound.Lineage.Events, bound.Scope.RunID, 3),
 		RoleTargets:      roleTargetsFromTasks(tasks),
-		Learning:         learningView(ctx, workspace.WorkspaceExact, bound.Scope.ProjectID, bound.Scope.TeamName),
+		Learning:         learning,
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
 	recovery := RecoveryEligibilityForTasks(tasks, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)

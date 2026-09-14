@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +18,35 @@ import (
 
 	"github.com/kjelly/hufu/internal/operator"
 )
+
+func TestTUIProductionFilesStayBounded(t *testing.T) {
+	t.Parallel()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve TUI source directory")
+	}
+	directory := filepath.Dir(source)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := bytes.Count(data, []byte{'\n'})
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			lines++
+		}
+		if lines >= 800 {
+			t.Errorf("%s has %d lines; HF-UX-039 requires every production TUI file to stay below 800", entry.Name(), lines)
+		}
+	}
+}
 
 func TestThemeModeValidationAndAutoFallback(t *testing.T) {
 	for _, value := range []string{"auto", "light", "dark", "mono"} {
@@ -148,6 +180,28 @@ func TestBackgroundEventsDoNotStealDetailFocus(t *testing.T) {
 	}
 	if got.unread["task-2"] != 1 {
 		t.Fatalf("unread count = %d, want 1", got.unread["task-2"])
+	}
+}
+
+func TestOperatorSnapshotGenerationRejectsLateOldScope(t *testing.T) {
+	m := New("prompt", TeamInfo{})
+	oldSnapshot := operator.OperatorSnapshot{Scope: operator.ResolvedScope{RunID: "old-run", BranchID: "old-branch"}}
+	newSnapshot := operator.OperatorSnapshot{Scope: operator.ResolvedScope{RunID: "new-run", BranchID: "new-branch"}}
+	updated, _ := m.Update(OperatorSnapshotMsg{Generation: 1, Snapshot: oldSnapshot})
+	m = updated.(Model)
+	updated, _ = m.Update(OperatorSnapshotMsg{Generation: 2, Snapshot: newSnapshot})
+	m = updated.(Model)
+	updated, _ = m.Update(OperatorSnapshotMsg{Generation: 1, Snapshot: oldSnapshot})
+	m = updated.(Model)
+	updated, _ = m.Update(OperatorDetailsMsg{Generation: 1, Promotions: []OperatorPromotionDetail{{ID: "old-proposal"}}})
+	m = updated.(Model)
+	if m.operatorScope.RunID != "new-run" || m.operatorScope.BranchID != "new-branch" || len(m.operatorPromotions) != 0 {
+		t.Fatalf("late operator query replaced newer scope: %#v", m)
+	}
+	updated, _ = m.Update(OperatorDetailsMsg{Generation: 2, Promotions: []OperatorPromotionDetail{{ID: "new-proposal"}}})
+	m = updated.(Model)
+	if len(m.operatorPromotions) != 1 || m.operatorPromotions[0].ID != "new-proposal" {
+		t.Fatalf("current operator details were not accepted: %#v", m.operatorPromotions)
 	}
 }
 

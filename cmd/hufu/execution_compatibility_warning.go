@@ -85,6 +85,9 @@ func (s *executionCompatibilityWarningState) writer() io.Writer {
 }
 
 func (s *executionCompatibilityWarningState) writeWarning(line string) {
+	if opts.eventFormat == "jsonl" {
+		return
+	}
 	if _, err := fmt.Fprintln(s.writer(), line); err != nil {
 		return
 	}

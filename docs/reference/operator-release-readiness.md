@@ -16,7 +16,7 @@ in [Operator usability evaluation](operator-usability-evaluation.md) passes.
 | Gate | State | Evidence |
 |---|---|---|
 | Safety and compatibility automation | passed on the validation host | full Go tests, vet, lint, docs checks, deterministic operator contracts |
-| Warm overview target | passed on the validation host | 26-event p95 1.55 ms; 1001-event p95 51.19 ms, 30 warm samples each |
+| Warm overview target | passed on the validation host | 26-event/25-context p95 5.66 ms; 1001-event/1000-context p95 60.05 ms, 30 warm samples each |
 | Supported-platform build matrix | partial | native Linux amd64 plus CGO-free Linux arm64 and Darwin cross-builds |
 | Native terminal matrix | partial | Bash, Fish, and Nushell parse smoke only |
 | Human task test | **not run** | 0 participants; no baseline/candidate comparison |
@@ -31,14 +31,15 @@ that the whole Phase 7 stable-release gate passed.
 - Host: Linux `7.0.0-30-generic`, amd64, Intel i7-6700K, 6 vCPUs.
 - Toolchain: Go 1.26.6, `CGO_ENABLED=1` for native tests.
 - Harness: `HUFU_OPERATOR_PERF=1 go test ./internal/inspect -run TestOperatorOverviewPerformance -count=1 -v`.
-- Corpus: one `run_started` event and either 25 or 1000 `task_created`
-  events. Each warm result is p95 from 30 queries against a temporary event
-  store; cold latency is reported separately.
+- Corpus: one `run_started` event, either 25 or 1000 `task_created` events,
+  and the same number of shared context items with learning aggregates. Each
+  warm result is p95 from 30 queries against temporary event and context
+  stores; cold latency is reported separately.
 
 | Corpus | Cold | Warm p95 | Target |
 |---|---:|---:|---:|
-| 26 events | 2.54 ms | 1.55 ms | <=250 ms |
-| 1001 events | 47.81 ms | 51.19 ms | <=250 ms |
+| 26 events / 25 context items | 6.33 ms | 5.66 ms | <=250 ms |
+| 1001 events / 1000 context items | 35.53 ms | 60.05 ms | <=250 ms |
 
 These measurements describe this host and corpus only. The harness is opt-in
 and does not encode machine-dependent latency as a portable unit-test claim.
@@ -59,6 +60,10 @@ and does not encode machine-dependent latency as a portable unit-test claim.
 | PowerShell completion | Cobra generator and deterministic Go tests only | native shell unavailable; unverified |
 
 ## Requirement and regression traceability
+
+The exhaustive work-item and UX-T scenario mapping, including exact executable
+test names, is maintained in
+[operator requirement traceability](operator-requirement-traceability.md).
 
 | Requirement group | Deterministic evidence | Delivery state |
 |---|---|---|

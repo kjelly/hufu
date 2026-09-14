@@ -30,9 +30,16 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err := applyProfile(cmd); err != nil {
 		return err
 	}
+	if opts.eventFormat == "jsonl" {
+		cmd.Root().SilenceErrors = true
+		defer func() { emitJSONLCommandError(runErr) }()
+	}
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
+	// Profiles and validation may change output suppression after the initial
+	// command-boundary sync (for example event-format or JSON output).
+	syncLogState()
 	// Keep the user spelling before --temp synthesizes an internal workspace.
 	// Warnings may show an explicit argument verbatim but must never expose the
 	// default or resolved absolute path.
@@ -41,7 +48,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
+		stderrLog("%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
 		pr = nil
 	}
 	globalPromptReader.Store(pr)
@@ -52,7 +59,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 		}
 		defer func() { _ = os.RemoveAll(tmpDir) }()
 		opts.workspace = filepath.Join(tmpDir, "workspace")
-		fmt.Fprintf(os.Stderr, "%s Temp workspace: %s\n", stepStyle.Render("⟳"), opts.workspace)
+		stderrLog("%s Temp workspace: %s\n", stepStyle.Render("⟳"), opts.workspace)
 	}
 
 	vars, err := team.ResolveVars(opts.varFiles, opts.varFlags)
@@ -115,7 +122,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 			return offerFirstTimeWizard(searchPaths)
 		}
 
-		fmt.Fprintf(os.Stderr, "%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
+		stderrLog("%s Available teams: %s\n", boldStyle.Render("Teams:"), strings.Join(registry.ListTeams(), ", "))
 	}
 
 	if opts.archiveMemory && prompt == "" && !opts.newSession {
@@ -311,7 +318,7 @@ func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, regist
 	if decision.Team != "" && (opts.autoTeam || opts.routeMode != "auto" || opts.defaultTeam || initialTeam != "") {
 		if opts.verbose || opts.autoTeam || opts.routeMode != "auto" {
 			reasonsStr := strings.Join(decision.Reasons, "; ")
-			fmt.Fprintf(os.Stderr, "%s Route decision: %s (team: %s, confidence: %.2f) [%s]\n",
+			stderrLog("%s Route decision: %s (team: %s, confidence: %.2f) [%s]\n",
 				boldStyle.Render("→"), teamStyle.Render(string(decision.Route)), teamStyle.Render(decision.Team), decision.Confidence, reasonsStr)
 		}
 		return RouteDecision{Route: decision.Route, Team: strings.ToLower(decision.Team), Confidence: decision.Confidence, Reasons: decision.Reasons}
@@ -322,17 +329,17 @@ func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, regist
 	}
 
 	if decision.Team != "" {
-		fmt.Fprintf(os.Stderr, "%s Auto-selected route %s (team: %s) [%s]\n",
+		stderrLog("%s Auto-selected route %s (team: %s) [%s]\n",
 			boldStyle.Render("→"), teamStyle.Render(string(decision.Route)), teamStyle.Render(decision.Team), strings.Join(decision.Reasons, "; "))
 		return RouteDecision{Route: decision.Route, Team: strings.ToLower(decision.Team), Confidence: decision.Confidence, Reasons: decision.Reasons}
 	}
 
 	picked, method := autoSelectTeam(ctx, prompt, registry)
 	if picked == "" {
-		fmt.Fprintf(os.Stderr, "%s --auto-team could not confidently pick a team; falling back to selection.\n", dimStyle.Render("·"))
+		stderrLog("%s --auto-team could not confidently pick a team; falling back to selection.\n", dimStyle.Render("·"))
 		return RouteDecision{Route: RouteTeam, Team: initialTeam, Confidence: 0, Reasons: []string{"auto-team fallback to manual selection"}}
 	}
-	fmt.Fprintf(os.Stderr, "%s Auto-selected team %s (%s)\n", boldStyle.Render("→"), teamStyle.Render(picked), method)
+	stderrLog("%s Auto-selected team %s (%s)\n", boldStyle.Render("→"), teamStyle.Render(picked), method)
 	return RouteDecision{Route: RouteTeam, Team: strings.ToLower(picked), Confidence: 0.6, Reasons: []string{"auto-team keyword match: " + method}}
 }
 
@@ -368,7 +375,7 @@ func resolveInitialSegments(prompt, initialTeam string, registry *team.TeamRegis
 		chosen = askUserForTeamFallback(registry.ListTeams())
 	}
 	if chosen == "" {
-		fmt.Fprintf(os.Stderr, "%s No team selected. Pass --agent-team <name>, use @<team> in the prompt, or run 'hufu init <name>' to create one.\n", errStyle.Render("✗"))
+		stderrLog("%s No team selected. Pass --agent-team <name>, use @<team> in the prompt, or run 'hufu init <name>' to create one.\n", errStyle.Render("✗"))
 		return nil, fmt.Errorf("no team selected")
 	}
 	return team.ParsePromptWithLazyAgents(prompt, registry, chosen)
@@ -420,11 +427,11 @@ func validateRunFlags() error {
 	// line works whether or not a human is present.
 	if opts.unattended {
 		if opts.stepsMode {
-			fmt.Fprintln(os.Stderr, "note: --unattended disables --steps (no human to confirm)")
+			stderrLog("note: --unattended disables --steps (no human to confirm)\n")
 			opts.stepsMode = false
 		}
 		if opts.tuiMode {
-			fmt.Fprintln(os.Stderr, "note: --unattended disables --tui (no human to watch)")
+			stderrLog("note: --unattended disables --tui (no human to watch)\n")
 			opts.tuiMode = false
 		}
 	}

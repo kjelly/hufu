@@ -11,6 +11,24 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func (m *Model) acceptOperatorGeneration(generation uint64) bool {
+	if generation == 0 {
+		return m.operatorGeneration == 0
+	}
+	if generation < m.operatorGeneration {
+		return false
+	}
+	m.operatorGeneration = generation
+	return true
+}
+
+func (m *Model) acceptOperatorDetailsGeneration(generation uint64) bool {
+	if generation == 0 {
+		return m.operatorGeneration == 0
+	}
+	return generation == m.operatorGeneration
+}
+
 func (m *Model) loadOperatorContent() {
 	width := max(m.width-4, 10)
 	height := max(m.height-2, 3)

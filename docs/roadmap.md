@@ -21,7 +21,7 @@ be tracked in an issue or ADR and linked here only while it is active.
 | Worksets | Artifact-backed manifests and expansion receipts are canonical; path-based TSV fan-out is compatibility-only. | Complete the documented release-cycle migration and then remove the legacy path. | [workset](architecture/workset.md) |
 | Memory learning | Canonical context, injection manifests, typed memory uses, outcome events, and promotion gates are runtime boundaries. | Treat ranking/consolidation changes as separately reviewed experiments with replay evidence. | [memory learning](architecture/memory-learning.md) |
 | Documentation integrity | Active docs now have explicit lifecycle and authority metadata, with link/path checks in CI. | Extend the checker when new lifecycle rules or document classes are added. | [documentation map](README.md) |
-| Operator experience | The implementation contract has frozen v1 scope resolution, overview snapshot, action selection, compatibility, and delivery boundaries. | Start with HF-UX-001A characterization fixtures, then follow the work-item dependency graph. | [operator experience](architecture/operator-experience.md) |
+| Operator experience | Phases 0–6 and the Phase 7 engineering gates are implemented as an additive preview; the human study has zero participants. | Run HF-UX-070 with real participants and retain preview status until its safety and usability gates pass. | [operator experience](architecture/operator-experience.md), [release readiness](reference/operator-release-readiness.md) |
 
 ## Recently completed documentation work
 

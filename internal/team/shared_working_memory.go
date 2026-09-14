@@ -8,11 +8,11 @@ package team
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -146,11 +146,11 @@ func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input 
 	// finding keep distinct provenance instead of collapsing into one item.
 	if err := c.contextRepo.AppendReducer(ctx, items...); err != nil {
 		redacted := contextstore.RedactSecrets(err.Error())
-		log.Printf("warning: shared working-memory reduction failed: %s", redacted)
+		hulog.Printf("warning: shared working-memory reduction failed: %s\n", redacted)
 		_ = c.emitEvent("shared_memory_reduce_error", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "error": redacted})
 		for _, item := range items {
 			if pendingErr := contextstore.AppendPendingWrite(c.contextPendingPath(), item, err); pendingErr != nil {
-				log.Printf("warning: pending shared memory write failed: %s", contextstore.RedactSecrets(pendingErr.Error()))
+				hulog.Printf("warning: pending shared memory write failed: %s\n", contextstore.RedactSecrets(pendingErr.Error()))
 			}
 		}
 		return
@@ -159,7 +159,7 @@ func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input 
 		_ = c.emitEvent("shared_working_memory_saved", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "kind": item.Kind})
 	}
 	if err := c.rebuildLegacyContextProjections(ctx); err != nil {
-		log.Printf("warning: shared working-memory projection rebuild failed: %v", err)
+		hulog.Printf("warning: shared working-memory projection rebuild failed: %v\n", err)
 		_ = c.emitEvent("shared_memory_projection_error", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "error": contextstore.RedactSecrets(err.Error())})
 	}
 }
@@ -228,16 +228,16 @@ func (c *Coordinator) recordVerificationFailure(ctx context.Context, input Verif
 	}
 	if err := c.contextRepo.AppendReducer(ctx, item); err != nil {
 		redacted := contextstore.RedactSecrets(err.Error())
-		log.Printf("warning: verification-failure reduction failed: %s", redacted)
+		hulog.Printf("warning: verification-failure reduction failed: %s\n", redacted)
 		_ = c.emitEvent("shared_memory_reduce_error", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "error": redacted})
 		if pendingErr := contextstore.AppendPendingWrite(c.contextPendingPath(), item, err); pendingErr != nil {
-			log.Printf("warning: pending verification-failure write failed: %s", contextstore.RedactSecrets(pendingErr.Error()))
+			hulog.Printf("warning: pending verification-failure write failed: %s\n", contextstore.RedactSecrets(pendingErr.Error()))
 		}
 		return
 	}
 	_ = c.emitEvent("shared_working_memory_saved", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "kind": item.Kind})
 	if err := c.rebuildLegacyContextProjections(ctx); err != nil {
-		log.Printf("warning: verification-failure projection rebuild failed: %v", err)
+		hulog.Printf("warning: verification-failure projection rebuild failed: %v\n", err)
 		_ = c.emitEvent("shared_memory_projection_error", "coordinator", input.TodoID, map[string]interface{}{"run_id": runID, "error": contextstore.RedactSecrets(err.Error())})
 	}
 }
