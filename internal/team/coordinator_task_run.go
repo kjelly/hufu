@@ -1516,6 +1516,7 @@ retryLoop:
 							if task.InvariantVerification == "" && !repairSuccess && !reclassifyExecution && typedRes == nil &&
 								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
 								if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
+									c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, promoted)
 									c.storeSubmittedTaskResult(todoID, promoted)
 									typedRes = promoted
 									repairSuccess = true
@@ -1593,6 +1594,7 @@ retryLoop:
 										copyRef := *transcriptArtifact
 										recovered.RawOutputRef = &copyRef
 									}
+									c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, recovered)
 									c.storeSubmittedTaskResult(todoID, recovered)
 									typedRes = recovered
 									receipt.RepairProvenance.SubmittedResult = recovered
@@ -1628,6 +1630,7 @@ retryLoop:
 					recovered.TaskID = todoID
 					recovered.Agent = agentName
 					recovered.Source = "recovered_protocol"
+					c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, recovered)
 					c.storeSubmittedTaskResult(todoID, recovered)
 					typedRes = recovered
 				}
