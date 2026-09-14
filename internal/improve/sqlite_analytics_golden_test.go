@@ -41,7 +41,7 @@ func TestAnalyzeRecentSemanticGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.ExecutionLinesRead != int64(len(semanticGoldenExecutionEvents())) || diagnostics.SelectedRuns != 4 || diagnostics.ProjectedTasks != 5 {
+	if diagnostics.ExecutionLinesRead != int64(len(semanticGoldenExecutionEvents())) || diagnostics.SelectedRuns != 4 || diagnostics.ProjectedTasks != 4 {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	projection := newSemanticGoldenProjection(report)

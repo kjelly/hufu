@@ -446,15 +446,15 @@ func BenchmarkExecutionTelemetryLegacyVsSQL(b *testing.B) {
 				if err := session.createIndexes(ctx); err != nil {
 					b.Fatal(err)
 				}
-				teamName, runIDs, err := session.sqlSelectRecentRuns(ctx, "bench", n)
+				teamName, _, err := session.sqlSelectRecentRuns(ctx, "bench", n)
 				if err != nil {
 					b.Fatal(err)
 				}
-				metrics, err := session.sqlCollectExecutionMetrics(ctx, runIDs)
+				metrics, err := session.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
 				if err != nil {
 					b.Fatal(err)
 				}
-				groups, err := session.sqlCollectGroupedMetrics(ctx, runIDs)
+				groups, err := session.sqlCollectGroupedMetrics(ctx)
 				if err != nil {
 					b.Fatal(err)
 				}

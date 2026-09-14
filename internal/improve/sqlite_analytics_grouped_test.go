@@ -16,11 +16,11 @@ func TestSQLGroupedMetrics_MultiSkillOverlapAndMissingDimensionFallback(t *testi
 	session := newTestSession(t)
 	loadFixtureEvents(t, session, events)
 	ctx := context.Background()
-	_, runIDs, err := session.sqlSelectRecentRuns(ctx, "dev", 1)
+	_, _, err := session.sqlSelectRecentRuns(ctx, "dev", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := session.sqlCollectGroupedMetrics(ctx, runIDs)
+	got, err := session.sqlCollectGroupedMetrics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +52,11 @@ func TestSQLGroupedMetrics_WhitespaceFallbackAndSkillNormalizationParity(t *test
 	session := newTestSession(t)
 	loadFixtureEvents(t, session, events)
 	ctx := context.Background()
-	_, runIDs, err := session.sqlSelectRecentRuns(ctx, "dev", 1)
+	_, _, err := session.sqlSelectRecentRuns(ctx, "dev", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := session.sqlCollectGroupedMetrics(ctx, runIDs)
+	got, err := session.sqlCollectGroupedMetrics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,10 @@ func TestSQLiteAnalyticsSession_RejectsExecutionIngestAfterTaskProjection(t *tes
 	events := []team.ExecutionEvent{{RunID: "r1", Team: "dev", TaskID: "1", Status: "done"}}
 	session := newTestSession(t)
 	loadFixtureEvents(t, session, events)
-	if _, err := session.sqlCollectGroupedMetrics(context.Background(), []string{"r1"}); err != nil {
+	if _, _, err := session.sqlSelectRecentRunSummaries(context.Background(), "dev", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.sqlCollectGroupedMetrics(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 

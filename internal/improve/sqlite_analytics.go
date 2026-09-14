@@ -25,11 +25,13 @@ type sqliteAnalyticsSession struct {
 	conn        *sql.Conn
 	diagnostics *AnalyticsDiagnostics
 
+	// selectedRunsReady freezes the run scope before task projection begins.
 	// taskViewsReady is set once materializeTaskViews has populated
 	// task_summary/task_skills for this session, so ensureTaskViews (used by
 	// every query that reads them) only materializes once no matter how
 	// many different run scopes are queried afterward.
-	taskViewsReady bool
+	selectedRunsReady bool
+	taskViewsReady    bool
 }
 
 // openSQLiteAnalyticsSession opens a fresh in-memory SQLite database, pins a

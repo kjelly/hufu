@@ -48,8 +48,8 @@ VALUES (?, ?, ?, ?)`
 // JSON line is skipped, and a line with an empty run_id is skipped.
 func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path string) (loadStats, error) {
 	var stats loadStats
-	if s.taskViewsReady {
-		return stats, fmt.Errorf("cannot ingest execution events after task projections materialize")
+	if s.selectedRunsReady {
+		return stats, fmt.Errorf("cannot ingest execution events after run selection")
 	}
 
 	f, err := os.Open(path)

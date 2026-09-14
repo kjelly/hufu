@@ -225,6 +225,13 @@ func writeBenchmarkMemoryEvents(tb testing.TB, workspace string, profile analyti
 }
 
 func addAnalyticsDiagnostics(total *AnalyticsDiagnostics, current AnalyticsDiagnostics) {
+	total.ExecutionLinesRead = current.ExecutionLinesRead
+	total.ExecutionRows = current.ExecutionRows
+	total.AuditLinesRead = current.AuditLinesRead
+	total.AuditRows = current.AuditRows
+	total.MemoryRows = current.MemoryRows
+	total.SelectedRuns = current.SelectedRuns
+	total.ProjectedTasks = current.ProjectedTasks
 	total.Open += current.Open
 	total.LoadExecution += current.LoadExecution
 	total.LoadAudit += current.LoadAudit
@@ -256,4 +263,7 @@ func reportAnalyticsDiagnostics(b *testing.B, diagnostics AnalyticsDiagnostics) 
 	b.ReportMetric(float64(diagnostics.AggregateGroups.Nanoseconds())/iterations, "aggregate_groups-ns/op")
 	b.ReportMetric(float64(diagnostics.AggregateTrend.Nanoseconds())/iterations, "aggregate_trend-ns/op")
 	b.ReportMetric(float64(diagnostics.Total.Nanoseconds())/iterations, "diagnostic_total-ns/op")
+	b.ReportMetric(float64(diagnostics.ExecutionRows), "execution_rows")
+	b.ReportMetric(float64(diagnostics.SelectedRuns), "selected_runs")
+	b.ReportMetric(float64(diagnostics.ProjectedTasks), "projected_tasks")
 }

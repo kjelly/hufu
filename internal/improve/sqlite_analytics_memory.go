@@ -5,27 +5,25 @@ import (
 	"fmt"
 )
 
-func (s *sqliteAnalyticsSession) sqlMemoryEvidence(ctx context.Context, runIDs []string) ([]string, []ArtifactRef, error) {
-	if len(runIDs) == 0 {
-		return nil, nil, nil
-	}
-	inClause, args := runsInClause(runIDs)
-	policyQuery := fmt.Sprintf(`
-SELECT DISTINCT policy_version
-FROM memory_events
-WHERE run_id IN (%s) AND policy_version <> ''
-ORDER BY policy_version`, inClause)
-	policies, err := queryStrings(ctx, s, policyQuery, args...)
+func (s *sqliteAnalyticsSession) sqlMemoryEvidence(ctx context.Context) ([]string, []ArtifactRef, error) {
+	const policyQuery = `
+SELECT DISTINCT m.policy_version
+FROM memory_events m
+JOIN selected_runs sr ON sr.run_id = m.run_id
+WHERE m.policy_version <> ''
+ORDER BY m.policy_version`
+	policies, err := queryStrings(ctx, s, policyQuery)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query selected memory policy versions: %w", err)
 	}
-	contextQuery := fmt.Sprintf(`
-SELECT DISTINCT context_item_id, content_hash
-FROM memory_events
-WHERE run_id IN (%s) AND type = 'memory_usage_recorded'
-	  AND disposition = 'applied' AND context_item_id <> '' AND content_hash <> ''
-ORDER BY context_item_id, content_hash`, inClause)
-	rows, err := s.conn.QueryContext(ctx, contextQuery, args...)
+	const contextQuery = `
+SELECT DISTINCT m.context_item_id, m.content_hash
+FROM memory_events m
+JOIN selected_runs sr ON sr.run_id = m.run_id
+WHERE m.type = 'memory_usage_recorded'
+	  AND m.disposition = 'applied' AND m.context_item_id <> '' AND m.content_hash <> ''
+ORDER BY m.context_item_id, m.content_hash`
+	rows, err := s.conn.QueryContext(ctx, contextQuery)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query selected applied context items: %w", err)
 	}
@@ -65,8 +63,8 @@ func queryStrings(ctx context.Context, s *sqliteAnalyticsSession, query string, 
 // TEMP memory_events scope. Memory events are intentionally not filtered by
 // selected run or execution time: the canonical event-store reader always
 // considered the complete canonical event store. Only the execution-derived
-// token and retry denominators are scoped to runIDs.
-func (s *sqliteAnalyticsSession) sqlCollectMemoryMetrics(ctx context.Context, runIDs []string, metrics *Metrics) error {
+// token and retry denominators are scoped to selected_runs.
+func (s *sqliteAnalyticsSession) sqlCollectMemoryMetrics(ctx context.Context, ordinal int, metrics *Metrics) error {
 	if metrics == nil {
 		return fmt.Errorf("collect memory metrics: nil metrics")
 	}
@@ -90,11 +88,11 @@ FROM memory_events`
 		return fmt.Errorf("query memory metrics summary: %w", err)
 	}
 
-	inputTokens, err := s.sqlSelectedInputTokens(ctx, runIDs)
+	inputTokens, err := s.sqlSelectedInputTokens(ctx, ordinal)
 	if err != nil {
 		return err
 	}
-	assistedRetries, unassistedRetries, appliedTaskCount, err := s.sqlMemoryRetryCounts(ctx, runIDs)
+	assistedRetries, unassistedRetries, appliedTaskCount, err := s.sqlMemoryRetryCounts(ctx, ordinal)
 	if err != nil {
 		return err
 	}
@@ -123,23 +121,20 @@ FROM memory_events`
 	return nil
 }
 
-func (s *sqliteAnalyticsSession) sqlSelectedInputTokens(ctx context.Context, runIDs []string) (int, error) {
-	if len(runIDs) == 0 {
-		return 0, nil
-	}
-	inClause, args := runsInClause(runIDs)
-	query := fmt.Sprintf(`
-SELECT COALESCE(SUM(CASE WHEN input_tokens > 0 THEN input_tokens ELSE 0 END), 0)
-FROM execution_events
-WHERE team <> '' AND run_id IN (%s)`, inClause)
+func (s *sqliteAnalyticsSession) sqlSelectedInputTokens(ctx context.Context, ordinal int) (int, error) {
+	const query = `
+SELECT COALESCE(SUM(CASE WHEN e.input_tokens > 0 THEN e.input_tokens ELSE 0 END), 0)
+FROM execution_events e
+JOIN selected_runs sr ON sr.run_id = e.run_id
+WHERE e.team <> '' AND (? < 0 OR sr.ordinal = ?)`
 	var inputTokens int
-	if err := s.conn.QueryRowContext(ctx, query, args...).Scan(&inputTokens); err != nil {
+	if err := s.conn.QueryRowContext(ctx, query, ordinal, ordinal).Scan(&inputTokens); err != nil {
 		return 0, fmt.Errorf("query selected memory input tokens: %w", err)
 	}
 	return inputTokens, nil
 }
 
-func (s *sqliteAnalyticsSession) sqlMemoryRetryCounts(ctx context.Context, runIDs []string) (assisted, unassisted, appliedTasks int, err error) {
+func (s *sqliteAnalyticsSession) sqlMemoryRetryCounts(ctx context.Context, ordinal int) (assisted, unassisted, appliedTasks int, err error) {
 	const appliedTasksQuery = `
 SELECT COUNT(*)
 FROM (
@@ -151,30 +146,27 @@ FROM (
 	if err := s.conn.QueryRowContext(ctx, appliedTasksQuery).Scan(&appliedTasks); err != nil {
 		return 0, 0, 0, fmt.Errorf("query applied memory tasks: %w", err)
 	}
-	if len(runIDs) == 0 {
-		return 0, 0, appliedTasks, nil
-	}
-
-	inClause, args := runsInClause(runIDs)
-	query := fmt.Sprintf(`
+	const query = `
 WITH applied AS (
     SELECT run_id, task_id
     FROM memory_events
     WHERE type = 'memory_usage_recorded' AND disposition = 'applied'
     GROUP BY run_id, task_id
 ), selected_retries AS (
-    SELECT run_id, task_id
-    FROM execution_events
-    WHERE team <> '' AND task_id <> '' AND attempt > 1 AND run_id IN (%s)
-    GROUP BY run_id, task_id
+    SELECT e.run_id, e.task_id
+    FROM execution_events e
+    JOIN selected_runs sr ON sr.run_id = e.run_id
+    WHERE e.team <> '' AND e.task_id <> '' AND e.attempt > 1
+      AND (? < 0 OR sr.ordinal = ?)
+    GROUP BY e.run_id, e.task_id
 )
 SELECT
     COALESCE(SUM(CASE WHEN applied.run_id IS NOT NULL THEN 1 ELSE 0 END), 0),
     COALESCE(SUM(CASE WHEN applied.run_id IS NULL THEN 1 ELSE 0 END), 0)
 FROM selected_retries
 LEFT JOIN applied ON applied.run_id = selected_retries.run_id
-                  AND applied.task_id = selected_retries.task_id`, inClause)
-	if err := s.conn.QueryRowContext(ctx, query, args...).Scan(&assisted, &unassisted); err != nil {
+                  AND applied.task_id = selected_retries.task_id`
+	if err := s.conn.QueryRowContext(ctx, query, ordinal, ordinal).Scan(&assisted, &unassisted); err != nil {
 		return 0, 0, 0, fmt.Errorf("query memory retry counts: %w", err)
 	}
 	return assisted, unassisted, appliedTasks, nil

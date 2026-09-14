@@ -31,12 +31,8 @@ func TestSQLRunSelectionFixedOrderingAndFiltering(t *testing.T) {
 		if teamName != "dev" || !reflect.DeepEqual(runIDs, []string{"run-a", "run-b"}) {
 			t.Fatalf("selection = %q/%v, want dev/[run-a run-b]", teamName, runIDs)
 		}
-		teamName, runIDs, err = session.sqlSelectRecentRuns(ctx, "", 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if teamName != "dev" || !reflect.DeepEqual(runIDs, []string{"run-b"}) {
-			t.Fatalf("default selection = %q/%v, want dev/[run-b]", teamName, runIDs)
+		if _, _, err := session.sqlSelectRecentRuns(ctx, "", 1); err == nil {
+			t.Fatal("expected second selection to fail")
 		}
 	})
 
@@ -57,7 +53,7 @@ func TestSQLRunSelectionFixedOrderingAndFiltering(t *testing.T) {
 		if !reflect.DeepEqual(runIDs, []string{"invalid", "window"}) {
 			t.Fatalf("run IDs = %v, want [invalid window]", runIDs)
 		}
-		metrics, err := session.sqlCollectExecutionMetrics(ctx, []string{"window"})
+		metrics, err := session.sqlCollectExecutionMetrics(ctx, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,13 +78,6 @@ func TestSQLRunSelectionFixedOrderingAndFiltering(t *testing.T) {
 		if teamName != "beta" || !reflect.DeepEqual(runIDs, []string{"beta-run"}) {
 			t.Fatalf("default selection = %q/%v, want beta/[beta-run]", teamName, runIDs)
 		}
-		_, runIDs, err = session.sqlSelectRecentRuns(ctx, "beta", 5)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(runIDs, []string{"beta-run"}) {
-			t.Fatalf("beta runs = %v, want [beta-run]", runIDs)
-		}
 	})
 }
 
@@ -103,7 +92,10 @@ func TestSQLTaskProjectionFixedMetadataRetryTokensAndSkillOverlap(t *testing.T) 
 		{Timestamp: "2026-07-12T10:00:05Z", RunID: "r1", Team: "dev", TaskID: "task-3", Attempt: 1, Status: "planned", Usage: team.ExecutionUsage{TotalTokens: 5}},
 	})
 	ctx := context.Background()
-	tasks, err := session.sqlTaskSummaries(ctx, []string{"r1"})
+	if _, _, err := session.sqlSelectRecentRunSummaries(ctx, "dev", 1); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := session.sqlTaskSummaries(ctx, allSelectedRunOrdinals)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +108,7 @@ func TestSQLTaskProjectionFixedMetadataRetryTokensAndSkillOverlap(t *testing.T) 
 		t.Fatalf("task summaries = %+v, want %+v", tasks, wantTasks)
 	}
 
-	metrics, err := session.sqlCollectExecutionMetrics(ctx, []string{"r1"})
+	metrics, err := session.sqlCollectExecutionMetrics(ctx, allSelectedRunOrdinals)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +122,7 @@ func TestSQLTaskProjectionFixedMetadataRetryTokensAndSkillOverlap(t *testing.T) 
 		t.Fatalf("execution metrics = %+v, want %+v", metrics, wantMetrics)
 	}
 
-	groups, err := session.sqlCollectGroupedMetrics(ctx, []string{"r1"})
+	groups, err := session.sqlCollectGroupedMetrics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +159,10 @@ func TestSQLGroupedMetricsZeroTaskRunReturnsNonNilEmptySlices(t *testing.T) {
 		{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", Status: "run_started"},
 		{Timestamp: "2026-07-12T10:00:01Z", RunID: "r1", Team: "dev", Status: "run_finished"},
 	})
-	groups, err := session.sqlCollectGroupedMetrics(context.Background(), []string{"r1"})
+	if _, _, err := session.sqlSelectRecentRunSummaries(context.Background(), "dev", 1); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := session.sqlCollectGroupedMetrics(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

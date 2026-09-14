@@ -41,40 +41,49 @@ CREATE TEMP TABLE task_skills (
 const populateTaskSummarySQL = `
 INSERT INTO task_summary (run_id, task_id, agent, model, task_type, terminal, attempts, total_attempts, total_tokens)
 WITH agg AS (
-    SELECT run_id, task_id,
-           MAX(0, MAX(attempt)) AS attempts,
-           SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS total_attempts,
-           SUM(total_tokens) AS total_tokens
-    FROM execution_events
-    WHERE task_id <> '' AND team <> ''
-    GROUP BY run_id, task_id
+    SELECT e.run_id, e.task_id,
+           MAX(0, MAX(e.attempt)) AS attempts,
+           SUM(CASE WHEN e.status = 'in_progress' THEN 1 ELSE 0 END) AS total_attempts,
+           SUM(e.total_tokens) AS total_tokens
+    FROM execution_events e
+    JOIN selected_runs sr ON sr.run_id = e.run_id
+    WHERE e.task_id <> '' AND e.team <> ''
+    GROUP BY e.run_id, e.task_id
 ),
 last_agent AS (
     SELECT run_id, task_id, agent FROM (
-        SELECT run_id, task_id, agent,
-               ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND team <> '' AND agent <> ''
+        SELECT e.run_id, e.task_id, e.agent,
+               ROW_NUMBER() OVER (PARTITION BY e.run_id, e.task_id ORDER BY e.event_seq DESC) AS rn
+        FROM execution_events e
+        JOIN selected_runs sr ON sr.run_id = e.run_id
+        WHERE e.task_id <> '' AND e.team <> '' AND e.agent <> ''
     ) WHERE rn = 1
 ),
 last_model AS (
     SELECT run_id, task_id, model FROM (
-        SELECT run_id, task_id, model,
-               ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND team <> '' AND model <> ''
+        SELECT e.run_id, e.task_id, e.model,
+               ROW_NUMBER() OVER (PARTITION BY e.run_id, e.task_id ORDER BY e.event_seq DESC) AS rn
+        FROM execution_events e
+        JOIN selected_runs sr ON sr.run_id = e.run_id
+        WHERE e.task_id <> '' AND e.team <> '' AND e.model <> ''
     ) WHERE rn = 1
 ),
 last_task_type AS (
     SELECT run_id, task_id, task_type FROM (
-        SELECT run_id, task_id, task_type,
-               ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND team <> '' AND task_type <> ''
+        SELECT e.run_id, e.task_id, e.task_type,
+               ROW_NUMBER() OVER (PARTITION BY e.run_id, e.task_id ORDER BY e.event_seq DESC) AS rn
+        FROM execution_events e
+        JOIN selected_runs sr ON sr.run_id = e.run_id
+        WHERE e.task_id <> '' AND e.team <> '' AND e.task_type <> ''
     ) WHERE rn = 1
 ),
 last_terminal AS (
     SELECT run_id, task_id, status FROM (
-        SELECT run_id, task_id, status,
-               ROW_NUMBER() OVER (PARTITION BY run_id, task_id ORDER BY event_seq DESC) AS rn
-        FROM execution_events WHERE task_id <> '' AND team <> '' AND status IN ('done', 'error', 'planned')
+        SELECT e.run_id, e.task_id, e.status,
+               ROW_NUMBER() OVER (PARTITION BY e.run_id, e.task_id ORDER BY e.event_seq DESC) AS rn
+        FROM execution_events e
+        JOIN selected_runs sr ON sr.run_id = e.run_id
+        WHERE e.task_id <> '' AND e.team <> '' AND e.status IN ('done', 'error', 'planned')
     ) WHERE rn = 1
 )
 SELECT agg.run_id, agg.task_id,
@@ -94,6 +103,7 @@ WITH last_skill_event AS (
         SELECT te.run_id, te.task_id, te.event_seq,
                ROW_NUMBER() OVER (PARTITION BY te.run_id, te.task_id ORDER BY te.event_seq DESC) AS rn
         FROM execution_events te
+        JOIN selected_runs sr ON sr.run_id = te.run_id
         WHERE te.task_id <> '' AND te.team <> ''
           AND te.skills_reported = 1
     ) WHERE rn = 1
@@ -104,17 +114,16 @@ JOIN execution_event_skills s ON s.event_seq = lse.event_seq
 ORDER BY lse.run_id ASC, lse.task_id ASC, s.skill ASC`
 
 // materializeTaskViews builds task_summary and task_skills once for the
-// session, over every task_id-bearing event currently loaded into
-// execution_events — not scoped to any particular run selection. Every
-// query against these tables filters by run_id at query time instead, so
-// this only needs to run once no matter how many different run scopes
-// (overall Metrics, per-run TrendPoint, GroupedMetrics) are queried
-// afterward. Must be called after loadExecutionEvents and before any
+// session, only over task_id-bearing events joined to the frozen
+// selected_runs scope. It must be called after selection and before any
 // task_summary/task_skills query; calling it twice on the same session is
 // rejected as a lifecycle error.
 func (s *sqliteAnalyticsSession) materializeTaskViews(ctx context.Context) error {
 	started := time.Now()
 	defer s.diagnostics.record(diagnosticProjectTasks, started)
+	if !s.selectedRunsReady {
+		return fmt.Errorf("cannot materialize task projections before run selection")
+	}
 	if s.taskViewsReady {
 		return fmt.Errorf("task projections already materialized")
 	}

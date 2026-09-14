@@ -110,7 +110,8 @@ FROM memory_events ORDER BY event_seq`)
 	if err := columns.Err(); err != nil {
 		t.Fatal(err)
 	}
-	policies, refs, err := session.sqlMemoryEvidence(t.Context(), []string{"memory-loader-run"})
+	setTestSelectedRuns(t, session, "memory-loader-run")
+	policies, refs, err := session.sqlMemoryEvidence(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

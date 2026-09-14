@@ -8,32 +8,26 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
 
-// sqlRunSummary is one row of the run-level view used to select recent runs
-// builds in Go: a run's resolved team (the team of its first qualifying
-// event, in file order — legacy never re-checks team on later events for
-// the same run) and its [start, end] window over parseable timestamps only.
-type sqlRunSummary struct {
+// selectedRun is one row in the frozen selected_runs scope.
+type selectedRun struct {
 	RunID       string
+	Ordinal     int
 	Team        string
 	StartUnixNS sql.NullInt64
 	EndUnixNS   sql.NullInt64
 }
 
-// selectedRunsQuery performs the run grouping needed to select recent runs in
-// Go: events with an empty run_id or empty team never contribute to a run at
-// all (not even to Events), a run's Team is fixed to whichever qualifying
-// event has the smallest event_seq, and Start/End only consider events whose
-// timestamp parsed successfully. SQLite's default NULL ordering (NULLs
-// first in ASC) makes a run with zero parseable timestamps sort as the
-// earliest possible run without a sentinel value, matching Go's zero
-// time.Time behaving as "before everything".
-const selectedRunsQuery = `
+const allSelectedRunOrdinals = -1
+
+// runSummaryCTE is the single semantic source for selection. A run's team is
+// its first qualifying event's team, and its time window ignores timestamps
+// that did not parse.
+const runSummaryCTE = `
 WITH qualifying AS (
     SELECT event_seq, run_id, team, timestamp_unix_ns
     FROM execution_events
@@ -51,31 +45,34 @@ run_window AS (
     FROM qualifying
     WHERE timestamp_unix_ns IS NOT NULL
     GROUP BY run_id
+),
+run_summary AS (
+    SELECT rt.run_id, rt.team, rw.start_ns, rw.end_ns
+    FROM run_team rt
+    LEFT JOIN run_window rw ON rw.run_id = rt.run_id
 )
-SELECT rt.run_id, rt.team, rw.start_ns, rw.end_ns
-FROM run_team rt
-LEFT JOIN run_window rw ON rw.run_id = rt.run_id
-ORDER BY rw.end_ns ASC, rt.run_id ASC`
+`
 
-func (s *sqliteAnalyticsSession) sqlAllRunSummaries(ctx context.Context) ([]sqlRunSummary, error) {
-	rows, err := s.conn.QueryContext(ctx, selectedRunsQuery)
-	if err != nil {
-		return nil, fmt.Errorf("query run summaries: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []sqlRunSummary
-	for rows.Next() {
-		var r sqlRunSummary
-		if err := rows.Scan(&r.RunID, &r.Team, &r.StartUnixNS, &r.EndUnixNS); err != nil {
-			return nil, fmt.Errorf("scan run summary: %w", err)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate run summaries: %w", err)
-	}
-	return out, nil
-}
+const defaultTeamQuery = runSummaryCTE + `
+SELECT team
+FROM run_summary
+ORDER BY (end_ns IS NULL) ASC, end_ns DESC, run_id DESC
+LIMIT 1`
+
+const recentRunsQuery = runSummaryCTE + `
+SELECT run_id, team, start_ns, end_ns
+FROM (
+    SELECT run_id, team, start_ns, end_ns
+    FROM run_summary
+    WHERE team = ?
+    ORDER BY (end_ns IS NULL) ASC, end_ns DESC, run_id DESC
+    LIMIT ?
+)
+ORDER BY (end_ns IS NOT NULL) ASC, end_ns ASC, run_id ASC`
+
+const insertSelectedRunSQL = `
+INSERT INTO selected_runs (run_id, ordinal, team, start_ns, end_ns)
+VALUES (?, ?, ?, ?, ?)`
 
 // sqlSelectRecentRuns resolves
 // teamName (defaulting to the chronologically-last run's team when empty)
@@ -94,50 +91,96 @@ func (s *sqliteAnalyticsSession) sqlSelectRecentRuns(ctx context.Context, teamNa
 	return teamName, runIDs, nil
 }
 
-func (s *sqliteAnalyticsSession) sqlSelectRecentRunSummaries(ctx context.Context, teamName string, runCount int) (string, []sqlRunSummary, error) {
-	all, err := s.sqlAllRunSummaries(ctx)
+func (s *sqliteAnalyticsSession) sqlSelectRecentRunSummaries(ctx context.Context, teamName string, runCount int) (string, []selectedRun, error) {
+	if s.selectedRunsReady {
+		return "", nil, fmt.Errorf("run selection already completed")
+	}
+	if runCount < 1 {
+		return "", nil, fmt.Errorf("run count must be at least 1")
+	}
+	tx, err := s.conn.BeginTx(ctx, nil)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("begin run selection transaction: %w", err)
 	}
-	if teamName == "" && len(all) > 0 {
-		teamName = all[len(all)-1].Team
-	}
-	selected := make([]sqlRunSummary, 0, runCount)
-	for _, run := range all {
-		if run.Team == teamName {
-			selected = append(selected, run)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if teamName == "" {
+		if err := tx.QueryRowContext(ctx, defaultTeamQuery).Scan(&teamName); err != nil && err != sql.ErrNoRows {
+			return "", nil, fmt.Errorf("resolve default team: %w", err)
 		}
 	}
-	if len(selected) > runCount {
-		selected = selected[len(selected)-runCount:]
+	rows, err := tx.QueryContext(ctx, recentRunsQuery, teamName, runCount)
+	if err != nil {
+		return "", nil, fmt.Errorf("query recent runs: %w", err)
 	}
+	selected := make([]selectedRun, 0, runCount)
+	for rows.Next() {
+		var run selectedRun
+		if err := rows.Scan(&run.RunID, &run.Team, &run.StartUnixNS, &run.EndUnixNS); err != nil {
+			_ = rows.Close()
+			return "", nil, fmt.Errorf("scan recent run: %w", err)
+		}
+		run.Ordinal = len(selected)
+		selected = append(selected, run)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", nil, fmt.Errorf("iterate recent runs: %w", err)
+	}
+	_ = rows.Close()
+	for _, run := range selected {
+		if _, err := tx.ExecContext(ctx, insertSelectedRunSQL, run.RunID, run.Ordinal, run.Team, run.StartUnixNS, run.EndUnixNS); err != nil {
+			return "", nil, fmt.Errorf("insert selected run: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", nil, fmt.Errorf("commit run selection: %w", err)
+	}
+	committed = true
+	s.selectedRunsReady = true
 	return teamName, selected, nil
 }
 
-// runsInClause builds a parameter-bound `run_id IN (?, ?, ...)` fragment.
-// Run IDs are always passed as bound parameters, never string-concatenated
-// (spec.md §20.2's no-string-concatenation rule applied defensively even
-// though run IDs are not external file paths).
-func runsInClause(runIDs []string) (string, []any) {
-	placeholders := make([]string, len(runIDs))
-	args := make([]any, len(runIDs))
-	for i, id := range runIDs {
-		placeholders[i] = "?"
-		args[i] = id
+func (s *sqliteAnalyticsSession) sqlSelectedRuns(ctx context.Context) ([]selectedRun, error) {
+	if !s.selectedRunsReady {
+		return nil, fmt.Errorf("run selection has not completed")
 	}
-	return strings.Join(placeholders, ","), args
+	rows, err := s.conn.QueryContext(ctx, `
+SELECT run_id, ordinal, team, start_ns, end_ns
+FROM selected_runs
+ORDER BY ordinal`)
+	if err != nil {
+		return nil, fmt.Errorf("query selected runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var selected []selectedRun
+	for rows.Next() {
+		var run selectedRun
+		if err := rows.Scan(&run.RunID, &run.Ordinal, &run.Team, &run.StartUnixNS, &run.EndUnixNS); err != nil {
+			return nil, fmt.Errorf("scan selected run: %w", err)
+		}
+		selected = append(selected, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate selected runs: %w", err)
+	}
+	return selected, nil
 }
 
 // sqlEventWindow computes the [min, max] over every
 // parseable timestamp among events in scope, independent of task_id.
-func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context, runIDs []string) (time.Time, time.Time, error) {
-	if len(runIDs) == 0 {
-		return time.Time{}, time.Time{}, nil
-	}
-	inClause, args := runsInClause(runIDs)
-	query := fmt.Sprintf(`SELECT MIN(timestamp_unix_ns), MAX(timestamp_unix_ns) FROM execution_events WHERE team <> '' AND run_id IN (%s)`, inClause)
+func (s *sqliteAnalyticsSession) sqlEventWindow(ctx context.Context, ordinal int) (time.Time, time.Time, error) {
+	const query = `
+SELECT MIN(e.timestamp_unix_ns), MAX(e.timestamp_unix_ns)
+FROM execution_events e
+JOIN selected_runs sr ON sr.run_id = e.run_id
+WHERE e.team <> '' AND (? < 0 OR sr.ordinal = ?)`
 	var startNS, endNS sql.NullInt64
-	if err := s.conn.QueryRowContext(ctx, query, args...).Scan(&startNS, &endNS); err != nil {
+	if err := s.conn.QueryRowContext(ctx, query, ordinal, ordinal).Scan(&startNS, &endNS); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("query event window: %w", err)
 	}
 	return unixNSToTime(startNS), unixNSToTime(endNS), nil
@@ -152,8 +195,8 @@ func unixNSToTime(v sql.NullInt64) time.Time {
 
 // sqlTaskSummary is the task-level projection. Rows come from the task_summary /
 // task_skills TEMP tables materialized once per session by
-// materializeTaskViews (sqlite_analytics_task_summary.go), filtered by
-// run_id at query time.
+// materializeTaskViews (sqlite_analytics_task_summary.go). An ordinal can
+// narrow reads to one member of the selected scope for legacy trend queries.
 type sqlTaskSummary struct {
 	RunID         string
 	TaskID        string
@@ -167,26 +210,22 @@ type sqlTaskSummary struct {
 	TotalTokens   int
 }
 
-const taskSummaryQueryTemplate = `
-SELECT run_id, task_id, agent, model, task_type, terminal, attempts, total_attempts, total_tokens
-FROM task_summary
-WHERE run_id IN (%s)
-ORDER BY run_id ASC, task_id ASC`
+const taskSummaryQuery = `
+SELECT t.run_id, t.task_id, t.agent, t.model, t.task_type, t.terminal, t.attempts, t.total_attempts, t.total_tokens
+FROM task_summary t
+JOIN selected_runs sr ON sr.run_id = t.run_id
+WHERE (? < 0 OR sr.ordinal = ?)
+ORDER BY sr.ordinal ASC, t.task_id ASC`
 
-const taskSkillsQueryTemplate = `
-SELECT run_id, task_id, skill
-FROM task_skills
-WHERE run_id IN (%s)
-ORDER BY run_id ASC, task_id ASC, skill ASC`
+const taskSkillsQuery = `
+SELECT ts.run_id, ts.task_id, ts.skill
+FROM task_skills ts
+JOIN selected_runs sr ON sr.run_id = ts.run_id
+WHERE (? < 0 OR sr.ordinal = ?)
+ORDER BY sr.ordinal ASC, ts.task_id ASC, ts.skill ASC`
 
-// sqlTaskSummaries reads the materialized task_summary/task_skills tables
-// for the given run scope. materializeTaskViews must already have been
-// called on this session (once, regardless of how many different run
-// scopes are queried afterward).
-func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []string) ([]sqlTaskSummary, error) {
-	if len(runIDs) == 0 {
-		return nil, nil
-	}
+// sqlTaskSummaries reads the selected-only task_summary/task_skills tables.
+func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, ordinal int) ([]sqlTaskSummary, error) {
 	if err := s.ensureTaskViews(ctx); err != nil {
 		return nil, err
 	}
@@ -203,9 +242,7 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 		return t
 	}
 
-	inClause, args := runsInClause(runIDs)
-
-	rows, err := s.conn.QueryContext(ctx, fmt.Sprintf(taskSummaryQueryTemplate, inClause), args...)
+	rows, err := s.conn.QueryContext(ctx, taskSummaryQuery, ordinal, ordinal)
 	if err != nil {
 		return nil, fmt.Errorf("query task summary: %w", err)
 	}
@@ -226,7 +263,7 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 	}
 	_ = rows.Close()
 
-	skillRows, err := s.conn.QueryContext(ctx, fmt.Sprintf(taskSkillsQueryTemplate, inClause), args...)
+	skillRows, err := s.conn.QueryContext(ctx, taskSkillsQuery, ordinal, ordinal)
 	if err != nil {
 		return nil, fmt.Errorf("query task skills: %w", err)
 	}
@@ -256,18 +293,15 @@ func (s *sqliteAnalyticsSession) sqlTaskSummaries(ctx context.Context, runIDs []
 // needed after SQL aggregation. It intentionally does not materialize task
 // content, usage, prompts, output, tool arguments, or any other execution
 // telemetry content.
-func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Context, runIDs []string) (map[string][]team.ExecutionEvent, error) {
-	projection := make(map[string][]team.ExecutionEvent, len(runIDs))
-	if len(runIDs) == 0 {
-		return projection, nil
-	}
-	inClause, args := runsInClause(runIDs)
-	query := fmt.Sprintf(`
-SELECT run_id, team_revision
-FROM execution_events
-WHERE team <> '' AND run_id IN (%s)
-ORDER BY run_id ASC, event_seq ASC`, inClause)
-	rows, err := s.conn.QueryContext(ctx, query, args...)
+func (s *sqliteAnalyticsSession) sqlSelectedExecutionProjection(ctx context.Context) (map[string][]team.ExecutionEvent, error) {
+	const query = `
+SELECT e.run_id, e.team_revision
+FROM execution_events e
+JOIN selected_runs sr ON sr.run_id = e.run_id
+WHERE e.team <> ''
+ORDER BY sr.ordinal ASC, e.event_seq ASC`
+	projection := make(map[string][]team.ExecutionEvent)
+	rows, err := s.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query selected execution projection: %w", err)
 	}
@@ -292,19 +326,16 @@ ORDER BY run_id ASC, event_seq ASC`, inClause)
 // (last-non-empty) agent instead: TokensByAgent sums each event's own
 // Usage.TotalTokens under that event's own Agent field (falling back to
 // "unspecified" per event, not per task).
-const tokensByAgentQueryTemplate = `
-SELECT CASE WHEN agent = '' THEN 'unspecified' ELSE agent END AS agent_key, SUM(total_tokens)
-FROM execution_events
-WHERE task_id <> '' AND team <> '' AND run_id IN (%s)
+const tokensByAgentQuery = `
+SELECT CASE WHEN e.agent = '' THEN 'unspecified' ELSE e.agent END AS agent_key, SUM(e.total_tokens)
+FROM execution_events e
+JOIN selected_runs sr ON sr.run_id = e.run_id
+WHERE e.task_id <> '' AND e.team <> '' AND (? < 0 OR sr.ordinal = ?)
 GROUP BY agent_key`
 
-func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, runIDs []string) (map[string]int, error) {
+func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, ordinal int) (map[string]int, error) {
 	result := map[string]int{}
-	if len(runIDs) == 0 {
-		return result, nil
-	}
-	inClause, args := runsInClause(runIDs)
-	rows, err := s.conn.QueryContext(ctx, fmt.Sprintf(tokensByAgentQueryTemplate, inClause), args...)
+	rows, err := s.conn.QueryContext(ctx, tokensByAgentQuery, ordinal, ordinal)
 	if err != nil {
 		return nil, fmt.Errorf("query tokens by agent: %w", err)
 	}
@@ -324,25 +355,38 @@ func (s *sqliteAnalyticsSession) sqlTokensByAgent(ctx context.Context, runIDs []
 }
 
 // sqlCollectExecutionMetrics performs execution aggregation,
-// scoped to the given run IDs (already team/recency-filtered by
-// sqlSelectRecentRuns). It leaves ToolCalls*/ToolErrors*/Memory* fields
+// scoped to all selected runs, or one selected ordinal for a trend point.
+// It leaves ToolCalls*/ToolErrors*/Memory* fields
 // zero — those are populated by the audit and memory SQL aggregations,
 // respectively, exactly as the public metrics contract composes them.
-func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context, runIDs []string) (Metrics, error) {
+func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context, ordinal int) (Metrics, error) {
 	metrics := Metrics{TokensByAgent: map[string]int{}, ToolCallsByAgent: map[string]int{}, ToolErrorsByAgent: map[string]int{}}
-
-	metrics.RunCount = len(runIDs)
+	selected, err := s.sqlSelectedRuns(ctx)
+	if err != nil {
+		return Metrics{}, err
+	}
+	if ordinal >= 0 {
+		filtered := selected[:0]
+		for _, run := range selected {
+			if run.Ordinal == ordinal {
+				filtered = append(filtered, run)
+				break
+			}
+		}
+		selected = filtered
+	}
+	metrics.RunCount = len(selected)
 	if metrics.RunCount == 1 {
-		metrics.RunID = runIDs[0]
+		metrics.RunID = selected[0].RunID
 	}
 
-	start, end, err := s.sqlEventWindow(ctx, runIDs)
+	start, end, err := s.sqlEventWindow(ctx, ordinal)
 	if err != nil {
 		return Metrics{}, err
 	}
 	metrics.StartedAt, metrics.EndedAt = start.Format(time.RFC3339), end.Format(time.RFC3339)
 
-	tasks, err := s.sqlTaskSummaries(ctx, runIDs)
+	tasks, err := s.sqlTaskSummaries(ctx, ordinal)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -362,7 +406,7 @@ func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context,
 		}
 	}
 
-	tokensByAgent, err := s.sqlTokensByAgent(ctx, runIDs)
+	tokensByAgent, err := s.sqlTokensByAgent(ctx, ordinal)
 	if err != nil {
 		return Metrics{}, err
 	}

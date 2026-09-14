@@ -100,6 +100,15 @@ CREATE TEMP TABLE memory_events (
     direction         TEXT NOT NULL DEFAULT ''
 );`
 
+const selectedRunsSchema = `
+CREATE TEMP TABLE selected_runs (
+    run_id   TEXT PRIMARY KEY,
+    ordinal  INTEGER NOT NULL UNIQUE CHECK (ordinal >= 0),
+    team     TEXT NOT NULL,
+    start_ns INTEGER,
+    end_ns   INTEGER
+) WITHOUT ROWID;`
+
 // analyticsSchemaStatements build the TEMP schema for a fresh session.
 // Indexes are deliberately not part of this list — spec.md §7 requires
 // building them only after bulk load so per-row INSERTs during ingestion
@@ -109,6 +118,7 @@ var analyticsSchemaStatements = []string{
 	executionEventSkillsSchema,
 	auditEventsSchema,
 	memoryEventsSchema,
+	selectedRunsSchema,
 }
 
 func (s *sqliteAnalyticsSession) createSchema(ctx context.Context) error {

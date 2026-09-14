@@ -39,7 +39,6 @@ SELECT CASE WHEN TRIM(%[1]s, char(9, 10, 11, 12, 13, 32, 133, 160, 5760,
        SUM(CASE WHEN attempts > 1 THEN 1 ELSE 0 END) AS retried_tasks,
        SUM(total_tokens) AS total_tokens
 FROM task_summary
-WHERE run_id IN (%[2]s)
 GROUP BY group_key
 ORDER BY group_key ASC`
 
@@ -59,36 +58,27 @@ SELECT COALESCE(ts.skill, 'none') AS group_key,
        SUM(t.total_tokens) AS total_tokens
 FROM task_summary t
 LEFT JOIN task_skills ts ON ts.run_id = t.run_id AND ts.task_id = t.task_id
-WHERE t.run_id IN (%s)
 GROUP BY group_key
 ORDER BY group_key ASC`
 
-func (s *sqliteAnalyticsSession) sqlGroupMetricsByDimension(ctx context.Context, runIDs []string, dimension string) ([]GroupMetric, error) {
+func (s *sqliteAnalyticsSession) sqlGroupMetricsByDimension(ctx context.Context, dimension string) ([]GroupMetric, error) {
 	fallback, ok := groupDimensionColumns[dimension]
 	if !ok {
 		return nil, fmt.Errorf("unknown group dimension %q", dimension)
 	}
-	if len(runIDs) == 0 {
-		return []GroupMetric{}, nil
-	}
 	if err := s.ensureTaskViews(ctx); err != nil {
 		return nil, err
 	}
-	inClause, runArgs := runsInClause(runIDs)
-	query := fmt.Sprintf(groupByDimensionQueryTemplate, dimension, inClause)
-	args := append([]any{fallback}, runArgs...)
+	query := fmt.Sprintf(groupByDimensionQueryTemplate, dimension)
+	args := []any{fallback}
 	return s.scanGroupMetrics(ctx, query, args)
 }
 
-func (s *sqliteAnalyticsSession) sqlGroupMetricsBySkill(ctx context.Context, runIDs []string) ([]GroupMetric, error) {
-	if len(runIDs) == 0 {
-		return []GroupMetric{}, nil
-	}
+func (s *sqliteAnalyticsSession) sqlGroupMetricsBySkill(ctx context.Context) ([]GroupMetric, error) {
 	if err := s.ensureTaskViews(ctx); err != nil {
 		return nil, err
 	}
-	inClause, args := runsInClause(runIDs)
-	return s.scanGroupMetrics(ctx, fmt.Sprintf(groupBySkillQuery, inClause), args)
+	return s.scanGroupMetrics(ctx, groupBySkillQuery, nil)
 }
 
 func (s *sqliteAnalyticsSession) scanGroupMetrics(ctx context.Context, query string, args []any) ([]GroupMetric, error) {
@@ -115,21 +105,21 @@ func (s *sqliteAnalyticsSession) scanGroupMetrics(ctx context.Context, query str
 }
 
 // sqlCollectGroupedMetrics performs grouped SQL aggregation,
-// scoped to the given run IDs.
-func (s *sqliteAnalyticsSession) sqlCollectGroupedMetrics(ctx context.Context, runIDs []string) (GroupedMetrics, error) {
-	byAgent, err := s.sqlGroupMetricsByDimension(ctx, runIDs, "agent")
+// scoped to the frozen selected_runs table.
+func (s *sqliteAnalyticsSession) sqlCollectGroupedMetrics(ctx context.Context) (GroupedMetrics, error) {
+	byAgent, err := s.sqlGroupMetricsByDimension(ctx, "agent")
 	if err != nil {
 		return GroupedMetrics{}, err
 	}
-	byTaskType, err := s.sqlGroupMetricsByDimension(ctx, runIDs, "task_type")
+	byTaskType, err := s.sqlGroupMetricsByDimension(ctx, "task_type")
 	if err != nil {
 		return GroupedMetrics{}, err
 	}
-	byModel, err := s.sqlGroupMetricsByDimension(ctx, runIDs, "model")
+	byModel, err := s.sqlGroupMetricsByDimension(ctx, "model")
 	if err != nil {
 		return GroupedMetrics{}, err
 	}
-	bySkill, err := s.sqlGroupMetricsBySkill(ctx, runIDs)
+	bySkill, err := s.sqlGroupMetricsBySkill(ctx)
 	if err != nil {
 		return GroupedMetrics{}, err
 	}
