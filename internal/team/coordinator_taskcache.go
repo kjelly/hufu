@@ -392,6 +392,7 @@ func cloneVerificationResult(src *VerificationResult) *VerificationResult {
 	}
 	copy := *src
 	copy.Spec = cloneVerificationSpecPtr(src.Spec)
+	copy.TaskOutputAssertions = append([]TaskOutputAssertionResult(nil), src.TaskOutputAssertions...)
 	return &copy
 }
 

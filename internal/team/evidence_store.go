@@ -534,6 +534,8 @@ type EvidenceBinding struct {
 	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
+	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
+	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
 }
 
 type EvidenceManifest struct {
@@ -621,6 +623,11 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
 				return fmt.Errorf("evidence requirement %q has invalid bound input", result.RequirementID)
 			}
+		}
+	}
+	if b.ActionInvocationID != "" || b.RuntimeOutputsHash != "" {
+		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
+			return fmt.Errorf("evidence requirement %q has incomplete runtime output binding", result.RequirementID)
 		}
 	}
 	wantIDs := make([]string, 0, len(result.ArtifactRefs))

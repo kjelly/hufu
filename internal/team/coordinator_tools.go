@@ -629,9 +629,12 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 		verifyCtx, verifyCancel := context.WithTimeout(parentCtx, acceptanceTimeout)
 		var vRes *VerificationResult
 		var vErr error
-		if normalizedSpec.Type == VerifyWorksetComplete {
+		switch normalizedSpec.Type {
+		case VerifyWorksetComplete:
 			vRes, vErr = c.executeWorksetCompleteVerification(verifyCtx, normalizedSpec)
-		} else {
+		case VerifyTaskOutputAssert:
+			vRes, vErr = c.executeTaskOutputAssertVerification(verifyCtx, normalizedSpec)
+		default:
 			vRes, vErr = ExecuteVerificationSpec(verifyCtx, shell, workDir, vSpec)
 		}
 		verifyCancel()

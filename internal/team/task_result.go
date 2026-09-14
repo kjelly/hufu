@@ -269,6 +269,10 @@ type TaskResult struct {
 	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
+	// RuntimeOutputs are canonical values produced by trusted runtime
+	// execution. Model-facing result DTOs intentionally cannot populate them.
+	RuntimeOutputs     map[string]any `json:"runtime_outputs,omitempty"`
+	RuntimeOutputsHash string         `json:"runtime_outputs_hash,omitempty"`
 	// Details is the complete textual deliverable when a task produces a plan,
 	// analysis, review, or other handoff that does not need a separate file.
 	// It is part of the typed result, so downstream coordinators can consume it

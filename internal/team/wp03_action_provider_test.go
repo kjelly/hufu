@@ -51,8 +51,8 @@ func TestCoordinatorRuntimeActionPersistsProviderArtifactsAsTypedEvidence(t *tes
 	if got.TypedResult == nil || len(got.TypedResult.Artifacts) != 1 || got.TypedResult.Artifacts[0].ID == "provider-forged" {
 		t.Fatalf("typed provider artifact = %#v", got.TypedResult)
 	}
-	if got.TypedResult.Facts["count"] != 3 {
-		t.Fatalf("typed provider outputs = %#v", got.TypedResult.Facts)
+	if !equalJSONValues(got.TypedResult.RuntimeOutputs["count"], 3) || got.TypedResult.RuntimeOutputsHash == "" || got.TypedResult.Facts != nil {
+		t.Fatalf("typed provider outputs = %#v (hash %q)", got.TypedResult.RuntimeOutputs, got.TypedResult.RuntimeOutputsHash)
 	}
 	stored, err := events.ReadEvents()
 	if err != nil {

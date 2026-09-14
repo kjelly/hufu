@@ -2293,6 +2293,14 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", err
 	}
 	output := actionResultDisplay(rawResult, actionResult)
+	runtimeOutputs, runtimeOutputsHash, err := CanonicalizeRuntimeOutputs(actionResult.Outputs)
+	if err != nil {
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", fmt.Errorf("canonicalize structured action outputs: %w", err)
+	}
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
@@ -2312,7 +2320,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	typedResult := &TaskResult{
 		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
 		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
-		Facts: actionResult.Outputs, Confidence: 1,
+		RuntimeOutputs: runtimeOutputs, RuntimeOutputsHash: runtimeOutputsHash, Confidence: 1,
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 	}
@@ -2320,7 +2328,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if item := c.todoItemByID(todoID); item != nil {
 		c.emitArtifactEvents(item)
 	}
-	if err := c.persistSuccessfulCoordinatorTaskReceipt(todoID, task.Agent, attempt, startedAt, output); err != nil {
+	if err := c.persistSuccessfulCoordinatorTaskReceipt(todoID, task.Agent, attempt, startedAt, output, actionID); err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
@@ -2331,6 +2339,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action done: %w", err)
 	}
+	c.recordTerminalTypedTaskResult(todoID)
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(output).withMessage("structured action completed").withTodoID(todoID))
@@ -2458,6 +2467,7 @@ type runtimeActionReceipt struct {
 	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
+	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
 }
 
 func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, actionID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
@@ -2484,6 +2494,12 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 			StartedAt: startedAt, FinishedAt: finishedAt,
 			RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 			MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
+			RuntimeOutputsHash: func() string {
+				if item := c.todoItemByID(todoID); item != nil && item.TypedResult != nil {
+					return item.TypedResult.RuntimeOutputsHash
+				}
+				return ""
+			}(),
 			Output: utils.TruncateString(utils.RedactSecrets(output), 1000),
 			Error: func() string {
 				if actionErr == nil {
@@ -2512,6 +2528,12 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
+		RuntimeOutputsHash: func() string {
+			if item := c.todoItemByID(todoID); item != nil && item.TypedResult != nil {
+				return item.TypedResult.RuntimeOutputsHash
+			}
+			return ""
+		}(),
 	})
 }
 
@@ -4505,6 +4527,13 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 	defer cancel()
 	if normalizedSpec.Type == VerifyWorksetComplete {
 		verification, verifyErr := c.executeWorksetCompleteVerification(verifyCtx, normalizedSpec)
+		if verification != nil {
+			verification.Fingerprint = ComputeVerificationFingerprintFull(normalizedSpec, verification, workDir, "", c.verificationSecurityMode(shell))
+		}
+		return verification, verifyErr
+	}
+	if normalizedSpec.Type == VerifyTaskOutputAssert {
+		verification, verifyErr := c.executeTaskOutputAssertVerification(verifyCtx, normalizedSpec)
 		if verification != nil {
 			verification.Fingerprint = ComputeVerificationFingerprintFull(normalizedSpec, verification, workDir, "", c.verificationSecurityMode(shell))
 		}

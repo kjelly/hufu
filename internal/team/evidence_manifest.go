@@ -259,6 +259,10 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 		!maps.Equal(receipt.BoundInputs, item.BoundInputs)) {
 		return fmt.Errorf("receipt action input binding conflicts with task occurrence")
 	}
+	if item.TypedResult != nil && item.TypedResult.RuntimeOutputsHash != "" &&
+		receipt.RuntimeOutputsHash != item.TypedResult.RuntimeOutputsHash {
+		return fmt.Errorf("receipt runtime output digest conflicts with task result")
+	}
 	ids := make([]string, 0, len(result.ArtifactRefs))
 	for _, ref := range result.ArtifactRefs {
 		if ref.ID == "" {
@@ -272,6 +276,7 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 		TranscriptRef: receipt.TranscriptRef, ArtifactIDs: ids,
 		RunInputSnapshotID: receipt.RunInputSnapshotID, RunInputSnapshotHash: receipt.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: receipt.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(receipt.BoundInputs),
+		ActionInvocationID: receipt.ActionInvocationID, RuntimeOutputsHash: receipt.RuntimeOutputsHash,
 	}
 	return nil
 }

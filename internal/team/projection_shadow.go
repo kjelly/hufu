@@ -164,18 +164,19 @@ func compareTaskProjection(left, right []*TodoItem) error {
 }
 
 type canonicalVerifyResult struct {
-	Command        string            `json:"command,omitempty"`
-	WorkDir        string            `json:"work_dir,omitempty"`
-	ExitCode       int               `json:"exit_code"`
-	Stdout         string            `json:"stdout,omitempty"`
-	Stderr         string            `json:"stderr,omitempty"`
-	TimedOut       bool              `json:"timed_out,omitempty"`
-	WeakWarning    bool              `json:"weak_warning,omitempty"`
-	WeakReason     string            `json:"weak_reason,omitempty"`
-	Overturned     bool              `json:"overturned,omitempty"`
-	OverturnReason string            `json:"overturn_reason,omitempty"`
-	Fingerprint    string            `json:"fingerprint,omitempty"`
-	Spec           *VerificationSpec `json:"spec,omitempty"`
+	Command              string                      `json:"command,omitempty"`
+	WorkDir              string                      `json:"work_dir,omitempty"`
+	ExitCode             int                         `json:"exit_code"`
+	Stdout               string                      `json:"stdout,omitempty"`
+	Stderr               string                      `json:"stderr,omitempty"`
+	TimedOut             bool                        `json:"timed_out,omitempty"`
+	WeakWarning          bool                        `json:"weak_warning,omitempty"`
+	WeakReason           string                      `json:"weak_reason,omitempty"`
+	Overturned           bool                        `json:"overturned,omitempty"`
+	OverturnReason       string                      `json:"overturn_reason,omitempty"`
+	Fingerprint          string                      `json:"fingerprint,omitempty"`
+	Spec                 *VerificationSpec           `json:"spec,omitempty"`
+	TaskOutputAssertions []TaskOutputAssertionResult `json:"task_output_assertions,omitempty"`
 }
 
 func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
@@ -183,18 +184,19 @@ func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
 		return nil
 	}
 	return &canonicalVerifyResult{
-		Command:        vr.Command,
-		WorkDir:        vr.WorkDir,
-		ExitCode:       vr.ExitCode,
-		Stdout:         vr.Stdout,
-		Stderr:         vr.Stderr,
-		TimedOut:       vr.TimedOut,
-		WeakWarning:    vr.WeakWarning,
-		WeakReason:     vr.WeakReason,
-		Overturned:     vr.Overturned,
-		OverturnReason: vr.OverturnReason,
-		Fingerprint:    vr.Fingerprint,
-		Spec:           cloneVerificationSpecPtr(vr.Spec),
+		Command:              vr.Command,
+		WorkDir:              vr.WorkDir,
+		ExitCode:             vr.ExitCode,
+		Stdout:               vr.Stdout,
+		Stderr:               vr.Stderr,
+		TimedOut:             vr.TimedOut,
+		WeakWarning:          vr.WeakWarning,
+		WeakReason:           vr.WeakReason,
+		Overturned:           vr.Overturned,
+		OverturnReason:       vr.OverturnReason,
+		Fingerprint:          vr.Fingerprint,
+		Spec:                 cloneVerificationSpecPtr(vr.Spec),
+		TaskOutputAssertions: append([]TaskOutputAssertionResult(nil), vr.TaskOutputAssertions...),
 	}
 }
 
@@ -206,6 +208,8 @@ type canonicalReceipt struct {
 	RunInputSnapshotHash          string                     `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string                     `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string          `json:"bound_inputs,omitempty"`
+	ActionInvocationID            string                     `json:"action_invocation_id,omitempty"`
+	RuntimeOutputsHash            string                     `json:"runtime_outputs_hash,omitempty"`
 	Backend                       string                     `json:"backend,omitempty"`
 	ExitCode                      *int                       `json:"exit_code,omitempty"`
 	ProducerID                    string                     `json:"producer_id,omitempty"`
@@ -241,6 +245,8 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			RunInputSnapshotHash:          r.RunInputSnapshotHash,
 			MaterializedActionPayloadHash: r.MaterializedActionPayloadHash,
 			BoundInputs:                   cloneStringMap(r.BoundInputs),
+			ActionInvocationID:            r.ActionInvocationID,
+			RuntimeOutputsHash:            r.RuntimeOutputsHash,
 			Backend:                       r.Backend,
 			ExitCode:                      r.ExitCode,
 			ProducerID:                    r.ProducerID,

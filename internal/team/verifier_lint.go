@@ -26,7 +26,7 @@ func LintVerifier(spec VerificationSpec, legacyCommand string) []ContractFinding
 // LintVerifierWithMode is like LintVerifier, but accepts an explicit legacyMode.
 func LintVerifierWithMode(spec VerificationSpec, legacyCommand, legacyMode string) []ContractFinding {
 	normalized := NormalizeVerificationSpec(spec, legacyCommand, legacyMode)
-	if normalized.Type == VerifyTaskResultAssert || normalized.Type == VerifyWorksetComplete {
+	if normalized.Type == VerifyTaskResultAssert || normalized.Type == VerifyTaskOutputAssert || normalized.Type == VerifyWorksetComplete {
 		if err := validateVerificationSpec(normalized); err != nil {
 			return []ContractFinding{{
 				Severity: FindingSeverityError,

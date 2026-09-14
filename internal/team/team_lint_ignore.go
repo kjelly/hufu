@@ -28,7 +28,7 @@ var teamLintKnownCodes = func() map[string]bool {
 		FindingNetworkDisabled, FindingPlanFirstRequired, FindingRequirementInvalid,
 		FindingWorksetSourceConflict, FindingWorksetReceiptSource, FindingWorksetChildVerify,
 		FindingActionProviderMissing, FindingActionRecoveryConflict, FindingUnattendedWorksetBudget,
-		FindingUnattendedAcceptance, FindingWorksetCommandBinding, FindingLegacyFanOutDeprecated,
+		FindingUnattendedAcceptance, FindingWorksetCommandBinding, FindingWorksetScopeAssertion, FindingLegacyFanOutDeprecated,
 		FindingDecisionEvidenceInvalid, FindingUnsupportedSchemaVersion, FindingDuplicateAgent,
 		FindingMissingCoordinator, FindingMultipleCoordinators, FindingPromptUnknownTool,
 		FindingPromptDeniedTool, FindingPromptToolNotGranted, FindingDeclaredToolMissing,

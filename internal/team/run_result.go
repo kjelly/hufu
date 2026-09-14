@@ -133,6 +133,7 @@ type VerificationType = agent.VerificationType
 type JSONAssertion = agent.JSONAssertion
 type ToolCallAssertion = agent.ToolCallAssertion
 type TaskResultAssertion = agent.TaskResultAssertion
+type TaskOutputAssertion = agent.TaskOutputAssertion
 type AcceptanceCriterion = agent.AcceptanceCriterion
 type ReliabilityConfig = agent.ReliabilityConfig
 
@@ -143,6 +144,7 @@ const (
 	VerifyJSONAssert       = agent.VerifyJSONAssert
 	VerifyToolCallAssert   = agent.VerifyToolCallAssert
 	VerifyTaskResultAssert = agent.VerifyTaskResultAssert
+	VerifyTaskOutputAssert = agent.VerifyTaskOutputAssert
 	VerifyWorksetComplete  = agent.VerifyWorksetComplete
 )
 
@@ -164,6 +166,7 @@ func cloneVerificationSpec(v VerificationSpec) VerificationSpec {
 		for i, assertion := range v.Assertions {
 			c.Assertions[i] = assertion
 			c.Assertions[i].Equals = cloneTaskResultValue(assertion.Equals)
+			c.Assertions[i].Value = cloneTaskResultValue(assertion.Value)
 		}
 	}
 	if v.ToolCallAssertions != nil {

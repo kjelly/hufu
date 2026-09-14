@@ -572,90 +572,95 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 
 		var payload struct {
-			ID                  string                      `json:"id"`
-			Phase               Phase                       `json:"phase"`
-			Action              *Action                     `json:"action"`
-			PlanTaskID          string                      `json:"plan_task_id"`
-			PlanFirst           *bool                       `json:"plan_first"`
-			PlanID              *string                     `json:"plan_id"`
-			ContractID          string                      `json:"contract_id"`
-			ContractHash        string                      `json:"contract_hash"`
-			ContractRevision    int                         `json:"contract_revision"`
-			Description         string                      `json:"description"`
-			Desc                string                      `json:"desc"`
-			Goal                string                      `json:"goal"`
-			Constraints         string                      `json:"constraints"`
-			Status              string                      `json:"status"`
-			Detail              string                      `json:"detail"`
-			CheckpointPause     *bool                       `json:"checkpoint_pause"`
-			OccurrenceRevision  int                         `json:"occurrence_revision"`
-			DispatchID          string                      `json:"dispatch_id"`
-			MaxRetries          int                         `json:"max_retries"`
-			Retries             int                         `json:"retries"`
-			Output              string                      `json:"output"`
-			Summary             string                      `json:"summary"`
-			Agent               string                      `json:"agent"`
-			Model               string                      `json:"model"`
-			ModelTopology       []string                    `json:"model_topology"`
-			ExecutionTarget     execution.ExecutionTarget   `json:"execution_target"`
-			ExecutionTopology   []execution.ExecutionTarget `json:"execution_topology"`
-			Sidecar             bool                        `json:"sidecar"`
-			Summarize           bool                        `json:"summarize"`
-			OutputMode          string                      `json:"output_mode"`
-			ContextFiles        []string                    `json:"context_files"`
-			Requires            []string                    `json:"requires"`
-			Skills              []string                    `json:"skills"`
-			InjectedSkills      []string                    `json:"injected_skills"`
-			LoadedSkills        []string                    `json:"loaded_skills"`
-			Source              string                      `json:"source"`
-			ParentID            string                      `json:"parent_id"`
-			DependsOn           []string                    `json:"depends_on"`
-			OnFailure           string                      `json:"on_failure"`
-			OnFailureClasses    []TaskFailureClass          `json:"on_failure_classes"`
-			Escalate            bool                        `json:"escalate"`
-			AdversarialVerify   int                         `json:"adversarial_verify"`
-			Verify              string                      `json:"verify"`
-			VerifyMode          string                      `json:"verify_mode"`
-			VerifySpec          *VerificationSpec           `json:"verify_spec"`
-			VerifyResult        *VerificationResult         `json:"verify_result"`
-			WorksetBinding      *WorksetBinding             `json:"workset_binding"`
-			WorksetReceipt      *WorksetExpansionReceipt    `json:"workset_receipt"`
-			TypedResult         *TaskResult                 `json:"typed_result"`
-			ExecutionReceipt    *ExecutionReceipt           `json:"execution_receipt"`
-			ExecutionReceipts   []ExecutionReceipt          `json:"execution_receipts"`
-			Kind                TaskKind                    `json:"kind"`
-			Advances            []string                    `json:"advances"`
-			ExpectedStateChange string                      `json:"expected_state_change"`
-			Progress            TaskProgress                `json:"progress"`
-			ProgressCriteria    []string                    `json:"progress_criteria"`
-			FailureFingerprints []FailureFingerprint        `json:"failure_fingerprints"`
-			Execution           ExecutionContract           `json:"execution"`
-			Optional            bool                        `json:"optional"`
-			ResourceClaims      []string                    `json:"resource_claims"`
-			Resources           []ResourceClaim             `json:"resources"`
-			RecoveryHypothesis  *RecoveryHypothesis         `json:"recovery_hypothesis"`
-			SideEffect          SideEffectClass             `json:"side_effect"`
-			Recovery            RecoveryPolicy              `json:"recovery"`
-			ReconcileTool       string                      `json:"reconcile_tool"`
-			RecoveryState       string                      `json:"recovery_state"`
-			RuntimeError        *ExecutionError             `json:"runtime_error"`
-			Resolution          *TaskResolution             `json:"resolution"`
-			DiagnosticHints     []string                    `json:"diagnostic_hints"`
-			LastOperation       string                      `json:"last_operation"`
-			DecisionProfile     string                      `json:"decision_profile"`
-			DecisionOptions     []DecisionOption            `json:"decision_options"`
-			DecisionAssumptions []DecisionAssumption        `json:"decision_assumptions"`
-			DecisionFacts       map[string]any              `json:"decision_facts"`
-			DecisionArtifacts   []ArtifactRef               `json:"decision_artifacts"`
-			DecisionBaseRates   []BaseRateEvidence          `json:"decision_base_rates"`
-			DecisionProvenance  []EvidenceProvenance        `json:"decision_provenance"`
-			MemoryManifests     []MemoryInjectionManifest   `json:"memory_manifests"`
-			ContextManifests    []ContextInjectionManifest  `json:"context_manifests"`
-			ResetForRetry       bool                        `json:"reset_for_retry"`
-			SubagentProvider    string                      `json:"subagent_provider"`
-			ProviderBinding     *ProviderBinding            `json:"provider_binding"`
-			BackendBinding      *BackendBinding             `json:"backend_binding"`
-			RemediationContext  *RemediationContext         `json:"remediation_context"`
+			ID                            string                      `json:"id"`
+			Phase                         Phase                       `json:"phase"`
+			Action                        *Action                     `json:"action"`
+			ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings"`
+			RunInputSnapshotID            string                      `json:"run_input_snapshot_id"`
+			RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash"`
+			MaterializedActionPayloadHash string                      `json:"materialized_action_payload_hash"`
+			BoundInputs                   map[string]string           `json:"bound_inputs"`
+			PlanTaskID                    string                      `json:"plan_task_id"`
+			PlanFirst                     *bool                       `json:"plan_first"`
+			PlanID                        *string                     `json:"plan_id"`
+			ContractID                    string                      `json:"contract_id"`
+			ContractHash                  string                      `json:"contract_hash"`
+			ContractRevision              int                         `json:"contract_revision"`
+			Description                   string                      `json:"description"`
+			Desc                          string                      `json:"desc"`
+			Goal                          string                      `json:"goal"`
+			Constraints                   string                      `json:"constraints"`
+			Status                        string                      `json:"status"`
+			Detail                        string                      `json:"detail"`
+			CheckpointPause               *bool                       `json:"checkpoint_pause"`
+			OccurrenceRevision            int                         `json:"occurrence_revision"`
+			DispatchID                    string                      `json:"dispatch_id"`
+			MaxRetries                    int                         `json:"max_retries"`
+			Retries                       int                         `json:"retries"`
+			Output                        string                      `json:"output"`
+			Summary                       string                      `json:"summary"`
+			Agent                         string                      `json:"agent"`
+			Model                         string                      `json:"model"`
+			ModelTopology                 []string                    `json:"model_topology"`
+			ExecutionTarget               execution.ExecutionTarget   `json:"execution_target"`
+			ExecutionTopology             []execution.ExecutionTarget `json:"execution_topology"`
+			Sidecar                       bool                        `json:"sidecar"`
+			Summarize                     bool                        `json:"summarize"`
+			OutputMode                    string                      `json:"output_mode"`
+			ContextFiles                  []string                    `json:"context_files"`
+			Requires                      []string                    `json:"requires"`
+			Skills                        []string                    `json:"skills"`
+			InjectedSkills                []string                    `json:"injected_skills"`
+			LoadedSkills                  []string                    `json:"loaded_skills"`
+			Source                        string                      `json:"source"`
+			ParentID                      string                      `json:"parent_id"`
+			DependsOn                     []string                    `json:"depends_on"`
+			OnFailure                     string                      `json:"on_failure"`
+			OnFailureClasses              []TaskFailureClass          `json:"on_failure_classes"`
+			Escalate                      bool                        `json:"escalate"`
+			AdversarialVerify             int                         `json:"adversarial_verify"`
+			Verify                        string                      `json:"verify"`
+			VerifyMode                    string                      `json:"verify_mode"`
+			VerifySpec                    *VerificationSpec           `json:"verify_spec"`
+			VerifyResult                  *VerificationResult         `json:"verify_result"`
+			WorksetBinding                *WorksetBinding             `json:"workset_binding"`
+			WorksetReceipt                *WorksetExpansionReceipt    `json:"workset_receipt"`
+			TypedResult                   *TaskResult                 `json:"typed_result"`
+			ExecutionReceipt              *ExecutionReceipt           `json:"execution_receipt"`
+			ExecutionReceipts             []ExecutionReceipt          `json:"execution_receipts"`
+			Kind                          TaskKind                    `json:"kind"`
+			Advances                      []string                    `json:"advances"`
+			ExpectedStateChange           string                      `json:"expected_state_change"`
+			Progress                      TaskProgress                `json:"progress"`
+			ProgressCriteria              []string                    `json:"progress_criteria"`
+			FailureFingerprints           []FailureFingerprint        `json:"failure_fingerprints"`
+			Execution                     ExecutionContract           `json:"execution"`
+			Optional                      bool                        `json:"optional"`
+			ResourceClaims                []string                    `json:"resource_claims"`
+			Resources                     []ResourceClaim             `json:"resources"`
+			RecoveryHypothesis            *RecoveryHypothesis         `json:"recovery_hypothesis"`
+			SideEffect                    SideEffectClass             `json:"side_effect"`
+			Recovery                      RecoveryPolicy              `json:"recovery"`
+			ReconcileTool                 string                      `json:"reconcile_tool"`
+			RecoveryState                 string                      `json:"recovery_state"`
+			RuntimeError                  *ExecutionError             `json:"runtime_error"`
+			Resolution                    *TaskResolution             `json:"resolution"`
+			DiagnosticHints               []string                    `json:"diagnostic_hints"`
+			LastOperation                 string                      `json:"last_operation"`
+			DecisionProfile               string                      `json:"decision_profile"`
+			DecisionOptions               []DecisionOption            `json:"decision_options"`
+			DecisionAssumptions           []DecisionAssumption        `json:"decision_assumptions"`
+			DecisionFacts                 map[string]any              `json:"decision_facts"`
+			DecisionArtifacts             []ArtifactRef               `json:"decision_artifacts"`
+			DecisionBaseRates             []BaseRateEvidence          `json:"decision_base_rates"`
+			DecisionProvenance            []EvidenceProvenance        `json:"decision_provenance"`
+			MemoryManifests               []MemoryInjectionManifest   `json:"memory_manifests"`
+			ContextManifests              []ContextInjectionManifest  `json:"context_manifests"`
+			ResetForRetry                 bool                        `json:"reset_for_retry"`
+			SubagentProvider              string                      `json:"subagent_provider"`
+			ProviderBinding               *ProviderBinding            `json:"provider_binding"`
+			BackendBinding                *BackendBinding             `json:"backend_binding"`
+			RemediationContext            *RemediationContext         `json:"remediation_context"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -689,78 +694,83 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		failureEvent, hasFailureEvent := mergeFailureEventJSON(nil, e.Payload)
 		if !exists {
 			item = &TodoItem{
-				ID:                  taskID,
-				Phase:               payload.Phase,
-				Action:              payload.Action,
-				PlanTaskID:          payload.PlanTaskID,
-				PlanFirst:           pointerValueOrZero(payload.PlanFirst),
-				PlanID:              pointerValueOrZero(payload.PlanID),
-				ContractID:          payload.ContractID,
-				ContractHash:        payload.ContractHash,
-				ContractRevision:    payload.ContractRevision,
-				Desc:                desc,
-				Goal:                payload.Goal,
-				Constraints:         payload.Constraints,
-				Status:              TaskPending,
-				CheckpointPause:     pointerValueOrZero(payload.CheckpointPause),
-				OccurrenceRevision:  payload.OccurrenceRevision,
-				DispatchID:          payload.DispatchID,
-				MaxRetries:          payload.MaxRetries,
-				Retries:             payload.Retries,
-				Agent:               payload.Agent,
-				Model:               payload.Model,
-				ModelTopology:       cloneModelTopology(payload.ModelTopology),
-				ExecutionTarget:     payload.ExecutionTarget,
-				ExecutionTopology:   cloneExecutionTopology(payload.ExecutionTopology),
-				Sidecar:             payload.Sidecar,
-				Summarize:           payload.Summarize,
-				OutputMode:          payload.OutputMode,
-				ContextFiles:        append([]string(nil), payload.ContextFiles...),
-				Requires:            append([]string(nil), payload.Requires...),
-				Skills:              append([]string(nil), payload.Skills...),
-				InjectedSkills:      append([]string(nil), payload.InjectedSkills...),
-				LoadedSkills:        append([]string(nil), payload.LoadedSkills...),
-				Source:              payload.Source,
-				ParentID:            payload.ParentID,
-				DependsOn:           payload.DependsOn,
-				OnFailure:           payload.OnFailure,
-				OnFailureClasses:    append([]TaskFailureClass(nil), payload.OnFailureClasses...),
-				Escalate:            payload.Escalate,
-				AdversarialVerify:   payload.AdversarialVerify,
-				Kind:                payload.Kind,
-				Advances:            append([]string(nil), payload.Advances...),
-				ExpectedStateChange: payload.ExpectedStateChange,
-				Progress:            payload.Progress,
-				ProgressCriteria:    append([]string(nil), payload.ProgressCriteria...),
-				FailureFingerprints: append([]FailureFingerprint(nil), payload.FailureFingerprints...),
-				Execution:           cloneExecutionContract(payload.Execution),
-				Optional:            payload.Optional,
-				ResourceClaims:      append([]string(nil), payload.ResourceClaims...),
-				Resources:           append([]ResourceClaim(nil), payload.Resources...),
-				RecoveryHypothesis:  cloneRecoveryHypothesis(payload.RecoveryHypothesis),
-				SideEffect:          payload.SideEffect,
-				Recovery:            payload.Recovery,
-				ReconcileTool:       payload.ReconcileTool,
-				RecoveryState:       payload.RecoveryState,
-				RuntimeError:        payload.RuntimeError,
-				Resolution:          payload.Resolution,
-				DiagnosticHints:     append([]string(nil), payload.DiagnosticHints...),
-				LastOperation:       payload.LastOperation,
-				DecisionProfile:     payload.DecisionProfile,
-				DecisionOptions:     append([]DecisionOption(nil), payload.DecisionOptions...),
-				DecisionAssumptions: cloneDecisionAssumptions(payload.DecisionAssumptions),
-				DecisionFacts:       cloneDecisionFacts(payload.DecisionFacts),
-				DecisionArtifacts:   append([]ArtifactRef(nil), payload.DecisionArtifacts...),
-				DecisionBaseRates:   cloneBaseRateEvidence(payload.DecisionBaseRates),
-				DecisionProvenance:  cloneEvidenceProvenance(payload.DecisionProvenance),
-				TypedResult:         payload.TypedResult,
-				WorksetBinding:      cloneWorksetBinding(payload.WorksetBinding),
-				WorksetReceipt:      cloneWorksetReceipt(payload.WorksetReceipt),
-				FailureEvent:        failureEvent,
-				SubagentProvider:    payload.SubagentProvider,
-				ProviderBinding:     cloneProviderBinding(payload.ProviderBinding),
-				BackendBinding:      cloneBackendBinding(payload.BackendBinding),
-				RemediationContext:  cloneRemediationContext(payload.RemediationContext),
+				ID:                            taskID,
+				Phase:                         payload.Phase,
+				Action:                        payload.Action,
+				ActionInputBindings:           append([]ActionInputBinding(nil), payload.ActionInputBindings...),
+				RunInputSnapshotID:            payload.RunInputSnapshotID,
+				RunInputSnapshotHash:          payload.RunInputSnapshotHash,
+				MaterializedActionPayloadHash: payload.MaterializedActionPayloadHash,
+				BoundInputs:                   cloneStringMap(payload.BoundInputs),
+				PlanTaskID:                    payload.PlanTaskID,
+				PlanFirst:                     pointerValueOrZero(payload.PlanFirst),
+				PlanID:                        pointerValueOrZero(payload.PlanID),
+				ContractID:                    payload.ContractID,
+				ContractHash:                  payload.ContractHash,
+				ContractRevision:              payload.ContractRevision,
+				Desc:                          desc,
+				Goal:                          payload.Goal,
+				Constraints:                   payload.Constraints,
+				Status:                        TaskPending,
+				CheckpointPause:               pointerValueOrZero(payload.CheckpointPause),
+				OccurrenceRevision:            payload.OccurrenceRevision,
+				DispatchID:                    payload.DispatchID,
+				MaxRetries:                    payload.MaxRetries,
+				Retries:                       payload.Retries,
+				Agent:                         payload.Agent,
+				Model:                         payload.Model,
+				ModelTopology:                 cloneModelTopology(payload.ModelTopology),
+				ExecutionTarget:               payload.ExecutionTarget,
+				ExecutionTopology:             cloneExecutionTopology(payload.ExecutionTopology),
+				Sidecar:                       payload.Sidecar,
+				Summarize:                     payload.Summarize,
+				OutputMode:                    payload.OutputMode,
+				ContextFiles:                  append([]string(nil), payload.ContextFiles...),
+				Requires:                      append([]string(nil), payload.Requires...),
+				Skills:                        append([]string(nil), payload.Skills...),
+				InjectedSkills:                append([]string(nil), payload.InjectedSkills...),
+				LoadedSkills:                  append([]string(nil), payload.LoadedSkills...),
+				Source:                        payload.Source,
+				ParentID:                      payload.ParentID,
+				DependsOn:                     payload.DependsOn,
+				OnFailure:                     payload.OnFailure,
+				OnFailureClasses:              append([]TaskFailureClass(nil), payload.OnFailureClasses...),
+				Escalate:                      payload.Escalate,
+				AdversarialVerify:             payload.AdversarialVerify,
+				Kind:                          payload.Kind,
+				Advances:                      append([]string(nil), payload.Advances...),
+				ExpectedStateChange:           payload.ExpectedStateChange,
+				Progress:                      payload.Progress,
+				ProgressCriteria:              append([]string(nil), payload.ProgressCriteria...),
+				FailureFingerprints:           append([]FailureFingerprint(nil), payload.FailureFingerprints...),
+				Execution:                     cloneExecutionContract(payload.Execution),
+				Optional:                      payload.Optional,
+				ResourceClaims:                append([]string(nil), payload.ResourceClaims...),
+				Resources:                     append([]ResourceClaim(nil), payload.Resources...),
+				RecoveryHypothesis:            cloneRecoveryHypothesis(payload.RecoveryHypothesis),
+				SideEffect:                    payload.SideEffect,
+				Recovery:                      payload.Recovery,
+				ReconcileTool:                 payload.ReconcileTool,
+				RecoveryState:                 payload.RecoveryState,
+				RuntimeError:                  payload.RuntimeError,
+				Resolution:                    payload.Resolution,
+				DiagnosticHints:               append([]string(nil), payload.DiagnosticHints...),
+				LastOperation:                 payload.LastOperation,
+				DecisionProfile:               payload.DecisionProfile,
+				DecisionOptions:               append([]DecisionOption(nil), payload.DecisionOptions...),
+				DecisionAssumptions:           cloneDecisionAssumptions(payload.DecisionAssumptions),
+				DecisionFacts:                 cloneDecisionFacts(payload.DecisionFacts),
+				DecisionArtifacts:             append([]ArtifactRef(nil), payload.DecisionArtifacts...),
+				DecisionBaseRates:             cloneBaseRateEvidence(payload.DecisionBaseRates),
+				DecisionProvenance:            cloneEvidenceProvenance(payload.DecisionProvenance),
+				TypedResult:                   payload.TypedResult,
+				WorksetBinding:                cloneWorksetBinding(payload.WorksetBinding),
+				WorksetReceipt:                cloneWorksetReceipt(payload.WorksetReceipt),
+				FailureEvent:                  failureEvent,
+				SubagentProvider:              payload.SubagentProvider,
+				ProviderBinding:               cloneProviderBinding(payload.ProviderBinding),
+				BackendBinding:                cloneBackendBinding(payload.BackendBinding),
+				RemediationContext:            cloneRemediationContext(payload.RemediationContext),
 			}
 			taskMap[taskID] = item
 			taskOrder = append(taskOrder, taskID)
@@ -780,6 +790,15 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.Action != nil {
 			item.Action = payload.Action
+		}
+		if len(payload.ActionInputBindings) > 0 {
+			item.ActionInputBindings = append([]ActionInputBinding(nil), payload.ActionInputBindings...)
+		}
+		if payload.RunInputSnapshotID != "" {
+			item.RunInputSnapshotID = payload.RunInputSnapshotID
+			item.RunInputSnapshotHash = payload.RunInputSnapshotHash
+			item.MaterializedActionPayloadHash = payload.MaterializedActionPayloadHash
+			item.BoundInputs = cloneStringMap(payload.BoundInputs)
 		}
 		if payload.PlanTaskID != "" {
 			item.PlanTaskID = payload.PlanTaskID

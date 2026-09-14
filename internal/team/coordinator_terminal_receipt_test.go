@@ -72,12 +72,15 @@ printf '%s' '{"outputs":{"ok":true}}'
 	if got.TypedResult == nil || got.TypedResult.RunInputSnapshotID != snapshot.ID || got.TypedResult.BoundInputs["scope"] == "" {
 		t.Fatalf("runtime result binding = %#v", got.TypedResult)
 	}
+	if got.TypedResult.RuntimeOutputsHash == "" || got.TypedResult.Facts != nil || got.ExecutionReceipt.RuntimeOutputsHash != got.TypedResult.RuntimeOutputsHash || got.ExecutionReceipt.ActionInvocationID == "" {
+		t.Fatalf("runtime output receipt binding = result %#v receipt %#v", got.TypedResult, got.ExecutionReceipt)
+	}
 	manifest, err := c.buildEvidenceManifest(context.Background(), true)
 	if err != nil {
 		t.Fatalf("buildEvidenceManifest: %v", err)
 	}
 	binding := manifest.EvidenceResults[0].Binding
-	if binding == nil || binding.RunInputSnapshotHash != snapshot.SnapshotHash || binding.BoundInputs["scope"] == "" {
+	if binding == nil || binding.RunInputSnapshotHash != snapshot.SnapshotHash || binding.BoundInputs["scope"] == "" || binding.RuntimeOutputsHash != got.TypedResult.RuntimeOutputsHash || binding.ActionInvocationID == "" {
 		t.Fatalf("evidence binding = %#v", binding)
 	}
 }

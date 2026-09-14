@@ -840,6 +840,7 @@ const (
 	VerifyJSONAssert       VerificationType = "json_assert"
 	VerifyToolCallAssert   VerificationType = "tool_call_assert"
 	VerifyTaskResultAssert VerificationType = "task_result_assert"
+	VerifyTaskOutputAssert VerificationType = "task_output_assert"
 	VerifyWorksetComplete  VerificationType = "workset_complete"
 )
 
@@ -852,6 +853,7 @@ type VerificationSpec struct {
 	ToolCallAssertions      []ToolCallAssertion   `json:"tool_call_assertions,omitempty" yaml:"tool-call-assertions,omitempty"`
 	TaskResultAssertions    []TaskResultAssertion `json:"task_result_assertions,omitempty" yaml:"task-result-assertions,omitempty"`
 	WorksetSourceTask       string                `json:"source_task,omitempty" yaml:"source-task,omitempty"`
+	TaskOutputName          string                `json:"output,omitempty" yaml:"output,omitempty"`
 	WorksetRequireTerminal  bool                  `json:"require_all_terminal,omitempty" yaml:"require-all-terminal,omitempty"`
 	WorksetRequireVerified  bool                  `json:"require_all_verified,omitempty" yaml:"require-all-verified,omitempty"`
 	WorksetAcceptedStatuses []string              `json:"accepted_statuses,omitempty" yaml:"accepted-statuses,omitempty"`
@@ -862,10 +864,58 @@ type VerificationSpec struct {
 	AssumptionRefs []string `json:"assumption_refs,omitempty" yaml:"assumption-refs,omitempty"`
 }
 
-type JSONAssertion struct {
-	Path   string `json:"path" yaml:"path"`
-	Equals any    `json:"equals" yaml:"equals"`
+// TaskOutputAssertion declares a bounded assertion against one runtime-owned
+// task output. Path/Equals are retained in the same wire shape for the legacy
+// json_assert verifier; Pointer/Op/Value/Input belong to task_output_assert.
+// Sharing the assertions field keeps existing manifests source compatible.
+type TaskOutputAssertion struct {
+	Path    string `json:"path,omitempty" yaml:"path,omitempty"`
+	Equals  any    `json:"equals,omitempty" yaml:"equals,omitempty"`
+	Pointer string `json:"pointer,omitempty" yaml:"pointer,omitempty"`
+	Op      string `json:"op,omitempty" yaml:"op,omitempty"`
+	Value   any    `json:"value,omitempty" yaml:"value,omitempty"`
+	Input   string `json:"input,omitempty" yaml:"input,omitempty"`
 }
+
+func (assertion TaskOutputAssertion) isTaskOutputShape() bool {
+	return assertion.Pointer != "" || assertion.Op != "" || assertion.Input != "" || assertion.Value != nil
+}
+
+// MarshalJSON preserves json_assert's historical path/equals:null shape while
+// keeping task_output_assert entries limited to their own public fields.
+func (assertion TaskOutputAssertion) MarshalJSON() ([]byte, error) {
+	if assertion.isTaskOutputShape() {
+		return json.Marshal(struct {
+			Pointer string `json:"pointer"`
+			Op      string `json:"op"`
+			Value   any    `json:"value,omitempty"`
+			Input   string `json:"input,omitempty"`
+		}{assertion.Pointer, assertion.Op, assertion.Value, assertion.Input})
+	}
+	return json.Marshal(struct {
+		Path   string `json:"path"`
+		Equals any    `json:"equals"`
+	}{assertion.Path, assertion.Equals})
+}
+
+// MarshalYAML mirrors MarshalJSON for generated compatibility snapshots.
+func (assertion TaskOutputAssertion) MarshalYAML() (any, error) {
+	if assertion.isTaskOutputShape() {
+		return struct {
+			Pointer string `yaml:"pointer"`
+			Op      string `yaml:"op"`
+			Value   any    `yaml:"value,omitempty"`
+			Input   string `yaml:"input,omitempty"`
+		}{assertion.Pointer, assertion.Op, assertion.Value, assertion.Input}, nil
+	}
+	return struct {
+		Path   string `yaml:"path"`
+		Equals any    `yaml:"equals"`
+	}{assertion.Path, assertion.Equals}, nil
+}
+
+// JSONAssertion is the compatibility name for json_assert entries.
+type JSONAssertion = TaskOutputAssertion
 
 // ToolCallAssertion declares a runtime-native assertion against the tool
 // calls and results Fantasy already recorded for the current task attempt --

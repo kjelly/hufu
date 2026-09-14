@@ -11,7 +11,7 @@ import (
 // commit TaskDone. Runtime actions and structured coordinator tasks do not
 // have a model stream to create this receipt for them, but they still need the
 // same current-run evidence binding as ordinary worker tasks.
-func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer string, attempt int, startedAt time.Time, output string) error {
+func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer string, attempt int, startedAt time.Time, output string, actionInvocationID ...string) error {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || c.session == nil {
 		return fmt.Errorf("coordinator task receipt requires task state")
 	}
@@ -62,6 +62,12 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 		receipt.RunInputSnapshotHash = item.RunInputSnapshotHash
 		receipt.MaterializedActionPayloadHash = item.MaterializedActionPayloadHash
 		receipt.BoundInputs = cloneStringMap(item.BoundInputs)
+		if item.TypedResult != nil {
+			receipt.RuntimeOutputsHash = item.TypedResult.RuntimeOutputsHash
+		}
+	}
+	if len(actionInvocationID) > 0 {
+		receipt.ActionInvocationID = strings.TrimSpace(actionInvocationID[0])
 	}
 	if strings.TrimSpace(receipt.ModelExecutionID) == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
 		return fmt.Errorf("coordinator task receipt is missing execution identity or transcript reference")

@@ -153,9 +153,12 @@ func (c *Coordinator) evaluateCriteria(ctx context.Context, criteria []Acceptanc
 				workDir := c.verificationWorkDir()
 				var vr *VerificationResult
 				var err error
-				if spec.Type == VerifyWorksetComplete {
+				switch spec.Type {
+				case VerifyWorksetComplete:
 					vr, err = c.executeWorksetCompleteVerification(ctx, spec)
-				} else {
+				case VerifyTaskOutputAssert:
+					vr, err = c.executeTaskOutputAssertVerification(ctx, spec)
+				default:
 					vr, err = ExecuteVerificationSpec(ctx, shell, workDir, spec)
 				}
 				if vr != nil {

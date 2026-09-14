@@ -80,6 +80,7 @@ const (
 	FindingUnattendedWorksetBudget = "unattended_workset_budget_missing"
 	FindingUnattendedAcceptance    = "unattended_workset_acceptance_missing"
 	FindingWorksetCommandBinding   = "workset_binding_command_injection"
+	FindingWorksetScopeAssertion   = "workset_scope_assertion_missing"
 	FindingLegacyFanOutDeprecated  = "legacy_fanout_deprecated"
 	FindingDecisionEvidenceInvalid = "decision_evidence_invalid"
 	// FindingUnsupportedSchemaVersion reports a readable manifest envelope

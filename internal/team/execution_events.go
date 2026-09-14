@@ -139,6 +139,7 @@ type LifecycleEventPayload struct {
 	RunInputSnapshotHash          string                  `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string                  `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string       `json:"bound_inputs,omitempty"`
+	RuntimeOutputsHash            string                  `json:"runtime_outputs_hash,omitempty"`
 }
 
 type executionEventLogger struct {

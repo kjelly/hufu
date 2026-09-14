@@ -117,6 +117,23 @@ func canonicalJSONAssertions(assertions []JSONAssertion) []JSONAssertion {
 	return canonical
 }
 
+func canonicalTaskOutputAssertions(assertions []TaskOutputAssertion) []TaskOutputAssertion {
+	canonical := append([]TaskOutputAssertion(nil), assertions...)
+	sort.SliceStable(canonical, func(i, j int) bool {
+		if canonical[i].Pointer != canonical[j].Pointer {
+			return canonical[i].Pointer < canonical[j].Pointer
+		}
+		if canonical[i].Op != canonical[j].Op {
+			return canonical[i].Op < canonical[j].Op
+		}
+		if canonical[i].Input != canonical[j].Input {
+			return canonical[i].Input < canonical[j].Input
+		}
+		return canonicalJSONAssertionValue(canonical[i].Value) < canonicalJSONAssertionValue(canonical[j].Value)
+	})
+	return canonical
+}
+
 func canonicalJSONAssertionValue(value any) string {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -167,14 +184,33 @@ func ComputeVerificationFingerprintFull(spec VerificationSpec, result *Verificat
 
 	// Canonically encode assertions by both path and JSON value so that all-of
 	// contracts with repeated paths have an order-independent fingerprint.
-	assertions := canonicalJSONAssertions(spec.Assertions)
-	for _, a := range assertions {
-		_, _ = fmt.Fprintf(h, "a:%s=%s|", a.Path, canonicalJSONAssertionValue(a.Equals))
+	if spec.Type == VerifyTaskOutputAssert {
+		for _, a := range canonicalTaskOutputAssertions(spec.Assertions) {
+			_, _ = fmt.Fprintf(h, "toa:%s:%s:%s=%s|", a.Pointer, a.Op, a.Input, canonicalJSONAssertionValue(a.Value))
+		}
+	} else {
+		assertions := canonicalJSONAssertions(spec.Assertions)
+		for _, a := range assertions {
+			_, _ = fmt.Fprintf(h, "a:%s=%s|", a.Path, canonicalJSONAssertionValue(a.Equals))
+		}
 	}
 	for _, a := range canonicalTaskResultAssertions(spec.TaskResultAssertions) {
 		_, _ = fmt.Fprintf(h, "tra:%s:%s=%s|", a.Pointer, a.Op, canonicalJSONAssertionValue(a.Value))
 	}
-	_, _ = fmt.Fprintf(h, "workset:%s|terminal:%t|verified:%t|statuses:%s|", spec.WorksetSourceTask, spec.WorksetRequireTerminal, spec.WorksetRequireVerified, strings.Join(spec.WorksetAcceptedStatuses, ","))
+	_, _ = fmt.Fprintf(h, "source:%s|output:%s|terminal:%t|verified:%t|statuses:%s|", spec.WorksetSourceTask, spec.TaskOutputName, spec.WorksetRequireTerminal, spec.WorksetRequireVerified, strings.Join(spec.WorksetAcceptedStatuses, ","))
+	if result != nil && len(result.TaskOutputAssertions) > 0 {
+		evidence := append([]TaskOutputAssertionResult(nil), result.TaskOutputAssertions...)
+		sort.SliceStable(evidence, func(i, j int) bool {
+			left := evidence[i].SourceTaskID + "\x00" + evidence[i].Pointer + "\x00" + evidence[i].Op
+			right := evidence[j].SourceTaskID + "\x00" + evidence[j].Pointer + "\x00" + evidence[j].Op
+			return left < right
+		})
+		for _, assertion := range evidence {
+			_, _ = fmt.Fprintf(h, "toe:%s:%d:%s:%s:%s:%s:%s:%t|",
+				assertion.SourceTaskID, assertion.SourceOccurrence, assertion.Pointer, assertion.Op,
+				assertion.RunInputSnapshotID, assertion.ExpectedHash, assertion.ActualHash, assertion.Passed)
+		}
+	}
 
 	targetPath := spec.Path
 	if targetPath != "" {
@@ -430,6 +466,12 @@ func ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx context.Context, sh
 		}
 		return res, err
 
+	case VerifyTaskOutputAssert:
+		res.ExitCode = 1
+		res.Stderr = "task_output_assert requires coordinator task occurrence and frozen input state"
+		res.Fingerprint = ComputeVerificationFingerprint(spec, res, workDir)
+		return res, errors.New("task_output_assert requires coordinator task occurrence and frozen input state")
+
 	case VerifyWorksetComplete:
 		res.ExitCode = 1
 		res.Stderr = "workset_complete requires coordinator canonical group state"
@@ -495,6 +537,8 @@ func validateVerificationSpec(spec VerificationSpec) error {
 				return err
 			}
 		}
+	case VerifyTaskOutputAssert:
+		return validateTaskOutputVerificationSpec(spec)
 	case VerifyWorksetComplete:
 		if strings.TrimSpace(spec.WorksetSourceTask) == "" {
 			return errors.New("workset_complete verification requires source-task")
@@ -515,6 +559,82 @@ func validateVerificationSpec(spec VerificationSpec) error {
 		}
 	default:
 		return fmt.Errorf("unsupported verification type %q", spec.Type)
+	}
+	return nil
+}
+
+func validateTaskOutputVerificationSpec(spec VerificationSpec) error {
+	if strings.TrimSpace(spec.WorksetSourceTask) == "" {
+		return errors.New("task_output_assert verification requires source-task")
+	}
+	if strings.TrimSpace(spec.TaskOutputName) == "" {
+		return errors.New("task_output_assert verification requires output")
+	}
+	if len(spec.Assertions) == 0 {
+		return errors.New("task_output_assert verification requires at least one assertion")
+	}
+	if strings.TrimSpace(spec.Command) != "" || strings.TrimSpace(spec.Path) != "" || len(spec.ToolCallAssertions) > 0 || len(spec.TaskResultAssertions) > 0 {
+		return errors.New("task_output_assert verification cannot combine command, path, or other assertion types")
+	}
+	if len(spec.Assertions) > maxTaskResultAssertions {
+		return fmt.Errorf("task_output_assert verification has too many assertions: %d (maximum %d)", len(spec.Assertions), maxTaskResultAssertions)
+	}
+	for index, assertion := range spec.Assertions {
+		if err := validateTaskOutputAssertion(index, assertion); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTaskOutputAssertion(index int, assertion TaskOutputAssertion) error {
+	if assertion.Path != "" || assertion.Equals != nil {
+		return fmt.Errorf("task_output_assert assertion %d uses json_assert fields", index)
+	}
+	if len(assertion.Pointer) > maxTaskResultPointerBytes {
+		return fmt.Errorf("task_output_assert assertion %d pointer exceeds %d bytes", index, maxTaskResultPointerBytes)
+	}
+	if err := validateJSONPointer(assertion.Pointer); err != nil {
+		return fmt.Errorf("task_output_assert assertion %d has invalid pointer: %w", index, err)
+	}
+	if assertion.Value != nil {
+		if !isJSONScalar(assertion.Value) {
+			return fmt.Errorf("task_output_assert assertion %d value must be a scalar", index)
+		}
+		encoded, err := json.Marshal(assertion.Value)
+		if err != nil || len(encoded) > maxTaskResultValueBytes {
+			return fmt.Errorf("task_output_assert assertion %d value exceeds %d bytes", index, maxTaskResultValueBytes)
+		}
+	}
+	op := strings.TrimSpace(assertion.Op)
+	input := strings.TrimSpace(assertion.Input)
+	switch op {
+	case "exists", "non_empty":
+		if assertion.Value != nil || input != "" {
+			return fmt.Errorf("task_output_assert assertion %d op %q accepts neither value nor input", index, op)
+		}
+	case "equals", "contains_scalar":
+		if input != "" {
+			return fmt.Errorf("task_output_assert assertion %d op %q does not accept input", index, op)
+		}
+	case "minimum", "maximum", "min_items":
+		if input != "" {
+			return fmt.Errorf("task_output_assert assertion %d op %q does not accept input", index, op)
+		}
+		if op == "min_items" {
+			count, ok := taskResultAssertionInt(assertion.Value)
+			if !ok || count < 0 {
+				return fmt.Errorf("task_output_assert assertion %d min_items value must be a non-negative integer", index)
+			}
+		} else if _, ok := toExactJSONNumber(assertion.Value); !ok {
+			return fmt.Errorf("task_output_assert assertion %d op %q requires a numeric value", index, op)
+		}
+	case "equals_input", "equals_input_hash":
+		if input == "" || assertion.Value != nil {
+			return fmt.Errorf("task_output_assert assertion %d op %q requires input and no value", index, op)
+		}
+	default:
+		return fmt.Errorf("task_output_assert assertion %d uses unsupported op %q", index, assertion.Op)
 	}
 	return nil
 }

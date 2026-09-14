@@ -134,6 +134,8 @@ type ExecutionReceipt struct {
 	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
 	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
+	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
+	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
 	// Backend is the canonical execution backend admitted for this attempt.
 	// SubagentProvider remains a read-compatible legacy field only while the
 	// execution-identity sunset is in progress.

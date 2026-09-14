@@ -91,10 +91,108 @@ func validateWorksetAndActionContracts(session *TeamSession) []ContractFinding {
 		}
 	}
 	findings = append(findings, validateWorksetVerificationContracts(session, fanOutTasks)...)
+	findings = append(findings, validateInputBoundWorksetAssertions(session)...)
 	if session.Config.Unattended && hasWorkset {
 		findings = append(findings, validateUnattendedWorksetContract(session)...)
 	}
 	return findings
+}
+
+func validateInputBoundWorksetAssertions(session *TeamSession) []ContractFinding {
+	if session == nil || session.Config.AcceptanceSpec == nil {
+		return nil
+	}
+	acceptance := session.Config.AcceptanceSpec
+	if acceptance.Mode == string(AcceptanceAdvisory) || session.Config.AcceptanceMode == string(AcceptanceAdvisory) {
+		return nil
+	}
+	worksetSources := make(map[string]bool)
+	assertions := make(map[string][]VerificationSpec)
+	collect := func(spec VerificationSpec) {
+		normalized := NormalizeVerificationSpec(spec, "", "")
+		switch normalized.Type {
+		case VerifyWorksetComplete:
+			worksetSources[normalizeTaskReferenceID(normalized.WorksetSourceTask)] = true
+		case VerifyTaskOutputAssert:
+			if normalized.Mode != "observation" {
+				key := normalizeTaskReferenceID(normalized.WorksetSourceTask)
+				assertions[key] = append(assertions[key], normalized)
+			}
+		}
+	}
+	for _, spec := range acceptance.Verifications {
+		collect(spec)
+	}
+	for _, criterion := range acceptance.Criteria {
+		if criterion.Required {
+			collect(criterion.Verify)
+		}
+	}
+	if len(worksetSources) == 0 {
+		return nil
+	}
+	boundProducers := make(map[string]bool)
+	for _, task := range session.ContractTasks {
+		if task.FanOut == nil || !worksetSources[normalizeTaskReferenceID(task.ID)] {
+			continue
+		}
+		producerID := normalizeTaskReferenceID(task.FanOut.SourceArtifact.TaskID)
+		if producerID != "" {
+			boundProducers[producerID] = true
+		}
+	}
+
+	var findings []ContractFinding
+	for index, task := range session.ContractTasks {
+		if task.Action == nil || len(task.Action.InputBindings) == 0 || !boundProducers[normalizeTaskReferenceID(task.ID)] {
+			continue
+		}
+		valid := false
+		for _, spec := range assertions[normalizeTaskReferenceID(task.ID)] {
+			if taskOutputAssertionBindsScope(spec, task.Action.InputBindings) {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			findings = append(findings, errorFinding(
+				fmt.Sprintf("tasks[%d].action.input-bindings", index),
+				FindingWorksetScopeAssertion,
+				fmt.Sprintf("input-bound workset producer %q requires a blocking task_output_assert that proves requested value/hash and satisfied=true", task.ID),
+			))
+		}
+	}
+	return findings
+}
+
+func taskOutputAssertionBindsScope(spec VerificationSpec, bindings []ActionInputBinding) bool {
+	wantInputs := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		wantInputs[strings.TrimSpace(binding.Input)] = struct{}{}
+	}
+	equalsInputs := make(map[string]bool, len(wantInputs))
+	equalsHashes := make(map[string]bool, len(wantInputs))
+	satisfied := false
+	for _, assertion := range spec.Assertions {
+		input := strings.TrimSpace(assertion.Input)
+		switch assertion.Op {
+		case "equals_input":
+			equalsInputs[input] = true
+		case "equals_input_hash":
+			equalsHashes[input] = true
+		case "equals":
+			if assertion.Pointer == "/satisfied" {
+				value, ok := assertion.Value.(bool)
+				satisfied = ok && value
+			}
+		}
+	}
+	for input := range wantInputs {
+		if input == "" || !equalsInputs[input] || !equalsHashes[input] {
+			return false
+		}
+	}
+	return satisfied
 }
 
 func validateFanOutTaskContract(field string, task TaskDef) []ContractFinding {
