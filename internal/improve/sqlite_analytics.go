@@ -25,6 +25,8 @@ type sqliteAnalyticsSession struct {
 	conn        *sql.Conn
 	executor    analyticsQueryExecutor
 	diagnostics *AnalyticsDiagnostics
+	batchConfig analyticsBatchConfig
+	variableMax int
 
 	// selectedRunsReady freezes the run scope before task projection begins.
 	// taskViewsReady is set once materializeTaskViews has populated
@@ -41,6 +43,10 @@ type sqliteAnalyticsSession struct {
 // shared across calls or across goroutines (spec.md §19: "不要使用 global
 // analytics DB").
 func openSQLiteAnalyticsSession(ctx context.Context) (*sqliteAnalyticsSession, error) {
+	return openSQLiteAnalyticsSessionWithPragmas(ctx, nil)
+}
+
+func openSQLiteAnalyticsSessionWithPragmas(ctx context.Context, pragmas []string) (*sqliteAnalyticsSession, error) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageOpen, fmt.Errorf("open analytics database: %w", err))
@@ -53,8 +59,22 @@ func openSQLiteAnalyticsSession(ctx context.Context) (*sqliteAnalyticsSession, e
 		_ = db.Close()
 		return nil, newAnalyticsError(AnalyticsStageOpen, fmt.Errorf("pin analytics connection: %w", err))
 	}
+	var configureErr error
+	if pragmas == nil {
+		configureErr = configureAnalyticsSQLite(ctx, conn)
+	} else {
+		configureErr = configureAnalyticsSQLiteFrom(ctx, conn, pragmas)
+	}
+	if configureErr != nil {
+		_ = conn.Close()
+		_ = db.Close()
+		return nil, newAnalyticsError(AnalyticsStageOpen, configureErr)
+	}
 
-	session := &sqliteAnalyticsSession{db: db, conn: conn, executor: conn}
+	session := &sqliteAnalyticsSession{
+		db: db, conn: conn, executor: conn,
+		batchConfig: defaultAnalyticsBatchConfig,
+	}
 	if err := session.createSchema(ctx); err != nil {
 		_ = session.Close()
 		return nil, newAnalyticsError(AnalyticsStageSchema, err)

@@ -22,10 +22,12 @@ type auditLoadStats struct {
 	InvalidTimestampRows int64
 }
 
-const insertAuditEventSQL = `
+const insertAuditEventPrefix = `
 INSERT INTO audit_events (
     event_seq, timestamp_raw, timestamp_unix_ns, team, agent, event
-) VALUES (?, ?, ?, ?, ?, ?)`
+) VALUES `
+
+const auditEventColumnCount = 6
 
 // loadAuditEvents streams all audit-*.jsonl files in filepath.Glob order into
 // the session's TEMP audit_events table. Valid JSON rows are retained even
@@ -56,9 +58,13 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 		}
 	}()
 
-	insertEvent, err := tx.PrepareContext(ctx, insertAuditEventSQL)
+	batchRows, err := s.configuredBatchRows(ctx, auditEventColumnCount, s.batchConfig.Audit)
 	if err != nil {
-		return stats, fmt.Errorf("prepare audit event insert: %w", err)
+		return stats, fmt.Errorf("configure audit event batch: %w", err)
+	}
+	insertEvent, err := newSQLiteBatchInserter(ctx, tx, insertAuditEventPrefix, auditEventColumnCount, batchRows)
+	if err != nil {
+		return stats, fmt.Errorf("create audit event batch: %w", err)
 	}
 	defer func() { _ = insertEvent.Close() }()
 
@@ -87,7 +93,7 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 			} else {
 				stats.InvalidTimestampRows++
 			}
-			if _, err := insertEvent.ExecContext(ctx, eventSeq, event.Timestamp, timestampUnixNS, event.Team, event.Agent, event.Event); err != nil {
+			if err := insertEvent.Add(eventSeq, event.Timestamp, timestampUnixNS, event.Team, event.Agent, event.Event); err != nil {
 				_ = f.Close()
 				return stats, fmt.Errorf("insert audit event %d: %w", eventSeq, err)
 			}
@@ -98,6 +104,9 @@ func (s *sqliteAnalyticsSession) loadAuditEvents(ctx context.Context, dir string
 			continue
 		}
 		_ = f.Close()
+	}
+	if err := insertEvent.Flush(); err != nil {
+		return stats, fmt.Errorf("flush audit events: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

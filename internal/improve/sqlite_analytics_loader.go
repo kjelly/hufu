@@ -9,7 +9,6 @@ package improve
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,7 +27,7 @@ type loadStats struct {
 	MissingRunIDRows int64
 }
 
-const insertExecutionEventSQL = `
+const insertExecutionEventPrefix = `
 INSERT INTO execution_events (
     event_seq, version, timestamp_raw, timestamp_unix_ns, run_id, team,
 	 task_id, agent, attempt, status, model, task_type, team_revision,
@@ -36,11 +35,16 @@ INSERT INTO execution_events (
 	 duration_ms, input_tokens, output_tokens, total_tokens, progress_tokens,
     outcome, stop_reason, acceptance_state, repair_attempts, phase,
     provider, failure_signature
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES `
 
-const insertExecutionEventSkillSQL = `
+const insertExecutionEventSkillPrefix = `
 INSERT OR IGNORE INTO execution_event_skills (event_seq, run_id, task_id, skill)
-VALUES (?, ?, ?, ?)`
+VALUES `
+
+const (
+	executionEventColumnCount = 26
+	executionSkillColumnCount = 4
+)
 
 // loadExecutionEvents streams path (execution-events.jsonl) into TEMP
 // execution_events / execution_event_skills. It preserves the tolerant
@@ -72,15 +76,22 @@ func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path s
 		}
 	}()
 
-	insertEvent, err := tx.PrepareContext(ctx, insertExecutionEventSQL)
+	eventBatchRows, err := s.configuredBatchRows(ctx, executionEventColumnCount, s.batchConfig.Execution)
 	if err != nil {
-		return stats, fmt.Errorf("prepare execution event insert: %w", err)
+		return stats, fmt.Errorf("configure execution event batch: %w", err)
+	}
+	skillBatchRows, err := s.configuredBatchRows(ctx, executionSkillColumnCount, s.batchConfig.Skills)
+	if err != nil {
+		return stats, fmt.Errorf("configure execution skill batch: %w", err)
+	}
+	insertEvent, err := newSQLiteBatchInserter(ctx, tx, insertExecutionEventPrefix, executionEventColumnCount, eventBatchRows)
+	if err != nil {
+		return stats, fmt.Errorf("create execution event batch: %w", err)
 	}
 	defer func() { _ = insertEvent.Close() }()
-
-	insertSkill, err := tx.PrepareContext(ctx, insertExecutionEventSkillSQL)
+	insertSkill, err := newSQLiteBatchInserter(ctx, tx, insertExecutionEventSkillPrefix, executionSkillColumnCount, skillBatchRows)
 	if err != nil {
-		return stats, fmt.Errorf("prepare execution event skill insert: %w", err)
+		return stats, fmt.Errorf("create execution skill batch: %w", err)
 	}
 	defer func() { _ = insertSkill.Close() }()
 
@@ -100,13 +111,19 @@ func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path s
 			continue
 		}
 		eventSeq++
-		if err := insertExecutionEventRow(ctx, insertEvent, insertSkill, eventSeq, event); err != nil {
+		if err := insertExecutionEventRow(insertEvent, insertSkill, eventSeq, event); err != nil {
 			return stats, fmt.Errorf("insert execution event %d: %w", eventSeq, err)
 		}
 		stats.RowsLoaded++
 	}
 	if err := scanner.Err(); err != nil {
 		return stats, fmt.Errorf("read execution events: %w", err)
+	}
+	if err := insertEvent.Flush(); err != nil {
+		return stats, fmt.Errorf("flush execution events: %w", err)
+	}
+	if err := insertSkill.Flush(); err != nil {
+		return stats, fmt.Errorf("flush execution skills: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -116,12 +133,12 @@ func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path s
 	return stats, nil
 }
 
-func insertExecutionEventRow(ctx context.Context, insertEvent, insertSkill *sql.Stmt, eventSeq int64, event team.ExecutionEvent) error {
+func insertExecutionEventRow(insertEvent, insertSkill *sqliteBatchInserter, eventSeq int64, event team.ExecutionEvent) error {
 	var timestampUnixNS any
 	if ts, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
 		timestampUnixNS = ts.UnixNano()
 	}
-	_, err := insertEvent.ExecContext(ctx,
+	err := insertEvent.Add(
 		eventSeq, event.Version, event.Timestamp, timestampUnixNS, event.RunID, event.Team,
 		event.TaskID, event.Agent, event.Attempt, event.Status, event.Model, event.TaskType, event.TeamRevision,
 		len(event.Skills) > 0,
@@ -133,7 +150,7 @@ func insertExecutionEventRow(ctx context.Context, insertEvent, insertSkill *sql.
 		return err
 	}
 	for _, skill := range dedupeNonEmpty(event.Skills) {
-		if _, err := insertSkill.ExecContext(ctx, eventSeq, event.RunID, event.TaskID, skill); err != nil {
+		if err := insertSkill.Add(eventSeq, event.RunID, event.TaskID, skill); err != nil {
 			return fmt.Errorf("insert skill %q: %w", skill, err)
 		}
 	}

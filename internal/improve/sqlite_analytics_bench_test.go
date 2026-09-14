@@ -544,3 +544,72 @@ func benchmarkSQLiteAnalyticsIndexSets(b *testing.B, profile analyticsBenchmarkP
 		})
 	}
 }
+
+func BenchmarkSQLiteAnalyticsPragmaProfiles(b *testing.B) {
+	profile := analyticsBenchmarkProfile{name: "medium", events: 100_000, runs: 1_000}
+	workspace, _ := writeAnalyticsBenchmarkFixture(b, profile)
+	profiles := []struct {
+		name       string
+		statements []string
+	}{
+		{name: "default", statements: []string{}},
+		{name: "temp-memory", statements: []string{"PRAGMA temp_store = MEMORY"}},
+		{name: "sync-off", statements: []string{"PRAGMA synchronous = OFF"}},
+		{name: "journal-memory", statements: []string{"PRAGMA journal_mode = MEMORY"}},
+		{name: "combined", statements: []string{
+			"PRAGMA temp_store = MEMORY",
+			"PRAGMA synchronous = OFF",
+			"PRAGMA journal_mode = MEMORY",
+		}},
+	}
+	for _, profile := range profiles {
+		b.Run("profile="+profile.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				ctx := b.Context()
+				session, err := openSQLiteAnalyticsSessionWithPragmas(ctx, profile.statements)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.loadMemoryEvents(ctx, workspace); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.createIndexes(ctx); err != nil {
+					b.Fatal(err)
+				}
+				if _, _, err := session.sqlSelectRecentRunSummaries(ctx, "dev", 10); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.materializeTaskViews(ctx); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectExecutionMetrics(ctx); err != nil {
+					b.Fatal(err)
+				}
+				_, revisions, err := session.sqlSelectedRevisions(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				memory, err := session.sqlCollectMemoryAnalytics(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectTrend(ctx, memory, revisions); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := session.sqlCollectGroupedMetrics(ctx); err != nil {
+					b.Fatal(err)
+				}
+				if err := session.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

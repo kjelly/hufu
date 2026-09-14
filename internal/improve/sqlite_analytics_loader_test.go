@@ -55,6 +55,7 @@ func TestLoadExecutionEvents_SkipsMalformedAndMissingRunID(t *testing.T) {
 	})
 
 	session := newTestSession(t)
+	session.batchConfig.Execution = 32
 	stats, err := session.loadExecutionEvents(context.Background(), path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -78,6 +79,7 @@ func TestLoadExecutionEvents_AssignsMonotonicEventSeqInFileOrder(t *testing.T) {
 	path := writeJSONLFile(t, []string{string(e1), string(e2)})
 
 	session := newTestSession(t)
+	session.batchConfig.Execution = 32
 	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +107,7 @@ func TestLoadExecutionEvents_UnparseableTimestampYieldsNullUnixNS(t *testing.T) 
 	path := writeJSONLFile(t, []string{string(e)})
 
 	session := newTestSession(t)
+	session.batchConfig.Skills = 32
 	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}

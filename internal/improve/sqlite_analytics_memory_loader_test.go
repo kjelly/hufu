@@ -3,6 +3,7 @@ package improve
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,11 +137,14 @@ func TestLoadMemoryEventsMissingStoreIsNonfatalAndDoesNotCreateFile(t *testing.T
 }
 
 func TestLoadMemoryEventsLateHashFailureRollsBackPrefix(t *testing.T) {
+	const batchCandidate = 32
 	workspace := t.TempDir()
-	path := writeMemoryEventStore(t, workspace, []team.RunEvent{
-		{ID: "memory-1", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1"}`)},
-		{ID: "memory-2", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"disposition":"applied"}`)},
-	})
+	events := make([]team.RunEvent, 0, batchCandidate+3)
+	for i := range batchCandidate + 2 {
+		events = append(events, team.RunEvent{ID: fmt.Sprintf("memory-%d", i), Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1"}`)})
+	}
+	events = append(events, team.RunEvent{ID: "memory-corrupt", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"disposition":"applied"}`)})
+	path := writeMemoryEventStore(t, workspace, events)
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -155,12 +159,13 @@ func TestLoadMemoryEventsLateHashFailureRollsBackPrefix(t *testing.T) {
 	}
 
 	session := newTestSession(t)
+	session.batchConfig.Memory = batchCandidate
 	stats, err := session.loadMemoryEvents(t.Context(), workspace)
 	if err != nil {
 		t.Fatalf("corrupt event store must be nonfatal: %v", err)
 	}
-	if stats.RowsLoaded != 1 {
-		t.Fatalf("stats = %+v, want one streamed prefix row before rollback", stats)
+	if stats.RowsLoaded != int64(batchCandidate+2) {
+		t.Fatalf("stats = %+v, want a flushed batch plus streamed prefix rows before rollback", stats)
 	}
 	var count int
 	if err := session.conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM memory_events").Scan(&count); err != nil {

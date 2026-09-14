@@ -32,6 +32,7 @@ func TestLoadAuditEvents_SkipsMalformedRowsAndKeepsOnlyMinimalFields(t *testing.
 	})
 
 	session := newTestSession(t)
+	session.batchConfig.Audit = 32
 	stats, err := session.loadAuditEvents(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +138,7 @@ func TestLoadAuditEvents_CommitsPrefixAndLaterFilesAfterScannerError(t *testing.
 	})
 
 	session := newTestSession(t)
+	session.batchConfig.Audit = 32
 	stats, err := session.loadAuditEvents(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)

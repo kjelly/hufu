@@ -21,12 +21,14 @@ type memoryLoadStats struct {
 	MalformedPayloadRows int64
 }
 
-const insertMemoryEventSQL = `
+const insertMemoryEventPrefix = `
 INSERT INTO memory_events (
     event_seq, run_id, task_id, attempt, type, timestamp_raw,
 	timestamp_unix_ns, retrieval_id, context_item_id, content_hash, policy_version, reason_code, token_count,
 	disposition, signal, direction
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES `
+
+const memoryEventColumnCount = 16
 
 const (
 	memoryRetrievedEvent       = "memory_retrieved"
@@ -55,9 +57,13 @@ func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace
 		}
 	}()
 
-	insertEvent, err := tx.PrepareContext(ctx, insertMemoryEventSQL)
+	batchRows, err := s.configuredBatchRows(ctx, memoryEventColumnCount, s.batchConfig.Memory)
 	if err != nil {
-		return stats, fmt.Errorf("prepare memory event insert: %w", err)
+		return stats, fmt.Errorf("configure memory event batch: %w", err)
+	}
+	insertEvent, err := newSQLiteBatchInserter(ctx, tx, insertMemoryEventPrefix, memoryEventColumnCount, batchRows)
+	if err != nil {
+		return stats, fmt.Errorf("create memory event batch: %w", err)
 	}
 	defer func() { _ = insertEvent.Close() }()
 
@@ -80,7 +86,7 @@ func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace
 		if timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
 			timestampUnixNS = timestamp.UnixNano()
 		}
-		_, insertErr = insertEvent.ExecContext(ctx,
+		insertErr = insertEvent.Add(
 			eventSeq, event.RunID, event.TaskID, event.Attempt, event.Type, event.Timestamp,
 			timestampUnixNS, memoryPayloadString(payload, "retrieval_id"), memoryPayloadString(payload, "context_item_id"),
 			memoryPayloadString(payload, "content_hash"), memoryPayloadString(payload, "policy_version"), memoryPayloadString(payload, "reason_code"),
@@ -100,6 +106,9 @@ func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace
 		// The transaction is rolled back by the deferred cleanup. Canonical
 		// event-store validation/read failures are nonfatal by design.
 		return stats, nil
+	}
+	if err := insertEvent.Flush(); err != nil {
+		return stats, fmt.Errorf("flush memory events: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
