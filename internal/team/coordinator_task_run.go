@@ -1630,19 +1630,27 @@ retryLoop:
 					c.storeSubmittedTaskResult(todoID, recovered)
 					typedRes = recovered
 				}
-				if err == nil && typedRes != nil && isSubmittedResultSource(typedRes.Source) {
-					if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
-						err = withFailureClassOverride(resultErr, FailureExecution)
-					}
+			}
+			if err == nil && typedRes != nil && isSubmittedResultSource(typedRes.Source) {
+				if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
+					err = withFailureClassOverride(resultErr, FailureExecution)
 				}
-				if err == nil && typedRes != nil && HasBlockingInvariantAssessment(task.InvariantVerification, typedRes.InvariantVerification) {
-					receipt.HandoffState = ResultHandoffSubmitted
-					receipt.SubmittedResult = typedRes
-					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
-					}
-					err = withFailureClassOverride(errors.New("runtime-attested invariant gate rejected the worker result"), FailureExecution)
+			}
+			invariantMode := task.InvariantVerification
+			if durable := c.todoItemByID(todoID); durable != nil {
+				// The admitted Todo is the durable static contract. A scheduler
+				// TaskDef is only an execution assertion and must never weaken a
+				// configured gate while the worker result is being accepted.
+				invariantMode = durable.InvariantVerification
+			}
+			if err == nil && typedRes != nil && HasBlockingInvariantAssessment(invariantMode, typedRes.InvariantVerification) {
+				receipt.HandoffState = ResultHandoffSubmitted
+				receipt.SubmittedResult = typedRes
+				receipt.ExitCode = new(1)
+				if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+					_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
 				}
+				err = withFailureClassOverride(errors.New("runtime-attested invariant gate rejected the worker result"), FailureExecution)
 			}
 			// For requires-result tasks the typed submission is the terminal
 			// handoff. A final-action-only worker is correctly instructed not to
