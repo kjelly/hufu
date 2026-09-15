@@ -145,7 +145,7 @@ func addSessionScopeFlags(command *cobra.Command, options *sessionFacadeOptions,
 }
 
 func resolveSessionOutput(command *cobra.Command, output string) (string, error) {
-	return resolveOutputAlias("output", output, flagChanged(command, "output"), "json", "json", flagChanged(command, "json"), "text", []string{"text", "json"})
+	return resolveOutputAlias("output", output, flagChanged(command, "output"), "json", outputForJSONAlias(sessionJSON), flagChanged(command, "json"), "text", []string{"text", "json"})
 }
 
 func bindActiveMutationTarget(ctx context.Context, workspace string, options *sessionFacadeOptions, requireTask bool) (boundMutationTarget, error) {

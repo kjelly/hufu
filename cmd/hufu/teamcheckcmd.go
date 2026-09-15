@@ -91,7 +91,7 @@ func newTeamCheckCommand() *cobra.Command {
 }
 
 func resolveTeamCheckOutput(command *cobra.Command, options *teamCheckOptions) (string, error) {
-	format, err := resolveOutputAlias("output", options.output, flagChanged(command, "output"), "json", "json", flagChanged(command, "json"), "text", []string{"text", "json"})
+	format, err := resolveOutputAlias("output", options.output, flagChanged(command, "output"), "json", outputForJSONAlias(options.json), flagChanged(command, "json"), "text", []string{"text", "json"})
 	if err != nil && options.json {
 		return "json", err
 	}

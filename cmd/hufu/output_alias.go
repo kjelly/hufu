@@ -6,6 +6,13 @@ import (
 	"strings"
 )
 
+func outputForJSONAlias(enabled bool) string {
+	if enabled {
+		return "json"
+	}
+	return "text"
+}
+
 // resolveOutputAlias is the shared, side-effect-free selector for domain
 // format flags and their common --output/--json aliases. Equivalent explicit
 // values are accepted; conflicting explicit values fail before the command's
