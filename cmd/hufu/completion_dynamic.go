@@ -238,3 +238,47 @@ func boundedCompletionDescription(value string) string {
 	value = strings.Join(strings.Fields(value), " ")
 	return operatorpkg.SafeDisplayText(value, 64)
 }
+
+// completionHelperScaffold builds a bare command carrying only the flag
+// values the shared complete*IDs functions read, so `hufu completion-helper`
+// can reuse that scope-safe logic for shells (Nushell) that need an external
+// process rather than Cobra's built-in completion protocol.
+func completionHelperScaffold(workspace, run, branch, project, team string) *cobra.Command {
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("workspace", workspace, "")
+	command.Flags().String("run", run, "")
+	command.Flags().String("branch", branch, "")
+	command.Flags().String("project", project, "")
+	command.Flags().String("team", team, "")
+	return command
+}
+
+func completionHelperRunIDs(workspace, branch string) []string {
+	values, _ := completeRunIDs(completionHelperScaffold(workspace, "", branch, "", ""), nil, "")
+	return stripCompletionDescriptions(values)
+}
+
+func completionHelperTaskIDs(workspace, run, branch string) []string {
+	values, _ := completeTaskIDs(completionHelperScaffold(workspace, run, branch, "", ""), nil, "")
+	return stripCompletionDescriptions(values)
+}
+
+func completionHelperBranchIDs(workspace string) []string {
+	values, _ := completeBranchIDs(completionHelperScaffold(workspace, "", "", "", ""), nil, "")
+	return stripCompletionDescriptions(values)
+}
+
+func completionHelperProposalIDs(workspace, project, team string) []string {
+	values, _ := completePromotionIDs(completionHelperScaffold(workspace, "", "", project, team), nil, "")
+	return stripCompletionDescriptions(values)
+}
+
+func stripCompletionDescriptions(values []string) []string {
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id, _, _ := strings.Cut(value, "\t")
+		ids = append(ids, id)
+	}
+	return ids
+}

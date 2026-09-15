@@ -51,7 +51,7 @@ remaining manual gates are recorded in
 | HF-UX-054 | delivered | `TestSkillGraphRendersDraftName` |
 | HF-UX-055 | delivered | `TestOperatorPanelUsesVerifiedDetailsAndSeparatedLearningSignals` |
 | HF-UX-060 | delivered | `TestTeamCreateWizardPreviewsValidatesThenWrites` |
-| HF-UX-061 | delivered | `TestDynamicCompletionIsBoundedBranchAndRunScoped` |
+| HF-UX-061 | delivered | `TestDynamicCompletionIsBoundedBranchAndRunScoped`; `TestCompletionHelperRunTaskBranchIDsAreBoundedAndReadOnly`; `TestCompletionHelperProposalIDsAreScopedAndReadOnly`; `TestNushellCompletionWiresRunTaskBranchProposalCompleters` |
 | HF-UX-062 | delivered | `TestGeneratedOperatorCommandReferenceIsCurrent` |
 | HF-UX-063 | delivered | `TestCanonicalExamplesAreShellParseableAndReferenceExistingCommands` |
 | HF-UX-070 | blocked-human | `TestOperatorUsabilityMeasurementScript` verifies the harness only; participant count remains zero |

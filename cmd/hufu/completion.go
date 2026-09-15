@@ -57,45 +57,76 @@ var completionNushellCmd = &cobra.Command{
 	},
 }
 
+var (
+	completionHelperRun     string
+	completionHelperBranch  string
+	completionHelperProject string
+	completionHelperTeam    string
+)
+
+func init() {
+	completionHelperCmd.Flags().StringVar(&completionHelperRun, "run", "", "Run ID to scope task completion")
+	completionHelperCmd.Flags().StringVar(&completionHelperBranch, "branch", "", "Branch ID to scope run/task completion")
+	completionHelperCmd.Flags().StringVar(&completionHelperProject, "project", "", "Project ID to scope proposal completion")
+	completionHelperCmd.Flags().StringVar(&completionHelperTeam, "team", "", "Team ID to scope proposal completion")
+}
+
+// completionHelperCmd is invoked as an external command by shells (Nushell)
+// whose completion protocol cannot call back into Cobra's own
+// ValidArgsFunction/RegisterFlagCompletionFunc machinery. It reuses the exact
+// same bounded, read-only complete*IDs logic registered for Bash/Zsh/Fish/
+// PowerShell in completion_dynamic.go, so results and scope rules stay in
+// one place.
 var completionHelperCmd = &cobra.Command{
-	Use:    "completion-helper [teams|agents]",
+	Use:    "completion-helper [teams|agents|runs|tasks|branches|proposals]",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		registry := team.NewTeamRegistry(resolveSearchPaths())
-		if err := registry.Discover(); err != nil {
-			return err
-		}
-
 		switch args[0] {
-		case "teams":
-			var teams []string
-			for _, name := range registry.ListTeams() {
-				teams = append(teams, "@"+name)
+		case "teams", "agents":
+			registry := team.NewTeamRegistry(resolveSearchPaths())
+			if err := registry.Discover(); err != nil {
+				return err
 			}
-			for _, t := range teams {
-				fmt.Println(t)
-			}
-		case "agents":
-			var agents []string
-			for _, dir := range registry.TeamDirs() {
-				entries, err := os.ReadDir(dir)
-				if err != nil {
-					continue
+			switch args[0] {
+			case "teams":
+				for _, name := range registry.ListTeams() {
+					fmt.Println("@" + name)
 				}
-				for _, entry := range entries {
-					if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			case "agents":
+				unique := make(map[string]bool)
+				for _, dir := range registry.TeamDirs() {
+					entries, err := os.ReadDir(dir)
+					if err != nil {
 						continue
 					}
-					agents = append(agents, "@"+strings.TrimSuffix(entry.Name(), ".md"))
+					for _, entry := range entries {
+						if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+							continue
+						}
+						agent := "@" + strings.TrimSuffix(entry.Name(), ".md")
+						if !unique[agent] {
+							unique[agent] = true
+							fmt.Println(agent)
+						}
+					}
 				}
 			}
-			unique := make(map[string]bool)
-			for _, a := range agents {
-				if !unique[a] {
-					unique[a] = true
-					fmt.Println(a)
-				}
+		case "runs":
+			for _, id := range completionHelperRunIDs(getWorkspace(), completionHelperBranch) {
+				fmt.Println(id)
+			}
+		case "tasks":
+			for _, id := range completionHelperTaskIDs(getWorkspace(), completionHelperRun, completionHelperBranch) {
+				fmt.Println(id)
+			}
+		case "branches":
+			for _, id := range completionHelperBranchIDs(getWorkspace()) {
+				fmt.Println(id)
+			}
+		case "proposals":
+			for _, id := range completionHelperProposalIDs(getWorkspace(), completionHelperProject, completionHelperTeam) {
+				fmt.Println(id)
 			}
 		}
 		return nil
@@ -113,6 +144,38 @@ def "nu-complete hufu atnames" [] {
     (^hufu completion-helper teams | lines)
     (^hufu completion-helper agents | lines)
   ] | flatten
+}
+
+def "nu-complete hufu branches" [] {
+  ^hufu completion-helper branches | lines
+}
+
+def "nu-complete hufu runs" [context: string] {
+  let matches = ($context | parse --regex '--branch[ =]+(?<v>[^ ]+)')
+  let branch = if ($matches | is-empty) { "" } else { $matches.0.v }
+  mut helper_args = [runs]
+  if $branch != "" { $helper_args = ($helper_args | append [--branch $branch]) }
+  ^hufu completion-helper ...$helper_args | lines
+}
+
+def "nu-complete hufu tasks" [context: string] {
+  let run_matches = ($context | parse --regex '--run[ =]+(?<v>[^ ]+)')
+  let run = if ($run_matches | is-empty) { "" } else { $run_matches.0.v }
+  let branch_matches = ($context | parse --regex '--branch[ =]+(?<v>[^ ]+)')
+  let branch = if ($branch_matches | is-empty) { "" } else { $branch_matches.0.v }
+  mut helper_args = [tasks]
+  if $run != "" { $helper_args = ($helper_args | append [--run $run]) }
+  if $branch != "" { $helper_args = ($helper_args | append [--branch $branch]) }
+  ^hufu completion-helper ...$helper_args | lines
+}
+
+def "nu-complete hufu proposals" [context: string] {
+  let project_matches = ($context | parse --regex '--project[ =]+(?<v>[^ ]+)')
+  let project = if ($project_matches | is-empty) { "" } else { $project_matches.0.v }
+  let team_matches = ($context | parse --regex '--team[ =]+(?<v>[^ ]+)')
+  let team = if ($team_matches | is-empty) { "" } else { $team_matches.0.v }
+  if $project == "" or $team == "" { return [] }
+  ^hufu completion-helper proposals --project $project --team $team | lines
 }
 
 # Run an agent team to accomplish a task
@@ -200,7 +263,7 @@ export extern "hufu context promotion list" [
 ]
 
 export extern "hufu context promotion show" [
-  proposal_id: string
+  proposal_id: string@'nu-complete hufu proposals'
   --workspace(-w): string
   --project: string
   --team: string
@@ -211,7 +274,7 @@ export extern "hufu context promotion show" [
 ]
 
 export extern "hufu context promotion review" [
-  proposal_id?: string
+  proposal_id?: string@'nu-complete hufu proposals'
   --workspace(-w): string
   --project: string
   --team: string
@@ -229,7 +292,7 @@ export extern "hufu context learning" [
 ]
 
 export extern "hufu context promotion edit" [
-  proposal_id: string
+  proposal_id: string@'nu-complete hufu proposals'
   --workspace(-w): string
   --project: string
   --team: string
@@ -239,9 +302,9 @@ export extern "hufu context promotion edit" [
   --draft-file: string
 ]
 
-export extern "hufu context promotion approve" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
-export extern "hufu context promotion reject" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
-export extern "hufu context promotion apply" [proposal_id: string --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
+export extern "hufu context promotion approve" [proposal_id: string@'nu-complete hufu proposals' --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
+export extern "hufu context promotion reject" [proposal_id: string@'nu-complete hufu proposals' --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
+export extern "hufu context promotion apply" [proposal_id: string@'nu-complete hufu proposals' --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
 
 export extern "hufu team create" [
   name: string
@@ -253,10 +316,10 @@ export extern "hufu team create" [
   --wizard
 ]
 
-export extern "hufu session status" [--workspace(-w): string --team: string --run: string --branch: string --output: string]
-export extern "hufu session resume" [--workspace(-w): string --team: string --run: string --branch: string]
-export extern "hufu session retry" [--workspace(-w): string --team: string --run: string --branch: string --task: string --attempt: int --output: string]
-export extern "hufu session reconcile" [--workspace(-w): string --team: string --run: string --branch: string --task: string --attempt: int --output: string]
+export extern "hufu session status" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches' --output: string]
+export extern "hufu session resume" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches']
+export extern "hufu session retry" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches' --task: string@'nu-complete hufu tasks' --attempt: int --output: string]
+export extern "hufu session reconcile" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches' --task: string@'nu-complete hufu tasks' --attempt: int --output: string]
 export extern "hufu examples" [--format: string]
 
 def "nu-complete hufu inspect formats" [] {
@@ -265,19 +328,19 @@ def "nu-complete hufu inspect formats" [] {
 
 export extern "hufu inspect" [
   --workspace(-w): string # Workspace directory
-  --branch: string # Exact branch ID, name, or label
+  --branch: string@'nu-complete hufu branches' # Exact branch ID, name, or label
   --session: string # Exact session ID filter
   --format: string@'nu-complete hufu inspect formats' # text or json
   --output: string@'nu-complete hufu inspect formats' # text or json
 ]
 
-export extern "hufu inspect overview" [--run: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect run" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect task" [task_id: string --run: string --attempt: int --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect evidence" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect context" [task_id: string --run: string --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect trace" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
-export extern "hufu inspect replay" [run_id: string --workspace(-w): string --branch: string --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect overview" [--run: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect run" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect task" [task_id: string@'nu-complete hufu tasks' --run: string@'nu-complete hufu runs' --attempt: int --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect evidence" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect context" [task_id: string@'nu-complete hufu tasks' --run: string@'nu-complete hufu runs' --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect trace" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect replay" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect storage" [--workspace(-w): string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 `
 	_, err := fmt.Fprint(w, script)

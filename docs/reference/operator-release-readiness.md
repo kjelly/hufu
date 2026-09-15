@@ -55,7 +55,7 @@ and does not encode machine-dependent latency as a portable unit-test claim.
 | Windows | not a `.goreleaser.yml` target | unsupported; PowerShell argv rendering tests are not a Windows binary claim |
 | Bash completion | generated script accepted by `bash -n` | native parse accepted |
 | Fish completion | generated script accepted by `fish -n` | native parse accepted |
-| Nushell completion | generated static declarations sourced by `nu --no-config-file` | native parse accepted; selector-aware dynamic IDs are not shipped |
+| Nushell completion | generated declarations, including scoped run/task/branch/proposal completers, sourced by `nu --no-config-file`; argv-forwarding and the missing-scope short-circuit verified against a stub `hufu` | native parse accepted; not yet exercised against a live workspace in a native Nushell session |
 | Zsh completion | Cobra generator and deterministic Go tests only | native parser unavailable; unverified |
 | PowerShell completion | Cobra generator and deterministic Go tests only | native shell unavailable; unverified |
 
@@ -72,7 +72,7 @@ test names, is maintained in
 | HF-UX-030–034 / UX-T04–15, 29–30, 48, 51 | command-factory, legacy workspace/JSON/exit, model-role, facade equivalence and team-check tests | shipped in preview |
 | HF-UX-039–044 / UX-T17–18, 21, 26–30, 39–46, 50 | TUI summary/theme/epaper/layout/navigation/PTY unit, integration and focused race tests | preview; native Darwin and arm64 smoke pending |
 | HF-UX-050–055 / UX-T28, 31–39 | read-only context/learning queries and explicit promotion review/apply tests | shipped in preview |
-| HF-UX-060–063 / UX-T01, 38, 47–48 | wizard safety, bounded scoped completion, generated reference and journey parse tests | shipped in preview; dynamic Nushell IDs unshipped |
+| HF-UX-060–063 / UX-T01, 38, 47–48 | wizard safety, bounded scoped completion, generated reference and journey parse tests | shipped in preview; Nushell run/task/branch/proposal completion now included (native parse plus stubbed-`hufu` argv tests; native session smoke still pending) |
 | HF-UX-070 | six-person baseline/candidate report | **unshipped; 0 participants** |
 | HF-UX-071 | this performance/platform report and cross-build/shell evidence | partial; unverified platforms are explicitly excluded |
 | HF-UX-072 / UX-T52 | `--no-summary` contract plus documented legacy/plain/theme fallback | shipped in preview |
