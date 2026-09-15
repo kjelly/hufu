@@ -103,7 +103,7 @@ func TestUpdate_Messages(t *testing.T) {
 	}
 }
 
-func TestUpdate_FinishedMsgConvertsStragglers(t *testing.T) {
+func TestUpdate_FinishedMsgPreservesCanonicalTaskStatus(t *testing.T) {
 	m := New("prompt", TeamInfo{})
 	m.tasks = []*team.TodoItem{
 		{ID: "1", Status: team.TaskInProgress},
@@ -116,20 +116,14 @@ func TestUpdate_FinishedMsgConvertsStragglers(t *testing.T) {
 	updated, _ := m.Update(FinishedMsg{})
 	model := updated.(Model)
 
-	if model.tasks[0].Status != team.TaskDone {
-		t.Errorf("expected in-progress task to become done, got %s", model.tasks[0].Status)
+	want := []team.TaskStatus{team.TaskInProgress, team.TaskVerifying, team.TaskPaused, team.TaskPending}
+	for index, status := range want {
+		if model.tasks[index].Status != status {
+			t.Errorf("task %d status = %s, want canonical %s", index, model.tasks[index].Status, status)
+		}
 	}
-	if model.tasks[1].Status != team.TaskDone {
-		t.Errorf("expected verifying task to become done, got %s", model.tasks[1].Status)
-	}
-	if model.tasks[2].Status != team.TaskDone {
-		t.Errorf("expected paused task to become done, got %s", model.tasks[2].Status)
-	}
-	if model.tasks[3].Status != team.TaskSkipped {
-		t.Errorf("expected pending task to become skipped, got %s", model.tasks[3].Status)
-	}
-	if model.coordItem == nil || model.coordItem.Status != team.TaskDone {
-		t.Fatalf("expected coord item to become done, got %#v", model.coordItem)
+	if model.coordItem == nil || model.coordItem.Status != team.TaskVerifying {
+		t.Fatalf("coordinator status changed without evidence: %#v", model.coordItem)
 	}
 }
 

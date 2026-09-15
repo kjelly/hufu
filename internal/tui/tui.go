@@ -533,31 +533,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// fail-safe if a newer/invalid outcome reaches this older TUI.
 			m.statusText = m.styles.pausedIcon.Render("ℹ") + m.styles.dim.Render("  "+statusStr)
 		}
-		// The coordinator already called finalizeNormalCompletion() which marks
-		// TaskPending → TaskSkipped and TaskInProgress → TaskDone via a
-		// todos_updated event. This is a safety net for any stragglers.
-		for i, t := range m.tasks {
-			switch t.Status {
-			case team.TaskInProgress, team.TaskPaused, team.TaskVerifying:
-				m.tasks[i].Status = team.TaskDone
-			case team.TaskPending, team.TaskPlanned:
-				m.tasks[i].Status = team.TaskSkipped
-			}
-		}
-		if m.coordItem != nil {
-			switch m.coordItem.Status {
-			case team.TaskInProgress, team.TaskVerifying:
-				m.coordItem.Status = team.TaskDone
-			case team.TaskPending:
-				m.coordItem.Status = team.TaskSkipped
-			}
-			for i, t := range m.tasks {
-				if t.ID == team.CoordTodoID {
-					m.tasks[i].Status = m.coordItem.Status
-					break
-				}
-			}
-		}
+		// FinishedMsg ends the display lifecycle only. Task status remains the
+		// canonical snapshot last delivered through TasksUpdatedMsg; synthesizing
+		// terminal states here would turn missing evidence into success.
 		if m.wrapUpRequested && !m.inAskUser {
 			return m, tea.Quit
 		}

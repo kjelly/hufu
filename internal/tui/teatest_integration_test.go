@@ -421,10 +421,15 @@ func TestIntegration_FinishedMsg_Quits(t *testing.T) {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
-// TestIntegration_FinishedMsg_ConvertsTasks verifies that FinishedMsg converts
-// in-progress tasks to done and pending tasks to skipped.
-func TestIntegration_FinishedMsg_ConvertsTasks(t *testing.T) {
-	tm := newTestModelWithTasks(t, "test", sampleTeamInfo(), sampleTasks(), 120, 40)
+// TestIntegration_FinishedMsg_PreservesTasks verifies that FinishedMsg ends
+// the display lifecycle without inventing canonical task transitions.
+func TestIntegration_FinishedMsg_PreservesTasks(t *testing.T) {
+	tasks := sampleTasks()
+	want := make(map[string]team.TaskStatus, len(tasks))
+	for _, task := range tasks {
+		want[task.ID] = task.Status
+	}
+	tm := newTestModelWithTasks(t, "test", sampleTeamInfo(), tasks, 120, 40)
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	tm.Send(FinishedMsg{})
@@ -439,11 +444,8 @@ func TestIntegration_FinishedMsg_ConvertsTasks(t *testing.T) {
 	model := fm.(Model)
 
 	for _, task := range model.tasks {
-		switch task.Status {
-		case team.TaskPending, team.TaskPlanned:
-			t.Errorf("task %s should not be pending/planned after finish, got %s", task.ID, task.Status)
-		case team.TaskInProgress, team.TaskPaused, team.TaskVerifying:
-			t.Errorf("task %s should not be in-progress after finish, got %s", task.ID, task.Status)
+		if task.Status != want[task.ID] {
+			t.Errorf("task %s status = %s, want canonical %s", task.ID, task.Status, want[task.ID])
 		}
 	}
 }
