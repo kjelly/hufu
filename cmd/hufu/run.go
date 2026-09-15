@@ -27,8 +27,10 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 
 	// Apply a named profile first so its values feed the checks below; explicit
 	// CLI flags still win (applyProfile respects flag.Changed).
-	if err := applyProfile(cmd); err != nil {
-		return err
+	if !opts.canonicalRun {
+		if err := applyProfile(cmd); err != nil {
+			return err
+		}
 	}
 	if opts.eventFormat == "jsonl" {
 		cmd.Root().SilenceErrors = true

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -28,6 +29,11 @@ type canonicalRunOptions struct {
 // package globals; the legacy runner sees a temporary option snapshot only
 // for the duration of RunE.
 func newRunCommand() *cobra.Command {
+	command, _ := newRunCommandWithOptions()
+	return command
+}
+
+func newRunCommandWithOptions() (*cobra.Command, *canonicalRunOptions) {
 	options := new(canonicalRunOptions)
 	command := &cobra.Command{
 		Use:   "run [--] <task>",
@@ -40,7 +46,17 @@ which the team name is joined exactly once. Omit both to use
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) (runErr error) {
+			previous := opts
+			defer func() {
+				opts = previous
+				syncLogState()
+			}()
+
+			resolved, err := resolveCanonicalRunOptions(command, options)
 			delegated := false
+			// A valid profile may select JSONL before a later alias/scope check
+			// fails, so establish command-error framing from the resolved local
+			// flag even when no runtime snapshot can be returned.
 			if options.eventFormat == "jsonl" {
 				command.Root().SilenceErrors = true
 				defer func() {
@@ -49,81 +65,10 @@ which the team name is joined exactly once. Omit both to use
 					}
 				}()
 			}
-			teamName, err := resolveCanonicalTeamAlias(command, options)
 			if err != nil {
 				return err
 			}
-			mode, path, err := resolveCanonicalWorkspaceFlags(command, options)
-			if err != nil {
-				return err
-			}
-			if options.defaultTeam && teamName != "" {
-				return fmt.Errorf("--default cannot be combined with --team or --agent-team")
-			}
-
-			previous := opts
-			defer func() {
-				opts = previous
-				syncLogState()
-			}()
-			opts.agentTeamName = teamName
-			opts.agentTeamSearchPath = options.searchPath
-			opts.workspace = path
-			opts.workspaceMode = mode
-			opts.canonicalRun = true
-			opts.defaultTeam = options.defaultTeam
-			opts.providerURL = options.providerURL
-			opts.providerAPIKey = options.providerAPIKey
-			opts.modelOverride = options.model
-			opts.coordinatorModelOverride = options.coordinatorModel
-			opts.contextWindowOverride = options.contextWindow
-			opts.temperatureOverride = options.temperature
-			opts.maxTokensOverride = options.maxTokens
-			opts.topPOverride = options.topP
-			opts.topKOverride = options.topK
-			opts.reasoningEffortOverride = options.reasoningEffort
-			opts.sidecarModelOverride = options.sidecarModel
-			opts.guardModelOverride = options.guardModel
-			opts.judgeModelOverride = options.judgeModel
-			opts.planReviewerModelOverride = options.planReviewer
-			opts.outputFormat = options.output
-			opts.eventFormat = options.eventFormat
-			opts.routeMode = options.route
-			opts.displayMode = options.displayMode
-			opts.themeMode = options.theme
-			opts.displayPreset = options.displayPreset
-			opts.noSpinner = options.noSpinner
-			opts.noSummary = options.noSummary
-			opts.tuiCompact = options.tuiCompact
-			opts.quietMode = options.quiet
-			opts.verbose = options.verbose
-			opts.dryRun = options.dryRun
-			opts.noNet = options.noNet
-			opts.forceMCP = options.forceMCP
-			opts.rbashMode = options.rbash
-			opts.direnv = options.direnv
-			opts.noJournal = options.noJournal
-			opts.autoApprove = options.autoApprove
-			opts.unattended = options.unattended
-			opts.planMode = options.plan
-			opts.autoSkills = options.autoSkills
-			opts.reportMode = options.report
-			opts.stepsMode = options.steps
-			opts.tuiMode = options.tui
-			opts.think = options.think
-			opts.timeoutOverride = options.timeout
-			opts.verifyTimeoutOverride = options.verifyTimeout
-			opts.maxDuration = options.maxDuration
-			opts.maxTotalTokens = options.maxTotalTokens
-			opts.maxRoundsOverride = options.maxRounds
-			opts.maxConcurrentOverride = options.maxConcurrent
-			opts.maxStepsOverride = options.maxSteps
-			opts.allowPaths = append([]string(nil), options.allowPath...)
-			opts.varFlags = append([]string(nil), options.vars...)
-			opts.varFiles = append([]string(nil), options.varFiles...)
-			opts.inputFlags = append([]string(nil), options.inputs...)
-			opts.inputFiles = append([]string(nil), options.inputFiles...)
-			opts.forcedSkills = append([]string(nil), options.skills...)
+			opts = resolved
 			delegated = true
 			return runTeam(command, args)
 		},
@@ -194,7 +139,88 @@ which the team name is joined exactly once. Omit both to use
 	registerStaticFlagCompletion(command, "display-mode", []string{"auto", "terminal", "plain"})
 	registerStaticFlagCompletion(command, "theme", []string{"auto", "light", "dark", "mono"})
 	registerStaticFlagCompletion(command, "display-preset", []string{"default", "epaper"})
-	return command
+	return command, options
+}
+
+// resolveCanonicalRunOptions applies the profile to the command-local flags
+// before producing the single runtime option snapshot consumed by runTeam.
+// The caller owns restoring opts because root-only profile flags may bind to it.
+func resolveCanonicalRunOptions(command *cobra.Command, options *canonicalRunOptions) (runOptions, error) {
+	if err := applyProfile(command); err != nil {
+		return runOptions{}, err
+	}
+	teamName, err := resolveCanonicalTeamAlias(command, options)
+	if err != nil {
+		return runOptions{}, err
+	}
+	mode, path, err := resolveCanonicalWorkspaceFlags(command, options)
+	if err != nil {
+		return runOptions{}, err
+	}
+	if options.defaultTeam && teamName != "" {
+		return runOptions{}, fmt.Errorf("--default cannot be combined with --team or --agent-team")
+	}
+
+	resolved := opts
+	resolved.agentTeamName = teamName
+	resolved.agentTeamSearchPath = options.searchPath
+	resolved.workspace = path
+	resolved.workspaceMode = mode
+	resolved.canonicalRun = true
+	resolved.defaultTeam = options.defaultTeam
+	resolved.providerURL = options.providerURL
+	resolved.providerAPIKey = options.providerAPIKey
+	resolved.modelOverride = options.model
+	resolved.coordinatorModelOverride = options.coordinatorModel
+	resolved.contextWindowOverride = options.contextWindow
+	resolved.temperatureOverride = options.temperature
+	resolved.maxTokensOverride = options.maxTokens
+	resolved.topPOverride = options.topP
+	resolved.topKOverride = options.topK
+	resolved.reasoningEffortOverride = options.reasoningEffort
+	resolved.sidecarModelOverride = options.sidecarModel
+	resolved.guardModelOverride = options.guardModel
+	resolved.judgeModelOverride = options.judgeModel
+	resolved.planReviewerModelOverride = options.planReviewer
+	resolved.outputFormat = options.output
+	resolved.eventFormat = options.eventFormat
+	resolved.routeMode = options.route
+	resolved.displayMode = options.displayMode
+	resolved.themeMode = options.theme
+	resolved.displayPreset = options.displayPreset
+	resolved.noSpinner = options.noSpinner
+	resolved.noSummary = options.noSummary
+	resolved.tuiCompact = options.tuiCompact
+	resolved.quietMode = options.quiet
+	resolved.verbose = options.verbose
+	resolved.dryRun = options.dryRun
+	resolved.noNet = options.noNet
+	resolved.forceMCP = options.forceMCP
+	resolved.rbashMode = options.rbash
+	resolved.direnv = options.direnv
+	resolved.noJournal = options.noJournal
+	resolved.autoApprove = options.autoApprove
+	resolved.unattended = options.unattended
+	resolved.planMode = options.plan
+	resolved.autoSkills = options.autoSkills
+	resolved.reportMode = options.report
+	resolved.stepsMode = options.steps
+	resolved.tuiMode = options.tui
+	resolved.think = options.think
+	resolved.timeoutOverride = options.timeout
+	resolved.verifyTimeoutOverride = options.verifyTimeout
+	resolved.maxDuration = options.maxDuration
+	resolved.maxTotalTokens = options.maxTotalTokens
+	resolved.maxRoundsOverride = options.maxRounds
+	resolved.maxConcurrentOverride = options.maxConcurrent
+	resolved.maxStepsOverride = options.maxSteps
+	resolved.allowPaths = slices.Clone(options.allowPath)
+	resolved.varFlags = slices.Clone(options.vars)
+	resolved.varFiles = slices.Clone(options.varFiles)
+	resolved.inputFlags = slices.Clone(options.inputs)
+	resolved.inputFiles = slices.Clone(options.inputFiles)
+	resolved.forcedSkills = slices.Clone(options.skills)
+	return resolved, nil
 }
 
 func resolveCanonicalTeamAlias(command *cobra.Command, options *canonicalRunOptions) (string, error) {

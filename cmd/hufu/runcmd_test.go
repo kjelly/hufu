@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,97 @@ func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	want := filepath.Join(root, "review")
 	if session.Workspace != want {
 		t.Fatalf("root workspace = %q, want %q", session.Workspace, want)
+	}
+}
+
+func TestCanonicalRunResolvesProfileBeforeRuntimeBridge(t *testing.T) {
+	dir := t.TempDir()
+	writeHufuYAML(t, dir, `
+profiles:
+  safe:
+    no-net: "true"
+    unattended: "true"
+    max-duration: "60"
+    max-total-tokens: "1200"
+    model: "profile-model"
+    output: "json"
+    workspace: "/profile/workspace"
+    event-format: "jsonl"
+`)
+	defer chdir(t, dir)()
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	opts.profileName = "safe"
+
+	command, options := newRunCommandWithOptions()
+	var diagnostics bytes.Buffer
+	command.SetErr(&diagnostics)
+	if err := command.ParseFlags([]string{"task"}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveCanonicalRunOptions(command, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.noNet || !resolved.unattended || resolved.maxDuration != 60 || resolved.maxTotalTokens != 1200 {
+		t.Fatalf("profile safety/budget options not bridged: %#v", resolved)
+	}
+	if resolved.modelOverride != "profile-model" || resolved.outputFormat != "json" || resolved.workspace != "/profile/workspace" || resolved.workspaceMode != "exact" {
+		t.Fatalf("profile runtime options not bridged: %#v", resolved)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("JSONL profile emitted non-JSONL diagnostics: %q", diagnostics.String())
+	}
+}
+
+func TestCanonicalRunExplicitZeroAndFalseOverrideProfile(t *testing.T) {
+	dir := t.TempDir()
+	writeHufuYAML(t, dir, `
+profiles:
+  safe:
+    no-net: "true"
+    max-duration: "60"
+    model: "profile-model"
+    output: "json"
+`)
+	defer chdir(t, dir)()
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	opts.profileName = "safe"
+
+	command, options := newRunCommandWithOptions()
+	command.SetErr(new(bytes.Buffer))
+	if err := command.ParseFlags([]string{"--no-net=false", "--max-duration=0", "--model", "cli-model", "--output", "text", "task"}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveCanonicalRunOptions(command, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.noNet || resolved.maxDuration != 0 || resolved.modelOverride != "cli-model" || resolved.outputFormat != "text" {
+		t.Fatalf("explicit CLI values did not override profile: %#v", resolved)
+	}
+}
+
+func TestCanonicalRunProfileAliasConflictFailsBeforeWorkspaceMutation(t *testing.T) {
+	dir := t.TempDir()
+	exact := filepath.Join(dir, "must-not-exist")
+	writeHufuYAML(t, dir, "profiles:\n  scoped:\n    workspace: \""+exact+"\"\n")
+	defer chdir(t, dir)()
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	opts.profileName = "scoped"
+
+	command, options := newRunCommandWithOptions()
+	command.SetErr(new(bytes.Buffer))
+	if err := command.ParseFlags([]string{"--workspace-root", filepath.Join(dir, "root"), "task"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCanonicalRunOptions(command, options); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("profile alias conflict error = %v", err)
+	}
+	if _, err := os.Stat(exact); !os.IsNotExist(err) {
+		t.Fatalf("profile conflict mutated workspace %q: %v", exact, err)
 	}
 }
 

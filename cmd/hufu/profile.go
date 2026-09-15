@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -70,6 +69,12 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 			return fmt.Errorf("profile %q: invalid value for --%s: %w", profileName, name, err)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(profileName))
+	// JSONL is a framing contract on diagnostics as well as status events.
+	// A profile may itself select JSONL, so inspect the now-resolved command
+	// flag instead of only the package-level runtime snapshot.
+	if flag := cmd.Flags().Lookup("event-format"); flag == nil || flag.Value.String() != "jsonl" {
+		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s Applied profile %s\n", dimStyle.Render("·"), boldStyle.Render(profileName))
+		return err
+	}
 	return nil
 }
