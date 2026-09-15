@@ -2,6 +2,7 @@ package operator
 
 import (
 	"errors"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -198,7 +199,7 @@ func TestShellRenderersQuoteMetacharactersWithoutChangingArgv(t *testing.T) {
 		t.Fatalf("bash rendering is not safely quoted: %q, %v", bash, ok)
 	}
 	powershell, ok := RenderArgv(argv, "pwsh")
-	if !ok || !strings.Contains(powershell, "''") {
+	if !ok || !strings.HasPrefix(powershell, "& '") || !strings.Contains(powershell, "''") {
 		t.Fatalf("PowerShell rendering is not safely quoted: %q, %v", powershell, ok)
 	}
 	if rendered, supported := RenderArgv(argv, "fish"); supported || rendered != "" {
@@ -206,6 +207,37 @@ func TestShellRenderersQuoteMetacharactersWithoutChangingArgv(t *testing.T) {
 	}
 	if argv[3] != "任務 '$(touch /tmp/pwn)' ; &" {
 		t.Fatalf("renderer mutated authoritative argv: %#v", argv)
+	}
+}
+
+func TestBuildSummaryPreservesExecutableArgvWithoutTruncation(t *testing.T) {
+	values := []string{"two  spaces", "single'quote", "Unicode-任務", strings.Repeat("long path ", 80)}
+	argv := append([]string{"printf", "%s\\n"}, values...)
+	snapshot := selectionTestSnapshot(ActivityBlocked, "")
+	snapshot.PrimaryAction = &ActionSuggestion{ID: ActionInspectTaskRecovery, Kind: "inspect", Availability: "available", Argv: argv}
+
+	summary := BuildSummaryForShell(snapshot, "sh")
+	if strings.Contains(summary.Next, "…") || len(summary.Next) <= 320 {
+		t.Fatalf("executable command was truncated: %q", summary.Next)
+	}
+	output, err := exec.Command("sh", "-c", summary.Next).Output()
+	if err != nil {
+		t.Fatalf("execute rendered command: %v", err)
+	}
+	if got, want := string(output), strings.Join(values, "\n")+"\n"; got != want {
+		t.Fatalf("rendered argv round trip = %q, want %q", got, want)
+	}
+}
+
+func TestBuildSummaryRejectsControlCharactersInsteadOfRenderingChangedCommand(t *testing.T) {
+	snapshot := selectionTestSnapshot(ActivityBlocked, "")
+	snapshot.PrimaryAction = &ActionSuggestion{
+		ID: ActionInspectTaskRecovery, Kind: "inspect", Availability: "available",
+		Argv: []string{"hufu", "inspect", "task", "line\nbreak"},
+	}
+	summary := BuildSummaryForShell(snapshot, "sh")
+	if strings.Contains(summary.Next, "line break") || !strings.Contains(summary.Next, "cannot be rendered safely") {
+		t.Fatalf("unsafe argv produced a misleading command: %q", summary.Next)
 	}
 }
 

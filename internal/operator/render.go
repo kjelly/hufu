@@ -13,20 +13,31 @@ func RenderArgv(argv []string, shell string) (string, bool) {
 	if len(argv) == 0 {
 		return "", false
 	}
+	for _, value := range argv {
+		if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return "", false
+		}
+	}
 	quoted := make([]string, len(argv))
+	prefix := ""
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "bash", "sh", "zsh":
 		for index, value := range argv {
 			quoted[index] = quotePOSIX(value)
 		}
 	case "powershell", "pwsh":
+		prefix = "& "
 		for index, value := range argv {
 			quoted[index] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
 		}
 	default:
 		return "", false
 	}
-	return strings.Join(quoted, " "), true
+	rendered := prefix + strings.Join(quoted, " ")
+	if utils.RedactSecrets(rendered) != rendered {
+		return "", false
+	}
+	return rendered, true
 }
 
 func quotePOSIX(value string) string {
@@ -47,14 +58,22 @@ func BuildSummaryForShell(snapshot OperatorSnapshot, shell string) OperatorSumma
 	state := strings.ToUpper(snapshot.Activity.State)
 	what := summaryWhat(snapshot)
 	next := "No operator action is required."
+	nextIsCommand := false
 	if primary != nil {
-		next = summaryNext(*primary, shell)
+		next, nextIsCommand = summaryNext(*primary, shell)
 	}
 	data := fmt.Sprintf("durable through event %s; live connection %s", valueOrUnknown(snapshot.Freshness.EventID), valueOrUnknown(snapshot.Freshness.LiveState))
 	return OperatorSummary{
 		State: SafeDisplayText(state, 80), What: SafeDisplayText(what, 320),
-		Next: SafeDisplayText(next, 320), Data: SafeDisplayText(data, 240),
+		Next: safeSummaryNext(next, nextIsCommand), Data: SafeDisplayText(data, 240),
 	}
+}
+
+func safeSummaryNext(next string, isCommand bool) string {
+	if isCommand {
+		return next
+	}
+	return SafeDisplayText(next, 320)
 }
 
 func summaryWhat(snapshot OperatorSnapshot) string {
@@ -70,23 +89,23 @@ func summaryWhat(snapshot OperatorSnapshot) string {
 	return "activity is " + snapshot.Activity.State
 }
 
-func summaryNext(action ActionSuggestion, shell string) string {
+func summaryNext(action ActionSuggestion, shell string) (string, bool) {
 	if action.Kind == "none" {
-		return "No operator action is required."
+		return "No operator action is required.", false
 	}
 	if action.Kind == "wait" {
-		return "Wait for the runtime; do not retry while execution is active."
+		return "Wait for the runtime; do not retry while execution is active.", false
 	}
 	if action.Availability != "available" {
-		return fmt.Sprintf("%s is %s (%s); no executable command is available", action.ID, action.Availability, valueOrUnknown(action.ReasonCode))
+		return fmt.Sprintf("%s is %s (%s); no executable command is available", action.ID, action.Availability, valueOrUnknown(action.ReasonCode)), false
 	}
 	if rendered, ok := RenderArgv(action.Argv, shell); ok {
-		return rendered
+		return rendered, true
 	}
 	if len(action.Argv) > 0 {
-		return fmt.Sprintf("Use the typed %s argv from JSON output; this shell has no safe copy renderer.", action.ID)
+		return fmt.Sprintf("Use the typed %s argv from JSON output; this command cannot be rendered safely for the selected shell.", action.ID), false
 	}
-	return fmt.Sprintf("Use the typed %s action (%s).", action.ID, valueOrUnknown(action.ReasonCode))
+	return fmt.Sprintf("Use the typed %s action (%s).", action.ID, valueOrUnknown(action.ReasonCode)), false
 }
 
 // SafeDisplayText strips terminal controls, redacts recognizable credentials,
