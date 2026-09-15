@@ -416,26 +416,3 @@ func sortedUniqueToolNames(names []string) []string {
 	slices.Sort(result)
 	return slices.Compact(result)
 }
-
-func (c *Coordinator) resolveTaskLogicalToolsetDigest(ctx context.Context, task TaskDef, todoID string) (string, error) {
-	if task.PlanFirst && len(task.Execution.ToolSequence) > 0 {
-		// Preserve the established execution-contract rejection path and its
-		// diagnostic; this invalid task never reaches a usable tool surface.
-		sum := sha256.Sum256([]byte("invalid-plan-first-closed-sequence"))
-		return hex.EncodeToString(sum[:]), nil
-	}
-	def, _, err := c.AgentPool().ResolveAgentName(task.Agent)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := c.ToolResolver().ResolveTaskTools(ctx, def, WorkerToolResolutionRequest{
-		Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
-	})
-	if err != nil {
-		return "", err
-	}
-	if resolved.LogicalToolsetDigest == "" {
-		return "", fmt.Errorf("resolve task logical toolset digest: empty digest")
-	}
-	return resolved.LogicalToolsetDigest, nil
-}

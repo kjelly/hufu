@@ -134,8 +134,8 @@ func TestForcePlanFirstRejectsClosedSequenceBeforeProviderConstruction(t *testin
 		}
 		_, err := c.ExecuteTasks(t.Context(), []TaskDef{task})
 		items := c.taskTracker.TodoList().Items()
-		if err == nil || len(items) != 1 || !strings.Contains(items[0].Detail, "cannot be combined with plan_first") {
-			t.Fatalf("ExecuteTasks error = %v, todo items = %#v, want deterministic force-plan-first closed-sequence rejection", err, items)
+		if err == nil || len(items) != 0 || !strings.Contains(err.Error(), "initial-plan mode is incompatible with closed execution tool_sequence") {
+			t.Fatalf("ExecuteTasks error = %v, todo items = %#v, want zero-start force-plan-first closed-sequence rejection", err, items)
 		}
 	})
 }

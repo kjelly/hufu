@@ -667,6 +667,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			RemediationContext            *RemediationContext         `json:"remediation_context"`
 
 			DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization"`
+			ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -773,6 +774,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				WorksetBinding:                cloneWorksetBinding(payload.WorksetBinding),
 				WorksetReceipt:                cloneWorksetReceipt(payload.WorksetReceipt),
 				DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(payload.DynamicToolAuthorization),
+				ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot),
 				FailureEvent:                  failureEvent,
 				SubagentProvider:              payload.SubagentProvider,
 				ProviderBinding:               cloneProviderBinding(payload.ProviderBinding),
@@ -1001,6 +1003,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.DynamicToolAuthorization != nil {
 			item.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(payload.DynamicToolAuthorization)
+		}
+		if payload.ResourceScopeSnapshot != nil {
+			item.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot)
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult

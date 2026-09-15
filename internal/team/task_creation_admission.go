@@ -22,6 +22,9 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
 		return fmt.Errorf("validate task %s tool authorization: %w", item.ID, err)
 	}
+	if err := validateTaskResourceScopeSnapshot(item.ResourceScopeSnapshot, item.SideEffect); err != nil {
+		return fmt.Errorf("validate task %s resource scope: %w", item.ID, err)
+	}
 	if !c.requiresTaskCreationAdmission() {
 		return nil
 	}

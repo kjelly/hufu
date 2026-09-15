@@ -137,7 +137,7 @@ func TestDAGSchedulerSelfLoopDoesNotAttachRemediationContext(t *testing.T) {
 	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskError, "terminal failure")
 	items[0].FailureEvent = &FailureEventPayload{FailureClass: FailureVerify}
 
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.inProgress = TaskInProgress, 1
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

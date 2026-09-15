@@ -53,13 +53,14 @@ type jsonRunInputs struct {
 }
 
 type jsonRunTask struct {
-	ID                  string `json:"id"`
-	Agent               string `json:"agent"`
-	Desc                string `json:"desc"`
-	Status              string `json:"status"`
-	NoObjectiveVerifier bool   `json:"no_objective_verifier,omitempty"`
-	CompletedReview     bool   `json:"completed_review,omitempty"`
-	FindingsPresent     bool   `json:"findings_present,omitempty"`
+	ID                  string                          `json:"id"`
+	Agent               string                          `json:"agent"`
+	Desc                string                          `json:"desc"`
+	Status              string                          `json:"status"`
+	NoObjectiveVerifier bool                            `json:"no_objective_verifier,omitempty"`
+	CompletedReview     bool                            `json:"completed_review,omitempty"`
+	FindingsPresent     bool                            `json:"findings_present,omitempty"`
+	ResourceScope       *team.TaskResourceScopeSnapshot `json:"resource_scope,omitempty"`
 }
 
 type jsonRunSkill struct {
@@ -125,6 +126,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 				NoObjectiveVerifier: it.Status == team.TaskDone && it.Verify == "" && it.VerifySpec == nil,
 				CompletedReview:     it.Kind == team.TaskKindDiagnostic && it.Status == team.TaskDone,
 				FindingsPresent:     it.TypedResult != nil && len(it.TypedResult.Findings) > 0,
+				ResourceScope:       it.ResourceScopeSnapshot,
 			})
 		}
 		out.Teams = append(out.Teams, jt)

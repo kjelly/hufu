@@ -28,7 +28,7 @@ func TestDAGSchedulerResourceConflict(t *testing.T) {
 		{Resources: []ResourceClaim{{Resource: "vm", Mode: ResourceWrite}}},
 		{Resources: []ResourceClaim{{Resource: "repo", Mode: ResourceRead}}},
 	}
-	s := newDAGScheduler(c, tasks, nil, nil)
+	s := mustNewDAGScheduler(t, c, tasks, nil, nil)
 	s.activeResources[0] = resourceClaims(tasks[0])
 	if !s.resourceConflict(1) {
 		t.Fatal("write task was not blocked by active exclusive claim")

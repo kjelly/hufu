@@ -239,9 +239,10 @@ const (
 // WorkerToolResolutionRequest carries the trusted runtime identity and
 // lifecycle mode needed to construct a task's final worker tool surface.
 type WorkerToolResolutionRequest struct {
-	Task   TaskDef
-	TodoID string
-	Mode   WorkerToolResolutionMode
+	Task            TaskDef
+	TodoID          string
+	Mode            WorkerToolResolutionMode
+	ProspectiveTodo *TodoItem
 }
 
 type ToolResolver interface {
@@ -703,10 +704,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	resultRequired := task.Execution.RequiresResult || mode == WorkerToolResolutionApprovedPlan || mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
 	planRequired := mode == WorkerToolResolutionInitialPlan
 	resultOnly := mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
-	var todo *TodoItem
-	if strings.TrimSpace(req.TodoID) != "" {
-		todo = r.c.todoItemByID(req.TodoID)
-	}
+	todo := taskToolResolutionTodo(r.c, req)
 	if resultOnly || planRequired || resultRequired {
 		if strings.TrimSpace(req.TodoID) == "" {
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %s requires a Todo ID", mode)
@@ -785,6 +783,16 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	}
 	concrete = filterConcreteToolsByNames(concrete, static.Names)
 	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicAuthorization, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+}
+
+func taskToolResolutionTodo(c *Coordinator, req WorkerToolResolutionRequest) *TodoItem {
+	if req.ProspectiveTodo != nil && req.ProspectiveTodo.ID == req.TodoID {
+		return cloneTodoItem(req.ProspectiveTodo)
+	}
+	if c == nil || strings.TrimSpace(req.TodoID) == "" {
+		return nil
+	}
+	return c.todoItemByID(req.TodoID)
 }
 
 func validateUniqueConcreteToolNames(candidate []fantasy.AgentTool) error {

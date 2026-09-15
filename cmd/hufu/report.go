@@ -918,6 +918,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, reportExecutionTarget(t), reportProviderIdentity(t), t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n")
+		writeTaskResourceScopeReport(&b, data.Todos)
 		for _, item := range data.Todos {
 			if item == nil || item.TypedResult == nil {
 				continue
@@ -1085,6 +1086,34 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	}
 
 	return utils.RedactSecrets(b.String())
+}
+
+func writeTaskResourceScopeReport(b *strings.Builder, todos []*team.TodoItem) {
+	hasScopes := false
+	for _, item := range todos {
+		if item != nil && item.ResourceScopeSnapshot != nil {
+			hasScopes = true
+			break
+		}
+	}
+	if !hasScopes {
+		return
+	}
+	b.WriteString("### Effective Resource Scopes\n\n")
+	for _, item := range todos {
+		if item == nil || item.ResourceScopeSnapshot == nil {
+			continue
+		}
+		scope := item.ResourceScopeSnapshot
+		claims := make([]string, 0, len(scope.Claims))
+		for _, claim := range scope.Claims {
+			claims = append(claims, fmt.Sprintf("%s (%s)", reportSafeMetadata(claim.Resource, 200), claim.Mode))
+		}
+		fmt.Fprintf(b, "- **%s:** source `%s`; read bounded `%t`; write bounded `%t`; claims: %s\n",
+			reportSafeMetadata(item.ID, 120), reportSafeMetadata(scope.Source, 40), scope.BoundedReadScope,
+			scope.BoundedWriteScope, strings.Join(claims, ", "))
+	}
+	b.WriteString("\n")
 }
 
 func renderModelProfileSection(profiles []modelprofile.TelemetryProjection) string {

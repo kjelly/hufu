@@ -292,11 +292,17 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 		return nil, ResolvedWorkerTools{}, fmt.Errorf("create direct agent: agent definition is required")
 	}
 	syntheticTask := TaskDef{Agent: resolvedName, Goal: task, Model: directModel, Execution: ExecutionContract{RequiresResult: true}}
-	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
-		Task: syntheticTask, TodoID: todoID, Mode: WorkerToolResolutionNormal,
-	})
-	if err != nil {
-		return nil, ResolvedWorkerTools{}, err
+	var resolvedTools ResolvedWorkerTools
+	if envelope, ok := taskExecutionEnvelopeFromContext(ctx); ok {
+		resolvedTools = cloneResolvedWorkerTools(envelope.Tools)
+	} else {
+		var err error
+		resolvedTools, err = c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
+			Task: syntheticTask, TodoID: todoID, Mode: WorkerToolResolutionNormal,
+		})
+		if err != nil {
+			return nil, ResolvedWorkerTools{}, err
+		}
 	}
 	if c.workerAgentOverride != nil {
 		return c.workerAgentOverride, resolvedTools, nil
@@ -435,6 +441,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
+	directSpecs := []TodoSpec{directSpec}
+	directEnvelopes, err := c.prepareNewTaskExecutionEnvelopes(ctx, []TaskDef{directTask}, directSpecs, ids, true)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
+	directSpec = directSpecs[0]
+	directEnvelope := directEnvelopes[0]
 	// Admission is the creation boundary: it precedes task_created, provider
 	// admission, sidecar matching, in_progress, and every worker-side effect.
 	if c.hasDurableEventJournal() {
@@ -455,6 +469,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 		return nil, err
 	}
+	if err := c.recordResourceClaimsResolved(ctx, todoItems[0]); err != nil {
+		return nil, err
+	}
+	ctx = withResourceClaimsReported(withTaskExecutionEnvelope(ctx, directEnvelope))
 	// A direct-agent invocation is a complete execution boundary just like a
 	// coordinator round. Evaluate its recorded tool sequence on every terminal
 	// return, while the invocation context and execution run are still active.
@@ -909,6 +927,11 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &spec); err != nil {
 		return errors.Join(cancellation, fmt.Errorf("freeze pre-cancelled direct task tools: %w", err))
 	}
+	specs := []TodoSpec{spec}
+	if _, err := c.prepareNewTaskExecutionEnvelopes(ctx, []TaskDef{occurrence}, specs, ids, true); err != nil {
+		return errors.Join(cancellation, fmt.Errorf("freeze pre-cancelled direct task resource scope: %w", err))
+	}
+	spec = specs[0]
 	if c.hasDurableEventJournal() {
 		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, ids[0])
 		if projectionErr != nil {
@@ -924,6 +947,9 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	}
 	if len(items) != 1 || items[0] == nil {
 		return errors.Join(cancellation, errors.New("persist pre-cancelled direct task: task creation returned no task"))
+	}
+	if err := c.recordResourceClaimsResolved(ctx, items[0]); err != nil {
+		return errors.Join(cancellation, err)
 	}
 	todoID := items[0].ID
 	c.recordNoProgressTasks(1)

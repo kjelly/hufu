@@ -633,7 +633,7 @@ func TestSchedulerErrorPostconditionPreservesCanonicalDiagnostic(t *testing.T) {
 		t.Fatalf("setup task: %v", err)
 	}
 	original := errors.New(`worker tool policy preflight failed: resolved tool "random" is incompatible with the bound artifact policy`)
-	scheduler := newDAGScheduler(c, []TaskDef{{Agent: item.Agent, Goal: item.Desc}}, []*TodoItem{item}, nil)
+	scheduler := mustNewDAGScheduler(t, c, []TaskDef{{Agent: item.Agent, Goal: item.Desc}}, []*TodoItem{item}, nil)
 	scheduler.states[0] = TaskInProgress
 	scheduler.inProgress = 1
 	scheduler.handleEvent(context.Background(), agentTaskResult{idx: 0, todoID: item.ID, err: original})

@@ -435,7 +435,7 @@ func TestDAGScheduler_CacheHitFailingJournalDoesNotAdvanceCheckpointOrReleaseDep
 		{Agent: "worker", Desc: "dependent task"},
 	})
 
-	s := newDAGScheduler(c, tasks, items, nil)
+	s := mustNewDAGScheduler(t, c, tasks, items, nil)
 	_, _ = s.run(context.Background())
 
 	cachedItem := todoItemByID(c.taskTracker.TodoList().Items(), items[0].ID)
@@ -481,7 +481,7 @@ func TestDAGScheduler_ResetWaveFailingJournalDoesNotResetStateOrLaunchWorker(t *
 		{Agent: "worker", Desc: "task 2", MaxRetries: 1},
 	})
 
-	s := newDAGScheduler(c, tasks, items, nil)
+	s := mustNewDAGScheduler(t, c, tasks, items, nil)
 	s.states[0] = TaskDone
 	s.states[1] = TaskError
 	_ = c.taskTracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskDone, "done 1", "out 1")

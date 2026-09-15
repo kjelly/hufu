@@ -2,6 +2,7 @@ package team
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -472,6 +473,35 @@ func (c *Coordinator) serializeMutationTasks(tasks []TaskDef) []TaskDef {
 		}
 	}
 	return out
+}
+
+func serializeConflictingMutationTasks(tasks []TaskDef, envelopes []TaskExecutionEnvelope) []TaskDef {
+	out := make([]TaskDef, len(tasks))
+	copy(out, tasks)
+	for current := range out {
+		if !isMutationSideEffect(out[current].SideEffect) {
+			continue
+		}
+		out[current].DependsOn = slices.Clone(out[current].DependsOn)
+		for earlier := range current {
+			if !isMutationSideEffect(out[earlier].SideEffect) || !claimsConflict(envelopes[current].ResourceScope.Claims, envelopes[earlier].ResourceScope.Claims) {
+				continue
+			}
+			if !containsInt(out[current].DependsOn, earlier) {
+				out[current].DependsOn = append(out[current].DependsOn, earlier)
+			}
+		}
+	}
+	return out
+}
+
+func isMutationSideEffect(effect SideEffectClass) bool {
+	switch effect {
+	case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 func containsInt(values []int, want int) bool {

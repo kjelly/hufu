@@ -265,7 +265,7 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	t.Setenv("HOME", secondHome)
 	t.Setenv("CODEX_HOME", secondCodexHome)
 
-	scheduler := newDAGScheduler(c, []TaskDef{{Agent: "worker", Goal: "test"}}, nil, nil)
+	scheduler := mustNewDAGScheduler(t, c, []TaskDef{{Agent: "worker", Goal: "test"}}, nil, nil)
 	if scheduler.sem == nil || cap(scheduler.sem) != 4 {
 		t.Fatalf("team semaphore cap = %d, want frozen 4", cap(scheduler.sem))
 	}

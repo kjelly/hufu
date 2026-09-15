@@ -136,7 +136,7 @@ func TestWP13DAGAntiThrashingBlockPersistsStructuredFailureEvent(t *testing.T) {
 	c.antiThrashing.BlockedScopes[antiThrashingScopeKey("build", TaskKindOutcome)] = true
 	c.metricsMu.Unlock()
 
-	s := newDAGScheduler(c, []TaskDef{{Agent: "worker", Goal: item.Desc, Kind: TaskKindOutcome, Advances: []string{"build"}}}, []*TodoItem{item}, nil)
+	s := mustNewDAGScheduler(t, c, []TaskDef{{Agent: "worker", Goal: item.Desc, Kind: TaskKindOutcome, Advances: []string{"build"}}}, []*TodoItem{item}, nil)
 	s.launchReady(context.Background())
 	got := c.taskTracker.TodoList().Items()[0]
 	if got.Status != TaskBlocked || got.FailureEvent == nil {

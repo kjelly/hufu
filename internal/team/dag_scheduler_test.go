@@ -269,7 +269,7 @@ func TestDAGSchedulerBudgetAdmissionSkipsQueuedWorkers(t *testing.T) {
 	c.SetBudget(0, 1)
 	c.tokensUsed.Store(1)
 
-	scheduler := newDAGScheduler(c, tasks, items, nil)
+	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
 	results, err := scheduler.run(context.Background())
 	if err != nil {
 		t.Fatalf("budgeted DAG run: %v", err)
@@ -354,7 +354,7 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 	var heldID string
 	holding := &budgetHoldingAgent{started: make(chan struct{}), release: make(chan struct{}), calls: &providerCalls, heldID: &heldID}
 	c.workerAgentOverride = holding
-	scheduler := newDAGScheduler(c, tasks, items, nil)
+	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
 	resultsCh := make(chan []agentTaskResult, 1)
 	go func() {
 		results, _ := scheduler.run(context.Background())

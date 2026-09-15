@@ -373,6 +373,7 @@ type canonicalTaskShadow struct {
 	BackendBinding                *BackendBinding             `json:"backend_binding,omitempty"`
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
+	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -442,6 +443,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
+		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ExecutionReceipts:             toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
 		FailureEvent:                  RedactedFailureEvent(item.FailureEvent),
 		FailureFingerprints:           normalizeFingerprints(item.FailureFingerprints),

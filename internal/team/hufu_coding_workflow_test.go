@@ -66,7 +66,7 @@ func hufuCodingWorkflowFixture(t *testing.T) (*dagScheduler, []*TodoItem) {
 		{Agent: "reviewer", Desc: "REVIEW_CODE"},
 		{Agent: "final-sa", Desc: "FINAL_SA_GATE"},
 	})
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	return s, items
 }
 

@@ -135,10 +135,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			return "", c.rejectDelegationPolicy(err.Error())
 		}
 	}
-	// Normalize accidental mutation batching before policy/preflight. This
-	// preserves the coordinator's requested task set while making the safety
-	// dependency explicit to the DAG scheduler.
-	tasks = c.serializeMutationTasks(tasks)
 	// A configured delegation policy is checked before workspace validation,
 	// resource locking, TODO creation, or worker startup. It therefore leaves
 	// previously successful independent work untouched on rejection.
@@ -198,6 +194,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	if detectTaskCycle(tasks) {
 		return "", fmt.Errorf("tasks contain a dependency cycle — check depends_on indices")
+	}
+	if err := validateResourceClaims(tasks); err != nil {
+		return "", err
 	}
 
 	if err := validateOnFailureTargets(tasks); err != nil {
@@ -453,6 +452,53 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			firstReceipt[t.WorksetBinding.WorksetID] = true
 		}
 	}
+	// Freeze a conservative resource snapshot for every prospective occurrence
+	// before any task_created event. Stage 3 intentionally classifies every
+	// workspace surface as unenforceable, so these envelopes preserve the
+	// historical whole-root serialization behavior.
+	envelopes, envelopeErr := c.prepareNewTaskExecutionEnvelopes(ctx, tasks, todoBatch, ids, true)
+	if envelopeErr != nil {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", envelopeErr
+	}
+	tasks = serializeConflictingMutationTasks(tasks, envelopes)
+	if detectTaskCycle(tasks) {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", fmt.Errorf("tasks contain a dependency cycle after resource serialization")
+	}
+	if err := validateOnFailureTargets(tasks); err != nil {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", fmt.Errorf("on_failure validation after resource serialization failed: %w", err)
+	}
+	if c.phaseWorkflow != nil {
+		if err := c.phaseWorkflow.validateTasks(tasks); err != nil {
+			if advancedPhase && c.sessionData != nil {
+				c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+			}
+			return "", c.rejectDelegationPolicy(err.Error())
+		}
+	}
+	for i := range todoBatch {
+		todoBatch[i].DependsOn = nil
+		for _, depIdx := range tasks[i].DependsOn {
+			if depIdx >= 0 && depIdx < len(ids) && depIdx != i {
+				todoBatch[i].DependsOn = append(todoBatch[i].DependsOn, ids[depIdx])
+			}
+		}
+	}
+	envelopes, envelopeErr = c.prepareNewTaskExecutionEnvelopes(ctx, tasks, todoBatch, ids, false)
+	if envelopeErr != nil {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", envelopeErr
+	}
 	// Freeze decision admission before task_created makes an occurrence
 	// recoverable. A failure leaves no executable task projection behind.
 	if c.hasDurableEventJournal() {
@@ -481,6 +527,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
 		}
 		return "", err
+	}
+	for i, item := range todoItems {
+		if duplicateIndices[i] {
+			continue
+		}
+		if err := c.recordResourceClaimsResolved(ctx, item); err != nil {
+			return "", err
+		}
 	}
 	// No-progress budget (§8.1, WP-12): ordinary newly created tasks are one
 	// unit, while one validated artifact-backed workset expansion is one
@@ -550,7 +604,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if err != nil {
 		return "", err
 	}
-	results, err := newDAGScheduler(c, schedulerTasks, todoItems, duplicateIndices).run(ctx)
+	scheduler, err := newDAGScheduler(c, schedulerTasks, todoItems, envelopes, duplicateIndices)
+	if err != nil {
+		return "", err
+	}
+	results, err := scheduler.run(ctx)
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 			_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)

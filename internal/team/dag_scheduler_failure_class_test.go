@@ -66,7 +66,7 @@ func dagSchedulerOnFailureClassesFixture(t *testing.T, onFailureClasses []TaskFa
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskError, "terminal failure")
 	items[1].FailureEvent = &FailureEventPayload{FailureClass: terminalClass, RetryDisposition: retryDispositionForTerminalTestClass(terminalClass)}
 
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1], s.inProgress = TaskDone, TaskInProgress, 1
 	return s, items
 }

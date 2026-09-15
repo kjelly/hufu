@@ -87,6 +87,7 @@ type TaskOccurrenceProjection struct {
 	SubagentProvider string
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
+	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 }
 
 func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, error) {
@@ -94,6 +95,9 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		return TaskOccurrenceProjection{}, fmt.Errorf("task occurrence projection requires a Todo ID")
 	}
 	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
+		return TaskOccurrenceProjection{}, err
+	}
+	if err := validateTaskResourceScopeSnapshot(item.ResourceScopeSnapshot, item.SideEffect); err != nil {
 		return TaskOccurrenceProjection{}, err
 	}
 	model := item.Model
@@ -123,6 +127,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		Verify: item.Verify, VerifyMode: item.VerifyMode, VerifySpec: cloneVerificationSpecPtr(item.VerifySpec),
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
+		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
 		Escalate: item.Escalate, AdversarialVerify: item.AdversarialVerify,
 		ReconcileTool: item.ReconcileTool, Kind: item.Kind, Advances: append([]string(nil), item.Advances...),

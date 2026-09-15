@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -82,6 +83,7 @@ type dagScheduler struct {
 	coord      *Coordinator
 	tasks      []TaskDef
 	todoItems  []*TodoItem
+	envelopes  []TaskExecutionEnvelope
 	duplicates map[int]bool // batch indices flagged as duplicate delegations
 
 	states  []TaskStatus
@@ -104,7 +106,10 @@ type dagScheduler struct {
 	sem        chan struct{}
 }
 
-func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, duplicates map[int]bool) *dagScheduler {
+func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, envelopes []TaskExecutionEnvelope, duplicates map[int]bool) (*dagScheduler, error) {
+	if err := validateTaskExecutionEnvelopes(tasks, todoItems, envelopes); err != nil {
+		return nil, err
+	}
 	var sem chan struct{}
 	if c != nil && c.teamConcurrencyLimit() > 0 {
 		sem = make(chan struct{}, c.teamConcurrencyLimit())
@@ -113,6 +118,7 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 		coord:                c,
 		tasks:                tasks,
 		todoItems:            todoItems,
+		envelopes:            make([]TaskExecutionEnvelope, len(envelopes)),
 		duplicates:           duplicates,
 		states:               make([]TaskStatus, len(tasks)),
 		retries:              make([]int, len(tasks)),
@@ -126,6 +132,9 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 		activeResources:      make(map[int][]ResourceClaim),
 		sem:                  sem,
 	}
+	for i := range envelopes {
+		s.envelopes[i] = cloneTaskExecutionEnvelope(envelopes[i])
+	}
 	for i := range s.states {
 		s.states[i] = TaskPending
 	}
@@ -136,7 +145,7 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, dup
 			}
 		}
 	}
-	return s
+	return s, nil
 }
 
 func maxCriterionRetryBudget(tasks []TaskDef) int {
@@ -197,7 +206,7 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 
 		s.states[i] = TaskInProgress
 		s.inProgress++
-		s.activeResources[i] = resourceClaims(t)
+		s.activeResources[i] = slices.Clone(s.envelopes[i].ResourceScope.Claims)
 		go s.runTask(ctx, t, s.todoItems[i].ID, i, s.duplicates[i])
 	}
 }
@@ -361,7 +370,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 }
 
 func (s *dagScheduler) resourceConflict(candidate int) bool {
-	claims := resourceClaims(s.tasks[candidate])
+	claims := s.envelopes[candidate].ResourceScope.Claims
 	for active, held := range s.activeResources {
 		if active != candidate && claimsConflict(claims, held) {
 			return true
@@ -605,15 +614,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		desc += "\nconstraints: " + td.Constraints
 	}
 	agentKey := strings.ToLower(td.Agent)
-	logicalToolsetDigest, digestErr := c.resolveTaskLogicalToolsetDigest(ctx, td, tid)
-	if digestErr != nil {
-		c.PersistFailureWithClass(td.Agent, desc, tid, c.FailureDetail(digestErr, FailureSourceError), RetryNone, FailurePolicy)
-		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: digestErr, idx: idx}
-		return
-	}
+	envelope := cloneTaskExecutionEnvelope(s.envelopes[idx])
+	logicalToolsetDigest := envelope.LogicalToolsetDigest
 	cacheKey := agentKey + ":" + taskCacheIdentityWithSpec(desc, td.VerifySpec, td.Verify, td.VerifyMode)
 	cacheKey += taskExecutionInputCacheIdentity(td)
 	cacheKey += ":logical-tools:" + logicalToolsetDigest
+	cacheKey += ":resource-scope:" + envelope.ResourceScopeDigest
 	// Actions can have external side effects. They must never be satisfied by
 	// an output cache or coalesced with an identical in-flight request.
 	if td.Action != nil {
@@ -722,7 +728,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		lookup, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
 			Scope: TaskCacheLookupExecution, AgentKey: agentKey, Task: desc,
 			VerifySpec: td.VerifySpec, Verify: td.Verify, VerifyMode: td.VerifyMode,
-			LogicalToolsetDigest: logicalToolsetDigest,
+			LogicalToolsetDigest: logicalToolsetDigest, ResourceScopeDigest: envelope.ResourceScopeDigest,
 		})
 		if ok {
 			cached := lookup.Output
@@ -753,14 +759,15 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	if td.Sidecar {
 		output, err = c.executeSidecarTask(ctx, td, tid)
 	} else {
-		output, err = c.executeTask(ctx, td, tid)
+		taskCtx := withResourceClaimsReported(withTaskExecutionEnvelope(ctx, envelope))
+		output, err = c.executeTask(taskCtx, td, tid)
 	}
 	if err == nil && td.Action == nil && td.InvariantVerification == "" {
 		c.TaskCache().Store(TaskCacheStoreRequest{
 			AgentKey: agentKey, Task: desc, Output: output, VerifySpec: td.VerifySpec,
 			Verify: td.Verify, VerifyMode: td.VerifyMode,
 			Verification:         verificationForTodo(c.taskTracker.TodoList().Items(), tid),
-			LogicalToolsetDigest: logicalToolsetDigest,
+			LogicalToolsetDigest: logicalToolsetDigest, ResourceScopeDigest: envelope.ResourceScopeDigest,
 		})
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}

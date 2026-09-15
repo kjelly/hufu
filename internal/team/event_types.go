@@ -23,6 +23,7 @@ const (
 	EventTaskCancelled                           EventType = "task_cancelled"
 	EventTaskRemoved                             EventType = "task_removed"
 	EventDynamicToolUnavailable                  EventType = "dynamic_tool_unavailable"
+	EventResourceClaimsResolved                  EventType = "resource_claims_resolved"
 	EventTaskResolution                          EventType = "task_resolution"
 	EventArtifactCreated                         EventType = "artifact_created"
 	EventCriterionReevaluated                    EventType = "criterion_re_evaluated"
@@ -84,7 +85,7 @@ func IsKnownEventType(eventType string) bool {
 		EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted,
 		EventTaskFailed, EventTaskBlocked, EventTaskSkipped,
 		EventTaskProtocolIncomplete, EventTaskCancelled,
-		EventTaskRemoved, EventTaskResolution,
+		EventTaskRemoved, EventTaskResolution, EventDynamicToolUnavailable, EventResourceClaimsResolved,
 		EventArtifactCreated, EventCriterionReevaluated,
 		EventCriterionCheckpoint, EventMemoryRetrieved,
 		EventMemoryUsageRecorded, EventMemoryOutcomeRecorded,

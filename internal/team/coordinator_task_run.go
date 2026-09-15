@@ -325,6 +325,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.validateContractStructural(task, todoID); err != nil {
 		return "", err
 	}
+	admittedEnvelope, err := c.prepareTaskExecutionEnvelope(parentCtx, task, todoID, leafExecution)
+	if err != nil {
+		return "", err
+	}
 	// Static runtime actions and structured steps are executable task
 	// occurrences too. Admit and arm their decision discipline before entering
 	// either handler, so neither path can bypass a configured decision profile.
@@ -492,14 +496,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var ag fantasy.Agent
 	var exposedToolNames []string
 	var resolvedTools ResolvedWorkerTools
-	resolvedTools, err = c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, WorkerToolResolutionRequest{
-		Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
-	})
-	if err != nil {
-		c.report(c.newEvent("error").withAgent(agentName).withMessage(err.Error()).withTodoID(todoID))
-		c.PersistFailure(agentName, taskDesc, todoID, c.FailureDetail(err, ""))
-		return "", err
-	}
+	resolvedTools = cloneResolvedWorkerTools(admittedEnvelope.Tools)
 	exposedToolNames = resolvedTools.Names
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
@@ -746,6 +743,10 @@ retryLoop:
 			}
 		}
 		if attempt > 1 {
+			if err := c.preflightTaskExecutionRetry(parentCtx, task, todoID); err != nil {
+				closeTranscript()
+				return "", err
+			}
 			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
 			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
 				closeTranscript()
@@ -763,6 +764,10 @@ retryLoop:
 			// unconditionally fail with "submit_result runtime identity is missing
 			// or invalid", regardless of whether the attempt actually succeeded.
 			c.setCurrentTaskAttempt(todoID, attempt)
+			if err := c.recordTaskExecutionRetryScope(parentCtx, task, todoID); err != nil {
+				closeTranscript()
+				return "", err
+			}
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
@@ -792,9 +797,7 @@ retryLoop:
 		// surface again at the attempt boundary instead of carrying a stale
 		// provider/logical digest from the task-level preflight. The occurrence's
 		// frozen dynamic authorization remains the ceiling for every rebind.
-		attemptTools, resolveToolsErr := c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, WorkerToolResolutionRequest{
-			Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
-		})
+		attemptTools, resolveToolsErr := c.resolveAttemptWorkerTools(parentCtx, task, todoID, agentDef)
 		if resolveToolsErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("resolve worker tools for attempt %d: %w", attempt, resolveToolsErr)

@@ -52,6 +52,7 @@ type journalRecord struct {
 	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
+	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 
 	// TypedResult is a read-only durability projection for stable task_id
 	// lookups. It is deliberately separate from cache "put" records, whose
@@ -172,7 +173,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }

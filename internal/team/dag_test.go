@@ -155,7 +155,7 @@ func TestMarkStrandedBlocksDependentWithProducerVerifierEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0] = TaskError
 	s.markStranded()
 
@@ -197,7 +197,7 @@ func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
 	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "repair", Desc: "repair", Kind: TaskKindRepair, Advances: []string{"build"}},
 	})
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 
 	_ = s.resetTask(context.Background(), 0, "criterion retry routed")
 	if s.states[0] != TaskPending {
@@ -299,7 +299,7 @@ func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
 	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "done")
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1] = TaskDone, TaskDone
 	s.criterionRetryBudget = 1
 
@@ -331,7 +331,7 @@ func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
 	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "done")
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1] = TaskDone, TaskDone
 	s.criterionRetryBudget = 3
 	if !s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
@@ -366,7 +366,7 @@ func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
 	items[0].Progress = ProgressNoChange
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskInProgress, "running")
 	coord.taskTracker.TodoList().UpdateStatus(items[1].ID, TaskDone, "done")
-	s := newDAGScheduler(coord, tasks, items, nil)
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1], s.inProgress = TaskInProgress, TaskDone, 1
 	s.criterionRetryBudget = 1
 	ctx, cancel := context.WithCancel(context.Background())

@@ -372,6 +372,7 @@ type TodoItem struct {
 	BackendBinding  *BackendBinding  `json:"backend_binding,omitempty"`
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
+	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 }
 
 // MarshalJSON keeps historical target-less checkpoints/events readable while
@@ -498,6 +499,7 @@ type TodoSpec struct {
 	BackendBinding   *BackendBinding
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
+	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -577,6 +579,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
+		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		MaxRetries:                    item.MaxRetries,
 		OnFailure:                     item.OnFailure,
 		OnFailureClasses:              append([]TaskFailureClass(nil), item.OnFailureClasses...),
@@ -1309,6 +1312,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
+		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		VerifyResult:                  verifyResult,
 		RuntimeError:                  runtimeErr,
 		ExecutionReceipt:              execReceipt,
@@ -1481,6 +1485,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.WorksetBinding = cloneWorksetBinding(src.WorksetBinding)
 	dst.WorksetReceipt = cloneWorksetReceipt(src.WorksetReceipt)
 	dst.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicToolAuthorization)
+	dst.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(src.ResourceScopeSnapshot)
 	dst.MaxRetries = src.MaxRetries
 	dst.OnFailure = src.OnFailure
 	dst.Escalate = src.Escalate
