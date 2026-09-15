@@ -36,6 +36,7 @@ func NewRandomTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "random"
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "random",
 			Description: "Generate random values: random strings, random integers, or random selections from a list. Useful for generating unique IDs, test data, passwords, or making random selections.",

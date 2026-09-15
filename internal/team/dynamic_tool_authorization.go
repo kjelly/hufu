@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -61,6 +62,7 @@ func cloneResolvedWorkerTools(src ResolvedWorkerTools) ResolvedWorkerTools {
 		cloned.DynamicTargets[i].Required = slices.Clone(src.DynamicTargets[i].Required)
 	}
 	cloned.Capabilities = slices.Clone(src.Capabilities)
+	cloned.WorkspaceScopeDescriptors = maps.Clone(src.WorkspaceScopeDescriptors)
 	cloned.DynamicAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicAuthorization)
 	return cloned
 }

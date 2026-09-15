@@ -27,6 +27,7 @@ type fetchArgs struct {
 func NewFetchTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "fetch",
 			Description: "Fetch content from a URL. Returns the content in the specified format (text, markdown, or html). Use this to retrieve web pages, API responses, or any URL content.",

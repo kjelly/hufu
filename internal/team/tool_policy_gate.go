@@ -73,6 +73,10 @@ func (t *policyGatedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 	t.inner.SetProviderOptions(opts)
 }
 
+func (t *policyGatedTool) DescribeWorkspaceScope() tools.ToolWorkspaceScopeDescriptor {
+	return tools.DescribeToolWorkspaceScope(t.inner)
+}
+
 func (t *policyGatedTool) invalidBashInputResponse(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, bool) {
 	if t.Info().Name != "bash" {
 		return fantasy.ToolResponse{}, false

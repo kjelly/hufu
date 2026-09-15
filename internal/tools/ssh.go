@@ -37,6 +37,7 @@ type sshArgs struct {
 
 func NewSshTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "ssh",
 			Description: "Execute a command on a remote host via SSH. CRITICAL: Use the EXACT host identifier provided by the user. If user specified 'offline-test-gpu', use 'offline-test-gpu' — DO NOT resolve to IP (10.1.24.229). SSH config settings (IdentityFile, User, Port) are tied to hostnames, not IPs. Only use IP if user explicitly provided IP.",

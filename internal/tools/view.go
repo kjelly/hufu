@@ -34,6 +34,7 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "view"
 	return &coreTool{
+		workspaceScope:         workspaceReadEnforcedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "view",
@@ -81,28 +82,37 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		return executeViewArtifact(ctx, args, cfg)
 	}
 
-	absPath, err := checkPathOrConsent(args.FilePath, workDir, "read", cfgWithMergedPaths(cfg, ctx))
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	scoped, err := newScopedFileAccess(effectiveCfg, args.FilePath, false)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
-
-	info, err := os.Stat(absPath)
+	var info os.FileInfo
+	var f *os.File
+	if scoped != nil {
+		defer scoped.close()
+		f, info, err = scoped.openRegular()
+	} else {
+		absPath, pathErr := checkPathOrConsent(args.FilePath, workDir, "read", effectiveCfg)
+		err = pathErr
+		if err == nil {
+			info, err = os.Stat(absPath)
+		}
+		if err == nil && info.IsDir() {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("'%s' is a directory, not a file. Use the ls tool to list directory contents.", args.FilePath)), nil
+		}
+		if err == nil {
+			f, err = os.Open(absPath)
+		}
+	}
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot access '%s': %v", args.FilePath, err)), nil
 	}
-	if info.IsDir() {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("'%s' is a directory, not a file. Use the ls tool to list directory contents.", args.FilePath)), nil
-	}
+	defer f.Close()
 
 	if info.Size() > maxViewSize {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("file '%s' is too large (%d bytes, max %d). Use offset/limit to read portions.", args.FilePath, info.Size(), maxViewSize)), nil
 	}
-
-	f, err := os.Open(absPath)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to open file: %v", err)), nil
-	}
-	defer f.Close()
 
 	offset := args.Offset
 	if offset < 0 {

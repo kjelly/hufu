@@ -499,6 +499,9 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if _, ok := ctx.Value(AgentAllowedWritePathsKey).([]string); ok {
 		needMerge = true
 	}
+	if _, ok := ctx.Value(AgentTaskPathScopeKey).(AgentTaskPathScope); ok {
+		needMerge = true
+	}
 	if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
 		needMerge = true
 	}
@@ -517,6 +520,10 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	merged := cfg
 	merged.AllowedPaths = mergedAllowedPaths(cfg, ctx)
 	merged.AllowedWritePaths = mergedAllowedWritePaths(cfg, ctx)
+	if scope, ok := ctx.Value(AgentTaskPathScopeKey).(AgentTaskPathScope); ok {
+		merged.TaskPathScope = cloneAgentTaskPathScope(&scope)
+		merged.TaskPathScopeError = applyTaskPathScope(&merged, cfg, ctx)
+	}
 	merged.RestrictedPath = mergedRestrictedPath(cfg, ctx)
 	merged.NetworkBlock = mergedNetworkBlock(cfg, ctx)
 	merged.ForceMCP = mergedForceMCP(cfg, ctx)
@@ -526,6 +533,32 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 		merged.ArtifactPathPolicy = &copyPolicy
 	}
 	return merged
+}
+
+func applyTaskPathScope(merged *ToolConfig, configured ToolConfig, ctx context.Context) error {
+	if merged == nil || merged.TaskPathScope == nil {
+		return nil
+	}
+	if err := validateAgentTaskPathScope(merged.TaskPathScope); err != nil {
+		return err
+	}
+	scope := merged.TaskPathScope
+	if scope.ReadBounded {
+		paths, err := IntersectReadPathScopes(merged.AllowedPaths, scope.ReadPaths)
+		if err != nil {
+			return err
+		}
+		merged.AllowedPaths = paths
+	}
+	if scope.WriteBounded {
+		runtimeWrite, _ := ctx.Value(AgentAllowedWritePathsKey).([]string)
+		paths, err := IntersectPathScopeCeilings(scope.WritePaths, merged.AllowedPaths, configured.AllowedWritePaths, runtimeWrite)
+		if err != nil {
+			return err
+		}
+		merged.AllowedWritePaths = paths
+	}
+	return nil
 }
 
 func mergedRestrictedPath(cfg ToolConfig, ctx context.Context) string {
@@ -563,11 +596,15 @@ type coreTool struct {
 	guardReviewer          GuardReviewFn
 	pathReviewer           PathReviewer
 	artifactPathPolicySafe bool
+	workspaceScope         ToolWorkspaceScopeDescriptor
 }
 
 func (t *coreTool) Info() fantasy.ToolInfo                          { return t.info }
 func (t *coreTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *coreTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
+func (t *coreTool) DescribeWorkspaceScope() ToolWorkspaceScopeDescriptor {
+	return t.workspaceScope
+}
 
 // IsTrustedArtifactPathTool reports whether a concrete built-in tool has opted
 // into the shared artifact-path policy. Being a coreTool is not sufficient.

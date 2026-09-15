@@ -6,8 +6,79 @@ import (
 	"io"
 	"sync"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/hooks"
 )
+
+type PathScopeBehavior string
+
+const (
+	PathScopeEnforced    PathScopeBehavior = "enforced"
+	PathScopeDenied      PathScopeBehavior = "denied_when_scoped"
+	PathScopeUnsupported PathScopeBehavior = "unsupported"
+)
+
+type ToolWorkspaceScopeDescriptor struct {
+	MayReadWorkspace  bool
+	ReadBehavior      PathScopeBehavior
+	MayWriteWorkspace bool
+	WriteBehavior     PathScopeBehavior
+}
+
+type ToolWorkspaceScopeDescriber interface {
+	DescribeWorkspaceScope() ToolWorkspaceScopeDescriptor
+}
+
+func DescribeToolWorkspaceScope(tool fantasy.AgentTool) ToolWorkspaceScopeDescriptor {
+	if describer, ok := tool.(ToolWorkspaceScopeDescriber); ok {
+		return describer.DescribeWorkspaceScope()
+	}
+	return ToolWorkspaceScopeDescriptor{
+		MayReadWorkspace: true, ReadBehavior: PathScopeUnsupported,
+		MayWriteWorkspace: true, WriteBehavior: PathScopeUnsupported,
+	}
+}
+
+func noWorkspaceScope() ToolWorkspaceScopeDescriptor { return ToolWorkspaceScopeDescriptor{} }
+
+func workspaceReadEnforcedScope() ToolWorkspaceScopeDescriptor {
+	return ToolWorkspaceScopeDescriptor{MayReadWorkspace: true, ReadBehavior: PathScopeEnforced}
+}
+
+func workspaceReadUnsupportedScope() ToolWorkspaceScopeDescriptor {
+	return ToolWorkspaceScopeDescriptor{MayReadWorkspace: true, ReadBehavior: PathScopeUnsupported}
+}
+
+func workspaceReadWriteEnforcedScope() ToolWorkspaceScopeDescriptor {
+	return ToolWorkspaceScopeDescriptor{
+		MayReadWorkspace: true, ReadBehavior: PathScopeEnforced,
+		MayWriteWorkspace: true, WriteBehavior: PathScopeEnforced,
+	}
+}
+
+func workspaceReadWriteUnsupportedScope() ToolWorkspaceScopeDescriptor {
+	return ToolWorkspaceScopeDescriptor{
+		MayReadWorkspace: true, ReadBehavior: PathScopeUnsupported,
+		MayWriteWorkspace: true, WriteBehavior: PathScopeUnsupported,
+	}
+}
+
+func workspaceWriteUnsupportedScope() ToolWorkspaceScopeDescriptor {
+	return ToolWorkspaceScopeDescriptor{MayWriteWorkspace: true, WriteBehavior: PathScopeUnsupported}
+}
+
+type AgentTaskPathScope struct {
+	ReadPaths    []string
+	WritePaths   []string
+	ReadBounded  bool
+	WriteBounded bool
+	Digest       string
+}
+
+type agentTaskPathScopeKeyType struct{}
+
+var AgentTaskPathScopeKey = agentTaskPathScopeKeyType{}
 
 type ToolOption func(*ToolConfig)
 
@@ -74,4 +145,6 @@ type ToolConfig struct {
 	Direnv             bool
 	ForceMCP           bool
 	ArtifactPathPolicy *ArtifactPathPolicy
+	TaskPathScope      *AgentTaskPathScope
+	TaskPathScopeError error
 }

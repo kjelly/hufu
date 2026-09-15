@@ -29,6 +29,7 @@ func NewMathTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "math"
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "math",
 			Description: "Evaluate mathematical expressions. Supports basic arithmetic (+, -, *, /), power (^), square root (sqrt), parentheses, and constants (pi, e). Examples: '2 + 2', '3^4', 'sqrt(16)', '(10-2)*5', 'pi*2'.",

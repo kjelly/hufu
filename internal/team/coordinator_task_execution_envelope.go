@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type TaskExecutionEnvelope struct {
@@ -32,6 +33,26 @@ func taskExecutionEnvelopeFromContext(ctx context.Context) (TaskExecutionEnvelop
 	}
 	envelope, ok := ctx.Value(taskExecutionEnvelopeContextKey{}).(TaskExecutionEnvelope)
 	return cloneTaskExecutionEnvelope(envelope), ok
+}
+
+func installTaskExecutionPathScope(ctx context.Context) (context.Context, error) {
+	envelope, ok := taskExecutionEnvelopeFromContext(ctx)
+	if !ok || (!envelope.ResourceScope.BoundedReadScope && !envelope.ResourceScope.BoundedWriteScope) {
+		return ctx, nil
+	}
+	if envelope.ResourceScopeDigest == "" {
+		return nil, fmt.Errorf("resource_scope_unreproducible: admitted path scope digest is empty")
+	}
+	if envelope.ResourceScope.BoundedReadScope != (len(envelope.ResourceScope.AllowedReadPaths) > 0) ||
+		envelope.ResourceScope.BoundedWriteScope != (len(envelope.ResourceScope.AllowedWritePaths) > 0) {
+		return nil, fmt.Errorf("resource_scope_unreproducible: admitted path scope flags do not match paths")
+	}
+	scope := tools.AgentTaskPathScope{
+		ReadPaths: slices.Clone(envelope.ResourceScope.AllowedReadPaths), WritePaths: slices.Clone(envelope.ResourceScope.AllowedWritePaths),
+		ReadBounded: envelope.ResourceScope.BoundedReadScope, WriteBounded: envelope.ResourceScope.BoundedWriteScope,
+		Digest: envelope.ResourceScopeDigest,
+	}
+	return context.WithValue(ctx, tools.AgentTaskPathScopeKey, scope), nil
 }
 
 func newSHA256Hasher() hash.Hash { return sha256.New() }

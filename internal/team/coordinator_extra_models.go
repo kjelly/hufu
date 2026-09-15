@@ -670,6 +670,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		compactionRecoveryErr:              compactionRecoveryErrCopy,
 		initialPrompt:                      orig.initialPrompt,
 		projectDir:                         orig.projectDir,
+		allowedPaths:                       append([]string(nil), orig.allowedPaths...),
 		artifactStoreRoot:                  orig.artifactStoreRootPath(),
 		auditLogger:                        orig.auditLogger,
 		sshSessionMgr:                      orig.sshSessionMgr,

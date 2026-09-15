@@ -40,6 +40,7 @@ func NewBashTool(opts ...ToolOption) fantasy.AgentTool {
 	}
 	desc += " Environment variables (HOME, PATH, etc.) are inherited from the parent process — do not use 'env -i' to reset them."
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "bash",
 			Description: desc,

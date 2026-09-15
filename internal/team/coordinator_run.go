@@ -74,6 +74,13 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedWritePathsKey, writePaths)
 	}
+	taskCtx, err = installTaskExecutionPathScope(taskCtx)
+	if err != nil {
+		cancel()
+		roundCancel()
+		c.unregisterTerminalRound(todoID)
+		return nil, nil, nil, err
+	}
 	if agentDef.RestrictedPath != "" {
 		taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
 	}

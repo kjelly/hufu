@@ -127,6 +127,7 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	_ = cfg
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "ask_user",
 			Description: "Ask the user a question and wait for their response. Supports multiple choice, free text, or mixed (choices + free text). Use this when you need clarification, confirmation, or input from the user.",

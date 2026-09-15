@@ -34,6 +34,7 @@ func NewMultiEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "multiedit"
 	return &coreTool{
+		workspaceScope:         workspaceReadWriteEnforcedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "multiedit",
@@ -93,17 +94,65 @@ func executeMultiEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidateWritePathWithConsent(args.FilePath, cfgWithMergedPaths(cfg, ctx))
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	scoped, err := newScopedFileAccess(effectiveCfg, args.FilePath, true)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+	if scoped != nil {
+		defer scoped.close()
+	}
+	absPath := ""
+	if scoped != nil {
+		absPath = scoped.absolute
+	} else {
+		absPath, err = resolveAndValidateWritePathWithConsent(args.FilePath, effectiveCfg)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
+		}
 	}
 
 	isCreate := args.Edits[0].OldString == "" && args.Edits[0].NewString != ""
 
 	if isCreate {
+		if scoped != nil {
+			return processScopedMultiEditWithCreation(ctx, scoped, args)
+		}
 		return processMultiEditWithCreation(absPath, args)
 	}
+	if scoped != nil {
+		return processScopedMultiEditExistingFile(ctx, scoped, args)
+	}
 	return processMultiEditExistingFile(absPath, args)
+}
+
+func processScopedMultiEditWithCreation(ctx context.Context, access *scopedFileAccess, args multiEditArgs) (fantasy.ToolResponse, error) {
+	if info, err := access.destinationInfo(); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to inspect file: %v", err)), nil
+	} else if info != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already exists", args.FilePath)), nil
+	}
+	content, applied, failed := multiEditCreationContent(args)
+	if err := access.writeAtomic(ctx, []byte(content), nil, 0o644); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
+	}
+	return buildMultiEditResult(args.FilePath, "", content, applied, failed), nil
+}
+
+func processScopedMultiEditExistingFile(ctx context.Context, access *scopedFileAccess, args multiEditArgs) (fantasy.ToolResponse, error) {
+	contentBytes, identity, err := access.readRegular()
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
+	}
+	originalContent := string(contentBytes)
+	content, applied, failed := multiEditExistingContent(originalContent, args)
+	if applied == 0 {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("all %d edits failed", len(args.Edits))), nil
+	}
+	if err := access.writeAtomic(ctx, []byte(content), identity, identity.Mode()); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
+	}
+	return buildMultiEditResult(args.FilePath, originalContent, content, applied, failed), nil
 }
 
 func processMultiEditWithCreation(absPath string, args multiEditArgs) (fantasy.ToolResponse, error) {
@@ -111,20 +160,7 @@ func processMultiEditWithCreation(absPath string, args multiEditArgs) (fantasy.T
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already exists", args.FilePath)), nil
 	}
 
-	content := args.Edits[0].NewString
-	var failed []failedEdit
-	appliedCount := 1
-
-	for i, edit := range args.Edits[1:] {
-		idx := i + 1
-		newContent, err := applyMultiEditToContent(content, edit)
-		if err != nil {
-			failed = append(failed, failedEdit{Index: idx, Error: err.Error()})
-			continue
-		}
-		content = newContent
-		appliedCount++
-	}
+	content, appliedCount, failed := multiEditCreationContent(args)
 
 	if err := os.MkdirAll(getDir(absPath), 0o755); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to create directories: %v", err)), nil
@@ -144,20 +180,7 @@ func processMultiEditExistingFile(absPath string, args multiEditArgs) (fantasy.T
 	}
 
 	originalContent := string(contentBytes)
-	content := strings.ReplaceAll(originalContent, "\r\n", "\n")
-
-	var failed []failedEdit
-	appliedCount := 0
-
-	for i, edit := range args.Edits {
-		newContent, err := applyMultiEditToContent(content, edit)
-		if err != nil {
-			failed = append(failed, failedEdit{Index: i, Error: err.Error()})
-			continue
-		}
-		content = newContent
-		appliedCount++
-	}
+	content, appliedCount, failed := multiEditExistingContent(originalContent, args)
 
 	if appliedCount == 0 {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("all %d edits failed", len(args.Edits))), nil
@@ -168,6 +191,38 @@ func processMultiEditExistingFile(absPath string, args multiEditArgs) (fantasy.T
 	}
 
 	return buildMultiEditResult(args.FilePath, originalContent, content, appliedCount, failed), nil
+}
+
+func multiEditCreationContent(args multiEditArgs) (string, int, []failedEdit) {
+	content := args.Edits[0].NewString
+	failed := make([]failedEdit, 0)
+	appliedCount := 1
+	for i, edit := range args.Edits[1:] {
+		newContent, err := applyMultiEditToContent(content, edit)
+		if err != nil {
+			failed = append(failed, failedEdit{Index: i + 1, Error: err.Error()})
+			continue
+		}
+		content = newContent
+		appliedCount++
+	}
+	return content, appliedCount, failed
+}
+
+func multiEditExistingContent(originalContent string, args multiEditArgs) (string, int, []failedEdit) {
+	content := strings.ReplaceAll(originalContent, "\r\n", "\n")
+	failed := make([]failedEdit, 0)
+	appliedCount := 0
+	for i, edit := range args.Edits {
+		newContent, err := applyMultiEditToContent(content, edit)
+		if err != nil {
+			failed = append(failed, failedEdit{Index: i, Error: err.Error()})
+			continue
+		}
+		content = newContent
+		appliedCount++
+	}
+	return content, appliedCount, failed
 }
 
 func applyMultiEditToContent(content string, edit multiEditOperation) (string, error) {

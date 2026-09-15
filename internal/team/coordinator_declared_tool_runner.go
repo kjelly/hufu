@@ -89,6 +89,10 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	if writePaths := r.c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
 		stepCtx = context.WithValue(stepCtx, tools.AgentAllowedWritePathsKey, writePaths)
 	}
+	stepCtx, scopeErr = installTaskExecutionPathScope(stepCtx)
+	if scopeErr != nil {
+		return ExecutionStepResult{}, scopeErr
+	}
 	if agentDef.RestrictedPath != "" {
 		stepCtx = context.WithValue(stepCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)
 	}

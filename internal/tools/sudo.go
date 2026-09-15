@@ -19,6 +19,7 @@ func NewSudoTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "sudo"
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "sudo",
 			Description: "Execute a bash command with root privileges via sudo. Use only when elevated access is genuinely required. The command runs as: sudo bash -c \"<command>\". Environment variables (HOME, PATH, etc.) are inherited from the parent process — do not use 'env -i' to reset them.",

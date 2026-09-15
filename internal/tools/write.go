@@ -26,6 +26,7 @@ func NewWriteTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "write"
 	return &coreTool{
+		workspaceScope:         workspaceReadWriteEnforcedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "write",
@@ -76,7 +77,16 @@ func executeWrite(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (f
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidateWritePathWithConsent(filePath, cfgWithMergedPaths(cfg, ctx))
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	scoped, err := newScopedFileAccess(effectiveCfg, filePath, true)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+	if scoped != nil {
+		defer scoped.close()
+		return executeScopedWrite(ctx, scoped, filePath, args.Content)
+	}
+	absPath, err := resolveAndValidateWritePathWithConsent(filePath, effectiveCfg)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
@@ -108,4 +118,31 @@ func executeWrite(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (f
 	}
 
 	return fantasy.NewTextResponse(fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), filePath)), nil
+}
+
+func executeScopedWrite(ctx context.Context, access *scopedFileAccess, displayPath, content string) (fantasy.ToolResponse, error) {
+	info, err := access.destinationInfo()
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to inspect file: %v", err)), nil
+	}
+	var existing []byte
+	if info != nil && info.Mode().IsRegular() {
+		existing, _, err = access.readRegular()
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
+		}
+		if string(existing) == content {
+			return fantasy.NewTextResponse(fmt.Sprintf("File %s already contains the exact content (no changes)", displayPath)), nil
+		}
+	}
+	if err := access.writeAtomic(ctx, []byte(content), info, 0o644); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
+	}
+	if info == nil || !info.Mode().IsRegular() {
+		return fantasy.NewTextResponse(fmt.Sprintf("Wrote %d bytes to %s", len(content), displayPath)), nil
+	}
+	normalizedOld := strings.ReplaceAll(string(existing), "\r\n", "\n")
+	normalizedNew := strings.ReplaceAll(content, "\r\n", "\n")
+	diff := udiff.Unified(access.absolute, access.absolute, normalizedOld, normalizedNew)
+	return fantasy.NewTextResponse(fmt.Sprintf("Wrote %d bytes to %s\n%s", len(content), displayPath, diff)), nil
 }

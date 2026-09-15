@@ -9,11 +9,17 @@ import (
 	"fmt"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type submitPlanTool struct {
 	coordinator *Coordinator
 	todoID      string
+}
+
+func (*submitPlanTool) DescribeWorkspaceScope() tools.ToolWorkspaceScopeDescriptor {
+	return tools.ToolWorkspaceScopeDescriptor{}
 }
 
 func (t *submitPlanTool) ProviderOptions() fantasy.ProviderOptions        { return fantasy.ProviderOptions{} }

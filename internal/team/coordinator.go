@@ -451,6 +451,7 @@ type Coordinator struct {
 	executionAttemptSeq    atomic.Uint64
 	initialToolCorrections atomic.Int32
 	projectDir             string
+	allowedPaths           []string
 	// artifactStoreRoot is the coordinator-owned CAS root. Isolated
 	// extra-model coordinators change session.Workspace, but must continue to
 	// resolve the parent run's immutable artifact capabilities from this root.
@@ -1307,6 +1308,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		admittedTodoIDs:           make(map[string]struct{}),
 		skills:                    session.Skills,
 		projectDir:                projectDir,
+		allowedPaths:              append([]string(nil), allowedPaths...),
 		artifactStoreRoot:         session.Workspace,
 		skillUsage:                make(map[string]*skillUsageState),
 		delegatedTasks:            make(map[string]int),

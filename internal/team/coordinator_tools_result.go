@@ -121,6 +121,10 @@ type submitResultTool struct {
 	sink        TaskResultSink
 }
 
+func (*submitResultTool) DescribeWorkspaceScope() tools.ToolWorkspaceScopeDescriptor {
+	return tools.ToolWorkspaceScopeDescriptor{}
+}
+
 func (t *submitResultTool) ProviderOptions() fantasy.ProviderOptions {
 	return fantasy.ProviderOptions{}
 }

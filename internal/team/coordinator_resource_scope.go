@@ -8,6 +8,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const taskResourceScopeSnapshotVersion = 1
@@ -193,7 +196,7 @@ func scopePathCovered(requested string, ceilings []string) bool {
 	return false
 }
 
-func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, _ ResolvedWorkerTools) (*TaskResourceScopeSnapshot, error) {
+func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, resolvedTools ResolvedWorkerTools) (*TaskResourceScopeSnapshot, error) {
 	if todo == nil {
 		return nil, fmt.Errorf("resolve new task resource scope: Todo is required")
 	}
@@ -205,6 +208,19 @@ func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, 
 	if effect == "" {
 		effect = SideEffectNone
 	}
+	if (effect == SideEffectNone || effect == SideEffectWorkspaceWrite) && todo.WorksetBinding != nil && len(todo.WorksetBinding.TouchedPaths) > 0 {
+		eligible, eligibilityErr := c.taskScopeEligible(task, resolvedTools)
+		if eligibilityErr != nil {
+			return nil, eligibilityErr
+		}
+		if eligible {
+			return c.resolveBoundedTaskResourceScope(task, todo, claims, effect)
+		}
+	}
+	return wholeRootTaskResourceScope(claims, effect)
+}
+
+func wholeRootTaskResourceScope(claims []ResourceClaim, effect SideEffectClass) (*TaskResourceScopeSnapshot, error) {
 	mode := ResourceExclusive
 	if effect == SideEffectNone {
 		mode = ResourceRead
@@ -228,7 +244,142 @@ func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, 
 	return snapshot, nil
 }
 
-func (c *Coordinator) bindFrozenTaskResourceScope(task TaskDef, todo *TodoItem, _ ResolvedWorkerTools, mutableRoot string) (EffectiveTaskResourceScope, error) {
+func (c *Coordinator) taskScopeEligible(task TaskDef, resolved ResolvedWorkerTools) (bool, error) {
+	if task.Action != nil || len(task.Execution.Steps) > 0 || task.ResolvedExecutionTarget.IsZero() {
+		return false, nil
+	}
+	backend, err := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+	if err != nil || backend.Kind() != execution.BackendKindLLM {
+		return false, nil
+	}
+	closed := make(map[string]bool, len(task.Execution.ToolSequence))
+	for _, name := range task.Execution.ToolSequence {
+		closed[name] = true
+	}
+	for _, name := range resolved.AuthorizedNames {
+		descriptor, ok := resolved.WorkspaceScopeDescriptors[name]
+		if !ok {
+			return false, nil
+		}
+		if descriptor.MayReadWorkspace && descriptor.ReadBehavior != tools.PathScopeEnforced {
+			if closed[name] && descriptor.ReadBehavior == tools.PathScopeDenied {
+				return false, fmt.Errorf("unsupported_closed_sequence_scope: required tool %q cannot read under a bounded scope", name)
+			}
+			if descriptor.ReadBehavior != tools.PathScopeDenied {
+				return false, nil
+			}
+		}
+		if descriptor.MayWriteWorkspace && descriptor.WriteBehavior != tools.PathScopeEnforced {
+			if closed[name] && descriptor.WriteBehavior == tools.PathScopeDenied {
+				return false, fmt.Errorf("unsupported_closed_sequence_scope: required tool %q cannot write under a bounded scope", name)
+			}
+			if descriptor.WriteBehavior != tools.PathScopeDenied {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func (c *Coordinator) resolveBoundedTaskResourceScope(task TaskDef, todo *TodoItem, authored []ResourceClaim, effect SideEffectClass) (*TaskResourceScopeSnapshot, error) {
+	paths, err := canonicalScopePaths(todo.WorksetBinding.TouchedPaths)
+	if err != nil {
+		return nil, fmt.Errorf("invalid_write_scope: %w", err)
+	}
+	root, err := c.taskMutableRoot()
+	if err != nil {
+		return nil, fmt.Errorf("resource_scope_unreproducible: %w", err)
+	}
+	absRead, err := absoluteTaskScopePaths(root, paths)
+	if err != nil {
+		return nil, err
+	}
+	def, _, err := c.AgentPool().ResolveAgentName(todo.Agent)
+	if err != nil {
+		return nil, err
+	}
+	configured := append(slices.Clone(c.allowedPaths), c.runtimeAllowedPaths(def.AllowedPaths)...)
+	if _, err := IntersectReadPathScopes(configured, absRead); err != nil {
+		return nil, err
+	}
+	mode := ResourceRead
+	writePaths := []string(nil)
+	if effect == SideEffectWorkspaceWrite {
+		if c.taskScopeOverlapsControlWorkspace(root, paths) {
+			return nil, fmt.Errorf("invalid_write_scope: bounded task scope overlaps coordinator-owned workspace")
+		}
+		if _, err := IntersectPathScopeCeilings(absRead, configured, c.runtimeAllowedWritePaths()); err != nil {
+			return nil, err
+		}
+		mode = ResourceWrite
+		writePaths = slices.Clone(paths)
+	}
+	claims := slices.Clone(authored)
+	for _, path := range paths {
+		claim, err := NewWorkspacePathResourceClaim(strings.TrimSuffix(path, "/"), mode)
+		if err != nil {
+			return nil, err
+		}
+		claims = append(claims, claim)
+	}
+	claims, err = normalizeResourceClaims(claims)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &TaskResourceScopeSnapshot{
+		Version: taskResourceScopeSnapshotVersion, Claims: claims, ReadPaths: paths, WritePaths: writePaths,
+		BoundedReadScope: true, BoundedWriteScope: effect == SideEffectWorkspaceWrite,
+		Source: resourceScopeSourceAuthoredWorkset,
+	}
+	snapshot.Digest = taskResourceScopeDigest(snapshot)
+	if err := validateTaskResourceScopeSnapshot(snapshot, effect); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func absoluteTaskScopePaths(root string, relative []string) ([]string, error) {
+	root, err := canonicalMutableRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("resource_scope_unreproducible: %w", err)
+	}
+	result := make([]string, len(relative))
+	for i, path := range relative {
+		directory := strings.HasSuffix(path, "/")
+		result[i] = filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(path, "/")))
+		if directory {
+			result[i] += string(filepath.Separator)
+		}
+	}
+	return result, nil
+}
+
+func (c *Coordinator) taskScopeOverlapsControlWorkspace(root string, paths []string) bool {
+	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
+		return false
+	}
+	root, rootErr := canonicalMutableRoot(root)
+	control, controlErr := canonicalMutableRoot(c.session.Workspace)
+	if rootErr != nil || controlErr != nil {
+		return true
+	}
+	for _, path := range paths {
+		directory := strings.HasSuffix(path, "/") || path == "."
+		candidate := filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(path, "/")))
+		if candidate == control {
+			return true
+		}
+		if directory {
+			rel, err := filepath.Rel(candidate, control)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) bindFrozenTaskResourceScope(task TaskDef, todo *TodoItem, resolvedTools ResolvedWorkerTools, mutableRoot string) (EffectiveTaskResourceScope, error) {
 	if todo == nil {
 		return EffectiveTaskResourceScope{}, fmt.Errorf("resource_scope_unreproducible: Todo is required")
 	}
@@ -241,6 +392,32 @@ func (c *Coordinator) bindFrozenTaskResourceScope(task TaskDef, todo *TodoItem, 
 	}
 	if err := validateTaskResourceScopeSnapshot(todo.ResourceScopeSnapshot, todo.SideEffect); err != nil {
 		return EffectiveTaskResourceScope{}, err
+	}
+	if todo.ResourceScopeSnapshot.BoundedReadScope {
+		eligible, err := c.taskScopeEligible(task, resolvedTools)
+		if err != nil {
+			return EffectiveTaskResourceScope{}, err
+		}
+		if !eligible {
+			return EffectiveTaskResourceScope{}, fmt.Errorf("resource_scope_unreproducible: current tool/backend surface cannot enforce frozen bounded scope")
+		}
+		paths, err := absoluteTaskScopePaths(mutableRoot, todo.ResourceScopeSnapshot.ReadPaths)
+		if err != nil {
+			return EffectiveTaskResourceScope{}, err
+		}
+		def, _, err := c.AgentPool().ResolveAgentName(todo.Agent)
+		if err != nil {
+			return EffectiveTaskResourceScope{}, err
+		}
+		configured := append(slices.Clone(c.allowedPaths), c.runtimeAllowedPaths(def.AllowedPaths)...)
+		if _, err := IntersectReadPathScopes(configured, paths); err != nil {
+			return EffectiveTaskResourceScope{}, fmt.Errorf("resource_scope_unreproducible: %w", err)
+		}
+		if todo.ResourceScopeSnapshot.BoundedWriteScope {
+			if _, err := IntersectPathScopeCeilings(paths, configured, c.runtimeAllowedWritePaths()); err != nil {
+				return EffectiveTaskResourceScope{}, fmt.Errorf("resource_scope_unreproducible: %w", err)
+			}
+		}
 	}
 	return effectiveScopeFromSnapshot(todo.ResourceScopeSnapshot, mutableRoot)
 }
@@ -260,7 +437,11 @@ func effectiveScopeFromSnapshot(snapshot *TaskResourceScopeSnapshot, mutableRoot
 	resolve := func(paths []string) []string {
 		result := make([]string, len(paths))
 		for i, path := range paths {
+			directory := strings.HasSuffix(path, "/")
 			result[i] = filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(path, "/")))
+			if directory {
+				result[i] += string(filepath.Separator)
+			}
 		}
 		return result
 	}
@@ -287,71 +468,15 @@ func canonicalMutableRoot(root string) (string, error) {
 }
 
 func IntersectWritePathScopes(configured, runtime []string) ([]string, error) {
-	return IntersectPathScopeCeilings(runtime, configured)
+	return tools.IntersectWritePathScopes(configured, runtime)
 }
 
 func IntersectReadPathScopes(configured, task []string) ([]string, error) {
-	return IntersectPathScopeCeilings(task, configured)
+	return tools.IntersectReadPathScopes(configured, task)
 }
 
 func IntersectPathScopeCeilings(requested []string, ceilings ...[]string) ([]string, error) {
-	if requested == nil {
-		if len(ceilings) == 0 || len(ceilings[0]) == 0 {
-			return nil, nil
-		}
-		return canonicalFilesystemScopePaths(ceilings[0])
-	}
-	canonical, err := canonicalFilesystemScopePaths(requested)
-	if err != nil {
-		return nil, err
-	}
-	if len(canonical) == 0 {
-		return nil, fmt.Errorf("invalid_write_scope: explicit path scope is empty")
-	}
-	for _, group := range ceilings {
-		if len(group) == 0 {
-			continue
-		}
-		allowed, err := canonicalFilesystemScopePaths(group)
-		if err != nil {
-			return nil, err
-		}
-		for _, path := range canonical {
-			if !filesystemScopePathCovered(path, allowed) {
-				return nil, fmt.Errorf("invalid_write_scope: requested path %q is outside configured scope", path)
-			}
-		}
-	}
-	return canonical, nil
-}
-
-func canonicalFilesystemScopePaths(paths []string) ([]string, error) {
-	result := make([]string, 0, len(paths))
-	for _, raw := range paths {
-		if strings.TrimSpace(raw) == "" {
-			return nil, fmt.Errorf("invalid_write_scope: path is empty")
-		}
-		directory := strings.HasSuffix(filepath.ToSlash(raw), "/")
-		clean := filepath.Clean(raw)
-		if directory && clean != string(filepath.Separator) && clean != "." {
-			clean += string(filepath.Separator)
-		}
-		result = append(result, clean)
-	}
-	slices.Sort(result)
-	return slices.Compact(result), nil
-}
-
-func filesystemScopePathCovered(requested string, ceilings []string) bool {
-	want := strings.TrimSuffix(filepath.Clean(requested), string(filepath.Separator))
-	for _, ceiling := range ceilings {
-		root := strings.TrimSuffix(filepath.Clean(ceiling), string(filepath.Separator))
-		rel, err := filepath.Rel(root, want)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
+	return tools.IntersectPathScopeCeilings(requested, ceilings...)
 }
 
 func (c *Coordinator) recordResourceClaimsResolved(ctx context.Context, todo *TodoItem) error {

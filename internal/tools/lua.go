@@ -29,6 +29,7 @@ func NewLuaTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "lua"
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "lua",
 			Description: "Execute Lua code in a sandboxed environment. Returns stdout output. Supports string, math, table, coroutine, and restricted io/os libraries. The debug library is disabled. File I/O requires path consent for paths outside allowed directories. Prefer this over a multi-line bash pipeline (grep/awk/sed chains) for parsing, counting, or aggregating command output into a report: it has no pipefail/exit-code pitfalls and gives real string/table operations. To reuse a fixed, reviewed script instead of regenerating logic every call, read it with io.open and run it with loadstring(code)() (dofile/loadfile are disabled).",

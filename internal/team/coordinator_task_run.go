@@ -329,6 +329,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err != nil {
 		return "", err
 	}
+	parentCtx = withTaskExecutionEnvelope(parentCtx, admittedEnvelope)
 	// Static runtime actions and structured steps are executable task
 	// occurrences too. Admit and arm their decision discipline before entering
 	// either handler, so neither path can bypass a configured decision profile.
@@ -1027,6 +1028,11 @@ retryLoop:
 				if command := c.boundedWorkflowBashCommand(task); command != "" {
 					taskCtx = context.WithValue(taskCtx, tools.WorkflowBoundedBashKey, tools.WorkflowBoundedBash{Command: command})
 				}
+			}
+			taskCtx, err = installTaskExecutionPathScope(taskCtx)
+			if err != nil {
+				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), err)
+				return
 			}
 			if agentDef.RestrictedPath != "" {
 				taskCtx = context.WithValue(taskCtx, tools.AgentRestrictedPathKey, agentDef.RestrictedPath)

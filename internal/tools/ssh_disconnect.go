@@ -17,6 +17,7 @@ type sshDisconnectArgs struct {
 
 func NewSSHDisconnectTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "ssh_disconnect",
 			Description: "Close an active SSH session and clear cached credentials. Use this when finished with a remote host to free resources and clear cached passwords.",

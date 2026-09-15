@@ -37,6 +37,7 @@ func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "grep"
 	return &coreTool{
+		workspaceScope:         workspaceReadUnsupportedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "grep",

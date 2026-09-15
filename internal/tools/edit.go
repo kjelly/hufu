@@ -36,6 +36,7 @@ func NewEditTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "edit"
 	return &coreTool{
+		workspaceScope:         workspaceReadWriteEnforcedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "edit",
@@ -117,9 +118,22 @@ func executeEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("cancelled: %v", err)), nil
 	}
 
-	absPath, err := resolveAndValidateWritePathWithConsent(filePath, cfgWithMergedPaths(cfg, ctx))
+	effectiveCfg := cfgWithMergedPaths(cfg, ctx)
+	scoped, err := newScopedFileAccess(effectiveCfg, filePath, true)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+	if scoped != nil {
+		defer scoped.close()
+	}
+	absPath := ""
+	if scoped != nil {
+		absPath = scoped.absolute
+	} else {
+		absPath, err = resolveAndValidateWritePathWithConsent(filePath, effectiveCfg)
+		if err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
+		}
 	}
 
 	oldString := args.OldString
@@ -136,10 +150,24 @@ func executeEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		if err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
+		if scoped != nil {
+			return applyScopedEditsAndWrite(ctx, scoped, filePath, replacements)
+		}
 		return applyEditsAndWrite(absPath, filePath, replacements)
 	}
 
 	if oldString == "" && newString != "" {
+		if scoped != nil {
+			if info, inspectErr := scoped.destinationInfo(); inspectErr != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to inspect file: %v", inspectErr)), nil
+			} else if info != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already exists", filePath)), nil
+			}
+			if writeErr := scoped.writeAtomic(ctx, []byte(newString), nil, 0o644); writeErr != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", writeErr)), nil
+			}
+			return fantasy.NewTextResponse(fmt.Sprintf("Created %s", filePath)), nil
+		}
 		if _, err := os.Stat(absPath); err == nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already exists", filePath)), nil
 		}
@@ -171,6 +199,9 @@ func executeEdit(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		},
 	}
 
+	if scoped != nil {
+		return applyScopedEditsAndWrite(ctx, scoped, filePath, replacements)
+	}
 	return applyEditsAndWrite(absPath, filePath, replacements)
 }
 
@@ -200,32 +231,56 @@ func applyEditsAndWrite(absPath, displayPath string, replacements []replacement)
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
 
-	content := string(contentBytes)
-	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
-
-	var matched []matchedReplacement
-	for _, edit := range replacements {
-		m, err := findMatch(normalizedContent, edit)
-		if err != nil {
-			return fantasy.NewTextErrorResponse(err.Error()), nil
-		}
-		matched = append(matched, *m)
-	}
-
-	newContent := normalizedContent
-	for i := len(matched) - 1; i >= 0; i-- {
-		m := matched[i]
-		if m.replaceAll {
-			newContent = strings.ReplaceAll(newContent, m.oldText, m.newText)
-		} else {
-			newContent = newContent[:m.start] + m.newText + newContent[m.end:]
-		}
+	normalizedContent, newContent, matched, err := applyReplacements(contentBytes, replacements)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
 	if err := os.WriteFile(absPath, []byte(newContent), 0o644); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
+	return buildEditResult(absPath, displayPath, normalizedContent, newContent, matched), nil
+}
+
+func applyScopedEditsAndWrite(ctx context.Context, access *scopedFileAccess, displayPath string, replacements []replacement) (fantasy.ToolResponse, error) {
+	contentBytes, identity, err := access.readRegular()
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read file: %v", err)), nil
+	}
+	normalizedContent, newContent, matched, err := applyReplacements(contentBytes, replacements)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	if err := access.writeAtomic(ctx, []byte(newContent), identity, identity.Mode()); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to write file: %v", err)), nil
+	}
+	return buildEditResult(access.absolute, displayPath, normalizedContent, newContent, matched), nil
+}
+
+func applyReplacements(contentBytes []byte, replacements []replacement) (string, string, []matchedReplacement, error) {
+	normalizedContent := strings.ReplaceAll(string(contentBytes), "\r\n", "\n")
+	matched := make([]matchedReplacement, 0, len(replacements))
+	for _, edit := range replacements {
+		match, err := findMatch(normalizedContent, edit)
+		if err != nil {
+			return "", "", nil, err
+		}
+		matched = append(matched, *match)
+	}
+	newContent := normalizedContent
+	for i := len(matched) - 1; i >= 0; i-- {
+		match := matched[i]
+		if match.replaceAll {
+			newContent = strings.ReplaceAll(newContent, match.oldText, match.newText)
+		} else {
+			newContent = newContent[:match.start] + match.newText + newContent[match.end:]
+		}
+	}
+	return normalizedContent, newContent, matched, nil
+}
+
+func buildEditResult(absPath, displayPath, normalizedContent, newContent string, matched []matchedReplacement) fantasy.ToolResponse {
 	diff := udiff.Unified(absPath, absPath, normalizedContent, newContent)
 
 	fuzzyCount := 0
@@ -250,7 +305,7 @@ func applyEditsAndWrite(absPath, displayPath string, replacements []replacement)
 		}
 	}
 
-	return fantasy.NewTextResponse(msg), nil
+	return fantasy.NewTextResponse(msg)
 }
 
 type replacement struct {

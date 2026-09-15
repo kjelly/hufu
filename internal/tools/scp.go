@@ -31,6 +31,7 @@ type scpArgs struct {
 
 func NewScpTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "scp",
 			Description: "Transfer files to/from remote hosts via SCP. Supports upload (local→remote) and download (remote→local).",

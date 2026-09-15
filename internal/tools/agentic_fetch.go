@@ -19,6 +19,7 @@ type agenticFetchArgs struct {
 func NewAgenticFetchTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	return &coreTool{
+		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "agentic_fetch",
 			Description: "Fetch content from a URL and return it along with a prompt for analysis. Use this when you need to retrieve web content and then analyze, summarize, or extract information from it.",

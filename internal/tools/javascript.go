@@ -95,6 +95,7 @@ type jsResultEnvelope struct {
 // package-loading access; see spec.md for the full contract.
 func NewJavascriptTool(opts ...ToolOption) fantasy.AgentTool {
 	return &coreTool{
+		workspaceScope: workspaceReadWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "javascript",
 			Description: javascriptToolDescription,

@@ -11,6 +11,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
+	internaltools "github.com/kjelly/hufu/internal/tools"
 )
 
 // EventJournal owns the durable runtime event boundary. Session and task
@@ -213,14 +214,15 @@ type EvidenceService interface {
 // logical authorization surface. Capabilities remain descriptive; they never
 // grant a tool independently of Tools or AuthorizedNames.
 type ResolvedWorkerTools struct {
-	Tools                 []fantasy.AgentTool
-	Names                 []string
-	AuthorizedNames       []string
-	DynamicTargets        []DynamicToolTarget
-	Capabilities          []string
-	ProviderSurfaceDigest string
-	LogicalToolsetDigest  string
-	DynamicAuthorization  *DynamicToolAuthorizationSnapshot
+	Tools                     []fantasy.AgentTool
+	Names                     []string
+	AuthorizedNames           []string
+	DynamicTargets            []DynamicToolTarget
+	Capabilities              []string
+	ProviderSurfaceDigest     string
+	LogicalToolsetDigest      string
+	DynamicAuthorization      *DynamicToolAuthorizationSnapshot
+	WorkspaceScopeDescriptors map[string]internaltools.ToolWorkspaceScopeDescriptor
 }
 
 // WorkerToolResolutionMode identifies the lifecycle surface being built. The
@@ -839,6 +841,12 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: result-only repair surface must contain exactly %q", submitResultToolName)
 	}
 	names := agentToolNames(tools)
+	descriptors := make(map[string]internaltools.ToolWorkspaceScopeDescriptor, len(tools))
+	for _, tool := range tools {
+		if tool != nil {
+			descriptors[tool.Info().Name] = internaltools.DescribeToolWorkspaceScope(tool)
+		}
+	}
 	providerDigest, logicalDigest, err := workerToolDigests(r.c, def, task, mode, phase, tools, dynamicAuthorization, effectiveSequence)
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: compute surface digests: %w", err)
@@ -847,6 +855,7 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 		Tools: tools, Names: names, AuthorizedNames: append([]string(nil), names...),
 		Capabilities: append([]string(nil), names...), ProviderSurfaceDigest: providerDigest,
 		LogicalToolsetDigest: logicalDigest, DynamicAuthorization: cloneDynamicToolAuthorizationSnapshot(dynamicAuthorization),
+		WorkspaceScopeDescriptors: descriptors,
 	}, nil
 }
 

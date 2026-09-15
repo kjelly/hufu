@@ -26,6 +26,7 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "create_skill"
 	return &coreTool{
+		workspaceScope: workspaceWriteUnsupportedScope(),
 		info: fantasy.ToolInfo{
 			Name:        "create_skill",
 			Description: "Create a new agent skill dynamically. Use this when you encounter a repetitive task or a missing tool. The content should be a Markdown file with instructions and scripts.",

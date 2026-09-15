@@ -27,6 +27,7 @@ func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "glob"
 	return &coreTool{
+		workspaceScope:         workspaceReadUnsupportedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "glob",

@@ -26,6 +26,7 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "ls"
 	return &coreTool{
+		workspaceScope:         workspaceReadUnsupportedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "ls",

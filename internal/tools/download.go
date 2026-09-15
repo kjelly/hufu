@@ -29,6 +29,7 @@ func NewDownloadTool(opts ...ToolOption) fantasy.AgentTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "download"
 	return &coreTool{
+		workspaceScope:         workspaceWriteUnsupportedScope(),
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "download",
