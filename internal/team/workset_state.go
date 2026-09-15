@@ -46,13 +46,28 @@ func (c *Coordinator) WorksetGroupStates() []WorksetGroupState {
 				state.Failed++
 				continue
 			}
-			if item.Status != TaskDone || item.TypedResult == nil || !taskResultStatusIsSuccessful(item.TypedResult.Status) {
+			switch item.Status {
+			case TaskPending, TaskPlanned:
+				state.Pending++
+			case TaskInProgress, TaskVerifying, TaskPaused:
+				state.Active++
+			case TaskDone:
+				if item.TypedResult == nil || !taskResultStatusIsSuccessful(item.TypedResult.Status) {
+					state.Failed++
+					continue
+				}
+				state.Completed++
+				if item.VerifyResult != nil && isVerifySuccess(item.VerifyResult) {
+					state.Verified++
+				}
+			case TaskSkipped:
+				state.Skipped++
+			case TaskError, TaskBlocked, TaskProtocolIncomplete:
 				state.Failed++
-				continue
-			}
-			state.Completed++
-			if item.VerifyResult != nil && isVerifySuccess(item.VerifyResult) {
-				state.Verified++
+			default:
+				// Unknown durable states cannot be represented as ordinary
+				// unfinished work. Keep the projection fail-closed.
+				state.Failed++
 			}
 		}
 		for _, item := range items {
@@ -71,6 +86,8 @@ func (c *Coordinator) WorksetGroupStates() []WorksetGroupState {
 			state.State = "complete"
 		case state.Completed == state.Expected:
 			state.State = "completed"
+		case state.Active > 0:
+			state.State = "in_progress"
 		default:
 			state.State = "partial"
 		}

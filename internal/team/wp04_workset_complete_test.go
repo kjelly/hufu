@@ -72,6 +72,54 @@ func TestWorksetCompleteVerificationPassesAllVerifiedChildren(t *testing.T) {
 	}
 }
 
+func TestWorksetGroupStatesDistinguishesUnfinishedAndFailedChildren(t *testing.T) {
+	tests := []struct {
+		name      string
+		statuses  []TaskStatus
+		results   []string
+		wantState string
+		pending   int
+		active    int
+		completed int
+		verified  int
+		skipped   int
+		failed    int
+	}{
+		{name: "pending", statuses: []TaskStatus{TaskPending, TaskPlanned}, wantState: "partial", pending: 2},
+		{name: "active", statuses: []TaskStatus{TaskInProgress, TaskVerifying}, wantState: "in_progress", active: 2},
+		{name: "partially completed", statuses: []TaskStatus{TaskDone, TaskPending}, results: []string{TaskResultStatusSuccess, ""}, wantState: "partial", pending: 1, completed: 1, verified: 1},
+		{name: "terminal failure", statuses: []TaskStatus{TaskError, TaskPending}, results: []string{TaskResultStatusFailed, ""}, wantState: "failed", pending: 1, failed: 1},
+		{name: "skipped is not failed", statuses: []TaskStatus{TaskSkipped, TaskPending}, wantState: "partial", pending: 1, skipped: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := newCompleteWorksetCoordinator(t)
+			items := c.taskTracker.TodoList().Items()
+			for i, status := range tt.statuses {
+				items[i].Status = status
+				items[i].TypedResult = nil
+				items[i].VerifyResult = nil
+				if i < len(tt.results) && tt.results[i] != "" {
+					items[i].TypedResult = &TaskResult{TaskID: items[i].ID, Status: tt.results[i], Source: "submitted"}
+					items[i].VerifyResult = &VerificationResult{ExitCode: 0}
+				}
+			}
+			c.taskTracker.TodoList().Restore(items)
+
+			states := c.WorksetGroupStates()
+			if len(states) != 1 {
+				t.Fatalf("workset states = %#v, want one", states)
+			}
+			got := states[0]
+			if got.State != tt.wantState || got.Pending != tt.pending || got.Active != tt.active ||
+				got.Completed != tt.completed || got.Verified != tt.verified || got.Skipped != tt.skipped || got.Failed != tt.failed {
+				t.Fatalf("workset state = %#v, want state=%q pending=%d active=%d completed=%d verified=%d skipped=%d failed=%d",
+					got, tt.wantState, tt.pending, tt.active, tt.completed, tt.verified, tt.skipped, tt.failed)
+			}
+		})
+	}
+}
+
 func TestFindWorksetReceiptMatchesNormalizedParentAndFailsClosed(t *testing.T) {
 	t.Run("unknown", func(t *testing.T) {
 		c, _ := newCompleteWorksetCoordinator(t)

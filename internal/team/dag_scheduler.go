@@ -62,6 +62,21 @@ func acquireSem(ctx context.Context, ch chan struct{}) (semSlot, error) {
 	}
 }
 
+// tryAcquireSem reserves a scheduler slot without creating a goroutine that
+// waits for capacity. This keeps the ready queue deterministic and bounded:
+// only tasks that own a slot are promoted to in-progress scheduler state.
+func tryAcquireSem(ch chan struct{}) (semSlot, bool) {
+	if ch == nil {
+		return semSlot{}, true
+	}
+	select {
+	case ch <- struct{}{}:
+		return semSlot{ch: ch}, true
+	default:
+		return semSlot{}, false
+	}
+}
+
 func (s *semSlot) release() {
 	if s.ch != nil && !s.released {
 		<-s.ch
@@ -100,6 +115,7 @@ type dagScheduler struct {
 	eventCh              chan agentTaskResult
 	inProgress           int
 	activeResources      map[int][]ResourceClaim
+	teamSlots            map[int]semSlot
 
 	inflightMu sync.Mutex
 	inflight   map[string]chan agentTaskResult
@@ -130,6 +146,7 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, env
 		eventCh:              make(chan agentTaskResult, len(tasks)),
 		inflight:             make(map[string]chan agentTaskResult),
 		activeResources:      make(map[int][]ResourceClaim),
+		teamSlots:            make(map[int]semSlot),
 		sem:                  sem,
 	}
 	for i := range envelopes {
@@ -176,7 +193,9 @@ func (s *dagScheduler) run(ctx context.Context) ([]agentTaskResult, error) {
 	return s.results, nil
 }
 
-// launchReady starts every pending task whose dependencies are all done.
+// launchReady starts pending tasks whose dependencies are all done, in input
+// order, up to the configured team concurrency limit. Tasks beyond that limit
+// remain pending in both scheduler and durable projections until a slot opens.
 func (s *dagScheduler) launchReady(ctx context.Context) {
 	for i, t := range s.tasks {
 		if s.states[i] != TaskPending {
@@ -203,10 +222,15 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 			}
 			continue
 		}
+		teamSlot, acquired := tryAcquireSem(s.sem)
+		if !acquired {
+			return
+		}
 
 		s.states[i] = TaskInProgress
 		s.inProgress++
 		s.activeResources[i] = slices.Clone(s.envelopes[i].ResourceScope.Claims)
+		s.teamSlots[i] = teamSlot
 		go s.runTask(ctx, t, s.todoItems[i].ID, i, s.duplicates[i])
 	}
 }
@@ -215,11 +239,16 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 // any tasks that became ready as a result.
 func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	c := s.coord
-	s.inProgress--
 	idx := res.idx
 	if idx < 0 || idx >= len(s.tasks) {
+		s.inProgress--
 		return
 	}
+	if slot, ok := s.teamSlots[idx]; ok {
+		slot.release()
+		delete(s.teamSlots, idx)
+	}
+	s.inProgress--
 	delete(s.activeResources, idx)
 
 	// A reset wave swept this task while it was still running: discard the
@@ -603,10 +632,12 @@ func (s *dagScheduler) taskDesc(i int) string {
 	return desc
 }
 
-// runTask is the per-task goroutine body: it rejects duplicates, acquires a
-// concurrency slot, deduplicates against identical in-flight tasks, consults
-// the result cache, and finally executes the task. Exactly one event is sent
-// to eventCh on every path, including panics.
+// runTask is the per-task goroutine body. launchReady has already reserved its
+// concurrency slot; handleEvent releases that slot only after serializing the
+// completion into scheduler state. The task rejects duplicates, deduplicates
+// against identical in-flight tasks, consults the result cache, and finally
+// executes. Exactly one event is sent to eventCh on every path, including
+// panics.
 func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx int, dup bool) {
 	c := s.coord
 	desc := td.Goal
@@ -632,6 +663,10 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		cacheKey += ":verbatim:" + tid
 	}
 	var isOwner bool
+	if err := budgetAdmissionErrorFor(c); err != nil {
+		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
+		return
+	}
 
 	if len(td.Requires) > 0 {
 		reqs, missing := c.taskCapabilityRequirements(td.Requires)
@@ -690,24 +725,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		return
 	}
 
-	teamSlot, semErr := acquireSem(ctx, s.sem)
-	if semErr != nil {
-		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: semErr, idx: idx}
-		return
-	}
-	defer teamSlot.release()
-	if err := budgetAdmissionErrorFor(c); err != nil {
-		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: err, idx: idx}
-		return
-	}
-
 	// In-flight dedup: the first task with a given key runs; identical
 	// concurrent tasks release their slot and wait to share its result.
 	if td.InvariantVerification == "" {
 		s.inflightMu.Lock()
 		if ch, ok := s.inflight[cacheKey]; ok {
 			s.inflightMu.Unlock()
-			teamSlot.release()
 			select {
 			case result := <-ch:
 				s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: result.output, err: result.err, idx: idx}

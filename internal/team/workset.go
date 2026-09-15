@@ -75,8 +75,11 @@ type WorksetGroupState struct {
 	SourceArtifactID string `json:"source_artifact_id"`
 	SourceSHA256     string `json:"source_sha256"`
 	Expected         int    `json:"expected"`
+	Pending          int    `json:"pending"`
+	Active           int    `json:"active"`
 	Completed        int    `json:"completed"`
 	Verified         int    `json:"verified"`
+	Skipped          int    `json:"skipped"`
 	Failed           int    `json:"failed"`
 	State            string `json:"state"`
 }

@@ -807,10 +807,10 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		if len(data.RunResult.Worksets) > 0 {
 			b.WriteString("\n### Workset Groups\n\n")
-			b.WriteString("| Workset | Source artifact | Expected | Completed | Verified | Failed | State |\n")
-			b.WriteString("|---|---|---:|---:|---:|---:|---|\n")
+			b.WriteString("| Workset | Source artifact | Expected | Pending | Active | Completed | Verified | Skipped | Failed | State |\n")
+			b.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
 			for _, workset := range data.RunResult.Worksets {
-				fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %d | `%s` |\n", reportSafeMetadata(workset.WorksetID, 120), reportSafeMetadata(workset.SourceArtifactID, 120), workset.Expected, workset.Completed, workset.Verified, workset.Failed, reportSafeMetadata(workset.State, 40))
+				fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %d | %d | %d | %d | `%s` |\n", reportSafeMetadata(workset.WorksetID, 120), reportSafeMetadata(workset.SourceArtifactID, 120), workset.Expected, workset.Pending, workset.Active, workset.Completed, workset.Verified, workset.Skipped, workset.Failed, reportSafeMetadata(workset.State, 40))
 			}
 		}
 		if data.RuntimeWorksets != nil {

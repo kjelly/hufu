@@ -293,6 +293,63 @@ func TestDAGSchedulerBudgetAdmissionSkipsQueuedWorkers(t *testing.T) {
 	}
 }
 
+func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: t.TempDir(),
+			Config:    agent.TeamConfig{Name: "deterministic-serial-dispatch"},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		maxConcurrent: 1,
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "serial child one"},
+		{Agent: "worker", Desc: "serial child two"},
+		{Agent: "worker", Desc: "serial child three"},
+	})
+	tasks := []TaskDef{
+		{Agent: "worker", Goal: "serial child one"},
+		{Agent: "worker", Goal: "serial child two"},
+		{Agent: "worker", Goal: "serial child three"},
+	}
+	var providerCalls int
+	var heldID string
+	holding := &budgetHoldingAgent{started: make(chan struct{}), release: make(chan struct{}), calls: &providerCalls, heldID: &heldID}
+	c.workerAgentOverride = holding
+	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
+
+	scheduler.launchReady(t.Context())
+	select {
+	case <-holding.started:
+	case <-time.After(time.Second):
+		t.Fatal("first task did not start")
+	}
+	if heldID != items[0].ID {
+		t.Fatalf("first dispatched task = %q, want input-order task %q", heldID, items[0].ID)
+	}
+	if scheduler.inProgress != 1 || scheduler.states[0] != TaskInProgress || scheduler.states[1] != TaskPending || scheduler.states[2] != TaskPending {
+		t.Fatalf("scheduler states = %v in_progress=%d, want [in_progress pending pending] / 1", scheduler.states, scheduler.inProgress)
+	}
+	if items[1].Status != TaskPending || items[2].Status != TaskPending {
+		t.Fatalf("queued durable statuses = [%s %s], want pending/pending", items[1].Status, items[2].Status)
+	}
+	if len(scheduler.sem) != 1 {
+		t.Fatalf("reserved team slots = %d, want 1", len(scheduler.sem))
+	}
+
+	close(holding.release)
+	select {
+	case <-scheduler.eventCh:
+	case <-time.After(time.Second):
+		t.Fatal("launched task did not stop")
+	}
+}
+
 type budgetHoldingAgent struct {
 	started chan struct{}
 	release chan struct{}

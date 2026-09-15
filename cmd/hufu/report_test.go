@@ -76,6 +76,18 @@ func TestReportProjectsRecoveryDispositionAndNextAction(t *testing.T) {
 	}
 }
 
+func TestReportProjectsWorksetQueueAndActivityCounts(t *testing.T) {
+	report := buildReportMD(&reportData{StartedAt: time.Now(), RunResult: &team.RunResult{Worksets: []team.WorksetGroupState{{
+		WorksetID: "workset-1", SourceArtifactID: "artifact-1", Expected: 5,
+		Pending: 2, Active: 1, Completed: 1, Verified: 1, Skipped: 1, Failed: 0, State: "in_progress",
+	}}}}, "demo", "")
+	for _, want := range []string{"| Pending | Active |", "| Verified | Skipped | Failed |", "| `workset-1` | `artifact-1` | 5 | 2 | 1 | 1 | 1 | 1 | 0 | `in_progress` |"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), DeprecatedMemory: []team.DeprecatedMemoryToolUsage{{Tool: "stm_write", Calls: 2, Success: 1, FailClosed: 1, Denied: 3}}}, "demo", "")
 	for _, want := range []string{"## Deprecated Memory Compatibility Usage", "`stm_write`", "| 2 | 1 | 1 | 3 |", "Only content-free lifecycle counts"} {
