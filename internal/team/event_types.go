@@ -22,6 +22,7 @@ const (
 	EventTaskProtocolIncomplete                  EventType = "task_protocol_incomplete"
 	EventTaskCancelled                           EventType = "task_cancelled"
 	EventTaskRemoved                             EventType = "task_removed"
+	EventDynamicToolUnavailable                  EventType = "dynamic_tool_unavailable"
 	EventTaskResolution                          EventType = "task_resolution"
 	EventArtifactCreated                         EventType = "artifact_created"
 	EventCriterionReevaluated                    EventType = "criterion_re_evaluated"

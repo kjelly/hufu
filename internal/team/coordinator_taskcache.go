@@ -81,7 +81,12 @@ func taskCacheDependenciesFor(c *Coordinator) taskCacheDependencies {
 			if req.Scope != TaskCacheLookupExecution {
 				agentKey = ""
 			}
-			return c.ComputeCacheIdentity(agentKey, req.Task, req.Verify, req.VerifyMode)
+			identity := c.ComputeCacheIdentity(agentKey, req.Task, req.Verify, req.VerifyMode)
+			if req.LogicalToolsetDigest != "" {
+				identity.ToolRegistryVersion = req.LogicalToolsetDigest
+			}
+			identity.ResourceScopeDigest = req.ResourceScopeDigest
+			return identity
 		},
 		Forbidden: c.IsCacheForbidden,
 		SimilarTask: func(ctx context.Context, task string, candidates []string, timeout time.Duration) (int, error) {
@@ -258,6 +263,7 @@ func (tc *defaultTaskCache) Store(req TaskCacheStoreRequest) {
 	lookup := TaskCacheLookupRequest{
 		Scope: TaskCacheLookupExecution, AgentKey: req.AgentKey, Task: req.Task,
 		VerifySpec: req.VerifySpec, Verify: req.Verify, VerifyMode: req.VerifyMode,
+		LogicalToolsetDigest: req.LogicalToolsetDigest, ResourceScopeDigest: req.ResourceScopeDigest,
 	}
 	identity := tc.identity(lookup)
 	tc.mu.Lock()

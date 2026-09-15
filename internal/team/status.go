@@ -370,6 +370,8 @@ type TodoItem struct {
 	// as execution progresses; Provider itself does not change.
 	ProviderBinding *ProviderBinding `json:"provider_binding,omitempty"`
 	BackendBinding  *BackendBinding  `json:"backend_binding,omitempty"`
+
+	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 }
 
 // MarshalJSON keeps historical target-less checkpoints/events readable while
@@ -494,6 +496,8 @@ type TodoSpec struct {
 	SubagentProvider string
 	ProviderBinding  *ProviderBinding
 	BackendBinding   *BackendBinding
+
+	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -572,6 +576,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		VerifySpec:                    item.VerifySpec,
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
+		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		MaxRetries:                    item.MaxRetries,
 		OnFailure:                     item.OnFailure,
 		OnFailureClasses:              append([]TaskFailureClass(nil), item.OnFailureClasses...),
@@ -1303,6 +1308,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		VerifySpec:                    verifySpec,
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
+		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		VerifyResult:                  verifyResult,
 		RuntimeError:                  runtimeErr,
 		ExecutionReceipt:              execReceipt,
@@ -1474,6 +1480,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.VerifySpec = cloneVerificationSpecPtr(src.VerifySpec)
 	dst.WorksetBinding = cloneWorksetBinding(src.WorksetBinding)
 	dst.WorksetReceipt = cloneWorksetReceipt(src.WorksetReceipt)
+	dst.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicToolAuthorization)
 	dst.MaxRetries = src.MaxRetries
 	dst.OnFailure = src.OnFailure
 	dst.Escalate = src.Escalate

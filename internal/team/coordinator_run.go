@@ -431,6 +431,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		Recovery:          directTask.Recovery,
 		ReconcileTool:     directTask.ReconcileTool,
 	}
+	if err := c.freezeTodoSpecDynamicAuthorization(ctx, directTask, agentDef, &directSpec); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	// Admission is the creation boundary: it precedes task_created, provider
 	// admission, sidecar matching, in_progress, and every worker-side effect.
 	if c.hasDurableEventJournal() {
@@ -901,6 +905,9 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 		SideEffect:        occurrence.SideEffect,
 		Recovery:          occurrence.Recovery,
 		ReconcileTool:     occurrence.ReconcileTool,
+	}
+	if err := c.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &spec); err != nil {
+		return errors.Join(cancellation, fmt.Errorf("freeze pre-cancelled direct task tools: %w", err))
 	}
 	if c.hasDurableEventJournal() {
 		projection, projectionErr := taskOccurrenceProjectionFromSpec(spec, ids[0])

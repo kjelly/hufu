@@ -85,11 +85,16 @@ type TaskOccurrenceProjection struct {
 	// is deliberately absent here: it carries mutable runtime session state,
 	// analogous to why ExecutionReceipt/VerifyResult are also absent.
 	SubagentProvider string
+
+	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 }
 
 func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, error) {
 	if item == nil || strings.TrimSpace(item.ID) == "" {
 		return TaskOccurrenceProjection{}, fmt.Errorf("task occurrence projection requires a Todo ID")
+	}
+	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
+		return TaskOccurrenceProjection{}, err
 	}
 	model := item.Model
 	modelTopology := cloneModelTopology(item.ModelTopology)
@@ -117,7 +122,8 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DependsOn: append([]string(nil), item.DependsOn...), OnFailure: item.OnFailure,
 		Verify: item.Verify, VerifyMode: item.VerifyMode, VerifySpec: cloneVerificationSpecPtr(item.VerifySpec),
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
-		MaxRetries: item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
+		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
+		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
 		Escalate: item.Escalate, AdversarialVerify: item.AdversarialVerify,
 		ReconcileTool: item.ReconcileTool, Kind: item.Kind, Advances: append([]string(nil), item.Advances...),
 		ExpectedStateChange: item.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(item.RecoveryHypothesis),

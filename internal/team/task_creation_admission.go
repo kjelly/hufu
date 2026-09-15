@@ -19,6 +19,9 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	if err := validateActionOccurrenceBinding(item); err != nil {
 		return fmt.Errorf("validate task %s action input binding: %w", item.ID, err)
 	}
+	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
+		return fmt.Errorf("validate task %s tool authorization: %w", item.ID, err)
+	}
 	if !c.requiresTaskCreationAdmission() {
 		return nil
 	}

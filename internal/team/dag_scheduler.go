@@ -605,8 +605,15 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		desc += "\nconstraints: " + td.Constraints
 	}
 	agentKey := strings.ToLower(td.Agent)
+	logicalToolsetDigest, digestErr := c.resolveTaskLogicalToolsetDigest(ctx, td, tid)
+	if digestErr != nil {
+		c.PersistFailureWithClass(td.Agent, desc, tid, c.FailureDetail(digestErr, FailureSourceError), RetryNone, FailurePolicy)
+		s.eventCh <- agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, err: digestErr, idx: idx}
+		return
+	}
 	cacheKey := agentKey + ":" + taskCacheIdentityWithSpec(desc, td.VerifySpec, td.Verify, td.VerifyMode)
 	cacheKey += taskExecutionInputCacheIdentity(td)
+	cacheKey += ":logical-tools:" + logicalToolsetDigest
 	// Actions can have external side effects. They must never be satisfied by
 	// an output cache or coalesced with an identical in-flight request.
 	if td.Action != nil {
@@ -712,7 +719,13 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	// tasks, and verbatim-output tasks always run fresh: a cached prose result
 	// cannot satisfy a new runner-owned transcript contract.
 	if td.InvariantVerification == "" && td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
-		if cached, ok := c.lookupTaskCacheWithTypedVerification(ctx, agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode); ok {
+		lookup, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
+			Scope: TaskCacheLookupExecution, AgentKey: agentKey, Task: desc,
+			VerifySpec: td.VerifySpec, Verify: td.Verify, VerifyMode: td.VerifyMode,
+			LogicalToolsetDigest: logicalToolsetDigest,
+		})
+		if ok {
+			cached := lookup.Output
 			c.report(c.newEvent("cache_hit").withAgent(td.Agent).withMessage(desc).withTodoID(tid))
 			if err := c.commitTaskTransitionFromCurrent(ctx, tid, TaskDone, utils.TruncateRunes(cached, summaryMaxRunes), cached, nil); err != nil {
 				s.inflightMu.Lock()
@@ -743,7 +756,12 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		output, err = c.executeTask(ctx, td, tid)
 	}
 	if err == nil && td.Action == nil && td.InvariantVerification == "" {
-		c.storeTaskCacheWithTypedVerificationEvidence(agentKey, desc, td.VerifySpec, td.Verify, td.VerifyMode, output, verificationForTodo(c.taskTracker.TodoList().Items(), tid))
+		c.TaskCache().Store(TaskCacheStoreRequest{
+			AgentKey: agentKey, Task: desc, Output: output, VerifySpec: td.VerifySpec,
+			Verify: td.Verify, VerifyMode: td.VerifyMode,
+			Verification:         verificationForTodo(c.taskTracker.TodoList().Items(), tid),
+			LogicalToolsetDigest: logicalToolsetDigest,
+		})
 	}
 	result := agentTaskResult{agentName: td.Agent, todoID: tid, task: desc, output: output, err: err, idx: idx}
 	if err == nil && td.PlanFirst && td.PlanID == "" {

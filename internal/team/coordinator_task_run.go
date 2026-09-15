@@ -787,6 +787,20 @@ retryLoop:
 				}
 			}
 		}
+		// Protocol tool schemas are derived from the durable Todo contract. A
+		// retry transition can update that projection, so bind the complete
+		// surface again at the attempt boundary instead of carrying a stale
+		// provider/logical digest from the task-level preflight. The occurrence's
+		// frozen dynamic authorization remains the ceiling for every rebind.
+		attemptTools, resolveToolsErr := c.ToolResolver().ResolveTaskTools(parentCtx, agentDef, WorkerToolResolutionRequest{
+			Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
+		})
+		if resolveToolsErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("resolve worker tools for attempt %d: %w", attempt, resolveToolsErr)
+		}
+		resolvedTools = attemptTools
+		exposedToolNames = attemptTools.Names
 		attemptCtx := parentCtx
 		invocation := providerBoundInvocationContext{ModelID: resolvedModel}
 		// Provider-bound context/profile admission is an LLM capability only.
@@ -1104,7 +1118,7 @@ retryLoop:
 							ModelID:                     target.Model,
 							ReasoningEffort:             c.effectiveReasoningEffort(agentDef),
 							MaxSteps:                    stepBudget,
-							Tools:                       resolvedTools,
+							Tools:                       cloneResolvedWorkerTools(resolvedTools),
 							History:                     conversationHistory,
 							ExecutionTarget:             target,
 							BackendBinding:              backendBinding,

@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -123,12 +124,14 @@ const (
 )
 
 type TaskCacheLookupRequest struct {
-	Scope      TaskCacheLookupScope
-	AgentKey   string
-	Task       string
-	VerifySpec *VerificationSpec
-	Verify     string
-	VerifyMode string
+	Scope                TaskCacheLookupScope
+	AgentKey             string
+	Task                 string
+	VerifySpec           *VerificationSpec
+	Verify               string
+	VerifyMode           string
+	LogicalToolsetDigest string
+	ResourceScopeDigest  string
 }
 
 type TaskCacheLookupResult struct {
@@ -137,13 +140,15 @@ type TaskCacheLookupResult struct {
 }
 
 type TaskCacheStoreRequest struct {
-	AgentKey     string
-	Task         string
-	Output       string
-	VerifySpec   *VerificationSpec
-	Verify       string
-	VerifyMode   string
-	Verification *VerificationResult
+	AgentKey             string
+	Task                 string
+	Output               string
+	VerifySpec           *VerificationSpec
+	Verify               string
+	VerifyMode           string
+	Verification         *VerificationResult
+	LogicalToolsetDigest string
+	ResourceScopeDigest  string
 }
 
 type TaskCacheInvalidateRequest struct {
@@ -204,13 +209,18 @@ type EvidenceService interface {
 	FinalizeRunManifest(context.Context, EvidenceFinalizeRequest) (*EvidenceManifest, error)
 }
 
-// ResolvedWorkerTools is the one source for both model-visible tool names and
-// the concrete runtime allowlist. Capabilities remain descriptive; they never
-// grant a tool independently of Tools.
+// ResolvedWorkerTools keeps the provider-visible surface distinct from the
+// logical authorization surface. Capabilities remain descriptive; they never
+// grant a tool independently of Tools or AuthorizedNames.
 type ResolvedWorkerTools struct {
-	Tools        []fantasy.AgentTool
-	Names        []string
-	Capabilities []string
+	Tools                 []fantasy.AgentTool
+	Names                 []string
+	AuthorizedNames       []string
+	DynamicTargets        []DynamicToolTarget
+	Capabilities          []string
+	ProviderSurfaceDigest string
+	LogicalToolsetDigest  string
+	DynamicAuthorization  *DynamicToolAuthorizationSnapshot
 }
 
 // WorkerToolResolutionMode identifies the lifecycle surface being built. The
@@ -693,12 +703,23 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	resultRequired := task.Execution.RequiresResult || mode == WorkerToolResolutionApprovedPlan || mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
 	planRequired := mode == WorkerToolResolutionInitialPlan
 	resultOnly := mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
+	var todo *TodoItem
+	if strings.TrimSpace(req.TodoID) != "" {
+		todo = r.c.todoItemByID(req.TodoID)
+	}
 	if resultOnly || planRequired || resultRequired {
 		if strings.TrimSpace(req.TodoID) == "" {
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %s requires a Todo ID", mode)
 		}
-		if r.c.todoItemByID(req.TodoID) == nil {
+		if todo == nil {
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: Todo %q does not exist", req.TodoID)
+		}
+	}
+	var dynamicAuthorization *DynamicToolAuthorizationSnapshot
+	if todo != nil {
+		dynamicAuthorization = cloneDynamicToolAuthorizationSnapshot(todo.DynamicToolAuthorization)
+		if err := validateDynamicToolAuthorizationSnapshot(dynamicAuthorization); err != nil {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 		}
 	}
 
@@ -709,7 +730,15 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	var supplementalTools []fantasy.AgentTool
 	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
 	if !resultOnly && r.c.mcpManager != nil && mcpAllowed {
-		supplementalTools = append(supplementalTools, r.c.mcpManager.AsAgentTools()...)
+		managerTools := r.c.mcpManager.AsAgentTools()
+		managerTools, unavailable, err := filterManagerToolsThroughSnapshot(dynamicAuthorization, r.c.managerMCPDescriptors(), managerTools, task.Execution.ToolSequence)
+		if err != nil {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+		}
+		if err := r.c.recordDynamicToolUnavailable(ctx, todo, unavailable); err != nil {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+		}
+		supplementalTools = append(supplementalTools, managerTools...)
 		if len(def.MCPTools) > 0 {
 			if err := r.c.mcpManager.LoadAgentMCPServer(def.Name, def.MCPTools, def.Shell); err != nil {
 				return ResolvedWorkerTools{}, fmt.Errorf("load MCP server for agent %s: %w", def.Name, err)
@@ -736,6 +765,17 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	// The pure result is authoritative. Concrete handlers are projected onto
 	// that ordered surface only after all static policy decisions are complete.
 	concrete := append(append([]fantasy.AgentTool(nil), baseTools...), supplementalTools...)
+	if err := validateUniqueConcreteToolNames(concrete); err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+	}
+	for _, reserved := range []struct {
+		name     string
+		required bool
+	}{{name: submitResultToolName, required: static.ResultRequired}, {name: "submit_plan", required: static.PlanRequired}} {
+		if reserved.required && slices.Contains(agentToolNames(concrete), reserved.name) {
+			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: protocol tool name %q collides with a concrete handler", reserved.name)
+		}
+	}
 	concrete = removeToolNames(concrete, submitResultToolName, "submit_plan")
 	if static.ResultRequired {
 		concrete = append(concrete, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
@@ -744,7 +784,22 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		concrete = append(concrete, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
 	}
 	concrete = filterConcreteToolsByNames(concrete, static.Names)
-	return r.finalizeTaskTools(ctx, def, task, req.TodoID, concrete, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicAuthorization, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+}
+
+func validateUniqueConcreteToolNames(candidate []fantasy.AgentTool) error {
+	seen := make(map[string]bool, len(candidate))
+	for _, tool := range candidate {
+		if tool == nil {
+			continue
+		}
+		name := tool.Info().Name
+		if seen[name] {
+			return fmt.Errorf("duplicate tool name %q has multiple concrete handlers", name)
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 func filterConcreteToolsByNames(candidate []fantasy.AgentTool, names []string) []fantasy.AgentTool {
@@ -758,7 +813,7 @@ func filterConcreteToolsByNames(candidate []fantasy.AgentTool, names []string) [
 	return filtered
 }
 
-func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, tools []fantasy.AgentTool, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
+func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, mode WorkerToolResolutionMode, phase Phase, tools []fantasy.AgentTool, dynamicAuthorization *DynamicToolAuthorizationSnapshot, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
 	modelID, err := r.c.resolveTaskExecutionModel(def, task, todoID)
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: resolve task model: %w", err)
@@ -776,7 +831,15 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: result-only repair surface must contain exactly %q", submitResultToolName)
 	}
 	names := agentToolNames(tools)
-	return ResolvedWorkerTools{Tools: tools, Names: names, Capabilities: append([]string(nil), names...)}, nil
+	providerDigest, logicalDigest, err := workerToolDigests(r.c, def, task, mode, phase, tools, dynamicAuthorization, effectiveSequence)
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: compute surface digests: %w", err)
+	}
+	return ResolvedWorkerTools{
+		Tools: tools, Names: names, AuthorizedNames: append([]string(nil), names...),
+		Capabilities: append([]string(nil), names...), ProviderSurfaceDigest: providerDigest,
+		LogicalToolsetDigest: logicalDigest, DynamicAuthorization: cloneDynamicToolAuthorizationSnapshot(dynamicAuthorization),
+	}, nil
 }
 
 func removeToolNames(candidate []fantasy.AgentTool, names ...string) []fantasy.AgentTool {

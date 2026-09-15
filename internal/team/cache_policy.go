@@ -39,6 +39,7 @@ type CacheIdentity struct {
 	ProjectFingerprint   string        `json:"project_fingerprint,omitempty"`
 	HasError             bool          `json:"has_error,omitempty"`
 	ToolRegistryVersion  string        `json:"tool_registry_version,omitempty"`
+	ResourceScopeDigest  string        `json:"resource_scope_digest,omitempty"`
 	SkillHashes          string        `json:"skill_hashes,omitempty"`
 	PolicyVersion        string        `json:"policy_version,omitempty"`
 	ModelFamily          string        `json:"model_family,omitempty"`
@@ -404,6 +405,9 @@ func (e cachedTaskEntry) isFresh(target CacheIdentity) bool {
 
 	// 5. Check ToolRegistryVersion
 	if e.identity.ToolRegistryVersion != target.ToolRegistryVersion {
+		return false
+	}
+	if e.identity.ResourceScopeDigest != target.ResourceScopeDigest {
 		return false
 	}
 

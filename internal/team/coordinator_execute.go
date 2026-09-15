@@ -410,6 +410,23 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// dependent task must not be replayed as independent pending work, and an
 	// on_failure loop must not be lost on restart or branch replay.
 	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
+	for i := range todoBatch {
+		agentDef, _, resolveErr := c.AgentPool().ResolveAgentName(tasks[i].Agent)
+		if resolveErr != nil {
+			if advancedPhase && c.sessionData != nil {
+				c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+			}
+			return "", c.rejectDelegationPolicy(resolveErr.Error())
+		}
+		snapshot, snapshotErr := c.resolveNewTaskToolAuthorization(ctx, tasks[i], agentDef)
+		if snapshotErr != nil {
+			if advancedPhase && c.sessionData != nil {
+				c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+			}
+			return "", c.rejectDelegationPolicy(snapshotErr.Error())
+		}
+		todoBatch[i].DynamicToolAuthorization = snapshot
+	}
 	worksetReceipts, receiptErr := buildWorksetReceipts(tasks, ids, c.executionRunID)
 	if receiptErr != nil {
 		if advancedPhase && c.sessionData != nil {

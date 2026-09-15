@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ import (
 type MCPTool struct {
 	Name        string
 	Description string
+	InputSchema map[string]any
 	Parameters  map[string]any
 	Required    []string
 	ServerName  string
@@ -170,6 +173,11 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
+		inputSchema, err := cloneMCPInputSchema(t.InputSchema)
+		if err != nil {
+			_ = cli.Close()
+			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
+		}
 		params := map[string]any{}
 		if t.InputSchema.Properties != nil {
 			params = t.InputSchema.Properties
@@ -177,6 +185,7 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 		tools = append(tools, MCPTool{
 			Name:        prefixedName,
 			Description: t.Description,
+			InputSchema: inputSchema,
 			Parameters:  params,
 			Required:    t.InputSchema.Required,
 			ServerName:  name,
@@ -224,6 +233,11 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
+		inputSchema, err := cloneMCPInputSchema(t.InputSchema)
+		if err != nil {
+			_ = cli.Close()
+			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
+		}
 		params := map[string]any{}
 		if t.InputSchema.Properties != nil {
 			params = t.InputSchema.Properties
@@ -231,6 +245,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 		tools = append(tools, MCPTool{
 			Name:        prefixedName,
 			Description: t.Description,
+			InputSchema: inputSchema,
 			Parameters:  params,
 			Required:    t.InputSchema.Required,
 			ServerName:  name,
@@ -261,12 +276,23 @@ func isToolAllowed(toolName string, allowed, excluded []string) bool {
 }
 
 func (m *MCPToolManager) GetTools() []MCPTool {
+	return m.SnapshotToolDescriptors()
+}
+
+// SnapshotToolDescriptors returns an immutable, name-sorted copy of the
+// manager-owned MCP catalog. It deliberately carries no client handles.
+func (m *MCPToolManager) SnapshotToolDescriptors() []MCPTool {
+	if m == nil {
+		return nil
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.tools == nil {
-		return []MCPTool{}
+	tools := make([]MCPTool, len(m.tools))
+	for i := range m.tools {
+		tools[i] = cloneMCPTool(m.tools[i])
 	}
-	return m.tools
+	slices.SortFunc(tools, func(a, b MCPTool) int { return cmp.Compare(a.Name, b.Name) })
+	return tools
 }
 
 const mcpDefaultTimeout = 30 * time.Second

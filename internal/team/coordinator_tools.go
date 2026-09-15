@@ -1012,6 +1012,9 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
 			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
 		}
+		if err := t.coordinator.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &batch[i]); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil
+		}
 	}
 	if t.coordinator.hasDurableEventJournal() {
 		for i := range batch {

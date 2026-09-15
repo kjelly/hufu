@@ -1563,6 +1563,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.WorksetReceipt != nil {
 		payload["workset_receipt"] = item.WorksetReceipt
 	}
+	if item.DynamicToolAuthorization != nil {
+		payload["dynamic_tool_authorization"] = cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization)
+	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
 	}

@@ -371,6 +371,8 @@ type canonicalTaskShadow struct {
 	SubagentProvider              string                      `json:"subagent_provider,omitempty"`
 	ProviderBinding               *ProviderBinding            `json:"provider_binding,omitempty"`
 	BackendBinding                *BackendBinding             `json:"backend_binding,omitempty"`
+
+	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -439,6 +441,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		VerifyResult:                  toCanonicalVerifyResult(item.VerifyResult),
 		WorksetBinding:                cloneWorksetBinding(item.WorksetBinding),
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
+		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ExecutionReceipts:             toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
 		FailureEvent:                  RedactedFailureEvent(item.FailureEvent),
 		FailureFingerprints:           normalizeFingerprints(item.FailureFingerprints),

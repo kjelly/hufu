@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -79,6 +80,14 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	}
 	if !slices.Equal(request.Tools.Names, verified.Names) {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt tool surface %v does not match canonical surface %v", request.Tools.Names, verified.Names)
+	}
+	if verified.DynamicAuthorization != nil || request.Tools.DynamicAuthorization != nil {
+		if !slices.Equal(request.Tools.AuthorizedNames, verified.AuthorizedNames) || request.Tools.LogicalToolsetDigest != verified.LogicalToolsetDigest {
+			return AttemptResult{}, fmt.Errorf("hufu-local attempt logical tool authorization does not match canonical authorization for Todo %q (request names=%v provider=%s logical=%s; canonical names=%v provider=%s logical=%s)", request.TaskID, request.Tools.AuthorizedNames, request.Tools.ProviderSurfaceDigest, request.Tools.LogicalToolsetDigest, verified.AuthorizedNames, verified.ProviderSurfaceDigest, verified.LogicalToolsetDigest)
+		}
+		if !reflect.DeepEqual(request.Tools.DynamicAuthorization, verified.DynamicAuthorization) {
+			return AttemptResult{}, fmt.Errorf("hufu-local attempt dynamic tool authorization does not match canonical authorization for Todo %q", request.TaskID)
+		}
 	}
 	if len(verified.Tools) == 0 {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt has no authorized tools")
