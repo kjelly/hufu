@@ -147,26 +147,44 @@ func normalizedInvariantAssessmentClaims(claims *[]InvariantAssessmentClaim) ([]
 	return normalized, nil
 }
 
-func (c *Coordinator) invariantContextManifest(todo *TodoItem, attempt int, modelExecutionID string) (*ContextInjectionManifest, error) {
+func authoritativeTaskContextManifest(todo *TodoItem, attempt int, modelExecutionID string) (*ContextInjectionManifest, error) {
 	if todo == nil {
 		return nil, fmt.Errorf("invariant attestation requires a durable Todo")
 	}
-	if attempt < 1 || strings.TrimSpace(modelExecutionID) == "" {
-		return nil, fmt.Errorf("invariant attestation requires runtime attempt and model execution identity")
+	if attempt < 1 {
+		return nil, fmt.Errorf("invariant attestation requires a runtime attempt")
 	}
 	var matched *ContextInjectionManifest
 	for i := range todo.ContextManifests {
 		manifest := &todo.ContextManifests[i]
-		if manifest.TaskID != todo.ID || manifest.Attempt != attempt || manifest.ModelExecutionID != modelExecutionID || !manifest.ModelCalled {
+		if manifest.TaskID != todo.ID || manifest.Attempt != attempt || !manifest.ModelCalled {
+			continue
+		}
+		if modelExecutionID != "" && manifest.ModelExecutionID != modelExecutionID {
+			continue
+		}
+		if (manifest.Trigger != ContextTriggerTaskDispatch || manifest.Purpose != contextPurposeForTrigger(ContextTriggerTaskDispatch)) &&
+			(manifest.Trigger != ContextTriggerRetry || manifest.Purpose != contextPurposeForTrigger(ContextTriggerRetry)) {
 			continue
 		}
 		if matched != nil {
-			return nil, fmt.Errorf("multiple context manifests match task %q attempt %d model execution %q", todo.ID, attempt, modelExecutionID)
+			return nil, fmt.Errorf("multiple authoritative context manifests match task %q attempt %d model execution %q", todo.ID, attempt, modelExecutionID)
 		}
 		matched = cloneContextInjectionManifest(manifest)
 	}
 	if matched == nil {
-		return nil, fmt.Errorf("no context manifest matches task %q attempt %d model execution %q", todo.ID, attempt, modelExecutionID)
+		return nil, fmt.Errorf("no context manifest with an authoritative task purpose matches task %q attempt %d model execution %q", todo.ID, attempt, modelExecutionID)
+	}
+	return matched, nil
+}
+
+func (c *Coordinator) invariantContextManifest(todo *TodoItem, attempt int, modelExecutionID string) (*ContextInjectionManifest, error) {
+	if strings.TrimSpace(modelExecutionID) == "" {
+		return nil, fmt.Errorf("invariant attestation requires model execution identity")
+	}
+	matched, err := authoritativeTaskContextManifest(todo, attempt, modelExecutionID)
+	if err != nil {
+		return nil, err
 	}
 	if matched.SchemaVersion != ContextManifestSchemaVersion {
 		return nil, fmt.Errorf("context manifest for task %q uses schema version %d; version %d is required for invariant attestation", todo.ID, matched.SchemaVersion, ContextManifestSchemaVersion)
@@ -273,19 +291,9 @@ func (c *Coordinator) invariantRepairIdentity(todo *TodoItem, attempt int) (Invo
 	if todo == nil || todo.InvariantVerification == "" {
 		return InvocationMetadata{}, nil
 	}
-	var matched *ContextInjectionManifest
-	for i := range todo.ContextManifests {
-		manifest := &todo.ContextManifests[i]
-		if manifest.TaskID != todo.ID || manifest.Attempt != attempt || !manifest.ModelCalled || manifest.Purpose != "" {
-			continue
-		}
-		if matched != nil {
-			return InvocationMetadata{}, fmt.Errorf("multiple worker context manifests match task %q attempt %d", todo.ID, attempt)
-		}
-		matched = manifest
-	}
-	if matched == nil {
-		return InvocationMetadata{}, fmt.Errorf("no worker context manifest matches task %q attempt %d", todo.ID, attempt)
+	matched, err := authoritativeTaskContextManifest(todo, attempt, "")
+	if err != nil {
+		return InvocationMetadata{}, err
 	}
 	_, metadata, err := c.invariantRepairInstructions(todo.ID, attempt, matched.ModelExecutionID)
 	return metadata, err

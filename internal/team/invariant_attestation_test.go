@@ -29,7 +29,7 @@ func invariantAttestationFixture(t *testing.T, mode InvariantVerificationMode, d
 		SchemaVersion: ContextManifestSchemaVersion,
 		RequestID:     "request-1", RequestHash: "request-hash", RunID: "run-1",
 		TaskID: item.ID, Attempt: 1, Agent: "reviewer", AgentRole: "worker",
-		ModelExecutionID: "model-execution-1", Phase: PhaseVerify, Trigger: ContextTriggerTaskDispatch,
+		ModelExecutionID: "model-execution-1", Phase: PhaseVerify, Trigger: ContextTriggerTaskDispatch, Purpose: "task_execution",
 		ModelCalled: true, Outcome: "model_call", CreatedAt: time.Unix(100, 0).UTC(),
 	}
 	for _, definition := range definitions {
@@ -45,6 +45,21 @@ func invariantAttestationFixture(t *testing.T, mode InvariantVerificationMode, d
 		t.Fatal(err)
 	}
 	return c, tracker.TodoList().Items()[0], manifest
+}
+
+func addInvariantRecoveryManifest(t *testing.T, c *Coordinator, item *TodoItem, primary ContextInjectionManifest, requestID string) ContextInjectionManifest {
+	t.Helper()
+	recovery := *cloneContextInjectionManifest(&primary)
+	recovery.RequestID = requestID
+	recovery.Trigger = ContextTriggerToolFailure
+	recovery.Purpose = "tool_failure_recovery"
+	recovery.ParentRequestID = primary.RequestID
+	recovery.ParentManifestFingerprint = primary.Fingerprint
+	recovery.Fingerprint = contextManifestFingerprint(recovery)
+	if err := c.taskTracker.TodoList().SetContextManifest(item.ID, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	return recovery
 }
 
 func TestAttestInvariantClaimsBuildsCanonicalSortedEnvelope(t *testing.T) {
@@ -215,6 +230,22 @@ func TestSubmitResultAttestsBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestSubmitResultUsesTaskExecutionManifestAfterToolFailure(t *testing.T) {
+	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
+	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport, definition)
+	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery")
+
+	ctx := withInvocationMetadata(occurrenceTestContext(c, item.ID, 1), invocationMetadataFromManifest(&primary))
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Input: `{"status":"success","summary":"checked","invariant_assessments":[{"invariant_id":"safe","status":"preserved","summary":"preserved"}]}`})
+	if err != nil || response.IsError {
+		t.Fatalf("submit_result after recovery response=%#v err=%v", response, err)
+	}
+	stored := c.GetTaskResult(item.ID)
+	if stored == nil || stored.InvariantVerification == nil || stored.InvariantVerification.ContextManifestFingerprint != primary.Fingerprint {
+		t.Fatalf("stored result = %#v, want primary manifest %q", stored, primary.Fingerprint)
+	}
+}
+
 func TestInvariantRepairInstructionsReuseDurableManifest(t *testing.T) {
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationGate, definition)
@@ -228,6 +259,103 @@ func TestInvariantRepairInstructionsReuseDurableManifest(t *testing.T) {
 	c.session.InvariantCatalog[0].Statement = "changed"
 	if _, _, err := c.invariantRepairInstructions(item.ID, 1, manifest.ModelExecutionID); err == nil {
 		t.Fatal("repair accepted catalog content that no longer matches persisted manifest")
+	}
+}
+
+func TestInvariantRepairUsesUniquePrimaryAmongRecoveryManifests(t *testing.T) {
+	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
+	c, item, primary := invariantAttestationFixture(t, InvariantVerificationGate, definition)
+	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery-1")
+	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery-2")
+
+	current := c.todoItemByID(item.ID)
+	metadata, err := c.invariantRepairIdentity(current, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ParentManifestFingerprint != primary.Fingerprint || metadata.ModelExecutionID != primary.ModelExecutionID || metadata.Purpose != primary.Purpose {
+		t.Fatalf("repair metadata = %#v, want primary manifest %#v", metadata, primary)
+	}
+	prompt, promptMetadata, err := c.invariantRepairInstructions(item.ID, 1, primary.ModelExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "### safe (error)") || promptMetadata.ParentManifestFingerprint != primary.Fingerprint {
+		t.Fatalf("repair prompt=%q metadata=%#v", prompt, promptMetadata)
+	}
+}
+
+func TestInvariantRepairIdentityUsesTaskExecutionManifest(t *testing.T) {
+	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport)
+	metadata, err := c.invariantRepairIdentity(item, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ParentManifestFingerprint != primary.Fingerprint || metadata.Purpose != "task_execution" || metadata.Trigger != ContextTriggerTaskDispatch {
+		t.Fatalf("repair metadata = %#v, want task execution manifest %#v", metadata, primary)
+	}
+}
+
+func TestInvariantRepairIdentityUsesRetryManifest(t *testing.T) {
+	c, item, retry := invariantAttestationFixture(t, InvariantVerificationReport)
+	retry.Attempt = 2
+	retry.Trigger = ContextTriggerRetry
+	retry.Purpose = "task_retry"
+	retry.Fingerprint = contextManifestFingerprint(retry)
+	if err := c.taskTracker.TodoList().SetContextManifest(item.ID, &retry); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := c.invariantRepairIdentity(c.todoItemByID(item.ID), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ParentManifestFingerprint != retry.Fingerprint || metadata.Purpose != "task_retry" || metadata.Trigger != ContextTriggerRetry {
+		t.Fatalf("repair metadata = %#v, want retry manifest %#v", metadata, retry)
+	}
+}
+
+func TestInvariantManifestSelectionFailsClosedWithoutUniquePrimary(t *testing.T) {
+	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport)
+	duplicate := *cloneContextInjectionManifest(&primary)
+	duplicate.RequestID = "request-primary-duplicate"
+	duplicate.Fingerprint = contextManifestFingerprint(duplicate)
+	if err := c.taskTracker.TodoList().SetContextManifest(item.ID, &duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.invariantContextManifest(c.todoItemByID(item.ID), 1, primary.ModelExecutionID); err == nil || !strings.Contains(err.Error(), "multiple authoritative") {
+		t.Fatalf("duplicate primary error = %v", err)
+	}
+
+	c2, item2, primary2 := invariantAttestationFixture(t, InvariantVerificationReport)
+	recovery := addInvariantRecoveryManifest(t, c2, item2, primary2, "request-recovery-only")
+	withoutPrimary := c2.todoItemByID(item2.ID)
+	withoutPrimary.ContextManifests = []ContextInjectionManifest{recovery}
+	if _, err := authoritativeTaskContextManifest(withoutPrimary, 1, primary2.ModelExecutionID); err == nil || !strings.Contains(err.Error(), "no context manifest") {
+		t.Fatalf("recovery-only error = %v", err)
+	}
+}
+
+func TestInvariantManifestSelectionSurvivesSessionReload(t *testing.T) {
+	c, item, primary := invariantAttestationFixture(t, InvariantVerificationGate)
+	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery")
+	workspace := t.TempDir()
+	if err := SaveSession(workspace, &SessionData{Tasks: c.taskTracker.TodoList().Items()}); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadSession(workspace)
+	if loaded == nil {
+		t.Fatal("session did not reload")
+	}
+	resumedTracker := NewTaskTracker()
+	resumedTracker.TodoList().Restore(loaded.Tasks)
+	resumed := &Coordinator{projectDir: "/repo", taskTracker: resumedTracker, session: c.session}
+	resumedItem := resumed.todoItemByID(item.ID)
+	metadata, err := resumed.invariantRepairIdentity(resumedItem, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ParentManifestFingerprint != primary.Fingerprint {
+		t.Fatalf("reloaded repair metadata = %#v, want primary manifest %q", metadata, primary.Fingerprint)
 	}
 }
 
