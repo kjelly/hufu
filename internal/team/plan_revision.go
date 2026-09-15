@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -307,9 +309,17 @@ func planCycle(tasks []TaskDef) (int, bool) {
 }
 
 func validateResourceClaims(tasks []TaskDef) error {
+	claims := make([][]ResourceClaim, len(tasks))
+	for i := range tasks {
+		normalized, err := normalizeResourceClaims(resourceClaims(tasks[i]))
+		if err != nil {
+			return fmt.Errorf("task %d resource claims: %w", i, err)
+		}
+		claims[i] = normalized
+	}
 	for i := range tasks {
 		for j := i + 1; j < len(tasks); j++ {
-			if claimsConflict(resourceClaims(tasks[i]), resourceClaims(tasks[j])) && !dependsEither(tasks, i, j) {
+			if claimsConflict(claims[i], claims[j]) && !dependsEither(tasks, i, j) {
 				return fmt.Errorf("resource claims conflict between parallel tasks %d and %d", i, j)
 			}
 		}
@@ -334,16 +344,123 @@ func normalizeResourceClaimMode(mode ResourceClaimMode) ResourceClaimMode {
 	return mode
 }
 
-func claimsConflict(left, right []ResourceClaim) bool {
-	for _, a := range left {
-		if a.Resource == "" {
+const workspacePathResourcePrefix = "workspace:path:"
+
+// NewWorkspacePathResourceClaim constructs a canonical scheduler claim for a
+// repository-relative path. A dot path is reserved for the whole workspace.
+func NewWorkspacePathResourceClaim(path string, mode ResourceClaimMode) (ResourceClaim, error) {
+	return normalizeResourceClaim(ResourceClaim{Resource: workspacePathResourcePrefix + path, Mode: mode})
+}
+
+// ParseWorkspacePathResource parses the reserved workspace resource namespace.
+// Ordinary resource names are reported with ok=false; malformed workspace
+// namespace values are errors so callers cannot silently treat them as generic.
+func ParseWorkspacePathResource(resource string) (path string, ok bool, err error) {
+	value, found := strings.CutPrefix(resource, workspacePathResourcePrefix)
+	if !found {
+		if strings.HasPrefix(resource, "workspace:") {
+			return "", false, fmt.Errorf("invalid reserved workspace resource %q", resource)
+		}
+		return "", false, nil
+	}
+	if value == "" {
+		return "", false, fmt.Errorf("workspace path resource is empty")
+	}
+	if value == "." {
+		return value, true, nil
+	}
+	if strings.ContainsRune(value, '\\') {
+		return "", false, fmt.Errorf("workspace path resource %q contains a backslash", resource)
+	}
+	normalized, err := NormalizeTouchedPath(value)
+	if err != nil {
+		return "", false, fmt.Errorf("invalid workspace path resource %q: %w", resource, err)
+	}
+	return strings.TrimSuffix(normalized, "/"), true, nil
+}
+
+func normalizeResourceClaim(claim ResourceClaim) (ResourceClaim, error) {
+	claim.Mode = normalizeResourceClaimMode(claim.Mode)
+	switch claim.Mode {
+	case ResourceRead, ResourceWrite, ResourceExclusive:
+	default:
+		return ResourceClaim{}, fmt.Errorf("resource %q has invalid mode %q", claim.Resource, claim.Mode)
+	}
+	path, workspacePath, err := ParseWorkspacePathResource(claim.Resource)
+	if err != nil {
+		return ResourceClaim{}, err
+	}
+	if workspacePath {
+		claim.Resource = workspacePathResourcePrefix + path
+	}
+	return claim, nil
+}
+
+func normalizeResourceClaims(claims []ResourceClaim) ([]ResourceClaim, error) {
+	byResource := make(map[string]ResourceClaimMode, len(claims))
+	for _, claim := range claims {
+		normalized, err := normalizeResourceClaim(claim)
+		if err != nil {
+			return nil, err
+		}
+		if normalized.Resource == "" {
 			continue
 		}
+		if current, exists := byResource[normalized.Resource]; !exists || resourceClaimModeStrength(normalized.Mode) > resourceClaimModeStrength(current) {
+			byResource[normalized.Resource] = normalized.Mode
+		}
+	}
+	resources := slices.Sorted(maps.Keys(byResource))
+	result := make([]ResourceClaim, 0, len(resources))
+	for _, resource := range resources {
+		result = append(result, ResourceClaim{Resource: resource, Mode: byResource[resource]})
+	}
+	return result, nil
+}
+
+func resourceClaimModeStrength(mode ResourceClaimMode) int {
+	switch normalizeResourceClaimMode(mode) {
+	case ResourceRead:
+		return 1
+	case ResourceWrite:
+		return 2
+	case ResourceExclusive:
+		return 3
+	default:
+		return 4
+	}
+}
+
+func resourceClaimConflicts(a, b ResourceClaim) bool {
+	left, leftErr := normalizeResourceClaim(a)
+	right, rightErr := normalizeResourceClaim(b)
+	if leftErr != nil || rightErr != nil {
+		return true
+	}
+	if left.Resource == "" || right.Resource == "" {
+		return false
+	}
+	leftPath, leftWorkspace, _ := ParseWorkspacePathResource(left.Resource)
+	rightPath, rightWorkspace, _ := ParseWorkspacePathResource(right.Resource)
+	overlaps := left.Resource == right.Resource
+	if leftWorkspace && rightWorkspace {
+		overlaps = workspacePathsOverlap(leftPath, rightPath)
+	}
+	if !overlaps {
+		return false
+	}
+	return left.Mode != ResourceRead || right.Mode != ResourceRead
+}
+
+func workspacePathsOverlap(left, right string) bool {
+	return left == "." || right == "." || left == right ||
+		strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
+func claimsConflict(left, right []ResourceClaim) bool {
+	for _, a := range left {
 		for _, b := range right {
-			if a.Resource != b.Resource {
-				continue
-			}
-			if normalizeResourceClaimMode(a.Mode) != ResourceRead || normalizeResourceClaimMode(b.Mode) != ResourceRead {
+			if resourceClaimConflicts(a, b) {
 				return true
 			}
 		}
