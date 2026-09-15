@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `72c20a5`
 > Supersedes: `archive/roadmaps/future-improvement-roadmap-2026-07.md`
 > Superseded-By: —
 
@@ -18,7 +18,9 @@ be tracked in an issue or ADR and linked here only while it is active.
 | Execution compatibility | New durable identity is `ExecutionTarget`; receipt backend, v4 policy routes, and execution-event backend shadows are now canonical writers. Legacy `local` and provider-era fields remain readable. | Deliver read-only inventory and append-only migration before the warning release and later removal. | [execution runtime](architecture/execution-runtime.md) |
 | Decision runtime | Capability-aware reference/JUDGE/CHALLENGE/REVISE routing and pinned bindings are implemented; outcome calibration remains data-gated. | Keep the deferred Phase 5 entry criteria and metrics honest as real runs accumulate. | [decision runtime](architecture/decision-runtime.md) |
 | Model profiles | Runtime resolver, provider introspection, provenance, cache, and effective-context admission are implemented. | Maintain provider adapters and update tests when provider metadata contracts change. | [model metadata](architecture/model-metadata.md) |
-| Worksets | Artifact-backed manifests and expansion receipts are canonical; path-based TSV fan-out is compatibility-only. | Complete the documented release-cycle migration and then remove the legacy path. | [workset](architecture/workset.md) |
+| Resource-safe execution | Typed hierarchical claims, conservative fallback scopes, immutable execution envelopes, and root-anchored local file enforcement are implemented. | Extend narrow-scope eligibility only when a tool has an enforceable descriptor and race/adversarial coverage. | [execution runtime](architecture/execution-runtime.md) |
+| Dynamic MCP surface | Eligible manager-owned MCP tools use one fixed provider gateway while frozen logical authorization, schema validation, digests, and receipts remain target-specific. | Add future schema/effect capabilities only as versioned contracts without widening restored occurrences. | [execution runtime](architecture/execution-runtime.md) |
+| Worksets | Artifact-backed manifests and expansion receipts are canonical; child bindings can derive frozen bounded resource scopes; path-based TSV fan-out is compatibility-only. | Complete the documented release-cycle migration and then remove the legacy path. | [workset](architecture/workset.md) |
 | Memory learning | Canonical context, injection manifests, typed memory uses, outcome events, and promotion gates are runtime boundaries. | Treat ranking/consolidation changes as separately reviewed experiments with replay evidence. | [memory learning](architecture/memory-learning.md) |
 | Documentation integrity | Active docs now have explicit lifecycle and authority metadata, with link/path checks in CI. | Extend the checker when new lifecycle rules or document classes are added. | [documentation map](README.md) |
 | Operator experience | Phases 0–6 and the Phase 7 engineering gates are implemented as an additive preview; the human study has zero participants. | Run HF-UX-070 with real participants and retain preview status until its safety and usability gates pass. | [operator experience](architecture/operator-experience.md), [release readiness](reference/operator-release-readiness.md) |
@@ -26,7 +28,7 @@ be tracked in an issue or ADR and linked here only while it is active.
 ## Recently completed documentation work
 
 - Replaced the flat active-doc set with lifecycle directories.
-- Promoted execution-target, run-outcome, workset, and memory boundaries to
-  concise architecture references.
+- Promoted execution-target, run-outcome, workset, resource-scope, stable MCP
+  tool-surface, and memory boundaries to concise architecture references.
 - Archived completed migration reports and implementation plans without
   deleting their historical evidence.
