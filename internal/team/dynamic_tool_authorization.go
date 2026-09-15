@@ -76,7 +76,9 @@ func cloneJSONMap(src map[string]any) map[string]any {
 		return nil
 	}
 	var cloned map[string]any
-	if json.Unmarshal(payload, &cloned) != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.UseNumber()
+	if decoder.Decode(&cloned) != nil || requireJSONEOF(decoder) != nil {
 		return nil
 	}
 	return cloned
@@ -347,7 +349,7 @@ func providerToolSchemaSHA256(info fantasy.ToolInfo) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func workerToolDigests(c *Coordinator, def *agent.AgentDef, task TaskDef, mode WorkerToolResolutionMode, phase Phase, tools []fantasy.AgentTool, snapshot *DynamicToolAuthorizationSnapshot, effectiveSequence []string) (string, string, error) {
+func workerToolDigests(c *Coordinator, def *agent.AgentDef, task TaskDef, mode WorkerToolResolutionMode, phase Phase, tools []fantasy.AgentTool, dynamicTargets []DynamicToolTarget, snapshot *DynamicToolAuthorizationSnapshot, effectiveSequence []string) (string, string, error) {
 	type namedFingerprint struct{ name, fingerprint string }
 	direct := make([]namedFingerprint, 0, len(tools))
 	for _, tool := range tools {
@@ -363,6 +365,9 @@ func workerToolDigests(c *Coordinator, def *agent.AgentDef, task TaskDef, mode W
 	for _, entry := range direct {
 		writeDigestRecord(providerHasher, "direct", entry.name, entry.fingerprint)
 	}
+	if slices.ContainsFunc(direct, func(entry namedFingerprint) bool { return entry.name == dynamicToolGatewayName }) {
+		writeDigestRecord(providerHasher, "gateway_schema_version", strconv.Itoa(dynamicToolGatewaySchemaVersion))
+	}
 	logicalHasher := sha256.New()
 	writeDigestRecord(logicalHasher, "logical_toolset_digest_version", strconv.Itoa(logicalToolsetDigestVersion))
 	frozenDigest := "legacy"
@@ -374,9 +379,13 @@ func workerToolDigests(c *Coordinator, def *agent.AgentDef, task TaskDef, mode W
 		writeDigestRecord(logicalHasher, "direct", entry.name, entry.fingerprint)
 	}
 	if snapshot != nil {
+		executable := make(map[string]bool, len(dynamicTargets))
+		for _, target := range dynamicTargets {
+			executable[target.Name] = true
+		}
 		for _, target := range snapshot.Targets {
 			writeDigestRecord(logicalHasher, "frozen_dynamic", target.Name, target.DescriptorSHA256)
-			if slices.ContainsFunc(direct, func(entry namedFingerprint) bool { return entry.name == target.Name }) {
+			if executable[target.Name] || slices.ContainsFunc(direct, func(entry namedFingerprint) bool { return entry.name == target.Name }) {
 				writeDigestRecord(logicalHasher, "executable_dynamic", target.Name, target.DescriptorSHA256)
 			}
 		}
@@ -417,4 +426,69 @@ func sortedUniqueToolNames(names []string) []string {
 	}
 	slices.Sort(result)
 	return slices.Compact(result)
+}
+
+func projectDynamicToolGateway(c *Coordinator, tools, baseTools []fantasy.AgentTool, descriptors []internalmcp.MCPTool, snapshot *DynamicToolAuthorizationSnapshot, mode WorkerToolResolutionMode, sequence []string) ([]fantasy.AgentTool, []DynamicToolTarget, error) {
+	if snapshot == nil || mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume || len(sequence) > 0 {
+		return tools, nil, nil
+	}
+	descriptorByName := make(map[string]internalmcp.MCPTool, len(descriptors))
+	for _, descriptor := range descriptors {
+		descriptorByName[descriptor.Name] = descriptor
+	}
+	frozen := frozenDynamicTargetMap(snapshot)
+	proxied := make(map[string]bool)
+	targets := make([]DynamicToolTarget, 0)
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		descriptor, managerOwned := descriptorByName[tool.Info().Name]
+		fingerprint, frozenTarget := frozen[tool.Info().Name]
+		if !managerOwned || !frozenTarget || !dynamicSchemaEligible(descriptor.InputSchema) {
+			continue
+		}
+		proxied[descriptor.Name] = true
+		targets = append(targets, DynamicToolTarget{
+			Name: descriptor.Name, Kind: "mcp", Server: descriptor.ServerName, NativeName: descriptor.OrigName,
+			Description: descriptor.Description, InputSchema: cloneJSONMap(descriptor.InputSchema),
+			Parameters: cloneJSONMap(descriptor.Parameters), Required: slices.Clone(descriptor.Required), DescriptorSHA256: fingerprint,
+		})
+	}
+	if len(targets) == 0 {
+		return tools, nil, nil
+	}
+	for _, tool := range tools {
+		if tool != nil && tool.Info().Name == dynamicToolGatewayName {
+			return nil, nil, fmt.Errorf("tool_name_collision: reserved gateway name %q is already in use", dynamicToolGatewayName)
+		}
+	}
+	slices.SortFunc(targets, func(a, b DynamicToolTarget) int { return strings.Compare(a.Name, b.Name) })
+	baseNames := toolNameSet(agentToolNames(baseTools))
+	directBase := make([]fantasy.AgentTool, 0, len(baseTools))
+	directSupplemental := make([]fantasy.AgentTool, 0, len(tools))
+	protocol := make([]fantasy.AgentTool, 0, 2)
+	for _, tool := range tools {
+		if tool == nil || proxied[tool.Info().Name] {
+			continue
+		}
+		name := tool.Info().Name
+		switch {
+		case name == "submit_plan" || name == submitResultToolName:
+			protocol = append(protocol, tool)
+		case baseNames[name]:
+			directBase = append(directBase, tool)
+		default:
+			directSupplemental = append(directSupplemental, tool)
+		}
+	}
+	slices.SortFunc(directSupplemental, func(a, b fantasy.AgentTool) int {
+		return strings.Compare(a.Info().Name, b.Info().Name)
+	})
+	direct := make([]fantasy.AgentTool, 0, len(tools)-len(targets)+1)
+	direct = append(direct, directBase...)
+	direct = append(direct, directSupplemental...)
+	direct = append(direct, newDynamicToolGateway(c, c.mcpManager, targets))
+	direct = append(direct, protocol...)
+	return direct, targets, nil
 }

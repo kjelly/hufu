@@ -348,7 +348,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	ctx = context.WithValue(ctx, executionAttemptKey{}, 1)
 	ctx = context.WithValue(ctx, taskRequiresResultKey{}, true)
 	ctx = context.WithValue(ctx, tools.AgentNameKey, canonical.Agent.Name)
-	ctx = c.withEffectiveToolsAllowedForTask(ctx, agentDef, resolvedTools.Names, canonical.Task)
+	ctx = c.withEffectiveToolsAllowedForTask(ctx, agentDef, resolvedTools.AuthorizedNames, canonical.Task)
 	ctx = withContextWindowRequestDescriptor(ctx, c.newContextWindowRequestDescriptorWithContext(ctx, subAgModelID, agentDef, gatedTools, canonical.Agent.Name, "subagent"))
 	if identity, active := c.activeTaskResultOccurrence(todoID); active {
 		ctx = withSubmitResultRuntimeIdentity(ctx, identity)

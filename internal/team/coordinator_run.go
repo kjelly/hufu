@@ -40,7 +40,7 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 // same timeout, terminal-round, artifact-scope, and tool-authorization wiring
 // as DAG workers. It returns the task context plus the timeout and round cancel
 // funcs so the caller can defer them.
-func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef *agent.AgentDef, resolvedName, task, todoID, directModel string, exposedToolNames []string) (context.Context, context.CancelFunc, context.CancelFunc, error) {
+func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef *agent.AgentDef, resolvedName, task, todoID, directModel string, authorizedToolNames []string) (context.Context, context.CancelFunc, context.CancelFunc, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	artifactScope, err := c.buildArtifactAccessScope(todoID, 1, task)
 	if err != nil {
@@ -106,7 +106,7 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 		DenyUnsupportedDeclaredTools: true,
 		FailClosedForUnsupported:     false,
 	})
-	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, exposedToolNames)
+	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, authorizedToolNames)
 	return taskCtx, cancel, roundCancel, nil
 }
 
@@ -592,7 +592,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	directRunID := c.contextRunID()
 	exposedToolNames := resolvedDirectTools.Names
-	taskCtx, cancel, roundCancel, scopeErr := c.buildDirectAgentTaskContext(ctx, agentDef, resolvedName, task, todoID, directModel, exposedToolNames)
+	taskCtx, cancel, roundCancel, scopeErr := c.buildDirectAgentTaskContext(ctx, agentDef, resolvedName, task, todoID, directModel, resolvedDirectTools.AuthorizedNames)
 	if scopeErr != nil {
 		directScopeErr := fmt.Errorf("direct-agent artifact scope preflight failed: %w", scopeErr)
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
@@ -607,6 +607,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: directScopeErr}, nil
 	}
 	taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(directDispositions, directSideEffect, directRunID, todoID, 1))
+	directDynamicInvocations := newDynamicInvocationAccumulator(c.stepBudget(agentDef, agent.DefaultMaxSteps))
+	taskCtx = withDynamicToolInvocationSink(taskCtx, directDynamicInvocations.record, dynamicInvocationDiagnosticsReporter(c, nil, nil, resolvedName, todoID))
 	taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptorWithContext(taskCtx, directModel, agentDef, resolvedDirectTools.Tools, resolvedName, "direct-agent"))
 	defer cancel()
 
@@ -775,6 +777,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		ContextManifest:  cloneContextInjectionManifest(&contextManifest),
 		ToolDispositions: directDispositions.snapshot(),
 	}
+	directReceipt.ToolInvocations, directReceipt.ToolInvocationsTruncated = directDynamicInvocations.snapshot()
 	if err == nil {
 		zero := 0
 		directReceipt.ExitCode = &zero

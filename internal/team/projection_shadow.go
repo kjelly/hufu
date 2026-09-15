@@ -219,6 +219,8 @@ type canonicalReceipt struct {
 	VerifyResult                  *canonicalVerifyResult     `json:"verify_result,omitempty"`
 	StepBudget                    *StepBudgetUsage           `json:"step_budget,omitempty"`
 	ToolDispositions              []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
+	ToolInvocations               []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
+	ToolInvocationsTruncated      int                        `json:"tool_invocations_truncated,omitempty"`
 	HandoffState                  ResultHandoffState         `json:"handoff_state,omitempty"`
 	MemoryManifest                *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
 	ContextManifest               *ContextInjectionManifest  `json:"context_manifest,omitempty"`
@@ -256,6 +258,8 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			VerifyResult:                  toCanonicalVerifyResult(r.VerifyResult),
 			StepBudget:                    r.StepBudget,
 			ToolDispositions:              append([]ToolExecutionDisposition(nil), r.ToolDispositions...),
+			ToolInvocations:               append([]ToolInvocationReceipt(nil), r.ToolInvocations...),
+			ToolInvocationsTruncated:      r.ToolInvocationsTruncated,
 			HandoffState:                  r.HandoffState,
 			MemoryManifest:                r.MemoryManifest,
 			ContextManifest:               r.ContextManifest,

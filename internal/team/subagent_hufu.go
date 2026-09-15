@@ -25,6 +25,33 @@ func (p *HufuLocalSubagentProvider) Capabilities() SubagentCapabilities {
 	return SubagentCapabilities{SupportsHufuTools: true, SupportsTypedResult: true, SupportsActivities: true}
 }
 
+func validateHufuLocalToolResolution(request AttemptRequest, verified ResolvedWorkerTools) error {
+	if len(request.Tools.Names) != len(request.Tools.Tools) {
+		return fmt.Errorf("hufu-local attempt tool surface names do not match concrete tools")
+	}
+	for i, tool := range request.Tools.Tools {
+		if tool == nil {
+			return fmt.Errorf("hufu-local attempt tool surface contains nil tool at index %d", i)
+		}
+		if request.Tools.Names[i] != strings.TrimSpace(tool.Info().Name) {
+			return fmt.Errorf("hufu-local attempt tool surface name %q does not match concrete tool %q", request.Tools.Names[i], tool.Info().Name)
+		}
+	}
+	if !slices.Equal(request.Tools.Names, verified.Names) {
+		return fmt.Errorf("hufu-local attempt tool surface %v does not match canonical surface %v", request.Tools.Names, verified.Names)
+	}
+	if verified.DynamicAuthorization == nil && request.Tools.DynamicAuthorization == nil {
+		return nil
+	}
+	if !slices.Equal(request.Tools.AuthorizedNames, verified.AuthorizedNames) || request.Tools.LogicalToolsetDigest != verified.LogicalToolsetDigest || request.Tools.ProviderSurfaceDigest != verified.ProviderSurfaceDigest || !reflect.DeepEqual(request.Tools.DynamicTargets, verified.DynamicTargets) {
+		return fmt.Errorf("hufu-local attempt logical tool authorization does not match canonical authorization for Todo %q (request names=%v provider=%s logical=%s; canonical names=%v provider=%s logical=%s)", request.TaskID, request.Tools.AuthorizedNames, request.Tools.ProviderSurfaceDigest, request.Tools.LogicalToolsetDigest, verified.AuthorizedNames, verified.ProviderSurfaceDigest, verified.LogicalToolsetDigest)
+	}
+	if !reflect.DeepEqual(request.Tools.DynamicAuthorization, verified.DynamicAuthorization) {
+		return fmt.Errorf("hufu-local attempt dynamic tool authorization does not match canonical authorization for Todo %q", request.TaskID)
+	}
+	return nil
+}
+
 func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request AttemptRequest) (AttemptResult, error) {
 	if p == nil || p.coordinator == nil {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt requires a coordinator")
@@ -67,27 +94,8 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if err != nil {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt tool resolution: %w", err)
 	}
-	if len(request.Tools.Names) != len(request.Tools.Tools) {
-		return AttemptResult{}, fmt.Errorf("hufu-local attempt tool surface names do not match concrete tools")
-	}
-	for i, tool := range request.Tools.Tools {
-		if tool == nil {
-			return AttemptResult{}, fmt.Errorf("hufu-local attempt tool surface contains nil tool at index %d", i)
-		}
-		if request.Tools.Names[i] != strings.TrimSpace(tool.Info().Name) {
-			return AttemptResult{}, fmt.Errorf("hufu-local attempt tool surface name %q does not match concrete tool %q", request.Tools.Names[i], tool.Info().Name)
-		}
-	}
-	if !slices.Equal(request.Tools.Names, verified.Names) {
-		return AttemptResult{}, fmt.Errorf("hufu-local attempt tool surface %v does not match canonical surface %v", request.Tools.Names, verified.Names)
-	}
-	if verified.DynamicAuthorization != nil || request.Tools.DynamicAuthorization != nil {
-		if !slices.Equal(request.Tools.AuthorizedNames, verified.AuthorizedNames) || request.Tools.LogicalToolsetDigest != verified.LogicalToolsetDigest {
-			return AttemptResult{}, fmt.Errorf("hufu-local attempt logical tool authorization does not match canonical authorization for Todo %q (request names=%v provider=%s logical=%s; canonical names=%v provider=%s logical=%s)", request.TaskID, request.Tools.AuthorizedNames, request.Tools.ProviderSurfaceDigest, request.Tools.LogicalToolsetDigest, verified.AuthorizedNames, verified.ProviderSurfaceDigest, verified.LogicalToolsetDigest)
-		}
-		if !reflect.DeepEqual(request.Tools.DynamicAuthorization, verified.DynamicAuthorization) {
-			return AttemptResult{}, fmt.Errorf("hufu-local attempt dynamic tool authorization does not match canonical authorization for Todo %q", request.TaskID)
-		}
+	if err := validateHufuLocalToolResolution(request, verified); err != nil {
+		return AttemptResult{}, err
 	}
 	if len(verified.Tools) == 0 {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt has no authorized tools")
@@ -102,7 +110,7 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	ctx = withContextWindowRequestDescriptor(ctx, p.coordinator.newContextWindowRequestDescriptorWithContext(ctx, request.ModelID, def, gatedTools, canonical.Agent.Name, "subagent"))
 	// Install authorization from the verified concrete surface before the
 	// gated constructor runs. This also preserves agent-specific MCP aliases.
-	ctx = p.coordinator.withEffectiveToolsAllowedForTask(ctx, def, verified.Names, canonical.Task)
+	ctx = p.coordinator.withEffectiveToolsAllowedForTask(ctx, def, verified.AuthorizedNames, canonical.Task)
 	// The local Fantasy adapter is still a compatibility implementation of the
 	// LLM execution backend, but it must not select a provider through the
 	// retired ModelRuntime seam. Prefer the immutable target carried by the

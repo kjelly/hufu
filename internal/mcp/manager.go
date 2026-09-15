@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,6 +31,33 @@ type MCPTool struct {
 // ToolAuthorizer is injected by the coordinator at the execution boundary so
 // MCP transport cannot bypass the same policy used by built-in tools.
 type ToolAuthorizer func(context.Context, string, string, string) error
+
+type toolAuthorizationError struct{ cause error }
+
+func (e *toolAuthorizationError) Error() string {
+	return "MCP authorization denied: " + e.cause.Error()
+}
+func (e *toolAuthorizationError) Unwrap() error { return e.cause }
+
+type toolDescriptorMismatchError struct{ name string }
+
+func (e *toolDescriptorMismatchError) Error() string {
+	return fmt.Sprintf("MCP tool %q descriptor no longer matches the admitted occurrence", e.name)
+}
+
+type toolNotFoundError struct{ name string }
+
+func (e *toolNotFoundError) Error() string { return fmt.Sprintf("MCP tool %q not found", e.name) }
+
+func IsToolAuthorizationError(err error) bool {
+	_, ok := errors.AsType[*toolAuthorizationError](err)
+	return ok
+}
+
+func IsToolDescriptorMismatchError(err error) bool {
+	_, ok := errors.AsType[*toolDescriptorMismatchError](err)
+	return ok
+}
 
 type toolAuthorizerKey struct{}
 
@@ -173,7 +201,7 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
-		inputSchema, err := cloneMCPInputSchema(t.InputSchema)
+		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
 		if err != nil {
 			_ = cli.Close()
 			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
@@ -233,7 +261,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
-		inputSchema, err := cloneMCPInputSchema(t.InputSchema)
+		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
 		if err != nil {
 			_ = cli.Close()
 			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
@@ -298,24 +326,64 @@ func (m *MCPToolManager) SnapshotToolDescriptors() []MCPTool {
 const mcpDefaultTimeout = 30 * time.Second
 
 func (m *MCPToolManager) ExecuteTool(ctx context.Context, toolName string, args string) (string, bool, error) {
+	t, cli, err := m.resolveToolForExecution(toolName)
+	if err != nil {
+		return "", false, err
+	}
+	return executeMCPTool(ctx, t, cli, args)
+}
+
+// ExecuteAuthorizedTool is the shared direct/gateway MCP boundary. The
+// descriptor assertion and current ToolAuthorizer both run before transport.
+func (m *MCPToolManager) ExecuteAuthorizedTool(ctx context.Context, logicalName, expectedDescriptorSHA256, input string) (string, bool, error) {
+	if expectedDescriptorSHA256 == "" {
+		return "", false, &toolDescriptorMismatchError{name: logicalName}
+	}
+	t, cli, err := m.resolveToolForExecution(logicalName)
+	if err != nil {
+		if _, missing := errors.AsType[*toolNotFoundError](err); missing {
+			return "", false, &toolDescriptorMismatchError{name: logicalName}
+		}
+		return "", false, err
+	}
+	fingerprint, err := MCPToolDescriptorSHA256(t)
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprint MCP tool %q: %w", logicalName, err)
+	}
+	if fingerprint != expectedDescriptorSHA256 {
+		return "", false, &toolDescriptorMismatchError{name: logicalName}
+	}
+	if authorize := toolAuthorizerFromContext(ctx); authorize != nil {
+		if err := authorize(ctx, t.ServerName, t.OrigName, input); err != nil {
+			return "", false, &toolAuthorizationError{cause: err}
+		}
+	}
+	return executeMCPTool(ctx, t, cli, input)
+}
+
+func (m *MCPToolManager) resolveToolForExecution(toolName string) (MCPTool, *client.Client, error) {
+	if m == nil {
+		return MCPTool{}, nil, fmt.Errorf("MCP tool manager is unavailable")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.toolMap[toolName]
+	if !ok {
+		return MCPTool{}, nil, &toolNotFoundError{name: toolName}
+	}
+	cli, ok := m.clients[t.ServerName]
+	if !ok {
+		return MCPTool{}, nil, fmt.Errorf("MCP server %q not connected", t.ServerName)
+	}
+	return cloneMCPTool(t), cli, nil
+}
+
+func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string) (string, bool, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, mcpDefaultTimeout)
 		defer cancel()
 	}
-
-	m.mu.RLock()
-	t, ok := m.toolMap[toolName]
-	if !ok {
-		m.mu.RUnlock()
-		return "", false, fmt.Errorf("MCP tool %q not found", toolName)
-	}
-	cli, ok := m.clients[t.ServerName]
-	if !ok {
-		m.mu.RUnlock()
-		return "", false, fmt.Errorf("MCP server %q not connected", t.ServerName)
-	}
-	m.mu.RUnlock()
 
 	var argsMap map[string]any
 	if args != "" && args != "{}" {
@@ -436,12 +504,11 @@ func (t *mcpAgentTool) ProviderOptions() fantasy.ProviderOptions        { return
 func (t *mcpAgentTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }
 
 func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	if authorize := toolAuthorizerFromContext(ctx); authorize != nil {
-		if err := authorize(ctx, t.tool.ServerName, t.tool.OrigName, call.Input); err != nil {
-			return fantasy.NewTextErrorResponse(err.Error()), nil
-		}
+	fingerprint, err := MCPToolDescriptorSHA256(t.tool)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	content, isError, err := t.manager.ExecuteTool(ctx, t.tool.Name, call.Input)
+	content, isError, err := t.manager.ExecuteAuthorizedTool(ctx, t.tool.Name, fingerprint, call.Input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}

@@ -125,6 +125,17 @@ type ToolExecutionDisposition struct {
 	Attempt     int               `json:"attempt"`
 }
 
+type ToolInvocationReceipt struct {
+	GatewayTool      string `json:"gateway_tool,omitempty"`
+	LogicalTool      string `json:"logical_tool"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	DescriptorSHA256 string `json:"descriptor_sha256,omitempty"`
+	Outcome          string `json:"outcome"`
+	ReasonCode       string `json:"reason_code,omitempty"`
+	Truncated        bool   `json:"truncated,omitempty"`
+	OriginalBytes    int    `json:"original_bytes,omitempty"`
+}
+
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
 	RunID                         string            `json:"run_id"`
@@ -180,11 +191,13 @@ type ExecutionReceipt struct {
 	VerifyResult *VerificationResult `json:"verify_result,omitempty"`
 	// StepBudget records this attempt's step consumption, so a truncated attempt
 	// is distinguishable from one that chose to stop.
-	StepBudget       *StepBudgetUsage           `json:"step_budget,omitempty"`
-	ToolDispositions []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
-	HandoffState     ResultHandoffState         `json:"handoff_state,omitempty"`
-	MemoryManifest   *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
-	ContextManifest  *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+	StepBudget               *StepBudgetUsage           `json:"step_budget,omitempty"`
+	ToolDispositions         []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
+	ToolInvocations          []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
+	ToolInvocationsTruncated int                        `json:"tool_invocations_truncated,omitempty"`
+	HandoffState             ResultHandoffState         `json:"handoff_state,omitempty"`
+	MemoryManifest           *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest          *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 // MarshalJSON keeps old receipts readable while preventing a newly written

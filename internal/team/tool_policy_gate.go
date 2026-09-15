@@ -195,7 +195,8 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	if err := ctx.Err(); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
-	if denial := artifactScopeToolDenial(ctx, t.Info().Name, t.inner); denial != "" {
+	_, dynamicGateway := t.inner.(*dynamicToolGateway)
+	if denial := artifactScopeToolDenial(ctx, t.Info().Name, t.inner); denial != "" && !dynamicGateway {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind: "policy_denied", ReasonCode: "artifact_scope_unsupported",
 			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
@@ -219,7 +220,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// Enforce it before authorization or handler execution so every mutation
 	// capable tool is denied consistently, including handlers that do not
 	// inspect the marker themselves.
-	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(t.Info().Name, call.Input) {
+	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && !dynamicGateway && readOnlyToolMutation(t.Info().Name, call.Input) {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind:       "policy_denied",
 			ReasonCode: "read_only_tool_denied",
@@ -346,7 +347,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// The commit gate runs before the tool process starts, so a task missing a
 	// required prerequisite performs zero mutations rather than being caught
 	// after one.
-	if denial := t.coordinator.commitGateDenial(ctx, disciplineTodoID, t.Info().Name, effectiveInput); denial != "" {
+	if denial := t.coordinator.commitGateDenial(ctx, disciplineTodoID, t.Info().Name, effectiveInput); denial != "" && !dynamicGateway {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind: "policy_denied", ReasonCode: "commit_gate_blocked",
 			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,

@@ -784,7 +784,11 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		concrete = append(concrete, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
 	}
 	concrete = filterConcreteToolsByNames(concrete, static.Names)
-	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicAuthorization, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+	concrete, dynamicTargets, err := projectDynamicToolGateway(r.c, concrete, baseTools, r.c.managerMCPDescriptors(), dynamicAuthorization, mode, static.EffectiveSequence)
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+	}
+	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicTargets, dynamicAuthorization, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
 }
 
 func taskToolResolutionTodo(c *Coordinator, req WorkerToolResolutionRequest) *TodoItem {
@@ -823,7 +827,7 @@ func filterConcreteToolsByNames(candidate []fantasy.AgentTool, names []string) [
 	return filtered
 }
 
-func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, mode WorkerToolResolutionMode, phase Phase, tools []fantasy.AgentTool, dynamicAuthorization *DynamicToolAuthorizationSnapshot, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
+func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.AgentDef, task TaskDef, todoID string, mode WorkerToolResolutionMode, phase Phase, tools []fantasy.AgentTool, dynamicTargets []DynamicToolTarget, dynamicAuthorization *DynamicToolAuthorizationSnapshot, resultOnly, resultRequired, planRequired bool, effectiveSequence []string) (ResolvedWorkerTools, error) {
 	modelID, err := r.c.resolveTaskExecutionModel(def, task, todoID)
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: resolve task model: %w", err)
@@ -833,6 +837,9 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
 	tools = filteredTools
+	if !slices.Contains(agentToolNames(tools), dynamicToolGatewayName) {
+		dynamicTargets = nil
+	}
 	if missing := missingExecutionTools(tools, effectiveSequence); len(missing) > 0 {
 		return ResolvedWorkerTools{}, fmt.Errorf("execution tool_sequence requires unavailable tool(s) for agent %q: %s", def.Name, strings.Join(missing, ", "))
 	}
@@ -847,12 +854,23 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 			descriptors[tool.Info().Name] = internaltools.DescribeToolWorkspaceScope(tool)
 		}
 	}
-	providerDigest, logicalDigest, err := workerToolDigests(r.c, def, task, mode, phase, tools, dynamicAuthorization, effectiveSequence)
+	authorizedNames := slices.Clone(names)
+	for _, target := range dynamicTargets {
+		authorizedNames = append(authorizedNames, target.Name)
+		descriptors[target.Name] = internaltools.ToolWorkspaceScopeDescriptor{
+			MayReadWorkspace: true, ReadBehavior: internaltools.PathScopeUnsupported,
+			MayWriteWorkspace: true, WriteBehavior: internaltools.PathScopeUnsupported,
+		}
+	}
+	if len(dynamicTargets) > 0 {
+		authorizedNames = sortedUniqueToolNames(authorizedNames)
+	}
+	providerDigest, logicalDigest, err := workerToolDigests(r.c, def, task, mode, phase, tools, dynamicTargets, dynamicAuthorization, effectiveSequence)
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: compute surface digests: %w", err)
 	}
 	return ResolvedWorkerTools{
-		Tools: tools, Names: names, AuthorizedNames: append([]string(nil), names...),
+		Tools: tools, Names: names, AuthorizedNames: authorizedNames, DynamicTargets: cloneDynamicToolTargets(dynamicTargets),
 		Capabilities: append([]string(nil), names...), ProviderSurfaceDigest: providerDigest,
 		LogicalToolsetDigest: logicalDigest, DynamicAuthorization: cloneDynamicToolAuthorizationSnapshot(dynamicAuthorization),
 		WorkspaceScopeDescriptors: descriptors,

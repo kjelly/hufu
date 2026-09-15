@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 )
 
@@ -39,13 +41,29 @@ func MCPToolDescriptorSHA256(tool MCPTool) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func cloneMCPInputSchema(schema any) (map[string]any, error) {
-	payload, err := json.Marshal(schema)
+func captureMCPInputSchema(raw json.RawMessage, typed any) (map[string]any, error) {
+	if len(raw) > 0 {
+		return decodeMCPInputSchema(raw)
+	}
+	payload, err := json.Marshal(typed)
 	if err != nil {
 		return nil, err
 	}
+	return decodeMCPInputSchema(payload)
+}
+
+func decodeMCPInputSchema(payload []byte) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
 	var cloned map[string]any
-	if err := json.Unmarshal(payload, &cloned); err != nil {
+	if err := decoder.Decode(&cloned); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("input schema contains more than one JSON value")
+		}
 		return nil, err
 	}
 	return cloned, nil
@@ -67,8 +85,8 @@ func canonicalJSONMap(value map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cloned map[string]any
-	if err := json.Unmarshal(payload, &cloned); err != nil {
+	cloned, err := decodeMCPInputSchema(payload)
+	if err != nil {
 		return nil, err
 	}
 	canonicalizeRequiredArrays(cloned)

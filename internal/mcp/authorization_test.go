@@ -13,14 +13,14 @@ import (
 
 func TestMCPAgentToolEnforcesContextAuthorizerBeforeTransport(t *testing.T) {
 	called := false
-	manager := &MCPToolManager{}
+	manager, descriptor, _ := authorizedExecutionTestManager(t)
 	tool := &mcpAgentTool{
-		tool:    MCPTool{Name: "filesystem__read", ServerName: "filesystem", OrigName: "read"},
+		tool:    descriptor,
 		manager: manager,
 	}
 	ctx := WithToolAuthorizer(context.Background(), func(_ context.Context, server, name, _ string) error {
 		called = true
-		if server != "filesystem" || name != "read" {
+		if server != descriptor.ServerName || name != descriptor.OrigName {
 			t.Fatalf("authorizer received %q/%q", server, name)
 		}
 		return context.DeadlineExceeded

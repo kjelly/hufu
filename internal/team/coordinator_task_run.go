@@ -496,9 +496,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 
 	var ag fantasy.Agent
 	var exposedToolNames []string
+	var authorizedToolNames []string
 	var resolvedTools ResolvedWorkerTools
 	resolvedTools = cloneResolvedWorkerTools(admittedEnvelope.Tools)
 	exposedToolNames = resolvedTools.Names
+	authorizedToolNames = resolvedTools.AuthorizedNames
 	if c.workerAgentOverride != nil {
 		ag = c.workerAgentOverride
 	}
@@ -804,7 +806,7 @@ retryLoop:
 			return "", fmt.Errorf("resolve worker tools for attempt %d: %w", attempt, resolveToolsErr)
 		}
 		resolvedTools = attemptTools
-		exposedToolNames = attemptTools.Names
+		authorizedToolNames = attemptTools.AuthorizedNames
 		attemptCtx := parentCtx
 		invocation := providerBoundInvocationContext{ModelID: resolvedModel}
 		// Provider-bound context/profile admission is an LLM capability only.
@@ -966,6 +968,7 @@ retryLoop:
 		// choose to stop. That distinction decides whether the follow-up turn
 		// should ask it to finalize what it has or to change its approach.
 		stepBudget := c.stepBudget(agentDef, agent.DefaultMaxSteps)
+		dynamicInvocations := newDynamicInvocationAccumulator(stepBudget)
 		func() {
 			// Coordinator request shaping is scoped to the coordinator stream. A
 			// worker must derive its context without that state so its own final
@@ -1014,6 +1017,7 @@ retryLoop:
 			if transcript != nil {
 				taskCtx = context.WithValue(taskCtx, taskTranscriptKey{}, transcript)
 			}
+			taskCtx = withDynamicToolInvocationSink(taskCtx, dynamicInvocations.record, dynamicInvocationDiagnosticsReporter(c, transcript, attemptEvidence, agentName, todoID))
 			if len(agentDef.Guard) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 			}
@@ -1063,7 +1067,7 @@ retryLoop:
 
 			workerDef := c.injectWorkerContext(taskCtx, agentDef)
 			gatedTools := c.gatePolicyTools(resolvedTools.Tools)
-			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, workerDef, exposedToolNames, task)
+			taskCtx = c.withEffectiveToolsAllowedForTask(taskCtx, workerDef, authorizedToolNames, task)
 			taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptorWithContext(taskCtx, resolvedModel, workerDef, gatedTools, agentName, "worker"))
 			if sequence := newTaskToolSequenceWithBindings(task.Execution.ToolSequence, task.Execution.ToolInputSequence, task.Execution.ToolInputField, task.Execution.ToolInputValueSequence, task.Execution.ToolExpectedExitCodes, task.Execution.ToolInputCanonicalSequence, task.Execution.ToolInputTransformSequence); sequence != nil {
 				attemptSequence = sequence
@@ -1240,6 +1244,7 @@ retryLoop:
 			ProviderTurnID:        attemptProviderTurnID,
 			ProviderTranscriptRef: attemptProviderTranscriptRef,
 		}
+		receipt.ToolInvocations, receipt.ToolInvocationsTruncated = dynamicInvocations.snapshot()
 		if durable := c.todoItemByID(todoID); durable != nil && durable.BackendBinding != nil {
 			receipt.ProviderSessionID = durable.BackendBinding.SessionID
 			receipt.ExecutionWorldID = durable.BackendBinding.ExecutionWorldID
