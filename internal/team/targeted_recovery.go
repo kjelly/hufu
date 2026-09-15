@@ -84,16 +84,6 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
-	// A deterministic in-process override is an execution seam, not a
-	// provider request. Retrying it must retain the normal recovery lifecycle
-	// without requiring an unrelated provider proxy to start.
-	if action == TargetedRecoveryRetry && c.workerAgentOverride == nil {
-		if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
-			c.finalizePublicInvocationFailure(err)
-			return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
-		}
-	}
-
 	c.resetRoundState()
 	c.reconcileTaskStatusProjection()
 	c.initTaskJournal()
@@ -102,6 +92,24 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 	item := c.todoItemByID(taskID)
 	if item == nil {
 		return c.finishTargetedRecovery(invocationCtx, action, taskID, fmt.Errorf("task %s not found", taskID))
+	}
+	// Decide replay eligibility before opening a provider execution boundary.
+	// A persisted replan/reconcile/human disposition is a deterministic
+	// preflight denial and must not start a provider proxy as a side effect of
+	// an operator selecting the wrong recovery command.
+	if action == TargetedRecoveryRetry {
+		if err := validateTargetedRetry(item, c.RepairController()); err != nil {
+			return c.finishTargetedRecovery(invocationCtx, action, taskID, err)
+		}
+		// A deterministic in-process override is an execution seam, not a
+		// provider request. Retrying it must retain the normal recovery lifecycle
+		// without requiring an unrelated provider proxy to start.
+		if c.workerAgentOverride == nil {
+			if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
+				c.finalizePublicInvocationFailure(err)
+				return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
+			}
+		}
 	}
 
 	var operationErr error
@@ -160,22 +168,11 @@ func (c *Coordinator) reconcileTaskForOperator(ctx context.Context, item *TodoIt
 }
 
 func (c *Coordinator) retryTaskForOperator(ctx context.Context, item *TodoItem) error {
-	if item == nil {
-		return fmt.Errorf("task is nil")
+	if err := validateTargetedRetry(item, c.RepairController()); err != nil {
+		return err
 	}
-	canRetryNotStarted := item.Status == TaskInProgress && item.RecoveryState == RecoveryStateNotStarted
-	if item.Status != TaskError && item.Status != TaskBlocked && !canRetryNotStarted {
-		return fmt.Errorf("task %s has status %s; targeted retry accepts error/blocked tasks or a not_started reconciliation", item.ID, item.Status)
-	}
-
 	task := taskDefFromTodoItem(item)
-	request := RepairRequest{
-		Task:          task,
-		Attempt:       item.Retries,
-		MaxAttempts:   item.MaxRetries,
-		RecoveryState: item.RecoveryState,
-	}
-	decision := c.RepairController().Decide(request)
+	decision := c.RepairController().Decide(targetedRetryRequest(item))
 	_ = c.emitEvent("repair_decision", "operator", item.ID, map[string]any{
 		"action":  string(decision.Action),
 		"reason":  decision.Reason,
@@ -186,10 +183,11 @@ func (c *Coordinator) retryTaskForOperator(ctx context.Context, item *TodoItem) 
 	}
 
 	repair := c.RepairController().Execute(ctx, RepairRequest{
-		Task:          task,
-		Attempt:       item.Retries,
-		MaxAttempts:   item.MaxRetries,
-		RecoveryState: item.RecoveryState,
+		Task:               task,
+		Attempt:            item.Retries,
+		MaxAttempts:        item.MaxRetries,
+		RecoveryState:      item.RecoveryState,
+		FailureDisposition: taskFailureDisposition(item),
 		Checkpoint: func(checkpointCtx context.Context) error {
 			return c.CommitTaskResetForRetry(checkpointCtx, item.ID, "operator requested targeted retry")
 		},
@@ -210,6 +208,44 @@ func (c *Coordinator) retryTaskForOperator(ctx context.Context, item *TodoItem) 
 		return fmt.Errorf("targeted retry for task %s finished without done status (status: %s)", item.ID, status)
 	}
 	return nil
+}
+
+func validateTargetedRetry(item *TodoItem, controller *RepairController) error {
+	if item == nil {
+		return fmt.Errorf("task is nil")
+	}
+	canRetryNotStarted := item.Status == TaskInProgress && item.RecoveryState == RecoveryStateNotStarted
+	if item.Status != TaskError && item.Status != TaskBlocked && !canRetryNotStarted {
+		return fmt.Errorf("task %s has status %s; targeted retry accepts error/blocked tasks or a not_started reconciliation", item.ID, item.Status)
+	}
+	if controller == nil {
+		return fmt.Errorf("task %s cannot be retried: repair controller is unavailable", item.ID)
+	}
+	decision := controller.Decide(targetedRetryRequest(item))
+	if decision.Action != RepairRetry {
+		return fmt.Errorf("task %s cannot be retried: %s", item.ID, decision.Reason)
+	}
+	return nil
+}
+
+func targetedRetryRequest(item *TodoItem) RepairRequest {
+	if item == nil {
+		return RepairRequest{}
+	}
+	return RepairRequest{
+		Task:               taskDefFromTodoItem(item),
+		Attempt:            item.Retries,
+		MaxAttempts:        item.MaxRetries,
+		RecoveryState:      item.RecoveryState,
+		FailureDisposition: taskFailureDisposition(item),
+	}
+}
+
+func taskFailureDisposition(item *TodoItem) RetryDisposition {
+	if item == nil || item.FailureEvent == nil {
+		return ""
+	}
+	return item.FailureEvent.RetryDisposition
 }
 
 func (c *Coordinator) finishTargetedRecovery(ctx context.Context, action TargetedRecoveryAction, taskID string, operationErr error) (TargetedRecoveryReport, error) {

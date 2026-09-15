@@ -781,6 +781,18 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		if data.RunResult.StopReason != "" {
 			fmt.Fprintf(&b, "- **Stop reason:** `%s`\n", data.RunResult.StopReason)
 		}
+		if disposition := team.RunRecoveryDisposition(data.RunResult.UnresolvedTasks); disposition != "" {
+			fmt.Fprintf(&b, "- **Recovery disposition:** `%s`\n", disposition)
+			for _, task := range data.RunResult.UnresolvedTasks {
+				nextAction := task.NextAction
+				if nextAction == "" {
+					nextAction = team.RecoveryNextAction(task.RetryDisposition)
+				}
+				if nextAction != "" {
+					fmt.Fprintf(&b, "  - Task `%s`: %s\n", reportSafeMetadata(task.ID, 120), reportSafeMetadata(nextAction, 500))
+				}
+			}
+		}
 		if telemetry := data.RunResult.Telemetry; telemetry != nil {
 			fmt.Fprintf(&b, "- **Plan revision:** `%s`\n", telemetry.PlanRevision)
 			fmt.Fprintf(&b, "- **Evidence manifest:** `%s`\n", telemetry.EvidenceManifest)

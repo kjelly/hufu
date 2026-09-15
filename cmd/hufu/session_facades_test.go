@@ -49,6 +49,20 @@ func TestSessionResumeRejectsTerminalSessionAsStale(t *testing.T) {
 	}
 }
 
+func TestSessionResumeAcceptsReplanRequiredAndChangesPrompt(t *testing.T) {
+	session := &team.SessionData{Tasks: []*team.TodoItem{{
+		ID: "budget", Status: team.TaskError,
+		FailureEvent: &team.FailureEventPayload{RetryDisposition: team.ReplanRequired},
+	}}}
+	if !sessionHasResumableWork(session) {
+		t.Fatal("replan-required session was not resumable")
+	}
+	prompt := resumeInstruction(session)
+	if !strings.Contains(prompt, "budget") || !strings.Contains(prompt, "materially changed plan") || !strings.Contains(prompt, "do not replay") {
+		t.Fatalf("resume prompt = %q", prompt)
+	}
+}
+
 func TestBindActiveMutationTargetRejectsHistoricalBranch(t *testing.T) {
 	workspace := writeSessionFacadeFixture(t, &team.TodoItem{
 		ID: "task-1", Status: team.TaskBlocked, Recovery: team.RecoveryRetry,

@@ -15,24 +15,25 @@ import (
 // to a dispatched task. Coordinator and worker prose may describe the goal,
 // but execution, output, and evidence behavior originate here.
 type EffectiveTaskContract struct {
-	ID                  string               `json:"id"`
-	Revision            int                  `json:"revision"`
-	Hash                string               `json:"hash"`
-	Agent               string               `json:"agent"`
-	Execution           ExecutionContract    `json:"execution"`
-	OutputMode          string               `json:"output_mode"`
-	SideEffect          SideEffectClass      `json:"side_effect,omitempty"`
-	Recovery            RecoveryPolicy       `json:"recovery,omitempty"`
-	MaxRetries          int                  `json:"max_retries,omitempty"`
-	Action              *Action              `json:"action,omitempty"`
-	FanOut              *FanOutSpec          `json:"fan_out,omitempty"`
-	Optional            bool                 `json:"optional,omitempty"`
-	OnFailureClasses    []TaskFailureClass   `json:"on_failure_classes,omitempty"`
-	DecisionFacts       map[string]any       `json:"decision_facts,omitempty"`
-	DecisionArtifacts   []ArtifactRef        `json:"decision_artifacts,omitempty"`
-	DecisionBaseRates   []BaseRateEvidence   `json:"decision_base_rates,omitempty"`
-	DecisionAssumptions []DecisionAssumption `json:"decision_assumptions,omitempty"`
-	DecisionProvenance  []EvidenceProvenance `json:"decision_provenance,omitempty"`
+	ID                    string                    `json:"id"`
+	Revision              int                       `json:"revision"`
+	Hash                  string                    `json:"hash"`
+	Agent                 string                    `json:"agent"`
+	Execution             ExecutionContract         `json:"execution"`
+	OutputMode            string                    `json:"output_mode"`
+	SideEffect            SideEffectClass           `json:"side_effect,omitempty"`
+	Recovery              RecoveryPolicy            `json:"recovery,omitempty"`
+	MaxRetries            int                       `json:"max_retries,omitempty"`
+	Action                *Action                   `json:"action,omitempty"`
+	FanOut                *FanOutSpec               `json:"fan_out,omitempty"`
+	Optional              bool                      `json:"optional,omitempty"`
+	InvariantVerification InvariantVerificationMode `json:"invariant_verification,omitempty"`
+	OnFailureClasses      []TaskFailureClass        `json:"on_failure_classes,omitempty"`
+	DecisionFacts         map[string]any            `json:"decision_facts,omitempty"`
+	DecisionArtifacts     []ArtifactRef             `json:"decision_artifacts,omitempty"`
+	DecisionBaseRates     []BaseRateEvidence        `json:"decision_base_rates,omitempty"`
+	DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
+	DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -90,6 +91,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
+		bound[i].InvariantVerification = contract.InvariantVerification
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
@@ -97,7 +99,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
 }
@@ -161,6 +163,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
 		bound[i].Optional = contract.Optional
+		bound[i].InvariantVerification = contract.InvariantVerification
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
@@ -168,9 +171,50 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
 	}
 	return bound, effective, nil
+}
+
+// restoreLegacyBoundInvariantVerification repairs the projection-only gap in
+// revision-1 bound tasks written before invariant-verification was copied from
+// the repository-authored contract. The existing contract hash already
+// covered this field, so restoration is permitted only when the complete
+// current static contract reproduces the durable hash. No worker-authored or
+// prose-derived value is trusted.
+func restoreLegacyBoundInvariantVerification(tasks []*TodoItem, contracts []TaskDef) int {
+	restored := 0
+	for _, item := range tasks {
+		if item == nil || item.InvariantVerification != "" || item.ContractID == "" || item.ContractHash == "" || item.ContractRevision != effectiveTaskContractRevision {
+			continue
+		}
+		for _, contract := range contracts {
+			if contract.InvariantVerification == "" || !staticContractMatchesID(contract, item.ContractID) {
+				continue
+			}
+			agentName := strings.ToLower(strings.TrimSpace(contract.Agent))
+			hash, err := effectiveContractHash(item.ContractID, agentName, contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
+			if err != nil || hash != item.ContractHash {
+				continue
+			}
+			item.InvariantVerification = contract.InvariantVerification
+			restored++
+			break
+		}
+	}
+	return restored
+}
+
+func staticContractMatchesID(contract TaskDef, id string) bool {
+	if declared := strings.TrimSpace(contract.ID); declared != "" {
+		return declared == id
+	}
+	agentName := strings.ToLower(strings.TrimSpace(contract.Agent))
+	if agentName == id {
+		return true
+	}
+	selector := strings.TrimSpace(contract.WhenGoalContains)
+	return selector != "" && agentName+":"+selector == id
 }
 
 // applyStaticVerificationContract makes verification and progress-criterion

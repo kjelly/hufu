@@ -505,6 +505,9 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	for i := range sd.DiagnosticPackets {
 		sd.DiagnosticPackets[i] = normalizeDiagnosticPacket(sd.DiagnosticPackets[i])
 	}
+	if c.session != nil {
+		restoreLegacyBoundInvariantVerification(sd.Tasks, c.session.ContractTasks)
+	}
 	if sd.RunResult != nil {
 		c.SetLastRunResult(sd.RunResult)
 	}

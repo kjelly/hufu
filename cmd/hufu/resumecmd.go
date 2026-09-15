@@ -96,9 +96,26 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	segments := []team.PromptSegment{{
 		Type:    team.SegmentSwitchTeam,
 		Name:    teamName,
-		Content: "Resume the existing session from its durable checkpoint.",
+		Content: resumeInstruction(tc.sessionData),
 	}}
 	return executeAndReport(ctx, cancel, "", "", segments, registry, loadedTeams, injector, activeCoord, nil, vars, RouteDecision{Route: RouteTeam, Team: teamName})
+}
+
+func resumeInstruction(session *team.SessionData) string {
+	const base = "Resume the existing session from its durable checkpoint."
+	if session == nil {
+		return base
+	}
+	var taskIDs []string
+	for _, item := range session.Tasks {
+		if item != nil && item.FailureEvent != nil && item.FailureEvent.RetryDisposition == team.ReplanRequired {
+			taskIDs = append(taskIDs, item.ID)
+		}
+	}
+	if len(taskIDs) == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s Tasks %s require a materially changed plan. Preserve their failure evidence and do not replay the original attempts.", base, strings.Join(taskIDs, ", "))
 }
 
 func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars map[string]string) error {

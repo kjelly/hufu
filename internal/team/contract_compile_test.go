@@ -77,6 +77,23 @@ func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.
 	}
 }
 
+func TestCompileInitialTaskContractsBindsInvariantVerification(t *testing.T) {
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
+		BindInitialTaskContracts: true,
+		InitialBatch:             []string{"reviewer"},
+	}}, ContractTasks: []TaskDef{{
+		ID: "review-invariants", Agent: "reviewer", InvariantVerification: InvariantVerificationGate,
+		Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"submit_result"}},
+	}}}
+	bound, effective, err := CompileInitialTaskContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound[0].InvariantVerification != InvariantVerificationGate || effective[0].InvariantVerification != InvariantVerificationGate {
+		t.Fatalf("invariant policy was not bound: bound=%#v effective=%#v", bound[0], effective[0])
+	}
+}
+
 func TestCompileInitialTaskContractsBindsPartialBatchWhenExactDisabled(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
@@ -129,6 +146,45 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 	}
 	if effective[0].SideEffect != SideEffectWorkspaceWrite || effective[0].Recovery != RecoveryReconcile || effective[0].MaxRetries != 2 {
 		t.Fatalf("effective goal contract safety/recovery fields were not published: %#v", effective[0])
+	}
+}
+
+func TestRestoreLegacyBoundInvariantVerificationRequiresMatchingContractHash(t *testing.T) {
+	contract := TaskDef{
+		ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+		InvariantVerification: InvariantVerificationReport,
+		Execution:             ExecutionContract{RequiresResult: true, ToolSequence: []string{"view", "submit_result"}},
+	}
+	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}}, ContractTasks: []TaskDef{contract}}
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := &TodoItem{ContractID: bound[0].ContractID, ContractHash: bound[0].ContractHash, ContractRevision: bound[0].ContractRevision}
+	tampered := &TodoItem{ContractID: bound[0].ContractID, ContractHash: "different", ContractRevision: bound[0].ContractRevision}
+	if restored := restoreLegacyBoundInvariantVerification([]*TodoItem{legacy, tampered}, session.ContractTasks); restored != 1 {
+		t.Fatalf("restored count = %d, want 1", restored)
+	}
+	if legacy.InvariantVerification != InvariantVerificationReport {
+		t.Fatalf("legacy invariant policy = %q", legacy.InvariantVerification)
+	}
+	if tampered.InvariantVerification != "" {
+		t.Fatalf("hash-mismatched task was modified: %#v", tampered)
+	}
+
+	restoredSession := &SessionData{Tasks: []*TodoItem{{
+		ContractID:       bound[0].ContractID,
+		ContractHash:     bound[0].ContractHash,
+		ContractRevision: bound[0].ContractRevision,
+	}}}
+	coordinator := &Coordinator{session: session, taskTracker: NewTaskTracker()}
+	coordinator.SetSessionData(restoredSession)
+	if got := restoredSession.Tasks[0].InvariantVerification; got != InvariantVerificationReport {
+		t.Fatalf("SetSessionData legacy invariant policy = %q", got)
+	}
+	items := coordinator.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].InvariantVerification != InvariantVerificationReport {
+		t.Fatalf("live restored task lost invariant policy: %#v", items)
 	}
 }
 

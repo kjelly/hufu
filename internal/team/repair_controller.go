@@ -31,14 +31,15 @@ type RepairResult struct {
 // invents tools, paths, or rollback commands; it only chooses a safe action
 // and enforces checkpoint-before-action ordering.
 type RepairRequest struct {
-	Task              TaskDef
-	Failure           error
-	Attempt           int
-	MaxAttempts       int
-	RecoveryState     string
-	BudgetExhausted   bool
-	AllowRollback     bool
-	RollbackRequested bool
+	Task               TaskDef
+	Failure            error
+	Attempt            int
+	MaxAttempts        int
+	RecoveryState      string
+	FailureDisposition RetryDisposition
+	BudgetExhausted    bool
+	AllowRollback      bool
+	RollbackRequested  bool
 
 	Checkpoint func(context.Context) error
 	Retry      func(context.Context) error
@@ -65,6 +66,24 @@ func (r *RepairController) Decide(req RepairRequest) RepairDecision {
 			return RepairDecision{Action: RepairRollback, Reason: "authorized rollback requested"}
 		}
 		return RepairDecision{Action: RepairBlock, Reason: "rollback is not explicitly authorized"}
+	}
+	switch req.FailureDisposition {
+	case ReplanRequired:
+		return RepairDecision{Action: RepairReplan, Reason: "terminal disposition requires a materially changed plan; original attempt replay is forbidden"}
+	case ReconcileOnly:
+		if !taskHasReconcileCapability(task) {
+			return RepairDecision{Action: RepairBlock, Reason: "terminal disposition requires reconciliation but no reconcile capability is declared"}
+		}
+		if req.RecoveryState != RecoveryStateNotStarted {
+			return RepairDecision{Action: RepairReconcile, Reason: "terminal disposition requires result/state reconciliation before any replay"}
+		}
+		// A canonical reconciliation result proving the operation never started
+		// discharges the replay prohibition. Continue through the ordinary
+		// recovery, side-effect, attempt-budget, and escalation gates below.
+	case NeedsHuman:
+		return RepairDecision{Action: RepairBlock, Reason: "terminal disposition requires human intervention"}
+	case RetryNone:
+		return RepairDecision{Action: RepairBlock, Reason: "terminal disposition does not authorize another worker attempt"}
 	}
 	if task.Execution.AllowsReplay != nil && !*task.Execution.AllowsReplay {
 		if task.ReconcileTool != "" || task.Recovery == RecoveryReconcile {
@@ -104,6 +123,10 @@ func (r *RepairController) Decide(req RepairRequest) RepairDecision {
 		return RepairDecision{Action: RepairEscalate, Reason: "task permits model escalation on retry"}
 	}
 	return RepairDecision{Action: RepairRetry, Reason: "retry is permitted by task recovery policy"}
+}
+
+func taskHasReconcileCapability(task TaskDef) bool {
+	return task.ReconcileTool != "" || task.Verify != "" || task.VerifySpec != nil
 }
 
 func (r *RepairController) Execute(ctx context.Context, req RepairRequest) RepairResult {

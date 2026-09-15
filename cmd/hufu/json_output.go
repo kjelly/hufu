@@ -13,25 +13,26 @@ import (
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
 type jsonRunOutput struct {
-	Outcome            string                     `json:"outcome"`
-	GoalSatisfied      bool                       `json:"goal_satisfied"`
-	GoalMode           string                     `json:"goal_mode,omitempty"`
-	Result             string                     `json:"result"`
-	Reason             string                     `json:"reason,omitempty"`
-	StopReason         string                     `json:"stop_reason,omitempty"`
-	ExitCode           int                        `json:"exit_code,omitempty"`
-	Acceptance         *team.AcceptanceResult     `json:"acceptance,omitempty"`
-	Worksets           []team.WorksetGroupState   `json:"worksets,omitempty"`
-	CompletedReview    bool                       `json:"completed_review,omitempty"`
-	FindingsPresent    bool                       `json:"findings_present,omitempty"`
-	FixedAndVerified   bool                       `json:"fixed_and_verified,omitempty"`
-	AcceptanceAdvisory bool                       `json:"acceptance_advisory,omitempty"`
-	UnresolvedTasks    []team.TaskReference       `json:"unresolved_tasks,omitempty"`
-	Stats              team.RunStats              `json:"stats"`
-	Metrics            team.RunMetrics            `json:"metrics,omitempty"`
-	Teams              []jsonRunTeam              `json:"teams"`
-	Skills             []jsonRunSkill             `json:"skills,omitempty"`
-	Failures           []team.FailureEventPayload `json:"failures,omitempty"`
+	Outcome             string                     `json:"outcome"`
+	GoalSatisfied       bool                       `json:"goal_satisfied"`
+	GoalMode            string                     `json:"goal_mode,omitempty"`
+	Result              string                     `json:"result"`
+	Reason              string                     `json:"reason,omitempty"`
+	StopReason          string                     `json:"stop_reason,omitempty"`
+	RecoveryDisposition team.RetryDisposition      `json:"recovery_disposition,omitempty"`
+	ExitCode            int                        `json:"exit_code,omitempty"`
+	Acceptance          *team.AcceptanceResult     `json:"acceptance,omitempty"`
+	Worksets            []team.WorksetGroupState   `json:"worksets,omitempty"`
+	CompletedReview     bool                       `json:"completed_review,omitempty"`
+	FindingsPresent     bool                       `json:"findings_present,omitempty"`
+	FixedAndVerified    bool                       `json:"fixed_and_verified,omitempty"`
+	AcceptanceAdvisory  bool                       `json:"acceptance_advisory,omitempty"`
+	UnresolvedTasks     []team.TaskReference       `json:"unresolved_tasks,omitempty"`
+	Stats               team.RunStats              `json:"stats"`
+	Metrics             team.RunMetrics            `json:"metrics,omitempty"`
+	Teams               []jsonRunTeam              `json:"teams"`
+	Skills              []jsonRunSkill             `json:"skills,omitempty"`
+	Failures            []team.FailureEventPayload `json:"failures,omitempty"`
 }
 
 type jsonRunTeam struct {
@@ -61,6 +62,8 @@ type jsonRunTask struct {
 	CompletedReview     bool                            `json:"completed_review,omitempty"`
 	FindingsPresent     bool                            `json:"findings_present,omitempty"`
 	ResourceScope       *team.TaskResourceScopeSnapshot `json:"resource_scope,omitempty"`
+	RetryDisposition    team.RetryDisposition           `json:"retry_disposition,omitempty"`
+	NextAction          string                          `json:"next_action,omitempty"`
 }
 
 type jsonRunSkill struct {
@@ -118,8 +121,12 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			}
 		}
 		for _, it := range items {
+			var retryDisposition team.RetryDisposition
+			var nextAction string
 			if it != nil && it.FailureEvent != nil {
 				out.Failures = append(out.Failures, team.FailureEventsFromTodos([]*team.TodoItem{it})...)
+				retryDisposition = it.FailureEvent.RetryDisposition
+				nextAction = team.RecoveryNextAction(retryDisposition)
 			}
 			jt.Tasks = append(jt.Tasks, jsonRunTask{
 				ID: it.ID, Agent: it.Agent, Desc: it.Desc, Status: string(it.Status),
@@ -127,6 +134,8 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 				CompletedReview:     it.Kind == team.TaskKindDiagnostic && it.Status == team.TaskDone,
 				FindingsPresent:     it.TypedResult != nil && len(it.TypedResult.Findings) > 0,
 				ResourceScope:       it.ResourceScopeSnapshot,
+				RetryDisposition:    retryDisposition,
+				NextAction:          nextAction,
 			})
 		}
 		out.Teams = append(out.Teams, jt)
@@ -142,6 +151,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 	out.GoalMode = string(canonical.GoalMode)
 	out.Reason = canonical.Reason
 	out.StopReason = string(canonical.StopReason)
+	out.RecoveryDisposition = team.RunRecoveryDisposition(canonical.UnresolvedTasks)
 	out.ExitCode = canonical.ExitCode
 	out.CompletedReview = canonical.CompletedReview
 	out.FindingsPresent = canonical.FindingsPresent
@@ -190,17 +200,36 @@ func isHistoricalUnresolvedTask(teamName string, item *team.TodoItem, priorUnres
 }
 
 func appendUniqueTaskReferences(existing, additional []team.TaskReference) []team.TaskReference {
-	seen := make(map[string]struct{}, len(existing)+len(additional))
+	seen := make(map[string]int, len(existing)+len(additional))
 	key := func(ref team.TaskReference) string { return ref.ID + "\x00" + ref.Status }
-	for _, ref := range existing {
-		seen[key(ref)] = struct{}{}
+	for index, ref := range existing {
+		seen[key(ref)] = index
 	}
 	for _, ref := range additional {
-		if _, ok := seen[key(ref)]; ok {
+		if index, ok := seen[key(ref)]; ok {
+			mergeTaskReferenceRecovery(&existing[index], ref)
 			continue
 		}
-		seen[key(ref)] = struct{}{}
+		seen[key(ref)] = len(existing)
 		existing = append(existing, ref)
 	}
 	return existing
+}
+
+func mergeTaskReferenceRecovery(target *team.TaskReference, source team.TaskReference) {
+	if target == nil {
+		return
+	}
+	if target.FailureClass == "" {
+		target.FailureClass = source.FailureClass
+	}
+	if target.RetryDisposition == "" {
+		target.RetryDisposition = source.RetryDisposition
+	}
+	if target.NextAction == "" {
+		target.NextAction = source.NextAction
+	}
+	if target.Error == "" {
+		target.Error = source.Error
+	}
 }

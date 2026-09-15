@@ -137,6 +137,36 @@ func TestJSONOutputDoesNotReportAbortedRunAsCompleted(t *testing.T) {
 	}
 }
 
+func TestJSONOutputProjectsRunRecoveryDisposition(t *testing.T) {
+	c := &team.Coordinator{}
+	c.SetLastRunResult(&team.RunResult{
+		Outcome: team.RunOutcomePartial,
+		UnresolvedTasks: []team.TaskReference{{
+			ID: "task-7", Status: string(team.TaskError), RetryDisposition: team.ReplanRequired,
+			NextAction: team.RecoveryNextAction(team.ReplanRequired),
+		}},
+	})
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	err = printResultJSON("partial", map[string]*teamContext{"demo": {teamName: "demo", coordinator: c}}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.RecoveryDisposition != team.ReplanRequired || len(out.UnresolvedTasks) != 1 || !strings.Contains(out.UnresolvedTasks[0].NextAction, "materially changed plan") {
+		t.Fatalf("recovery JSON = %#v", out)
+	}
+}
+
 func TestJSONOutputIncludesContentFreeContextRoutingAggregate(t *testing.T) {
 	c := &team.Coordinator{}
 	c.SetSessionData(&team.SessionData{CoordinatorContextManifests: []team.ContextInjectionManifest{{

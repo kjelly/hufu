@@ -25,6 +25,7 @@ type FailureEventPayload struct {
 	Fingerprint      string           `json:"fingerprint" yaml:"fingerprint"`
 	Hint             string           `json:"hint" yaml:"hint"`
 	Summary          string           `json:"summary" yaml:"summary"`
+	NextAction       string           `json:"next_action,omitempty" yaml:"next_action,omitempty"`
 	FailedStepID     string           `json:"failed_step_id,omitempty" yaml:"failed_step_id,omitempty"`
 	ReceiptID        string           `json:"receipt_id,omitempty" yaml:"receipt_id,omitempty"`
 	FailureType      string           `json:"failure_type,omitempty" yaml:"failure_type,omitempty"`
@@ -56,6 +57,10 @@ func RedactedFailureEvent(event *FailureEventPayload) *FailureEventPayload {
 	copyEvent.Fingerprint = utils.TruncateString(utils.RedactSecrets(copyEvent.Fingerprint), 200)
 	copyEvent.Hint = utils.TruncateString(utils.RedactSecrets(copyEvent.Hint), 500)
 	copyEvent.Summary = utils.TruncateString(utils.RedactSecrets(copyEvent.Summary), 500)
+	// NextAction is derived from the typed disposition, never trusted from a
+	// sparse/legacy event or another presentation layer.
+	copyEvent.NextAction = RecoveryNextAction(copyEvent.RetryDisposition)
+	copyEvent.NextAction = utils.TruncateString(utils.RedactSecrets(copyEvent.NextAction), 500)
 	copyEvent.FailedStepID = utils.TruncateString(utils.RedactSecrets(copyEvent.FailedStepID), 200)
 	copyEvent.ReceiptID = utils.TruncateString(utils.RedactSecrets(copyEvent.ReceiptID), 200)
 	copyEvent.FailureType = utils.TruncateString(utils.RedactSecrets(copyEvent.FailureType), 100)
@@ -81,6 +86,9 @@ func RenderFailureText(event *FailureEventPayload) string {
 	// an exhausted attempt budget — appeared nowhere in the CLI output at all.
 	// The fields below are supporting detail and can afford to be cut.
 	fmt.Fprintf(&b, "summary: %s\n", event.Summary)
+	if event.NextAction != "" {
+		fmt.Fprintf(&b, "next_action: %s\n", event.NextAction)
+	}
 	if event.FailedStepID != "" {
 		fmt.Fprintf(&b, "failed_step_id: %s\n", event.FailedStepID)
 	}
@@ -138,7 +146,28 @@ func FailureDisplayText(item *TodoItem) string {
 		Phase:            "legacy",
 		RetryDisposition: RetryNone,
 		Summary:          utils.TruncateString(detail, 500),
+		NextAction:       RecoveryNextAction(RetryNone),
 	})
+}
+
+// RecoveryNextAction is the canonical bounded operator guidance for a
+// terminal retry disposition. It describes the next safe workflow boundary;
+// it never grants permission to bypass policy or replay side effects.
+func RecoveryNextAction(disposition RetryDisposition) string {
+	switch disposition {
+	case RetryWorker:
+		return "retry through the policy gate with prior failure evidence"
+	case ReconcileOnly:
+		return "run targeted reconciliation; do not replay worker tools"
+	case ReplanRequired:
+		return "resume with a materially changed plan; do not retry the original attempt"
+	case NeedsHuman:
+		return "request operator review before continuing"
+	case RetryNone:
+		return "review the terminal failure; no automatic retry is authorized"
+	default:
+		return ""
+	}
 }
 
 func isFailureTaskStatus(status TaskStatus) bool {
@@ -207,6 +236,7 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		Phase:            failurePhase(class, item),
 		FailureClass:     class,
 		RetryDisposition: disposition,
+		NextAction:       RecoveryNextAction(disposition),
 		Command:          item.LastOperation,
 		WorkDir:          c.verificationWorkDir(),
 		Shell:            "sh",
@@ -273,6 +303,7 @@ func failureEventPayloadMap(event *FailureEventPayload) map[string]interface{} {
 		"fingerprint":       event.Fingerprint,
 		"hint":              event.Hint,
 		"summary":           event.Summary,
+		"next_action":       event.NextAction,
 		"failed_step_id":    event.FailedStepID,
 		"receipt_id":        event.ReceiptID,
 		"failure_type":      event.FailureType,
@@ -282,7 +313,7 @@ func failureEventPayloadMap(event *FailureEventPayload) map[string]interface{} {
 
 var failureEventFieldNames = []string{
 	"task_id", "phase", "failure_class", "retry_disposition", "command", "work_dir", "shell",
-	"exit_code", "stdout", "stderr", "fingerprint", "hint", "summary", "failed_step_id", "receipt_id", "failure_type",
+	"exit_code", "stdout", "stderr", "fingerprint", "hint", "summary", "next_action", "failed_step_id", "receipt_id", "failure_type",
 }
 
 // mergeFailureEventJSON applies only fields present in the event payload.
@@ -345,6 +376,7 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 	apply("fingerprint", &result.Fingerprint)
 	apply("hint", &result.Hint)
 	apply("summary", &result.Summary)
+	apply("next_action", &result.NextAction)
 	apply("failed_step_id", &result.FailedStepID)
 	apply("receipt_id", &result.ReceiptID)
 	apply("failure_type", &result.FailureType)

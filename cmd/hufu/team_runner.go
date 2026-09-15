@@ -470,6 +470,18 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration, ru
 		fmt.Fprintf(&b, "  Outcome:   %s (satisfied: %t, mode: %s, stop reason: %s)\n",
 			canonical.Outcome, canonical.GoalSatisfied, canonical.GoalMode, canonical.StopReason)
 		fmt.Fprintf(&b, "  Status:    %s\n", team.FormatCanonicalStatus(&canonical))
+		if disposition := team.RunRecoveryDisposition(canonical.UnresolvedTasks); disposition != "" {
+			fmt.Fprintf(&b, "  Recovery:  %s\n", disposition)
+			for _, task := range canonical.UnresolvedTasks {
+				nextAction := task.NextAction
+				if nextAction == "" {
+					nextAction = team.RecoveryNextAction(task.RetryDisposition)
+				}
+				if nextAction != "" {
+					fmt.Fprintf(&b, "  Next:      task %s — %s\n", task.ID, nextAction)
+				}
+			}
+		}
 	}
 	return b.String()
 }

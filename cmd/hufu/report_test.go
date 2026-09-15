@@ -57,6 +57,25 @@ func TestBuildReportMDIncludesDecisionStateProjection(t *testing.T) {
 	}
 }
 
+func TestReportProjectsRecoveryDispositionAndNextAction(t *testing.T) {
+	result := &team.RunResult{
+		Outcome: team.RunOutcomePartial,
+		UnresolvedTasks: []team.TaskReference{{
+			ID: "task-36", Status: string(team.TaskBlocked), RetryDisposition: team.ReconcileOnly,
+			NextAction: team.RecoveryNextAction(team.ReconcileOnly),
+		}},
+	}
+	report := buildReportMD(&reportData{StartedAt: time.Now(), RunResult: result, Todos: []*team.TodoItem{{
+		ID: "task-36", Status: team.TaskBlocked,
+		FailureEvent: &team.FailureEventPayload{RetryDisposition: team.ReconcileOnly, Summary: "schema repair exhausted"},
+	}}}, "demo", "")
+	for _, want := range []string{"Recovery disposition:** `reconcile_only`", "Task `task-36`", "run targeted reconciliation", "next_action: run targeted reconciliation"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing recovery projection %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), DeprecatedMemory: []team.DeprecatedMemoryToolUsage{{Tool: "stm_write", Calls: 2, Success: 1, FailClosed: 1, Denied: 3}}}, "demo", "")
 	for _, want := range []string{"## Deprecated Memory Compatibility Usage", "`stm_write`", "| 2 | 1 | 1 | 3 |", "Only content-free lifecycle counts"} {

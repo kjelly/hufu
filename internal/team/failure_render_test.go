@@ -26,7 +26,7 @@ func testFailureEvent() *FailureEventPayload {
 func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
 	event := testFailureEvent()
 	want := RenderFailureText(event)
-	if want == "" || strings.Contains(want, "task description") {
+	if want == "" || strings.Contains(want, "task description") || !strings.Contains(want, "next_action: resume with a materially changed plan") {
 		t.Fatalf("unexpected canonical failure text: %q", want)
 	}
 
@@ -62,7 +62,7 @@ func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"failure_event"`) || !strings.Contains(string(data), `"failure_class":"environment"`) {
+	if !strings.Contains(string(data), `"failure_event"`) || !strings.Contains(string(data), `"failure_class":"environment"`) || !strings.Contains(string(data), `"next_action":"resume with a materially changed plan`) {
 		t.Fatalf("journal missing structured failure event: %s", data)
 	}
 	if strings.Contains(string(data), "private task prompt") || strings.Contains(string(data), `"desc":"private task prompt"`) {
@@ -87,7 +87,7 @@ func TestFailureDisplayTextUsesStructuredEvidenceAndMasksLegacyDetail(t *testing
 	event.RetryDisposition = ReplanRequired
 	item := &TodoItem{ID: "12", Status: TaskError, Detail: "api_token=raw-detail-secret", FailureEvent: event}
 	got := FailureDisplayText(item)
-	if strings.Contains(got, "raw-detail-secret") || !strings.Contains(got, "class=environment") || !strings.Contains(got, "disposition=replan_required") {
+	if strings.Contains(got, "raw-detail-secret") || !strings.Contains(got, "class=environment") || !strings.Contains(got, "disposition=replan_required") || !strings.Contains(got, "do not retry the original attempt") {
 		t.Fatalf("structured failure display = %q", got)
 	}
 

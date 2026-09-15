@@ -274,12 +274,24 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 		}
 	case slices.Contains([]string{ActivityPlanning, ActivityExecuting, ActivityVerifying, ActivityWrappingUp, ActivityPreflight}, snapshot.Activity.State):
 		primary, err = build(ActionWaitRuntime, "runtime_active", "available", nil)
+	case isTerminalReplan(facts):
+		resumePreconditions := preconditions
+		resumePreconditions.ExpectedRevision = facts.SessionExpectedRevision
+		primary, err = BuildAction(ActionResumeSession, ActionBuildInput{
+			Target: target, Preconditions: resumePreconditions,
+			ReasonCode: "replan_required", Availability: "available", SourceRefs: facts.SessionSourceRefs,
+			MutationFacadeAvailable: facts.MutationFacadeAvailable,
+		})
 	case snapshot.Activity.State == ActivityFinished && snapshot.Outcome.RunOutcome == "completed" && len(snapshot.Blockers) == 0:
 		primary, err = build(ActionNoneRequired, "run_completed", "available", nil)
+	case isFinishedRecovery(snapshot, facts.Recovery):
+		primary, err = build(ActionInspectTaskRecovery, "terminal_task_requires_recovery", inspectionAvailability(facts.Recovery), facts.Recovery)
+		secondary, err = appendRecoveryMutationAction(secondary, facts.Recovery, build, err)
 	case snapshot.Activity.State == ActivityFinished:
 		primary, err = build(ActionReviewResult, "terminal_result_requires_review", "available", nil)
 	case facts.Recovery != nil && facts.Recovery.TaskID != "":
 		primary, err = build(ActionInspectTaskRecovery, "task_requires_review", inspectionAvailability(facts.Recovery), facts.Recovery)
+		secondary, err = appendRecoveryMutationAction(secondary, facts.Recovery, build, err)
 	default:
 		primary, err = build(ActionInspectIntegrity, "insufficient_verified_facts", "available", nil)
 	}
@@ -293,6 +305,41 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 		secondary = []ActionSuggestion{}
 	}
 	return &primary, secondary, nil
+}
+
+func isTerminalReplan(facts ActionSelectionFacts) bool {
+	state := facts.Snapshot.Activity.State
+	return facts.Recovery != nil && facts.Recovery.ResumeEligible && facts.Recovery.ReasonCode == "recovery_replan" &&
+		(state == ActivityFinished || state == ActivityBlocked)
+}
+
+func isFinishedRecovery(snapshot OperatorSnapshot, recovery *RecoveryEligibility) bool {
+	return snapshot.Activity.State == ActivityFinished && recovery != nil && recovery.TaskID != ""
+}
+
+func appendRecoveryMutationAction(
+	actions []ActionSuggestion,
+	recovery *RecoveryEligibility,
+	build func(string, string, string, *RecoveryEligibility) (ActionSuggestion, error),
+	priorErr error,
+) ([]ActionSuggestion, error) {
+	if priorErr != nil {
+		return actions, priorErr
+	}
+	var id, reason string
+	switch {
+	case recovery != nil && recovery.ReconcileEligible:
+		id, reason = ActionReconcileTask, "reconcile_eligible"
+	case recovery != nil && recovery.RetryEligible:
+		id, reason = ActionRetryTask, "retry_eligible"
+	default:
+		return actions, nil
+	}
+	action, err := build(id, reason, "available", recovery)
+	if err != nil {
+		return actions, err
+	}
+	return append(actions, action), nil
 }
 
 func inspectionAvailability(recovery *RecoveryEligibility) string {

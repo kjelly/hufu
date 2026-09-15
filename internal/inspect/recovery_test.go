@@ -43,11 +43,33 @@ func TestRecoveryEligibilityAllowsRetryOnlyAfterNotStartedEvidence(t *testing.T)
 	item := &team.TodoItem{
 		ID: "task", Status: team.TaskInProgress, SideEffect: team.SideEffectExternalWrite,
 		Recovery: team.RecoveryReconcile, ReconcileTool: "probe", RecoveryState: team.RecoveryStateNotStarted,
-		MaxRetries: 3,
+		MaxRetries:   3,
+		FailureEvent: &team.FailureEventPayload{RetryDisposition: team.ReconcileOnly},
 	}
 	got := RecoveryEligibilityForTasks([]*team.TodoItem{item}, nil, "run", true)
 	if got == nil || !got.RetryEligible || got.ReconcileEligible {
 		t.Fatalf("not-started eligibility = %#v", got)
+	}
+}
+
+func TestRecoveryEligibilityHonorsTerminalDisposition(t *testing.T) {
+	replan := &team.TodoItem{
+		ID: "budget", Status: team.TaskError, Recovery: team.RecoveryRetry,
+		FailureEvent: &team.FailureEventPayload{RetryDisposition: team.ReplanRequired},
+	}
+	got := RecoveryEligibilityForTask(replan, nil, "run", false)
+	if got == nil || !got.ResumeEligible || got.RetryEligible || got.ReconcileEligible || got.ReasonCode != "recovery_replan" {
+		t.Fatalf("replan eligibility = %#v", got)
+	}
+
+	reconcile := &team.TodoItem{
+		ID: "protocol", Status: team.TaskBlocked, Recovery: team.RecoveryRetry,
+		VerifySpec:   &team.VerificationSpec{Type: team.VerifyFileExists, Path: "result.json"},
+		FailureEvent: &team.FailureEventPayload{RetryDisposition: team.ReconcileOnly},
+	}
+	got = RecoveryEligibilityForTask(reconcile, nil, "run", false)
+	if got == nil || got.ResumeEligible || got.RetryEligible || !got.ReconcileEligible || got.ReasonCode != "recovery_reconcile" {
+		t.Fatalf("reconcile eligibility = %#v", got)
 	}
 }
 

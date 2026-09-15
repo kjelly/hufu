@@ -71,6 +71,46 @@ func TestTaskGoalContractCarriesArtifactFanOutBeforeExpansion(t *testing.T) {
 	}
 }
 
+func TestTaskGoalInvariantContractPropagatesThroughFanOutAndSubmission(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorksetManifest(t, workspace, `{"schema_version":1,"items":[{"key":"one","bindings":{"key":"one"}}]}`)
+	session := &TeamSession{
+		Workspace: workspace,
+		Config:    agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
+		ContractTasks: []TaskDef{{
+			ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+			InvariantVerification: InvariantVerificationReport,
+			Execution:             ExecutionContract{RequiresResult: true, ToolSequence: []string{"submit_result"}},
+			FanOut:                &FanOutSpec{Source: "manifest.json", GoalTemplate: "review {key}"},
+		}},
+	}
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: session, executionRunID: "run-1"}
+	expanded, err := c.expandFanOutTasks(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded) != 1 || len(effective) != 1 || effective[0].InvariantVerification != InvariantVerificationReport {
+		t.Fatalf("compiled fan-out invariant projection = expanded=%#v effective=%#v", expanded, effective)
+	}
+	item := todoItemFromSpec(TodoSpec{
+		PlanTaskID: expanded[0].ID, Agent: expanded[0].Agent, Desc: expanded[0].Goal,
+		InvariantVerification: expanded[0].InvariantVerification,
+		ContractID:            expanded[0].ContractID, ContractHash: expanded[0].ContractHash, ContractRevision: expanded[0].ContractRevision,
+		Execution: expanded[0].Execution, WorksetBinding: expanded[0].WorksetBinding,
+	}, "task-1")
+	submission := taskResultSubmissionContractForTask(taskDefFromTodoItem(item))
+	if item.InvariantVerification != InvariantVerificationReport || submission.InvariantVerification != InvariantVerificationReport {
+		t.Fatalf("durable submission contract lost invariant policy: item=%#v submission=%#v", item, submission)
+	}
+	if _, err := decodeSubmitResultInput([]byte(`{"status":"success","summary":"checked","invariant_assessments":[{"invariant_id":"safe","status":"preserved","summary":"preserved"}]}`), submission); err != nil {
+		t.Fatalf("report-mode submission was rejected: %v", err)
+	}
+}
+
 func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 	for name, content := range map[string]string{
 		"zero-byte source": "",

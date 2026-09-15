@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -53,6 +54,23 @@ func TestEvaluateRunOutcome(t *testing.T) {
 				t.Fatalf("evaluation did not preserve acceptance state: %#v", got.Acceptance)
 			}
 		})
+	}
+}
+
+func TestUnresolvedTaskReferencesProjectRecoveryAction(t *testing.T) {
+	items := []*TodoItem{{
+		ID: "task-7", Agent: "reviewer", Status: TaskError,
+		FailureEvent: &FailureEventPayload{FailureClass: FailureExecution, RetryDisposition: ReplanRequired, Summary: "attempt budget exceeded"},
+	}, {
+		ID: "task-8", Agent: "reviewer", Status: TaskBlocked,
+		FailureEvent: &FailureEventPayload{FailureClass: FailureProtocol, RetryDisposition: ReconcileOnly, Summary: "schema repair exhausted"},
+	}}
+	refs := UnresolvedTaskReferences(items)
+	if len(refs) != 2 || refs[0].RetryDisposition != ReplanRequired || !strings.Contains(refs[0].NextAction, "materially changed plan") {
+		t.Fatalf("recovery references = %#v", refs)
+	}
+	if got := RunRecoveryDisposition(refs); got != ReconcileOnly {
+		t.Fatalf("run recovery disposition = %q, want %q", got, ReconcileOnly)
 	}
 }
 

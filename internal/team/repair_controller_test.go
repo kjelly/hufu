@@ -96,6 +96,13 @@ func TestRepairControllerDecisionMatrix(t *testing.T) {
 		{name: "reconciled not started escalates", req: RepairRequest{Task: TaskDef{SideEffect: SideEffectExternalWrite, Recovery: RecoveryReconcile, Escalate: true}, RecoveryState: RecoveryStateNotStarted}, want: RepairEscalate},
 		{name: "attempt budget replans", req: RepairRequest{Task: TaskDef{}, Attempt: 2, MaxAttempts: 2}, want: RepairReplan},
 		{name: "reconciled attempt budget replans", req: RepairRequest{Task: TaskDef{SideEffect: SideEffectExternalWrite, Recovery: RecoveryReconcile}, RecoveryState: RecoveryStateNotStarted, Attempt: 2, MaxAttempts: 2}, want: RepairReplan},
+		{name: "terminal replan forbids original retry", req: RepairRequest{Task: TaskDef{Recovery: RecoveryRetry}, FailureDisposition: ReplanRequired}, want: RepairReplan},
+		{name: "terminal reconcile uses verifier", req: RepairRequest{Task: TaskDef{VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "result.json"}}, FailureDisposition: ReconcileOnly}, want: RepairReconcile},
+		{name: "terminal reconcile proof permits gated retry", req: RepairRequest{Task: TaskDef{VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "result.json"}}, RecoveryState: RecoveryStateNotStarted, FailureDisposition: ReconcileOnly}, want: RepairRetry},
+		{name: "terminal reconcile without capability blocks", req: RepairRequest{Task: TaskDef{}, FailureDisposition: ReconcileOnly}, want: RepairBlock},
+		{name: "reconcile policy alone is not executable", req: RepairRequest{Task: TaskDef{Recovery: RecoveryReconcile}, FailureDisposition: ReconcileOnly}, want: RepairBlock},
+		{name: "terminal human gate blocks", req: RepairRequest{Task: TaskDef{Recovery: RecoveryRetry}, FailureDisposition: NeedsHuman}, want: RepairBlock},
+		{name: "terminal no-retry blocks", req: RepairRequest{Task: TaskDef{Recovery: RecoveryRetry}, FailureDisposition: RetryNone}, want: RepairBlock},
 		{name: "unauthorized rollback blocks", req: RepairRequest{RollbackRequested: true}, want: RepairBlock},
 	}
 

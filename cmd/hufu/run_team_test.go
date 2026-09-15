@@ -198,9 +198,12 @@ func TestIsInteractiveEnvironment(t *testing.T) {
 
 func TestRenderExecutionSummary(t *testing.T) {
 	summary := executionSummary{teams: []string{"dev"}, workspaces: []string{"/tmp/workspace"}, total: 4, done: 1, errored: 1, skipped: 1, pending: 1}
-	res := &team.RunResult{Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded, GoalMode: team.GoalModeOutcome}
+	res := &team.RunResult{
+		Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded, GoalMode: team.GoalModeOutcome,
+		UnresolvedTasks: []team.TaskReference{{ID: "task-7", Status: string(team.TaskError), RetryDisposition: team.ReplanRequired, NextAction: team.RecoveryNextAction(team.ReplanRequired)}},
+	}
 	out := formatExecutionSummary(summary, 3*time.Second, []*team.RunResult{res})
-	for _, want := range []string{"Team:      dev", "1 done", "3s", "Outcome:   partial", "Status:    Budget exhausted"} {
+	for _, want := range []string{"Team:      dev", "1 done", "3s", "Outcome:   partial", "Status:    Budget exhausted", "Recovery:  replan_required", "task task-7", "materially changed plan"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q: %q", want, out)
 		}

@@ -614,12 +614,27 @@ func mergeContextWindowTelemetrySummary(dst *ContextWindowTelemetrySummary, src 
 }
 
 type TaskReference struct {
-	ID           string           `json:"id"`
-	Agent        string           `json:"agent,omitempty"`
-	Desc         string           `json:"desc"`
-	Status       string           `json:"status"`
-	Error        string           `json:"error,omitempty"`
-	FailureClass TaskFailureClass `json:"failure_class,omitempty"`
+	ID               string           `json:"id"`
+	Agent            string           `json:"agent,omitempty"`
+	Desc             string           `json:"desc"`
+	Status           string           `json:"status"`
+	Error            string           `json:"error,omitempty"`
+	FailureClass     TaskFailureClass `json:"failure_class,omitempty"`
+	RetryDisposition RetryDisposition `json:"retry_disposition,omitempty"`
+	NextAction       string           `json:"next_action,omitempty"`
+}
+
+// RunRecoveryDisposition returns the strongest recovery requirement across
+// unresolved task references. Presentation layers use this one fold so JSON,
+// reports, terminal summaries, and TUI failure detail cannot disagree.
+func RunRecoveryDisposition(tasks []TaskReference) RetryDisposition {
+	var strongest RetryDisposition
+	for _, task := range tasks {
+		if dispositionSafetyRank(task.RetryDisposition) > dispositionSafetyRank(strongest) {
+			strongest = task.RetryDisposition
+		}
+	}
+	return strongest
 }
 
 type ContinuationInfo struct {
@@ -920,16 +935,22 @@ func toTaskReference(item *TodoItem) TaskReference {
 	}
 	errStr := FailureDisplayText(item)
 	failureClass := TaskFailureClass("")
+	retryDisposition := RetryDisposition("")
+	nextAction := ""
 	if item.FailureEvent != nil {
 		failureClass = item.FailureEvent.FailureClass
+		retryDisposition = item.FailureEvent.RetryDisposition
+		nextAction = RecoveryNextAction(retryDisposition)
 	}
 	return TaskReference{
-		ID:           item.ID,
-		Agent:        item.Agent,
-		Desc:         item.Desc,
-		Status:       string(item.Status),
-		Error:        errStr,
-		FailureClass: failureClass,
+		ID:               item.ID,
+		Agent:            item.Agent,
+		Desc:             item.Desc,
+		Status:           string(item.Status),
+		Error:            errStr,
+		FailureClass:     failureClass,
+		RetryDisposition: retryDisposition,
+		NextAction:       nextAction,
 	}
 }
 

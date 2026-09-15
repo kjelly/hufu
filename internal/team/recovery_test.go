@@ -509,6 +509,7 @@ func TestReconcileTaskDoesNotReplayWhenOperationWasNotStarted(t *testing.T) {
 		Recovery:      RecoveryReconcile,
 		ReconcileTool: "exit 1",
 		Execution:     contract,
+		FailureEvent:  &FailureEventPayload{RetryDisposition: ReconcileOnly},
 	}})
 
 	report, err := c.ReconcileTask(context.Background(), "41")
@@ -555,6 +556,31 @@ func TestRetryTaskUsesCanonicalResetBeforeWorkerExecution(t *testing.T) {
 	item := c.todoItemByID("42")
 	if item == nil || len(item.ExecutionReceipts) != 1 {
 		t.Fatalf("retry execution receipts = %#v, want one canonical worker attempt", item)
+	}
+}
+
+func TestTargetedRetryHonorsTerminalRecoveryDisposition(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		disposition RetryDisposition
+		want        string
+	}{
+		{name: "replan", disposition: ReplanRequired, want: "materially changed plan"},
+		{name: "reconcile", disposition: ReconcileOnly, want: "reconciliation"},
+		{name: "needs human", disposition: NeedsHuman, want: "human intervention"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &Coordinator{}
+			item := &TodoItem{
+				ID: "failed", Status: TaskError, Recovery: RecoveryRetry,
+				VerifySpec:   &VerificationSpec{Type: VerifyFileExists, Path: "result.json"},
+				FailureEvent: &FailureEventPayload{RetryDisposition: test.disposition},
+			}
+			err := c.retryTaskForOperator(t.Context(), item)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("retry error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

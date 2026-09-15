@@ -133,6 +133,34 @@ func TestSelectActionsRuntimeAndTerminalStates(t *testing.T) {
 	}
 }
 
+func TestSelectActionsSurfacesExecutableTerminalRecovery(t *testing.T) {
+	replanSnapshot := selectionTestSnapshot(ActivityFinished, "partial")
+	replan := &RecoveryEligibility{TaskID: "budget", ResumeEligible: true, ReasonCode: "recovery_replan"}
+	primary, secondary, err := SelectActions(ActionSelectionFacts{
+		Snapshot: replanSnapshot, Recovery: replan, SessionExpectedRevision: "sha256:session",
+		SessionSourceRefs: []string{"run"}, MutationFacadeAvailable: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.ID != ActionResumeSession || primary.ReasonCode != "replan_required" || primary.Availability != "available" || len(primary.Argv) == 0 || len(secondary) != 0 {
+		t.Fatalf("replan actions = primary=%#v secondary=%#v", primary, secondary)
+	}
+
+	reconcileSnapshot := selectionTestSnapshot(ActivityFinished, "blocked")
+	reconcile := &RecoveryEligibility{
+		TaskID: "protocol", Attempt: 1, TaskStatus: "blocked", ReconcileEligible: true,
+		ExpectedRevision: "sha256:task", ReasonCode: "recovery_reconcile",
+	}
+	primary, secondary, err = SelectActions(ActionSelectionFacts{Snapshot: reconcileSnapshot, Recovery: reconcile, MutationFacadeAvailable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.ID != ActionInspectTaskRecovery || len(secondary) != 1 || secondary[0].ID != ActionReconcileTask || secondary[0].Availability != "available" || len(secondary[0].Argv) == 0 {
+		t.Fatalf("reconcile actions = primary=%#v secondary=%#v", primary, secondary)
+	}
+}
+
 func TestActionJourneyMatrix(t *testing.T) {
 	tests := []struct {
 		name         string

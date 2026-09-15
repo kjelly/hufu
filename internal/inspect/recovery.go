@@ -42,6 +42,17 @@ func recoveryEligibilityForItem(item *team.TodoItem, events []IndexedEvent, runI
 				Execution: team.ExecutionContract{AllowsReplay: allowsReplay}, Verify: item.Verify, VerifySpec: item.VerifySpec,
 			},
 			Attempt: item.Retries, MaxAttempts: item.MaxRetries, RecoveryState: item.RecoveryState,
+			FailureDisposition: taskRetryDisposition(item),
+		})
+	} else if disposition := taskRetryDisposition(item); disposition != "" {
+		decision = team.NewRepairController().Decide(team.RepairRequest{
+			Task: team.TaskDef{
+				ID: item.ID, MaxRetries: item.MaxRetries, Recovery: policy, SideEffect: item.SideEffect,
+				ReconcileTool: item.ReconcileTool, Escalate: item.Escalate,
+				Execution: team.ExecutionContract{AllowsReplay: allowsReplay}, Verify: item.Verify, VerifySpec: item.VerifySpec,
+			},
+			Attempt: item.Retries, MaxAttempts: item.MaxRetries, RecoveryState: item.RecoveryState,
+			FailureDisposition: disposition,
 		})
 	}
 	latest := latestTaskEvent(events, runID, item.ID)
@@ -65,11 +76,18 @@ func recoveryEligibilityForItem(item *team.TodoItem, events []IndexedEvent, runI
 		TaskID: item.ID, Attempt: recoveryAttempt(item), TaskStatus: string(item.Status),
 		ExpectedEventID: latest.Event.ID, ExpectedEventHash: latest.Event.Hash,
 		ExternalEffectState: externalState, EffectivePolicy: effectivePolicy, PolicyRevision: policyRevision,
-		ExpectedRevision: expectedRevision, PolicyDenied: policyDenied, ResumeEligible: interrupted,
+		ExpectedRevision: expectedRevision, PolicyDenied: policyDenied, ResumeEligible: interrupted || decision.Action == team.RepairReplan,
 		ReconcileEligible: decision.Action == team.RepairReconcile && capabilityKnown,
 		RetryEligible:     decision.Action == team.RepairRetry && retryStateProvenSafe(item, externalState),
-		CapabilityKnown:   capabilityKnown, ReasonCode: repairReasonCode(decision.Action, policyDenied, policyKnown), SourceRefs: refs,
+		CapabilityKnown:   capabilityKnown, ReasonCode: repairReasonCode(decision.Action, policyDenied, policyKnown || taskRetryDisposition(item) != ""), SourceRefs: refs,
 	}
+}
+
+func taskRetryDisposition(item *team.TodoItem) team.RetryDisposition {
+	if item == nil || item.FailureEvent == nil {
+		return ""
+	}
+	return item.FailureEvent.RetryDisposition
 }
 
 func retryStateProvenSafe(item *team.TodoItem, externalState string) bool {

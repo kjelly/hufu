@@ -219,6 +219,9 @@ func sessionHasResumableWork(session *team.SessionData) bool {
 		case team.TaskPending, team.TaskPlanned, team.TaskInProgress, team.TaskPaused:
 			return true
 		}
+		if item.FailureEvent != nil && item.FailureEvent.RetryDisposition == team.ReplanRequired {
+			return true
+		}
 	}
 	return false
 }
