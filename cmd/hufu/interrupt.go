@@ -5,13 +5,18 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/tools"
 	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
-const emergencyFinalizationTimeout = 1500 * time.Millisecond
+const (
+	emergencyFinalizationTimeout = 1500 * time.Millisecond
+	gracefulWrapUpTimeout        = 30 * time.Second
+	forceQuitGracePeriod         = 8 * time.Second
+)
 
 // processExit is an injectable seam for shutdown tests. Production retains
 // the historical os.Exit behavior.
@@ -37,10 +42,36 @@ func setupInterruptHandlerWithHooks(injector *promptInjector, activeCoord *activ
 	sigIntDone := make(chan struct{})
 
 	var watchdog *time.Timer
+	var watchdogMu sync.Mutex
+	watchdogsClosed := false
 	stopWatchdog := func() {
+		watchdogMu.Lock()
+		defer watchdogMu.Unlock()
+		watchdogsClosed = true
 		if watchdog != nil {
 			watchdog.Stop()
 			watchdog = nil
+		}
+	}
+	replaceWatchdog := func(delay time.Duration, callback func()) {
+		watchdogMu.Lock()
+		defer watchdogMu.Unlock()
+		if watchdogsClosed {
+			return
+		}
+		if watchdog != nil {
+			watchdog.Stop()
+		}
+		watchdog = time.AfterFunc(delay, callback)
+	}
+	forceExit := func() {
+		fmt.Fprintf(os.Stderr, "\n%s Operations did not cancel within %s. Forcing exit.\n",
+			errStyle.Render("⚠"), forceQuitGracePeriod)
+		if emergencyFinalize != nil {
+			emergencyFinalize()
+		}
+		if exit != nil {
+			exit(130)
 		}
 	}
 
@@ -60,6 +91,12 @@ func setupInterruptHandlerWithHooks(injector *promptInjector, activeCoord *activ
 					}
 					injector.injectWrapUp()
 				}
+				replaceWatchdog(gracefulWrapUpTimeout, func() {
+					fmt.Fprintf(os.Stderr, "\n%s Graceful wrap-up exceeded %s; cancelling in-flight operations.\n",
+						errStyle.Render("⚠"), gracefulWrapUpTimeout)
+					cancelFn()
+					replaceWatchdog(forceQuitGracePeriod, forceExit)
+				})
 				first = false
 			} else {
 				if activeTUIProgram.Load() == nil {
@@ -70,20 +107,10 @@ func setupInterruptHandlerWithHooks(injector *promptInjector, activeCoord *activ
 					logCancelSource("sigint", "force quit requested")
 					fmt.Fprintf(os.Stderr, "\n%s Force quit requested\n", errStyle.Render("✗"))
 					fmt.Fprintf(os.Stderr, "  Current: %s\n", currentStatus)
-					fmt.Fprintf(os.Stderr, "  Cancelling in-flight operations (up to 8s grace period)...\n")
+					fmt.Fprintf(os.Stderr, "  Cancelling in-flight operations (up to %s grace period)...\n", forceQuitGracePeriod)
 					fmt.Fprintf(os.Stderr, "  Press Ctrl+\\\\ (SIGQUIT) to dump stack if still stuck\n")
 				}
-				stopWatchdog()
-				watchdog = time.AfterFunc(8*time.Second, func() {
-					fmt.Fprintf(os.Stderr, "\n%s Operations did not cancel within 8s. Forcing exit.\n",
-						errStyle.Render("⚠"))
-					if emergencyFinalize != nil {
-						emergencyFinalize()
-					}
-					if exit != nil {
-						exit(130)
-					}
-				})
+				replaceWatchdog(forceQuitGracePeriod, forceExit)
 				cancelFn()
 			}
 		}
