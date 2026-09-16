@@ -5,6 +5,13 @@ This team implements the directory layout `spec.md` §6 asked for
 adapted to what Hufu's real decision-aware runtime (`internal/team/decision_*.go`,
 `internal/agent/decision_config.go`) actually parses and executes today.
 
+The team is now a consumer of the generic Decision Runtime rather than the
+owner of its rigor policies. Its `light`, `standard`, and `high-stakes` names
+are local aliases for the versioned `builtin/*@v1` presets. Team-owned
+authorization, workers, capability evidence, routing hints, tools, and request
+contract remain in `team.yaml`; each run materializes and durably snapshots the
+selected preset, so recovery never depends on re-reading this team or catalog.
+
 **2026-09-07 update:** `spec.md` was rewritten to v2 (72 sections) and
 `spec2.md` was added, both reframing `reference`/`juror`/`challenger` as
 capability-routed logical roles rather than fixed agent identities. Per

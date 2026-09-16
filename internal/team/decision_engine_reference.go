@@ -27,6 +27,23 @@ func validateReferenceRecoveryState(state decisionState) error {
 }
 
 func (e *decisionEngine) attachReferenceEvidence(ctx context.Context, req DecisionRequest, state decisionState) (DecisionRequest, error) {
+	// An anchored v2 envelope already contains the completed reference stage's
+	// material. Re-append would change the sealed evidence hash on resume and
+	// make completed judge opinions look stale. Revalidate the durable result
+	// against the snapshot, then reuse the snapshot byte-for-byte.
+	if state.ReferenceResult != nil && req.ReferenceEvidenceResultRef.ID != "" {
+		rates, artifacts, provenance, resultRef, err := e.runReferenceEvidence(ctx, req, state)
+		if err != nil {
+			return req, err
+		}
+		if !sameArtifactIdentity(req.ReferenceEvidenceResultRef, resultRef) ||
+			!reflect.DeepEqual(req.BaseRates, rates) ||
+			!containsDecisionArtifacts(req.Artifacts, artifacts) ||
+			!containsDecisionProvenance(req.Provenance, provenance) {
+			return req, &GateResult{Reason: ReasonDecisionOutsideViewMissing, Detail: "reference evidence envelope snapshot does not match its durable result"}
+		}
+		return req, nil
+	}
 	if len(req.BaseRates) == 0 && req.Policy.OutsideView.Required && req.Policy.OutsideView.ReferenceEvidence {
 		rates, artifacts, provenance, resultRef, err := e.runReferenceEvidence(ctx, req, state)
 		if err != nil {
@@ -47,6 +64,38 @@ func (e *decisionEngine) attachReferenceEvidence(ctx context.Context, req Decisi
 		}
 	}
 	return req, nil
+}
+
+func containsDecisionArtifacts(have, want []ArtifactRef) bool {
+	for _, expected := range want {
+		found := false
+		for _, candidate := range have {
+			if sameArtifactIdentity(candidate, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func containsDecisionProvenance(have, want []EvidenceProvenance) bool {
+	for _, expected := range want {
+		found := false
+		for _, candidate := range have {
+			if reflect.DeepEqual(candidate, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionRequest, state decisionState) ([]BaseRateEvidence, []ArtifactRef, []EvidenceProvenance, ArtifactRef, error) {
