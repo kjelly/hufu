@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -99,5 +100,33 @@ func TestSessionRecoveryRevisionBindsBranchAndCheckpointProjection(t *testing.T)
 	checkpointChanged, _ := SessionRecoveryRevision(session, "main")
 	if checkpointChanged == first {
 		t.Fatal("checkpoint projection change did not change session recovery revision")
+	}
+}
+
+func TestSessionRecoveryRevisionBindsPendingWrapUp(t *testing.T) {
+	session := &team.SessionData{
+		RecoveryRequired: true,
+		WorkflowState:    team.PhaseExecute,
+		Tasks:            []*team.TodoItem{{ID: "task", Status: team.TaskPaused, OccurrenceRevision: 2}},
+	}
+	withoutWrapUp, _ := SessionRecoveryRevision(session, "main")
+
+	session.PendingWrapUp = &team.PendingWrapUp{
+		RunID:        "run-wrap-up",
+		BranchID:     "main",
+		RequestedAt:  "2026-09-16T09:00:00Z",
+		Reason:       "operator requested graceful wrap-up",
+		EventDurable: true,
+	}
+	withWrapUp, refs := SessionRecoveryRevision(session, "main")
+	again, againRefs := SessionRecoveryRevision(session, "main")
+	if withWrapUp == "" || withWrapUp == withoutWrapUp {
+		t.Fatalf("pending wrap-up did not change session recovery revision: without=%q with=%q", withoutWrapUp, withWrapUp)
+	}
+	if withWrapUp != again || !slices.Equal(refs, againRefs) {
+		t.Fatalf("pending wrap-up revision is not deterministic: %q/%#v vs %q/%#v", withWrapUp, refs, again, againRefs)
+	}
+	if !slices.Contains(refs, "run-wrap-up") {
+		t.Fatalf("pending wrap-up run was not included in recovery refs: %#v", refs)
 	}
 }
