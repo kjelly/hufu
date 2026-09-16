@@ -208,7 +208,7 @@ func sessionHasResumableWork(session *team.SessionData) bool {
 	if session == nil {
 		return false
 	}
-	if session.RecoveryRequired || session.PendingTerminalCommit != nil {
+	if session.RecoveryRequired || session.PendingTerminalCommit != nil || session.PendingWrapUp != nil {
 		return true
 	}
 	for _, item := range session.Tasks {

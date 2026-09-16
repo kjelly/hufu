@@ -108,6 +108,7 @@ func SessionRecoveryRevision(session *team.SessionData, branchID string) (string
 		BranchID              string                      `json:"branch_id"`
 		RecoveryRequired      bool                        `json:"recovery_required"`
 		PendingTerminalCommit *team.PendingTerminalCommit `json:"pending_terminal_commit"`
+		PendingWrapUp         *team.PendingWrapUp         `json:"pending_wrap_up,omitempty"`
 		WorkflowState         team.Phase                  `json:"workflow_state"`
 		Tasks                 []sessionTaskRevision       `json:"tasks"`
 	}
@@ -124,7 +125,8 @@ func SessionRecoveryRevision(session *team.SessionData, branchID string) (string
 	slices.SortFunc(tasks, func(left, right sessionTaskRevision) int { return strings.Compare(left.ID, right.ID) })
 	input := sessionRevisionInput{
 		BranchID: branchID, RecoveryRequired: session.RecoveryRequired,
-		PendingTerminalCommit: session.PendingTerminalCommit, WorkflowState: session.WorkflowState, Tasks: tasks,
+		PendingTerminalCommit: session.PendingTerminalCommit, PendingWrapUp: session.PendingWrapUp,
+		WorkflowState: session.WorkflowState, Tasks: tasks,
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {
@@ -134,6 +136,9 @@ func SessionRecoveryRevision(session *team.SessionData, branchID string) (string
 	refs := []string{branchID}
 	if session.PendingTerminalCommit != nil {
 		refs = appendRecoveryRefs(refs, session.PendingTerminalCommit.RunID)
+	}
+	if session.PendingWrapUp != nil {
+		refs = appendRecoveryRefs(refs, session.PendingWrapUp.RunID)
 	}
 	slices.Sort(refs)
 	return "sha256:" + hex.EncodeToString(digest[:]), slices.Compact(refs)

@@ -54,12 +54,15 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if bound.Session != nil && bound.Session.RecoveryReason != "" {
 		reasons = append(reasons, bound.Session.RecoveryReason)
 	}
+	if bound.Session != nil && bound.Session.PendingWrapUp != nil && bound.Session.PendingWrapUp.RunID == resolvedQuery.RunID {
+		reasons = append(reasons, bound.Session.PendingWrapUp.Reason)
+	}
 	activity := operatorpkg.DeriveActivity(operatorpkg.ActivityFacts{
 		BindingStatus:      bound.Scope.BindingStatus,
 		EventChain:         "verified",
 		RequiredProjection: "consistent",
 		HasTerminalRun:     selected.terminal != nil,
-		DurablyInterrupted: overviewInterrupted(selected.terminal != nil, bound.Session, states),
+		DurablyInterrupted: overviewInterrupted(selected.terminal != nil, bound.Session, resolvedQuery.RunID, states),
 		TaskStates:         states,
 		RawReasonCodes:     reasons,
 	})
@@ -190,11 +193,14 @@ func overviewTaskFacts(tasks []*team.TodoItem) ([]string, []string, []operatorpk
 	return states, reasons, blockers
 }
 
-func overviewInterrupted(terminal bool, session *team.SessionData, states []string) bool {
+func overviewInterrupted(terminal bool, session *team.SessionData, runID string, states []string) bool {
 	if terminal || session == nil {
 		return false
 	}
 	if session.RecoveryRequired || session.PendingTerminalCommit != nil {
+		return true
+	}
+	if session.PendingWrapUp != nil && session.PendingWrapUp.RunID == runID {
 		return true
 	}
 	return slices.Contains(states, string(team.TaskPaused))
@@ -247,6 +253,7 @@ func latestChanges(events []IndexedEvent, runID string, limit int) []operatorpkg
 func isOverviewChange(eventType string) bool {
 	switch team.EventType(eventType) {
 	case team.EventRunStarted, team.EventRunFinished,
+		team.EventWrapUpPhase,
 		team.EventTaskCreated, team.EventTaskPlanned, team.EventTaskStarted,
 		team.EventTaskVerifying, team.EventTaskPaused, team.EventTaskCompleted,
 		team.EventTaskFailed, team.EventTaskBlocked, team.EventTaskSkipped,
