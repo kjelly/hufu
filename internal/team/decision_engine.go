@@ -108,6 +108,11 @@ type DecisionRequest struct {
 	Profile string
 	Policy  DecisionPolicy
 
+	ProfileOrigin  string `json:"profile_origin,omitempty"`
+	ProfileVersion string `json:"profile_version,omitempty"`
+	ProfileRef     string `json:"profile_ref,omitempty"`
+	PolicyDigest   string `json:"policy_digest,omitempty"`
+
 	Question string
 	Options  []DecisionOption
 
@@ -198,7 +203,9 @@ func (e *decisionEngine) Run(ctx context.Context, req DecisionRequest) (*Decisio
 	if req.Attempt == 0 {
 		req.Attempt = 1
 	}
-	if err := req.Policy.Validate(); err != nil {
+	var err error
+	req, err = materializeDirectDecisionRequest(req)
+	if err != nil {
 		return nil, fmt.Errorf("decision policy: %w", err)
 	}
 	if req.DecisionID == "" {
@@ -227,7 +234,9 @@ func cloneDecisionRequest(req DecisionRequest) DecisionRequest {
 		contract.Assumptions = cloneDecisionAssumptions(req.Contract.Assumptions)
 		clone.Contract = &contract
 	}
-	clone.Policy.Criteria = append([]DecisionCriterion(nil), req.Policy.Criteria...)
+	if policy, err := agent.CloneDecisionPolicy(req.Policy); err == nil {
+		clone.Policy = policy
+	}
 	return clone
 }
 

@@ -9,11 +9,16 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // DecisionRunEnvelopeSchemaVersion is the wire version for the immutable
 // request snapshot used to resume a decision in a fresh process.
-const DecisionRunEnvelopeSchemaVersion = 1
+const (
+	decisionRunEnvelopeLegacySchemaVersion = 1
+	DecisionRunEnvelopeSchemaVersion       = 2
+)
 
 // ErrLegacyUnfinishedDecision identifies a pre-envelope decision that cannot
 // be resumed safely. Its request snapshot was never committed to CAS, so a
@@ -53,11 +58,15 @@ type DecisionRunStageProgress struct {
 type DecisionRunEnvelope struct {
 	SchemaVersion int `json:"schema_version"`
 
-	DecisionID string `json:"decision_id"`
-	RunID      string `json:"run_id,omitempty"`
-	TaskID     string `json:"task_id,omitempty"`
-	Attempt    int    `json:"attempt,omitempty"`
-	Profile    string `json:"profile"`
+	DecisionID     string `json:"decision_id"`
+	RunID          string `json:"run_id,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	Attempt        int    `json:"attempt,omitempty"`
+	Profile        string `json:"profile"`
+	ProfileOrigin  string `json:"profile_origin,omitempty"`
+	ProfileVersion string `json:"profile_version,omitempty"`
+	ProfileRef     string `json:"profile_ref,omitempty"`
+	PolicyDigest   string `json:"policy_digest,omitempty"`
 
 	Request DecisionRequest `json:"request"`
 	Policy  DecisionPolicy  `json:"policy"`
@@ -68,7 +77,7 @@ type DecisionRunEnvelope struct {
 }
 
 func (e DecisionRunEnvelope) Validate() error {
-	if e.SchemaVersion != DecisionRunEnvelopeSchemaVersion {
+	if e.SchemaVersion != decisionRunEnvelopeLegacySchemaVersion && e.SchemaVersion != DecisionRunEnvelopeSchemaVersion {
 		return fmt.Errorf("unsupported decision run envelope schema version %d", e.SchemaVersion)
 	}
 	if strings.TrimSpace(e.DecisionID) == "" || strings.TrimSpace(e.RunID) == "" ||
@@ -87,6 +96,26 @@ func (e DecisionRunEnvelope) Validate() error {
 	if !reflect.DeepEqual(e.Request.Policy, e.Policy) {
 		return fmt.Errorf("decision run envelope policy snapshot does not match request")
 	}
+	identity := e.profileIdentity()
+	requestIdentity := e.Request.profileIdentity()
+	if e.SchemaVersion == DecisionRunEnvelopeSchemaVersion {
+		if err := validateDecisionProfileIdentity(identity, e.Policy, true, true); err != nil {
+			return fmt.Errorf("decision run envelope profile identity: %w", err)
+		}
+		if !identity.equal(requestIdentity) {
+			return fmt.Errorf("decision run envelope profile identity does not match request")
+		}
+	} else {
+		if err := validateDecisionProfileIdentity(identity, e.Policy, false, false); err != nil {
+			return fmt.Errorf("legacy decision run envelope profile identity: %w", err)
+		}
+		if err := validateDecisionProfileIdentity(requestIdentity, e.Request.Policy, false, false); err != nil {
+			return fmt.Errorf("legacy decision run envelope request profile identity: %w", err)
+		}
+		if err := validateLegacyDecisionProfileIdentityAgreement(identity, requestIdentity); err != nil {
+			return fmt.Errorf("legacy decision run envelope profile identity: %w", err)
+		}
+	}
 	if e.StageProgress.CurrentStage == "" || e.StageProgress.NextStage == "" {
 		return fmt.Errorf("decision run envelope stage progress is incomplete")
 	}
@@ -100,21 +129,34 @@ func (e DecisionRunEnvelope) RequestSnapshot() DecisionRequest {
 	return cloneDecisionRequest(e.Request)
 }
 
-func newDecisionRunEnvelope(req DecisionRequest, policy DecisionPolicy, packet DecisionEvidencePacket, now time.Time) DecisionRunEnvelope {
+func newDecisionRunEnvelope(req DecisionRequest, policy DecisionPolicy, packet DecisionEvidencePacket, now time.Time) (DecisionRunEnvelope, error) {
 	req = cloneDecisionRequest(req)
-	req.Policy = policy
+	policyClone, err := cloneDecisionPolicy(policy)
+	if err != nil {
+		return DecisionRunEnvelope{}, err
+	}
+	req.Policy = policyClone
+	digest, err := decisionPolicyDigest(policyClone)
+	if err != nil {
+		return DecisionRunEnvelope{}, err
+	}
+	req.PolicyDigest = digest
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	return DecisionRunEnvelope{
-		SchemaVersion: DecisionRunEnvelopeSchemaVersion,
-		DecisionID:    req.DecisionID,
-		RunID:         req.RunID,
-		TaskID:        req.TaskID,
-		Attempt:       req.Attempt,
-		Profile:       req.Profile,
-		Request:       req,
-		Policy:        policy,
+		SchemaVersion:  DecisionRunEnvelopeSchemaVersion,
+		DecisionID:     req.DecisionID,
+		RunID:          req.RunID,
+		TaskID:         req.TaskID,
+		Attempt:        req.Attempt,
+		Profile:        req.Profile,
+		ProfileOrigin:  req.ProfileOrigin,
+		ProfileVersion: req.ProfileVersion,
+		ProfileRef:     req.ProfileRef,
+		PolicyDigest:   req.PolicyDigest,
+		Request:        req,
+		Policy:         policyClone,
 		StageProgress: DecisionRunStageProgress{
 			CurrentStage: "evidence_sealed",
 			EvidenceHash: packet.Hash,
@@ -126,7 +168,37 @@ func newDecisionRunEnvelope(req DecisionRequest, policy DecisionPolicy, packet D
 			"finalized":   decisionStageEventKey(req.DecisionID, "finalized", packet.Hash),
 		},
 		CreatedAt: now.UTC(),
+	}, nil
+}
+
+func (e DecisionRunEnvelope) profileIdentity() decisionProfileIdentity {
+	return decisionProfileIdentity{Origin: e.ProfileOrigin, Version: e.ProfileVersion, Ref: e.ProfileRef, Digest: e.PolicyDigest}
+}
+
+func validateLegacyDecisionProfileIdentityAgreement(a, b decisionProfileIdentity) error {
+	if a.Origin != "" && b.Origin != "" && a.Origin != b.Origin ||
+		a.Version != "" && b.Version != "" && a.Version != b.Version ||
+		a.Ref != "" && b.Ref != "" && a.Ref != b.Ref ||
+		a.Digest != "" && b.Digest != "" && a.Digest != b.Digest {
+		return fmt.Errorf("envelope and request metadata conflict")
 	}
+	return nil
+}
+
+func cloneDecisionPolicy(policy DecisionPolicy) (DecisionPolicy, error) {
+	clone, err := agent.CloneDecisionPolicy(policy)
+	if err != nil {
+		return DecisionPolicy{}, fmt.Errorf("clone decision policy: %w", err)
+	}
+	return clone, nil
+}
+
+func decisionPolicyDigest(policy DecisionPolicy) (string, error) {
+	digest, err := agent.DecisionPolicyDigest(policy)
+	if err != nil {
+		return "", fmt.Errorf("compute decision policy digest: %w", err)
+	}
+	return digest, nil
 }
 
 func persistDecisionRunEnvelope(ctx context.Context, store ArtifactStore, envelope DecisionRunEnvelope) (ArtifactRef, error) {

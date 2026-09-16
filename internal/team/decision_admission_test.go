@@ -26,6 +26,11 @@ func admissionForTest(t *testing.T, enabled bool) DecisionAdmission {
 		a.DecisionID = "decision-a"
 		policy := enginePolicy(2)
 		a.Policy = &policy
+		a.ProfileOrigin = agent.DecisionProfileOriginTeamInline
+		a.PolicyDigest, err = agent.DecisionPolicyDigest(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	return a
 }

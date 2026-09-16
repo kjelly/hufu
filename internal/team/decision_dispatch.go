@@ -206,8 +206,21 @@ func (c *Coordinator) formTaskDecisionWithAdmission(
 		requestContractRevision = envelope.envelope.Revision
 	}
 	runID, decisionID := c.executionRunID, ""
+	var profileOrigin, profileVersion, profileRef, policyDigest, admissionInputDigest string
 	if admission != nil {
 		runID, decisionID = admission.RunID, admission.DecisionID
+		profileOrigin, profileVersion = admission.ProfileOrigin, admission.ProfileVersion
+		profileRef, policyDigest = admission.ProfileRef, admission.PolicyDigest
+		admissionInputDigest = admission.TaskInputDigest
+		if admission.SchemaVersion == decisionAdmissionLegacySchemaVersion && admission.ProfileOrigin == "" {
+			profileOrigin = agent.DecisionProfileOriginLegacyInline
+		}
+		if policyDigest == "" {
+			policyDigest, err = agent.DecisionPolicyDigest(policy)
+			if err != nil {
+				return nil, fmt.Errorf("task %s decision policy digest: %w", taskLabel(task, todoID), err)
+			}
+		}
 	}
 
 	record, err := engine.Run(ctx, DecisionRequest{
@@ -216,6 +229,10 @@ func (c *Coordinator) formTaskDecisionWithAdmission(
 		Attempt:        c.taskAttempt(todoID),
 		Profile:        profile,
 		Policy:         policy,
+		ProfileOrigin:  profileOrigin,
+		ProfileVersion: profileVersion,
+		ProfileRef:     profileRef,
+		PolicyDigest:   policyDigest,
 		Question:       decisionQuestionFor(task),
 		Options:        task.DecisionOptions,
 		Facts:          cloneDecisionFacts(task.DecisionFacts),
@@ -228,13 +245,8 @@ func (c *Coordinator) formTaskDecisionWithAdmission(
 		ProjectContext: c.decisionProjectContext(),
 		Contract:       requestContract, RequireRequestContract: true, RequestContractRef: requestContractRef,
 		RequestContractRevision: requestContractRevision, RequestContractArtifact: requestContractArtifact,
-		AdmissionInputDigest: func() string {
-			if admission != nil {
-				return admission.TaskInputDigest
-			}
-			return ""
-		}(),
-		DecisionID: decisionID,
+		AdmissionInputDigest: admissionInputDigest,
+		DecisionID:           decisionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("task %s decision: %w", taskLabel(task, todoID), err)

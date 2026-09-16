@@ -18,7 +18,10 @@ import (
 // made for one durable task occurrence. It deliberately exists before the
 // later DecisionRunEnvelope: off-profile occurrences also need a durable
 // admission, and an interrupted occurrence must never re-resolve live config.
-const DecisionAdmissionSchemaVersion = 1
+const (
+	decisionAdmissionLegacySchemaVersion = 1
+	DecisionAdmissionSchemaVersion       = 2
+)
 
 // DecisionAdmission is the immutable effective decision contract for one
 // (task, attempt) occurrence. Policy is meaningful only when Enabled is true.
@@ -30,6 +33,10 @@ type DecisionAdmission struct {
 	Profile                 string          `json:"profile"`
 	Source                  string          `json:"source"`
 	Enabled                 bool            `json:"enabled"`
+	ProfileOrigin           string          `json:"profile_origin,omitempty"`
+	ProfileVersion          string          `json:"profile_version,omitempty"`
+	ProfileRef              string          `json:"profile_ref,omitempty"`
+	PolicyDigest            string          `json:"policy_digest,omitempty"`
 	Policy                  *DecisionPolicy `json:"policy,omitempty"`
 	DecisionID              string          `json:"decision_id,omitempty"`
 	RequestContractRef      string          `json:"request_contract_ref,omitempty"`
@@ -39,7 +46,7 @@ type DecisionAdmission struct {
 }
 
 func (a DecisionAdmission) Validate() error {
-	if a.SchemaVersion != DecisionAdmissionSchemaVersion {
+	if a.SchemaVersion != decisionAdmissionLegacySchemaVersion && a.SchemaVersion != DecisionAdmissionSchemaVersion {
 		return fmt.Errorf("unsupported decision admission schema version %d", a.SchemaVersion)
 	}
 	if strings.TrimSpace(a.RunID) == "" || strings.TrimSpace(a.TaskID) == "" || a.Attempt < 1 || strings.TrimSpace(a.Profile) == "" || strings.TrimSpace(a.Source) == "" || strings.TrimSpace(a.TaskInputDigest) == "" {
@@ -58,8 +65,14 @@ func (a DecisionAdmission) Validate() error {
 		if err := a.Policy.Validate(); err != nil {
 			return fmt.Errorf("decision admission policy: %w", err)
 		}
+		identity := decisionProfileIdentity{Origin: a.ProfileOrigin, Version: a.ProfileVersion, Ref: a.ProfileRef, Digest: a.PolicyDigest}
+		if err := validateDecisionProfileIdentity(identity, *a.Policy, a.SchemaVersion == DecisionAdmissionSchemaVersion, false); err != nil {
+			return fmt.Errorf("decision admission profile identity: %w", err)
+		}
 	} else if strings.TrimSpace(a.DecisionID) != "" {
 		return fmt.Errorf("off decision admission has a decision id")
+	} else if a.ProfileOrigin != "" || a.ProfileVersion != "" || a.ProfileRef != "" || a.PolicyDigest != "" || a.Policy != nil {
+		return fmt.Errorf("off decision admission carries policy identity")
 	}
 	return nil
 }
@@ -633,7 +646,9 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 	if err != nil {
 		return DecisionAdmission{}, err
 	}
-	resolution, err := ResolveDecisionProfile(c.decisionConfig(), c.DecisionProfileOverride(), task)
+	materialized, resolution, err := ResolveMaterializedDecisionProfile(
+		c.decisionConfig(), c.DecisionProfileOverride(), task, agent.BuiltInDecisionProfileCatalog(),
+	)
 	if err != nil {
 		return DecisionAdmission{}, err
 	}
@@ -666,15 +681,13 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 	if err := ValidateTaskDecisionEvidence(task); err != nil {
 		return DecisionAdmission{}, fmt.Errorf("decision task evidence: %w", err)
 	}
-	policy, ok := DecisionPolicyFor(c.decisionConfig(), a.Profile)
-	if !ok {
-		return DecisionAdmission{}, fmt.Errorf("%s: decision profile %q resolved but has no policy", ReasonDecisionProfileUnknown, a.Profile)
-	}
 	contract, err := c.requestContractFor(ctx, c.decisionConfig().RequestContract)
 	if err != nil {
 		return DecisionAdmission{}, err
 	}
-	a.Policy, a.DecisionID = &policy, "decision:"+taskID+fmt.Sprintf(":%d", attempt)
+	a.ProfileOrigin, a.ProfileVersion = materialized.Origin, materialized.Version
+	a.ProfileRef, a.PolicyDigest = materialized.Ref, materialized.PolicyDigest
+	a.Policy, a.DecisionID = &materialized.Policy, "decision:"+taskID+fmt.Sprintf(":%d", attempt)
 	a.RequestContractRef, a.RequestContractRevision, a.RequestContractArtifact = contract.artifact.ID, contract.envelope.Revision, contract.artifact
 	return appendDecisionAdmission(ctx, journal, a)
 }
@@ -691,6 +704,34 @@ func validateDecisionAdmissionEnvelope(admission DecisionAdmission, envelope Dec
 	}
 	if admission.TaskInputDigest != envelope.Request.AdmissionInputDigest {
 		return fmt.Errorf("decision admission task input does not match run envelope")
+	}
+	admissionIdentity := decisionProfileIdentity{
+		Origin: admission.ProfileOrigin, Version: admission.ProfileVersion,
+		Ref: admission.ProfileRef, Digest: admission.PolicyDigest,
+	}
+	envelopeIdentity := envelope.profileIdentity()
+	if admission.SchemaVersion == DecisionAdmissionSchemaVersion {
+		if envelope.SchemaVersion != DecisionRunEnvelopeSchemaVersion {
+			return fmt.Errorf("schema-v2 decision admission cannot use a schema-v1 run envelope")
+		}
+		if !admissionIdentity.equal(envelopeIdentity) {
+			return fmt.Errorf("decision admission profile identity does not match run envelope")
+		}
+	} else if envelope.SchemaVersion == DecisionRunEnvelopeSchemaVersion {
+		if admissionIdentity.empty() {
+			if envelope.ProfileOrigin != agent.DecisionProfileOriginLegacyInline || envelope.ProfileVersion != "" || envelope.ProfileRef != "" {
+				return fmt.Errorf("legacy decision admission requires legacy-inline envelope identity")
+			}
+		} else {
+			if admission.ProfileOrigin != "" && admission.ProfileOrigin != envelope.ProfileOrigin ||
+				admission.ProfileVersion != "" && admission.ProfileVersion != envelope.ProfileVersion ||
+				admission.ProfileRef != "" && admission.ProfileRef != envelope.ProfileRef ||
+				admission.PolicyDigest != "" && admission.PolicyDigest != envelope.PolicyDigest {
+				return fmt.Errorf("legacy decision admission metadata conflicts with run envelope")
+			}
+		}
+	} else if err := validateLegacyDecisionProfileIdentityAgreement(admissionIdentity, envelopeIdentity); err != nil {
+		return fmt.Errorf("legacy decision admission metadata conflicts with run envelope: %w", err)
 	}
 	return nil
 }

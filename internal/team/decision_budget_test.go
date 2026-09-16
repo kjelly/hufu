@@ -140,6 +140,51 @@ func TestDecisionBudgetExplicitDegradationLadder(t *testing.T) {
 	}
 }
 
+func TestDirectDecisionBudgetDegradationBindsEffectiveEnvelopeDigest(t *testing.T) {
+	journal := &memoryJournal{}
+	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
+		return scoredOpinion(8, 4, "migrate", 0.8), nil
+	})
+	policy := enginePolicy(5)
+	policy.MinIndependentJudgments = 3
+	policy.MaxRounds = 2
+	policy.Revision.Enabled = true
+	policy.Challenge = ChallengePolicy{Enabled: true, Count: 2}
+	policy.BudgetDegradation = agent.BudgetDegradationExplicit
+	req := engineRequest(policy)
+	req.DecisionID = "decision-effective-digest"
+	engine := newTestEngineWithStages(journal, runner, budgetWith(4*defaultJudgeTokenEstimate, 0), DecisionServices{
+		Challengers: &stubChallenger{},
+		Revisions:   &stubReviser{},
+	})
+	if _, err := engine.Run(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	state, err := projectDecision(t.Context(), journal, req.DecisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := loadDecisionRunEnvelope(t.Context(), journal.store, state.EnvelopeRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Policy.IndependentJudgments != 3 || envelope.Policy.Revision.Enabled || envelope.Policy.Challenge.Count != 1 {
+		t.Fatalf("effective envelope policy = %#v", envelope.Policy)
+	}
+	want, err := agent.DecisionPolicyDigest(envelope.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := agent.DecisionPolicyDigest(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.PolicyDigest != want || envelope.Request.PolicyDigest != want || envelope.PolicyDigest == configured {
+		t.Fatalf("effective digest = envelope %q, request %q, configured %q, want %q",
+			envelope.PolicyDigest, envelope.Request.PolicyDigest, configured, want)
+	}
+}
+
 // Even with degradation enabled, a budget that cannot support the floor fails
 // closed rather than dropping below min-independent-judgments (spec §34.2).
 func TestDecisionBudgetFailsClosedBelowTheFloor(t *testing.T) {

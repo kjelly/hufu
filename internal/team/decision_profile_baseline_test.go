@@ -17,9 +17,9 @@ import (
 // canonical policy encoder: Phase 0 records the input that later phases must
 // preserve, including omitted semantic defaults.
 func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
-	if DecisionAdmissionSchemaVersion != 1 || DecisionRunEnvelopeSchemaVersion != 1 {
-		t.Fatalf("baseline schemas = admission %d, envelope %d; want 1/1",
-			DecisionAdmissionSchemaVersion, DecisionRunEnvelopeSchemaVersion)
+	if decisionAdmissionLegacySchemaVersion != 1 || decisionRunEnvelopeLegacySchemaVersion != 1 {
+		t.Fatalf("legacy schemas = admission %d, envelope %d; want 1/1",
+			decisionAdmissionLegacySchemaVersion, decisionRunEnvelopeLegacySchemaVersion)
 	}
 
 	teamDir := filepath.Join("..", "..", ".agent-teams", "strategic-decision")
@@ -62,7 +62,7 @@ func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
 	req := engineRequest(policy)
 	req.DecisionID = "decision-baseline"
 	req.EvidenceArtifactRef = ArtifactRef{ID: "evidence-baseline", SHA256: "evidence-sha"}
-	envelope := newDecisionRunEnvelope(req, policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
+	envelope := legacyDecisionRunEnvelopeForBaseline(req, policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
 	if got, want := baselineJSONHash(t, envelope), "d16a0d53e2dd6880a2f9402b052a3d583898af6b83989a3c4e4be794f4b5dd7b"; got != want {
 		t.Errorf("v1 envelope JSON hash = %s, want %s", got, want)
 	}
@@ -101,9 +101,34 @@ func TestDecisionProfileGeneralizationBaselineRejectsCoordinatorDegradation(t *t
 	req.Profile = admission.Profile
 	req.AdmissionInputDigest = admission.TaskInputDigest
 	req.Policy.IndependentJudgments--
-	envelope := newDecisionRunEnvelope(req, req.Policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
+	digest, err := agent.DecisionPolicyDigest(req.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ProfileOrigin, req.PolicyDigest = admission.ProfileOrigin, digest
+	envelope, err := newDecisionRunEnvelope(req, req.Policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := validateDecisionAdmissionEnvelope(admission, envelope); err == nil {
 		t.Fatal("coordinator admission accepted a policy-changing degradation")
+	}
+}
+
+func legacyDecisionRunEnvelopeForBaseline(req DecisionRequest, policy DecisionPolicy, packet DecisionEvidencePacket, now time.Time) DecisionRunEnvelope {
+	req = cloneDecisionRequest(req)
+	req.Policy = policy
+	return DecisionRunEnvelope{
+		SchemaVersion: decisionRunEnvelopeLegacySchemaVersion,
+		DecisionID:    req.DecisionID, RunID: req.RunID, TaskID: req.TaskID,
+		Attempt: req.Attempt, Profile: req.Profile, Request: req, Policy: policy,
+		StageProgress: DecisionRunStageProgress{CurrentStage: "evidence_sealed", EvidenceHash: packet.Hash, NextStage: "judge"},
+		IdempotencyKeys: map[string]string{
+			"envelope":    decisionRunEnvelopeEventKey(req.DecisionID, packet.Hash),
+			"aggregate:1": decisionStageEventKey(req.DecisionID, "aggregate", packet.Hash, "1"),
+			"finalized":   decisionStageEventKey(req.DecisionID, "finalized", packet.Hash),
+		},
+		CreatedAt: now.UTC(),
 	}
 }
 

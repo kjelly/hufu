@@ -27,7 +27,11 @@ func (e *decisionEngine) anchorDecisionRun(ctx context.Context, req *DecisionReq
 	if packetArtifact.ID != "" {
 		req.EvidenceArtifactRef = packetArtifact
 	}
-	envelope := newDecisionRunEnvelope(*req, policy, packet, e.now())
+	envelope, err := newDecisionRunEnvelope(*req, policy, packet, e.now())
+	if err != nil {
+		return fmt.Errorf("build decision run envelope: %w", err)
+	}
+	*req = envelope.RequestSnapshot()
 	if admission, found, err := loadDecisionAdmission(ctx, e.services.Journal, req.TaskID, req.Attempt); err != nil {
 		return fmt.Errorf("load decision admission before envelope anchor: %w", err)
 	} else if found {
@@ -77,6 +81,16 @@ func validateDecisionRunRequestIdentity(req DecisionRequest, envelope DecisionRu
 	}
 	if !reflect.DeepEqual(req.Policy, DecisionPolicy{}) && !reflect.DeepEqual(req.Policy, envelope.Policy) {
 		return fmt.Errorf("decision run envelope policy snapshot mismatch")
+	}
+	requestIdentity := req.profileIdentity()
+	if !requestIdentity.empty() {
+		if envelope.SchemaVersion == DecisionRunEnvelopeSchemaVersion {
+			if !requestIdentity.equal(envelope.profileIdentity()) {
+				return fmt.Errorf("decision run envelope profile identity mismatch")
+			}
+		} else if err := validateLegacyDecisionProfileIdentityAgreement(requestIdentity, envelope.profileIdentity()); err != nil {
+			return fmt.Errorf("decision run envelope profile identity mismatch: %w", err)
+		}
 	}
 	if strings.TrimSpace(req.Question) != "" && req.Question != envelope.Request.Question {
 		return fmt.Errorf("decision run envelope immutable question mismatch")
