@@ -192,18 +192,27 @@ func persistedScopeIDs(lineage Lineage, runID string) (string, string, error) {
 			continue
 		}
 		var payload struct {
-			ProjectID string `json:"project_id"`
-			TeamID    string `json:"team_id"`
-			Scope     struct {
-				ProjectID string `json:"project_id"`
-				TeamID    string `json:"team_id"`
-			} `json:"scope"`
+			ProjectID json.RawMessage `json:"project_id"`
+			TeamID    json.RawMessage `json:"team_id"`
+			Scope     json.RawMessage `json:"scope"`
 		}
 		if err := json.Unmarshal(indexed.Event.Payload, &payload); err != nil {
 			return "", "", fmt.Errorf("%w: decode persisted scope for event %q: %v", ErrIntegrity, indexed.Event.ID, err)
 		}
-		projects = appendNonEmpty(projects, payload.ProjectID, payload.Scope.ProjectID)
-		teams = appendNonEmpty(teams, payload.TeamID, payload.Scope.TeamID)
+		projectID, err := decodePersistedScopeID(payload.ProjectID, "project_id")
+		if err != nil {
+			return "", "", fmt.Errorf("%w: decode persisted scope for event %q: %v", ErrIntegrity, indexed.Event.ID, err)
+		}
+		teamID, err := decodePersistedScopeID(payload.TeamID, "team_id")
+		if err != nil {
+			return "", "", fmt.Errorf("%w: decode persisted scope for event %q: %v", ErrIntegrity, indexed.Event.ID, err)
+		}
+		scopeProjectID, scopeTeamID, err := decodePersistedScopeObject(payload.Scope)
+		if err != nil {
+			return "", "", fmt.Errorf("%w: decode persisted scope for event %q: %v", ErrIntegrity, indexed.Event.ID, err)
+		}
+		projects = appendNonEmpty(projects, projectID, scopeProjectID)
+		teams = appendNonEmpty(teams, teamID, scopeTeamID)
 	}
 	projectID, err := uniqueScopeID("project", projects)
 	if err != nil {
@@ -214,6 +223,46 @@ func persistedScopeIDs(lineage Lineage, runID string) (string, string, error) {
 		return "", "", err
 	}
 	return projectID, teamID, nil
+}
+
+func decodePersistedScopeObject(raw json.RawMessage) (string, string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "", "", nil
+	}
+	// Event payloads are heterogeneous. Telemetry events legitimately use a
+	// scalar field named scope (for example "subagent"); only an object can
+	// carry the canonical project/team binding inspected here.
+	if !strings.HasPrefix(trimmed, "{") {
+		return "", "", nil
+	}
+	var scope struct {
+		ProjectID json.RawMessage `json:"project_id"`
+		TeamID    json.RawMessage `json:"team_id"`
+	}
+	if err := json.Unmarshal(raw, &scope); err != nil {
+		return "", "", err
+	}
+	projectID, err := decodePersistedScopeID(scope.ProjectID, "scope.project_id")
+	if err != nil {
+		return "", "", err
+	}
+	teamID, err := decodePersistedScopeID(scope.TeamID, "scope.team_id")
+	if err != nil {
+		return "", "", err
+	}
+	return projectID, teamID, nil
+}
+
+func decodePersistedScopeID(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string: %w", field, err)
+	}
+	return value, nil
 }
 
 func uniqueScopeID(kind string, values []string) (string, error) {

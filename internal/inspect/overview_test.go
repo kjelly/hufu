@@ -116,11 +116,52 @@ func TestBindReadTargetDoesNotPromoteUnverifiedProjectSelector(t *testing.T) {
 }
 
 func TestBindReadTargetRejectsMalformedPersistedScope(t *testing.T) {
-	lineage := Lineage{Events: []IndexedEvent{{Event: team.RunEvent{
-		ID: "event-1", RunID: "run-1", Payload: []byte(`{"project_id":42}`),
-	}}}}
-	if _, _, err := persistedScopeIDs(lineage, "run-1"); !errors.Is(err, ErrIntegrity) {
-		t.Fatalf("malformed scope error = %v, want integrity", err)
+	for _, payload := range []string{`{"project_id":42}`, `{"scope":{"team_id":42}}`} {
+		lineage := Lineage{Events: []IndexedEvent{{Event: team.RunEvent{
+			ID: "event-1", RunID: "run-1", Payload: []byte(payload),
+		}}}}
+		if _, _, err := persistedScopeIDs(lineage, "run-1"); !errors.Is(err, ErrIntegrity) {
+			t.Fatalf("malformed scope %s error = %v, want integrity", payload, err)
+		}
+	}
+}
+
+func TestBindReadTargetIgnoresScalarTelemetryScope(t *testing.T) {
+	lineage := Lineage{Events: []IndexedEvent{
+		{Event: team.RunEvent{ID: "binding", RunID: "run-1", Payload: []byte(`{"scope":{"project_id":"project-a","team_id":"team-a"}}`)}},
+		{Event: team.RunEvent{ID: "telemetry", RunID: "run-1", Type: string(team.EventContextWindowAdmission), Payload: []byte(`{"scope":"subagent"}`)}},
+	}}
+	projectID, teamID, err := persistedScopeIDs(lineage, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectID != "project-a" || teamID != "team-a" {
+		t.Fatalf("persisted scope = (%q, %q), want (project-a, team-a)", projectID, teamID)
+	}
+}
+
+func TestInspectOverviewAcceptsContextWindowTelemetryScopeWithoutWrites(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := team.NewEventStore(workspace, "run-telemetry", "session-telemetry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendOverviewEvent(t, store, team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: []byte(`{"scope":{"project_id":"project","team_id":"team"}}`)})
+	appendOverviewEvent(t, store, team.RunEvent{Type: string(team.EventContextWindowAdmission), Actor: "runtime", Payload: []byte(`{"scope":"subagent","status":"admitted"}`)})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := readWorkspaceFiles(t, workspace)
+	envelope, err := InspectOverview(t.Context(), InspectQuery{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := envelope.Data.(OverviewData).Snapshot; snapshot == nil || snapshot.Scope.ProjectID != "project" || snapshot.Scope.TeamName != "team" {
+		t.Fatalf("overview snapshot = %#v", snapshot)
+	}
+	after := readWorkspaceFiles(t, workspace)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("read-only overview changed workspace files: before=%v after=%v", mapKeys(before), mapKeys(after))
 	}
 }
 
