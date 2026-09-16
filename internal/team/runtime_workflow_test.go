@@ -3,12 +3,14 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
@@ -494,6 +496,98 @@ func TestRuntimeWorkflowCancellationIsTyped(t *testing.T) {
 	}
 	if got := result.Errors[0]; got.Category != CategoryCancelled || got.Source != "operator" || got.Retryable {
 		t.Fatalf("cancelled workflow error = %#v", got)
+	}
+}
+
+type executeTasksCancellationAgent struct {
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (a *executeTasksCancellationAgent) wait(ctx context.Context) (*fantasy.AgentResult, error) {
+	select {
+	case <-a.started:
+	default:
+		close(a.started)
+	}
+	defer close(a.finished)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (a *executeTasksCancellationAgent) Generate(ctx context.Context, _ fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return a.wait(ctx)
+}
+
+func (a *executeTasksCancellationAgent) Stream(ctx context.Context, _ fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return a.wait(ctx)
+}
+
+func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Workspace = t.TempDir()
+	session.Dir = t.TempDir()
+	workflow, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatalf("newRuntimeWorkflow: %v", err)
+	}
+	if err := workflow.Start(); err != nil {
+		t.Fatalf("workflow.Start: %v", err)
+	}
+
+	worker := &executeTasksCancellationAgent{started: make(chan struct{}), finished: make(chan struct{})}
+	coordinator := &Coordinator{
+		session:             session,
+		sessionData:         NewSession(),
+		taskTracker:         NewTaskTracker(),
+		phaseWorkflow:       workflow,
+		executionRunID:      "run-scheduler-cancel",
+		maxConcurrent:       1,
+		delegatedTasks:      make(map[string]int),
+		reportStatus:        func(StatusEvent) {},
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
+		workerAgentOverride: worker,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, execErr := coordinator.ExecuteTasks(ctx, []TaskDef{{
+			ID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
+		}})
+		done <- execErr
+	}()
+	select {
+	case <-worker.started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start before cancellation")
+	}
+	select {
+	case <-worker.finished:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled worker did not stop")
+	}
+	select {
+	case execErr := <-done:
+		if !errors.Is(execErr, context.Canceled) {
+			t.Fatalf("ExecuteTasks error = %v, want context.Canceled", execErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteTasks did not return after cancellation")
+	}
+
+	state, results, _, _ := workflow.snapshot()
+	if state != PhaseFailed {
+		t.Fatalf("workflow state = %s, want FAILED", state)
+	}
+	result := results[PhasePrepare]
+	if result.Status != PhaseStatusCancelled || len(result.Errors) != 1 {
+		t.Fatalf("prepare phase result = %#v, want one CANCELLED error", result)
+	}
+	if failure := result.Errors[0]; failure.Category != CategoryCancelled || failure.Source != "context_canceled" || failure.Retryable {
+		t.Fatalf("prepare cancellation error = %#v", failure)
 	}
 }
 
