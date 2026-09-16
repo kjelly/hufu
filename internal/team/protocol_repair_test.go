@@ -599,6 +599,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 	repairCalls := 0
+	var repairTouchedPaths [][]string
 	var prompts []string
 
 	c := &Coordinator{
@@ -615,11 +616,22 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-schema-repair-success",
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "schema repair task"}})[0]
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "worker", Desc: "schema repair task",
+		InvariantVerification: InvariantVerificationReport,
+		WorksetBinding:        &WorksetBinding{TouchedPaths: []string{"internal/team/coordinator_task_run.go"}},
+	}})[0]
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "execution output"}
 	c.repairAgentOverride = &scriptedRepairAgent{
 		calls:   &repairCalls,
 		prompts: &prompts,
+		onContext: func(ctx context.Context) {
+			metadata, ok := invocationMetadataFromContext(ctx)
+			if !ok {
+				t.Fatal("schema repair context is missing invocation metadata")
+			}
+			repairTouchedPaths = append(repairTouchedPaths, append([]string(nil), metadata.TouchedPaths...))
+		},
 		steps: func(call int) []fantasy.StepResult {
 			if call == 1 {
 				return invalidSchemaRepairSteps()
@@ -638,7 +650,8 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 
 	out, err := c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
 		Agent: "worker", Goal: "schema repair task",
-		Execution: ExecutionContract{RequiresResult: true},
+		InvariantVerification: InvariantVerificationReport,
+		Execution:             ExecutionContract{RequiresResult: true},
 	}, item.ID)
 	if err != nil {
 		t.Fatalf("expected schema-only repair to succeed, got %v", err)
@@ -651,6 +664,14 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 	}
 	if repairCalls != 2 {
 		t.Fatalf("repair calls = %d, want exactly 2 (one schema-only retry)", repairCalls)
+	}
+	if len(repairTouchedPaths) != 2 {
+		t.Fatalf("schema repair invocation metadata samples = %d, want 2", len(repairTouchedPaths))
+	}
+	for i, touchedPaths := range repairTouchedPaths {
+		if len(touchedPaths) != 1 || touchedPaths[0] != "internal/team/coordinator_task_run.go" {
+			t.Fatalf("schema repair invocation metadata[%d].TouchedPaths = %v, want durable workset scope", i, touchedPaths)
+		}
 	}
 	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") || !strings.Contains(prompts[1], "`status`") || !strings.Contains(prompts[1], "non-empty `summary`") {
 		t.Fatalf("second repair prompt was not schema-only: %#v", prompts)

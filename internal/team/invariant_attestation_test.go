@@ -249,12 +249,21 @@ func TestSubmitResultUsesTaskExecutionManifestAfterToolFailure(t *testing.T) {
 func TestInvariantRepairInstructionsReuseDurableManifest(t *testing.T) {
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationGate, definition)
+	item.WorksetBinding = &WorksetBinding{TouchedPaths: []string{"internal/team/invariant_attestation.go"}}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
 	prompt, metadata, err := c.invariantRepairInstructions(item.ID, 1, manifest.ModelExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "### safe (error)") || !strings.Contains(prompt, "preserve safety") || metadata.ModelExecutionID != manifest.ModelExecutionID {
 		t.Fatalf("repair prompt=%q metadata=%#v", prompt, metadata)
+	}
+	if !slices.Equal(metadata.TouchedPaths, item.WorksetBinding.TouchedPaths) {
+		t.Fatalf("repair touched paths = %#v, want %#v", metadata.TouchedPaths, item.WorksetBinding.TouchedPaths)
+	}
+	metadata.TouchedPaths[0] = "mutated"
+	if item.WorksetBinding.TouchedPaths[0] == "mutated" {
+		t.Fatal("repair metadata aliases the durable workset binding")
 	}
 	c.session.InvariantCatalog[0].Statement = "changed"
 	if _, _, err := c.invariantRepairInstructions(item.ID, 1, manifest.ModelExecutionID); err == nil {
@@ -337,6 +346,8 @@ func TestInvariantManifestSelectionFailsClosedWithoutUniquePrimary(t *testing.T)
 
 func TestInvariantManifestSelectionSurvivesSessionReload(t *testing.T) {
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationGate)
+	item.WorksetBinding = &WorksetBinding{TouchedPaths: []string{"docs/review.md"}}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
 	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery")
 	workspace := t.TempDir()
 	if err := SaveSession(workspace, &SessionData{Tasks: c.taskTracker.TodoList().Items()}); err != nil {
@@ -356,6 +367,9 @@ func TestInvariantManifestSelectionSurvivesSessionReload(t *testing.T) {
 	}
 	if metadata.ParentManifestFingerprint != primary.Fingerprint {
 		t.Fatalf("reloaded repair metadata = %#v, want primary manifest %q", metadata, primary.Fingerprint)
+	}
+	if !slices.Equal(metadata.TouchedPaths, []string{"docs/review.md"}) {
+		t.Fatalf("reloaded repair touched paths = %#v", metadata.TouchedPaths)
 	}
 }
 

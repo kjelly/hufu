@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
@@ -61,8 +62,21 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	first.taskTracker.TodoList().onChange = func() { first.saveCheckpoint() }
 	item := first.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker", Desc: "complete the already-run task",
-		Execution: ExecutionContract{RequiresResult: true},
+		InvariantVerification: InvariantVerificationReport,
+		WorksetBinding:        &WorksetBinding{TouchedPaths: []string{"internal/team/"}},
+		Execution:             ExecutionContract{RequiresResult: true},
 	}})[0]
+	manifest := ContextInjectionManifest{
+		SchemaVersion: ContextManifestSchemaVersion, RequestID: "request-resume-primary", RequestHash: "request-hash",
+		RunID: first.executionRunID, TaskID: item.ID, Attempt: 1, Agent: item.Agent, AgentRole: "worker",
+		ModelExecutionID: "model-execution-resume-primary", Phase: PhaseExecute,
+		Trigger: ContextTriggerTaskDispatch, Purpose: "task_execution", ModelCalled: true,
+		Outcome: "model_call", CreatedAt: time.Now().UTC(),
+	}
+	manifest.Fingerprint = contextManifestFingerprint(manifest)
+	if err := first.taskTracker.TodoList().SetContextManifest(item.ID, &manifest); err != nil {
+		t.Fatal(err)
+	}
 	workerOutput := "checkpointed worker output"
 	if err := first.taskTracker.TodoList().SetFailureEventAndOutput(item.ID, &FailureEventPayload{
 		TaskID: item.ID, Phase: "protocol", FailureClass: FailureProtocol,
@@ -88,6 +102,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 		t.Fatal(err)
 	}
 	repairArtifactRejected := false
+	var repairTouchedPaths []string
 	second := &Coordinator{
 		session:             &TeamSession{Workspace: workspace, Config: config, Agents: agents},
 		sessionData:         NewSession(),
@@ -102,6 +117,11 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	second.repairAgentOverride = &scriptedRepairAgent{
 		calls: &repairCalls,
 		onContext: func(ctx context.Context) {
+			metadata, ok := invocationMetadataFromContext(ctx)
+			if !ok {
+				t.Fatal("resumed protocol repair context is missing invocation metadata")
+			}
+			repairTouchedPaths = append([]string(nil), metadata.TouchedPaths...)
 			response, runErr := (&submitResultTool{coordinator: second, todoID: item.ID}).Run(ctx, fantasy.ToolCall{
 				Name:  submitResultToolName,
 				Input: `{"status":"success","summary":"repair","artifacts":[{"path":"resume-repair-artifact.txt"}]}`,
@@ -128,6 +148,9 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	}
 	if repairCalls != 1 {
 		t.Fatalf("result-only repair calls = %d, want 1", repairCalls)
+	}
+	if len(repairTouchedPaths) != 1 || repairTouchedPaths[0] != "internal/team/" {
+		t.Fatalf("resumed protocol repair touched paths = %v, want durable workset scope", repairTouchedPaths)
 	}
 	if !repairArtifactRejected {
 		t.Fatal("resumed result-only repair accepted artifact evidence")

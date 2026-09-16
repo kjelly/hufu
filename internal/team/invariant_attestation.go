@@ -284,7 +284,17 @@ func (c *Coordinator) invariantRepairInstructions(todoID string, attempt int, mo
 		fmt.Fprintf(&boundedContent, "\n### %s (%s)\n%s\n", expected.definition.ID, expected.definition.Severity, canonicalInvariantContent(expected.definition))
 	}
 	prompt.WriteString(utils.TruncateRunes(boundedContent.String(), 12000))
-	return prompt.String(), invocationMetadataFromManifest(manifest), nil
+	metadata := invocationMetadataFromManifest(manifest)
+	// The manifest is a content-free routing projection and intentionally does
+	// not carry the workset itself. Result-only invariant repair still needs the
+	// original scope, however: an empty touched-path set means "all repository
+	// invariants apply". Rehydrate that runtime-owned scope from the durable Todo
+	// occurrence and clone it so later context propagation cannot mutate the
+	// checkpointed binding.
+	if todo.WorksetBinding != nil {
+		metadata.TouchedPaths = slices.Clone(todo.WorksetBinding.TouchedPaths)
+	}
+	return prompt.String(), metadata, nil
 }
 
 func (c *Coordinator) invariantRepairIdentity(todo *TodoItem, attempt int) (InvocationMetadata, error) {
