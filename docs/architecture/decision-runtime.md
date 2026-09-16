@@ -2,19 +2,21 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `4242666`
 > Supersedes: the former decision-runtime drafts and the root `spec.md` decision draft
 > Superseded-By: —
 
 **Implementation status:** V1 phases 0–3.5 are wired to dispatch. Capability-aware
 REFERENCE/JUDGE/CHALLENGE/REVISE routing, diversity reporting, and pinned
 bindings are also implemented. Outcome learning/calibration remains deferred
-until its documented evidence threshold is met.
+until its documented evidence threshold is met. Versioned decision-profile
+materialization, tagged YAML specs, schema-v2 admission/envelope identity, and
+the derived execution-plan projection are implemented and verified.
 
-**2026-09-16 approved extension (implementation pending):** §8.1 defines
-versioned profile materialization. It does not claim that the catalog, tagged
-YAML, or schema-v2 persistence is already implemented. The original
-Verified-Commit above describes the earlier baseline, not this extension.
+**2026-09-16 extension status:** §8.1's versioned profile materialization is
+implemented. The verified commit above includes the catalog, tagged YAML,
+schema-v2 persistence, v1 compatibility bridge, generic runtime recovery proof,
+and strategic-team preset migration.
 
 **Target:** `github.com/kjelly/hufu`
 **Audience:** Coding agents / maintainers
@@ -453,7 +455,7 @@ type TeamConfig struct {
 type DecisionConfig struct {
     DefaultProfile string                    `yaml:"default-profile,omitempty"`
     Profiles       map[string]DecisionPolicy `yaml:"profiles,omitempty"`
-    // Approved extension (§8.1); authoritative authoring specs, pending implementation.
+    // Authoritative profile authoring specs (§8.1).
     ProfileSpecs   map[string]DecisionProfileSpec `yaml:"-"`
 }
 ```
