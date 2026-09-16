@@ -23,6 +23,12 @@ func (c *Coordinator) Close() error {
 
 func (c *Coordinator) closeOwnedResources() error {
 	var closeErrs []error
+	// Public callers must wait for invocations before Close, so no new async
+	// task can be admitted here. Drain the writers before closing any resource
+	// they may use (the event journal and canonical context store in
+	// particular). Otherwise a late reflexion write can race resource teardown
+	// and leave an incomplete candidate or an event-store-closed warning behind.
+	c.drainAsyncTasks()
 	if err := c.closeContextPreflight(); err != nil {
 		closeErrs = append(closeErrs, err)
 	}

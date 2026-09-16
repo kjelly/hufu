@@ -78,6 +78,29 @@ func TestCoordinatorCloseIsConcurrentIdempotentAndReleasesOwnedResources(t *test
 	}
 }
 
+func TestCoordinatorCloseWaitsForAsyncTasks(t *testing.T) {
+	c := &Coordinator{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c.asyncTasksWg.Go(func() {
+		close(started)
+		<-release
+	})
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
+	<-started
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before async task completed: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close returned an error after async task completed: %v", err)
+	}
+}
+
 func TestCoordinatorCloseReleasesActiveContextPreflight(t *testing.T) {
 	workspace := t.TempDir()
 	c, err := newCoordinator(coordinatorParams{Session: &TeamSession{

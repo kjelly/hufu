@@ -156,14 +156,12 @@ func (c *Coordinator) persistReflexionLessonAsync(agentName, taskID, goal, failu
 	if c == nil {
 		return
 	}
-	c.asyncTasksWg.Add(1)
-	go func() {
-		defer c.asyncTasksWg.Done()
+	c.asyncTasksWg.Go(func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[PANIC] persistReflexionLessonAsync recovered: %v", r)
 			}
 		}()
 		c.persistPrivateReflexionLesson(agentName, taskID, formatReflexionLesson(agentName, goal, failure, hint, rescued, verifyPolarityBug))
-	}()
+	})
 }
