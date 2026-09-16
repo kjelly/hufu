@@ -510,6 +510,10 @@ func TestEffectiveWorkerMaxAttemptsAddsInitialAttempt(t *testing.T) {
 	if got := c.effectiveWorkerMaxAttempts(nil); got != 2 {
 		t.Fatalf("team max retries 1 gives %d attempts, want 2", got)
 	}
+	c.phaseWorkflow = &runtimeWorkflow{enabled: true, policies: Policies{FailFast: true}}
+	if got := c.effectiveWorkerMaxAttempts(nil); got != 2 {
+		t.Fatalf("fail-fast changed team retry budget to %d attempts, want 2", got)
+	}
 	if got := c.effectiveWorkerMaxAttempts(&agent.AgentDef{MaxRetries: 0}); got != 1 {
 		t.Fatalf("agent max retries 0 gives %d attempts, want 1", got)
 	}

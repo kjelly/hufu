@@ -1028,9 +1028,9 @@ func TestRuntimeWorkflow_ObserveSkipsResolvedFailedTasks(t *testing.T) {
 	}
 }
 
-func TestRuntimeWorkflow_FailFastStopsWorkerRetryLoop(t *testing.T) {
-	worker := &alwaysFailAgent{}
-	c, _ := newWP08TestCoordinator(t, worker, 4)
+func TestRuntimeWorkflow_FailFastAllowsAuthorizedWorkerRetry(t *testing.T) {
+	worker := &succeedOnSecondAgent{}
+	c, _ := newWP08TestCoordinator(t, worker, 1)
 	c.session.Config.Workflow = agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}}
 	c.session.Config.Policies = agent.WorkflowPolicies{FailFast: true, AllowPhaseSkip: true}
 	w, err := newRuntimeWorkflow(c.session)
@@ -1041,11 +1041,20 @@ func TestRuntimeWorkflow_FailFastStopsWorkerRetryLoop(t *testing.T) {
 	if err := w.Start(); err != nil {
 		t.Fatal(err)
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must fail once"}})[0]
-	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "must fail once"}, item.ID); err == nil {
-		t.Fatal("expected worker failure")
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "retry transient failure"}})[0]
+	output, err := c.executeTask(t.Context(), TaskDef{
+		Agent: "worker", Goal: "retry transient failure", SideEffect: SideEffectNone, Recovery: RecoveryRetry,
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("authorized retry under fail-fast failed: %v", err)
 	}
-	if worker.calls != 1 {
-		t.Fatalf("FailFast worker calls = %d, want exactly 1", worker.calls)
+	if output != "succeeded on retry" {
+		t.Fatalf("retry output = %q, want success from second attempt", output)
+	}
+	if worker.calls != 2 {
+		t.Fatalf("fail-fast worker calls = %d, want initial attempt plus one authorized retry", worker.calls)
+	}
+	if got := c.taskTracker.TodoList().Items()[0].Status; got != TaskDone {
+		t.Fatalf("retried task status = %s, want %s", got, TaskDone)
 	}
 }

@@ -2149,14 +2149,13 @@ func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
 	if agentDef != nil && agentDef.MaxRetries >= 0 {
 		retries = agentDef.MaxRetries
 	}
-	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.policies.FailFast {
-		return 1
-	}
 	if retries < 0 {
 		retries = 0
 	}
 	// max-retries is a retry budget, not a total-attempt budget: a value of
 	// one means the initial attempt plus one replay when recovery permits it.
+	// Workflow fail-fast applies after a task reaches a terminal failure; it
+	// must not erase an explicitly authorized, side-effect-gated retry budget.
 	return retries + 1
 }
 
