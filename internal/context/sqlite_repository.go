@@ -806,6 +806,10 @@ func compileRepositoryPredicates(q RepositoryQuery, now int64) ([]string, []any,
 		}
 		where = append(where, "kind IN ("+strings.Join(ps, ",")+")")
 	}
+	if q.MinConfidence != nil {
+		where = append(where, "confidence>=?")
+		args = append(args, *q.MinConfidence)
+	}
 	if q.OriginRunID != "" {
 		where = append(where, "json_extract(metadata_json, '$.run_id') = ?")
 		args = append(args, q.OriginRunID)
@@ -1205,6 +1209,7 @@ func (r *SQLiteRepository) AddEdges(ctx context.Context, edges ...ContextEdge) e
 	return tx.Commit()
 }
 func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -1242,6 +1247,7 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	return out, rows.Err()
 }
 func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -1294,6 +1300,23 @@ func appendSearchFilters(prefix string, where *[]string, args *[]any, req Search
 		*where = append(*where, prefix+"confidence>=?")
 		*args = append(*args, *req.MinConfidence)
 	}
+	appendAllowedItemIDPredicate(prefix, where, args, req.AllowedItemIDs)
+}
+
+func appendAllowedItemIDPredicate(prefix string, where *[]string, args *[]any, allowed []string) {
+	if allowed == nil {
+		return
+	}
+	if len(allowed) == 0 {
+		*where = append(*where, "1=0")
+		return
+	}
+	placeholders := make([]string, len(allowed))
+	for i, id := range allowed {
+		placeholders[i] = "?"
+		*args = append(*args, id)
+	}
+	*where = append(*where, prefix+"id IN ("+strings.Join(placeholders, ",")+")")
 }
 
 // RebuildLexical recreates the FTS5 projection from canonical rows. It is

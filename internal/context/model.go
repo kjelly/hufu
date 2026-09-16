@@ -2,7 +2,10 @@
 // prompt assembly, lifecycle maintenance, and retrieval.
 package context
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 type ContextKind string
 
@@ -164,6 +167,7 @@ type RepositoryQuery struct {
 	Lifecycles        []ContextLifecycle
 	OriginRunID       string
 	SourceTypes       []string
+	MinConfidence     *float64
 	Limit             int
 }
 
@@ -175,10 +179,37 @@ type SearchRequest struct {
 	IncludeCandidates bool
 	Kinds             []ContextKind
 	MinConfidence     *float64
+	// AllowedItemIDs is an optional lineage restriction. Nil means unrestricted;
+	// a non-nil empty slice allows no items. It can only narrow canonical scope,
+	// lifecycle, visibility, and validity authorization.
+	AllowedItemIDs []string
 	// FilePaths are normalized evidence refs used for a deterministic ranking
 	// boost; they deliberately do not exclude otherwise relevant results.
 	FilePaths []string
 }
+
+// WithAllowedItemIDs returns a request with a copied, deduplicated, bytewise
+// sorted lineage restriction so caller mutation cannot change an in-flight
+// retrieval.
+func (r SearchRequest) WithAllowedItemIDs(ids []string) SearchRequest {
+	r.AllowedItemIDs = normalizeAllowedItemIDs(ids)
+	return r
+}
+
+func normalizeAllowedItemIDs(ids []string) []string {
+	if ids == nil {
+		return nil
+	}
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			normalized = append(normalized, id)
+		}
+	}
+	slices.Sort(normalized)
+	return slices.Compact(normalized)
+}
+
 type SearchResult struct {
 	Item  ContextItem
 	Score float64
