@@ -2,9 +2,11 @@ package evalharness
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,10 +30,7 @@ func TestRunSuiteCoreLifecycleSingleTaskUnverified(t *testing.T) {
 		t.Fatalf("LoadSuiteFixture: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := RunSuite(ctx, fixture, "single-task-unverified")
+	result, err := RunSuite(t.Context(), fixture, "single-task-unverified")
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
 	}
@@ -44,6 +43,21 @@ func TestRunSuiteCoreLifecycleSingleTaskUnverified(t *testing.T) {
 	}
 	if c.RunOutcome != "unverified" {
 		t.Errorf("RunOutcome = %q, want %q", c.RunOutcome, "unverified")
+	}
+}
+
+func TestBoundedRunErrorDiagnosticRedactsAndLimitsOutput(t *testing.T) {
+	const secret = "api_key=run-error-secret-should-not-leak"
+	raw := "provider startup failed: " + secret + " " + strings.Repeat("diagnostic ", 100)
+	got := boundedRunErrorDiagnostic(errors.New(raw))
+	if strings.Contains(got, "run-error-secret-should-not-leak") {
+		t.Fatalf("run error leaked credential: %q", got)
+	}
+	if len([]rune(got)) > maxRunErrorDiagnosticRunes {
+		t.Fatalf("run error diagnostic has %d runes, want <= %d", len([]rune(got)), maxRunErrorDiagnosticRunes)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("long run error diagnostic was not marked truncated: %q", got)
 	}
 }
 
@@ -75,9 +89,7 @@ func TestRunAllEvalSuites(t *testing.T) {
 				if err != nil {
 					t.Fatalf("LoadSuiteFixture(%s): %v", path, err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				result, err := RunSuite(ctx, fixture, "")
-				cancel()
+				result, err := RunSuite(t.Context(), fixture, "")
 				if err != nil {
 					t.Fatalf("RunSuite(%s): %v", path, err)
 				}

@@ -20,6 +20,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // defaultCaseTimeout bounds a single case's wall-clock time so a stuck
@@ -28,6 +29,8 @@ import (
 // package-level var, not a const, so tests can shrink it instead of
 // waiting out the real default -- see TestEvalTimeout.
 var defaultCaseTimeout = 60 * time.Second
+
+const maxRunErrorDiagnosticRunes = 500
 
 // ErrCaseNotFound is wrapped into RunSuite's error when caseID is set but no
 // case in the fixture matches it. A caller filtering by case across several
@@ -197,14 +200,16 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 			Actual:    "deadline exceeded",
 		})
 	}
-	if runErr != nil && runResult == nil {
-		// Run() returning an error alongside a populated RunResult is a
-		// normal outcome path (e.g. unresolved tasks); only a nil RunResult
-		// means the harness has nothing to assert against.
+	if runErr != nil && (runResult == nil || runResult.Outcome == team.RunOutcomeFailed) {
+		// A populated failed result is normally the canonical projection of
+		// unresolved work, but a failure before task admission also produces a
+		// result through finalizePublicInvocationFailure. Preserve that error in
+		// the harness output so provider-boundary/startup failures cannot be
+		// reduced to misleading zero-task fixture mismatches.
 		findings = append(findings, EvalFinding{
 			Dimension: "run-error",
-			Expected:  "a RunResult even on error",
-			Actual:    runErr.Error(),
+			Expected:  "no pre-admission Run error",
+			Actual:    boundedRunErrorDiagnostic(runErr),
 		})
 	}
 	if unconsumed != nil {
@@ -230,6 +235,17 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Findings:   findings,
 		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: normalizedRunID},
 	}, nil
+}
+
+func boundedRunErrorDiagnostic(err error) string {
+	if err == nil {
+		return ""
+	}
+	redacted := utils.RedactSecrets(err.Error())
+	if len([]rune(redacted)) <= maxRunErrorDiagnosticRunes {
+		return redacted
+	}
+	return utils.TruncateRunes(redacted, maxRunErrorDiagnosticRunes-len("..."))
 }
 
 func validateOfflineSession(session *team.TeamSession) error {
