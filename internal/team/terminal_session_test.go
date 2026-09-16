@@ -262,7 +262,7 @@ func TestTerminalSessionManager_EmptyReadDoesNotObserveOutput(t *testing.T) {
 	ctx := WithTerminalTaskID(context.Background(), "task-empty-read")
 	session, err := manager.Start(ctx, TerminalStartRequest{
 		RunID: "run-empty-read", OwnerTaskID: "task-empty-read",
-		Command: []string{"sh", "-c", "sleep 0.06; printf later"},
+		Command: []string{"sh", "-c", "read -r line; printf later"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -273,6 +273,9 @@ func TestTerminalSessionManager_EmptyReadDoesNotObserveOutput(t *testing.T) {
 	}
 	if len(first.Output) != 0 || !first.Session.ObservedAt.IsZero() {
 		t.Fatalf("empty read = %+v; it must not claim process output was observed", first)
+	}
+	if err := manager.Write(ctx, session.ID, TerminalInput{Data: []byte("release\n")}); err != nil {
+		t.Fatalf("release terminal session: %v", err)
 	}
 	completed := waitForTerminal(t, manager, session.ID, time.Second)
 	second, err := manager.Read(ctx, session.ID)
