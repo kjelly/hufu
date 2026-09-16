@@ -18,6 +18,11 @@ func TestDecisionRunEnvelopeReadsV1AndWritesV2Identity(t *testing.T) {
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy envelope validation: %v", err)
 	}
+	invalidLegacy := legacy
+	invalidLegacy.PolicyDigest = "sha256:" + strings.Repeat("0", 64)
+	if err := invalidLegacy.Validate(); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("legacy envelope invalid digest = %v, want mismatch rejection", err)
+	}
 
 	materialized, err := materializeDirectDecisionRequest(req)
 	if err != nil {
@@ -159,6 +164,32 @@ func TestV1AdmissionWithoutEnvelopeAnchorsV2Bridge(t *testing.T) {
 	}
 	if !reflect.DeepEqual(envelope.Policy, policy) || envelope.Policy.MaxRounds != 0 {
 		t.Fatal("bridge envelope rewrote the v1 policy snapshot")
+	}
+
+	// Simulate a process that had already written the old envelope schema.
+	// Recovery must consume it in place: no admission or envelope rewrite.
+	legacyEnvelope := envelope
+	legacyEnvelope.SchemaVersion = decisionRunEnvelopeLegacySchemaVersion
+	legacyEnvelope.ProfileOrigin, legacyEnvelope.ProfileVersion = "", ""
+	legacyEnvelope.ProfileRef, legacyEnvelope.PolicyDigest = "", ""
+	legacyEnvelope.Request.ProfileOrigin, legacyEnvelope.Request.ProfileVersion = "", ""
+	legacyEnvelope.Request.ProfileRef, legacyEnvelope.Request.PolicyDigest = "", ""
+	legacyRef, err := persistDecisionRunEnvelope(t.Context(), journal.store, legacyEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutateDecisionEventPayload(t, journal, agent.EventDecisionRunEnvelopeAnchored, func(payload *decisionEvent) {
+		payload.EnvelopeRef, payload.EnvelopeHash = legacyRef, legacyRef.SHA256
+	})
+	recoveredRunner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
+		return scoredOpinion(8, 4, "migrate", 0.8), nil
+	})
+	recovered, err := newTestEngineWithStages(journal, recoveredRunner, nil, DecisionServices{Store: journal.store}).Resume(t.Context(), req.DecisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.FinalOption == "" || journal.count(agent.EventDecisionRunEnvelopeAnchored) != 1 || journal.count(string(EventDecisionAdmitted)) != 1 {
+		t.Fatalf("legacy resume rewrote durable boundaries: final=%q events=%v", recovered.FinalOption, journal.typesOf())
 	}
 }
 
