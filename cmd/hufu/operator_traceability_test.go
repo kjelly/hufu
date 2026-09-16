@@ -44,6 +44,27 @@ func TestOperatorRequirementTraceabilityIsComplete(t *testing.T) {
 	}
 }
 
+func TestCollectOperatorTraceabilityTestsResolvesSymlinkRoot(t *testing.T) {
+	t.Parallel()
+	physicalRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(physicalRoot, "operator_traceability_test.go"), []byte(`package main
+
+func TestDiscoveredFromSymlinkRoot(t *testing.T) {}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	linkRoot := filepath.Join(t.TempDir(), "repo")
+	if err := os.Symlink(physicalRoot, linkRoot); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+
+	knownTests := collectOperatorTraceabilityTests(t, linkRoot)
+	if _, ok := knownTests["TestDiscoveredFromSymlinkRoot"]; !ok {
+		t.Fatalf("collectOperatorTraceabilityTests did not follow symlink root %q", linkRoot)
+	}
+}
+
 func operatorTraceabilityRoot(t *testing.T) string {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
@@ -87,7 +108,11 @@ func operatorTraceabilityLine(text, id string) string {
 func collectOperatorTraceabilityTests(t *testing.T, root string) map[string]struct{} {
 	t.Helper()
 	tests := make(map[string]struct{})
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	walkRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve traceability root %q: %v", root, err)
+	}
+	err = filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
