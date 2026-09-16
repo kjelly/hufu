@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -611,7 +612,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	results, err := scheduler.run(ctx)
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
-			_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)
+			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				source := "context_canceled"
+				message := "execution cancelled"
+				if c.IsWrapUp() {
+					source = "operator"
+					message = "operator requested graceful wrap-up"
+				}
+				_ = c.phaseWorkflow.cancel("scheduler", source, message)
+			} else {
+				_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)
+			}
 			c.saveCheckpoint()
 		}
 		return "", err

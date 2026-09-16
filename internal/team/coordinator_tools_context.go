@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -129,6 +130,7 @@ func (c *Coordinator) contextToolRequest(ctx context.Context, goal string, trigg
 			ParentRequestID:           metadata.ParentRequestID,
 			ParentManifestFingerprint: metadata.ParentManifestFingerprint,
 			Failure:                   failure,
+			TouchedPaths:              slices.Clone(metadata.TouchedPaths),
 		}
 		if r.RunID == "" {
 			r.RunID = c.contextRunID()

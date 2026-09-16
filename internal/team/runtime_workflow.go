@@ -699,6 +699,22 @@ func (w *runtimeWorkflow) fail(component, source, category, message string, retr
 	return w.failLocked("", component, source, category, message, retryable, PhaseStatusFailure)
 }
 
+// cancel records an operator/context cancellation as a typed phase outcome.
+// The workflow still enters its terminal failed state so no later phase can
+// run, but durable projections can distinguish an intentional stop from an
+// internal scheduler defect.
+func (w *runtimeWorkflow) cancel(component, source, message string) error {
+	if !w.Enabled() {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state == PhaseDone || w.state == PhaseFailed {
+		return nil
+	}
+	return w.failLocked("", component, source, CategoryCancelled, message, false, PhaseStatusCancelled)
+}
+
 func (w *runtimeWorkflow) requireFinished() error {
 	if !w.Enabled() {
 		return nil

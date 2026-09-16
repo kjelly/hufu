@@ -1850,16 +1850,34 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 	c.persistSessionRounds()
 }
 
-func (c *Coordinator) finalizeRemainingTasks() {
+func (c *Coordinator) finalizeRemainingTasks(causes ...error) {
 	items := c.taskTracker.TodoList().Items()
+	var cause error
+	if len(causes) > 0 {
+		cause = causes[0]
+	}
+	cancelled := errors.Is(cause, context.Canceled)
+	activeDetail := "coordinator ended unexpectedly"
+	pendingDetail := "skipped_due_to_run_termination"
+	if cancelled {
+		activeDetail = c.FailureDetail(context.Canceled, FailureSourceContextCanceled)
+		pendingDetail = "skipped_due_to_cancellation"
+		if c.IsWrapUp() {
+			pendingDetail = "skipped_due_to_operator_wrap_up"
+		}
+	}
 	changed := false
 	for _, item := range items {
 		switch item.Status {
 		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
-			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, "coordinator ended unexpectedly", RetryNone, FailureExecution, TaskError)
+			failureClass := FailureExecution
+			if cancelled {
+				failureClass = FailureCancelled
+			}
+			c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, activeDetail, RetryNone, failureClass, TaskError)
 			changed = true
 		case TaskPending:
-			if err := c.commitTaskTransitionFromCurrent(context.Background(), item.ID, TaskSkipped, "", "", nil); err == nil {
+			if err := c.commitTaskTransitionFromCurrent(context.Background(), item.ID, TaskSkipped, pendingDetail, "", nil); err == nil {
 				changed = true
 			}
 		}
@@ -2264,7 +2282,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 				if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
 					err = errors.Join(err, cleanupErr)
 				}
-				c.finalizeRemainingTasks()
+				c.finalizeRemainingTasks(err)
 				c.saveHistoryAndSession(ctx, steps)
 				c.recordRunAborted(err)
 				orchModel := c.resolveAgentModel(orchDef, "")
@@ -2272,7 +2290,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 				return "", fmt.Errorf("coordinator failed (model: %s): %w", orchModel, err)
 			}
 		} else {
-			c.finalizeRemainingTasks()
+			c.finalizeRemainingTasks(err)
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
 			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator stalled").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
@@ -2288,7 +2306,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
 		}
-		c.finalizeRemainingTasks()
+		c.finalizeRemainingTasks(invocationErr)
 		c.saveHistoryAndSession(ctx, steps)
 		c.recordRunAborted(invocationErr)
 		return "", invocationErr
@@ -2384,7 +2402,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 				if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunShutdown); cleanupErr != nil {
 					err = errors.Join(err, cleanupErr)
 				}
-				c.finalizeRemainingTasks()
+				c.finalizeRemainingTasks(err)
 				c.saveHistoryAndSession(ctx, steps)
 				c.recordRunAborted(err)
 				orchModel := c.resolveAgentModel(orchDef, "")
@@ -2392,7 +2410,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 				return "", fmt.Errorf("coordinator continuation failed (model: %s): %w", orchModel, err)
 			}
 		} else {
-			c.finalizeRemainingTasks()
+			c.finalizeRemainingTasks(err)
 			c.saveHistoryAndSession(ctx, steps)
 			c.recordRunAborted(err)
 			c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator continuation stalled").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
@@ -2408,7 +2426,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		if cleanupErr := c.cleanupRunTerminalResources(TerminalCleanupRunCancelled); cleanupErr != nil {
 			c.report(c.newEvent("error").withMessage("terminal cleanup error: " + cleanupErr.Error()))
 		}
-		c.finalizeRemainingTasks()
+		c.finalizeRemainingTasks(invocationErr)
 		c.saveHistoryAndSession(ctx, steps)
 		c.recordRunAborted(invocationErr)
 		return "", invocationErr

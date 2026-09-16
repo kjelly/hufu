@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -80,6 +81,72 @@ func TestContextToolRequestInheritsRetryInvocationMetadata(t *testing.T) {
 	}
 	if _, reason, err := c.GetAuthorizedContextItem(context.Background(), dispatchRequest, item.ID); err == nil || reason != ContextOmittedTrigger {
 		t.Fatalf("dispatch accessed retry-only item: reason=%q err=%v", reason, err)
+	}
+}
+
+func TestToolFailureRecoveryPreservesDispatchInvariantApplicability(t *testing.T) {
+	tracker := NewTaskTracker()
+	c := &Coordinator{
+		projectDir:     "/repo",
+		executionRunID: "run-invariant-recovery",
+		taskTracker:    tracker,
+		session: &TeamSession{
+			Workspace: t.TempDir(),
+			Config:    agent.TeamConfig{Name: "Review Team"},
+			InvariantCatalog: []InvariantDefinition{{
+				ID: "sqlite-canonical-memory", Statement: "preserve canonical memory", Severity: InvariantSeverityError,
+				AppliesTo: []string{"internal/context/"},
+			}},
+		},
+		sessionData: NewSession(),
+	}
+	binding := &WorksetBinding{TouchedPaths: []string{"README.md"}}
+	item := tracker.TodoList().AddBatch([]TodoSpec{{
+		Agent: "reviewer", Desc: "review README", Phase: PhaseVerify,
+		InvariantVerification: InvariantVerificationReport, WorksetBinding: binding,
+	}})[0]
+	task := TaskDef{
+		Agent: "reviewer", Goal: "review README", Phase: PhaseVerify,
+		InvariantVerification: InvariantVerificationReport, WorksetBinding: binding,
+	}
+	request := c.newTaskContextRequest(task, item.ID, 1, ContextTriggerTaskDispatch, "reviewer", "worker", nil)
+	route, err := c.contextRouter().Route(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := BuildContextInjectionManifest(request, CompiledContext{}, route.Decisions, "reviewer", time.Now(), c.session.Config.MemoryLearning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primary.Items) != 1 || primary.Items[0].Included || primary.Items[0].Reason != ContextOmittedNotApplicable {
+		t.Fatalf("dispatch invariant applicability = %#v", primary.Items)
+	}
+	if err := tracker.TodoList().SetContextManifest(item.ID, &primary); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := withInvocationMetadata(withTestAuxiliaryInvocationContext(t.Context()), invocationMetadataFromRequest(request, primary))
+	recoveryPrompt, err := c.prepareToolFailureRecovery(ctx, "reviewer", "call-1", submitResultToolName, `{"status":"success"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(recoveryPrompt, "sqlite-canonical-memory") {
+		t.Fatalf("recovery prompt injected a dispatch-inapplicable invariant: %q", recoveryPrompt)
+	}
+	manifests := c.todoItemByID(item.ID).ContextManifests
+	if len(manifests) != 2 {
+		t.Fatalf("context manifests = %d, want dispatch and recovery", len(manifests))
+	}
+	recovery := manifests[1]
+	var recoveredInvariant *ContextManifestItem
+	for i := range recovery.Items {
+		if recovery.Items[i].Kind == string(contextstore.ContextInvariant) {
+			recoveredInvariant = &recovery.Items[i]
+			break
+		}
+	}
+	if recovery.ParentManifestFingerprint != primary.Fingerprint || recoveredInvariant == nil || recoveredInvariant.Included || recoveredInvariant.Reason != ContextOmittedNotApplicable {
+		t.Fatalf("recovery invariant applicability = %#v, parent=%q", recovery.Items, recovery.ParentManifestFingerprint)
 	}
 }
 

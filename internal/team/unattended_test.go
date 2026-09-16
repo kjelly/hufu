@@ -399,6 +399,39 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 	}
 }
 
+func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+	c.executionRunID = "run-submit-result-loop"
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "submit a result"}})[0]
+
+	ag := &mockAgent{streamFunc: func(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		for attempt := range maxRepeatedSubmitResultFailures {
+			callID := fmt.Sprintf("submit-%d", attempt)
+			if err := call.OnToolCall(fantasy.ToolCallContent{
+				ToolCallID: callID, ToolName: submitResultToolName,
+				Input: fmt.Sprintf(`{"status":"success","summary":"attempt %d","invariant_assessments":[{"invariant_id":"unexpected"}]}`, attempt),
+			}); err != nil {
+				return nil, err
+			}
+			toolErr := fantasy.ToolResultOutputContentError{Error: errors.New(`invalid invariant assessment: invariant_assessments[0] names invariant "unexpected" that was not included in this model context`)}
+			if err := call.OnToolResult(fantasy.ToolResultContent{ToolCallID: callID, ToolName: submitResultToolName, Result: toolErr}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, errors.New("submit_result loop was not stopped")
+	}}
+
+	ctx := context.WithValue(withTestAuxiliaryInvocationContext(t.Context()), todoIDKey{}, item.ID)
+	_, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "reviewer", "submit a result", nil, &taskTiming{})
+	if err == nil || !strings.Contains(err.Error(), "deterministic submit_result protocol failure repeated 3 times") {
+		t.Fatalf("loop error = %v", err)
+	}
+	if manifests := c.todoItemByID(item.ID).ContextManifests; len(manifests) != maxRepeatedSubmitResultFailures-1 {
+		t.Fatalf("recovery manifests = %d, want %d before circuit break", len(manifests), maxRepeatedSubmitResultFailures-1)
+	}
+}
+
 func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()

@@ -23,9 +23,10 @@ const (
 type PhaseStatus string
 
 const (
-	PhaseStatusSuccess PhaseStatus = "SUCCESS"
-	PhaseStatusFailure PhaseStatus = "FAILURE"
-	PhaseStatusBlocked PhaseStatus = "BLOCKED"
+	PhaseStatusSuccess   PhaseStatus = "SUCCESS"
+	PhaseStatusFailure   PhaseStatus = "FAILURE"
+	PhaseStatusBlocked   PhaseStatus = "BLOCKED"
+	PhaseStatusCancelled PhaseStatus = "CANCELLED"
 )
 
 // ExecutionError represents a structured failure model.
@@ -79,6 +80,7 @@ const (
 	CategoryToolFailure      = "TOOL_FAILURE"
 	CategoryEnvironment      = "ENVIRONMENT_FAILURE"
 	CategoryTimeout          = "TIMEOUT"
+	CategoryCancelled        = "CANCELLED"
 	CategoryInternalError    = "INTERNAL_ERROR"
 )
 

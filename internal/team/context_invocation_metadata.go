@@ -1,6 +1,9 @@
 package team
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // InvocationMetadata is request-scoped execution identity carried only in the
 // Go context. Tool calls use it to derive child context requests without
@@ -22,6 +25,7 @@ type InvocationMetadata struct {
 	ParentRequestID           string
 	ParentManifestFingerprint string
 	EnvironmentFingerprint    string
+	TouchedPaths              []string
 }
 
 type contextInvocationKey struct{}
@@ -52,5 +56,6 @@ func invocationMetadataFromRequest(request ContextRequest, manifest ContextInjec
 		ParentRequestID:           request.RequestID,
 		ParentManifestFingerprint: manifest.Fingerprint,
 		EnvironmentFingerprint:    request.EnvironmentFingerprint,
+		TouchedPaths:              slices.Clone(request.TouchedPaths),
 	}
 }

@@ -13,6 +13,17 @@ import (
 	"time"
 )
 
+type delayedExperienceProcessor struct{ delay time.Duration }
+
+func (p delayedExperienceProcessor) Prepare(context.Context, RunFinalizationInput) error {
+	time.Sleep(p.delay)
+	return nil
+}
+
+func (delayedExperienceProcessor) Finalize(context.Context, RunFinalizationInput, CompletionGateDecision) error {
+	return nil
+}
+
 func TestEventStoreAppendPersistedContextCancelsWhileBlocked(t *testing.T) {
 	store, err := NewEventStore(t.TempDir(), "run-blocked", "session-blocked")
 	if err != nil {
@@ -357,6 +368,63 @@ func TestTerminalSnapshotUsesOneRunAndEvidenceIdentity(t *testing.T) {
 		return
 	}
 	t.Fatal("run_finished event missing")
+}
+
+func TestTerminalCommitOutlivesExpiringWorkerContext(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-cancelled", "session-cancelled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	c := &Coordinator{
+		eventStore: store, executionRunID: "run-cancelled", terminalLifecycleRunID: "run-cancelled",
+		terminalLifecycleState: terminalLifecycleOpen,
+		session:                &TeamSession{Workspace: workspace},
+		sessionData:            NewSession(),
+		taskTracker:            NewTaskTracker(),
+	}
+	c.SetExperienceProcessor(delayedExperienceProcessor{delay: 25 * time.Millisecond})
+	workerCtx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+	defer cancel()
+	result := c.FinalizeRun(workerCtx, &RunResult{RunID: "run-cancelled", Outcome: RunOutcomeCancelled, StopReason: StopReasonCancelled, ExitCode: 130}, nil)
+	if result == nil || !c.TerminalLifecycleConfirmed() {
+		t.Fatalf("cancelled terminal result=%#v confirmed=%t recovery=%#v", result, c.TerminalLifecycleConfirmed(), c.sessionData.PendingTerminalCommit)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := 0
+	for _, event := range events {
+		if event.Type == string(EventRunFinished) {
+			finished++
+		}
+	}
+	if finished != 1 || c.sessionData.PendingTerminalCommit != nil || c.sessionData.RecoveryRequired {
+		t.Fatalf("run_finished=%d session=%#v", finished, c.sessionData)
+	}
+}
+
+func TestFinalizeRemainingTasksPreservesOperatorCancellationCause(t *testing.T) {
+	tracker := NewTaskTracker()
+	items := tracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "active", Desc: "active task"},
+		{Agent: "queued", Desc: "queued task"},
+	})
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskInProgress, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}, sessionData: NewSession(), taskTracker: tracker}
+	c.wrapUp.Store(1)
+	c.finalizeRemainingTasks(context.Canceled)
+	got := tracker.TodoList().Items()
+	if got[0].Status != TaskError || got[0].FailureEvent == nil || got[0].FailureEvent.FailureClass != FailureCancelled {
+		t.Fatalf("active cancellation = %#v", got[0])
+	}
+	if got[1].Status != TaskSkipped || got[1].Detail != "skipped_due_to_operator_wrap_up" {
+		t.Fatalf("queued cancellation = %#v", got[1])
+	}
 }
 
 func TestFinalizeRunDoesNotSynthesizeNoProgressTerminalResult(t *testing.T) {

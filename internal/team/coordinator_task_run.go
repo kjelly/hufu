@@ -3330,6 +3330,38 @@ type lastToolCallEntry struct {
 	input    string
 }
 
+const maxRepeatedSubmitResultFailures = 3
+
+// submitResultFailureFingerprint recognizes deterministic protocol rejections
+// emitted by submit_result. The model may vary its JSON between attempts, so
+// the error contract—not the raw tool input—is the stable loop identity.
+func submitResultFailureFingerprint(toolName, result string) (string, bool) {
+	if toolName != submitResultToolName {
+		return "", false
+	}
+	normalized := NormalizeFailureError(result)
+	deterministicPrefixes := []string{
+		"invalid submit_result arguments:",
+		"summary is required",
+		"status must be success",
+		"submit_result contract violation:",
+		"invalid invariant assessment:",
+		"ordinary task must omit invariant_assessments",
+		"protocol repair cannot add artifact evidence",
+		"outputs are runtime-owned",
+		"raw_output_ref is runtime-owned",
+		"artifacts are forbidden by this task's execution contract",
+		"Tool argument schema violation:",
+	}
+	for _, prefix := range deterministicPrefixes {
+		if strings.HasPrefix(normalized, prefix) {
+			fingerprint := NewFailureFingerprint("", "worker", submitResultToolName, FailureProtocol, normalized)
+			return fingerprint.Digest, true
+		}
+	}
+	return "", false
+}
+
 // toolCallEvidence captures the most recent tool call's name, input, and
 // result within a single executeTask attempt. It is per-attempt (not
 // coordinator-global) to prevent cross-task leakage in the DAG scheduler's
@@ -3612,6 +3644,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// plus one failure of input B trip the detector on a first repeat of B.
 	pendingToolInputs := make(map[string]string)
 	pendingToolStarted := make(map[string]time.Time)
+	submitResultFailures := make(map[string]int)
 	var recoveryMu sync.Mutex
 	pendingRecovery := ""
 	tp := &ThinkParser{}
@@ -4006,6 +4039,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(tr.ToolName, resultPreview).withModel(resolvedModel))
 			llmLogStreamEvent(logWrite, "tool_result", formatToolResultContent(tr))
 			_, isErrResult := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result)
+			var repeatedProtocolErr error
 			if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); transcript != nil {
 				if err := transcript.RecordToolResult(tr.ToolCallID, tr.ToolName, resultPreview, isErrResult); err != nil {
 					return err
@@ -4033,8 +4067,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					consecutiveErrCount = 0
 				}
 			}
+			if isErrResult {
+				if fingerprint, deterministic := submitResultFailureFingerprint(tr.ToolName, resultPreview); deterministic {
+					submitResultFailures[fingerprint]++
+					if submitResultFailures[fingerprint] >= maxRepeatedSubmitResultFailures {
+						repeatedProtocolErr = fmt.Errorf("deterministic submit_result protocol failure repeated %d times in one attempt", submitResultFailures[fingerprint])
+					}
+				}
+			}
 			loopDetectMu.Unlock()
-			if isErrResult && todoID != CoordTodoID {
+			if isErrResult && repeatedProtocolErr == nil && todoID != CoordTodoID {
 				recovery, recoveryErr := c.prepareToolFailureRecovery(ctx, agentName, tr.ToolCallID, tr.ToolName, callInput)
 				if recoveryErr != nil {
 					return fmt.Errorf("prepare tool-failure recovery context: %w", recoveryErr)
@@ -4074,6 +4116,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 						{ID: tr.ToolCallID, Kind: "transcript"},
 					},
 				})
+			}
+			if repeatedProtocolErr != nil {
+				return repeatedProtocolErr
 			}
 			// A worker can use a tool error as evidence and still produce a
 			// typed result for its bounded task. A coordinator normally cannot

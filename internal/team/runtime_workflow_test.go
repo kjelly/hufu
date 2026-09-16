@@ -479,6 +479,24 @@ func TestCoordinatorRuntimeActionPreservesProviderFailureForPhaseResult(t *testi
 	}
 }
 
+func TestRuntimeWorkflowCancellationIsTyped(t *testing.T) {
+	w := &runtimeWorkflow{
+		enabled: true,
+		state:   PhaseVerify,
+		results: make(map[Phase]PhaseResult),
+	}
+	if err := w.cancel("scheduler", "operator", "operator requested graceful wrap-up"); err == nil {
+		t.Fatal("cancellation did not stop the workflow")
+	}
+	result := w.results[PhaseVerify]
+	if w.state != PhaseFailed || result.Status != PhaseStatusCancelled || len(result.Errors) != 1 {
+		t.Fatalf("cancelled workflow state=%s result=%#v", w.state, result)
+	}
+	if got := result.Errors[0]; got.Category != CategoryCancelled || got.Source != "operator" || got.Retryable {
+		t.Fatalf("cancelled workflow error = %#v", got)
+	}
+}
+
 func TestRuntimeWorkflowRetriesProviderFailureBySignatureAndRestoresIt(t *testing.T) {
 	session := workflowTestSession(t)
 	w, err := newRuntimeWorkflow(session)

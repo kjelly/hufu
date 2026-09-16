@@ -60,7 +60,9 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 	// rely on a state snapshot taken before election: the other goroutine may
 	// have elected and started preparation in between those two operations.
 	if activeLifecycle && !elected {
-		if _, err := c.commitTerminalLifecycle(ctx, candidate); err == nil {
+		commitCtx, cancel := terminalFinalizationContext(ctx)
+		defer cancel()
+		if _, err := c.commitTerminalLifecycle(commitCtx, candidate); err == nil {
 			c.SetLastRunResult(candidate)
 			c.reconcileTerminalStatusProjection(candidate)
 		}
@@ -70,16 +72,12 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 		candidate = result
 	}
 	result = candidate
-	finalCtx := ctx
-	if finalCtx == nil || finalCtx.Err() != nil {
-		// Cancellation stops worker execution, but terminal cleanup still needs a
-		// bounded context to reject run-bound candidates and either append the
-		// complete snapshot or mark recovery. The append path never emits a
-		// snapshot unless preparation has completed.
-		var cancel context.CancelFunc
-		finalCtx, cancel = context.WithTimeout(context.Background(), terminalFinalizationTimeout)
-		defer cancel()
-	}
+	// Cancellation stops worker execution, but terminal cleanup owns a separate
+	// bounded lifetime. Detach even while the caller context is still live:
+	// evidence/experience preparation may otherwise consume its final moments
+	// and hand an already-expired deadline to the run_finished append.
+	finalCtx, cancelFinalization := terminalFinalizationContext(ctx)
+	defer cancelFinalization()
 	c.drainAsyncTasks()
 	result.Acceptance = acceptance
 	if err := c.recordContextAcceptanceObservations(acceptance); err != nil {
@@ -130,7 +128,11 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 	}
 	if activeLifecycle {
 		c.finishTerminalPreparation()
-		_, commitErr := c.commitTerminalLifecycle(finalCtx, result)
+		// Persistence receives a fresh full window; preparation time must not
+		// reduce the durability boundary's budget.
+		commitCtx, cancelCommit := terminalFinalizationContext(ctx)
+		_, commitErr := c.commitTerminalLifecycle(commitCtx, result)
+		cancelCommit()
 		// Event-first: no active-run result or downstream projection is
 		// published until the exact immutable run_finished snapshot is confirmed.
 		if commitErr != nil {
@@ -148,6 +150,14 @@ func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, accept
 	// retained between finish calls.
 	c.SetLastRunResult(result)
 	return result
+}
+
+func terminalFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if parent != nil {
+		base = context.WithoutCancel(parent)
+	}
+	return context.WithTimeout(base, terminalFinalizationTimeout)
 }
 
 // prepareTerminalResult fills the bounded fields that must be identical in
