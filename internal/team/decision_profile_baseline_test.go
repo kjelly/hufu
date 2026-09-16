@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // These hashes freeze the pre-generalization policy and wire snapshots. They
@@ -62,6 +65,29 @@ func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
 	envelope := newDecisionRunEnvelope(req, policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
 	if got, want := baselineJSONHash(t, envelope), "d16a0d53e2dd6880a2f9402b052a3d583898af6b83989a3c4e4be794f4b5dd7b"; got != want {
 		t.Errorf("v1 envelope JSON hash = %s, want %s", got, want)
+	}
+}
+
+func TestBuiltInDecisionProfilesEqualStrategicBaseline(t *testing.T) {
+	teamDir := filepath.Join("..", "..", ".agent-teams", "strategic-decision")
+	cfg, err := parseTeamYML(teamDir, nil)
+	if err != nil {
+		t.Fatalf("parse strategic decision team: %v", err)
+	}
+	catalog := agent.BuiltInDecisionProfileCatalog()
+	refs := map[string]string{
+		"light":       agent.DecisionProfileBuiltinLightV1,
+		"standard":    agent.DecisionProfileBuiltinStandardV1,
+		"high-stakes": agent.DecisionProfileBuiltinHighStakesV1,
+	}
+	for local, ref := range refs {
+		got, _, err := catalog.Resolve(agent.DecisionProfileRef{Name: ref})
+		if err != nil {
+			t.Fatalf("resolve %q: %v", ref, err)
+		}
+		if want := cfg.Decision.Profiles[local]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("built-in %q differs from strategic profile %q", ref, local)
+		}
 	}
 }
 
