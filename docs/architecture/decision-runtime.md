@@ -11,6 +11,11 @@ REFERENCE/JUDGE/CHALLENGE/REVISE routing, diversity reporting, and pinned
 bindings are also implemented. Outcome learning/calibration remains deferred
 until its documented evidence threshold is met.
 
+**2026-09-16 approved extension (implementation pending):** §8.1 defines
+versioned profile materialization. It does not claim that the catalog, tagged
+YAML, or schema-v2 persistence is already implemented. The original
+Verified-Commit above describes the earlier baseline, not this extension.
+
 **Target:** `github.com/kjelly/hufu`
 **Audience:** Coding agents / maintainers
 **Language:** English identifiers and API names; explanatory text in Traditional Chinese.
@@ -348,14 +353,64 @@ Runtime built-in default    off
 
 ```text
 --decision-profile <name>   套用於本次 run 的所有 task。
-                            值必須是 team 已定義的 profile 或保留字 off，
+                            值必須是 team 已定義的 profile、保留字 off，
+                            或 §8.1 定義的完整版本化 built-in reference，
                             否則 run 在開始前失敗（decision_profile_unknown）。
                             它只能「指定」profile，不能繞過 §9 的保護——
                             coordinator 仍然無法選擇 profile。
 ```
 
 **相容性**：未宣告 `decision` 區段的舊 `team.yaml`，其 effective profile 為
-`off`，行為與升級前完全一致。
+`off`（未指定 request/task override 時），行為與升級前完全一致。
+
+### 8.1 版本化 profile 與 materialization（核准契約，待實作）
+
+本節擴充 profile authoring 與持久化身分，不改 stage 順序、授權集合或
+既有 recovery 判定。增量實作計畫見
+[`docs/tmp/now/spec.md`](../tmp/now/spec.md)；以下契約為規範依據。
+
+- request/CLI、task 與 team default 三層皆接受 local name、`off`，或完整
+  `builtin/<name>@<version>`。首批 catalog 為 `light@v1`、`standard@v1`、
+  `high-stakes@v1`，內容凍結自現有 strategic team 的對應 policy。
+  `builtin/` 為保留前綴；local profile 不得使用。未知名稱、缺版本或未知
+  版本 fail closed，不得降到較低優先層或推斷 latest。
+- 舊 inline policy 與 `{policy: ...}` 保持 custom；`{preset: builtin/...@v1}`
+  才是 catalog reference。兩種 tagged 欄位恰有其一，未知鍵嚴格拒絕。
+  YAML round trip 與 manifest migration 必須保留 preset 來源。
+- `internal/agent` 擁有純設定型別、catalog、normalization 與 canonical digest；
+  `internal/team` 保留 resolver、admission、engine、envelope 與執行狀態機。
+  不新增會循環相依的 runtime package。
+- `ProfileSpecs` 是 authoring 權威；保留的 `Profiles` map 僅為相容投影。
+  同名兩者的 canonical policy 不一致時拒絕；只有舊 map 的設定視為 inline。
+  所有 resolver/validation/dispatch 入口共用此規則。
+- admission 前 materialize 完整 policy，凍結 requested name、canonical ref、
+  origin、適用的 version 與 `sha256:<lowercase-hex>` policy digest。catalog 與
+  snapshot 回傳獨立深拷貝；執行階段不得按 profile 名稱重新解析 policy。
+- schema-v2 enabled 記錄要求 origin/digest；`builtin` 要求 ref 與匹配版本，
+  `team-inline`、`request-inline`、`legacy-inline` 的 ref/version 為空。
+  request selection source 不等於 policy origin。`request-inline` 僅用於可信
+  direct engine policy；`legacy-inline` 僅用於缺 metadata 的舊 admission bridge。
+  `off` 仍寫 admission marker，但不帶 policy/metadata，也不建立 engine envelope。
+- admission、envelope 與 nested request 必須檢查身分、digest 和 snapshot
+  一致性。讀 schema 1/2，新記錄寫 2；不覆寫既有記錄。v1 admission 尚無
+  envelope 時，新 v2 envelope 保留其原始 policy，以正規化副本計算 digest；
+  metadata 完全缺漏才標 legacy。已有合法完整 metadata 則保留，部分 metadata
+  不得偷偷補正。v2 admission 配 v1 envelope 是不支援的 downgrade。
+- 既有 v1 envelope 保持原 bytes 與 policy；resume 只用 durable snapshot，
+  不查目前 team/catalog。保留現有無 admission 的 legacy-envelope 相容路徑
+  及 unsafe in-flight stage 的 fail-closed 判定。
+- digest 使用凍結的 V1 canonical JSON 表示，含所有 policy 欄位，先驗證並
+  正規化指定 defaults，再 hash；變更 runtime struct 不得靜默改掉歷史 digest。
+  plan §8 明訂 encoding 與 golden-test 契約。
+- envelope digest 對應實際存入的 policy。direct engine 的合法預算降級後需
+  重新計算 digest；ref/origin/version 仍表示來源。coordinator occurrence 的
+  admission/envelope policy 相等門檻保持不變，限制見 §34.3。
+- execution plan 僅為 policy eligibility/requirements 的衍生投影，不是另一套
+  狀態機，也不是保證會發生的 dispatch trace。preset 不提供 worker/tool 授權。
+
+未提供 metadata 的可信 direct engine request 使用 `request-inline` 並在
+dispatch 前 materialize；已提供但不完整或不一致的 metadata 必須拒絕。
+此擴充不允許 coordinator LLM 提交 policy 或變更 `DecisionProfile`。
 
 ---
 
@@ -380,7 +435,8 @@ type TaskDef struct {
 1. tag 必須是 `json:"-"`。若 payload 中出現 `decision_profile`，
    解碼後必須為零值，且必須有測試斷言此點。
 2. 不得建立 `TaskKindDecision`，除非未來出現無法以執行模式表達的 lifecycle 語意。
-3. `DecisionProfile` 必須是 team config 中已定義的 profile 名稱或空字串，
+3. `DecisionProfile` 必須是 team config 中已定義的 profile 名稱、`off`、
+   §8.1 的完整版本化 built-in reference，或表示繼承的空字串，
    否則 config 載入即失敗（reason code `decision_profile_unknown`）。
 
 ---
@@ -397,6 +453,8 @@ type TeamConfig struct {
 type DecisionConfig struct {
     DefaultProfile string                    `yaml:"default-profile,omitempty"`
     Profiles       map[string]DecisionPolicy `yaml:"profiles,omitempty"`
+    // Approved extension (§8.1); authoritative authoring specs, pending implementation.
+    ProfileSpecs   map[string]DecisionProfileSpec `yaml:"-"`
 }
 ```
 
@@ -1844,6 +1902,20 @@ kill criteria 要求
 
 品質門檻不因執行不便而放寬。降級**永不靜默**：使用者必須能在事件與
 `DecisionRecord` 中看到降了什麼、為什麼。
+
+### 34.3 現有 occurrence admission 限制與 profile 泛化邊界
+
+直接 `DecisionEngine.Run` 的 explicit 降級已有實作；但 coordinator 路徑的
+`validateDecisionAdmissionEnvelope` 要求 admission policy 與 envelope policy
+完全相等，因此 policy-changing degradation 目前會在 envelope 驗證失敗，
+不會進入 JUDGE。這是 §34.1 目標在 coordinator integration 的既有限制。
+失敗路徑有 degradation events，但沒有成功的 final `DecisionRecord`。
+
+§8.1 的 profile 泛化保留此限制：direct 路徑在降級後計算 effective envelope
+digest，coordinator 路徑仍拒絕 policy 不一致；不得改成只比 digest 或以任意
+degradation event 繞過 admission。支援 coordinator 成功降級需要獨立的
+admission transition/recovery 契約，不在這次泛化範圍。三個 strategic built-in
+snapshot 均使用 `budget-degradation: forbidden`，不受此限制影響。
 
 ---
 
