@@ -116,6 +116,8 @@ type dagScheduler struct {
 	inProgress           int
 	activeResources      map[int][]ResourceClaim
 	teamSlots            map[int]semSlot
+	running              bool
+	dispatchStopped      bool
 
 	inflightMu sync.Mutex
 	inflight   map[string]chan agentTaskResult
@@ -180,12 +182,42 @@ func maxCriterionRetryBudget(tasks []TaskDef) int {
 // drains, then marks tasks stranded by failed dependencies. The returned
 // slice is indexed by task position in the input batch.
 func (s *dagScheduler) run(ctx context.Context) ([]agentTaskResult, error) {
+	s.running = true
+	s.dispatchStopped = false
+	defer func() { s.running = false }()
+	if err := ctx.Err(); err != nil {
+		s.dispatchStopped = true
+		if s.inProgress > 0 {
+			s.drainInProgress()
+		}
+		return nil, err
+	}
 	s.launchReady(ctx)
 	for s.inProgress > 0 {
+		// Prefer cancellation over a completion that is already buffered. A
+		// completion can otherwise make handleEvent launch a dependent task
+		// after the run has been cancelled.
+		if err := ctx.Err(); err != nil {
+			s.dispatchStopped = true
+			s.drainInProgress()
+			return nil, err
+		}
 		select {
 		case res := <-s.eventCh:
+			if err := ctx.Err(); err != nil {
+				s.dispatchStopped = true
+				s.consumeCancelledResult(res)
+				s.drainInProgress()
+				return nil, err
+			}
 			s.handleEvent(ctx, res)
 		case <-ctx.Done():
+			// A task goroutine owns its terminal cleanup and canonical status
+			// transitions. Returning immediately would let it keep writing into
+			// the run workspace after ExecuteTasks has returned, racing callers'
+			// cleanup (and potentially closing resources before its final event).
+			s.dispatchStopped = true
+			s.drainInProgress()
 			return nil, ctx.Err()
 		}
 	}
@@ -193,11 +225,52 @@ func (s *dagScheduler) run(ctx context.Context) ([]agentTaskResult, error) {
 	return s.results, nil
 }
 
+// drainInProgress waits for every task already admitted by launchReady. It
+// deliberately does not call handleEvent: the parent context is cancelled,
+// so applying retry/DAG routing here could start new work after cancellation.
+// Each runTask has already committed its own canonical task outcome before it
+// sends this completion event; the scheduler only needs to release its local
+// bookkeeping before returning control to ExecuteTasks.
+func (s *dagScheduler) drainInProgress() {
+	for s.inProgress > 0 {
+		res := <-s.eventCh
+		s.consumeCancelledResult(res)
+	}
+}
+
+func (s *dagScheduler) consumeCancelledResult(res agentTaskResult) {
+	if res.err != nil {
+		// Keep cancellation from skipping the canonical failure projection
+		// normally performed by handleEvent. Checkpoint control is a
+		// lifecycle transition rather than a task failure, so it remains
+		// untouched while scheduler/provider errors are terminalized.
+		if _, checkpointStopped := asCheckpointControlError(res.err); !checkpointStopped && s.coord != nil {
+			s.coord.terminalizeTaskErrorIfUnresolved(res.todoID, res.err)
+		}
+	}
+	s.releaseInProgress(res)
+}
+
+func (s *dagScheduler) releaseInProgress(res agentTaskResult) {
+	if slot, ok := s.teamSlots[res.idx]; ok {
+		slot.release()
+		delete(s.teamSlots, res.idx)
+	}
+	s.inProgress--
+	delete(s.activeResources, res.idx)
+}
+
 // launchReady starts pending tasks whose dependencies are all done, in input
 // order, up to the configured team concurrency limit. Tasks beyond that limit
 // remain pending in both scheduler and durable projections until a slot opens.
 func (s *dagScheduler) launchReady(ctx context.Context) {
+	if s.dispatchStopped || (s.running && ctx.Err() != nil) {
+		return
+	}
 	for i, t := range s.tasks {
+		if s.dispatchStopped || (s.running && ctx.Err() != nil) {
+			return
+		}
 		if s.states[i] != TaskPending {
 			continue
 		}
@@ -226,6 +299,10 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if !acquired {
 			return
 		}
+		if s.dispatchStopped || (s.running && ctx.Err() != nil) {
+			teamSlot.release()
+			return
+		}
 
 		s.states[i] = TaskInProgress
 		s.inProgress++
@@ -244,12 +321,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		s.inProgress--
 		return
 	}
-	if slot, ok := s.teamSlots[idx]; ok {
-		slot.release()
-		delete(s.teamSlots, idx)
-	}
-	s.inProgress--
-	delete(s.activeResources, idx)
+	s.releaseInProgress(res)
 
 	// A reset wave swept this task while it was still running: discard the
 	// stale result and re-queue the task.

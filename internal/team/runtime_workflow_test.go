@@ -500,8 +500,10 @@ func TestRuntimeWorkflowCancellationIsTyped(t *testing.T) {
 }
 
 type executeTasksCancellationAgent struct {
-	started  chan struct{}
-	finished chan struct{}
+	started        chan struct{}
+	cancelObserved chan struct{}
+	release        chan struct{}
+	finished       chan struct{}
 }
 
 func (a *executeTasksCancellationAgent) wait(ctx context.Context) (*fantasy.AgentResult, error) {
@@ -512,6 +514,8 @@ func (a *executeTasksCancellationAgent) wait(ctx context.Context) (*fantasy.Agen
 	}
 	defer close(a.finished)
 	<-ctx.Done()
+	close(a.cancelObserved)
+	<-a.release
 	return nil, ctx.Err()
 }
 
@@ -535,7 +539,12 @@ func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
 		t.Fatalf("workflow.Start: %v", err)
 	}
 
-	worker := &executeTasksCancellationAgent{started: make(chan struct{}), finished: make(chan struct{})}
+	worker := &executeTasksCancellationAgent{
+		started:        make(chan struct{}),
+		cancelObserved: make(chan struct{}),
+		release:        make(chan struct{}),
+		finished:       make(chan struct{}),
+	}
 	coordinator := &Coordinator{
 		session:             session,
 		sessionData:         NewSession(),
@@ -565,6 +574,17 @@ func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
 		t.Fatal("worker did not start before cancellation")
 	}
 	select {
+	case <-worker.cancelObserved:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled worker did not observe cancellation")
+	}
+	select {
+	case execErr := <-done:
+		t.Fatalf("ExecuteTasks returned while admitted worker was still running: %v", execErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(worker.release)
+	select {
 	case <-worker.finished:
 	case <-time.After(time.Second):
 		t.Fatal("cancelled worker did not stop")
@@ -588,6 +608,68 @@ func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
 	}
 	if failure := result.Errors[0]; failure.Category != CategoryCancelled || failure.Source != "context_canceled" || failure.Retryable {
 		t.Fatalf("prepare cancellation error = %#v", failure)
+	}
+	items := coordinator.taskTracker.TodoList().Items()
+	if len(items) != 1 || items[0].Status != TaskError {
+		t.Fatalf("cancelled task projection = %#v, want one terminal error task", items)
+	}
+}
+
+func TestExecuteTasksPreCancelledContextProjectsTypedWorkflowFailure(t *testing.T) {
+	session := workflowTestSession(t)
+	session.Workspace = t.TempDir()
+	session.Dir = t.TempDir()
+	workflow, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatalf("newRuntimeWorkflow: %v", err)
+	}
+	if err := workflow.Start(); err != nil {
+		t.Fatalf("workflow.Start: %v", err)
+	}
+
+	worker := &executeTasksCancellationAgent{
+		started:        make(chan struct{}),
+		cancelObserved: make(chan struct{}),
+		release:        make(chan struct{}),
+		finished:       make(chan struct{}),
+	}
+	coordinator := &Coordinator{
+		session:             session,
+		sessionData:         NewSession(),
+		taskTracker:         NewTaskTracker(),
+		phaseWorkflow:       workflow,
+		executionRunID:      "run-pre-cancel",
+		maxConcurrent:       1,
+		delegatedTasks:      make(map[string]int),
+		reportStatus:        func(StatusEvent) {},
+		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
+		workerAgentOverride: worker,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, execErr := coordinator.ExecuteTasks(ctx, []TaskDef{{
+		ID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
+	}})
+	if !errors.Is(execErr, context.Canceled) {
+		t.Fatalf("pre-cancelled ExecuteTasks error = %v, want context.Canceled", execErr)
+	}
+	select {
+	case <-worker.started:
+		t.Fatal("pre-cancelled ExecuteTasks started a worker")
+	default:
+	}
+
+	state, results, _, _ := workflow.snapshot()
+	if state != PhaseFailed {
+		t.Fatalf("pre-cancelled workflow state = %s, want FAILED", state)
+	}
+	result := results[PhasePrepare]
+	if result.Status != PhaseStatusCancelled || len(result.Errors) != 1 {
+		t.Fatalf("pre-cancelled phase result = %#v, want one CANCELLED error", result)
+	}
+	if failure := result.Errors[0]; failure.Category != CategoryCancelled || failure.Source != "context_canceled" || failure.Retryable {
+		t.Fatalf("pre-cancelled workflow error = %#v", failure)
 	}
 }
 

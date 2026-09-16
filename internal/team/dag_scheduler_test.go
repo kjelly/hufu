@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -347,6 +348,87 @@ func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
 	case <-scheduler.eventCh:
 	case <-time.After(time.Second):
 		t.Fatal("launched task did not stop")
+	}
+}
+
+func TestDAGSchedulerCancellationDoesNotLaunchDependentFromBufferedEvent(t *testing.T) {
+	for range 100 {
+		c := &Coordinator{
+			session: &TeamSession{
+				Workspace: t.TempDir(),
+				Config:    agent.TeamConfig{Name: "cancel-buffered-event"},
+				Agents: map[string]*agent.AgentDef{
+					"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+				},
+			},
+			taskTracker:   NewTaskTracker(),
+			reportStatus:  func(StatusEvent) {},
+			maxConcurrent: 1,
+			taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+		}
+		items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+			{Agent: "worker", Desc: "completed root"},
+			{Agent: "worker", Desc: "dependent must not start"},
+		})
+		tasks := []TaskDef{
+			{Agent: "worker", Goal: "completed root"},
+			{Agent: "worker", Goal: "dependent must not start", DependsOn: []int{0}},
+		}
+		var calls int
+		c.workerAgentOverride = &countingEmptyAgent{calls: &calls}
+		scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
+		scheduler.states[0] = TaskInProgress
+		scheduler.inProgress = 1
+		scheduler.eventCh <- agentTaskResult{agentName: "worker", todoID: items[0].ID, idx: 0}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := scheduler.run(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled scheduler error = %v, want context.Canceled", err)
+		}
+		if calls != 0 {
+			t.Fatalf("cancelled scheduler launched dependent worker %d time(s)", calls)
+		}
+		if scheduler.inProgress != 0 || scheduler.states[1] != TaskPending {
+			t.Fatalf("cancelled scheduler state = states=%v in_progress=%d, want [in_progress pending] / 0", scheduler.states, scheduler.inProgress)
+		}
+	}
+}
+
+func TestDAGSchedulerPreCancelledContextStopsBeforeStranding(t *testing.T) {
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: t.TempDir(),
+			Config:    agent.TeamConfig{Name: "pre-cancelled-scheduler"},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		taskTracker:   NewTaskTracker(),
+		reportStatus:  func(StatusEvent) {},
+		maxConcurrent: 1,
+		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must not start"}})
+	tasks := []TaskDef{{Agent: "worker", Goal: "must not start"}}
+	var calls int
+	c.workerAgentOverride = &countingEmptyAgent{calls: &calls}
+	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	results, err := scheduler.run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-cancelled scheduler error = %v, want context.Canceled", err)
+	}
+	if results != nil {
+		t.Fatalf("pre-cancelled scheduler results = %#v, want nil", results)
+	}
+	if calls != 0 {
+		t.Fatalf("pre-cancelled scheduler invoked worker %d time(s)", calls)
+	}
+	if scheduler.states[0] != TaskPending || items[0].Status != TaskPending {
+		t.Fatalf("pre-cancelled scheduler stranded task: state=%s item=%s", scheduler.states[0], items[0].Status)
 	}
 }
 
