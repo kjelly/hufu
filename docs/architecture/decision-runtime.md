@@ -369,7 +369,7 @@ Runtime built-in default    off
 
 本節擴充 profile authoring 與持久化身分，不改 stage 順序、授權集合或
 既有 recovery 判定。增量實作計畫見
-[`docs/tmp/now/spec.md`](../tmp/now/spec.md)；以下契約為規範依據。
+[`decision-runtime-profile-generalization.md`](../archive/implementation-plans/decision-runtime-profile-generalization.md)；以下契約為規範依據。
 
 - request/CLI、task 與 team default 三層皆接受 local name、`off`，或完整
   `builtin/<name>@<version>`。首批 catalog 為 `light@v1`、`standard@v1`、
