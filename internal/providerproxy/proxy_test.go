@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -464,6 +465,56 @@ func TestProxyForwardsAndCloseReapsBlockedChild(t *testing.T) {
 	if err := p.Close(); err != nil {
 		rest := err
 		t.Fatalf("second close was not idempotent: %v", rest)
+	}
+}
+
+func TestProxyForwardsCompleteStreamingResponses(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "upstream response does not support flushing", http.StatusInternalServerError)
+			return
+		}
+		for _, chunk := range []string{
+			"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+			"data: [DONE]\n\n",
+		} {
+			if _, err := io.WriteString(w, chunk); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	p, err := StartWithCommand(t.Context(), os.Args[0], []string{"-test.run=TestProviderProxyChildHelper"}, []string{"HUFU_PROXY_TEST_CHILD=1"}, Config{
+		UpstreamURL: upstream.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatalf("start provider proxy: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	client := &http.Client{}
+	for i := range 100 {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, p.URL()+"/chat/completions", strings.NewReader(`{"stream":true}`))
+		if err != nil {
+			t.Fatalf("create streaming request: %v", err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("streaming request %d: %v", i, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		closeErr := resp.Body.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatalf("read streaming response %d: read=%v close=%v body=%q", i, readErr, closeErr, body)
+		}
+		if resp.StatusCode != http.StatusOK || !strings.HasSuffix(string(body), "data: [DONE]\n\n") {
+			t.Fatalf("streaming response = status %d body %q", resp.StatusCode, body)
+		}
 	}
 }
 

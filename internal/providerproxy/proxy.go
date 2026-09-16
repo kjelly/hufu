@@ -295,8 +295,17 @@ func RunChild(in io.Reader, out io.Writer) int {
 			req.Out.Header.Set("Authorization", "Bearer "+control.Config.APIKey)
 		}
 	}
-	proxy.Transport = &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext}
+	proxy.Transport = &http.Transport{
+		Proxy:       http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	}
 	server := &http.Server{Handler: requireCapability(privatePath, proxy), ReadHeaderTimeout: 10 * time.Second}
+	// A provider client may reuse its connection to this process for multiple
+	// requests. Close that client connection after each response so a completed
+	// streaming response cannot share HTTP/1.1 framing state with the next
+	// request. The proxy process is cheap and remains available for subsequent
+	// requests; only the per-request downstream connection is short-lived.
+	server.SetKeepAlivesEnabled(false)
 	ready := readyMessage{Version: ProtocolVersion, URL: "http://" + listener.Addr().String() + privatePath}
 	data, _ := json.Marshal(ready)
 	if _, err := out.Write(append(data, '\n')); err != nil {
