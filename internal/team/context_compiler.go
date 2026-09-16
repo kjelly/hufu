@@ -189,6 +189,7 @@ type CompiledContext struct {
 	UsedTokens       int
 	OverBudget       bool
 	Fingerprint      string
+	Semantic         *SemanticRetrievalIdentity
 }
 
 func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool) []ContextItem {
@@ -843,6 +844,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	compiled, err := compiledResult(items, budget)
 	if err != nil {
 		return CompiledContext{}, err
+	}
+	if input.WorkerMemory != nil {
+		compiled.Semantic = cloneSemanticRetrievalIdentity(input.WorkerMemory.Semantic)
 	}
 	return compiled, nil
 }

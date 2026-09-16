@@ -1626,6 +1626,10 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				ti.ExecutionReceipt = nil
 			} else {
 				copyR := cloneExecutionReceipt(receipt)
+				if err := normalizeExecutionReceiptSemantic(&copyR); err != nil {
+					tl.mu.Unlock()
+					return err
+				}
 				// The Todo owns the frozen execution identity. Every current
 				// execution path persists receipts through this method, so derive
 				// the durable backend here instead of trusting a mutable task
@@ -1720,6 +1724,7 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 		copyR.ExitCode = &exitCode
 	}
 	copyR.ArtifactScope = cloneArtifactAccessScope(receipt.ArtifactScope)
+	copyR.Semantic = cloneSemanticRetrievalIdentity(receipt.Semantic)
 	copyR.MemoryManifest = cloneMemoryInjectionManifest(receipt.MemoryManifest)
 	copyR.ContextManifest = cloneContextInjectionManifest(receipt.ContextManifest)
 	copyR.ToolDispositions = append([]ToolExecutionDisposition(nil), receipt.ToolDispositions...)

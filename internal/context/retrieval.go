@@ -204,7 +204,7 @@ func HybridRetrieveWithOptions(
 				if errors.Is(vectorErr, ErrSemanticCanonicalRepo) {
 					return nil, trace, vectorErr
 				}
-				fallbackReason = classifySemanticFallback(vectorErr)
+				fallbackReason = SemanticFallbackReasonForError(vectorErr)
 			} else {
 				semanticCandidateCount = len(vectorResults)
 				semanticResults = filterSearchResults(vectorResults, req)

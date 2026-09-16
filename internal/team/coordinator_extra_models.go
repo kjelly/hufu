@@ -605,7 +605,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 			Rounds:                      orig.sessionData.Rounds,
 			ExecutionPolicySnapshot:     cloneExecutionPolicySnapshot(orig.sessionData.ExecutionPolicySnapshot),
 			Entries:                     entriesCopy,
-			CoordinatorContextManifests: append([]ContextInjectionManifest(nil), orig.sessionData.CoordinatorContextManifests...),
+			CoordinatorContextManifests: cloneContextInjectionManifests(orig.sessionData.CoordinatorContextManifests),
 		}
 	}
 

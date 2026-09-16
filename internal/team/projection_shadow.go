@@ -225,6 +225,7 @@ type canonicalReceipt struct {
 	ToolInvocations               []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
 	ToolInvocationsTruncated      int                        `json:"tool_invocations_truncated,omitempty"`
 	HandoffState                  ResultHandoffState         `json:"handoff_state,omitempty"`
+	Semantic                      *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	MemoryManifest                *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
 	ContextManifest               *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
@@ -264,6 +265,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			ToolInvocations:               append([]ToolInvocationReceipt(nil), r.ToolInvocations...),
 			ToolInvocationsTruncated:      r.ToolInvocationsTruncated,
 			HandoffState:                  r.HandoffState,
+			Semantic:                      semanticRetrievalIdentityFromReceipt(&r),
 			MemoryManifest:                r.MemoryManifest,
 			ContextManifest:               r.ContextManifest,
 		})
@@ -289,14 +291,22 @@ func normalizeMemoryManifests(mms []MemoryInjectionManifest) []MemoryInjectionMa
 	if len(mms) == 0 {
 		return nil
 	}
-	return append([]MemoryInjectionManifest(nil), mms...)
+	normalized := make([]MemoryInjectionManifest, len(mms))
+	for i := range mms {
+		normalized[i] = *cloneMemoryInjectionManifest(&mms[i])
+	}
+	return normalized
 }
 
 func normalizeContextManifests(manifests []ContextInjectionManifest) []ContextInjectionManifest {
 	if len(manifests) == 0 {
 		return nil
 	}
-	return append([]ContextInjectionManifest(nil), manifests...)
+	normalized := make([]ContextInjectionManifest, len(manifests))
+	for i := range manifests {
+		normalized[i] = *cloneContextInjectionManifest(&manifests[i])
+	}
+	return normalized
 }
 
 type canonicalTaskShadow struct {

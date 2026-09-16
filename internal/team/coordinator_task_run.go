@@ -1224,6 +1224,7 @@ retryLoop:
 			ProducerID:       agentName,
 			ArtifactScope:    cloneArtifactAccessScope(attemptArtifactScope),
 			TranscriptRef:    transcriptRef,
+			Semantic:         cloneSemanticRetrievalIdentity(contextManifest.Semantic),
 			MemoryManifest:   cloneMemoryInjectionManifest(attemptManifest),
 			ContextManifest:  cloneContextInjectionManifest(&contextManifest),
 			StepBudget: &StepBudgetUsage{

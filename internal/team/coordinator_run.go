@@ -773,6 +773,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		FinishedAt: time.Now(), ProducerID: resolvedName,
 		ModelExecutionID: contextManifest.ModelExecutionID,
 		ArtifactScope:    cloneArtifactAccessScope(directArtifactScope),
+		Semantic:         cloneSemanticRetrievalIdentity(contextManifest.Semantic),
 		MemoryManifest:   cloneMemoryInjectionManifest(memoryManifest),
 		ContextManifest:  cloneContextInjectionManifest(&contextManifest),
 		ToolDispositions: directDispositions.snapshot(),

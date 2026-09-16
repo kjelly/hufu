@@ -193,10 +193,11 @@ type MemoryInjectionManifest struct {
 	// policy/query that produced the prompt, so explain-memory can return a
 	// retrieval ID only when it matches the request being explained (spec §5.1,
 	// §7 HF-MEM4-005). Older manifests omit it.
-	QueryHash   string                `json:"query_hash,omitempty"`
-	Items       []MemoryInjectionItem `json:"items"`
-	Fingerprint string                `json:"fingerprint"`
-	CreatedAt   time.Time             `json:"created_at"`
+	QueryHash   string                     `json:"query_hash,omitempty"`
+	Items       []MemoryInjectionItem      `json:"items"`
+	Semantic    *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
+	Fingerprint string                     `json:"fingerprint"`
+	CreatedAt   time.Time                  `json:"created_at"`
 }
 
 type MemoryLearningReport struct {
@@ -356,12 +357,21 @@ func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, g
 		orderedBindings[i] = items[i].ContextItemID + "\x1e" + items[i].ContentHash
 	}
 	identity := strings.Join([]string{runID, taskID, agentName, policy.PolicyVersion, strings.Join(orderedBindings, "\x00")}, "\x1f")
+	semantic := (*SemanticRetrievalIdentity)(nil)
+	if general != nil {
+		semantic = cloneSemanticRetrievalIdentity(general.Semantic)
+	}
+	if semantic != nil {
+		semanticJSON, _ := json.Marshal(semantic)
+		identity += "\x1fsemantic_retrieval\x1f" + string(semanticJSON)
+	}
 	sum := sha256.Sum256([]byte(identity))
 	fingerprint := hex.EncodeToString(sum[:])
 	return &MemoryInjectionManifest{
 		RetrievalID: "retrieval-" + fingerprint[:20], RunID: runID, TaskID: taskID,
 		Attempt: attempt, Agent: agentName, PolicyVersion: policy.PolicyVersion,
-		QueryHash: hashContentKey(query), Items: items, Fingerprint: fingerprint, CreatedAt: time.Now().UTC(),
+		QueryHash: hashContentKey(query), Items: items, Semantic: semantic,
+		Fingerprint: fingerprint, CreatedAt: time.Now().UTC(),
 	}
 }
 
@@ -445,5 +455,6 @@ func cloneMemoryInjectionManifest(src *MemoryInjectionManifest) *MemoryInjection
 	}
 	clone := *src
 	clone.Items = append([]MemoryInjectionItem(nil), src.Items...)
+	clone.Semantic = cloneSemanticRetrievalIdentity(src.Semantic)
 	return &clone
 }

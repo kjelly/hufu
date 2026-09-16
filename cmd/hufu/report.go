@@ -931,6 +931,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		b.WriteString("\n")
 		writeTaskResourceScopeReport(&b, data.Todos)
+		writeSemanticRetrievalReport(&b, data.Todos)
 		for _, item := range data.Todos {
 			if item == nil || item.TypedResult == nil {
 				continue
@@ -1190,6 +1191,34 @@ func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestS
 		}
 	}
 	b.WriteString("\n---\n\n")
+}
+
+func writeSemanticRetrievalReport(b *strings.Builder, todos []*team.TodoItem) {
+	type row struct {
+		taskID   string
+		identity *team.SemanticRetrievalIdentity
+	}
+	rows := make([]row, 0, len(todos))
+	for _, item := range todos {
+		if identity := team.SemanticRetrievalIdentityForTask(item); identity != nil {
+			rows = append(rows, row{taskID: item.ID, identity: identity})
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	b.WriteString("## Semantic Retrieval Receipts\n\n")
+	b.WriteString("| Task | Mode | Model | Revision | Model hash | Generation | Source revision | Policy | Fallback |\n")
+	b.WriteString("|---|---|---|---|---|---|---:|---|---|\n")
+	for _, row := range rows {
+		identity := row.identity
+		fmt.Fprintf(b, "| `%s` | `%s` | `%s` | `%s` | `%s` | `%s` | %d | `%s` | `%s` |\n",
+			reportSafeMetadata(row.taskID, 120), identity.Mode,
+			reportSafeMetadata(identity.ModelID, 120), reportSafeMetadata(identity.ModelRevision, 120),
+			reportSafeMetadata(identity.ModelHash, 80), reportSafeMetadata(identity.GenerationID, 120),
+			identity.SourceRevision, reportSafeMetadata(identity.RetrievalPolicyVersion, 120), identity.FallbackReason)
+	}
+	b.WriteString("\n")
 }
 
 // writeRequiredResourceLockReport surfaces the durable, metadata-only

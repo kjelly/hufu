@@ -107,6 +107,7 @@ type MemoryInjectionManifest struct {
     Agent        string
     PolicyVersion string
     Items        []MemoryInjectionItem
+    Semantic     *SemanticRetrievalIdentity
     Fingerprint  string
     CreatedAt    time.Time
 }
@@ -128,6 +129,8 @@ type MemoryInjectionItem struct {
 - retry 若重用完全相同 prompt，沿用 retrieval ID，但每個 attempt 仍發出獨立、具 idempotency key 的 exposure event。
 - manifest fingerprint 必須涵蓋有序 item IDs、policy version、task、agent 與 run；不得涵蓋原文。
 - manifest 要綁定 attempt execution receipt，不能只存在記憶體；crash-resume 後仍可驗證 `MemoryUses`。
+- `Semantic` 只有 active semantic retrieval 可以設定；off 與 shadow 維持 `nil`，因此既有 JSON bytes 與 fingerprint input 不變。非 nil identity 只記 model/generation/source revision、固定 retrieval policy 與 typed fallback，不含 query、content、item ID、vector 或 raw error。
+- active identity 必須以相同內容傳播到 `ContextInjectionManifest`、session checkpoint、event replay 與 execution receipt；已完成 task 的 resume 只讀取既有 identity，不重新 retrieval 或重播 side effect。production coordinator 目前仍使用 nil semantic searcher，這個 contract 只提供內部 seam。
 
 ### 5.2 TaskResult.MemoryUses
 

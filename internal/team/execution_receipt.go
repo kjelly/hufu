@@ -196,6 +196,7 @@ type ExecutionReceipt struct {
 	ToolInvocations          []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
 	ToolInvocationsTruncated int                        `json:"tool_invocations_truncated,omitempty"`
 	HandoffState             ResultHandoffState         `json:"handoff_state,omitempty"`
+	Semantic                 *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	MemoryManifest           *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
 	ContextManifest          *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
@@ -206,6 +207,9 @@ type ExecutionReceipt struct {
 // receipt persistence boundary (TodoList.SetExecutionReceipt), rather than
 // being inferred from mutable task-definition configuration.
 func (receipt ExecutionReceipt) MarshalJSON() ([]byte, error) {
+	if err := normalizeExecutionReceiptSemantic(&receipt); err != nil {
+		return nil, err
+	}
 	type executionReceiptWire ExecutionReceipt
 	wire := executionReceiptWire(receipt)
 	if wire.Backend != "" {

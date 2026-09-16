@@ -31,29 +31,30 @@ type ContextManifestItem struct {
 }
 
 type ContextInjectionManifest struct {
-	SchemaVersion             int                   `json:"schema_version"`
-	RequestID                 string                `json:"request_id"`
-	RequestHash               string                `json:"request_hash"`
-	RunID                     string                `json:"run_id"`
-	TaskID                    string                `json:"task_id,omitempty"`
-	Attempt                   int                   `json:"attempt"`
-	Agent                     string                `json:"agent"`
-	AgentRole                 string                `json:"agent_role,omitempty"`
-	ModelExecutionID          string                `json:"model_execution_id,omitempty"`
-	Environment               string                `json:"environment,omitempty"`
-	Phase                     Phase                 `json:"phase"`
-	Trigger                   ContextTrigger        `json:"trigger"`
-	Purpose                   string                `json:"purpose,omitempty"`
-	ParentTrigger             ContextTrigger        `json:"parent_trigger,omitempty"`
-	ParentRequestID           string                `json:"parent_request_id,omitempty"`
-	ParentManifestFingerprint string                `json:"parent_manifest_fingerprint,omitempty"`
-	ModelCalled               bool                  `json:"model_called"`
-	Outcome                   string                `json:"outcome,omitempty"`
-	ToolCallID                string                `json:"tool_call_id,omitempty"`
-	FailureClass              string                `json:"failure_class,omitempty"`
-	Items                     []ContextManifestItem `json:"items"`
-	Fingerprint               string                `json:"fingerprint"`
-	CreatedAt                 time.Time             `json:"created_at"`
+	SchemaVersion             int                        `json:"schema_version"`
+	RequestID                 string                     `json:"request_id"`
+	RequestHash               string                     `json:"request_hash"`
+	RunID                     string                     `json:"run_id"`
+	TaskID                    string                     `json:"task_id,omitempty"`
+	Attempt                   int                        `json:"attempt"`
+	Agent                     string                     `json:"agent"`
+	AgentRole                 string                     `json:"agent_role,omitempty"`
+	ModelExecutionID          string                     `json:"model_execution_id,omitempty"`
+	Environment               string                     `json:"environment,omitempty"`
+	Phase                     Phase                      `json:"phase"`
+	Trigger                   ContextTrigger             `json:"trigger"`
+	Purpose                   string                     `json:"purpose,omitempty"`
+	ParentTrigger             ContextTrigger             `json:"parent_trigger,omitempty"`
+	ParentRequestID           string                     `json:"parent_request_id,omitempty"`
+	ParentManifestFingerprint string                     `json:"parent_manifest_fingerprint,omitempty"`
+	ModelCalled               bool                       `json:"model_called"`
+	Outcome                   string                     `json:"outcome,omitempty"`
+	ToolCallID                string                     `json:"tool_call_id,omitempty"`
+	FailureClass              string                     `json:"failure_class,omitempty"`
+	Items                     []ContextManifestItem      `json:"items"`
+	Semantic                  *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
+	Fingerprint               string                     `json:"fingerprint"`
+	CreatedAt                 time.Time                  `json:"created_at"`
 }
 
 func manifestItemID(id string) string { return strings.TrimPrefix(id, "context:") }
@@ -131,7 +132,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 		items = append(items, manifestItem)
 	}
-	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, CreatedAt: createdAt.UTC()}
+	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, Semantic: cloneSemanticRetrievalIdentity(compiled.Semantic), CreatedAt: createdAt.UTC()}
 	if request.Failure != nil {
 		if len(request.Failure.EvidenceRefs) > 0 {
 			manifest.ToolCallID = request.Failure.EvidenceRefs[0]
@@ -250,7 +251,19 @@ func cloneContextInjectionManifest(manifest *ContextInjectionManifest) *ContextI
 	}
 	copyManifest := *manifest
 	copyManifest.Items = append([]ContextManifestItem(nil), manifest.Items...)
+	copyManifest.Semantic = cloneSemanticRetrievalIdentity(manifest.Semantic)
 	return &copyManifest
+}
+
+func cloneContextInjectionManifests(manifests []ContextInjectionManifest) []ContextInjectionManifest {
+	if len(manifests) == 0 {
+		return nil
+	}
+	clones := make([]ContextInjectionManifest, len(manifests))
+	for i := range manifests {
+		clones[i] = *cloneContextInjectionManifest(&manifests[i])
+	}
+	return clones
 }
 
 func mergeContextInjectionManifests(existing, incoming []ContextInjectionManifest) []ContextInjectionManifest {

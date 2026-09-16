@@ -124,7 +124,9 @@ func validSemanticFallbackReason(reason SemanticFallbackReason) bool {
 	}
 }
 
-func classifySemanticFallback(err error) SemanticFallbackReason {
+// SemanticFallbackReasonForError maps component-local semantic failures onto
+// the fixed content-free enum shared by retrieval callers and manifests.
+func SemanticFallbackReasonForError(err error) SemanticFallbackReason {
 	switch {
 	case errors.Is(err, ErrSemanticInvalidVector), errors.Is(err, embedding.ErrInvalidEmbedding):
 		return SemanticFallbackInvalidVector

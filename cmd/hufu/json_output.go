@@ -62,6 +62,7 @@ type jsonRunTask struct {
 	CompletedReview     bool                            `json:"completed_review,omitempty"`
 	FindingsPresent     bool                            `json:"findings_present,omitempty"`
 	ResourceScope       *team.TaskResourceScopeSnapshot `json:"resource_scope,omitempty"`
+	SemanticRetrieval   *team.SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	RetryDisposition    team.RetryDisposition           `json:"retry_disposition,omitempty"`
 	NextAction          string                          `json:"next_action,omitempty"`
 }
@@ -134,6 +135,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 				CompletedReview:     it.Kind == team.TaskKindDiagnostic && it.Status == team.TaskDone,
 				FindingsPresent:     it.TypedResult != nil && len(it.TypedResult.Findings) > 0,
 				ResourceScope:       it.ResourceScopeSnapshot,
+				SemanticRetrieval:   team.SemanticRetrievalIdentityForTask(it),
 				RetryDisposition:    retryDisposition,
 				NextAction:          nextAction,
 			})

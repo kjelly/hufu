@@ -31,6 +31,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/embedding"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -70,8 +71,9 @@ type WorkerMemoryItem struct {
 // WorkerMemoryBundle is the output of recall: a ranked, deduped, budgeted
 // set of memory items plus a trace for observability.
 type WorkerMemoryBundle struct {
-	Items []WorkerMemoryItem
-	Trace WorkerMemoryTrace
+	Items    []WorkerMemoryItem
+	Trace    WorkerMemoryTrace
+	Semantic *SemanticRetrievalIdentity
 }
 
 // WorkerMemoryReport is a content-free execution-report summary. It is an
@@ -172,18 +174,36 @@ type WorkerMemoryRejectionRequest struct {
 // canonical context repository and an optional vector searcher.
 type defaultWorkerMemoryService struct {
 	repo         contextstore.Repository
-	vector       contextstore.VectorSearcher
+	options      WorkerMemoryOptions
 	mu           sync.RWMutex
 	rejectedRuns map[string]bool
+}
+
+type WorkerMemoryOptions struct {
+	Semantic          contextstore.VectorSearcher
+	Mode              contextstore.RetrievalMode
+	UnavailableReason contextstore.SemanticFallbackReason
+	TraceHasher       contextstore.TraceHasher
+	TraceSink         func(contextstore.SemanticRetrievalTrace)
 }
 
 // NewWorkerMemoryService creates a service backed by the given repository.
 // vector may be nil — retrieval falls back to exact + lexical only.
 func NewWorkerMemoryService(repo contextstore.Repository, vector contextstore.VectorSearcher) WorkerMemoryService {
+	options := WorkerMemoryOptions{Semantic: vector, Mode: contextstore.RetrievalActive}
+	if vector == nil {
+		options.Mode = contextstore.RetrievalOff
+	}
+	return NewWorkerMemoryServiceWithOptions(repo, options)
+}
+
+// NewWorkerMemoryServiceWithOptions exposes the semantic retrieval seam to
+// internal tests and future wiring without enabling it in the coordinator.
+func NewWorkerMemoryServiceWithOptions(repo contextstore.Repository, options WorkerMemoryOptions) WorkerMemoryService {
 	if repo == nil {
 		return &noopWorkerMemoryService{}
 	}
-	return &defaultWorkerMemoryService{repo: repo, vector: vector}
+	return &defaultWorkerMemoryService{repo: repo, options: options}
 }
 
 // noopWorkerMemoryService returns empty bundles for all requests. It is
@@ -235,6 +255,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	}
 
 	var allResults []rankedMemory
+	var semanticIdentity *SemanticRetrievalIdentity
 	lineage := req.SessionLineage
 	if len(lineage) == 0 {
 		lineage = []WorkerMemoryLineageBranch{{BranchID: req.Scope.BranchID}}
@@ -249,12 +270,13 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		// scope-authorized (exact, FTS, and vector). Fetching all eligible
 		// branch records prevents post-fork matches from crowding out a valid
 		// pre-fork parent record before the provenance filter is applied.
-		sessionResults, _, err := contextstore.HybridRetrieve(ctx, s.repo, s.vector, contextstore.SearchRequest{
+		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, contextstore.SearchRequest{
 			Query: query, Scope: sessionScope, Limit: 100000,
 		})
 		if err != nil {
 			return WorkerMemoryBundle{Trace: WorkerMemoryTrace{WorkerID: req.WorkerID, Query: query, Skipped: true, SkipReason: fmt.Sprintf("session retrieval error: %v", err)}}, nil
 		}
+		semanticIdentity = mergeSemanticRetrievalIdentity(semanticIdentity, retrievedSemantic)
 		for _, r := range sessionResults {
 			// VectorSearcher implementations are required to hydrate and authorize
 			// canonical rows, but recheck here as the final common gate for exact,
@@ -279,12 +301,13 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			TeamID:    req.Scope.TeamID,
 			AgentID:   req.Scope.AgentID,
 		}
-		persistentResults, _, pErr := contextstore.HybridRetrieve(ctx, s.repo, s.vector, contextstore.SearchRequest{
+		persistentResults, _, retrievedSemantic, pErr := s.retrieve(ctx, contextstore.SearchRequest{
 			Query: query,
 			Scope: persistentScope,
 			Limit: maxItems * 3,
 		})
 		if pErr == nil {
+			semanticIdentity = mergeSemanticRetrievalIdentity(semanticIdentity, retrievedSemantic)
 			for _, r := range persistentResults {
 				// Skip items already retrieved in the session query.
 				if hasItem(allResults, r.Item.ID) {
@@ -345,7 +368,8 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	}
 
 	return WorkerMemoryBundle{
-		Items: items,
+		Items:    items,
+		Semantic: cloneSemanticRetrievalIdentity(semanticIdentity),
 		Trace: WorkerMemoryTrace{
 			WorkerID: req.WorkerID,
 			Query:    query,
@@ -353,6 +377,60 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			Tokens:   totalTokens,
 		},
 	}, nil
+}
+
+type trackingVectorSearcher struct {
+	delegate contextstore.VectorSearcher
+	called   bool
+	err      error
+}
+
+func (s *trackingVectorSearcher) SearchVector(ctx context.Context, req contextstore.SearchRequest) ([]contextstore.SearchResult, error) {
+	s.called = true
+	results, err := s.delegate.SearchVector(ctx, req)
+	s.err = err
+	return results, err
+}
+
+func (s *trackingVectorSearcher) SemanticTraceIdentity() (embedding.ModelIdentity, string, int64) {
+	if provider, ok := s.delegate.(semanticTraceIdentityProvider); ok {
+		return provider.SemanticTraceIdentity()
+	}
+	return embedding.ModelIdentity{}, "", 0
+}
+
+func (s *defaultWorkerMemoryService) retrieve(
+	ctx context.Context,
+	req contextstore.SearchRequest,
+) ([]contextstore.SearchResult, contextstore.RetrievalTrace, *SemanticRetrievalIdentity, error) {
+	options := s.options
+	var tracker *trackingVectorSearcher
+	if options.Semantic != nil {
+		tracker = &trackingVectorSearcher{delegate: options.Semantic}
+	}
+	var vector contextstore.VectorSearcher
+	if tracker != nil {
+		vector = tracker
+	}
+	results, trace, err := contextstore.HybridRetrieveWithOptions(ctx, s.repo, req, contextstore.HybridRetrievalOptions{
+		Vector: vector, Mode: options.Mode, UnavailableReason: options.UnavailableReason,
+		TraceHasher: options.TraceHasher, TraceSink: options.TraceSink,
+	})
+	if err != nil {
+		return nil, trace, nil, err
+	}
+	fallback := contextstore.SemanticFallbackNone
+	switch {
+	case options.Mode != contextstore.RetrievalActive:
+		return results, trace, nil, nil
+	case strings.TrimSpace(contextstore.DecomposeQuery(req.Query).Remainder) == "":
+		fallback = contextstore.SemanticFallbackEmptyRemainder
+	case tracker == nil:
+		fallback = options.UnavailableReason
+	case tracker.called && tracker.err != nil:
+		fallback = contextstore.SemanticFallbackReasonForError(tracker.err)
+	}
+	return results, trace, semanticRetrievalIdentity(options.Mode, options.Semantic, fallback), nil
 }
 
 func workerMemoryScopeAllows(request, item contextstore.Scope) bool {
