@@ -134,6 +134,85 @@ profiles:
 	}
 }
 
+func TestDecisionConfigMarshalYAMLPreservesAuthoringProvenance(t *testing.T) {
+	cfg := DecisionConfig{
+		DefaultProfile: "preset",
+		Profiles: map[string]DecisionPolicy{
+			"legacy": {IndependentJudgments: 2},
+		},
+		ProfileSpecs: map[string]DecisionProfileSpec{
+			"preset": {Preset: &DecisionProfileRef{Name: DecisionProfileBuiltinStandardV1}},
+		},
+	}
+
+	wire, err := cfg.MarshalYAML()
+	if err != nil {
+		t.Fatalf("MarshalYAML: %v", err)
+	}
+	encoded, err := yaml.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire value: %v", err)
+	}
+
+	var document yaml.Node
+	if err := yaml.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("parse serialized wire value: %v", err)
+	}
+	if len(document.Content) != 1 {
+		t.Fatalf("serialized YAML document nodes = %d, want 1", len(document.Content))
+	}
+	root := document.Content[0]
+	profiles := mappingValue(t, root, "profiles")
+	preset := mappingValue(t, profiles, "preset")
+	if got := scalarMappingValue(t, preset, "preset"); got != DecisionProfileBuiltinStandardV1 {
+		t.Fatalf("preset wire value = %q, want %q", got, DecisionProfileBuiltinStandardV1)
+	}
+	if hasMappingKey(preset, "policy") {
+		t.Fatal("preset provenance was replaced by materialized policy")
+	}
+
+	legacy := mappingValue(t, profiles, "legacy")
+	legacyPolicy := mappingValue(t, legacy, "policy")
+	if got := scalarMappingValue(t, legacyPolicy, "independent-judgments"); got != "2" {
+		t.Fatalf("legacy inline policy wire value = %q, want 2", got)
+	}
+}
+
+func mappingValue(t *testing.T, mapping *yaml.Node, key string) *yaml.Node {
+	t.Helper()
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		t.Fatalf("YAML node for %q is not a mapping: %#v", key, mapping)
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	t.Fatalf("YAML mapping is missing key %q", key)
+	return nil
+}
+
+func scalarMappingValue(t *testing.T, mapping *yaml.Node, key string) string {
+	t.Helper()
+	node := mappingValue(t, mapping, key)
+	if node.Kind != yaml.ScalarNode {
+		t.Fatalf("YAML value for %q is not scalar: %#v", key, node)
+	}
+	return node.Value
+}
+
+func hasMappingKey(mapping *yaml.Node, key string) bool {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMaterializeDecisionConfigAdaptsCompatibilityMapsAndRejectsConflicts(t *testing.T) {
 	legacy := DecisionPolicy{IndependentJudgments: 2}
 	materialized, err := MaterializeDecisionConfig(DecisionConfig{
