@@ -3339,23 +3339,29 @@ func submitResultFailureFingerprint(toolName, result string) (string, bool) {
 	if toolName != submitResultToolName {
 		return "", false
 	}
-	normalized := NormalizeFailureError(result)
-	deterministicPrefixes := []string{
-		"invalid submit_result arguments:",
-		"summary is required",
-		"status must be success",
-		"submit_result contract violation:",
-		"invalid invariant assessment:",
-		"ordinary task must omit invariant_assessments",
-		"protocol repair cannot add artifact evidence",
-		"outputs are runtime-owned",
-		"raw_output_ref is runtime-owned",
-		"artifacts are forbidden by this task's execution contract",
-		"Tool argument schema violation:",
+	normalized := strings.ToLower(strings.TrimSpace(NormalizeFailureError(result)))
+	deterministicPrefixes := []struct {
+		prefix   string
+		category string
+	}{
+		{prefix: "invalid submit_result arguments:", category: "invalid_arguments"},
+		{prefix: "summary is required", category: "summary_required"},
+		{prefix: "status must be success", category: "status_must_be_success"},
+		{prefix: "submit_result contract violation:", category: "contract_violation"},
+		{prefix: "invalid invariant assessment:", category: "invalid_invariant_assessment"},
+		{prefix: "ordinary task must omit invariant_assessments", category: "ordinary_task_invariant_assessments"},
+		{prefix: "protocol repair cannot add artifact evidence", category: "repair_artifact_evidence"},
+		{prefix: "outputs are runtime-owned", category: "runtime_owned_outputs"},
+		{prefix: "raw_output_ref is runtime-owned", category: "runtime_owned_raw_output_ref"},
+		{prefix: "artifacts are forbidden by this task's execution contract", category: "forbidden_artifacts"},
+		{prefix: "tool argument schema violation:", category: "tool_argument_schema_violation"},
 	}
-	for _, prefix := range deterministicPrefixes {
-		if strings.HasPrefix(normalized, prefix) {
-			fingerprint := NewFailureFingerprint("", "worker", submitResultToolName, FailureProtocol, normalized)
+	for _, entry := range deterministicPrefixes {
+		if strings.HasPrefix(normalized, entry.prefix) {
+			// Only the stable rejection category belongs in the loop identity.
+			// Variable invariant IDs, JSON paths, and schema details must not let
+			// a model evade the bounded circuit breaker by changing its payload.
+			fingerprint := NewFailureFingerprint("", "worker", submitResultToolName, FailureProtocol, entry.category)
 			return fingerprint.Digest, true
 		}
 	}

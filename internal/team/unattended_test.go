@@ -408,13 +408,14 @@ func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
 	ag := &mockAgent{streamFunc: func(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 		for attempt := range maxRepeatedSubmitResultFailures {
 			callID := fmt.Sprintf("submit-%d", attempt)
+			invariantID := fmt.Sprintf("unexpected-%d", attempt)
 			if err := call.OnToolCall(fantasy.ToolCallContent{
 				ToolCallID: callID, ToolName: submitResultToolName,
-				Input: fmt.Sprintf(`{"status":"success","summary":"attempt %d","invariant_assessments":[{"invariant_id":"unexpected"}]}`, attempt),
+				Input: fmt.Sprintf(`{"status":"success","summary":"attempt %d","invariant_assessments":[{"invariant_id":"%s"}]}`, attempt, invariantID),
 			}); err != nil {
 				return nil, err
 			}
-			toolErr := fantasy.ToolResultOutputContentError{Error: errors.New(`invalid invariant assessment: invariant_assessments[0] names invariant "unexpected" that was not included in this model context`)}
+			toolErr := fantasy.ToolResultOutputContentError{Error: fmt.Errorf("invalid invariant assessment: invariant_assessments[0] names invariant %q that was not included in this model context", invariantID)}
 			if err := call.OnToolResult(fantasy.ToolResultContent{ToolCallID: callID, ToolName: submitResultToolName, Result: toolErr}); err != nil {
 				return nil, err
 			}
