@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type terminalLifecycleState uint8
@@ -595,6 +597,13 @@ func (c *Coordinator) EmergencyFinalizeRun(ctx context.Context) error {
 		result = c.LastRunResult()
 	}
 	if result == nil {
+		if err := c.terminalizeEmergencyInterruptedTasks(); err != nil {
+			c.markTerminalRecoveryState("emergency task cancellation persistence failed: " + utils.RedactSecrets(err.Error()))
+			if persistErr := c.persistSession("persist emergency task cancellation recovery"); persistErr != nil {
+				return errors.Join(err, persistErr)
+			}
+			return err
+		}
 		items := []*TodoItem(nil)
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			items = c.taskTracker.TodoList().Items()
@@ -645,6 +654,33 @@ func (c *Coordinator) EmergencyFinalizeRun(ctx context.Context) error {
 		return nil
 	}
 	return errTerminalPersistenceUnconfirmed
+}
+
+func (c *Coordinator) terminalizeEmergencyInterruptedTasks() error {
+	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	detail := c.FailureDetail(context.Canceled, FailureSourceContextCanceled)
+	var transitionErr error
+	changed := false
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item == nil {
+			continue
+		}
+		switch item.Status {
+		case TaskInProgress, TaskPaused, TaskVerifying, TaskProtocolIncomplete:
+			if err := c.PersistFailureWithClassAndStatusError(item.Agent, item.Desc, item.ID, detail, RetryNone, FailureCancelled, TaskError); err != nil {
+				transitionErr = errors.Join(transitionErr, err)
+				continue
+			}
+			changed = true
+		}
+	}
+	if changed {
+		c.reconcileTaskStatusProjection()
+		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
+	}
+	return transitionErr
 }
 
 func (c *Coordinator) runFinalizationInput(result *RunResult, acceptance *AcceptanceResult) RunFinalizationInput {

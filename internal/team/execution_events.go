@@ -369,9 +369,12 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	if c.session != nil {
 		teamName = c.session.Config.Name
 	}
-	c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
+	runStartedDurable := c.eventStore != nil
+	if err := c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
 		Team: teamName,
-	})
+	}); err == nil && runStartedDurable {
+		c.clearSupersededPendingWrapUp(runID)
+	}
 	if logger != nil {
 		_ = logger.append(ExecutionEvent{
 			Version:      executionEventSchemaVersion,
@@ -481,6 +484,23 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 			c.terminalLifecycleWaitTimedOut = false
 		}
 		c.terminalLifecycleMu.Unlock()
+	}
+}
+
+func (c *Coordinator) clearSupersededPendingWrapUp(runID string) {
+	if c == nil || strings.TrimSpace(runID) == "" {
+		return
+	}
+	changed := false
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		if sd.PendingWrapUp != nil && sd.PendingWrapUp.RunID != "" && sd.PendingWrapUp.RunID != runID {
+			sd.PendingWrapUp = nil
+			changed = true
+		}
+		return nil
+	})
+	if changed {
+		_ = c.persistSession("persist superseded pending wrap-up")
 	}
 }
 

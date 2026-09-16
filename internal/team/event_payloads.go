@@ -69,6 +69,14 @@ func ValidateEventPayload(event RunEvent) error {
 	}
 
 	switch EventType(event.Type) {
+	case EventWrapUpPhase:
+		var payload PendingWrapUp
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("decode wrap_up_phase payload: %w", err)
+		}
+		if strings.TrimSpace(payload.RunID) == "" || payload.RunID != event.RunID || strings.TrimSpace(payload.BranchID) == "" || strings.TrimSpace(payload.RequestedAt) == "" {
+			return fmt.Errorf("wrap_up_phase payload has invalid run binding")
+		}
 	case EventUserMessageAdded, EventAssistantMessageAdded:
 		var payload SessionMessageEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {

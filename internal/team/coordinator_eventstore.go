@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -268,6 +269,11 @@ func (c *Coordinator) clearTerminalRecoveryAfterCommit(result *RunResult, commit
 		c.sessionData.RecoveryRequired = false
 		c.sessionData.RecoveryReason = ""
 	}
+	if pending := c.sessionData.PendingWrapUp; pending != nil &&
+		pending.RunID == committed.RunID &&
+		pending.BranchID == committed.BranchID {
+		c.sessionData.PendingWrapUp = nil
+	}
 	// The event is now canonical, so publishing this detached snapshot into the
 	// session projection is event-first and safe even when no recovery marker
 	// was present.
@@ -410,6 +416,11 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 		sd.WorksetStates = append([]WorksetGroupState(nil), replayedSD.WorksetStates...)
 		sd.RecoveryRequired = replayedSD.RecoveryRequired
 		sd.RecoveryReason = replayedSD.RecoveryReason
+		if replayedSD.PendingWrapUp == nil {
+			sd.PendingWrapUp = nil
+		} else {
+			sd.PendingWrapUp = new(*replayedSD.PendingWrapUp)
+		}
 		sd.CriterionResults = replayedSD.CriterionResults
 		sd.CriterionCheckpoints = replayedSD.CriterionCheckpoints
 		sd.LastCriterionProgressAt = replayedSD.LastCriterionProgressAt
@@ -453,6 +464,13 @@ func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTask
 		if err := compareSingleTaskProjection(live.Tasks[i], replayedTasks[i]); err != nil {
 			return false
 		}
+	}
+	// A checkpoint that claims a wrap-up event which is absent or different in
+	// the canonical lineage cannot be repaired by deleting the checkpoint. In
+	// contrast, a missing checkpoint may safely be advanced from a durable
+	// wrap_up_phase event.
+	if live.PendingWrapUp != nil && !reflect.DeepEqual(live.PendingWrapUp, replayedSD.PendingWrapUp) {
+		return false
 	}
 	return true
 }

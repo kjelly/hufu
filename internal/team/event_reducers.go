@@ -74,6 +74,15 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp
 			}
+			if pending := session.PendingWrapUp; pending != nil && pending.RunID != "" && pending.RunID != e.RunID {
+				session.PendingWrapUp = nil
+			}
+		case string(EventWrapUpPhase):
+			var payload PendingWrapUp
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.RunID == e.RunID && payload.BranchID != "" {
+				payload.EventDurable = true
+				session.PendingWrapUp = &payload
+			}
 		case string(EventExecutionPolicySnapshot):
 			// Execution-policy snapshots were introduced with the current
 			// event-store schema. Older envelopes cannot establish the
@@ -221,6 +230,9 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				runID := payload.RunID
 				if runID == "" {
 					runID = e.RunID
+				}
+				if pending := session.PendingWrapUp; pending != nil && pending.RunID == runID && (e.BranchID == "" || pending.BranchID == e.BranchID) {
+					session.PendingWrapUp = nil
 				}
 				session.RunResult = &RunResult{
 					RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,

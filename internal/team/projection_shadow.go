@@ -34,6 +34,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if err := compareTaskProjection(live.Tasks, replayed.Tasks); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(live.PendingWrapUp, replayed.PendingWrapUp) {
+		return fmt.Errorf("pending wrap-up projection differs")
+	}
 	if !reflect.DeepEqual(live.CriterionResults, replayed.CriterionResults) || !reflect.DeepEqual(live.CriterionCheckpoints, replayed.CriterionCheckpoints) || live.LastCriterionProgressAt != replayed.LastCriterionProgressAt {
 		return fmt.Errorf("criterion projection differs")
 	}

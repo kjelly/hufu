@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -662,6 +663,7 @@ type Coordinator struct {
 	executionEvents       *executionEventLogger
 	executionRunID        string
 	executionTeamRevision string
+	wrapUpMu              sync.Mutex
 	runInputAssignments   []RunInputAssignment
 	// executionCompatibilityObserver contains only a read-only, content-free
 	// preflight summary. It is flushed after a public invocation has allocated
@@ -1673,12 +1675,20 @@ func (c *Coordinator) totalRounds() int {
 }
 
 func (c *Coordinator) resetRoundState() {
+	c.wrapUpMu.Lock()
+	defer c.wrapUpMu.Unlock()
+	c.resetRoundStateLocked(true)
+}
+
+func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
 	// Rounds already run must survive the reset: session.json's round count and
 	// stm snapshots previously restarted at 0 on every continue, overwriting
 	// history from earlier segments of the same session.
 	c.baseRounds += c.round
 	c.round = 0
-	c.wrapUp.Store(0)
+	if clearWrapUp {
+		c.wrapUp.Store(0)
+	}
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
 	c.continuationInterrupted.Store(false)
@@ -1686,6 +1696,23 @@ func (c *Coordinator) resetRoundState() {
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)
 	c.delegatedTasksMu.Unlock()
+}
+
+// resetRoundStatePreservingWrapUp resets per-invocation counters without
+// erasing a Ctrl+C that arrived after the CLI published the active coordinator
+// but before Run reached this boundary.
+func (c *Coordinator) resetRoundStatePreservingWrapUp() {
+	c.wrapUpMu.Lock()
+	defer c.wrapUpMu.Unlock()
+	c.resetRoundStateLocked(false)
+}
+
+func (c *Coordinator) resetRoundStateConsumingWrapUp() bool {
+	c.wrapUpMu.Lock()
+	defer c.wrapUpMu.Unlock()
+	wasWrapUp := c.wrapUp.Load() == 1
+	c.resetRoundStateLocked(true)
+	return wasWrapUp
 }
 
 // SetStatusReporter wraps fn so every delivered StatusEvent also feeds the
@@ -1759,9 +1786,66 @@ func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.D
 }
 
 func (c *Coordinator) SetWrapUp() {
+	c.wrapUpMu.Lock()
+	defer c.wrapUpMu.Unlock()
 	c.wrapUp.Store(1)
 	c.SetCurrentStage("wrapping_up")
+	c.persistPendingWrapUp("graceful wrap-up requested")
 	c.report(c.newEvent("wrap_up_phase").withMessage("finishing active tasks"))
+}
+
+func (c *Coordinator) persistPendingWrapUp(reason string) {
+	if c == nil || !c.hasDurableEventJournal() {
+		return
+	}
+	c.executionEventsMu.RLock()
+	runID := strings.TrimSpace(c.executionRunID)
+	c.executionEventsMu.RUnlock()
+	if runID == "" {
+		return
+	}
+	c.terminalLifecycleMu.Lock()
+	active := c.terminalLifecycleRunID == runID && c.terminalLifecycleState != terminalLifecycleCommitted
+	c.terminalLifecycleMu.Unlock()
+	if !active {
+		return
+	}
+	checkpoint := PendingWrapUp{
+		RunID: runID, BranchID: c.activeBranchID(), RequestedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Reason: utils.RedactSecrets(reason),
+	}
+	payload, err := json.Marshal(checkpoint)
+	var durable RunEvent
+	if err == nil {
+		durable, err = c.EventJournal().Append(context.Background(), RunEvent{
+			Type: string(EventWrapUpPhase), Actor: "operator", RunID: runID, BranchID: checkpoint.BranchID,
+			IdempotencyKey: "wrap_up_phase:" + runID, Payload: payload,
+		})
+	}
+	checkpoint.EventDurable = err == nil
+	if err == nil {
+		// An idempotent retry returns the original durable event. Reuse its
+		// payload so session.json remains an exact projection instead of gaining
+		// a later RequestedAt value that never existed in the event stream.
+		if decodeErr := json.Unmarshal(durable.Payload, &checkpoint); decodeErr != nil {
+			err = fmt.Errorf("decode durable wrap-up event: %w", decodeErr)
+		} else {
+			checkpoint.EventDurable = true
+		}
+	}
+	if err != nil {
+		checkpoint.Reason = utils.RedactSecrets("wrap-up event persistence failed: " + err.Error())
+		c.dualWriteFailures.Add(1)
+	}
+	if mutateErr := c.mutateSessionData(func(sd *SessionData) error {
+		sd.PendingWrapUp = &checkpoint
+		return nil
+	}); mutateErr != nil {
+		return
+	}
+	if persistErr := c.persistSession("persist pending wrap-up checkpoint"); persistErr != nil {
+		log.Printf("warning: persist pending wrap-up checkpoint failed: %v", persistErr)
+	}
 }
 
 func (c *Coordinator) IsWrapUp() bool {

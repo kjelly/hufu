@@ -93,6 +93,173 @@ func TestTerminalLifecycleNormalEmergencyRacePublishesOneCanonicalEvent(t *testi
 	}
 }
 
+func TestSetWrapUpPersistsOneRunBoundCheckpointAndEvent(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-wrap", "session-wrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	c := &Coordinator{
+		eventStore: store, executionRunID: "run-wrap", terminalLifecycleRunID: "run-wrap",
+		session: &TeamSession{Workspace: workspace}, sessionData: NewSession(), taskTracker: NewTaskTracker(),
+	}
+	c.SetWrapUp()
+	c.SetWrapUp()
+
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapEvents := 0
+	for _, event := range events {
+		if event.Type == string(EventWrapUpPhase) {
+			wrapEvents++
+			if event.RunID != "run-wrap" || event.BranchID != "main" {
+				t.Fatalf("wrap-up event binding = run:%q branch:%q", event.RunID, event.BranchID)
+			}
+		}
+	}
+	if wrapEvents != 1 {
+		t.Fatalf("wrap_up_phase event count = %d, want 1", wrapEvents)
+	}
+	saved := LoadSession(workspace)
+	if saved == nil || saved.PendingWrapUp == nil {
+		t.Fatalf("pending wrap-up checkpoint = %#v", saved)
+	}
+	if pending := saved.PendingWrapUp; pending.RunID != "run-wrap" || pending.BranchID != "main" || !pending.EventDurable || pending.RequestedAt == "" {
+		t.Fatalf("pending wrap-up binding = %#v", pending)
+	}
+
+	projected := ReduceToSessionData(events)
+	if projected.PendingWrapUp == nil || !projected.PendingWrapUp.EventDurable {
+		t.Fatalf("replayed wrap-up checkpoint = %#v", projected.PendingWrapUp)
+	}
+	if err := CompareCanonicalProjection(c.sessionData, events); err != nil {
+		t.Fatalf("live wrap-up checkpoint differs from canonical event: %v", err)
+	}
+	projected = ReduceToSessionData(append(events, RunEvent{Type: string(EventRunStarted), RunID: "run-resume", BranchID: "main"}))
+	if projected.PendingWrapUp != nil {
+		t.Fatalf("new run did not supersede prior wrap-up checkpoint: %#v", projected.PendingWrapUp)
+	}
+}
+
+func TestRunRoundResetPreservesEarlyWrapUpRequest(t *testing.T) {
+	c := &Coordinator{session: &TeamSession{}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
+	c.SetWrapUp()
+	c.resetRoundStatePreservingWrapUp()
+	if !c.IsWrapUp() {
+		t.Fatal("round reset erased wrap-up requested before Run startup")
+	}
+}
+
+func TestWrapUpEmergencyFinalizationCommitsCanonicalTerminalOutcome(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-wrap-terminal", "session-wrap-terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	c := &Coordinator{
+		eventStore: store, executionRunID: "run-wrap-terminal", terminalLifecycleRunID: "run-wrap-terminal",
+		session: &TeamSession{Workspace: workspace}, sessionData: NewSession(), taskTracker: NewTaskTracker(),
+	}
+	c.SetWrapUp()
+	if err := c.EmergencyFinalizeRun(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapEvents, finishedEvents := 0, 0
+	for _, event := range events {
+		switch event.Type {
+		case string(EventWrapUpPhase):
+			wrapEvents++
+		case string(EventRunFinished):
+			finishedEvents++
+		}
+	}
+	if wrapEvents != 1 || finishedEvents != 1 {
+		t.Fatalf("terminal event counts = wrap:%d finished:%d", wrapEvents, finishedEvents)
+	}
+	if c.sessionData.PendingWrapUp != nil || c.sessionData.RunResult == nil || c.sessionData.RunResult.RunID != "run-wrap-terminal" {
+		t.Fatalf("terminal session projection = %#v", c.sessionData)
+	}
+}
+
+func TestTerminalCommitClearsOnlyMatchingPendingWrapUp(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		executionRunID: "run-wrap", terminalLifecycleRunID: "run-wrap",
+		session: &TeamSession{Workspace: workspace}, sessionData: NewSession(),
+	}
+	c.sessionData.PendingWrapUp = &PendingWrapUp{RunID: "run-wrap", BranchID: "main", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), EventDurable: true}
+	result := &RunResult{RunID: "run-wrap", Outcome: RunOutcomeCancelled}
+	c.clearTerminalRecoveryAfterCommit(result, &PendingTerminalCommit{
+		RunID: "run-wrap", BranchID: "main", IdempotencyKey: terminalFinishedIdempotencyKey("run-wrap"),
+	})
+	if c.sessionData.PendingWrapUp != nil {
+		t.Fatalf("matching pending wrap-up was not cleared: %#v", c.sessionData.PendingWrapUp)
+	}
+
+	c.sessionData.PendingWrapUp = &PendingWrapUp{RunID: "older-run", BranchID: "main", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), EventDurable: true}
+	c.clearTerminalRecoveryAfterCommit(result, &PendingTerminalCommit{
+		RunID: "run-wrap", BranchID: "main", IdempotencyKey: terminalFinishedIdempotencyKey("run-wrap"),
+	})
+	if c.sessionData.PendingWrapUp == nil || c.sessionData.PendingWrapUp.RunID != "older-run" {
+		t.Fatalf("unrelated pending wrap-up was cleared: %#v", c.sessionData.PendingWrapUp)
+	}
+}
+
+func TestPendingWrapUpProjectionRecoveryIsEventFirst(t *testing.T) {
+	pending := &PendingWrapUp{RunID: "run-wrap", BranchID: "main", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), EventDurable: true}
+	if isProjectionPrefixOrRecoverable(&SessionData{PendingWrapUp: pending}, &SessionData{}, nil) {
+		t.Fatal("checkpoint-only wrap-up marker was treated as safely deletable")
+	}
+	if !isProjectionPrefixOrRecoverable(&SessionData{}, &SessionData{PendingWrapUp: pending}, nil) {
+		t.Fatal("durable wrap-up event was not allowed to repair a missing checkpoint")
+	}
+}
+
+func TestEmergencyFinalizationCancelsActiveTaskBeforeTerminalSnapshot(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-emergency", "session-emergency")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	tracker := NewTaskTracker()
+	items := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "active work"}})
+	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskInProgress, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{
+		eventStore: store, executionRunID: "run-emergency", terminalLifecycleRunID: "run-emergency",
+		session: &TeamSession{Workspace: workspace}, sessionData: NewSession(), taskTracker: tracker,
+	}
+	if err := c.terminalizeEmergencyInterruptedTasks(); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.TodoList().Items()[0]; got.Status != TaskError || got.FailureEvent == nil || got.FailureEvent.FailureClass != FailureCancelled {
+		t.Fatalf("emergency task outcome = %#v", got)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundCancelled := false
+	for _, event := range events {
+		if event.Type == string(EventTaskCancelled) && event.TaskID == items[0].ID {
+			foundCancelled = true
+		}
+	}
+	if !foundCancelled {
+		t.Fatalf("task_cancelled event missing: %#v", events)
+	}
+}
+
 func TestActiveSetLastRunResultDoesNotElectOrPersistTerminalState(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{

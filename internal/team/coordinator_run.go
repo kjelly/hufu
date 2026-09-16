@@ -2160,7 +2160,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
-	c.resetRoundState()
+	c.resetRoundStatePreservingWrapUp()
+	if c.IsWrapUp() {
+		// A request received while the CLI was loading the team could not be
+		// journaled until this invocation opened its event store.
+		c.SetWrapUp()
+	}
 	if c.initialPrompt == "" {
 		c.initialPrompt = userPrompt
 	}
@@ -2322,11 +2327,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
-	// Capture before resetRoundState clears the flag, or the wrap-up branch
-	// below can never trigger and wrap-up requests silently degrade into an
-	// ordinary (empty-prompt) continuation turn.
-	wasWrapUp := c.IsWrapUp()
-	c.resetRoundState()
+	// Consume the prior round's request atomically with reset. A new Ctrl+C
+	// arriving after this boundary sets wrapUp for the current round instead of
+	// being erased by the reset.
+	wasWrapUp := c.resetRoundStateConsumingWrapUp()
 	c.advanceRequestContractRevision(additionalPrompt)
 	if err := c.startProviderExecutionBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)

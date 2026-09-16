@@ -70,6 +70,19 @@ type PendingTerminalCommit struct {
 	BranchID       string `json:"branch_id"`
 }
 
+// PendingWrapUp records a run-bound graceful-stop request before the terminal
+// result exists. The canonical wrap_up_phase event is authoritative; this
+// checkpoint makes an abrupt process exit explicit in the mutable session
+// projection so restart and operator views do not mistake it for an ordinary
+// in-progress run.
+type PendingWrapUp struct {
+	RunID        string `json:"run_id"`
+	BranchID     string `json:"branch_id"`
+	RequestedAt  string `json:"requested_at"`
+	Reason       string `json:"reason"`
+	EventDurable bool   `json:"event_durable,omitzero"`
+}
+
 type SessionData struct {
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -121,6 +134,7 @@ type SessionData struct {
 	RecoveryRequired            bool                       `json:"recovery_required,omitempty"`
 	RecoveryReason              string                     `json:"recovery_reason,omitempty"`
 	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
+	PendingWrapUp               *PendingWrapUp             `json:"pending_wrap_up,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
 	// DecisionProjections is a disposable presentation projection rebuilt from
 	// the canonical decision events when needed. It is persisted so a resumed
