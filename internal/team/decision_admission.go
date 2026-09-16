@@ -678,6 +678,9 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 	if !c.decisionConfig().RequestContract.Enabled {
 		return DecisionAdmission{}, fmt.Errorf("decision request contract is required when profile %q is enabled", a.Profile)
 	}
+	if _, err := CompileDecisionExecutionPlan(materialized.Policy); err != nil {
+		return DecisionAdmission{}, fmt.Errorf("decision profile %q execution plan: %w", a.Profile, err)
+	}
 	if err := ValidateTaskDecisionEvidence(task); err != nil {
 		return DecisionAdmission{}, fmt.Errorf("decision task evidence: %w", err)
 	}
