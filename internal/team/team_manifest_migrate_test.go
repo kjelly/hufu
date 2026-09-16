@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 const migrateFixtureTeamYAML = `name: migrate-fixture
@@ -149,6 +151,34 @@ func TestTeamMigrateDryRunRoundTrips(t *testing.T) {
 	}
 	if string(migrated) != string(migratedAgain) {
 		t.Errorf("re-migrating an already-v1alpha1 manifest is not stable:\n--- first ---\n%s\n--- second ---\n%s", migrated, migratedAgain)
+	}
+}
+
+func TestTeamMigratePreservesDecisionPresetIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `name: preset-team
+decision:
+  default-profile: standard
+  profiles:
+    standard:
+      preset: builtin/standard@v1
+`)
+	migrated, _, err := MigrateTeamManifestToV1Alpha1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(migrated), "preset: builtin/standard@v1") {
+		t.Fatalf("migration expanded preset identity:\n%s", migrated)
+	}
+	roundTrip := t.TempDir()
+	writeTeamManifest(t, roundTrip, string(migrated))
+	cfg, err := parseTeamYML(roundTrip, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := cfg.Decision.ProfileSpecs["standard"]
+	if spec.Preset == nil || spec.Preset.Name != agent.DecisionProfileBuiltinStandardV1 {
+		t.Fatalf("round-trip preset = %#v", spec.Preset)
 	}
 }
 

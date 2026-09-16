@@ -90,9 +90,10 @@ const maxDecisionRounds = 2
 
 // DecisionConfig is the team-level decision configuration (spec §10).
 type DecisionConfig struct {
-	DefaultProfile  string                    `yaml:"default-profile,omitempty"`
-	Profiles        map[string]DecisionPolicy `yaml:"profiles,omitempty"`
-	RequestContract RequestContractConfig     `yaml:"request-contract,omitempty"`
+	DefaultProfile  string                         `yaml:"default-profile,omitempty"`
+	Profiles        map[string]DecisionPolicy      `yaml:"profiles,omitempty"`
+	ProfileSpecs    map[string]DecisionProfileSpec `yaml:"-" json:"-"`
+	RequestContract RequestContractConfig          `yaml:"request-contract,omitempty"`
 	// RoutingHints widen a role's preferred-capability list for a specific
 	// decision, based on the task's own question text (spec.md v2 §16,
 	// §30-31). Team-wide, not per-profile: every profile that opts a role
@@ -659,33 +660,8 @@ var knownKillKinds = map[string]bool{
 // Validate checks the whole decision configuration. Every rule here is a config
 // load-time failure, never a silent default (spec §12).
 func (c DecisionConfig) Validate() error {
-	if err := c.RequestContract.Validate(); err != nil {
-		return fmt.Errorf("decision.request-contract: %w", err)
-	}
-	for i, hint := range c.RoutingHints {
-		if err := hint.Validate(); err != nil {
-			return fmt.Errorf("decision.routing-hints[%d]: %w", i, err)
-		}
-	}
-	if c.DefaultProfile != "" && c.DefaultProfile != DecisionProfileOff {
-		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
-			return fmt.Errorf("%s: decision.default-profile %q is not defined", ReasonDecisionProfileUnknown, c.DefaultProfile)
-		}
-	}
-	names := make([]string, 0, len(c.Profiles))
-	for name := range c.Profiles {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if name == DecisionProfileOff {
-			return fmt.Errorf("decision.profiles: %q is a reserved profile name and must not be declared", DecisionProfileOff)
-		}
-		if err := c.Profiles[name].Validate(); err != nil {
-			return fmt.Errorf("decision.profiles.%s: %w", name, err)
-		}
-	}
-	return nil
+	_, err := MaterializeDecisionConfig(c, BuiltInDecisionProfileCatalog())
+	return err
 }
 
 func (c RequestContractConfig) Validate() error {
@@ -734,11 +710,12 @@ func (c RequestContractConfig) Validate() error {
 // HasProfile reports whether name resolves to a usable profile. The reserved
 // "off" name always resolves.
 func (c DecisionConfig) HasProfile(name string) bool {
+	name = strings.TrimSpace(name)
 	if name == "" || name == DecisionProfileOff {
 		return true
 	}
-	_, ok := c.Profiles[name]
-	return ok
+	_, _, ok, err := ResolveDecisionProfileSpec(c, name, BuiltInDecisionProfileCatalog())
+	return err == nil && ok
 }
 
 // Validate enforces the per-profile rules from spec §12.

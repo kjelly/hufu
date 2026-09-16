@@ -151,3 +151,48 @@ func TestValidateTaskDecisionProfiles(t *testing.T) {
 		t.Fatalf("error = %v, want the task index for an unnamed task", err)
 	}
 }
+
+func TestResolveMaterializedDecisionProfileAcceptsBuiltInsAtEveryLayer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     DecisionConfig
+		request string
+		task    TaskDef
+		source  string
+	}{
+		{name: "request", request: agent.DecisionProfileBuiltinLightV1, source: DecisionProfileSourceRequest},
+		{name: "task", task: TaskDef{DecisionProfile: agent.DecisionProfileBuiltinLightV1}, source: DecisionProfileSourceTask},
+		{name: "default", cfg: DecisionConfig{DefaultProfile: agent.DecisionProfileBuiltinLightV1}, source: DecisionProfileSourceTeam},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile, resolution, err := ResolveMaterializedDecisionProfile(tc.cfg, tc.request, tc.task, agent.BuiltInDecisionProfileCatalog())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolution.Profile != agent.DecisionProfileBuiltinLightV1 || resolution.Source != tc.source {
+				t.Fatalf("resolution = %#v", resolution)
+			}
+			if profile.Ref != agent.DecisionProfileBuiltinLightV1 || profile.Origin != agent.DecisionProfileOriginBuiltin || profile.Version != "v1" || profile.PolicyDigest == "" {
+				t.Fatalf("materialized profile = %#v", profile)
+			}
+			if profile.Policy.MinIndependentJudgments != 2 || profile.Policy.MaxRounds != 1 {
+				t.Fatalf("policy defaults were not normalized: %#v", profile.Policy)
+			}
+		})
+	}
+}
+
+func TestResolveMaterializedDecisionProfileRejectsMalformedBuiltinWithoutFallback(t *testing.T) {
+	cfg := decisionConfigFixture()
+	for _, name := range []string{"builtin/standard", "builtin/standard@v2", "builtin/missing@v1"} {
+		if _, _, err := ResolveMaterializedDecisionProfile(cfg, name, TaskDef{}, agent.BuiltInDecisionProfileCatalog()); err == nil || !strings.Contains(err.Error(), ReasonDecisionProfileUnknown) {
+			t.Fatalf("profile %q error = %v", name, err)
+		}
+	}
+}
+
+func TestValidateTaskDecisionProfilesAcceptsExactBuiltin(t *testing.T) {
+	if err := ValidateTaskDecisionProfiles(DecisionConfig{}, []TaskDef{{ID: "builtin", DecisionProfile: agent.DecisionProfileBuiltinStandardV1}}); err != nil {
+		t.Fatal(err)
+	}
+}

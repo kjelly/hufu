@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -61,6 +63,151 @@ type builtInDecisionProfile struct {
 // BuiltInDecisionProfileCatalog returns the immutable catalog shipped with Hufu.
 func BuiltInDecisionProfileCatalog() DecisionProfileCatalog {
 	return builtInDecisionProfileCatalog{}
+}
+
+// ResolveDecisionProfileSpec resolves one exact built-in or team-local entry.
+// The returned policy is always a deep copy. found is false only for a local
+// name absent from both compatibility maps.
+func ResolveDecisionProfileSpec(cfg DecisionConfig, name string, catalog DecisionProfileCatalog) (DecisionPolicy, DecisionProfileMetadata, bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || name == DecisionProfileOff {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, false, nil
+	}
+	if catalog == nil {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, false, fmt.Errorf("decision profile catalog is unavailable")
+	}
+	if strings.HasPrefix(name, "builtin/") {
+		policy, metadata, err := catalog.Resolve(DecisionProfileRef{Name: name})
+		if err == nil {
+			err = policy.Validate()
+		}
+		return policy, metadata, err == nil, err
+	}
+
+	spec, hasSpec := cfg.ProfileSpecs[name]
+	legacy, hasLegacy := cfg.Profiles[name]
+	if !hasSpec && !hasLegacy {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, false, nil
+	}
+	if !hasSpec {
+		policy, err := CloneDecisionPolicy(legacy)
+		if err == nil {
+			err = policy.Validate()
+		}
+		return policy, DecisionProfileMetadata{Origin: DecisionProfileOriginTeamInline}, true, err
+	}
+
+	policy, metadata, err := resolveDeclaredDecisionProfileSpec(spec, catalog)
+	if err != nil {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, false, err
+	}
+	if hasLegacy {
+		left, leftErr := CanonicalDecisionPolicy(policy)
+		right, rightErr := CanonicalDecisionPolicy(legacy)
+		if leftErr != nil {
+			return DecisionPolicy{}, DecisionProfileMetadata{}, false, leftErr
+		}
+		if rightErr != nil {
+			return DecisionPolicy{}, DecisionProfileMetadata{}, false, rightErr
+		}
+		if !bytes.Equal(left, right) {
+			return DecisionPolicy{}, DecisionProfileMetadata{}, false, fmt.Errorf("profile spec conflicts with compatibility policy projection")
+		}
+	}
+	return policy, metadata, true, nil
+}
+
+func resolveDeclaredDecisionProfileSpec(spec DecisionProfileSpec, catalog DecisionProfileCatalog) (DecisionPolicy, DecisionProfileMetadata, error) {
+	if (spec.Preset == nil) == (spec.Policy == nil) {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, fmt.Errorf("profile spec requires exactly one of preset or policy")
+	}
+	if spec.Preset != nil {
+		return catalog.Resolve(*spec.Preset)
+	}
+	policy, err := CloneDecisionPolicy(*spec.Policy)
+	if err != nil {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, err
+	}
+	if err := policy.Validate(); err != nil {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, err
+	}
+	return policy, DecisionProfileMetadata{Origin: DecisionProfileOriginTeamInline}, nil
+}
+
+// MaterializeDecisionConfig returns a validated deep copy whose compatibility
+// map is rebuilt from the authoritative profile specs.
+func MaterializeDecisionConfig(cfg DecisionConfig, catalog DecisionProfileCatalog) (DecisionConfig, error) {
+	if catalog == nil {
+		return DecisionConfig{}, fmt.Errorf("decision profile catalog is unavailable")
+	}
+	if err := cfg.RequestContract.Validate(); err != nil {
+		return DecisionConfig{}, fmt.Errorf("decision.request-contract: %w", err)
+	}
+	for i, hint := range cfg.RoutingHints {
+		if err := hint.Validate(); err != nil {
+			return DecisionConfig{}, fmt.Errorf("decision.routing-hints[%d]: %w", i, err)
+		}
+	}
+
+	result := cfg
+	result.Profiles = make(map[string]DecisionPolicy, len(cfg.Profiles)+len(cfg.ProfileSpecs))
+	result.ProfileSpecs = make(map[string]DecisionProfileSpec, len(cfg.Profiles)+len(cfg.ProfileSpecs))
+	names := make(map[string]struct{}, len(cfg.Profiles)+len(cfg.ProfileSpecs))
+	for name := range cfg.Profiles {
+		names[name] = struct{}{}
+	}
+	for name := range cfg.ProfileSpecs {
+		names[name] = struct{}{}
+	}
+	for name := range names {
+		if name == DecisionProfileOff || strings.HasPrefix(name, "builtin/") || strings.TrimSpace(name) == "" {
+			return DecisionConfig{}, fmt.Errorf("decision.profiles: invalid reserved profile name %q", name)
+		}
+		policy, _, ok, err := ResolveDecisionProfileSpec(cfg, name, catalog)
+		if err != nil {
+			return DecisionConfig{}, fmt.Errorf("decision.profiles.%s: %w", name, err)
+		}
+		if !ok {
+			return DecisionConfig{}, fmt.Errorf("decision.profiles.%s is not resolvable", name)
+		}
+		result.Profiles[name] = policy
+		if spec, exists := cfg.ProfileSpecs[name]; exists {
+			result.ProfileSpecs[name] = cloneDecisionProfileSpec(spec)
+		} else {
+			inline := policy
+			result.ProfileSpecs[name] = DecisionProfileSpec{Policy: &inline}
+		}
+	}
+	if result.DefaultProfile != "" && result.DefaultProfile != DecisionProfileOff {
+		if _, _, ok, err := ResolveDecisionProfileSpec(result, result.DefaultProfile, catalog); err != nil || !ok {
+			if err != nil {
+				return DecisionConfig{}, fmt.Errorf("%s: decision.default-profile %q: %w", ReasonDecisionProfileUnknown, result.DefaultProfile, err)
+			}
+			return DecisionConfig{}, fmt.Errorf("%s: decision.default-profile %q is not defined", ReasonDecisionProfileUnknown, result.DefaultProfile)
+		}
+	}
+	return result, nil
+}
+
+func cloneDecisionProfileSpec(spec DecisionProfileSpec) DecisionProfileSpec {
+	result := DecisionProfileSpec{}
+	if spec.Preset != nil {
+		result.Preset = &DecisionProfileRef{Name: spec.Preset.Name}
+	}
+	if spec.Policy != nil {
+		policy, err := CloneDecisionPolicy(*spec.Policy)
+		if err == nil {
+			result.Policy = &policy
+		}
+	}
+	return result
+}
+
+// EqualMaterializedDecisionPolicies compares complete policy semantics.
+func EqualMaterializedDecisionPolicies(a, b DecisionPolicy) bool {
+	left, leftErr := NormalizeDecisionPolicy(a)
+	right, rightErr := NormalizeDecisionPolicy(b)
+	return leftErr == nil && rightErr == nil && reflect.DeepEqual(left, right)
 }
 
 func (builtInDecisionProfileCatalog) Resolve(ref DecisionProfileRef) (DecisionPolicy, DecisionProfileMetadata, error) {

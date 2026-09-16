@@ -42,9 +42,21 @@ const (
 // TaskDef.DecisionProfile. An unknown name is an error, never a silent
 // fallback to a weaker profile (spec §8, §9).
 func ResolveDecisionProfile(cfg DecisionConfig, requestOverride string, task any) (DecisionProfileResolution, error) {
+	_, resolution, err := ResolveMaterializedDecisionProfile(cfg, requestOverride, task, agent.BuiltInDecisionProfileCatalog())
+	return resolution, err
+}
+
+// ResolveMaterializedDecisionProfile applies precedence and freezes a complete
+// normalized policy before any decision stage or provider dispatch.
+func ResolveMaterializedDecisionProfile(
+	cfg DecisionConfig,
+	requestOverride string,
+	task any,
+	catalog agent.DecisionProfileCatalog,
+) (agent.MaterializedDecisionProfile, DecisionProfileResolution, error) {
 	taskProfile, err := decisionProfileForInput(task)
 	if err != nil {
-		return DecisionProfileResolution{}, err
+		return agent.MaterializedDecisionProfile{}, DecisionProfileResolution{}, err
 	}
 	candidates := []DecisionProfileResolution{
 		{Profile: strings.TrimSpace(requestOverride), Source: DecisionProfileSourceRequest},
@@ -55,14 +67,36 @@ func ResolveDecisionProfile(cfg DecisionConfig, requestOverride string, task any
 		if candidate.Profile == "" {
 			continue
 		}
-		if !cfg.HasProfile(candidate.Profile) {
-			return DecisionProfileResolution{}, fmt.Errorf(
+		if candidate.Profile == DecisionProfileOff {
+			return agent.MaterializedDecisionProfile{}, candidate, nil
+		}
+		policy, metadata, ok, resolveErr := agent.ResolveDecisionProfileSpec(cfg, candidate.Profile, catalog)
+		if resolveErr != nil || !ok {
+			if resolveErr != nil {
+				return agent.MaterializedDecisionProfile{}, DecisionProfileResolution{}, fmt.Errorf(
+					"%s: decision profile %q requested by %s: %w",
+					ReasonDecisionProfileUnknown, candidate.Profile, candidate.Source, resolveErr)
+			}
+			return agent.MaterializedDecisionProfile{}, DecisionProfileResolution{}, fmt.Errorf(
 				"%s: decision profile %q requested by %s is not defined in this team",
 				ReasonDecisionProfileUnknown, candidate.Profile, candidate.Source)
 		}
-		return candidate, nil
+		normalized, normalizeErr := agent.NormalizeDecisionPolicy(policy)
+		if normalizeErr != nil {
+			return agent.MaterializedDecisionProfile{}, DecisionProfileResolution{}, fmt.Errorf("decision profile %q: %w", candidate.Profile, normalizeErr)
+		}
+		digest, digestErr := agent.DecisionPolicyDigest(normalized)
+		if digestErr != nil {
+			return agent.MaterializedDecisionProfile{}, DecisionProfileResolution{}, fmt.Errorf("decision profile %q digest: %w", candidate.Profile, digestErr)
+		}
+		return agent.MaterializedDecisionProfile{
+			RequestedName: candidate.Profile,
+			Ref:           metadata.Ref, Origin: metadata.Origin, Version: metadata.Version,
+			Policy: normalized, PolicyDigest: digest,
+		}, candidate, nil
 	}
-	return DecisionProfileResolution{Profile: DecisionProfileOff, Source: DecisionProfileSourceDefault}, nil
+	resolution := DecisionProfileResolution{Profile: DecisionProfileOff, Source: DecisionProfileSourceDefault}
+	return agent.MaterializedDecisionProfile{}, resolution, nil
 }
 
 func decisionProfileForInput(input any) (string, error) {
@@ -92,8 +126,8 @@ func DecisionPolicyFor(cfg DecisionConfig, profile string) (DecisionPolicy, bool
 	if profile == "" || profile == DecisionProfileOff {
 		return DecisionPolicy{}, false
 	}
-	policy, ok := cfg.Profiles[profile]
-	return policy, ok
+	policy, _, ok, err := agent.ResolveDecisionProfileSpec(cfg, profile, agent.BuiltInDecisionProfileCatalog())
+	return policy, ok && err == nil
 }
 
 // Enabled reports whether the resolution selects structured decision
