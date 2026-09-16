@@ -14,8 +14,11 @@ import (
 )
 
 var (
-	ErrSemanticSnapshotCorrupt = errors.New("semantic snapshot is corrupt")
-	ErrSemanticIndexStale      = errors.New("semantic index has no active generation for the canonical revision")
+	ErrSemanticSnapshotCorrupt   = errors.New("semantic snapshot is corrupt")
+	ErrSemanticIndexStale        = errors.New("semantic index has no active generation for the canonical revision")
+	ErrSemanticProjectionRefresh = errors.New("semantic projection refresh failed")
+	ErrSemanticInvalidVector     = errors.New("semantic query vector is invalid")
+	ErrSemanticCanonicalRepo     = errors.New("canonical repository failed during semantic retrieval")
 )
 
 type RetrievalCandidateIterator interface {
@@ -118,18 +121,21 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
 	}
 	currentRevision, err := s.repo.Revision(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
 	}
 	if currentRevision != sourceRevision {
 		return nil, ErrSemanticIndexStale
 	}
 	active, err := s.projection.ActiveGeneration(ctx, req.Scope.ProjectID, s.model)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
 	}
 	if active.GenerationID != generationID {
 		return nil, ErrSemanticIndexStale
@@ -168,11 +174,11 @@ func (s *SemanticIndex) ensureSnapshot(ctx context.Context, projectID string) er
 
 		inventory, loadErr := s.inventory.LoadEmbeddingInventory(ctx, projectID)
 		if loadErr != nil {
-			return loadErr
+			return fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, loadErr)
 		}
 		rows, loadErr := s.projection.LoadActiveGeneration(ctx, active.GenerationID)
 		if loadErr != nil {
-			return fmt.Errorf("%w: %v", ErrSemanticSnapshotCorrupt, loadErr)
+			return fmt.Errorf("%w: %w", ErrSemanticSnapshotCorrupt, loadErr)
 		}
 		flat, loadErr := buildFlatVectors(active, inventory, rows)
 		if loadErr != nil {
@@ -199,14 +205,14 @@ func (s *SemanticIndex) ensureSnapshot(ctx context.Context, projectID string) er
 func (s *SemanticIndex) currentProjectionIdentity(ctx context.Context, projectID string) (int64, Generation, error) {
 	revision, err := s.repo.Revision(ctx)
 	if err != nil {
-		return 0, Generation{}, err
+		return 0, Generation{}, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
 	}
 	active, err := s.projection.ActiveGeneration(ctx, projectID, s.model)
 	if err != nil {
 		if errors.Is(err, ErrNoActiveEmbeddingGeneration) {
 			return 0, Generation{}, ErrSemanticIndexStale
 		}
-		return 0, Generation{}, err
+		return 0, Generation{}, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
 	}
 	return revision, active, nil
 }
@@ -247,10 +253,10 @@ func buildFlatVectors(active Generation, inventory EmbeddingInventory, rows []Em
 
 func validateSemanticQueryVector(vector []float32, dimensions int) error {
 	if len(vector) != dimensions {
-		return fmt.Errorf("%w: query dimensions are %d, want %d", ErrSemanticSnapshotCorrupt, len(vector), dimensions)
+		return fmt.Errorf("%w: query dimensions are %d, want %d", ErrSemanticInvalidVector, len(vector), dimensions)
 	}
 	if err := validateNormalizedVector(vector); err != nil {
-		return fmt.Errorf("%w: query vector: %v", ErrSemanticSnapshotCorrupt, err)
+		return fmt.Errorf("%w: query vector: %v", ErrSemanticInvalidVector, err)
 	}
 	return nil
 }
@@ -331,6 +337,12 @@ func (r *SQLiteRepository) IterateRetrievable(ctx context.Context, req SearchReq
 		}
 		return visit(item)
 	})
+}
+
+func (s *SemanticIndex) SemanticTraceIdentity() (embedding.ModelIdentity, string, int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.model, s.generationID, s.sourceRevision
 }
 
 var _ VectorSearcher = (*SemanticIndex)(nil)

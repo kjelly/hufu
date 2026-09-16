@@ -2,9 +2,11 @@ package context
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // QueryParts is the deterministic decomposition used before hybrid retrieval.
@@ -142,6 +144,24 @@ type RetrievalTrace struct {
 // HybridRetrieve applies exact-first selection, reciprocal-rank fusion (k=60),
 // content deduplication (the first MMR pass), and deterministic tie-breakers.
 func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher, req SearchRequest) ([]SearchResult, RetrievalTrace, error) {
+	unavailable := SemanticFallbackReason("")
+	if vector == nil {
+		unavailable = SemanticFallbackProjectionMissing
+	}
+	return HybridRetrieveWithOptions(ctx, repo, req, HybridRetrievalOptions{
+		Vector: vector, Mode: RetrievalActive, UnavailableReason: unavailable,
+	})
+}
+
+func HybridRetrieveWithOptions(
+	ctx context.Context,
+	repo Repository,
+	req SearchRequest,
+	options HybridRetrievalOptions,
+) ([]SearchResult, RetrievalTrace, error) {
+	if err := validateHybridRetrievalOptions(options); err != nil {
+		return nil, RetrievalTrace{}, err
+	}
 	trace := RetrievalTrace{Query: req.Query}
 	parts := DecomposeQuery(req.Query)
 	exactTerms := []string{}
@@ -162,10 +182,36 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 		return nil, trace, err
 	}
 	trace.LexicalResults = filterSearchResults(lexical, req)
-	if vector != nil {
-		vectorResults, vectorErr := vector.SearchVector(ctx, req)
-		if vectorErr == nil {
-			trace.VectorResults = filterSearchResults(vectorResults, req)
+	semanticStarted := time.Now()
+	semanticResults := []SearchResult(nil)
+	semanticCandidateCount := 0
+	fallbackReason := SemanticFallbackNone
+	if options.Mode != RetrievalOff {
+		remainder := strings.TrimSpace(parts.Remainder)
+		switch {
+		case remainder == "":
+			fallbackReason = SemanticFallbackEmptyRemainder
+		case options.Vector == nil:
+			fallbackReason = options.UnavailableReason
+		default:
+			semanticRequest := req
+			semanticRequest.Query = remainder
+			vectorResults, vectorErr := options.Vector.SearchVector(ctx, semanticRequest)
+			if vectorErr != nil {
+				if errors.Is(vectorErr, context.Canceled) || errors.Is(vectorErr, context.DeadlineExceeded) {
+					return nil, trace, vectorErr
+				}
+				if errors.Is(vectorErr, ErrSemanticCanonicalRepo) {
+					return nil, trace, vectorErr
+				}
+				fallbackReason = classifySemanticFallback(vectorErr)
+			} else {
+				semanticCandidateCount = len(vectorResults)
+				semanticResults = filterSearchResults(vectorResults, req)
+				if options.Mode == RetrievalActive {
+					trace.VectorResults = semanticResults
+				}
+			}
 		}
 	}
 	fused := rrf(trace.LexicalResults, trace.VectorResults)
@@ -180,7 +226,55 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 	}
 	trace.Selected = resultIDs(trace.FusedResults)
 	trace.RetrievalInsufficient = len(trace.FusedResults) == 0 || (len(trace.ExactResults) == 0 && !hasRelevantScore(trace.LexicalResults) && !hasRelevantScore(trace.VectorResults))
+	if options.Mode != RetrievalOff && options.TraceSink != nil {
+		semanticTrace, traceErr := buildSemanticRetrievalTrace(
+			options, req, trace, semanticResults, semanticCandidateCount,
+			fallbackReason, time.Since(semanticStarted),
+		)
+		if traceErr != nil {
+			return nil, trace, traceErr
+		}
+		options.TraceSink(semanticTrace)
+	}
 	return trace.FusedResults, trace, nil
+}
+
+func buildSemanticRetrievalTrace(
+	options HybridRetrievalOptions,
+	req SearchRequest,
+	trace RetrievalTrace,
+	semanticResults []SearchResult,
+	semanticCandidateCount int,
+	fallbackReason SemanticFallbackReason,
+	latency time.Duration,
+) (SemanticRetrievalTrace, error) {
+	traceID, err := newSemanticTraceID()
+	if err != nil {
+		return SemanticRetrievalTrace{}, err
+	}
+	result := SemanticRetrievalTrace{
+		TraceID: traceID, QueryHMAC: options.TraceHasher.HashString(req.Query), Mode: options.Mode,
+		IntersectionCount:      semanticIntersectionCount(trace.LexicalResults, semanticResults),
+		SemanticCandidateCount: semanticCandidateCount, LexicalResultCount: len(trace.LexicalResults),
+		SemanticResultCount: len(semanticResults), SelectedResultCount: len(trace.FusedResults),
+		LatencyMillis: latency.Milliseconds(), FallbackReason: fallbackReason,
+	}
+	if identity, ok := options.Vector.(semanticTraceIdentityProvider); ok {
+		model, generationID, sourceRevision := identity.SemanticTraceIdentity()
+		result.ModelID = model.ID
+		result.ModelRevision = model.Revision
+		result.ModelHash = model.ManifestSHA256
+		result.GenerationID = generationID
+		result.SourceRevision = sourceRevision
+	}
+	var truncated bool
+	result.LexicalResultHashes, truncated = hashRankedResultIDs(options.TraceHasher, trace.LexicalResults)
+	result.HashesTruncated = result.HashesTruncated || truncated
+	result.SemanticResultHashes, truncated = hashRankedResultIDs(options.TraceHasher, semanticResults)
+	result.HashesTruncated = result.HashesTruncated || truncated
+	result.SelectedResultHashes, truncated = hashRankedResultIDs(options.TraceHasher, trace.FusedResults)
+	result.HashesTruncated = result.HashesTruncated || truncated
+	return result, nil
 }
 
 func filterSearchResults(results []SearchResult, req SearchRequest) []SearchResult {
