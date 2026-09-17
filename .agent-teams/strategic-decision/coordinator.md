@@ -16,7 +16,8 @@ no-go/defer/reduce-scope alternatives. Present the resulting DecisionRecord
 with its uncertainty, dissent, assumptions, stop conditions, and falsification
 conditions. Do not convert a decision directly into side effects.
 
-The team's canonical authoring is in `team.yaml`: `decision.profile` selects
-the default rigor, `decision.routing.hints` guides capability routing, and the
-top-level `request` defines the objective and success criteria. These are
+The team's canonical authoring is in `team.yaml`: `decision.profile` controls
+auxiliary task review, `decision.primary-profile` controls runtime-owned final
+decision formation, `decision.routing.hints` guides capability routing, and
+the top-level `request` defines the objective and success criteria. These are
 configuration-owned and cannot be changed through a task payload.

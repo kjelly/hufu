@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -209,8 +210,8 @@ func TestCanonicalDecisionFlagMatrix(t *testing.T) {
 		wantProfile   string
 		wantError     string
 	}{
-		{name: "run decision default", commandIntent: "execute", args: []string{"--intent", "decision", "question"}, wantProfile: "builtin/standard@v2"},
-		{name: "decide fixed intent", commandIntent: "decision", args: []string{"question"}, wantProfile: "builtin/standard@v2"},
+		{name: "run decision defers team default", commandIntent: "execute", args: []string{"--intent", "decision", "question"}, wantProfile: ""},
+		{name: "decide defers team default", commandIntent: "decision", args: []string{"question"}, wantProfile: ""},
 		{name: "rigor light", commandIntent: "decision", args: []string{"--rigor", "light", "question"}, wantProfile: "builtin/light@v2"},
 		{name: "rigor high", commandIntent: "decision", args: []string{"--rigor", "high", "question"}, wantProfile: "builtin/high-stakes@v2"},
 		{name: "decide rejects execute", commandIntent: "decision", args: []string{"--intent", "execute", "question"}, wantError: "requires --intent decision"},
@@ -260,5 +261,33 @@ func TestCanonicalDecisionResumeRejectsSemanticChanges(t *testing.T) {
 		if _, err := resolveCanonicalRunOptionsForIntent(command, options, "decision"); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 			t.Fatalf("args %v error = %v", args, err)
 		}
+	}
+}
+
+func TestResolveLoadedPrimaryDecisionProfilePrecedence(t *testing.T) {
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	configured := &teamContext{session: &team.TeamSession{Config: agent.TeamConfig{Decision: agent.DecisionConfig{
+		PrimaryProfile: "team-primary",
+		ProfileSpecs: map[string]agent.DecisionProfileSpec{
+			"team-primary": {Preset: &agent.DecisionProfileRef{Name: agent.DecisionProfileBuiltinLightV2}},
+		},
+	}}}}
+	loaded := map[string]*teamContext{"review": configured}
+
+	opts = runOptions{intent: "decision"}
+	if err := resolveLoadedPrimaryDecisionProfile(loaded, false); err != nil {
+		t.Fatal(err)
+	}
+	if opts.primaryDecisionProfile != agent.DecisionProfileBuiltinLightV2 || opts.primaryDecisionProfileRequested != "team-primary" || opts.primaryDecisionProfileOrigin != agent.DecisionProfileOriginTeamInline {
+		t.Fatalf("team primary = %#v", opts)
+	}
+
+	opts = runOptions{intent: "decision", primaryDecisionProfile: agent.DecisionProfileBuiltinHighStakesV2}
+	if err := resolveLoadedPrimaryDecisionProfile(loaded, false); err != nil {
+		t.Fatal(err)
+	}
+	if opts.primaryDecisionProfile != agent.DecisionProfileBuiltinHighStakesV2 || opts.primaryDecisionProfileRequested != agent.DecisionProfileBuiltinHighStakesV2 {
+		t.Fatalf("explicit primary did not win: %#v", opts)
 	}
 }

@@ -4,9 +4,8 @@ metadata:
   name: strategic-decision
 spec:
   description: >
-    Evidence-first decision team with outside-view research, isolated
-    judgments, deterministic aggregation, premortem, no-go alternatives,
-    and explicit dissent.
+    Decision-runtime example with separate auxiliary V1 review and a
+    runtime-owned primary V2 decision profile.
 
   max-rounds: 10
   max-steps: 20
@@ -111,6 +110,9 @@ spec:
     # Storage questions prefer architecture capability. This can route JUDGE
     # or CHALLENGE to reference-specialist while preserving the authorized set.
     profile: standard
+    # Primary decision formation is a distinct V2 bundle. It does not replace
+    # the auxiliary per-task profile above.
+    primary-profile: primary-standard
     routing:
       hints:
         - when-goal-contains: storage
@@ -126,6 +128,8 @@ spec:
         preset: builtin/standard@v1
       high-stakes:
         preset: builtin/high-stakes@v1
+      primary-standard:
+        preset: builtin/standard@v2
 
   max-total-tokens: 200000
   max-duration: 3600

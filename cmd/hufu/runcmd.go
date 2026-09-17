@@ -316,7 +316,7 @@ func resolvePrimaryDecisionFlags(command *cobra.Command, options *canonicalRunOp
 	}
 	profile := strings.TrimSpace(options.primaryDecisionProfile)
 	if profile == "" {
-		return agent.DecisionProfileBuiltinStandardV2, nil
+		return "", nil
 	}
 	if profile == agent.DecisionProfileOff {
 		return "", fmt.Errorf("primary decision profile cannot be off for decision intent")

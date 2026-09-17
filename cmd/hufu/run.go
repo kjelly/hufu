@@ -13,6 +13,7 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
@@ -161,6 +162,11 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if opts.intent == "decision" {
+		if err := resolveLoadedPrimaryDecisionProfile(loadedTeams, resumeInfo != nil); err != nil {
+			return err
+		}
+	}
 	if err := configureRunInputAssignments(loadedTeams); err != nil {
 		return err
 	}
@@ -205,6 +211,38 @@ func resolveRunPrompt(prompt string, pr *readline.PromptReader, vars map[string]
 	opts.agentTeamName = strings.ToLower(resolved.TeamName)
 	opts.primaryDecisionProfile = resolved.ProfileRef
 	return resolved.Question, &resolved, nil
+}
+
+func resolveLoadedPrimaryDecisionProfile(loadedTeams map[string]*teamContext, resumed bool) error {
+	if len(loadedTeams) != 1 {
+		return fmt.Errorf("a decision run requires exactly one loaded owner team")
+	}
+	for _, tc := range loadedTeams {
+		if tc == nil || tc.session == nil {
+			return fmt.Errorf("decision owner team is unavailable")
+		}
+		requested := strings.TrimSpace(opts.primaryDecisionProfile)
+		if resumed {
+			opts.primaryDecisionProfileRequested = requested
+			opts.primaryDecisionProfileOrigin = agent.DecisionProfileOriginBuiltin
+			return nil
+		}
+		if requested == "" {
+			requested = strings.TrimSpace(tc.session.Config.Decision.PrimaryProfile)
+		}
+		if requested == "" {
+			requested = agent.DecisionProfileBuiltinStandardV2
+		}
+		resolved, origin, err := agent.ResolvePrimaryDecisionProfileRef(tc.session.Config.Decision, requested)
+		if err != nil {
+			return fmt.Errorf("resolve primary decision profile %q: %w", requested, err)
+		}
+		opts.primaryDecisionProfileRequested = requested
+		opts.primaryDecisionProfile = resolved
+		opts.primaryDecisionProfileOrigin = origin
+		return nil
+	}
+	return fmt.Errorf("decision owner team is unavailable")
 }
 
 func configureDecisionIntent(loadedTeams map[string]*teamContext, question string, resumeInfo *team.DecisionResumeInfo) error {

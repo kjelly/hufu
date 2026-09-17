@@ -91,6 +91,10 @@ func (c *DecisionConfig) UnmarshalYAML(node *yaml.Node) error {
 			if err := decodeDecisionYAMLNodeStrict(value, &result.DefaultProfile); err != nil {
 				return err
 			}
+		case "primary-profile":
+			if err := decodeDecisionYAMLNodeStrict(value, &result.PrimaryProfile); err != nil {
+				return err
+			}
 		case "profiles":
 			profiles, specs, err := decodeDecisionProfilesYAML(value)
 			if err != nil {
@@ -120,11 +124,12 @@ func (c DecisionConfig) MarshalYAML() (any, error) {
 	}
 	type decisionConfigYAML struct {
 		DefaultProfile string                         `yaml:"default-profile,omitempty"`
+		PrimaryProfile string                         `yaml:"primary-profile,omitempty"`
 		Profiles       map[string]DecisionProfileSpec `yaml:"profiles,omitempty"`
 		RoutingHints   []RoutingHint                  `yaml:"routing-hints,omitempty"`
 	}
 	return decisionConfigYAML{
-		DefaultProfile: materialized.DefaultProfile, Profiles: materialized.ProfileSpecs,
+		DefaultProfile: materialized.DefaultProfile, PrimaryProfile: materialized.PrimaryProfile, Profiles: materialized.ProfileSpecs,
 		RoutingHints: materialized.RoutingHints,
 	}, nil
 }

@@ -16,17 +16,20 @@ import (
 // decision routing hints. The unexported presence bit distinguishes
 // decision.routing: {} from a mapping that actually authored hints.
 type DecisionRoutingAuthoringConfig struct {
-	Hints []agent.RoutingHint `yaml:"hints,omitempty"`
+	Hints       []agent.RoutingHint             `yaml:"hints,omitempty"`
+	Constraints agent.DecisionRoleConstraintsV1 `yaml:"constraints,omitempty"`
 
-	hintsSet bool
+	hintsSet       bool
+	constraintsSet bool
 }
 
 // DecisionAuthoringConfig contains both the canonical manifest shape and the
 // legacy spellings that are normalized into agent.DecisionConfig.
 type DecisionAuthoringConfig struct {
-	Profile  string                               `yaml:"profile,omitempty"`
-	Profiles map[string]agent.DecisionProfileSpec `yaml:"profiles,omitempty"`
-	Routing  DecisionRoutingAuthoringConfig       `yaml:"routing,omitempty"`
+	Profile        string                               `yaml:"profile,omitempty"`
+	PrimaryProfile string                               `yaml:"primary-profile,omitempty"`
+	Profiles       map[string]agent.DecisionProfileSpec `yaml:"profiles,omitempty"`
+	Routing        DecisionRoutingAuthoringConfig       `yaml:"routing,omitempty"`
 
 	// Legacy authoring only.
 	DefaultProfile  string                       `yaml:"default-profile,omitempty"`
@@ -34,6 +37,7 @@ type DecisionAuthoringConfig struct {
 	RoutingHints    []agent.RoutingHint          `yaml:"routing-hints,omitempty"`
 
 	profileSet        bool
+	primaryProfileSet bool
 	defaultProfileSet bool
 	routingHintsSet   bool
 	legacyContractSet bool
@@ -82,6 +86,15 @@ func (r *DecisionRoutingAuthoringConfig) UnmarshalYAML(node *yaml.Node) error {
 				return err
 			}
 			result.hintsSet = true
+		case "constraints":
+			if value.Tag == "!!null" {
+				return fmt.Errorf("decision.routing.constraints must be a non-null mapping")
+			}
+			result.Constraints = agent.DefaultDecisionRoleConstraintsV1()
+			if err := decodeAuthoringYAMLNodeStrict(value, &result.Constraints); err != nil {
+				return err
+			}
+			result.constraintsSet = true
 		default:
 			return fmt.Errorf("field %s not found in type team.DecisionRoutingAuthoringConfig", key.Value)
 		}
@@ -145,6 +158,11 @@ func (d *DecisionAuthoringConfig) UnmarshalYAML(node *yaml.Node) error {
 				return err
 			}
 			result.profileSet = true
+		case "primary-profile":
+			if err := decodeAuthoringYAMLNodeStrict(value, &result.PrimaryProfile); err != nil {
+				return err
+			}
+			result.primaryProfileSet = true
 		case "profiles":
 			profiles, err := decodeAuthoringProfiles(value)
 			if err != nil {
@@ -225,9 +243,10 @@ func NormalizeDecisionAuthoring(
 	}
 
 	cfg := agent.DecisionConfig{
-		Profiles:     make(map[string]agent.DecisionPolicy, len(decision.Profiles)),
-		ProfileSpecs: make(map[string]agent.DecisionProfileSpec, len(decision.Profiles)),
-		RoutingHints: nil,
+		Profiles:        make(map[string]agent.DecisionPolicy, len(decision.Profiles)),
+		ProfileSpecs:    make(map[string]agent.DecisionProfileSpec, len(decision.Profiles)),
+		RoutingHints:    nil,
+		RoleConstraints: agent.DefaultDecisionRoleConstraintsV1(),
 	}
 	for _, name := range slices.Sorted(maps.Keys(decision.Profiles)) {
 		spec := decision.Profiles[name]
@@ -268,6 +287,18 @@ func NormalizeDecisionAuthoring(
 	for i, hint := range cfg.RoutingHints {
 		if err := hint.Validate(); err != nil {
 			return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("decision.routing-hints[%d]: %w", i, err)
+		}
+	}
+	if decision.Routing.constraintsSet {
+		cfg.RoleConstraints = decision.Routing.Constraints
+		if err := cfg.RoleConstraints.Validate(); err != nil {
+			return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("decision.routing.constraints: %w", err)
+		}
+	}
+	if decision.primaryProfileSet {
+		cfg.PrimaryProfile = strings.TrimSpace(decision.PrimaryProfile)
+		if cfg.PrimaryProfile == "" {
+			return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("decision.primary-profile must not be blank when authored")
 		}
 	}
 

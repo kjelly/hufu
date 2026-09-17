@@ -1,14 +1,17 @@
 # strategic-decision
 
-This bundled team demonstrates Hufu's decision-authoring contract. It uses
-canonical `decision.profile`, `decision.routing.hints`, and the top-level
-`request` block in `team.yaml`; the loader materializes these into runtime
-configuration before dispatch.
+This bundled team is a configuration example for Hufu's decision runtime. It
+uses canonical `decision.profile`, `decision.primary-profile`,
+`decision.routing.hints`, and the top-level `request` block in `team.yaml`.
 
-The local `light`, `standard`, and `high-stakes` names alias versioned built-in
-profiles. The team owns worker authorization, capability evidence, routing
-hints, and read-only tool policy. Configure a provider model through normal
-Hufu settings before running a non-`off` decision profile.
+The local `light`, `standard`, and `high-stakes` profiles retain the auxiliary
+V1 task-review behavior. `primary-standard` separately aliases the immutable
+`builtin/standard@v2` bundle used by `hufu decide`. A command-line
+`--primary-decision-profile` or `--rigor` value overrides that team default;
+`--decision-profile` continues to affect auxiliary task review only.
+
+The example deliberately has no model placeholder. Configure provider and
+model selection through normal Hufu settings before executing it.
 
 Provider-free inspection commands:
 
@@ -18,6 +21,7 @@ hufu team explain .agent-teams/strategic-decision
 hufu decision profile list --team .agent-teams/strategic-decision
 hufu decision profile show standard --team .agent-teams/strategic-decision
 hufu decision plan --profile standard --team .agent-teams/strategic-decision
+hufu decide --team strategic-decision "Should we adopt option B?"
 ```
 
 These commands compile without model calls or workspace writes. Legacy
@@ -29,4 +33,5 @@ should use the canonical fields. To preview a migration:
 hufu team migrate --dry-run --canonical-authoring .agent-teams/strategic-decision
 ```
 
-The migrator is dry-run only and never edits this directory.
+The migrator is dry-run only and never edits this directory. This team is an
+example, not a special route: decision intent can use any valid team.

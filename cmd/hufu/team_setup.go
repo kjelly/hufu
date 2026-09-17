@@ -205,26 +205,8 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// occurrence owns its frozen canonical target, so a changed CLI/config
 	// worker target must never bypass executable/kind preflight for that work.
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
-	if !startsFresh {
-		// Read the checked active event lineage once so both checkpoint and
-		// event-first legacy occurrences can use the same historical evidence
-		// before any lifecycle mutation. This read is strictly read-only; the
-		// migration event is still appended only at dispatch.
-		eventTasks, eventEvidence, err := team.ReadCheckedActiveExecutionTaskEvidence(session.Workspace)
-		if err != nil {
-			return nil, fmt.Errorf("restored event lineage preflight failed: %w", err)
-		}
-		if restored := team.LoadSession(session.Workspace); restored != nil {
-			if err := preflightRestoredExecutionTargetsWithEvidence(session, cfg, restored.Tasks, eventEvidence, eventTasks, nil); err != nil {
-				return nil, err
-			}
-		}
-		// Event-first transitions are durable before the checkpoint write. The
-		// checked replay above is performed before workspace/session
-		// initialization so a crash-window task cannot bypass target preflight.
-		if err := preflightRestoredExecutionTargetsWithEvidence(session, cfg, eventTasks, eventEvidence, nil, nil); err != nil {
-			return nil, err
-		}
+	if err := preflightHistoricalExecutionTargets(session, cfg, startsFresh); err != nil {
+		return nil, err
 	}
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
@@ -239,6 +221,13 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	})
 	if messages := contractErrorMessages(effectiveContractFindings); len(messages) > 0 {
 		return nil, fmt.Errorf("effective team contract validation failed: %s", strings.Join(messages, "; "))
+	}
+	if opts.dryRun {
+		coordinator, err := team.NewDryRunCoordinator(session, execProfile)
+		if err != nil {
+			return nil, err
+		}
+		return &teamContext{teamName: teamName, session: session, coordinator: coordinator}, nil
 	}
 	migrateLegacyDrafts(teamSkillDirs(session, registry))
 
@@ -342,6 +331,29 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		sessionData: sessionData,
 		notifier:    notifierInst,
 	}, nil
+}
+
+func preflightHistoricalExecutionTargets(session *team.TeamSession, cfg *config.Config, startsFresh bool) error {
+	if startsFresh {
+		return nil
+	}
+	// Read the checked active event lineage once so both checkpoint and
+	// event-first legacy occurrences can use the same historical evidence
+	// before any lifecycle mutation. This read is strictly read-only; the
+	// migration event is still appended only at dispatch.
+	eventTasks, eventEvidence, err := team.ReadCheckedActiveExecutionTaskEvidence(session.Workspace)
+	if err != nil {
+		return fmt.Errorf("restored event lineage preflight failed: %w", err)
+	}
+	if restored := team.LoadSession(session.Workspace); restored != nil {
+		if err := preflightRestoredExecutionTargetsWithEvidence(session, cfg, restored.Tasks, eventEvidence, eventTasks, nil); err != nil {
+			return err
+		}
+	}
+	// Event-first transitions are durable before the checkpoint write. The
+	// checked replay above is performed before workspace/session initialization
+	// so a crash-window task cannot bypass target preflight.
+	return preflightRestoredExecutionTargetsWithEvidence(session, cfg, eventTasks, eventEvidence, nil, nil)
 }
 
 func applyCLICompactionOverrides(session *team.TeamSession) error {

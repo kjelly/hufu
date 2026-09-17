@@ -80,23 +80,27 @@ type DecisionProfileProjection struct {
 // inspection commands. It contains only normalized authoring/runtime data and
 // never performs provider or workspace I/O.
 type DecisionAuthoringProjection struct {
-	Profile            string                      `json:"profile" yaml:"profile"`
-	ProfileSource      string                      `json:"profile_source,omitempty" yaml:"profile_source,omitempty"`
-	RequestedProfile   string                      `json:"requested_profile,omitempty" yaml:"requested_profile,omitempty"`
-	ResolvedProfileRef string                      `json:"resolved_profile_ref,omitempty" yaml:"resolved_profile_ref,omitempty"`
-	RoutingHints       []agent.RoutingHint         `json:"routing_hints,omitempty" yaml:"routing_hints,omitempty"`
-	RequestContract    agent.RequestContractConfig `json:"request_contract" yaml:"request_contract"`
-	Deprecations       []string                    `json:"deprecations,omitempty" yaml:"deprecations,omitempty"`
-	Profiles           []DecisionProfileProjection `json:"profiles" yaml:"profiles"`
-	RequestSource      string                      `json:"request_source,omitempty" yaml:"request_source,omitempty"`
-	RequestEnabled     bool                        `json:"request_enabled" yaml:"request_enabled"`
-	RoutingSource      string                      `json:"routing_source,omitempty" yaml:"routing_source,omitempty"`
-	RoutingHintCount   int                         `json:"routing_hint_count" yaml:"routing_hint_count"`
-	Plan               *DecisionExecutionPlan      `json:"plan,omitempty" yaml:"plan,omitempty"`
-	ProfileOrigin      string                      `json:"profile_origin,omitempty" yaml:"profile_origin,omitempty"`
-	ProfileVersion     string                      `json:"profile_version,omitempty" yaml:"profile_version,omitempty"`
-	PolicyDigest       string                      `json:"policy_digest,omitempty" yaml:"policy_digest,omitempty"`
-	SelectedPolicy     agent.DecisionPolicy        `json:"-" yaml:"-"`
+	Profile                 string                          `json:"profile" yaml:"profile"`
+	ProfileSource           string                          `json:"profile_source,omitempty" yaml:"profile_source,omitempty"`
+	RequestedProfile        string                          `json:"requested_profile,omitempty" yaml:"requested_profile,omitempty"`
+	ResolvedProfileRef      string                          `json:"resolved_profile_ref,omitempty" yaml:"resolved_profile_ref,omitempty"`
+	RoutingHints            []agent.RoutingHint             `json:"routing_hints,omitempty" yaml:"routing_hints,omitempty"`
+	RequestContract         agent.RequestContractConfig     `json:"request_contract" yaml:"request_contract"`
+	Deprecations            []string                        `json:"deprecations,omitempty" yaml:"deprecations,omitempty"`
+	Profiles                []DecisionProfileProjection     `json:"profiles" yaml:"profiles"`
+	RequestSource           string                          `json:"request_source,omitempty" yaml:"request_source,omitempty"`
+	RequestEnabled          bool                            `json:"request_enabled" yaml:"request_enabled"`
+	RoutingSource           string                          `json:"routing_source,omitempty" yaml:"routing_source,omitempty"`
+	RoutingHintCount        int                             `json:"routing_hint_count" yaml:"routing_hint_count"`
+	Plan                    *DecisionExecutionPlan          `json:"plan,omitempty" yaml:"plan,omitempty"`
+	ProfileOrigin           string                          `json:"profile_origin,omitempty" yaml:"profile_origin,omitempty"`
+	ProfileVersion          string                          `json:"profile_version,omitempty" yaml:"profile_version,omitempty"`
+	PolicyDigest            string                          `json:"policy_digest,omitempty" yaml:"policy_digest,omitempty"`
+	SelectedPolicy          agent.DecisionPolicy            `json:"-" yaml:"-"`
+	PrimaryRequestedProfile string                          `json:"primary_requested_profile,omitempty" yaml:"primary_requested_profile,omitempty"`
+	PrimaryResolvedProfile  string                          `json:"primary_resolved_profile,omitempty" yaml:"primary_resolved_profile,omitempty"`
+	PrimaryProfileOrigin    string                          `json:"primary_profile_origin,omitempty" yaml:"primary_profile_origin,omitempty"`
+	RoleConstraints         agent.DecisionRoleConstraintsV1 `json:"role_constraints" yaml:"role_constraints"`
 }
 
 func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringProjection {
@@ -105,17 +109,24 @@ func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringPro
 	}
 	cfg := session.Config
 	out := DecisionAuthoringProjection{
-		Profile:            session.DecisionAuthoring.RequestedProfile,
-		ProfileSource:      session.DecisionAuthoring.ProfileSource,
-		RequestedProfile:   session.DecisionAuthoring.RequestedProfile,
-		ResolvedProfileRef: session.DecisionAuthoring.ResolvedProfileRef,
-		RoutingHints:       slices.Clone(cfg.Decision.RoutingHints),
-		RequestContract:    cloneRequestContractConfig(cfg.RequestContract),
-		Deprecations:       slices.Clone(session.DecisionAuthoring.Deprecations),
-		RequestSource:      session.DecisionAuthoring.RequestSource,
-		RequestEnabled:     cfg.RequestContract.Enabled,
-		RoutingSource:      session.DecisionAuthoring.RoutingSource,
-		RoutingHintCount:   len(cfg.Decision.RoutingHints),
+		Profile:                 session.DecisionAuthoring.RequestedProfile,
+		ProfileSource:           session.DecisionAuthoring.ProfileSource,
+		RequestedProfile:        session.DecisionAuthoring.RequestedProfile,
+		ResolvedProfileRef:      session.DecisionAuthoring.ResolvedProfileRef,
+		RoutingHints:            slices.Clone(cfg.Decision.RoutingHints),
+		RequestContract:         cloneRequestContractConfig(cfg.RequestContract),
+		Deprecations:            slices.Clone(session.DecisionAuthoring.Deprecations),
+		RequestSource:           session.DecisionAuthoring.RequestSource,
+		RequestEnabled:          cfg.RequestContract.Enabled,
+		RoutingSource:           session.DecisionAuthoring.RoutingSource,
+		RoutingHintCount:        len(cfg.Decision.RoutingHints),
+		PrimaryRequestedProfile: cfg.Decision.PrimaryProfile,
+		RoleConstraints:         cfg.Decision.RoleConstraints,
+	}
+	if cfg.Decision.PrimaryProfile != "" {
+		if ref, origin, err := agent.ResolvePrimaryDecisionProfileRef(cfg.Decision, cfg.Decision.PrimaryProfile); err == nil {
+			out.PrimaryResolvedProfile, out.PrimaryProfileOrigin = ref, origin
+		}
 	}
 	names := slices.Collect(maps.Keys(cfg.Decision.ProfileSpecs))
 	slices.Sort(names)

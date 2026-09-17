@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/kjelly/hufu/internal/agent"
 	internalteam "github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -91,17 +92,25 @@ type explainAgent struct {
 // not for reconstructing runtime state (that projection point is
 // EffectiveTeamSpec.RuntimeSession(), reserved for Go callers).
 type explainOutput struct {
-	Name        internalteam.ResolvedValue[string] `json:"name" yaml:"name"`
-	Description internalteam.ResolvedValue[string] `json:"description,omitempty" yaml:"description,omitempty"`
-	Model       internalteam.ResolvedValue[string] `json:"model,omitempty" yaml:"model,omitempty"`
-	MaxRounds   internalteam.ResolvedValue[int]    `json:"max_rounds" yaml:"max_rounds"`
-	Timeout     internalteam.ResolvedValue[int64]  `json:"timeout" yaml:"timeout"`
-	MaxRetries  internalteam.ResolvedValue[int]    `json:"max_retries" yaml:"max_retries"`
-	Agents      []explainAgent                     `json:"agents" yaml:"agents"`
-	Decision    decisionProfileView                `json:"decision" yaml:"decision"`
-	Request     explainRequestView                 `json:"request" yaml:"request"`
-	Routing     explainRoutingView                 `json:"routing" yaml:"routing"`
-	Diagnostics []internalteam.ContractFinding     `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
+	Name            internalteam.ResolvedValue[string] `json:"name" yaml:"name"`
+	Description     internalteam.ResolvedValue[string] `json:"description,omitempty" yaml:"description,omitempty"`
+	Model           internalteam.ResolvedValue[string] `json:"model,omitempty" yaml:"model,omitempty"`
+	MaxRounds       internalteam.ResolvedValue[int]    `json:"max_rounds" yaml:"max_rounds"`
+	Timeout         internalteam.ResolvedValue[int64]  `json:"timeout" yaml:"timeout"`
+	MaxRetries      internalteam.ResolvedValue[int]    `json:"max_retries" yaml:"max_retries"`
+	Agents          []explainAgent                     `json:"agents" yaml:"agents"`
+	Decision        decisionProfileView                `json:"decision" yaml:"decision"`
+	PrimaryDecision explainPrimaryDecisionView         `json:"primary_decision" yaml:"primary_decision"`
+	Request         explainRequestView                 `json:"request" yaml:"request"`
+	Routing         explainRoutingView                 `json:"routing" yaml:"routing"`
+	Diagnostics     []internalteam.ContractFinding     `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
+}
+
+type explainPrimaryDecisionView struct {
+	Requested   string                          `json:"requested,omitempty" yaml:"requested,omitempty"`
+	ResolvedRef string                          `json:"resolved_ref,omitempty" yaml:"resolved_ref,omitempty"`
+	Origin      string                          `json:"origin,omitempty" yaml:"origin,omitempty"`
+	Constraints agent.DecisionRoleConstraintsV1 `json:"constraints" yaml:"constraints"`
 }
 
 type explainRequestView struct {
@@ -168,6 +177,10 @@ func buildExplainOutput(spec *internalteam.EffectiveTeamSpec) explainOutput {
 		MaxRetries:  spec.MaxRetries,
 		Agents:      dedupedExplainAgents(spec),
 		Decision:    decision,
+		PrimaryDecision: explainPrimaryDecisionView{
+			Requested: spec.Decision.PrimaryRequestedProfile, ResolvedRef: spec.Decision.PrimaryResolvedProfile,
+			Origin: spec.Decision.PrimaryProfileOrigin, Constraints: spec.Decision.RoleConstraints,
+		},
 		Request:     explainRequestView{Source: spec.Decision.RequestSource, Enabled: spec.Decision.RequestEnabled},
 		Routing:     explainRoutingView{Source: spec.Decision.RoutingSource, HintCount: spec.Decision.RoutingHintCount},
 		Diagnostics: internalteam.ValidateEffectiveTeam(spec),
@@ -192,13 +205,19 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	writeResolvedLine(&b, "  ", "max-retries", spec.MaxRetries.Value, spec.MaxRetries.Source, spec.MaxRetries.Detail)
 
 	session := spec.RuntimeSession()
-	fmt.Fprintln(&b, "\nDecision authoring")
+	fmt.Fprintln(&b, "\nAuxiliary decision authoring")
 	fmt.Fprintf(&b, "  profile source: %s\n", explainEmpty(spec.Decision.ProfileSource))
 	fmt.Fprintf(&b, "  requested: %s\n", explainEmpty(projection.Decision.Identity.RequestedName))
 	fmt.Fprintf(&b, "  resolved: %s\n", explainEmpty(projection.Decision.Identity.ResolvedRef))
 	fmt.Fprintf(&b, "  origin: %s\n", explainEmpty(projection.Decision.Identity.Origin))
 	fmt.Fprintf(&b, "  version: %s\n", explainEmpty(projection.Decision.Identity.Version))
 	fmt.Fprintf(&b, "  policy digest: %s\n", explainEmpty(projection.Decision.Identity.PolicyDigest))
+	fmt.Fprintln(&b, "\nPrimary decision authoring")
+	fmt.Fprintf(&b, "  requested: %s\n", explainEmpty(projection.PrimaryDecision.Requested))
+	fmt.Fprintf(&b, "  resolved: %s\n", explainEmpty(projection.PrimaryDecision.ResolvedRef))
+	fmt.Fprintf(&b, "  origin: %s\n", explainEmpty(projection.PrimaryDecision.Origin))
+	fmt.Fprintf(&b, "  fallback: %s\n", projection.PrimaryDecision.Constraints.Fallback)
+	fmt.Fprintf(&b, "  candidate limit: %d\n", projection.PrimaryDecision.Constraints.CandidateLimit)
 	fmt.Fprintln(&b, "\nRequest contract")
 	fmt.Fprintf(&b, "  source: %s\n  enabled: %t\n", explainEmpty(projection.Request.Source), projection.Request.Enabled)
 	fmt.Fprintln(&b, "\nRouting")

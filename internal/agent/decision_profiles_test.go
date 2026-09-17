@@ -75,6 +75,42 @@ func TestMergeDecisionRoleConstraintsOnlyTightens(t *testing.T) {
 	}
 }
 
+func TestResolvePrimaryDecisionProfileRefKeepsAuxiliaryNamespaceStable(t *testing.T) {
+	cfg := DecisionConfig{ProfileSpecs: map[string]DecisionProfileSpec{
+		"standard":         {Preset: &DecisionProfileRef{Name: DecisionProfileBuiltinStandardV1}},
+		"primary-standard": {Preset: &DecisionProfileRef{Name: DecisionProfileBuiltinStandardV2}},
+	}}
+	ref, origin, err := ResolvePrimaryDecisionProfileRef(cfg, "primary-standard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != DecisionProfileBuiltinStandardV2 || origin != DecisionProfileOriginTeamInline {
+		t.Fatalf("primary profile = %q/%q", ref, origin)
+	}
+	if _, _, err := ResolvePrimaryDecisionProfileRef(cfg, "standard"); err == nil {
+		t.Fatal("local V1 profile must win name resolution and be rejected for primary use")
+	}
+	policy, _, ok, err := ResolveDecisionProfileSpec(cfg, "standard", BuiltInDecisionProfileCatalog())
+	if err != nil || !ok || policy.IndependentJudgments == 0 {
+		t.Fatalf("legacy auxiliary profile changed: ok=%v err=%v policy=%#v", ok, err, policy)
+	}
+}
+
+func TestResolvePrimaryDecisionProfileRefUsesV2OnlyAliases(t *testing.T) {
+	for requested, want := range map[string]string{
+		"light": DecisionProfileBuiltinLightV2, "standard": DecisionProfileBuiltinStandardV2,
+		"high": DecisionProfileBuiltinHighStakesV2, "high-stakes": DecisionProfileBuiltinHighStakesV2,
+	} {
+		got, origin, err := ResolvePrimaryDecisionProfileRef(DecisionConfig{}, requested)
+		if err != nil {
+			t.Fatalf("%s: %v", requested, err)
+		}
+		if got != want || origin != DecisionProfileOriginBuiltin {
+			t.Fatalf("%s = %q/%q, want %q/builtin", requested, got, origin, want)
+		}
+	}
+}
+
 func TestBuiltInDecisionProfileCatalogReturnsDeepCopies(t *testing.T) {
 	catalog := BuiltInDecisionProfileCatalog()
 	first, _, err := catalog.Resolve(DecisionProfileRef{Name: DecisionProfileBuiltinStandardV1})

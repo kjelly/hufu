@@ -62,7 +62,7 @@ func buildDecisionOutput(ctx context.Context, loadedTeams map[string]*teamContex
 		return out, err
 	}
 	out.Profile = &team.DecisionOutputProfileV1{
-		Requested: opts.primaryDecisionProfile, ResolvedRef: bundle.Ref, Origin: agent.DecisionProfileOriginBuiltin,
+		Requested: opts.primaryDecisionProfileRequested, ResolvedRef: bundle.Ref, Origin: opts.primaryDecisionProfileOrigin,
 		Version: "v2", PolicyDigest: policyDigest, BundleDigest: bundle.BundleDigest,
 	}
 	budget := tc.coordinator.Budget()

@@ -42,12 +42,14 @@ type runOptions struct {
 	decisionProfile string
 	// primaryDecisionProfile is exclusively the one runtime-owned primary
 	// decision. It never changes the auxiliary per-task decisionProfile above.
-	primaryDecisionProfile string
-	decisionRigor          string
-	resumeDecision         string
-	newSession             bool
-	tempWorkspace          bool
-	showHistory            bool
+	primaryDecisionProfile          string
+	primaryDecisionProfileRequested string
+	primaryDecisionProfileOrigin    string
+	decisionRigor                   string
+	resumeDecision                  string
+	newSession                      bool
+	tempWorkspace                   bool
+	showHistory                     bool
 
 	// Memory
 	memoryEnabled bool

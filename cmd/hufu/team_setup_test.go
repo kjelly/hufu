@@ -334,6 +334,39 @@ agents:
 	}
 }
 
+func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+
+	root := t.TempDir()
+	teamDir := filepath.Join(root, "preview")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: preview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "analyst.md"), []byte("---\nname: analyst\nrole: worker\n---\nPreview tasks.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(t.TempDir(), "must-not-exist")
+	opts = runOptions{dryRun: true, canonicalRun: true, workspace: workspace, workspaceMode: "exact"}
+	registry := team.NewTeamRegistry([]string{root})
+	if err := registry.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	tc, err := loadTeamByName(t.Context(), "preview", registry, "", "", nil, nil, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tc.coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created workspace %q: %v", workspace, err)
+	}
+}
+
 func TestLoadDefaultTeam_RejectsStrictWorkspaceWithoutCreatingDirectory(t *testing.T) {
 	projDir := t.TempDir()
 	origWd, err := os.Getwd()

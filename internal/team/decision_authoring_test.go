@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,58 @@ func TestNormalizeDecisionAuthoringLocalProfileWinsAlias(t *testing.T) {
 	policy, ok := DecisionPolicyFor(cfg.Decision, "standard")
 	if !ok || policy.IndependentJudgments != 2 {
 		t.Fatalf("local standard policy = %#v, ok=%v", policy, ok)
+	}
+}
+
+func TestNormalizeDecisionAuthoringSeparatesPrimaryAndAuxiliaryProfiles(t *testing.T) {
+	dir := writeDecisionAuthoringManifest(t, `decision:
+  profile: standard
+  primary-profile: primary-standard
+  profiles:
+    primary-standard:
+      preset: builtin/standard@v2
+  routing:
+    constraints:
+      required-capabilities:
+        judge: [security-review]
+      diversity:
+        min-distinct-providers: 1
+      fallback: forbid
+      candidate-limit: 8
+`)
+	cfg, metadata, err := parseTeamYMLWithAuthoring(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Decision.DefaultProfile != "standard" || metadata.ResolvedProfileRef != agent.DecisionProfileBuiltinStandardV1 {
+		t.Fatalf("auxiliary profile changed: %#v / %#v", cfg.Decision, metadata)
+	}
+	ref, origin, err := agent.ResolvePrimaryDecisionProfileRef(cfg.Decision, cfg.Decision.PrimaryProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != agent.DecisionProfileBuiltinStandardV2 || origin != agent.DecisionProfileOriginTeamInline {
+		t.Fatalf("primary profile = %q/%q", ref, origin)
+	}
+	constraints := cfg.Decision.RoleConstraints
+	if constraints.Fallback != "forbid" || constraints.CandidateLimit != 8 || constraints.Diversity.MinDistinctProviders != 1 || !slices.Equal(constraints.RequiredCapabilities.Judge, []string{"security-review"}) {
+		t.Fatalf("role constraints = %#v", constraints)
+	}
+}
+
+func TestNormalizeDecisionAuthoringRejectsInvalidPrimaryConfiguration(t *testing.T) {
+	for name, content := range map[string]string{
+		"blank":              "decision:\n  primary-profile: '   '\n",
+		"v1 local":           "decision:\n  primary-profile: old\n  profiles:\n    old:\n      preset: builtin/standard@v1\n",
+		"null constraints":   "decision:\n  routing:\n    constraints: null\n",
+		"unknown constraint": "decision:\n  routing:\n    constraints:\n      invented: true\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeDecisionAuthoringManifest(t, content)
+			if _, _, err := parseTeamYMLWithAuthoring(dir, nil); err == nil {
+				t.Fatal("invalid primary configuration was accepted")
+			}
+		})
 	}
 }
 

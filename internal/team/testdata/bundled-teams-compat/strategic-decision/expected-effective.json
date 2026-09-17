@@ -1,7 +1,7 @@
 {
   "team": {
     "name": "strategic-decision",
-    "description": "Evidence-first decision team with outside-view research, isolated judgments, deterministic aggregation, premortem, no-go alternatives, and explicit dissent.\n",
+    "description": "Decision-runtime example with separate auxiliary V1 review and a runtime-owned primary V2 decision profile.\n",
     "max_rounds": 10,
     "max_steps": 20,
     "timeout": 600,

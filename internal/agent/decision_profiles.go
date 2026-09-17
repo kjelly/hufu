@@ -198,7 +198,49 @@ func MaterializeDecisionConfig(cfg DecisionConfig, catalog DecisionProfileCatalo
 			return DecisionConfig{}, fmt.Errorf("%s: decision.default-profile %q is not defined", ReasonDecisionProfileUnknown, result.DefaultProfile)
 		}
 	}
+	if result.PrimaryProfile != "" {
+		if _, _, err := ResolvePrimaryDecisionProfileRef(result, result.PrimaryProfile); err != nil {
+			return DecisionConfig{}, fmt.Errorf("decision.primary-profile %q: %w", result.PrimaryProfile, err)
+		}
+	}
+	if result.RoleConstraints.SchemaVersion == 0 {
+		result.RoleConstraints = DefaultDecisionRoleConstraintsV1()
+	}
+	if err := result.RoleConstraints.Validate(); err != nil {
+		return DecisionConfig{}, fmt.Errorf("decision.routing.constraints: %w", err)
+	}
 	return result, nil
+}
+
+// ResolvePrimaryDecisionProfileRef resolves only immutable V2 bundles. Local
+// names win over ergonomic aliases, preserving the existing auxiliary
+// profile namespace while allowing a team to give a V2 preset its own name.
+func ResolvePrimaryDecisionProfileRef(cfg DecisionConfig, requested string) (string, string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || requested == DecisionProfileOff {
+		return "", "", fmt.Errorf("primary decision profile must not be empty or off")
+	}
+	if spec, local := cfg.ProfileSpecs[requested]; local {
+		if spec.Preset == nil {
+			return "", "", fmt.Errorf("team-local primary profile %q must reference an immutable V2 preset", requested)
+		}
+		if _, err := ResolveBuiltInDecisionProfileBundle(spec.Preset.Name); err != nil {
+			return "", "", fmt.Errorf("team-local primary profile %q: %w", requested, err)
+		}
+		return spec.Preset.Name, DecisionProfileOriginTeamInline, nil
+	}
+	aliases := map[string]string{
+		"light": DecisionProfileBuiltinLightV2, "standard": DecisionProfileBuiltinStandardV2,
+		"high": DecisionProfileBuiltinHighStakesV2, "high-stakes": DecisionProfileBuiltinHighStakesV2,
+	}
+	resolved := requested
+	if alias, ok := aliases[requested]; ok {
+		resolved = alias
+	}
+	if _, err := ResolveBuiltInDecisionProfileBundle(resolved); err != nil {
+		return "", "", err
+	}
+	return resolved, DecisionProfileOriginBuiltin, nil
 }
 
 func cloneDecisionProfileSpec(spec DecisionProfileSpec) DecisionProfileSpec {

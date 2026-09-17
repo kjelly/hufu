@@ -352,9 +352,13 @@ func (service *primaryDecisionService) prepareRolePlan(ctx context.Context, stor
 		InvocationPolicyDigest: policyDigest, AuthorizationSnapshotRef: authority, RoleInstructionRefs: instructions,
 		Authorized: true, RuntimeFallback: true, BackendCapability: DecisionBackendCapabilityV1{SchemaVersion: 1, ToolIsolation: "none_enforced", SessionIsolation: true, DeclarationSource: "adapter"},
 	}
+	constraints := service.coordinator.session.Config.Decision.RoleConstraints
+	if constraints.SchemaVersion == 0 {
+		constraints = agent.DefaultDecisionRoleConstraintsV1()
+	}
 	plan, err := ResolvePrimaryDecisionRoles(DecisionRoleResolutionRequest{
 		LogicalRunID: request.LogicalRunID, Generation: request.Generation, Bundle: service.bundle,
-		Constraints: agent.DefaultDecisionRoleConstraintsV1(), Candidates: []DecisionRoleCandidate{candidate},
+		Constraints: constraints, Candidates: []DecisionRoleCandidate{candidate},
 	})
 	if err != nil {
 		return nil, DecisionArtifactRef{}, err

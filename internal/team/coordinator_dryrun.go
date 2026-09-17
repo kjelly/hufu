@@ -47,6 +47,23 @@ type DryRunResult struct {
 	Error              string
 }
 
+// NewDryRunCoordinator creates the read-only coordinator projection used by
+// CLI previews. It intentionally does not initialize providers, SQLite,
+// journals, terminals, audit logs, or workspace directories.
+func NewDryRunCoordinator(session *TeamSession, profile ExecutionProfile) (*Coordinator, error) {
+	if session == nil {
+		return nil, fmt.Errorf("dry-run coordinator requires a team session")
+	}
+	c := &Coordinator{
+		session:      session,
+		skills:       session.Skills,
+		taskTracker:  NewTaskTracker(),
+		reportStatus: func(StatusEvent) {},
+	}
+	c.SetExecutionProfile(profile)
+	return c, nil
+}
+
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
 	if err := c.validateDryRunExecutionPolicy(); err != nil {
 		return nil, err

@@ -41,14 +41,3 @@ For every relevant metric provide:
   different URLs can still be the same evidence chain.
 - If no defensible reference class exists, explicitly report that.
 - Never invent sample size or base rate.
-
-## Runtime note
-
-Unlike `reference.md`, this file is genuinely reachable through
-`internal/team/decision_reference_capability_runner.go`: when a profile sets
-`outside-view.role.required-capabilities`, the runtime resolves a candidate
-from every worker declaring a matching capability (self-declared here, or via
-`team.yaml`'s `capability-registry`) and invokes the winner directly, with its
-tools narrowed to read-only. See `README.md` "Gap 1" for exactly which stages
-this covers (`REFERENCE` only — `JUDGE`/`CHALLENGE`/`PREMORTEM`/`REVISE`/
-`FINALIZE` still call the team's `judge-model` sidecar unconditionally).

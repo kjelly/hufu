@@ -127,7 +127,13 @@ type DecisionRoleConstraintsV1 struct {
 }
 
 func DefaultDecisionRoleConstraintsV1() DecisionRoleConstraintsV1 {
-	return DecisionRoleConstraintsV1{SchemaVersion: 1, Kind: "decision_role_constraints", Fallback: "inherit", CandidateLimit: 64}
+	empty := func() DecisionRoleCapabilitiesV1 {
+		return DecisionRoleCapabilitiesV1{Proposal: []string{}, Reference: []string{}, Judge: []string{}, Challenge: []string{}, Premortem: []string{}}
+	}
+	return DecisionRoleConstraintsV1{
+		SchemaVersion: 1, Kind: "decision_role_constraints", RequiredCapabilities: empty(), PreferredCapabilities: empty(),
+		Fallback: "inherit", CandidateLimit: 64,
+	}
 }
 
 func (value DecisionRoleConstraintsV1) Validate() error {
