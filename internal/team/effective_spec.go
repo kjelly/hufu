@@ -87,6 +87,14 @@ type DecisionAuthoringProjection struct {
 	RequestContract    agent.RequestContractConfig `json:"request_contract" yaml:"request_contract"`
 	Deprecations       []string                    `json:"deprecations,omitempty" yaml:"deprecations,omitempty"`
 	Profiles           []DecisionProfileProjection `json:"profiles" yaml:"profiles"`
+	RequestSource      string                      `json:"request_source,omitempty" yaml:"request_source,omitempty"`
+	RequestEnabled     bool                        `json:"request_enabled" yaml:"request_enabled"`
+	RoutingSource      string                      `json:"routing_source,omitempty" yaml:"routing_source,omitempty"`
+	RoutingHintCount   int                         `json:"routing_hint_count" yaml:"routing_hint_count"`
+	Plan               *DecisionExecutionPlan      `json:"plan,omitempty" yaml:"plan,omitempty"`
+	ProfileOrigin      string                      `json:"profile_origin,omitempty" yaml:"profile_origin,omitempty"`
+	ProfileVersion     string                      `json:"profile_version,omitempty" yaml:"profile_version,omitempty"`
+	PolicyDigest       string                      `json:"policy_digest,omitempty" yaml:"policy_digest,omitempty"`
 }
 
 func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringProjection {
@@ -102,6 +110,10 @@ func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringPro
 		RoutingHints:       slices.Clone(cfg.Decision.RoutingHints),
 		RequestContract:    cloneRequestContractConfig(cfg.RequestContract),
 		Deprecations:       slices.Clone(session.DecisionAuthoring.Deprecations),
+		RequestSource:      session.DecisionAuthoring.RequestSource,
+		RequestEnabled:     cfg.RequestContract.Enabled,
+		RoutingSource:      session.DecisionAuthoring.RoutingSource,
+		RoutingHintCount:   len(cfg.Decision.RoutingHints),
 	}
 	names := slices.Collect(maps.Keys(cfg.Decision.ProfileSpecs))
 	slices.Sort(names)
@@ -115,6 +127,11 @@ func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringPro
 			continue
 		}
 		out.Profiles = append(out.Profiles, DecisionProfileProjection{Name: name, Origin: metadata.Origin, Ref: metadata.Ref, Version: metadata.Version, Policy: policy, Plan: plan})
+		if name == out.RequestedProfile {
+			if digest, digestErr := agent.DecisionPolicyDigest(policy); digestErr == nil {
+				out.ProfileOrigin, out.ProfileVersion, out.PolicyDigest, out.Plan = metadata.Origin, metadata.Version, digest, &plan
+			}
+		}
 	}
 	return out
 }
@@ -256,6 +273,13 @@ func ValidateEffectiveTeam(spec *EffectiveTeamSpec) []ContractFinding {
 	}
 	findings := append(ValidateTeamTaskContracts(spec.session), ValidateTeamPolicyContracts(spec.session)...)
 	findings = append(findings, LintTeamContracts(spec.session)...)
+	for _, deprecation := range spec.session.DecisionAuthoring.Deprecations {
+		findings = append(findings, ContractFinding{Severity: FindingSeverityWarning, Code: "deprecated_decision_authoring", Field: deprecation, Message: deprecation + " is deprecated", Hint: "use the canonical decision authoring field"})
+	}
+	cfg := spec.session.Config
+	if cfg.Decision.DefaultProfile != "" && cfg.Decision.DefaultProfile != DecisionProfileOff && !cfg.RequestContract.Enabled {
+		findings = append(findings, ContractFinding{Severity: FindingSeverityError, Code: FindingRequirementInvalid, Field: "request", Message: "enabled decision profile requires a request contract", Hint: "add a top-level request with objective and success-criteria"})
+	}
 	return findings
 }
 

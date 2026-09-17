@@ -157,20 +157,21 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	writeResolvedLine(&b, "  ", "max-retries", spec.MaxRetries.Value, spec.MaxRetries.Source, spec.MaxRetries.Detail)
 
 	session := spec.RuntimeSession()
-	if spec.Decision.Profile != "" || len(spec.Decision.Profiles) > 0 || spec.Decision.RequestContract.Enabled {
-		fmt.Fprintln(&b, "\nDecision authoring")
-		if spec.Decision.Profile != "" {
-			fmt.Fprintf(&b, "  profile: %s (source: %s)\n", spec.Decision.Profile, spec.Decision.ProfileSource)
-		}
-		if spec.Decision.ResolvedProfileRef != "" {
-			fmt.Fprintf(&b, "  resolved-ref: %s\n", spec.Decision.ResolvedProfileRef)
-		}
-		if spec.Decision.RequestContract.Enabled {
-			fmt.Fprintf(&b, "  request objective: %s\n", spec.Decision.RequestContract.Objective)
-		}
-		if len(spec.Decision.Deprecations) > 0 {
-			fmt.Fprintf(&b, "  deprecated: %s\n", strings.Join(spec.Decision.Deprecations, ", "))
-		}
+	fmt.Fprintln(&b, "\nDecision authoring")
+	fmt.Fprintf(&b, "  profile source: %s\n", explainEmpty(spec.Decision.ProfileSource))
+	fmt.Fprintf(&b, "  requested: %s\n", explainEmpty(spec.Decision.RequestedProfile))
+	fmt.Fprintf(&b, "  resolved: %s\n", explainEmpty(spec.Decision.ResolvedProfileRef))
+	fmt.Fprintf(&b, "  origin: %s\n", explainEmpty(spec.Decision.ProfileOrigin))
+	fmt.Fprintf(&b, "  version: %s\n", explainEmpty(spec.Decision.ProfileVersion))
+	fmt.Fprintf(&b, "  policy digest: %s\n", explainEmpty(spec.Decision.PolicyDigest))
+	fmt.Fprintf(&b, "  request source: %s\n  request enabled: %t\n", explainEmpty(spec.Decision.RequestSource), spec.Decision.RequestEnabled)
+	fmt.Fprintf(&b, "  routing source: %s\n  hints: %d\n", explainEmpty(spec.Decision.RoutingSource), spec.Decision.RoutingHintCount)
+	if spec.Decision.Plan != nil {
+		plan := spec.Decision.Plan
+		fmt.Fprintf(&b, "  plan: proposal=%t reference=%t judges=%d aggregation=%s challenge=%d revision=%t premortem=%t forecast=%t finalization=%s\n", plan.Proposal, plan.Reference, plan.JudgeCount, plan.Aggregation, plan.ChallengeCount, plan.Revision, plan.Premortem, plan.Forecast, plan.Finalization)
+	}
+	if len(spec.Decision.Deprecations) > 0 {
+		fmt.Fprintf(&b, "  deprecated: %s\n", strings.Join(spec.Decision.Deprecations, ", "))
 	}
 	if session != nil {
 		cfg := session.Config
@@ -233,6 +234,13 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	}
 
 	return b.String()
+}
+
+func explainEmpty(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }
 
 // writeResolvedLine prints one "field: value" line followed by an indented

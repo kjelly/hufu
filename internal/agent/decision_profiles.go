@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -63,6 +64,17 @@ type builtInDecisionProfile struct {
 // BuiltInDecisionProfileCatalog returns the immutable catalog shipped with Hufu.
 func BuiltInDecisionProfileCatalog() DecisionProfileCatalog {
 	return builtInDecisionProfileCatalog{}
+}
+
+// BuiltInDecisionProfileMetadata returns the immutable catalog identities in
+// deterministic reference order for provider-free inspection commands.
+func BuiltInDecisionProfileMetadata() []DecisionProfileMetadata {
+	metadata := make([]DecisionProfileMetadata, 0, len(builtInDecisionProfiles))
+	for _, entry := range builtInDecisionProfiles {
+		metadata = append(metadata, entry.metadata)
+	}
+	slices.SortFunc(metadata, func(a, b DecisionProfileMetadata) int { return strings.Compare(a.Ref, b.Ref) })
+	return metadata
 }
 
 // ResolveDecisionProfileSpec resolves one exact built-in or team-local entry.
