@@ -60,6 +60,7 @@ type DecisionAuthoringMetadata struct {
 	UsedLegacyDefault  bool
 	UsedLegacyHints    bool
 	UsedLegacyContract bool
+	UsedErgonomicAlias bool
 	Deprecations       []string
 }
 
@@ -310,6 +311,7 @@ func NormalizeDecisionAuthoring(
 		cfg.DefaultProfile = requested
 		if aliasRef, isAlias := ergonomicDecisionAliases[requested]; isAlias {
 			if _, local := cfg.ProfileSpecs[requested]; !local {
+				metadata.UsedErgonomicAlias = true
 				ref := agent.DecisionProfileRef{Name: aliasRef}
 				cfg.ProfileSpecs[requested] = agent.DecisionProfileSpec{Preset: &ref}
 				policy, _, err := catalog.Resolve(ref)

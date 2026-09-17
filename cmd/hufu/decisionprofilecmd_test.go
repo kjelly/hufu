@@ -6,14 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/spf13/cobra"
 )
+
+func decisionProfileOutputCommand() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.SetOut(os.Stdout)
+	return cmd
+}
 
 func TestDecisionProfileInspectionUsesStableDTOs(t *testing.T) {
 	decisionJSON = true
 	decisionProfileTeam = ""
 	t.Cleanup(func() { decisionJSON = false; decisionProfileTeam = "" })
 	out := captureStdout(t, func() {
-		if err := runDecisionProfileList(decisionCmd, nil); err != nil {
+		if err := runDecisionProfileList(decisionProfileOutputCommand(), nil); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -28,7 +37,7 @@ func TestDecisionProfileInspectionUsesStableDTOs(t *testing.T) {
 		t.Fatalf("unexpected built-in list: %#v", list.Profiles)
 	}
 	out = captureStdout(t, func() {
-		if err := runDecisionProfileShow(decisionCmd, []string{"standard"}); err != nil {
+		if err := runDecisionProfileShow(decisionProfileOutputCommand(), []string{"standard"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -50,7 +59,7 @@ func TestDecisionProfileInspectionTeamAddsLocalProfile(t *testing.T) {
 	decisionProfileTeam = dir
 	t.Cleanup(func() { decisionJSON = false; decisionProfileTeam = "" })
 	out := captureStdout(t, func() {
-		if err := runDecisionProfileList(decisionCmd, nil); err != nil {
+		if err := runDecisionProfileList(decisionProfileOutputCommand(), nil); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -58,12 +67,74 @@ func TestDecisionProfileInspectionTeamAddsLocalProfile(t *testing.T) {
 		t.Fatalf("team list = %s", out)
 	}
 	out = captureStdout(t, func() {
-		if err := runDecisionProfileShow(decisionCmd, []string{"custom"}); err != nil {
+		if err := runDecisionProfileShow(decisionProfileOutputCommand(), []string{"custom"}); err != nil {
 			t.Fatal(err)
 		}
 	})
 	if !strings.Contains(out, `"requested_name": "custom"`) || !strings.Contains(out, `"origin": "team-inline"`) {
 		t.Fatalf("team show = %s", out)
+	}
+}
+
+func TestDecisionProfileInspectionDistinguishesSyntheticAliasFromLocalOverride(t *testing.T) {
+	tests := map[string]struct {
+		manifest string
+		kind     string
+	}{
+		"synthetic alias remains alias": {
+			manifest: "decision:\n  profile: standard\n",
+			kind:     "alias",
+		},
+		"local standard replaces alias": {
+			manifest: "decision:\n  profile: standard\n  profiles:\n    standard:\n      policy:\n        independent-judgments: 2\n",
+			kind:     "local",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(tt.manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			decisionJSON = true
+			decisionProfileTeam = dir
+			t.Cleanup(func() { decisionJSON = false; decisionProfileTeam = "" })
+			out := captureStdout(t, func() {
+				if err := runDecisionProfileList(decisionProfileOutputCommand(), nil); err != nil {
+					t.Fatal(err)
+				}
+			})
+			var list decisionProfileListView
+			if err := json.Unmarshal([]byte(out), &list); err != nil {
+				t.Fatal(err)
+			}
+			matches := 0
+			for _, item := range list.Profiles {
+				if item.Name == "standard" {
+					matches++
+					if item.Kind != tt.kind {
+						t.Fatalf("standard kind = %q, want %q", item.Kind, tt.kind)
+					}
+				}
+			}
+			if matches != 1 {
+				t.Fatalf("standard rows = %d, want 1: %#v", matches, list.Profiles)
+			}
+		})
+	}
+}
+
+func TestDecisionProfileInspectionTeamStillResolvesBuiltins(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: inspect\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	view, err := resolveDecisionProfileView("standard", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Identity.ResolvedRef != agent.DecisionProfileBuiltinStandardV1 {
+		t.Fatalf("resolved ref = %q", view.Identity.ResolvedRef)
 	}
 }
 

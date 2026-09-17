@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,66 @@ func TestRunTeamExplain_JSONIsWellFormed(t *testing.T) {
 	}
 	if !strings.Contains(out, `"key": "developer"`) {
 		t.Errorf("json output missing developer agent entry; got:\n%s", out)
+	}
+	var projection explainOutput
+	if err := json.Unmarshal([]byte(out), &projection); err != nil {
+		t.Fatal(err)
+	}
+	if projection.Decision.SchemaVersion != 1 || projection.Decision.Kind != "decision_profile" || projection.Decision.Enabled {
+		t.Fatalf("disabled decision projection = %#v", projection.Decision)
+	}
+	if projection.Request.Enabled || projection.Routing.HintCount != 0 {
+		t.Fatalf("disabled request/routing projection = %#v / %#v", projection.Request, projection.Routing)
+	}
+}
+
+func TestRunTeamExplain_ExactBuiltinUsesStableDecisionProjection(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "request:\n  objective: keep service safe\n  success-criteria:\n    - id: safe\n      statement: service remains safe\ndecision:\n  profile: builtin/standard@v1\n  routing:\n    hints:\n      - when-goal-contains: storage\n        preferred-capabilities: [architecture]\n"
+	writeExplainAgentFile(t, dir, "team.yaml", manifest)
+
+	teamExplainFormat = "json"
+	t.Cleanup(func() { teamExplainFormat = "text" })
+	out, err := runTeamExplainCaptured(t, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection explainOutput
+	if err := json.Unmarshal([]byte(out), &projection); err != nil {
+		t.Fatal(err)
+	}
+	if !projection.Decision.Enabled || projection.Decision.Identity.ResolvedRef != "builtin/standard@v1" || projection.Decision.Plan == nil {
+		t.Fatalf("decision projection = %#v", projection.Decision)
+	}
+	if projection.Request.Source != "request" || !projection.Request.Enabled {
+		t.Fatalf("request projection = %#v", projection.Request)
+	}
+	if projection.Routing.Source != "decision.routing.hints" || projection.Routing.HintCount != 1 {
+		t.Fatalf("routing projection = %#v", projection.Routing)
+	}
+}
+
+func TestRunTeamExplain_RedactsDecisionAuthoringProjection(t *testing.T) {
+	dir := t.TempDir()
+	secret := "SuperSecretToken-987654321"
+	manifest := "request:\n  objective: api_token=" + secret + "\n  success-criteria:\n    - id: safe\n      statement: keep service safe\ndecision:\n  profile: standard\n"
+	writeExplainAgentFile(t, dir, "team.yaml", manifest)
+
+	for _, format := range []string{"json", "yaml", "text"} {
+		t.Run(format, func(t *testing.T) {
+			teamExplainFormat = format
+			t.Cleanup(func() { teamExplainFormat = "text" })
+			out, err := runTeamExplainCaptured(t, []string{dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out, secret) {
+				t.Fatalf("%s output exposed recognizable secret: %s", format, out)
+			}
+			if format == "json" && !json.Valid([]byte(out)) {
+				t.Fatalf("redacted JSON is invalid: %s", out)
+			}
+		})
 	}
 }
 

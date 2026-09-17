@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	internalteam "github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 var (
@@ -47,12 +48,16 @@ func runTeamExplain(_ *cobra.Command, args []string) error {
 
 	switch strings.ToLower(strings.TrimSpace(teamExplainFormat)) {
 	case "", "text":
-		_, err = fmt.Fprint(os.Stdout, renderTeamExplainText(spec))
+		_, err = fmt.Fprint(os.Stdout, utils.RedactSecrets(renderTeamExplainText(spec)))
 		return err
 	case "json":
 		out, err := json.MarshalIndent(buildExplainOutput(spec), "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal explain output: %w", err)
+		}
+		out, err = utils.RedactJSON(out)
+		if err != nil {
+			return fmt.Errorf("redact explain output: %w", err)
 		}
 		_, err = fmt.Fprintln(os.Stdout, string(out))
 		return err
@@ -61,7 +66,7 @@ func runTeamExplain(_ *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("marshal explain output: %w", err)
 		}
-		_, err = fmt.Fprint(os.Stdout, string(out))
+		_, err = fmt.Fprint(os.Stdout, utils.RedactSecrets(string(out)))
 		return err
 	default:
 		return fmt.Errorf("unknown --format %q: supported formats are text, yaml, json", teamExplainFormat)
@@ -86,15 +91,27 @@ type explainAgent struct {
 // not for reconstructing runtime state (that projection point is
 // EffectiveTeamSpec.RuntimeSession(), reserved for Go callers).
 type explainOutput struct {
-	Name        internalteam.ResolvedValue[string]       `json:"name" yaml:"name"`
-	Description internalteam.ResolvedValue[string]       `json:"description,omitempty" yaml:"description,omitempty"`
-	Model       internalteam.ResolvedValue[string]       `json:"model,omitempty" yaml:"model,omitempty"`
-	MaxRounds   internalteam.ResolvedValue[int]          `json:"max_rounds" yaml:"max_rounds"`
-	Timeout     internalteam.ResolvedValue[int64]        `json:"timeout" yaml:"timeout"`
-	MaxRetries  internalteam.ResolvedValue[int]          `json:"max_retries" yaml:"max_retries"`
-	Agents      []explainAgent                           `json:"agents" yaml:"agents"`
-	Decision    internalteam.DecisionAuthoringProjection `json:"decision" yaml:"decision"`
-	Diagnostics []internalteam.ContractFinding           `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
+	Name        internalteam.ResolvedValue[string] `json:"name" yaml:"name"`
+	Description internalteam.ResolvedValue[string] `json:"description,omitempty" yaml:"description,omitempty"`
+	Model       internalteam.ResolvedValue[string] `json:"model,omitempty" yaml:"model,omitempty"`
+	MaxRounds   internalteam.ResolvedValue[int]    `json:"max_rounds" yaml:"max_rounds"`
+	Timeout     internalteam.ResolvedValue[int64]  `json:"timeout" yaml:"timeout"`
+	MaxRetries  internalteam.ResolvedValue[int]    `json:"max_retries" yaml:"max_retries"`
+	Agents      []explainAgent                     `json:"agents" yaml:"agents"`
+	Decision    decisionProfileView                `json:"decision" yaml:"decision"`
+	Request     explainRequestView                 `json:"request" yaml:"request"`
+	Routing     explainRoutingView                 `json:"routing" yaml:"routing"`
+	Diagnostics []internalteam.ContractFinding     `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
+}
+
+type explainRequestView struct {
+	Source  string `json:"source,omitempty" yaml:"source,omitempty"`
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+}
+
+type explainRoutingView struct {
+	Source    string `json:"source,omitempty" yaml:"source,omitempty"`
+	HintCount int    `json:"hint_count" yaml:"hint_count"`
 }
 
 // dedupedExplainAgents collapses EffectiveTeamSpec.Agents' dual file-alias/
@@ -127,6 +144,21 @@ func dedupedExplainAgents(spec *internalteam.EffectiveTeamSpec) []explainAgent {
 }
 
 func buildExplainOutput(spec *internalteam.EffectiveTeamSpec) explainOutput {
+	decision := decisionProfileView{
+		SchemaVersion: 1,
+		Kind:          "decision_profile",
+		Enabled:       spec.Decision.Plan != nil,
+		Identity: decisionProfileIdentityView{
+			RequestedName: spec.Decision.RequestedProfile,
+			ResolvedRef:   spec.Decision.ResolvedProfileRef,
+			Origin:        spec.Decision.ProfileOrigin,
+			Version:       spec.Decision.ProfileVersion,
+			PolicyDigest:  spec.Decision.PolicyDigest,
+		},
+	}
+	if spec.Decision.Plan != nil {
+		decision.Plan = decisionPlanViewFromPlan(*spec.Decision.Plan, spec.Decision.SelectedPolicy)
+	}
 	return explainOutput{
 		Name:        spec.Name,
 		Description: spec.Description,
@@ -135,13 +167,16 @@ func buildExplainOutput(spec *internalteam.EffectiveTeamSpec) explainOutput {
 		Timeout:     spec.Timeout,
 		MaxRetries:  spec.MaxRetries,
 		Agents:      dedupedExplainAgents(spec),
-		Decision:    spec.Decision,
+		Decision:    decision,
+		Request:     explainRequestView{Source: spec.Decision.RequestSource, Enabled: spec.Decision.RequestEnabled},
+		Routing:     explainRoutingView{Source: spec.Decision.RoutingSource, HintCount: spec.Decision.RoutingHintCount},
 		Diagnostics: internalteam.ValidateEffectiveTeam(spec),
 	}
 }
 
 func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	var b strings.Builder
+	projection := buildExplainOutput(spec)
 	fmt.Fprintf(&b, "Team: %s\n\n", spec.Name.Value)
 
 	fmt.Fprintln(&b, "Resolution")
@@ -159,19 +194,18 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	session := spec.RuntimeSession()
 	fmt.Fprintln(&b, "\nDecision authoring")
 	fmt.Fprintf(&b, "  profile source: %s\n", explainEmpty(spec.Decision.ProfileSource))
-	fmt.Fprintf(&b, "  requested: %s\n", explainEmpty(spec.Decision.RequestedProfile))
-	fmt.Fprintf(&b, "  resolved: %s\n", explainEmpty(spec.Decision.ResolvedProfileRef))
-	fmt.Fprintf(&b, "  origin: %s\n", explainEmpty(spec.Decision.ProfileOrigin))
-	fmt.Fprintf(&b, "  version: %s\n", explainEmpty(spec.Decision.ProfileVersion))
-	fmt.Fprintf(&b, "  policy digest: %s\n", explainEmpty(spec.Decision.PolicyDigest))
-	fmt.Fprintf(&b, "  request source: %s\n  request enabled: %t\n", explainEmpty(spec.Decision.RequestSource), spec.Decision.RequestEnabled)
-	fmt.Fprintf(&b, "  routing source: %s\n  hints: %d\n", explainEmpty(spec.Decision.RoutingSource), spec.Decision.RoutingHintCount)
-	if spec.Decision.Plan != nil {
-		plan := spec.Decision.Plan
-		fmt.Fprintf(&b, "  plan: proposal=%t reference=%t judges=%d aggregation=%s challenge=%d revision=%t premortem=%t forecast=%t finalization=%s\n", plan.Proposal, plan.Reference, plan.JudgeCount, plan.Aggregation, plan.ChallengeCount, plan.Revision, plan.Premortem, plan.Forecast, plan.Finalization)
-	}
-	if len(spec.Decision.Deprecations) > 0 {
-		fmt.Fprintf(&b, "  deprecated: %s\n", strings.Join(spec.Decision.Deprecations, ", "))
+	fmt.Fprintf(&b, "  requested: %s\n", explainEmpty(projection.Decision.Identity.RequestedName))
+	fmt.Fprintf(&b, "  resolved: %s\n", explainEmpty(projection.Decision.Identity.ResolvedRef))
+	fmt.Fprintf(&b, "  origin: %s\n", explainEmpty(projection.Decision.Identity.Origin))
+	fmt.Fprintf(&b, "  version: %s\n", explainEmpty(projection.Decision.Identity.Version))
+	fmt.Fprintf(&b, "  policy digest: %s\n", explainEmpty(projection.Decision.Identity.PolicyDigest))
+	fmt.Fprintln(&b, "\nRequest contract")
+	fmt.Fprintf(&b, "  source: %s\n  enabled: %t\n", explainEmpty(projection.Request.Source), projection.Request.Enabled)
+	fmt.Fprintln(&b, "\nRouting")
+	fmt.Fprintf(&b, "  source: %s\n  hints: %d\n", explainEmpty(projection.Routing.Source), projection.Routing.HintCount)
+	if plan := projection.Decision.Plan; plan != nil {
+		fmt.Fprintln(&b, "\nDecision plan")
+		fmt.Fprintf(&b, "  proposal: %t\n  reference: %t\n  judges: %d\n  aggregation: %s\n  challenge: %d\n  revision: %t\n  premortem: %t\n  forecast: %t\n  finalization: %s\n", plan.Proposal, plan.Reference, plan.JudgeCount, plan.Aggregation, plan.ChallengeCount, plan.Revision, plan.Premortem, plan.Forecast, plan.Finalization)
 	}
 	if session != nil {
 		cfg := session.Config
@@ -226,7 +260,7 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 		}
 	}
 
-	if findings := internalteam.ValidateEffectiveTeam(spec); len(findings) > 0 {
+	if findings := projection.Diagnostics; len(findings) > 0 {
 		fmt.Fprintln(&b, "\nDiagnostics")
 		for _, f := range findings {
 			fmt.Fprintf(&b, "  [%s] %s: %s\n", f.Severity, f.Field, f.Message)

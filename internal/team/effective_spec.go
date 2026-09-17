@@ -73,6 +73,7 @@ type DecisionProfileProjection struct {
 	Version string                `json:"version,omitempty" yaml:"version,omitempty"`
 	Policy  agent.DecisionPolicy  `json:"policy" yaml:"policy"`
 	Plan    DecisionExecutionPlan `json:"plan" yaml:"plan"`
+	Local   bool                  `json:"-" yaml:"-"`
 }
 
 // DecisionAuthoringProjection is shared by team explain and profile
@@ -95,6 +96,7 @@ type DecisionAuthoringProjection struct {
 	ProfileOrigin      string                      `json:"profile_origin,omitempty" yaml:"profile_origin,omitempty"`
 	ProfileVersion     string                      `json:"profile_version,omitempty" yaml:"profile_version,omitempty"`
 	PolicyDigest       string                      `json:"policy_digest,omitempty" yaml:"policy_digest,omitempty"`
+	SelectedPolicy     agent.DecisionPolicy        `json:"-" yaml:"-"`
 }
 
 func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringProjection {
@@ -126,10 +128,17 @@ func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringPro
 		if err != nil {
 			continue
 		}
-		out.Profiles = append(out.Profiles, DecisionProfileProjection{Name: name, Origin: metadata.Origin, Ref: metadata.Ref, Version: metadata.Version, Policy: policy, Plan: plan})
-		if name == out.RequestedProfile {
-			if digest, digestErr := agent.DecisionPolicyDigest(policy); digestErr == nil {
+		isSyntheticAlias := session.DecisionAuthoring.UsedErgonomicAlias && name == session.DecisionAuthoring.RequestedProfile
+		out.Profiles = append(out.Profiles, DecisionProfileProjection{Name: name, Origin: metadata.Origin, Ref: metadata.Ref, Version: metadata.Version, Policy: policy, Plan: plan, Local: !isSyntheticAlias})
+	}
+	if out.RequestedProfile != "" && out.RequestedProfile != agent.DecisionProfileOff {
+		policy, metadata, ok, err := agent.ResolveDecisionProfileSpec(cfg.Decision, out.RequestedProfile, agent.BuiltInDecisionProfileCatalog())
+		if err == nil && ok {
+			plan, planErr := CompileDecisionExecutionPlan(policy)
+			digest, digestErr := agent.DecisionPolicyDigest(policy)
+			if planErr == nil && digestErr == nil {
 				out.ProfileOrigin, out.ProfileVersion, out.PolicyDigest, out.Plan = metadata.Origin, metadata.Version, digest, &plan
+				out.SelectedPolicy = policy
 			}
 		}
 	}

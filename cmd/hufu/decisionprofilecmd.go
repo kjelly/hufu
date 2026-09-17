@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"slices"
@@ -57,6 +58,10 @@ type decisionProfileListView struct {
 	Profiles      []decisionProfileListItemView `json:"profiles" yaml:"profiles"`
 }
 
+func decisionPlanViewFromPlan(plan internalteam.DecisionExecutionPlan, policy agent.DecisionPolicy) *decisionPlanView {
+	return &decisionPlanView{Proposal: plan.Proposal, Reference: plan.Reference, JudgeCount: plan.JudgeCount, Aggregation: plan.Aggregation, ChallengeCount: plan.ChallengeCount, Revision: plan.Revision, Premortem: plan.Premortem, Forecast: plan.Forecast, Finalization: plan.Finalization, PolicyMaxTokens: policy.MaxTokens, StopMaxTokens: policy.Discipline.Stop.MaxTokens}
+}
+
 var decisionProfileCmd = &cobra.Command{Use: "profile", Short: "Inspect built-in and team decision profiles"}
 var decisionProfileListCmd = &cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: runDecisionProfileList}
 var decisionProfileShowCmd = &cobra.Command{Use: "show <profile>", Args: cobra.ExactArgs(1), RunE: runDecisionProfileShow}
@@ -100,7 +105,7 @@ func runDecisionProfileList(cmd *cobra.Command, _ []string) error {
 	items := []decisionProfileListItemView{{Name: agent.DecisionProfileOff, Kind: "off"}}
 	for _, metadata := range agent.BuiltInDecisionProfileMetadata() {
 		items = append(items, decisionProfileListItemView{Name: metadata.Ref, Kind: "builtin", ResolvesTo: metadata.Ref})
-		name := strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(metadata.Ref, "builtin/"), "@v1"), "")
+		name := strings.TrimSuffix(strings.TrimPrefix(metadata.Ref, "builtin/"), "@v1")
 		if name == "high-stakes" || name == "standard" || name == "light" {
 			items = append(items, decisionProfileListItemView{Name: name, Kind: "alias", ResolvesTo: metadata.Ref})
 		}
@@ -116,7 +121,9 @@ func runDecisionProfileList(cmd *cobra.Command, _ []string) error {
 		}
 		local := make(map[string]decisionProfileListItemView)
 		for _, profile := range spec.Decision.Profiles {
-			local[profile.Name] = decisionProfileListItemView{Name: profile.Name, Kind: "local", ResolvesTo: profile.Ref}
+			if profile.Local {
+				local[profile.Name] = decisionProfileListItemView{Name: profile.Name, Kind: "local", ResolvesTo: profile.Ref}
+			}
 		}
 		filtered := items[:0]
 		for _, item := range items {
@@ -132,7 +139,7 @@ func runDecisionProfileList(cmd *cobra.Command, _ []string) error {
 		}
 		items = filtered
 	}
-	slices.SortFunc(items, func(a, b decisionProfileListItemView) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(items, func(a, b decisionProfileListItemView) int { return cmp.Compare(a.Name, b.Name) })
 	view := decisionProfileListView{SchemaVersion: 1, Kind: "decision_profile_list", Profiles: items}
 	if decisionJSON {
 		return writeDecisionJSON(cmd, view)
@@ -154,7 +161,7 @@ func profileViewFromPolicy(name, kind string, policy agent.DecisionPolicy, metad
 	if err != nil {
 		return decisionProfileView{}, err
 	}
-	return decisionProfileView{SchemaVersion: 1, Kind: kind, Enabled: true, Identity: decisionProfileIdentityView{RequestedName: name, ResolvedRef: metadata.Ref, Origin: metadata.Origin, Version: metadata.Version, PolicyDigest: digest}, Plan: &decisionPlanView{Proposal: plan.Proposal, Reference: plan.Reference, JudgeCount: plan.JudgeCount, Aggregation: plan.Aggregation, ChallengeCount: plan.ChallengeCount, Revision: plan.Revision, Premortem: plan.Premortem, Forecast: plan.Forecast, Finalization: plan.Finalization, PolicyMaxTokens: policy.MaxTokens, StopMaxTokens: policy.Discipline.Stop.MaxTokens}}, nil
+	return decisionProfileView{SchemaVersion: 1, Kind: kind, Enabled: true, Identity: decisionProfileIdentityView{RequestedName: name, ResolvedRef: metadata.Ref, Origin: metadata.Origin, Version: metadata.Version, PolicyDigest: digest}, Plan: decisionPlanViewFromPlan(plan, policy)}, nil
 }
 
 func resolveDecisionProfileView(name, teamName string) (decisionProfileView, error) {
@@ -172,11 +179,10 @@ func resolveDecisionProfileView(name, teamName string) (decisionProfileView, err
 			return decisionProfileView{}, err
 		}
 		for _, profile := range spec.Decision.Profiles {
-			if profile.Name == name {
+			if profile.Name == name && profile.Local {
 				return profileViewFromPolicy(name, "decision_profile", profile.Policy, agent.DecisionProfileMetadata{Ref: profile.Ref, Origin: profile.Origin, Version: profile.Version})
 			}
 		}
-		return decisionProfileView{}, fmt.Errorf("decision profile %q is not defined in team %q", name, teamName)
 	}
 	ref := name
 	if alias := decisionAliasRef(name); alias != "" {

@@ -69,6 +69,9 @@ func TestNormalizeDecisionAuthoringCanonicalAliasMatchesLegacyPreset(t *testing.
 	if canonicalMeta.ResolvedProfileRef != agent.DecisionProfileBuiltinStandardV1 || legacyMeta.ResolvedProfileRef != agent.DecisionProfileBuiltinStandardV1 {
 		t.Fatalf("resolved refs = %q / %q", canonicalMeta.ResolvedProfileRef, legacyMeta.ResolvedProfileRef)
 	}
+	if !canonicalMeta.UsedErgonomicAlias || legacyMeta.UsedErgonomicAlias {
+		t.Fatalf("ergonomic alias provenance = %#v / %#v", canonicalMeta, legacyMeta)
+	}
 }
 
 func TestNormalizeDecisionAuthoringLocalProfileWinsAlias(t *testing.T) {
