@@ -37,3 +37,25 @@ func TestNushellCompletionIncludesInspectCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestNushellCompletionIncludesWorkspaceCommands(t *testing.T) {
+	var output bytes.Buffer
+	if err := generateNushellCompletion(&output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`def "nu-complete hufu workspace projects"`,
+		`^hufu completion-helper projects`,
+		`export extern "hufu workspace register"`,
+		`export extern "hufu workspace list"`,
+		`export extern "hufu workspace show"`,
+		`export extern "hufu workspace path"`,
+		`export extern "hufu workspace subject-path"`,
+		`export extern "hufu workspace alias set"`,
+		`export extern "hufu workspace alias clear"`,
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("Nushell completion does not contain %q", expected)
+		}
+	}
+}

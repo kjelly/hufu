@@ -1,14 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 var completionCmd = &cobra.Command{
@@ -78,7 +81,7 @@ func init() {
 // PowerShell in completion_dynamic.go, so results and scope rules stay in
 // one place.
 var completionHelperCmd = &cobra.Command{
-	Use:    "completion-helper [teams|agents|runs|tasks|branches|proposals]",
+	Use:    "completion-helper [teams|agents|runs|tasks|branches|proposals|projects]",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -128,6 +131,39 @@ var completionHelperCmd = &cobra.Command{
 			for _, id := range completionHelperProposalIDs(getWorkspace(), completionHelperProject, completionHelperTeam) {
 				fmt.Println(id)
 			}
+		case "projects":
+			stateRoot, err := workspacepkg.DefaultStateRoot()
+			if err != nil {
+				return err
+			}
+			registry, err := workspacepkg.OpenReadOnly(stateRoot)
+			if errors.Is(err, workspacepkg.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			defer func() { _ = registry.Close() }()
+			projects, err := registry.ListProjects(cmd.Context(), workspacepkg.ListOptions{})
+			if err != nil {
+				return err
+			}
+			unique := make(map[string]struct{})
+			for _, project := range projects {
+				for _, value := range []string{project.ID, project.Alias, project.Slug} {
+					if value != "" {
+						unique[value] = struct{}{}
+					}
+				}
+			}
+			values := make([]string, 0, len(unique))
+			for value := range unique {
+				values = append(values, value)
+			}
+			slices.Sort(values)
+			for _, value := range values {
+				fmt.Println(value)
+			}
 		}
 		return nil
 	},
@@ -176,6 +212,10 @@ def "nu-complete hufu proposals" [context: string] {
   let team = if ($team_matches | is-empty) { "" } else { $team_matches.0.v }
   if $project == "" or $team == "" { return [] }
   ^hufu completion-helper proposals --project $project --team $team | lines
+}
+
+def "nu-complete hufu workspace projects" [] {
+  ^hufu completion-helper projects | lines
 }
 
 # Run an agent team to accomplish a task
@@ -321,6 +361,14 @@ export extern "hufu session resume" [--workspace(-w): string --team: string --ru
 export extern "hufu session retry" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches' --task: string@'nu-complete hufu tasks' --attempt: int --output: string]
 export extern "hufu session reconcile" [--workspace(-w): string --team: string --run: string@'nu-complete hufu runs' --branch: string@'nu-complete hufu branches' --task: string@'nu-complete hufu tasks' --attempt: int --output: string]
 export extern "hufu examples" [--format: string]
+
+export extern "hufu workspace register" [path?: path --output: string]
+export extern "hufu workspace list" [--all --output: string]
+export extern "hufu workspace show" [selector?: string@'nu-complete hufu workspace projects' --output: string]
+export extern "hufu workspace path" [selector?: string@'nu-complete hufu workspace projects' --team: string]
+export extern "hufu workspace subject-path" [selector?: string@'nu-complete hufu workspace projects']
+export extern "hufu workspace alias set" [selector: string@'nu-complete hufu workspace projects' alias: string --output: string]
+export extern "hufu workspace alias clear" [selector: string@'nu-complete hufu workspace projects' --output: string]
 
 def "nu-complete hufu inspect formats" [] {
   [text json]

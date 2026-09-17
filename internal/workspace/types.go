@@ -52,6 +52,21 @@ type Operation struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 }
 
+type TrashWorkspace struct {
+	TrashID              string     `json:"trash_id"`
+	WorkspaceID          string     `json:"workspace_id"`
+	ProjectID            string     `json:"project_id"`
+	TeamName             string     `json:"team_name"`
+	ContextScopeID       string     `json:"context_scope_id"`
+	OriginalControlRoot  string     `json:"original_control_root"`
+	TrashPath            string     `json:"trash_path"`
+	State                string     `json:"state"`
+	OperationID          string     `json:"operation_id,omitempty"`
+	RequiresFreshSession bool       `json:"requires_fresh_session"`
+	DeletedAt            time.Time  `json:"deleted_at"`
+	PurgeAfter           *time.Time `json:"purge_after,omitempty"`
+}
+
 type ListOptions struct {
 	Selector string
 }
@@ -66,6 +81,8 @@ type Registry interface {
 	RebindProject(context.Context, string, string) error
 	GetWorkspace(context.Context, string, string) (Workspace, error)
 	ListWorkspaces(context.Context, string) ([]Workspace, error)
+	ListTrashWorkspaces(context.Context) ([]TrashWorkspace, error)
+	ListIncompleteOperations(context.Context) ([]Operation, error)
 	CreateWorkspace(context.Context, string, string) (Workspace, error)
 	Close() error
 }

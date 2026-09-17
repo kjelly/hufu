@@ -1,0 +1,105 @@
+=== register-json ===
+{
+  "schema_version": 1,
+  "data": {
+    "project": {
+      "id": "prj_11111111111111111111111111111111",
+      "slug": "project",
+      "subject_root": "<ROOT>/project",
+      "state_dir": "<ROOT>/state/projects/project--1111111111111111",
+      "status": "active",
+      "created_at": "2026-09-17T13:00:00Z",
+      "updated_at": "2026-09-17T13:00:00Z"
+    }
+  },
+  "warnings": []
+}
+=== alias-text ===
+alias=demo
+project_id=prj_11111111111111111111111111111111
+slug=project
+state_dir=<ROOT>/state/projects/project--1111111111111111
+subject_root=<ROOT>/project
+=== show-json ===
+{
+  "schema_version": 1,
+  "data": {
+    "project": {
+      "id": "prj_11111111111111111111111111111111",
+      "slug": "project",
+      "alias": "demo",
+      "subject_root": "<ROOT>/project",
+      "state_dir": "<ROOT>/state/projects/project--1111111111111111",
+      "status": "active",
+      "created_at": "2026-09-17T13:00:00Z",
+      "updated_at": "2026-09-17T13:00:00Z"
+    },
+    "workspaces": [
+      {
+        "id": "ws_22222222222222222222222222222222",
+        "project_id": "prj_11111111111111111111111111111111",
+        "team_name": "default",
+        "context_scope_id": "<ROOT>/project",
+        "control_root": "<ROOT>/state/projects/project--1111111111111111/teams/default",
+        "state": "active",
+        "requires_fresh_session": false,
+        "created_at": "2026-09-17T13:00:00Z",
+        "updated_at": "2026-09-17T13:00:00Z"
+      }
+    ]
+  },
+  "warnings": []
+}
+=== list-text ===
+PROJECT_ID	ALIAS	SLUG	SUBJECT_ROOT
+prj_11111111111111111111111111111111	demo	project	<ROOT>/project
+=== list-all-json ===
+{
+  "schema_version": 1,
+  "data": {
+    "projects": [
+      {
+        "id": "prj_11111111111111111111111111111111",
+        "slug": "project",
+        "alias": "demo",
+        "subject_root": "<ROOT>/project",
+        "state_dir": "<ROOT>/state/projects/project--1111111111111111",
+        "status": "active",
+        "created_at": "2026-09-17T13:00:00Z",
+        "updated_at": "2026-09-17T13:00:00Z"
+      }
+    ],
+    "trash": [],
+    "incomplete_operations": [
+      {
+        "id": "op_55555555555555555555555555555555",
+        "kind": "create",
+        "project_id": "prj_11111111111111111111111111111111",
+        "workspace_id": "ws_44444444444444444444444444444444",
+        "state": "started",
+        "started_at": "2026-09-17T13:00:00Z"
+      }
+    ]
+  },
+  "warnings": []
+}
+=== path ===
+<ROOT>/state/projects/project--1111111111111111/teams/default
+=== subject-path ===
+<ROOT>/project
+=== alias-clear-json ===
+{
+  "schema_version": 1,
+  "data": {
+    "project": {
+      "id": "prj_11111111111111111111111111111111",
+      "slug": "project",
+      "subject_root": "<ROOT>/project",
+      "state_dir": "<ROOT>/state/projects/project--1111111111111111",
+      "status": "active",
+      "created_at": "2026-09-17T13:00:00Z",
+      "updated_at": "2026-09-17T13:00:00Z"
+    }
+  },
+  "warnings": []
+}

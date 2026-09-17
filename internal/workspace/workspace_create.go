@@ -257,10 +257,62 @@ func (r *SQLiteRegistry) runCreateHook(stage CreateStage) error {
 }
 
 func (r *SQLiteRegistry) GetOperation(ctx context.Context, operationID string) (Operation, error) {
+	return scanOperation(r.db.QueryRowContext(ctx, operationSelect+" WHERE id=?", operationID))
+}
+
+func (r *SQLiteRegistry) ListIncompleteOperations(ctx context.Context) ([]Operation, error) {
+	rows, err := r.db.QueryContext(ctx, operationSelect+" WHERE state<>'completed' ORDER BY started_at,id")
+	if err != nil {
+		return nil, fmt.Errorf("list incomplete registry operations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var operations []Operation
+	for rows.Next() {
+		operation, scanErr := scanOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		operations = append(operations, operation)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("list incomplete registry operations: %w", err)
+	}
+	return operations, nil
+}
+
+func (r *SQLiteRegistry) ListTrashWorkspaces(ctx context.Context) ([]TrashWorkspace, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT trash_id,workspace_id,project_id,team_name,context_scope_id,original_control_root,trash_path,state,COALESCE(operation_id,''),requires_fresh_session,deleted_at,purge_after FROM trash_workspaces ORDER BY project_id,team_name,trash_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list trash workspaces: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var trash []TrashWorkspace
+	for rows.Next() {
+		var item TrashWorkspace
+		var requiresFresh int
+		var deletedAt int64
+		var purgeAfter sql.NullInt64
+		if err = rows.Scan(&item.TrashID, &item.WorkspaceID, &item.ProjectID, &item.TeamName, &item.ContextScopeID, &item.OriginalControlRoot, &item.TrashPath, &item.State, &item.OperationID, &requiresFresh, &deletedAt, &purgeAfter); err != nil {
+			return nil, fmt.Errorf("scan trash workspace: %w", err)
+		}
+		item.RequiresFreshSession = requiresFresh != 0
+		item.DeletedAt = time.UnixMilli(deletedAt).UTC()
+		item.PurgeAfter = nullableTime(purgeAfter)
+		trash = append(trash, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("list trash workspaces: %w", err)
+	}
+	return trash, nil
+}
+
+const operationSelect = `SELECT id,kind,COALESCE(project_id,''),COALESCE(workspace_id,''),state,detail_code,started_at,finished_at FROM registry_operations`
+
+func scanOperation(row rowScanner) (Operation, error) {
 	var operation Operation
 	var startedAt int64
 	var finishedAt sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT id,kind,COALESCE(project_id,''),COALESCE(workspace_id,''),state,detail_code,started_at,finished_at FROM registry_operations WHERE id=?`, operationID).Scan(&operation.ID, &operation.Kind, &operation.ProjectID, &operation.WorkspaceID, &operation.State, &operation.DetailCode, &startedAt, &finishedAt)
+	err := row.Scan(&operation.ID, &operation.Kind, &operation.ProjectID, &operation.WorkspaceID, &operation.State, &operation.DetailCode, &startedAt, &finishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Operation{}, ErrNotFound
 	}

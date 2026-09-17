@@ -263,7 +263,7 @@ func (r *SQLiteRegistry) ListProjects(ctx context.Context, options ListOptions) 
 		query += " WHERE slug=? OR alias=?"
 		arguments = append(arguments, strings.ToLower(options.Selector), strings.ToLower(options.Selector))
 	}
-	rows, err := r.db.QueryContext(ctx, query+" ORDER BY slug, id", arguments...)
+	rows, err := r.db.QueryContext(ctx, query+" ORDER BY id", arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
