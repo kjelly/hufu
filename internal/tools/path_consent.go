@@ -396,8 +396,10 @@ func readConsentLine(reader *bufio.Reader) string {
 // consentStdin is the shared line source for consent prompts. A prompt that
 // times out leaves its stdin read goroutine alive; keeping one channel and a
 // pending flag means the next prompt reuses that read instead of stacking a
-// second reader that would race it for lines. Prompts are serialized on
-// StdinMu, so this state is only touched by one prompt at a time.
+// second reader that would race it for lines. Pending stays set until the
+// result is consumed, so a reader completing between prompts cannot race a
+// second reader. Prompts are serialized on StdinMu, so this state is only
+// touched by one prompt at a time.
 var consentStdin struct {
 	mu      sync.Mutex
 	ch      chan string
@@ -417,6 +419,9 @@ func drainStaleConsentInput() {
 	}
 	select {
 	case <-ch:
+		consentStdin.mu.Lock()
+		consentStdin.pending = false
+		consentStdin.mu.Unlock()
 	default:
 	}
 }
@@ -438,21 +443,25 @@ func consentReadLineWithTimeout(timeout time.Duration) (string, bool) {
 		go func() {
 			line := read()
 			ch <- line
-			consentStdin.mu.Lock()
-			consentStdin.pending = false
-			consentStdin.mu.Unlock()
 		}()
 	}
 	ch := consentStdin.ch
 	consentStdin.mu.Unlock()
 
 	if timeout <= 0 {
-		return <-ch, true
+		line := <-ch
+		consentStdin.mu.Lock()
+		consentStdin.pending = false
+		consentStdin.mu.Unlock()
+		return line, true
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case line := <-ch:
+		consentStdin.mu.Lock()
+		consentStdin.pending = false
+		consentStdin.mu.Unlock()
 		return line, true
 	case <-timer.C:
 		return "", false
