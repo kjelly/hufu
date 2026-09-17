@@ -343,7 +343,8 @@ func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: preview\n"), 0o644); err != nil {
+	teamYAML := "name: preview\nworker-model: ollama/fixture-model\ncoordinator-model: ollama/fixture-model\n"
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte(teamYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(teamDir, "analyst.md"), []byte("---\nname: analyst\nrole: worker\n---\nPreview tasks.\n"), 0o644); err != nil {
