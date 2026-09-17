@@ -83,7 +83,11 @@ func savePromptToHistory(ctx context.Context, prompt string, defaultProviderURL 
 	if prompt == "" {
 		return
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getWorkspace(), "history-context.sqlite"))
+	workspace := getWorkspace()
+	if workspace == "" {
+		return
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "history-context.sqlite"))
 	if err != nil {
 		return
 	}
@@ -105,7 +109,11 @@ var historyCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(getWorkspace(), "history-context.sqlite"))
+		workspace := getWorkspace()
+		if workspace == "" {
+			return fmt.Errorf("managed workspace not found; run a team first or pass --workspace")
+		}
+		repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(workspace, "history-context.sqlite"))
 		if err != nil {
 			return fmt.Errorf("failed to open canonical prompt history: %w", err)
 		}

@@ -29,14 +29,9 @@ func TestDebugCmd_WorkspaceValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 2. Set the global opts.workspace to the tmp workspace
-	originalWorkspace := opts.workspace
-	opts.workspace = workspaceDir
-	defer func() { opts.workspace = originalWorkspace }()
-
-	// 3. Test missing run-id
+	// 2. Test missing run-id with an explicit compatibility workspace.
 	cmd := newRootCommand()
-	cmd.SetArgs([]string{"debug", "run-missing"})
+	cmd.SetArgs([]string{"--workspace", workspaceDir, "debug", "run-missing"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Errorf("expected error for missing run-id, got nil")
@@ -44,9 +39,9 @@ func TestDebugCmd_WorkspaceValidation(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 
-	// 4. Test existing run-id
+	// 3. Test existing run-id
 	cmd = newRootCommand()
-	cmd.SetArgs([]string{"debug", "run-12345"})
+	cmd.SetArgs([]string{"--workspace", workspaceDir, "debug", "run-12345"})
 	err = cmd.Execute()
 	if err != nil {
 		t.Errorf("expected success for existing run-id, got: %v", err)
@@ -57,9 +52,9 @@ func TestDebugCmd_WorkspaceValidation(t *testing.T) {
 		t.Errorf("expected bundle to be created at %s, but not found", bundlePath)
 	}
 
-	// 5. Test output collision
+	// 4. Test output collision
 	cmd = newRootCommand()
-	cmd.SetArgs([]string{"debug", "run-12345"})
+	cmd.SetArgs([]string{"--workspace", workspaceDir, "debug", "run-12345"})
 	err = cmd.Execute()
 	if err == nil {
 		t.Errorf("expected error when bundle already exists, got nil")

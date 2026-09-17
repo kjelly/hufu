@@ -33,7 +33,11 @@ var terminalAttachCmd = &cobra.Command{
 	Short: "Take over an active PTY session; press Ctrl-] to return control to hufu",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return attachTerminal(os.Stdin, os.Stdout, terminalWorkspacePath(), args[0])
+		workspace, err := requireResolvedWorkspace(terminalWorkspacePath())
+		if err != nil {
+			return err
+		}
+		return attachTerminal(os.Stdin, os.Stdout, workspace, args[0])
 	},
 }
 
@@ -61,7 +65,11 @@ var terminalListCmd = &cobra.Command{
 	Short: "List terminal sessions and their cleanup status",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return listTerminalSessions(cmd.OutOrStdout(), terminalWorkspacePath(), terminalListJSON)
+		workspace, err := requireResolvedWorkspace(terminalWorkspacePath())
+		if err != nil {
+			return err
+		}
+		return listTerminalSessions(cmd.OutOrStdout(), workspace, terminalListJSON)
 	},
 }
 
@@ -77,7 +85,11 @@ var terminalTransferCmd = &cobra.Command{
 		if mode != team.TerminalModePipe && mode != team.TerminalModePTY {
 			return fmt.Errorf("transfer mode must be %q or %q", team.TerminalModePipe, team.TerminalModePTY)
 		}
-		attachment, err := team.DialTerminalBroker(terminalWorkspacePath())
+		workspace, err := requireResolvedWorkspace(terminalWorkspacePath())
+		if err != nil {
+			return err
+		}
+		attachment, err := team.DialTerminalBroker(workspace)
 		if err != nil {
 			return err
 		}
@@ -256,7 +268,7 @@ func renderTerminalScreen(out io.Writer, screen string, last *string) {
 }
 
 func init() {
-	terminalCmd.PersistentFlags().StringVarP(&terminalWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	terminalCmd.PersistentFlags().StringVarP(&terminalWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	terminalCmd.AddCommand(terminalAttachCmd)
 	terminalListCmd.Flags().BoolVar(&terminalListJSON, "json", false, "Output machine-readable JSON")
 	terminalCmd.AddCommand(terminalListCmd)

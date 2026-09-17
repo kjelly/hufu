@@ -379,6 +379,51 @@ func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
 	}
 }
 
+func TestLoadTeamByName_ManagedDryRunDoesNotCreateState(t *testing.T) {
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	teamSearch := filepath.Join(root, "teams")
+	teamDir := filepath.Join(teamSearch, "preview")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: preview\nworker-model: ollama/fixture-model\ncoordinator-model: ollama/fixture-model\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, "analyst.md"), []byte("---\nname: analyst\nrole: worker\n---\nPreview tasks.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	opts = runOptions{dryRun: true, canonicalRun: true}
+	registry := team.NewTeamRegistry([]string{teamSearch})
+	if err := registry.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	tc, err := loadTeamByName(t.Context(), "preview", registry, "", "", nil, nil, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tc.coordinator.Close() })
+	result, err := tc.coordinator.DryRun(t.Context(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.WorkspaceWouldCreate || result.SubjectRoot != project || tc.session.Scope.ProjectID != "" {
+		t.Fatalf("managed preview result=%+v scope=%+v", result, tc.session.Scope)
+	}
+	if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("managed dry-run created state root: %v", statErr)
+	}
+}
+
 func TestLoadDefaultTeam_RejectsStrictWorkspaceWithoutCreatingDirectory(t *testing.T) {
 	projDir := t.TempDir()
 	origWd, err := os.Getwd()

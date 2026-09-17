@@ -49,7 +49,7 @@ the detailed audit, context, or decision maintenance commands.`,
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 	}
-	command.PersistentFlags().StringVarP(&options.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	command.PersistentFlags().StringVarP(&options.workspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	command.PersistentFlags().StringVar(&options.branch, "branch", "", "Exact branch ID, name, or branch label (default: active branch)")
 	command.PersistentFlags().StringVar(&options.session, "session", "", "Optional exact session ID filter")
 	command.PersistentFlags().StringVar(&options.format, "format", string(inspectpkg.FormatText), "Output format: text or json")
@@ -81,7 +81,10 @@ func newInspectOverviewCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = runID
 			envelope, inspectErr := inspectpkg.InspectOverview(command.Context(), query)
 			return finishInspectOverview(command, format, query, envelope, inspectErr)
@@ -102,7 +105,11 @@ func newInspectStorageCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			envelope, inspectErr := inspectpkg.InspectStorage(command.Context(), options.query())
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
+			envelope, inspectErr := inspectpkg.InspectStorage(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
@@ -119,7 +126,10 @@ func newInspectReplayCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = args[0]
 			envelope, inspectErr := inspectpkg.InspectReplay(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
@@ -138,7 +148,10 @@ func newInspectTraceCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = args[0]
 			envelope, inspectErr := inspectpkg.InspectTrace(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
@@ -157,7 +170,10 @@ func newInspectEvidenceCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = args[0]
 			envelope, inspectErr := inspectpkg.InspectEvidence(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
@@ -179,7 +195,10 @@ func newInspectContextCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = runID
 			query.TaskID = args[0]
 			query.Attempt = attempt
@@ -211,7 +230,10 @@ func newInspectRunCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = args[0]
 			envelope, inspectErr := inspectpkg.InspectRun(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
@@ -232,7 +254,10 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			query := options.query()
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
 			query.RunID = runID
 			query.TaskID = args[0]
 			query.Attempt = attempt
@@ -265,16 +290,20 @@ func flagChanged(command *cobra.Command, name string) bool {
 	return flag != nil && flag.Changed
 }
 
-func (options *inspectCLIOptions) query() inspectpkg.InspectQuery {
+func (options *inspectCLIOptions) query() (inspectpkg.InspectQuery, error) {
 	workspace := options.workspace
 	if strings.TrimSpace(workspace) == "" {
 		workspace = getWorkspace()
+	}
+	workspace, err := requireResolvedWorkspace(workspace)
+	if err != nil {
+		return inspectpkg.InspectQuery{}, &inspectExitError{code: inspectpkg.ExitUsage, err: fmt.Errorf("hufu inspect: %w", err)}
 	}
 	return inspectpkg.InspectQuery{
 		Workspace: workspace,
 		BranchID:  options.branch,
 		SessionID: options.session,
-	}
+	}, nil
 }
 
 func finishInspect(command *cobra.Command, format string, envelope *inspectpkg.Envelope, err error) error {

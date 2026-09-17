@@ -26,25 +26,27 @@ type DryRunSkillInfo struct {
 }
 
 type DryRunResult struct {
-	UserPrompt         string
-	TeamName           string
-	Model              string
-	SidecarModel       string
-	WorkerTarget       string
-	CoordinatorTarget  string
-	SidecarTarget      string
-	GuardTarget        string
-	JudgeTarget        string
-	PlanReviewerTarget string
-	ResolvedProfile    ExecutionProfile
-	Agents             []DryRunAgentInfo
-	AllSkills          []DryRunSkillInfo
-	MatchedSkillNames  []string
-	OrchestratorPrompt string
-	FirstRoundTasks    []TaskDef
-	ContractFindings   []ContractFinding
-	ResolvedRunInputs  *RunInputSnapshot
-	Error              string
+	UserPrompt           string
+	TeamName             string
+	Model                string
+	SidecarModel         string
+	WorkerTarget         string
+	CoordinatorTarget    string
+	SidecarTarget        string
+	GuardTarget          string
+	JudgeTarget          string
+	PlanReviewerTarget   string
+	ResolvedProfile      ExecutionProfile
+	Agents               []DryRunAgentInfo
+	AllSkills            []DryRunSkillInfo
+	MatchedSkillNames    []string
+	OrchestratorPrompt   string
+	FirstRoundTasks      []TaskDef
+	ContractFindings     []ContractFinding
+	ResolvedRunInputs    *RunInputSnapshot
+	Error                string
+	SubjectRoot          string
+	WorkspaceWouldCreate bool
 }
 
 // NewDryRunCoordinator creates the read-only coordinator projection used by
@@ -83,6 +85,8 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		result.TeamName = c.session.Config.Name
 	}
 	if c.session != nil {
+		result.SubjectRoot = c.session.Scope.SubjectRoot
+		result.WorkspaceWouldCreate = c.session.Scope.Managed && c.session.Scope.ProjectID == ""
 		result.WorkerTarget = canonicalDryRunTarget(c.session.Config.WorkerModel, c.session.Config.DefaultLLMBackend)
 		result.CoordinatorTarget = canonicalDryRunTarget(c.session.Config.CoordinatorModel, c.session.Config.DefaultLLMBackend)
 		result.SidecarTarget = canonicalDryRunTarget(c.session.Config.SidecarModel, c.session.Config.DefaultLLMBackend)

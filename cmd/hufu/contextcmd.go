@@ -149,8 +149,8 @@ var contextConsolidateCmd = &cobra.Command{
 }
 
 func init() {
-	contextRepairCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite (default: <cwd>/workspace)")
-	contextInspectCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context shadow traces (default: <cwd>/workspace)")
+	contextRepairCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite (default: active managed workspace)")
+	contextInspectCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context shadow traces (default: active managed workspace)")
 	contextCmd.AddCommand(contextRepairCmd)
 	contextCmd.AddCommand(contextInspectCmd)
 	contextQueryCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
@@ -297,12 +297,16 @@ func runContextMigrateMemory(cmd *cobra.Command, _ []string) error {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "context migrate-memory dry-run: %d records, sha256=%x; rerun with --apply to write canonical items\n", len(items), hash.Sum(nil))
 		return err
 	}
-	dbPath := filepath.Join(getContextWorkspace(), "context.sqlite")
+	workspace, err := requireContextWorkspace()
+	if err != nil {
+		return err
+	}
+	dbPath := filepath.Join(workspace, "context.sqlite")
 	backup, err := backupContextDatabase(dbPath)
 	if err != nil {
 		return fmt.Errorf("backup canonical context before migration: %w", err)
 	}
-	repo, err := openExistingContextRepository(getContextWorkspace())
+	repo, err := openExistingContextRepository(workspace)
 	if err != nil {
 		return err
 	}
@@ -872,7 +876,11 @@ type contextShadowTrace struct {
 }
 
 func runContextInspect(cmd *cobra.Command, _ []string) error {
-	path := filepath.Join(getContextWorkspace(), "context-shadow-traces.jsonl")
+	workspace, err := requireContextWorkspace()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(workspace, "context-shadow-traces.jsonl")
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		_, werr := fmt.Fprintln(cmd.OutOrStdout(), "context inspect: no shadow traces")
@@ -909,7 +917,11 @@ func runContextExplain(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(contextTraceID) == "" {
 		return fmt.Errorf("--trace is required")
 	}
-	path := filepath.Join(getContextWorkspace(), "context-shadow-traces.jsonl")
+	workspace, err := requireContextWorkspace()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(workspace, "context-shadow-traces.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -946,8 +958,15 @@ func getContextWorkspace() string {
 	return getWorkspace()
 }
 
+func requireContextWorkspace() (string, error) {
+	return requireResolvedWorkspace(getContextWorkspace())
+}
+
 func runContextRepair(cmd *cobra.Command, _ []string) error {
-	workspace := getContextWorkspace()
+	workspace, err := requireContextWorkspace()
+	if err != nil {
+		return err
+	}
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	pendingPath := filepath.Join(workspace, "context-pending.jsonl")
 	if _, err := os.Stat(pendingPath); os.IsNotExist(err) {
@@ -969,6 +988,9 @@ func runContextRepair(cmd *cobra.Command, _ []string) error {
 }
 
 func openExistingContextRepository(workspace string) (*contextstore.SQLiteRepository, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return nil, fmt.Errorf("managed workspace not found; run a team first or pass --workspace")
+	}
 	root, err := workspacepkg.CanonicalExistingDirectory(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("resolve existing workspace: %w", err)

@@ -79,15 +79,73 @@ func TestResolveCommandWorkspacePreviewAndUnmanagedDoNotCreateState(t *testing.T
 	if unmanaged.Managed || unmanaged.ControlRoot != exact || lease != nil {
 		t.Fatalf("unmanaged = %+v, lease=%v", unmanaged, lease)
 	}
-	legacy, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{
-		StartDir: subjectRoot, TeamName: "dev", Mode: workspacepkg.ResolveEnsure, LegacyDefault: true,
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	managed, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{
+		StartDir: subjectRoot, TeamName: "dev", Mode: workspacepkg.ResolveEnsure,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacy.ControlRoot != filepath.Join(subjectRoot, "workspace", "dev") || lease != nil {
-		t.Fatalf("legacy = %+v, lease=%v", legacy, lease)
+	if !managed.Managed || managed.ControlRoot == filepath.Join(subjectRoot, "workspace", "dev") || lease == nil {
+		t.Fatalf("managed = %+v, lease=%v", managed, lease)
 	}
+	if err = lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveCommandWorkspaceLegacyRequiresMigrationBeforeAnyStateWrite(t *testing.T) {
+	for _, mode := range []workspacepkg.ResolveMode{workspacepkg.ResolveEnsure, workspacepkg.ResolvePreview, workspacepkg.ResolveExisting} {
+		t.Run(string(mode), func(t *testing.T) {
+			root := t.TempDir()
+			stateRoot := filepath.Join(root, "missing-state")
+			t.Setenv("HUFU_STATE_HOME", stateRoot)
+			subjectRoot := filepath.Join(root, "project")
+			legacy := filepath.Join(subjectRoot, "workspace", "dev")
+			if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(legacy, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{StartDir: subjectRoot, TeamName: "dev", Mode: mode})
+			var legacyErr *workspacepkg.LegacyWorkspaceError
+			if !errors.As(err, &legacyErr) || !strings.Contains(err.Error(), "hufu workspace migrate --team dev") || lease != nil {
+				t.Fatalf("legacy gate = lease %v, error %v", lease, err)
+			}
+			if _, statErr := os.Stat(stateRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("legacy gate created state root: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestResolveCommandWorkspaceActiveManagedWorkspaceWinsOverLegacy(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	subjectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolution, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{StartDir: subjectRoot, TeamName: "dev", Mode: workspacepkg.ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Join(subjectRoot, "workspace", "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	again, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{StartDir: subjectRoot, TeamName: "dev", Mode: workspacepkg.ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.WorkspaceID != resolution.WorkspaceID || again.ControlRoot != resolution.ControlRoot || lease == nil {
+		t.Fatalf("active managed workspace did not win: before=%+v after=%+v lease=%v", resolution, again, lease)
+	}
+	_ = lease.Close()
 }
 
 func TestResolveCommandWorkspaceUnmanagedExistingDoesNotCreateMissingDirectory(t *testing.T) {

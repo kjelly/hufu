@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 func TestHistoryMissingWorkspaceDoesNotCreateState(t *testing.T) {
@@ -17,6 +20,62 @@ func TestHistoryMissingWorkspaceDoesNotCreateState(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatalf("history created missing workspace: %v", err)
+	}
+}
+
+func TestManagedDefaultReadCommandsDoNotCreateState(t *testing.T) {
+	previousOpts := opts
+	previousSessionWorkspace := sessionWorkspace
+	t.Cleanup(func() {
+		opts = previousOpts
+		sessionWorkspace = previousSessionWorkspace
+	})
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "missing-state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	opts = runOptions{}
+	sessionWorkspace = ""
+	if workspace := getWorkspace(); workspace != "" {
+		t.Fatalf("missing managed workspace resolved to %q", workspace)
+	}
+	if err := historyCmd.RunE(historyCmd, []string{"query"}); err == nil {
+		t.Fatal("history unexpectedly succeeded without a managed workspace")
+	}
+	if err := sessionListCmd.RunE(sessionListCmd, nil); err == nil {
+		t.Fatal("session list unexpectedly succeeded without a managed workspace")
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("read commands created state root: %v", err)
+	}
+}
+
+func TestGetWorkspaceReturnsActiveManagedControlRoot(t *testing.T) {
+	previousOpts := opts
+	t.Cleanup(func() { opts = previousOpts })
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := manager.Resolve(context.Background(), workspacepkg.ResolveRequest{StartDir: project, TeamName: "default", Mode: workspacepkg.ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts = runOptions{}
+	if workspace := getWorkspace(); workspace != resolution.ControlRoot {
+		t.Fatalf("getWorkspace = %q, want %q", workspace, resolution.ControlRoot)
 	}
 }
 

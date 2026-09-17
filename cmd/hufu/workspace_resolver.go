@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -19,7 +18,6 @@ type commandWorkspaceRequest struct {
 	ExplicitRoot  string
 	TemporaryRoot string
 	Mode          workspacepkg.ResolveMode
-	LegacyDefault bool
 	NewSession    bool
 }
 
@@ -63,13 +61,6 @@ func resolveCommandWorkspace(ctx context.Context, request commandWorkspaceReques
 	teamName, err := workspacepkg.NormalizeTeamName(request.TeamName)
 	if err != nil {
 		return workspacepkg.Resolution{}, nil, err
-	}
-	if request.LegacyDefault && request.TemporaryRoot == "" && request.ExplicitExact == "" && request.ExplicitRoot == "" {
-		subjectRoot, discoverErr := workspacepkg.DiscoverSubjectRoot(request.StartDir)
-		if discoverErr != nil {
-			return workspacepkg.Resolution{}, nil, discoverErr
-		}
-		request.ExplicitRoot = filepath.Join(subjectRoot, "workspace")
 	}
 	resolveRequest := workspacepkg.ResolveRequest{
 		StartDir: request.StartDir, TeamName: teamName,
@@ -124,7 +115,20 @@ func resolveCommandWorkspace(ctx context.Context, request commandWorkspaceReques
 
 func applyWorkspaceResolution(session *team.TeamSession, resolution workspacepkg.Resolution, lease io.Closer) error {
 	if resolution.WouldCreate {
-		return fmt.Errorf("workspace for team %q would be created", resolution.TeamName)
+		stateRoot, err := workspacepkg.DefaultStateRoot()
+		if err != nil {
+			return err
+		}
+		// Preview scopes deliberately carry no fabricated project/workspace IDs.
+		// StateRoot is only a non-overlapping, non-created control placeholder;
+		// dry-run exits before any workspace reads or writes.
+		session.Scope = team.WorkspaceScope{
+			ContextScopeID: resolution.SubjectRoot, ControlRoot: stateRoot,
+			SubjectRoot: resolution.SubjectRoot, ProjectRoot: resolution.SubjectRoot, Managed: true,
+		}
+		session.Workspace = stateRoot
+		session.Config.WorkspaceDir = stateRoot
+		return nil
 	}
 	scope := team.WorkspaceScope{
 		ProjectID: resolution.ProjectID, ContextScopeID: resolution.ContextScopeID,
@@ -161,12 +165,27 @@ func closeSessionWorkspaceLease(session *team.TeamSession) error {
 	return err
 }
 
-func legacyDefaultWorkspaceRoot(startDir string) (string, error) {
-	subjectRoot, err := workspacepkg.DiscoverSubjectRoot(startDir)
+func resolveExistingManagedWorkspacePath(ctx context.Context, startDir, teamName string) (string, error) {
+	stateRoot, err := workspacepkg.DefaultStateRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(subjectRoot, "workspace"), nil
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		return "", err
+	}
+	resolution, err := manager.Resolve(ctx, workspacepkg.ResolveRequest{StartDir: startDir, TeamName: teamName, Mode: workspacepkg.ResolveExisting})
+	if err != nil {
+		return "", err
+	}
+	return resolution.ControlRoot, nil
+}
+
+func requireResolvedWorkspace(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("managed workspace not found; run a team first or pass --workspace")
+	}
+	return path, nil
 }
 
 func runtimeStartDir() string {

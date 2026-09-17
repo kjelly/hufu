@@ -37,11 +37,11 @@ func (m *WorkspaceManager) Resolve(ctx context.Context, request ResolveRequest) 
 	}
 	switch request.Mode {
 	case ResolvePreview:
-		return m.resolvePreview(ctx, subjectRoot, teamName)
+		return m.resolvePreview(ctx, request.StartDir, subjectRoot, teamName)
 	case ResolveExisting:
-		return m.resolveExisting(ctx, subjectRoot, teamName)
+		return m.resolveExistingWithLegacyCheck(ctx, request.StartDir, subjectRoot, teamName)
 	case ResolveEnsure:
-		return m.resolveEnsure(ctx, subjectRoot, teamName)
+		return m.resolveEnsure(ctx, request.StartDir, subjectRoot, teamName)
 	default:
 		return Resolution{}, fmt.Errorf("unsupported workspace resolve mode %q", request.Mode)
 	}
@@ -80,9 +80,12 @@ func unmanagedResolution(controlPath, subjectRoot, teamName string) (Resolution,
 	return Resolution{ContextScopeID: subjectRoot, TeamName: teamName, SubjectRoot: subjectRoot, ControlRoot: controlRoot}, nil
 }
 
-func (m *WorkspaceManager) resolvePreview(ctx context.Context, subjectRoot, teamName string) (Resolution, error) {
+func (m *WorkspaceManager) resolvePreview(ctx context.Context, startDir, subjectRoot, teamName string) (Resolution, error) {
 	registry, err := OpenReadOnly(m.stateRoot)
 	if errors.Is(err, ErrNotFound) {
+		if legacyErr := rejectLegacyWorkspace(startDir, subjectRoot, teamName); legacyErr != nil {
+			return Resolution{}, legacyErr
+		}
 		return Resolution{TeamName: teamName, SubjectRoot: subjectRoot, WouldCreate: true}, nil
 	}
 	if err != nil {
@@ -91,6 +94,9 @@ func (m *WorkspaceManager) resolvePreview(ctx context.Context, subjectRoot, team
 	defer func() { _ = registry.Close() }()
 	project, err := registry.ResolveProjectByRoot(ctx, subjectRoot)
 	if errors.Is(err, ErrNotFound) {
+		if legacyErr := rejectLegacyWorkspace(startDir, subjectRoot, teamName); legacyErr != nil {
+			return Resolution{}, legacyErr
+		}
 		return Resolution{TeamName: teamName, SubjectRoot: subjectRoot, WouldCreate: true}, nil
 	}
 	if err != nil {
@@ -98,6 +104,9 @@ func (m *WorkspaceManager) resolvePreview(ctx context.Context, subjectRoot, team
 	}
 	workspace, err := registry.GetWorkspace(ctx, project.ID, teamName)
 	if errors.Is(err, ErrNotFound) {
+		if legacyErr := rejectLegacyWorkspace(startDir, subjectRoot, teamName); legacyErr != nil {
+			return Resolution{}, legacyErr
+		}
 		return Resolution{
 			ProjectID: project.ID, ContextScopeID: subjectRoot, TeamName: teamName,
 			SubjectRoot: subjectRoot, ControlRoot: filepath.Join(project.StateDir, "teams", teamName),
@@ -127,7 +136,25 @@ func (m *WorkspaceManager) resolveExisting(ctx context.Context, subjectRoot, tea
 	return managedResolution(project, workspace)
 }
 
-func (m *WorkspaceManager) resolveEnsure(ctx context.Context, subjectRoot, teamName string) (Resolution, error) {
+func (m *WorkspaceManager) resolveExistingWithLegacyCheck(ctx context.Context, startDir, subjectRoot, teamName string) (Resolution, error) {
+	resolution, err := m.resolveExisting(ctx, subjectRoot, teamName)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return resolution, err
+	}
+	if legacyErr := rejectLegacyWorkspace(startDir, subjectRoot, teamName); legacyErr != nil {
+		return Resolution{}, legacyErr
+	}
+	return Resolution{}, err
+}
+
+func (m *WorkspaceManager) resolveEnsure(ctx context.Context, startDir, subjectRoot, teamName string) (Resolution, error) {
+	resolution, err := m.resolveExisting(ctx, subjectRoot, teamName)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return resolution, err
+	}
+	if legacyErr := rejectLegacyWorkspace(startDir, subjectRoot, teamName); legacyErr != nil {
+		return Resolution{}, legacyErr
+	}
 	registry, err := OpenReadWrite(m.stateRoot, m.registryOptions...)
 	if err != nil {
 		return Resolution{}, err

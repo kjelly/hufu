@@ -207,13 +207,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := preflightExecutionTargets(session, cfg, roleModels, nil); err != nil {
 		return nil, err
 	}
-	// Read the durable checkpoint before any lifecycle mutation. A resumed
-	// occurrence owns its frozen canonical target, so a changed CLI/config
-	// worker target must never bypass executable/kind preflight for that work.
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
-	if err := preflightHistoricalExecutionTargets(session, cfg, startsFresh); err != nil {
-		return nil, err
-	}
 	allowedPaths := buildAllowedPaths(session, registry, cfg)
 	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
 	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
@@ -234,6 +228,12 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 			return nil, err
 		}
 		return &teamContext{teamName: teamName, session: session, coordinator: coordinator}, nil
+	}
+	// Read the durable checkpoint before any lifecycle mutation. A resumed
+	// occurrence owns its frozen canonical target, so a changed CLI/config
+	// worker target must never bypass executable/kind preflight for that work.
+	if err := preflightHistoricalExecutionTargets(session, cfg, startsFresh); err != nil {
+		return nil, err
 	}
 	migrateLegacyDrafts(teamSkillDirs(session, registry))
 

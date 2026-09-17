@@ -37,6 +37,8 @@ func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	}
 
 	project := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
 	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +48,10 @@ func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	if err := resolveTeamWorkspacePath("review", session); err != nil {
 		t.Fatal(err)
 	}
-	want = filepath.Join(project, "workspace", "review")
-	if session.Workspace != want {
-		t.Fatalf("default workspace = %q, want %q", session.Workspace, want)
+	if !session.Scope.Managed || session.Scope.SubjectRoot != project || !strings.HasPrefix(session.Workspace, filepath.Join(stateRoot, "projects")) {
+		t.Fatalf("managed default workspace scope = %+v", session.Scope)
 	}
+	_ = closeSessionWorkspaceLease(session)
 }
 
 func TestCanonicalRunResolvesProfileBeforeRuntimeBridge(t *testing.T) {

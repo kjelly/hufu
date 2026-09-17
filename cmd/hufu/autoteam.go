@@ -234,6 +234,9 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 		return nil
 	}
 	session.Workspace = getWorkspace()
+	if session.Workspace == "" {
+		return nil
+	}
 	if err := session.SetCompatibilityWorkspaceScope(runtimeSubjectRoot()); err != nil {
 		return nil
 	}

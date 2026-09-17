@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -30,16 +31,18 @@ func TestResolveTeamWorkspacePathCanonicalizesWorkingDirectorySymlink(t *testing
 	originalWorkspace := opts.workspace
 	opts.workspace = ""
 	t.Cleanup(func() { opts.workspace = originalWorkspace })
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
 
 	session := &team.TeamSession{}
 	if err := resolveTeamWorkspacePath("review", session); err != nil {
 		t.Fatalf("resolve team workspace: %v", err)
 	}
-	want := filepath.Join(physical, "workspace", "review")
-	if session.Workspace != want {
-		t.Fatalf("workspace = %q, want canonical path %q", session.Workspace, want)
+	if !session.Scope.Managed || session.Scope.SubjectRoot != physical || !strings.HasPrefix(session.Workspace, filepath.Join(stateRoot, "projects")) {
+		t.Fatalf("managed symlink scope = %+v", session.Scope)
 	}
-	if session.Config.WorkspaceDir != want {
-		t.Fatalf("config workspace = %q, want canonical path %q", session.Config.WorkspaceDir, want)
+	if session.Config.WorkspaceDir != session.Workspace {
+		t.Fatalf("config workspace = %q, want %q", session.Config.WorkspaceDir, session.Workspace)
 	}
+	_ = closeSessionWorkspaceLease(session)
 }

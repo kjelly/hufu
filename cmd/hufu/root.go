@@ -79,7 +79,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringVar(&opts.providerURL, "provider-url", "", "Ollama API base URL (default: from hufu.yaml or http://127.0.0.1:11434/v1)")
 	rootCmd.Flags().StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key (default: from HUFU_PROVIDER_API_KEY env or team.yaml)")
 	rootCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show full agent text output in real-time")
-	rootCmd.PersistentFlags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	rootCmd.PersistentFlags().StringVarP(&opts.workspace, "workspace", "w", "", "Explicit workspace directory (default: managed workspace)")
 	rootCmd.PersistentFlags().StringVar(&opts.decisionProfile, "decision-profile", "", "Decision rigor profile for this run: a team profile, exact builtin/<name>@<version>, or 'off' (default: the team's decision.default-profile)")
 	rootCmd.Flags().BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	rootCmd.Flags().BoolVarP(&opts.tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
@@ -166,7 +166,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	}
 
 	if improveCmd.PersistentFlags().Lookup("workspace") == nil {
-		improveCmd.PersistentFlags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: <cwd>/workspace)")
+		improveCmd.PersistentFlags().StringVarP(&improveWorkspace, "workspace", "w", "", "Workspace to analyze (default: active managed workspace)")
 		improveCmd.PersistentFlags().StringVar(&improveTeam, "team", "", "Target team (default: newest execution run)")
 		improveCmd.PersistentFlags().StringVar(&improveSearchPath, "agent-team-search-path", "", "Comma-separated team search paths")
 		improveCmd.Flags().StringVarP(&improveOutput, "output", "o", "", "Markdown report path (default: workspace/reports/improve-<team>-<timestamp>.md)")

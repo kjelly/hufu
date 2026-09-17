@@ -256,6 +256,25 @@ func TestExecutionWorldSkipsIdentifiedControlWorkspaceCheckpoint(t *testing.T) {
 	}
 }
 
+func TestExecutionWorldAcceptsManagedControlWorkspaceOutsideSubjectRoot(t *testing.T) {
+	root := t.TempDir()
+	controlWorkspace := filepath.Join(t.TempDir(), "managed", "default")
+	if err := os.MkdirAll(controlWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	world := NewLocalExecutionWorld()
+	prepared, err := world.Prepare(t.Context(), ExecutionWorldSpec{
+		Root: root, ControlWorkspace: controlWorkspace, SideEffect: SideEffectNone,
+	})
+	if err != nil {
+		t.Fatalf("Prepare managed external control workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
+	if prepared.Root != root {
+		t.Fatalf("prepared subject root = %q, want %q", prepared.Root, root)
+	}
+}
+
 // TestWorkspaceSnapshotGitOptimizedMatchesFallback is supplementary (not one
 // of PR-05's named tests): it exercises the Git-assisted candidate-discovery
 // path added alongside the required fallback, proving it produces the same

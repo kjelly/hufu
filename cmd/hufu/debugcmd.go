@@ -37,9 +37,9 @@ var debugCmd = &cobra.Command{
 			runID = filepath.Base(target)
 		} else {
 			// Otherwise treat target as a run ID in the default workspace
-			workspacePath = opts.workspace
+			workspacePath = getWorkspace()
 			if workspacePath == "" {
-				workspacePath = "workspace"
+				return fmt.Errorf("managed workspace not found; run a team first or pass --workspace")
 			}
 			runID = target
 

@@ -89,7 +89,7 @@ what evidence backs each. It is fully deterministic and never calls an LLM.`,
 }
 
 func init() {
-	auditCmd.PersistentFlags().StringVarP(&auditWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	auditCmd.PersistentFlags().StringVarP(&auditWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	auditVerifyCmd.Flags().StringVar(&auditRunID, "run", "", "Run ID to verify (required unless --bundle is set)")
 	auditVerifyCmd.Flags().StringVar(&auditBundle, "bundle", "", "Verify a portable audit bundle file instead of a live workspace run")
 	auditVerifyCmd.Flags().BoolVar(&auditJSON, "json", false, "Write a single JSON object to stdout; all diagnostics go to stderr")
@@ -113,6 +113,14 @@ func getAuditWorkspace() string {
 	return getWorkspace()
 }
 
+func requireAuditWorkspace() (string, error) {
+	workspace, err := requireResolvedWorkspace(getAuditWorkspace())
+	if err != nil {
+		return "", &auditExitError{code: 2, msg: "hufu audit: " + err.Error()}
+	}
+	return workspace, nil
+}
+
 func runAuditVerify(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(auditBundle) != "" {
 		if strings.TrimSpace(auditRunID) != "" {
@@ -128,7 +136,11 @@ func runAuditVerify(cmd *cobra.Command, args []string) error {
 		return &auditExitError{code: 2, msg: "hufu audit verify: --run is required (or use --bundle)"}
 	}
 
-	result, err := auditverify.VerifyWorkspaceRun(context.Background(), getAuditWorkspace(), auditRunID, auditverify.VerifyOptions{Recheck: auditRecheck})
+	workspace, err := requireAuditWorkspace()
+	if err != nil {
+		return err
+	}
+	result, err := auditverify.VerifyWorkspaceRun(context.Background(), workspace, auditRunID, auditverify.VerifyOptions{Recheck: auditRecheck})
 	if err != nil {
 		return &auditExitError{code: 2, msg: fmt.Sprintf("hufu audit verify: %v", err)}
 	}
@@ -165,8 +177,12 @@ func runAuditExport(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(auditExportOutput) == "" {
 		return &auditExitError{code: 2, msg: "hufu audit export: --output is required"}
 	}
+	workspace, err := requireAuditWorkspace()
+	if err != nil {
+		return err
+	}
 	opts := auditverify.ExportOptions{ArtifactMode: auditExportArtifactMode}
-	if err := auditverify.ExportRun(context.Background(), getAuditWorkspace(), auditExportRunID, auditExportOutput, opts); err != nil {
+	if err := auditverify.ExportRun(context.Background(), workspace, auditExportRunID, auditExportOutput, opts); err != nil {
 		return &auditExitError{code: 1, msg: fmt.Sprintf("hufu audit export: %v", err)}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Exported audit bundle for run %q to %s\n", auditExportRunID, auditExportOutput)
@@ -215,7 +231,11 @@ func runAuditExplain(cmd *cobra.Command, args []string) error {
 		return &auditExitError{code: 2, msg: "hufu audit explain: --run is required"}
 	}
 
-	result, err := auditverify.ExplainRun(context.Background(), getAuditWorkspace(), auditExplainRunID)
+	workspace, err := requireAuditWorkspace()
+	if err != nil {
+		return err
+	}
+	result, err := auditverify.ExplainRun(context.Background(), workspace, auditExplainRunID)
 	if err != nil {
 		return &auditExitError{code: 2, msg: fmt.Sprintf("hufu audit explain: %v", err)}
 	}

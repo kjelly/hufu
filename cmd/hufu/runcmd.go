@@ -54,8 +54,8 @@ func newCanonicalRunCommandWithOptions(name, defaultIntent string) (*cobra.Comma
 		Long: `Run one team through the canonical execution facade.
 
 --workspace is the exact team workspace. --workspace-root is a parent under
-which the team name is joined exactly once. Omit both to use
-<project>/workspace/<team>.`,
+which the team name is joined exactly once. Omit both to use the registered
+managed workspace for the discovered project and selected team.`,
 		Args: func(command *cobra.Command, args []string) error {
 			if strings.TrimSpace(options.resumeDecision) != "" {
 				return cobra.NoArgs(command, args)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -94,9 +95,13 @@ func resolveImproveWorkspace(value string) (string, error) {
 	if strings.TrimSpace(value) != "" {
 		return workspacepkg.CanonicalExistingDirectory(value)
 	}
-	workspace, err := legacyDefaultWorkspaceRoot(runtimeStartDir())
-	if err != nil {
-		return "", fmt.Errorf("resolve default workspace: %w", err)
+	teamName := strings.ToLower(strings.TrimSpace(improveTeam))
+	if teamName == "" {
+		teamName = "default"
 	}
-	return workspacepkg.CanonicalExistingDirectory(workspace)
+	workspace, err := resolveExistingManagedWorkspacePath(context.Background(), runtimeStartDir(), teamName)
+	if err != nil {
+		return "", fmt.Errorf("resolve managed workspace: %w", err)
+	}
+	return workspace, nil
 }

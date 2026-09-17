@@ -85,12 +85,18 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// 3. Workspace writability.
 	ws := getWorkspace()
-	fmt.Fprintf(os.Stderr, "\n%s %s\n", boldStyle.Render("Workspace:"), ws)
-	if err := checkWritable(ws); err != nil {
+	if ws == "" {
 		ok = false
-		fmt.Fprintf(os.Stderr, "  %s not writable: %v\n", fail, err)
+		fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Workspace:"))
+		fmt.Fprintf(os.Stderr, "  %s no active managed workspace; run a team or use hufu workspace migrate\n", fail)
 	} else {
-		fmt.Fprintf(os.Stderr, "  %s writable\n", pass)
+		fmt.Fprintf(os.Stderr, "\n%s %s\n", boldStyle.Render("Workspace:"), ws)
+		if err := checkWritable(ws); err != nil {
+			ok = false
+			fmt.Fprintf(os.Stderr, "  %s not writable: %v\n", fail, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s writable\n", pass)
+		}
 	}
 
 	// 4. Team discovery.

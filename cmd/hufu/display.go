@@ -2062,6 +2062,10 @@ func renderDryRun(result *team.DryRunResult) {
 	b.WriteString("\n\n")
 
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName))
+	if result.WorkspaceWouldCreate {
+		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Subject:"), result.SubjectRoot)
+		fmt.Fprintf(&b, "  %s\n", dimStyle.Render("Managed workspace will be created during a real run."))
+	}
 	if result.ResolvedProfile.Name != "" {
 		fmt.Fprintf(&b, "  %s %s (v%d, strict=%t, acceptance=%s, failure_mode=%s)\n",
 			boldStyle.Render("Profile:"),

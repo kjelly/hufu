@@ -26,7 +26,7 @@ import (
 func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error {
 	request := commandWorkspaceRequest{
 		StartDir: runtimeStartDir(), TeamName: teamName,
-		Mode: workspacepkg.ResolveEnsure, LegacyDefault: true, NewSession: opts.newSession,
+		Mode: workspacepkg.ResolveEnsure, NewSession: opts.newSession,
 	}
 	switch {
 	case opts.tempWorkspace:

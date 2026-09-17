@@ -125,3 +125,56 @@ func TestManagerResolveRejectsIncompleteWorkspace(t *testing.T) {
 		t.Fatalf("preview incomplete error = %v", err)
 	}
 }
+
+func TestWorkspaceManagerRejectsLegacyBeforeCreatingState(t *testing.T) {
+	root := t.TempDir()
+	subjectRoot := filepath.Join(root, "project")
+	legacy := filepath.Join(subjectRoot, "workspace", "dev")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	manager, err := NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []ResolveMode{ResolvePreview, ResolveExisting, ResolveEnsure} {
+		_, err = manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "dev", Mode: mode})
+		var legacyErr *LegacyWorkspaceError
+		if !errors.As(err, &legacyErr) || !strings.Contains(err.Error(), "hufu workspace migrate --team dev") {
+			t.Fatalf("mode %s error = %v", mode, err)
+		}
+	}
+	if _, err = os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("legacy preflight created state root: %v", err)
+	}
+}
+
+func TestWorkspaceManagerExistingManagedWorkspaceWinsOverLegacy(t *testing.T) {
+	root := t.TempDir()
+	subjectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(filepath.Join(root, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "dev", Mode: ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Join(subjectRoot, "workspace", "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "dev", Mode: ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.WorkspaceID != created.WorkspaceID || resolved.ControlRoot != created.ControlRoot {
+		t.Fatalf("managed workspace did not win: created=%+v resolved=%+v", created, resolved)
+	}
+}

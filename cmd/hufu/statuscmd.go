@@ -37,7 +37,7 @@ type workspaceStatus struct {
 }
 
 func init() {
-	statusCmd.Flags().StringVarP(&statusWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	statusCmd.Flags().StringVarP(&statusWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Write machine-readable JSON to stdout")
 }
 
@@ -45,6 +45,9 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	ws := statusWorkspace
 	if ws == "" {
 		ws = getWorkspace()
+	}
+	if ws == "" {
+		return fmt.Errorf("managed workspace not found; run hufu first or pass --workspace")
 	}
 	data := team.LoadSession(ws)
 	if data == nil {

@@ -167,7 +167,7 @@ which is the one entry condition code cannot satisfy.`,
 }
 
 func init() {
-	decisionCmd.PersistentFlags().StringVarP(&decisionWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	decisionCmd.PersistentFlags().StringVarP(&decisionWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	decisionCmd.PersistentFlags().BoolVar(&decisionJSON, "json", false, "Write JSON to stdout; all diagnostics go to stderr")
 
 	decisionListCmd.Flags().BoolVar(&decisionAll, "all", false, "Include decisions that already have a recorded outcome")
@@ -201,6 +201,9 @@ func getDecisionWorkspace() string {
 
 func openDecisionIndex() (*team.DecisionIndex, error) {
 	workspace := getDecisionWorkspace()
+	if strings.TrimSpace(workspace) == "" {
+		return nil, &decisionExitError{code: 2, msg: "hufu decision: managed workspace not found; run a team first or pass --workspace"}
+	}
 	index, err := team.OpenDecisionIndex(workspace)
 	if err != nil {
 		return nil, &decisionExitError{code: 2, msg: fmt.Sprintf("hufu decision: %v", err)}

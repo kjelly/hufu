@@ -96,15 +96,22 @@ func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string
 	workspacePath := getWorkspace()
 	teamName := strings.ToLower(strings.TrimSpace(requestedTeam))
 	if teamName == "" {
-		base := filepath.Base(filepath.Clean(strings.TrimSpace(workspacePath)))
-		if base == "." || base == "workspace" || base == "" {
-			return nil, "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspacePath)
+		if workspaceExplicit {
+			base := filepath.Base(filepath.Clean(strings.TrimSpace(workspacePath)))
+			if base == "." || base == "workspace" || base == "" {
+				return nil, "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspacePath)
+			}
+			teamName = base
+		} else {
+			teamName = strings.ToLower(strings.TrimSpace(opts.agentTeamName))
+			if teamName == "" {
+				teamName = "default"
+			}
 		}
-		teamName = base
 	}
 	request := commandWorkspaceRequest{
 		StartDir: runtimeStartDir(), TeamName: teamName, Mode: workspacepkg.ResolveExisting,
-		LegacyDefault: !workspaceExplicit, NewSession: opts.newSession,
+		NewSession: opts.newSession,
 	}
 	if workspaceExplicit {
 		request.ExplicitExact = workspacePath

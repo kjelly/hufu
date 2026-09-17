@@ -37,9 +37,11 @@ func runSkillGraph(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("unsupported --format %q (allowed: text, json, mermaid)", skillGraphFormat)
 	}
 
-	snapshot, available, err := skill.LoadSkillPatternSnapshot(
-		skill.SkillPatternSnapshotPath(getWorkspace()),
-	)
+	workspace, err := requireResolvedWorkspace(getWorkspace())
+	if err != nil {
+		return err
+	}
+	snapshot, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(workspace))
 	if err != nil {
 		return fmt.Errorf("load skill-pattern snapshot: %s", utils.RedactSecrets(err.Error()))
 	}

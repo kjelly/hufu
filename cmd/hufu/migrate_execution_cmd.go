@@ -56,7 +56,11 @@ func init() {
 }
 
 func runMigrateInspectExecution(cmd *cobra.Command, _ []string) error {
-	report, err := team.InspectExecutionCompatibility(context.Background(), getWorkspace(), migrateInspectExecutionBranch)
+	workspace, err := requireResolvedWorkspace(getWorkspace())
+	if err != nil {
+		return fmt.Errorf("hufu migrate inspect-execution: %w", err)
+	}
+	report, err := team.InspectExecutionCompatibility(context.Background(), workspace, migrateInspectExecutionBranch)
 	if err != nil {
 		return fmt.Errorf("hufu migrate inspect-execution: %w", err)
 	}
@@ -70,7 +74,11 @@ func runMigrateApplyExecution(cmd *cobra.Command, _ []string) error {
 	if !migrateApplyExecutionApply {
 		return fmt.Errorf("hufu migrate apply-execution: --apply is required")
 	}
-	result, err := team.ApplyExecutionCompatibility(context.Background(), getWorkspace(), migrateApplyExecutionBranch)
+	workspace, err := requireResolvedWorkspace(getWorkspace())
+	if err != nil {
+		return fmt.Errorf("hufu migrate apply-execution: %w", err)
+	}
+	result, err := team.ApplyExecutionCompatibility(context.Background(), workspace, migrateApplyExecutionBranch)
 	if err != nil {
 		return fmt.Errorf("hufu migrate apply-execution: %w", err)
 	}

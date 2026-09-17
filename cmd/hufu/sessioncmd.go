@@ -36,7 +36,10 @@ var sessionListCmd = &cobra.Command{
 	Short: "List all session branches and labels",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -85,7 +88,10 @@ var sessionTreeCmd = &cobra.Command{
 	Short: "Show visual ASCII session tree",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -106,7 +112,10 @@ var sessionForkCmd = &cobra.Command{
 	Short: "Fork a new branch from a branch, checkpoint label, or event ID",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -165,7 +174,10 @@ var sessionCheckoutCmd = &cobra.Command{
 	Short: "Switch active branch to target branch, checkpoint label, or event ID",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -203,7 +215,10 @@ var sessionLabelCmd = &cobra.Command{
 	Short: "Add a label to a checkpoint, event ID, or branch",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -230,7 +245,10 @@ var sessionDiffCmd = &cobra.Command{
 	Short: "Compare tasks, artifacts, and verification results between two branches",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws := getSessionWorkspace()
+		ws, err := requireSessionWorkspace()
+		if err != nil {
+			return err
+		}
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -264,8 +282,16 @@ func getSessionWorkspace() string {
 	return getWorkspace()
 }
 
+func requireSessionWorkspace() (string, error) {
+	workspace := getSessionWorkspace()
+	if workspace == "" {
+		return "", fmt.Errorf("managed workspace not found; run a team first or pass --workspace")
+	}
+	return workspace, nil
+}
+
 func init() {
-	sessionCmd.PersistentFlags().StringVarP(&sessionWorkspace, "workspace", "w", "", "Workspace directory (default: <cwd>/workspace)")
+	sessionCmd.PersistentFlags().StringVarP(&sessionWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	sessionCmd.PersistentFlags().BoolVar(&sessionJSON, "json", false, "Write output as JSON")
 
 	sessionForkCmd.Flags().StringVar(&sessionForkName, "name", "", "Name of the new branch")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/skill"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 var (
@@ -276,11 +278,23 @@ func resolveSkillLifecycleTarget() (skillLifecycleTarget, error) {
 			return skillLifecycleTarget{}, fmt.Errorf("resolve skill team: %w", err)
 		}
 		skillsDir := filepath.Join(teamDir, "skills")
-		usageDir := filepath.Join(getWorkspace(), strings.ToLower(strings.TrimSpace(skillTeamName)))
+		teamName := strings.ToLower(strings.TrimSpace(skillTeamName))
+		usageDir := ""
+		if strings.TrimSpace(opts.workspace) != "" {
+			usageDir = filepath.Join(opts.workspace, teamName)
+		} else {
+			usageDir, err = resolveSkillWorkspace(teamName)
+		}
+		if err != nil {
+			return skillLifecycleTarget{}, err
+		}
 		return skillLifecycleTarget{skillsDir: skillsDir, discoveryDirs: []string{skillsDir}, usageDir: usageDir}, nil
 	}
 
-	workspace := getWorkspace()
+	workspace, err := resolveSkillWorkspace("default")
+	if err != nil {
+		return skillLifecycleTarget{}, err
+	}
 	teamDir := filepath.Join(workspace, "..")
 	return skillLifecycleTarget{
 		skillsDir:     filepath.Join(workspace, "skills"),
@@ -304,10 +318,24 @@ func getWorkspace() string {
 	if opts.workspace != "" {
 		return opts.workspace
 	}
-	start := runtimeStartDir()
-	workspace, err := legacyDefaultWorkspaceRoot(start)
+	teamName := strings.ToLower(strings.TrimSpace(opts.agentTeamName))
+	if teamName == "" {
+		teamName = "default"
+	}
+	workspace, err := resolveExistingManagedWorkspacePath(context.Background(), runtimeStartDir(), teamName)
 	if err != nil {
-		return filepath.Join(start, "workspace")
+		return ""
 	}
 	return workspace
+}
+
+func resolveSkillWorkspace(teamName string) (string, error) {
+	if strings.TrimSpace(opts.workspace) != "" {
+		return workspacepkg.CanonicalExistingDirectory(opts.workspace)
+	}
+	workspace, err := resolveExistingManagedWorkspacePath(context.Background(), runtimeStartDir(), teamName)
+	if err != nil {
+		return "", fmt.Errorf("resolve managed skill workspace: %w", err)
+	}
+	return workspace, nil
 }
