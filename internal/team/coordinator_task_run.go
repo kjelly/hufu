@@ -270,6 +270,13 @@ func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
+	if c != nil && strings.HasPrefix(todoID, primaryDecisionTaskPrefix) {
+		item := c.todoItemByID(todoID)
+		if err := validatePrimaryOccurrenceForExecution(item); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: task %q is owned by decision_engine", ErrDecisionOccurrenceWrongOwner, todoID)
+	}
 	// Extra-model leaves execute against a private Todo projection cloned from
 	// the parent. Preserve the leaf's admitted target before that projection is
 	// reloaded; otherwise replaying the parent item would retarget every leaf

@@ -189,6 +189,16 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 	if err != nil {
 		return "", err
 	}
+	if task.RuntimeOccurrence != nil || task.PrimaryAdmission != nil {
+		b, err = json.Marshal(struct {
+			Occurrence json.RawMessage             `json:"occurrence"`
+			Runtime    *RuntimeOccurrenceMetaV1    `json:"runtime"`
+			Admission  *PrimaryOccurrenceAdmission `json:"admission"`
+		}{Occurrence: b, Runtime: task.RuntimeOccurrence, Admission: task.PrimaryAdmission})
+		if err != nil {
+			return "", err
+		}
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
 }

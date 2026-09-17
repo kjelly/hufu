@@ -891,6 +891,9 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	items := c.taskTracker.TodoList().Items()
 	var interrupted []*TodoItem
 	for _, it := range items {
+		if IsPrimaryOccurrence(it) {
+			continue
+		}
 		if isInterruptedStatus(it.Status) && (it.Status != TaskPaused || !it.CheckpointPause) {
 			interrupted = append(interrupted, it)
 		}
@@ -914,6 +917,11 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	prof := c.ExecutionProfile()
 	if prof.DisableHistoricalTaskReuse || prof.DisableJournalRestore {
 		return 0, nil
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if err := validatePrimaryOccurrenceForExecution(item); err != nil {
+			return 0, err
+		}
 	}
 	interrupted := c.getInterruptedTasks()
 	if len(interrupted) == 0 {

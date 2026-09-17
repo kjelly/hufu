@@ -230,6 +230,12 @@ func validateTaskExecutionEnvelopes(tasks []TaskDef, items []*TodoItem, envelope
 			return fmt.Errorf("scheduler envelope has duplicate Todo %q", items[i].ID)
 		}
 		seen[items[i].ID] = true
+		if err := validatePrimaryOccurrenceForExecution(items[i]); err != nil {
+			return err
+		}
+		if IsPrimaryOccurrence(items[i]) {
+			return fmt.Errorf("%w: task %q is owned by decision_engine", ErrDecisionOccurrenceWrongOwner, items[i].ID)
+		}
 		if err := compareTaskDefWithTodoOccurrence(tasks[i], items[i], indexByID); err != nil {
 			return err
 		}

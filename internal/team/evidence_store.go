@@ -510,13 +510,14 @@ type EvidenceRequirement struct {
 }
 
 type EvidenceResult struct {
-	RequirementID string           `json:"requirement_id"`
-	Status        string           `json:"status"`
-	Validator     string           `json:"validator,omitempty"`
-	ArtifactRefs  []ArtifactRef    `json:"artifact_refs,omitempty"`
-	Binding       *EvidenceBinding `json:"binding,omitempty"`
-	Assertions    []string         `json:"assertions,omitempty"`
-	CheckedAt     time.Time        `json:"checked_at"`
+	RequirementID        string                  `json:"requirement_id"`
+	Status               string                  `json:"status"`
+	Validator            string                  `json:"validator,omitempty"`
+	ArtifactRefs         []ArtifactRef           `json:"artifact_refs,omitempty"`
+	Binding              *EvidenceBinding        `json:"binding,omitempty"`
+	Assertions           []string                `json:"assertions,omitempty"`
+	CheckedAt            time.Time               `json:"checked_at"`
+	PrimaryDecisionProof *PrimaryManifestProofV1 `json:"primary_decision_proof,omitempty"`
 }
 
 // EvidenceBinding seals the exact execution provenance behind one task
@@ -589,7 +590,21 @@ func (m EvidenceManifest) Verify(ctx context.Context, store ArtifactStore) error
 			return err
 		}
 	}
+	primaryRequirements := 0
+	primaryProofs := 0
 	for _, result := range m.EvidenceResults {
+		if result.RequirementID == "primary_decision_valid" {
+			primaryRequirements++
+			if result.PrimaryDecisionProof != nil {
+				primaryProofs++
+				if err := validatePrimaryManifestProof(result.PrimaryDecisionProof, nil); err != nil {
+					return err
+				}
+			}
+			if strings.EqualFold(result.Status, "passed") && result.PrimaryDecisionProof == nil {
+				return fmt.Errorf("primary decision requirement passed without a typed proof")
+			}
+		}
 		if strings.HasPrefix(result.RequirementID, "task:") && strings.EqualFold(result.Status, "passed") {
 			if err := verifyEvidenceBinding(m, result); err != nil {
 				return err
@@ -598,6 +613,12 @@ func (m EvidenceManifest) Verify(ctx context.Context, store ArtifactStore) error
 		if strings.EqualFold(result.Status, "error") || (strings.EqualFold(result.Status, "failed") && strings.EqualFold(m.Status, "accepted")) {
 			return fmt.Errorf("evidence requirement %q failed", result.RequirementID)
 		}
+	}
+	if primaryRequirements > 1 || primaryProofs > 1 {
+		return fmt.Errorf("evidence manifest has more than one active primary decision requirement")
+	}
+	if primaryRequirements == 1 && strings.EqualFold(m.Status, "accepted") && primaryProofs != 1 {
+		return fmt.Errorf("accepted decision manifest requires exactly one primary decision proof")
 	}
 	return nil
 }

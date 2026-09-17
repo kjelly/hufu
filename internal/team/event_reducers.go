@@ -390,6 +390,20 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventPrimaryDecisionAdmitted) {
+			item, err := ProjectPrimaryDecisionOccurrence(e)
+			if err != nil {
+				continue
+			}
+			if existing := taskMap[item.ID]; existing == nil {
+				taskOrder = append(taskOrder, item.ID)
+			} else if IsPrimaryOccurrence(existing) && existing.RuntimeOccurrence.Generation >= item.RuntimeOccurrence.Generation {
+				continue
+			}
+			taskMap[item.ID] = item
+			frozenContracts[item.ID] = true
+			continue
+		}
 		if e.Type == string(EventExecutionCompatibilityMigrated) && e.TaskID != "" {
 			var payload ExecutionCompatibilityMigratedPayload
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && validateExecutionCompatibilityMigrationPayload(payload) == nil {

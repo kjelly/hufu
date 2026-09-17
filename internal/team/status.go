@@ -373,6 +373,11 @@ type TodoItem struct {
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
+	// RuntimeOccurrence and PrimaryAdmission are runtime-owned. Model-facing
+	// TaskDef/TodoSpec inputs never populate them.
+	RuntimeOccurrence    *RuntimeOccurrenceMetaV1    `json:"runtime_occurrence,omitempty"`
+	PrimaryAdmission     *PrimaryOccurrenceAdmission `json:"primary_admission,omitempty"`
+	PrimaryManifestProof *PrimaryManifestProofV1     `json:"primary_manifest_proof,omitempty"`
 }
 
 // MarshalJSON keeps historical target-less checkpoints/events readable while
@@ -1356,6 +1361,9 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		SubagentProvider:              item.SubagentProvider,
 		ProviderBinding:               cloneProviderBinding(item.ProviderBinding),
 		BackendBinding:                cloneBackendBinding(item.BackendBinding),
+		RuntimeOccurrence:             cloneRuntimeOccurrenceMeta(item.RuntimeOccurrence),
+		PrimaryAdmission:              clonePrimaryOccurrenceAdmission(item.PrimaryAdmission),
+		PrimaryManifestProof:          clonePrimaryManifestProof(item.PrimaryManifestProof),
 	}
 	cloned.InvariantVerification = item.InvariantVerification
 	return cloned
@@ -1508,6 +1516,9 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.DecisionArtifacts = append([]ArtifactRef(nil), src.DecisionArtifacts...)
 	dst.DecisionBaseRates = cloneBaseRateEvidence(src.DecisionBaseRates)
 	dst.DecisionProvenance = cloneEvidenceProvenance(src.DecisionProvenance)
+	dst.RuntimeOccurrence = cloneRuntimeOccurrenceMeta(src.RuntimeOccurrence)
+	dst.PrimaryAdmission = clonePrimaryOccurrenceAdmission(src.PrimaryAdmission)
+	dst.PrimaryManifestProof = clonePrimaryManifestProof(src.PrimaryManifestProof)
 }
 
 func (tl *TodoList) SetContextManifest(id string, manifest *ContextInjectionManifest) error {

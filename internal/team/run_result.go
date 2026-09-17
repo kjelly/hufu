@@ -496,6 +496,8 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		foldedStats.TasksUnresolved += result.Stats.TasksUnresolved
 		foldedStats.AttemptsTotal += result.Stats.AttemptsTotal
 		foldedStats.AttemptsFailed += result.Stats.AttemptsFailed
+		foldedStats.RuntimeOccurrences += result.Stats.RuntimeOccurrences
+		foldedStats.PrimaryGenerations += result.Stats.PrimaryGenerations
 
 		if result.StopReason == StopReasonBudgetExceeded {
 			input.BudgetExceeded = true
@@ -816,15 +818,17 @@ type TaskResolution struct {
 }
 
 type RunStats struct {
-	TasksTotal      int `json:"tasks_total"`
-	TasksDone       int `json:"tasks_done"`
-	TasksUnresolved int `json:"tasks_unresolved"`
-	AttemptsTotal   int `json:"attempts_total"`
-	AttemptsFailed  int `json:"attempts_failed"`
+	TasksTotal         int `json:"tasks_total"`
+	TasksDone          int `json:"tasks_done"`
+	TasksUnresolved    int `json:"tasks_unresolved"`
+	AttemptsTotal      int `json:"attempts_total"`
+	AttemptsFailed     int `json:"attempts_failed"`
+	RuntimeOccurrences int `json:"runtime_occurrences,omitempty"`
+	PrimaryGenerations int `json:"primary_generations,omitempty"`
 }
 
 func (s RunStats) IsZero() bool {
-	return s.TasksTotal == 0 && s.TasksDone == 0 && s.TasksUnresolved == 0 && s.AttemptsTotal == 0 && s.AttemptsFailed == 0
+	return s.TasksTotal == 0 && s.TasksDone == 0 && s.TasksUnresolved == 0 && s.AttemptsTotal == 0 && s.AttemptsFailed == 0 && s.RuntimeOccurrences == 0 && s.PrimaryGenerations == 0
 }
 
 type RunResult struct {
@@ -902,6 +906,11 @@ func SummarizeRunStats(items []*TodoItem) RunStats {
 		if item == nil {
 			continue
 		}
+		if IsPrimaryOccurrence(item) {
+			stats.RuntimeOccurrences++
+			stats.PrimaryGenerations++
+			continue
+		}
 		stats.TasksTotal++
 		stats.AttemptsTotal += 1 + item.Retries
 		// Every retry represents a failed attempt, including a task that
@@ -977,7 +986,7 @@ func UnresolvedTaskReferences(items []*TodoItem) []TaskReference {
 	}
 	unresolved := make([]*TodoItem, 0, len(items))
 	for _, item := range items {
-		if item == nil || !isUnresolvedTaskStatus(item.Status) {
+		if item == nil || IsPrimaryOccurrence(item) || !isUnresolvedTaskStatus(item.Status) {
 			continue
 		}
 		if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {

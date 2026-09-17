@@ -88,6 +88,8 @@ type TaskOccurrenceProjection struct {
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
+	RuntimeOccurrence        *RuntimeOccurrenceMetaV1
+	PrimaryAdmission         *PrimaryOccurrenceAdmission
 }
 
 func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, error) {
@@ -128,6 +130,8 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
+		RuntimeOccurrence:        cloneRuntimeOccurrenceMeta(item.RuntimeOccurrence),
+		PrimaryAdmission:         clonePrimaryOccurrenceAdmission(item.PrimaryAdmission),
 		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
 		Escalate: item.Escalate, AdversarialVerify: item.AdversarialVerify,
 		ReconcileTool: item.ReconcileTool, Kind: item.Kind, Advances: append([]string(nil), item.Advances...),

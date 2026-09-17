@@ -44,10 +44,30 @@ func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req Evidenc
 	}
 	manifest := &EvidenceManifest{RunID: req.RunID, Status: "accepted"}
 	completedCount := 0
+	supportingCount := 0
+	primaryCount := 0
 	for _, item := range req.Items {
 		if item == nil {
 			continue
 		}
+		if IsPrimaryOccurrence(item) {
+			primaryCount++
+			if primaryCount > 1 {
+				return nil, fmt.Errorf("decision manifest has more than one active primary occurrence")
+			}
+			result := EvidenceResult{RequirementID: "primary_decision_valid", Validator: "primary-decision-process@v1", CheckedAt: nowUTC()}
+			if item.Status == TaskDone && validatePrimaryManifestProof(item.PrimaryManifestProof, item) == nil {
+				result.Status = "passed"
+				result.PrimaryDecisionProof = clonePrimaryManifestProof(item.PrimaryManifestProof)
+			} else {
+				result.Status = "failed"
+				result.Assertions = []string{"primary decision process proof is not satisfied"}
+				manifest.Status = "failed"
+			}
+			manifest.EvidenceResults = append(manifest.EvidenceResults, result)
+			continue
+		}
+		supportingCount++
 		result, refs, failed, err := buildTaskEvidence(ctx, store, req.RunID, item, req.Strict)
 		if err != nil {
 			return nil, err
@@ -63,12 +83,12 @@ func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req Evidenc
 		manifest.ArtifactRefs = append(manifest.ArtifactRefs, refs...)
 		manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 	}
-	if completedCount == 0 && len(req.Items) > 0 {
+	if completedCount == 0 && supportingCount > 0 {
 		manifest.Status = "failed"
 		if req.Strict {
 			return nil, fmt.Errorf("no completed tasks with evidence")
 		}
-	} else if completedCount == 0 && req.Strict {
+	} else if completedCount == 0 && supportingCount == 0 && primaryCount == 0 && req.Strict {
 		return nil, fmt.Errorf("no completed tasks with evidence")
 	}
 	if err := manifest.Seal(); err != nil {
