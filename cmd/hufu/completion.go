@@ -374,6 +374,8 @@ export extern "hufu workspace migrate" [selector?: string@'nu-complete hufu work
 export extern "hufu workspace delete" [selector?: string@'nu-complete hufu workspace projects' --team: string --all-teams --yes --output: string]
 export extern "hufu workspace restore" [trash_id: string --yes --output: string]
 export extern "hufu workspace purge" [trash_id: string --yes --output: string]
+export extern "hufu workspace gc" [--dry-run --apply --yes --trash-older-than: duration --output: string]
+export extern "hufu workspace shell-init" [shell: string]
 export extern "hufu workspace doctor" [selector?: string@'nu-complete hufu workspace projects' --repair --output: string]
 
 def "nu-complete hufu inspect formats" [] {

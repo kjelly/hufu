@@ -71,8 +71,9 @@
 - 📈 **Escalation on Retry** — Automatically escalate to a stronger model when retries are needed
 - 🔄 **DAG Task Scheduling** — Declare `on_failure` loops and `verify` commands for non-LLM task verification
 - 🪞 **Reflexion** — Structured failure hints inform retries with deterministic local fallback
-- 📓 **Task Journal** — Durable per-task results persisted to `workspace/logs/task_journal.jsonl`
+- 📓 **Task Journal** — Durable per-task results persisted to `<control-root>/logs/task_journal.jsonl`
 - 🔎 **Read-only Inspector** — Correlate canonical run, task, evidence, context, trace, and replay metadata without executing runtime behavior
+- 🗂️ **Managed Workspaces** — Keep durable control state outside the subject repository, with explicit migration, trash, recovery, and garbage collection
 
 ---
 
@@ -109,7 +110,8 @@ hufu list              # show all discoverable teams and their agents
 hufu list my-team      # show one team in detail
 hufu chat --agent-team my-team  # interactive REPL with that team
 hufu chat --default    # interactive REPL with the built-in team
-hufu inspect run run-123 --workspace workspace  # inspect persisted run facts
+hufu workspace path                            # print the active managed control root
+hufu inspect run run-123                       # inspect persisted run facts
 ```
 
 ### 1. Start Ollama
@@ -257,7 +259,7 @@ go run ./cmd/hufu
 | `--provider-url` | — | `string` | "" (hufu.yaml or `http://localhost:11434/v1`) | Ollama or OpenAI-compatible API base URL |
 | `--provider-api-key` | — | `string` | "" | Provider API key |
 | `--verbose` | `-v` | `bool` | `false` | Show full agent text output in real-time |
-| `--workspace` | `-w` | `string` | `""` (`<cwd>/workspace`) | Workspace directory path |
+| `--workspace` | `-w` | `string` | `""` (active managed workspace) | Exact compatibility workspace override |
 | `--new` | `-n` | `bool` | `false` | Archive old session and start fresh |
 | `--temp` | `-t` | `bool` | `false` | Use a temporary directory as workspace |
 | `--steps` | `-s` | `bool` | `false` | Pause for user confirmation before each batch of worker tasks |
@@ -326,8 +328,8 @@ go run ./cmd/hufu --provider-url http://192.168.1.100:11434/v1 "Analyze the code
 # Enable verbose mode to observe agent operations
 go run ./cmd/hufu -v "Refactor the module"
 
-# Specify a workspace directory
-go run ./cmd/hufu -w /path/to/project "Fix the bug"
+# Override the managed default with an exact compatibility workspace
+go run ./cmd/hufu -w /path/to/control-workspace "Fix the bug"
 
 # Start a new session
 go run ./cmd/hufu -n "New task"
@@ -587,7 +589,7 @@ max-retries: 2                   # Maximum retries (default: 2)
 max-concurrent: 8                # Maximum concurrent worker tasks (default: 8)
 
 # === Workspace ===
-workspace: workspace             # Workspace directory (default: "workspace")
+workspace: workspace             # Legacy/unmanaged compatibility field; managed runs use ControlRoot
 
 # === Execution Targets ===
 # `model` remains accepted for legacy configurations. New teams should use
@@ -908,10 +910,22 @@ mcp-tools:
 
 ## Workspace Layout
 
-`hufu` maintains a structured file system in the workspace directory for inter-agent communication and state tracking:
+Without workspace flags, `hufu` discovers the subject repository and stores
+durable control state in a registry-managed directory below the platform state
+root. The source repository (`SubjectRoot`) and durable runtime state
+(`ControlRoot`) must not overlap. Use `hufu workspace path` and
+`hufu workspace subject-path` to print the exact paths.
+
+Existing `<project>/workspace/<team>` data is never moved silently. Import it
+with `hufu workspace migrate --team <team>`; the source remains unchanged. See
+the [workspace migration guide](docs/guides/workspace-migration.md) and
+[workspace command reference](docs/reference/workspace-command-reference.md).
+
+Each managed control root uses this layout for inter-agent communication and
+state tracking:
 
 ```
-workspace/
+<control-root>/
 ├── tasks/               # Unified task files (merged inbox + outbox)
 │   └── {team-name}/
 │       └── {agent-name}/
@@ -926,6 +940,18 @@ workspace/
 ├── session.json         # Structured session data
 ├── chat_history.md      # Human-readable conversation transcript
 └── execution_trace.log  # Detailed execution trace log
+```
+
+Common management commands:
+
+```bash
+hufu workspace list --all
+hufu workspace doctor
+hufu workspace delete --team default --yes   # recoverable rename to trash
+hufu workspace restore <trash-id> --yes
+hufu workspace gc                            # dry-run by default
+hufu workspace gc --apply --yes
+eval "$(hufu workspace shell-init bash)"      # defines hcd and hproj
 ```
 
 ### Directory Descriptions

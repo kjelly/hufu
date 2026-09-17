@@ -212,6 +212,18 @@ type PurgeRequest struct {
 	TrashID string
 }
 
+type GCRequest struct {
+	Apply          bool
+	TrashOlderThan time.Duration
+}
+
+type GCResult struct {
+	Outcome    string           `json:"outcome"`
+	Apply      bool             `json:"apply"`
+	Candidates []TrashWorkspace `json:"candidates"`
+	Purged     []LifecycleItem  `json:"purged"`
+}
+
 type LifecycleItem struct {
 	OperationID string `json:"operation_id"`
 	TrashID     string `json:"trash_id,omitempty"`

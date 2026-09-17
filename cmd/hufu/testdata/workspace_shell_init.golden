@@ -1,0 +1,48 @@
+=== bash ===
+hcd() {
+    local p
+    p="$(command hufu workspace path "$@")" || return
+    cd -- "$p"
+}
+
+hproj() {
+    local p
+    p="$(command hufu workspace subject-path "$@")" || return
+    cd -- "$p"
+}
+=== zsh ===
+hcd() {
+    local p
+    p="$(command hufu workspace path "$@")" || return
+    cd -- "$p"
+}
+
+hproj() {
+    local p
+    p="$(command hufu workspace subject-path "$@")" || return
+    cd -- "$p"
+}
+=== fish ===
+function hcd
+    set -l p (command hufu workspace path $argv); or return
+    cd -- "$p"
+end
+
+function hproj
+    set -l p (command hufu workspace subject-path $argv); or return
+    cd -- "$p"
+end
+=== powershell ===
+function hcd {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]] $HufuArgs)
+    $p = & hufu workspace path @HufuArgs
+    if ($LASTEXITCODE -ne 0) { return }
+    Set-Location -LiteralPath $p
+}
+
+function hproj {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]] $HufuArgs)
+    $p = & hufu workspace subject-path @HufuArgs
+    if ($LASTEXITCODE -ne 0) { return }
+    Set-Location -LiteralPath $p
+}

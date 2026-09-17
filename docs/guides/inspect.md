@@ -32,7 +32,7 @@ hufu inspect storage
 All subcommands accept workspace and format:
 
 ```text
---workspace, -w <path>   workspace to inspect; defaults to <cwd>/workspace
+--workspace, -w <path>   exact workspace override; defaults to the active managed workspace
 --format text|json       output format; defaults to text
 ```
 

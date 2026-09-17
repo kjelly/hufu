@@ -251,6 +251,84 @@ func TestWorkspaceLifecyclePostReservationFailureWritesPartialResult(t *testing.
 	}
 }
 
+func TestWorkspaceGCDefaultsToReadOnlyAndApplyRequiresYes(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	fixture.run(t, "register")
+	registry, err := workspacepkg.OpenReadWrite(fixture.stateRoot,
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x22, 0x23)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := registry.CreateWorkspace(t.Context(), fixture.projectID, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Close()
+	identifierReader := bytes.NewReader(fixtureIDs(0x31, 0x32, 0x33, 0x34))
+	clock := fixture.now
+	fixture.deps.registryOptions = []workspacepkg.RegistryOption{
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(identifierReader)),
+		workspacepkg.WithClock(func() time.Time { return clock }),
+	}
+	deletedOutput := fixture.run(t, "delete", "--yes")
+	trashID := lifecycleOutputValue(deletedOutput, "trash_id")
+	clock = fixture.now.Add(2 * time.Hour)
+	registryPath := filepath.Join(fixture.stateRoot, "registry.sqlite")
+	before, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := executeWorkspaceCommand(t, fixture.deps, "gc", "--trash-older-than", "1h")
+	if err != nil || !strings.HasPrefix(stdout, "gc outcome=complete\nmode=dry-run\n") || !strings.Contains(stdout, trashID) {
+		t.Fatalf("GC dry run = %q, %v", stdout, err)
+	}
+	after, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || pathExistsForCLI(workspace.ControlRoot) {
+		t.Fatal("GC dry run changed state")
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "gc", "--apply", "--trash-older-than", "1h")
+	if err == nil || stdout != "" {
+		t.Fatalf("unconfirmed GC apply = %q, %v", stdout, err)
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "gc", "--apply", "--yes", "--trash-older-than", "1h")
+	if err != nil || !strings.Contains(stdout, "purged\t"+trashID) {
+		t.Fatalf("GC apply = %q, %v", stdout, err)
+	}
+}
+
+func TestWorkspaceShellInitGoldenIsStatic(t *testing.T) {
+	deps := workspaceCommandDeps{
+		stateRoot: func() (string, error) { return "", errors.New("shell-init must not read state") },
+		getwd:     func() (string, error) { return "", errors.New("shell-init must not read cwd") },
+	}
+	var output strings.Builder
+	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
+		fmt.Fprintf(&output, "=== %s ===\n", shell)
+		stdout, err := executeWorkspaceCommand(t, deps, "shell-init", shell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output.WriteString(stdout)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "workspace_shell_init.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != string(want) {
+		t.Fatalf("shell-init golden mismatch\n--- want ---\n%s\n--- got ---\n%s", want, output.String())
+	}
+	for _, forbidden := range []string{"$(touch", "malicious-alias", "/tmp/runtime-project"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("shell-init contains runtime data %q", forbidden)
+		}
+	}
+}
+
 func TestWorkspaceRebindCommandPreservesControlIdentity(t *testing.T) {
 	fixture := newWorkspaceCLIFixture(t)
 	fixture.run(t, "register")

@@ -68,6 +68,7 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Decision authoring](guides/decision-authoring.md)
 - [Read-only runtime inspection](guides/inspect.md)
+- [Managed workspace migration](guides/workspace-migration.md)
 - [Operator journeys](guides/operator-journeys.md)
 - [Operator CLI migration](guides/operator-cli-migration.md)
 - [Operator troubleshooting and recovery](guides/operator-troubleshooting.md)
@@ -78,6 +79,7 @@ to re-create an abstraction that already exists in the runtime.
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.
 - [Generated operator command reference](reference/operator-command-reference.md)
+- [Workspace command reference](reference/workspace-command-reference.md)
 - [Operator release readiness](reference/operator-release-readiness.md)
 - [Operator requirement traceability](reference/operator-requirement-traceability.md)
 - [Operator usability evaluation](reference/operator-usability-evaluation.md)

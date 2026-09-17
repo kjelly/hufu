@@ -19,7 +19,10 @@ import (
 )
 
 const workspaceOutputSchemaVersion = 1
-const workspaceTrashRetention = 720 * time.Hour
+const (
+	workspaceTrashRetentionText = "720h"
+	workspaceTrashRetention     = 720 * time.Hour
+)
 
 type workspaceCommandDeps struct {
 	stateRoot       func() (string, error)
@@ -74,9 +77,127 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceDeleteCommand(deps),
 		newWorkspaceRestoreCommand(deps),
 		newWorkspacePurgeCommand(deps),
+		newWorkspaceGCCommand(deps),
 		newWorkspaceDoctorCommand(deps),
+		newWorkspaceShellInitCommand(),
 	)
 	return command
+}
+
+func newWorkspaceGCCommand(deps workspaceCommandDeps) *cobra.Command {
+	var output, olderThan string
+	var dryRun, apply, yes bool
+	command := &cobra.Command{
+		Use:   "gc",
+		Short: "Preview or purge expired managed workspace trash",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			if dryRun && apply {
+				return errors.New("--dry-run and --apply are mutually exclusive")
+			}
+			if apply && !yes {
+				return errors.New("workspace gc --apply requires explicit --yes confirmation")
+			}
+			if !apply && yes {
+				return errors.New("--yes is only valid with --apply")
+			}
+			retention, err := time.ParseDuration(olderThan)
+			if err != nil || retention <= 0 {
+				return fmt.Errorf("invalid --trash-older-than %q: expected a positive duration", olderThan)
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, gcErr := manager.GC(command.Context(), workspacepkg.GCRequest{Apply: apply, TrashOlderThan: retention})
+			if err = writeWorkspaceGC(command.OutOrStdout(), output, result); err != nil {
+				return errors.Join(gcErr, err)
+			}
+			if gcErr != nil || result.Outcome != "complete" {
+				return &workspaceOutcomeError{outcome: result.Outcome, cause: gcErr}
+			}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "Preview eligible trash without changing state (default)")
+	command.Flags().BoolVar(&apply, "apply", false, "Permanently purge eligible trash")
+	command.Flags().BoolVar(&yes, "yes", false, "Confirm permanent purge when --apply is set")
+	command.Flags().StringVar(&olderThan, "trash-older-than", workspaceTrashRetentionText, "Only select trash older than this duration")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = cobra.NoFileCompletions
+	return command
+}
+
+func newWorkspaceShellInitCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:               "shell-init <bash|zsh|fish|powershell>",
+		Short:             "Print static shell helpers for managed workspace navigation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgs:         []string{"bash", "zsh", "fish", "powershell"},
+		ValidArgsFunction: cobra.FixedCompletions([]string{"bash", "zsh", "fish", "powershell"}, cobra.ShellCompDirectiveNoFileComp),
+		RunE: func(command *cobra.Command, args []string) error {
+			source, ok := workspaceShellInitSource(args[0])
+			if !ok {
+				return fmt.Errorf("unsupported shell %q: expected bash, zsh, fish, or powershell", args[0])
+			}
+			_, err := io.WriteString(command.OutOrStdout(), source)
+			return err
+		},
+	}
+	return command
+}
+
+func workspaceShellInitSource(shell string) (string, bool) {
+	switch strings.ToLower(shell) {
+	case "bash", "zsh":
+		return `hcd() {
+    local p
+    p="$(command hufu workspace path "$@")" || return
+    cd -- "$p"
+}
+
+hproj() {
+    local p
+    p="$(command hufu workspace subject-path "$@")" || return
+    cd -- "$p"
+}
+`, true
+	case "fish":
+		return `function hcd
+    set -l p (command hufu workspace path $argv); or return
+    cd -- "$p"
+end
+
+function hproj
+    set -l p (command hufu workspace subject-path $argv); or return
+    cd -- "$p"
+end
+`, true
+	case "powershell":
+		return `function hcd {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]] $HufuArgs)
+    $p = & hufu workspace path @HufuArgs
+    if ($LASTEXITCODE -ne 0) { return }
+    Set-Location -LiteralPath $p
+}
+
+function hproj {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]] $HufuArgs)
+    $p = & hufu workspace subject-path @HufuArgs
+    if ($LASTEXITCODE -ne 0) { return }
+    Set-Location -LiteralPath $p
+}
+`, true
+	default:
+		return "", false
+	}
 }
 
 func newWorkspaceDeleteCommand(deps workspaceCommandDeps) *cobra.Command {
@@ -825,6 +946,30 @@ func writeWorkspaceLifecycle(writer io.Writer, output, action string, result wor
 	}
 	for _, item := range result.Items {
 		if _, err := fmt.Fprintf(writer, "control_root=%s\noperation_id=%s\nproject_id=%s\nteam_name=%s\ntrash_id=%s\ntrash_path=%s\nworkspace_id=%s\n", item.ControlRoot, item.OperationID, item.ProjectID, item.TeamName, displayEmpty(item.TrashID), displayEmpty(item.TrashPath), item.WorkspaceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeWorkspaceGC(writer io.Writer, output string, result workspacepkg.GCResult) error {
+	if output == "json" {
+		return writeWorkspaceJSON(writer, result)
+	}
+	mode := "dry-run"
+	if result.Apply {
+		mode = "apply"
+	}
+	if _, err := fmt.Fprintf(writer, "gc outcome=%s\nmode=%s\n", result.Outcome, mode); err != nil {
+		return err
+	}
+	for _, item := range result.Candidates {
+		if _, err := fmt.Fprintf(writer, "candidate\t%s\t%s\t%s\t%s\n", item.TrashID, item.ProjectID, item.TeamName, item.TrashPath); err != nil {
+			return err
+		}
+	}
+	for _, item := range result.Purged {
+		if _, err := fmt.Fprintf(writer, "purged\t%s\t%s\t%s\t%s\n", item.TrashID, item.ProjectID, item.TeamName, item.TrashPath); err != nil {
 			return err
 		}
 	}
