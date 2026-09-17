@@ -33,6 +33,12 @@ golangci-lint run
 
 The command must complete successfully with no errors before the task is considered complete. If it reports errors, fix them and rerun the command; do not stop with known lint failures. Documentation-only changes do not require this code lint gate.
 
+## Documentation and Temporary Files
+
+- Never commit files under `docs/tmp/`; it is gitignored scratch space and is not part of the documentation authority chain.
+- If material from `docs/tmp/` must be retained in version control, move it to the appropriate permanent `docs/` lifecycle directory (for example, `docs/archive/implementation-plans/`) before staging it.
+- The pre-commit configuration rejects staged additions, modifications, and renames into `docs/tmp/`; deletions and renames out of that directory remain allowed.
+
 ## Package Structure
 
 | Package | Path | Purpose |
