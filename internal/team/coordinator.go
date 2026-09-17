@@ -769,17 +769,22 @@ type Coordinator struct {
 	terminalLifecyclePrepared     bool
 	terminalLifecycleErr          error
 	terminalLifecycleWaitTimedOut bool
-	lastEvidenceManifest          *EvidenceManifest
-	lastEvidenceManifestMu        sync.RWMutex
-	diagnosticPackets             []DiagnosticPacket
-	diagnosticPacketsMu           sync.RWMutex
-	pendingDiagnosticPackets      map[string]DiagnosticPacket
-	planRevisions                 []PlanRevision
-	planRevisionsMu               sync.RWMutex
-	planMaxTasks                  int
-	planMaxAttempts               int
-	planReviews                   map[string]PlanReviewResult
-	planReviewsMu                 sync.RWMutex
+	// decisionTerminal owns the decision-intent preparation phase that occurs
+	// before terminalLifecycle elects its immutable candidate. Its mutex is
+	// never held while a provider, artifact store, or event store is called.
+	decisionTerminalMu       sync.Mutex
+	decisionTerminal         decisionTerminalRuntime
+	lastEvidenceManifest     *EvidenceManifest
+	lastEvidenceManifestMu   sync.RWMutex
+	diagnosticPackets        []DiagnosticPacket
+	diagnosticPacketsMu      sync.RWMutex
+	pendingDiagnosticPackets map[string]DiagnosticPacket
+	planRevisions            []PlanRevision
+	planRevisionsMu          sync.RWMutex
+	planMaxTasks             int
+	planMaxAttempts          int
+	planReviews              map[string]PlanReviewResult
+	planReviewsMu            sync.RWMutex
 	// contractWarnings deduplicates contract_warning events per
 	// (todoID, code, message) within a single dispatch cycle, so that both
 	// the ExecuteTasks preflight and the executeTask execution-path check
@@ -1022,6 +1027,9 @@ func (c *Coordinator) LastRunResult() *RunResult {
 func (c *Coordinator) SetLastRunResult(res *RunResult) {
 	if c == nil {
 		return
+	}
+	if res != nil && c.decisionTerminalEnabled() && terminalCandidateWantsSuccess(res) && !c.terminalPreparationAuthorized(res) {
+		res = blockDecisionTerminalCandidate(res, ReasonDecisionTerminalPreparationMissing)
 	}
 	// This method is deliberately a projection seam, never a terminal
 	// decision point. In particular it must not elect a candidate or prepare a

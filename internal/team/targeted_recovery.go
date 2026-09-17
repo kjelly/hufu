@@ -263,7 +263,7 @@ func (c *Coordinator) finishTargetedRecovery(ctx context.Context, action Targete
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	result := c.FinalizeRun(ctx, &evaluated, nil)
+	result := c.requestTerminalResult(ctx, TerminalEntryResumeCompletion, "targeted_recovery", false, &evaluated, nil)
 	report := c.targetedRecoveryReport(action, taskID, result)
 	if operationErr != nil {
 		return report, operationErr

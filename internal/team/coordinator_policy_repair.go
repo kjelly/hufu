@@ -101,7 +101,7 @@ func (c *Coordinator) finalizeCoordinatorPolicyRepairRun() string {
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	c.FinalizeRun(context.Background(), &evaluated, nil)
+	c.requestTerminalResult(context.Background(), TerminalEntryNoProgress, "policy_repair_exhausted", false, &evaluated, nil)
 	c.finishCalled.Store(true)
 	c.SetCurrentStage("coordinator_policy_repair_exhausted")
 	return summary

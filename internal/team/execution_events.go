@@ -333,6 +333,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.terminalLifecycleErr = nil
 	c.terminalLifecycleWaitTimedOut = false
 	c.terminalLifecycleMu.Unlock()
+	c.resetDecisionTerminalInvocation(runID)
 
 	workspace := ""
 	if c.session != nil {
@@ -425,7 +426,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 				c.markTerminalRecovery("invocation ended without a terminal result")
 			} else {
 				finalizeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				final := c.FinalizeRun(finalizeCtx, result, result.Acceptance)
+				final := c.requestTerminalResult(finalizeCtx, TerminalEntryCoordinatorEOF, "deferred_completion", false, result, result.Acceptance)
 				cancel()
 				if final == nil || !c.TerminalLifecycleConfirmed() {
 					c.markTerminalRecovery("deferred terminal finalization did not confirm run_finished")

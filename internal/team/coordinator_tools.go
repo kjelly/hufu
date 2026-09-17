@@ -393,7 +393,7 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		// Preserve the elected business pointer. In the active path this is the
 		// pending no-progress candidate; in compatibility mode this is a fresh
 		// compatibility candidate. FinalizeRun owns the only terminal projection.
-		t.coordinator.FinalizeRun(ctx, preserved, acceptance)
+		t.coordinator.requestTerminalResult(ctx, TerminalEntryNoProgress, "no_progress", false, preserved, acceptance)
 		t.coordinator.finishCalled.Store(true)
 		t.coordinator.coordinatorPolicyRepairPending.Store(false)
 		return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
@@ -471,11 +471,34 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	t.coordinator.lastEvidenceManifestMu.RLock()
 	evaluated.EvidenceManifest = t.coordinator.lastEvidenceManifest
 	t.coordinator.lastEvidenceManifestMu.RUnlock()
-	_ = t.coordinator.FinalizeRun(ctx, &evaluated, accRes)
+	if terminalResponse, stop := t.prepareTerminalFinish(ctx, args.AcknowledgeFailedTasks, &evaluated, accRes); stop {
+		return terminalResponse, nil
+	}
 
 	t.coordinator.finishCalled.Store(true)
 	t.coordinator.coordinatorPolicyRepairPending.Store(false)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+}
+
+func (t *finishTool) prepareTerminalFinish(ctx context.Context, acknowledgeFailedTasks bool, evaluated *RunResult, acceptance *AcceptanceResult) (fantasy.ToolResponse, bool) {
+	entryPoint := TerminalEntryFinishTool
+	cause := "success_requested"
+	canContinue := true
+	if acknowledgeFailedTasks {
+		entryPoint = TerminalEntryPartialAck
+		cause = "partial_ack"
+		canContinue = false
+	}
+	prepared, err := t.coordinator.RequestRunTermination(ctx, TerminalIntent{
+		EntryPoint: entryPoint, Cause: cause, WantsSuccess: terminalCandidateWantsSuccess(evaluated), CanContinueSupporting: canContinue,
+	}, evaluated, acceptance)
+	if err != nil {
+		t.coordinator.report(t.coordinator.newEvent("error").withMessage("terminal preparation failed: " + err.Error()))
+	}
+	if prepared.Action == TerminalPreparationContinueWork {
+		return fantasy.NewTextErrorResponse("primary decision is not ready; continue required supporting work before finish"), true
+	}
+	return fantasy.ToolResponse{}, false
 }
 
 // canonicalFinishedResponse returns the response sealed by finish rather than

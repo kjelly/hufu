@@ -1,6 +1,9 @@
 package team
 
-import "slices"
+import (
+	"context"
+	"slices"
+)
 
 // TerminalEntryPoint identifies every runtime path that can request terminal
 // processing. Decision-intent runs use this closed set so no compatibility or
@@ -131,4 +134,64 @@ type TerminalPreparationProof struct {
 	Action                TerminalPreparationAction `json:"action"`
 	PrimaryBindingEventID *string                   `json:"primary_binding_event_id"`
 	ReasonCodes           []string                  `json:"reason_codes"`
+}
+
+// TerminalPreparation is the immutable result of the common pre-terminal
+// boundary. Candidate is handed to the existing terminal writer only when the
+// action is commit_terminal.
+type TerminalPreparation struct {
+	Action         TerminalPreparationAction
+	Candidate      *RunResult
+	PrimaryBinding *PrimaryBindingV1
+	Proof          *TerminalPreparationProof
+	ReasonCodes    []string
+}
+
+// DecisionTerminalPreparationRequest is the complete runtime-owned input to a
+// primary decision preparer. Implementations may perform provider work only
+// with Context; CleanupContext is deliberately not exposed here.
+type DecisionTerminalPreparationRequest struct {
+	Intent         TerminalIntent
+	Candidate      *RunResult
+	LogicalRunID   string
+	ExecutionRunID string
+	BranchID       string
+	Generation     uint32
+}
+
+// DecisionTerminalPreparationResult is returned by the primary decision
+// service after it either binds one primary result, identifies repairable
+// supporting work, or determines that replay-only recovery is required.
+type DecisionTerminalPreparationResult struct {
+	Action                TerminalPreparationAction
+	PrimaryBinding        *PrimaryBindingV1
+	PrimaryBindingEventID *string
+	SupportRevisionDigest *string
+	ReasonCodes           []string
+}
+
+// DecisionTerminalPreparer performs primary decision work before terminal
+// candidate election. It must honor cancellation and must not call
+// FinalizeRun or RequestRunTermination recursively.
+type DecisionTerminalPreparer interface {
+	PrepareDecisionForTerminal(context.Context, DecisionTerminalPreparationRequest) (DecisionTerminalPreparationResult, error)
+}
+
+// DecisionTerminalPreparerFunc adapts a function to DecisionTerminalPreparer.
+type DecisionTerminalPreparerFunc func(context.Context, DecisionTerminalPreparationRequest) (DecisionTerminalPreparationResult, error)
+
+func (fn DecisionTerminalPreparerFunc) PrepareDecisionForTerminal(ctx context.Context, request DecisionTerminalPreparationRequest) (DecisionTerminalPreparationResult, error) {
+	return fn(ctx, request)
+}
+
+// DecisionTerminalConfig enables the primary decision terminal contract for a
+// coordinator. Identity and any already-bound primary are durable snapshots;
+// they are never inferred from model prose.
+type DecisionTerminalConfig struct {
+	LogicalRunID           string
+	BranchID               string
+	Generation             uint32
+	Preparer               DecisionTerminalPreparer
+	ExistingBinding        *PrimaryBindingV1
+	ExistingBindingEventID *string
 }

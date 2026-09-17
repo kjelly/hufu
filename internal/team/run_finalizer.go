@@ -44,6 +44,17 @@ type RunFinalizationInput struct {
 // only acceptance authority; the experience processor only proposes or
 // confirms/rejects candidates based on that decision.
 func (c *Coordinator) FinalizeRun(ctx context.Context, result *RunResult, acceptance *AcceptanceResult) *RunResult {
+	if c != nil && result != nil && c.decisionTerminalEnabled() && terminalCandidateWantsSuccess(result) && !c.terminalPreparationAuthorized(result) {
+		result = blockDecisionTerminalCandidate(result, ReasonDecisionTerminalPreparationMissing)
+	}
+	return c.finalizeRunPrepared(ctx, result, acceptance)
+}
+
+// finalizeRunPrepared is the existing single terminal writer. Decision-intent
+// callers reach it through RequestRunTermination after runtime proof has been
+// registered; FinalizeRun retains a fail-closed compatibility seam for direct
+// embedders.
+func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult, acceptance *AcceptanceResult) *RunResult {
 	if c == nil || result == nil {
 		return result
 	}
@@ -635,7 +646,11 @@ func (c *Coordinator) EmergencyFinalizeRun(ctx context.Context) error {
 	state := c.terminalLifecycleState
 	c.terminalLifecycleMu.Unlock()
 	if !activeLifecycle || state == terminalLifecycleOpen {
-		final := c.FinalizeRun(ctx, result, result.Acceptance)
+		entryPoint := TerminalEntryEmergency
+		if errors.Is(context.Cause(ctx), context.Canceled) {
+			entryPoint = TerminalEntrySignal
+		}
+		final := c.requestTerminalResult(ctx, entryPoint, "emergency", false, result, result.Acceptance)
 		if !activeLifecycle {
 			return nil
 		}

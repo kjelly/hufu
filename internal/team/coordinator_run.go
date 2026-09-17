@@ -234,7 +234,7 @@ func (c *Coordinator) finalizePublicInvocationFailure(runErr error) {
 			Metrics:         c.Metrics(),
 			GoalMode:        c.GoalMode(),
 		})
-		c.FinalizeRun(context.Background(), &evaluated, nil)
+		c.requestTerminalResult(context.Background(), TerminalEntryResumeCompletion, "recovery_required", false, &evaluated, nil)
 		return
 	}
 	c.recordRunAborted(runErr)
@@ -1096,7 +1096,7 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 			Metrics:         c.Metrics(),
 			GoalMode:        c.GoalMode(),
 		})
-		return c.FinalizeRun(ctx, &evaluated, nil)
+		return c.requestTerminalResult(ctx, TerminalEntryDirectAgent, "direct_agent_failed", false, &evaluated, nil)
 	}
 	accRes, accErr := c.runAcceptance(ctx)
 	if manifestErr := c.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
@@ -1122,7 +1122,7 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 	c.lastEvidenceManifestMu.RLock()
 	evaluated.EvidenceManifest = c.lastEvidenceManifest
 	c.lastEvidenceManifestMu.RUnlock()
-	runRes := c.FinalizeRun(ctx, &evaluated, accRes)
+	runRes := c.requestTerminalResult(ctx, TerminalEntryDirectAgent, "success_requested", true, &evaluated, accRes)
 	return runRes
 }
 
@@ -1539,7 +1539,19 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		// value back into this stack object and project that clone as LastRunResult;
 		// continuation metadata must be part of the immutable snapshot before the
 		// event-first commit.
-		c.FinalizeRun(ctx, &evaluated, accRes)
+		entryPoint := TerminalEntryCoordinatorEOF
+		cause := "success_requested"
+		canContinue := true
+		if ctx.Err() != nil {
+			entryPoint = TerminalEntrySignal
+			cause = "cancelled"
+			canContinue = false
+		} else if budgetStopped {
+			entryPoint = TerminalEntryBudgetStop
+			cause = "budget"
+			canContinue = false
+		}
+		c.requestTerminalResult(ctx, entryPoint, cause, canContinue, &evaluated, accRes)
 	}
 	if continuationTurns > 0 {
 		status := "completed"
@@ -1638,7 +1650,7 @@ func (c *Coordinator) recordInterruptedContinuation(turn, maxTurns int, reason, 
 		Reason:     reason,
 		NoProgress: &progress,
 	}
-	c.FinalizeRun(context.Background(), &evaluated, nil)
+	c.requestTerminalResult(context.Background(), TerminalEntryTurnLimit, "turn_limit", false, &evaluated, nil)
 	c.saveContinuationCheckpoint(turn, maxTurns, reason, "aborted")
 	c.continuationInterrupted.Store(true)
 	return result
@@ -1749,7 +1761,7 @@ func (c *Coordinator) finalizeTerminalUnresolvedRun() string {
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	c.FinalizeRun(context.Background(), &evaluated, nil)
+	c.requestTerminalResult(context.Background(), TerminalEntryWorkerHardStop, "unresolved_work", false, &evaluated, nil)
 	c.SetCurrentStage("terminal_unresolved")
 	return summary
 }
@@ -1821,7 +1833,16 @@ func (c *Coordinator) recordRunAborted(runErr error) {
 		Metrics:         c.Metrics(),
 		GoalMode:        c.GoalMode(),
 	})
-	c.FinalizeRun(context.Background(), &evaluated, nil)
+	entryPoint := TerminalEntryProviderFailure
+	cause := "provider_failure"
+	if errors.Is(runErr, ErrInvocationStalled) || errors.Is(runErr, context.DeadlineExceeded) {
+		entryPoint = TerminalEntryWatchdog
+		cause = "watchdog"
+	} else if errors.Is(runErr, context.Canceled) {
+		entryPoint = TerminalEntrySignal
+		cause = "cancelled"
+	}
+	c.requestTerminalResult(context.Background(), entryPoint, cause, false, &evaluated, nil)
 	checkpoint := c.ContinuationCheckpoint()
 	if checkpoint == nil {
 		c.saveContinuationCheckpoint(0, 0, reason, "aborted")

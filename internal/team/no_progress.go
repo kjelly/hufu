@@ -371,7 +371,7 @@ func (c *Coordinator) stopForNoProgress(reason string) (bool, string) {
 	if activeLifecycle {
 		c.SetLastRunResult(&evaluated)
 	} else {
-		c.FinalizeRun(context.Background(), &evaluated, nil)
+		c.requestTerminalResult(context.Background(), TerminalEntryNoProgress, "no_progress", false, &evaluated, nil)
 	}
 	// Preserve a durable resume handoff even when the stop is observed at a
 	// task boundary before ensureFinished has entered its continuation loop.
