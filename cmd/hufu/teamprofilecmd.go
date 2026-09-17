@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -95,7 +95,7 @@ func runTeamProfileList(_ *cobra.Command, args []string) error {
 	for _, profile := range projection.Profiles {
 		profiles = append(profiles, teamProfileDTO{Name: profile.Name, Origin: profile.Origin, Ref: profile.Ref, Version: profile.Version})
 	}
-	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
+	slices.SortFunc(profiles, func(a, b teamProfileDTO) int { return strings.Compare(a.Name, b.Name) })
 	if strings.EqualFold(strings.TrimSpace(teamProfileFormat), "text") || strings.TrimSpace(teamProfileFormat) == "" {
 		var b strings.Builder
 		for _, profile := range profiles {
