@@ -2,7 +2,7 @@
 
 > Status: Implemented
 > Authority: normative
-> Verified-Commit: f0fc9f7
+> Verified-Commit: 1d370fe
 > Verified-Date: 2026-09-17
 > Supersedes: —
 > Superseded-By: —
