@@ -130,6 +130,14 @@ type VectorSearcher interface {
 	SearchVector(context.Context, SearchRequest) ([]SearchResult, error)
 }
 
+// RetrievalRepository is the minimal canonical query surface needed by hybrid
+// retrieval. Keeping it read-only lets inspectors open SQLite in immutable
+// mode without acquiring the repository's mutation capabilities.
+type RetrievalRepository interface {
+	SearchExact(context.Context, SearchRequest) ([]SearchResult, error)
+	SearchLexical(context.Context, SearchRequest) ([]SearchResult, error)
+}
+
 type RetrievalTrace struct {
 	Query                 string         `json:"query"`
 	ExactResults          []SearchResult `json:"exact_results"`
@@ -143,7 +151,7 @@ type RetrievalTrace struct {
 
 // HybridRetrieve applies exact-first selection, reciprocal-rank fusion (k=60),
 // content deduplication (the first MMR pass), and deterministic tie-breakers.
-func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher, req SearchRequest) ([]SearchResult, RetrievalTrace, error) {
+func HybridRetrieve(ctx context.Context, repo RetrievalRepository, vector VectorSearcher, req SearchRequest) ([]SearchResult, RetrievalTrace, error) {
 	unavailable := SemanticFallbackReason("")
 	if vector == nil {
 		unavailable = SemanticFallbackProjectionMissing
@@ -155,7 +163,7 @@ func HybridRetrieve(ctx context.Context, repo Repository, vector VectorSearcher,
 
 func HybridRetrieveWithOptions(
 	ctx context.Context,
-	repo Repository,
+	repo RetrievalRepository,
 	req SearchRequest,
 	options HybridRetrievalOptions,
 ) ([]SearchResult, RetrievalTrace, error) {

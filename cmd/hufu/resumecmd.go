@@ -40,12 +40,21 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
+	if err := captureRuntimeRoots(); err != nil {
+		return err
+	}
 	configureOutputRendering()
 
-	workspace, teamName, err := resolveCommandWorkspaceAndTeam(getWorkspace(), resumeTeamName, opts.workspace != "")
+	binding, teamName, err := resolveExistingExecutionWorkspace(context.Background(), resumeTeamName, opts.workspace != "")
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if binding != nil && binding.Lease != nil {
+			runErr = errors.Join(runErr, binding.Lease.Close())
+		}
+	}()
+	workspace := binding.Resolution.ControlRoot
 	if !team.HasSession(workspace) {
 		return fmt.Errorf("no session found in %s; resume requires an existing session checkpoint", workspace)
 	}
@@ -69,7 +78,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err := validateResumeProfile(teamName, registry, vars); err != nil {
 		return err
 	}
-	tc, err := loadTeamByNameAtWorkspace(context.Background(), teamName, workspace, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
+	tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
 	}

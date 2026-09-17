@@ -10,6 +10,9 @@ import (
 
 func TestResolveTeamWorkspacePathCanonicalizesWorkingDirectorySymlink(t *testing.T) {
 	physical := t.TempDir()
+	if err := os.Mkdir(filepath.Join(physical, ".git"), 0o755); err != nil {
+		t.Fatalf("create git marker: %v", err)
+	}
 	aliasParent := t.TempDir()
 	alias := filepath.Join(aliasParent, "repo-alias")
 	if err := os.Symlink(physical, alias); err != nil {

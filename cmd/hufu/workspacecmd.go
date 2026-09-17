@@ -65,7 +65,38 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspacePathCommand(deps),
 		newWorkspaceSubjectPathCommand(deps),
 		newWorkspaceAliasCommand(deps),
+		newWorkspaceRebindCommand(deps),
 	)
+	return command
+}
+
+func newWorkspaceRebindCommand(deps workspaceCommandDeps) *cobra.Command {
+	var output string
+	command := &cobra.Command{
+		Use:   "rebind <selector> <new-root>",
+		Short: "Rebind a registered project to a new subject root",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, err := manager.Rebind(command.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return writeWorkspaceShow(command.OutOrStdout(), output, workspaceShowData{Project: result.Project, Workspaces: nonNilWorkspaces(result.Workspaces)})
+		},
+	}
+	command.ValidArgsFunction = completeWorkspaceProjectSelectors(deps)
+	addWorkspaceOutputFlag(command, &output)
 	return command
 }
 

@@ -49,6 +49,7 @@ func runProcessContract(t *testing.T, binary string, args ...string) (int, []byt
 
 	home := t.TempDir()
 	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = home
 	cmd.Env = []string{
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),

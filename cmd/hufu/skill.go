@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -305,6 +304,10 @@ func getWorkspace() string {
 	if opts.workspace != "" {
 		return opts.workspace
 	}
-	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, "workspace")
+	start := runtimeStartDir()
+	workspace, err := legacyDefaultWorkspaceRoot(start)
+	if err != nil {
+		return filepath.Join(start, "workspace")
+	}
+	return workspace
 }

@@ -55,6 +55,46 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestOpenEventStoreReadOnlyDoesNotCreateAndRejectsAppend(t *testing.T) {
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	if _, err := OpenEventStoreReadOnly(missingWorkspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing read-only open error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(missingWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("read-only open created workspace: %v", err)
+	}
+
+	workspace := t.TempDir()
+	writable, err := NewEventStore(workspace, "run-read-only", "session-read-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Append(RunEvent{Type: "read_only_fixture", Actor: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := OpenEventStoreReadOnly(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = readOnly.Close() }()
+	if err := readOnly.VerifyHashChain(); err != nil {
+		t.Fatal(err)
+	}
+	if err := readOnly.Append(RunEvent{Type: "must_not_append", Actor: "test"}); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("read-only append error = %v", err)
+	}
+	events, err := readOnly.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("read-only event count = %d, want 1", len(events))
+	}
+}
+
 func TestEventStoreIdempotencyIsScopedToBranch(t *testing.T) {
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-branch-idempotency", "session-branch-idempotency")

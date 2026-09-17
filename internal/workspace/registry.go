@@ -305,8 +305,44 @@ func (r *SQLiteRegistry) ClearAlias(ctx context.Context, selector string) error 
 	return requireAffected(result, "project", project.ID)
 }
 
-func (r *SQLiteRegistry) RebindProject(context.Context, string, string) error {
-	return errors.New("project rebind is not available until runtime locking is enabled")
+func (r *SQLiteRegistry) RebindProject(ctx context.Context, selector, newRoot string) error {
+	if r.readOnly {
+		return errors.New("rebind project: registry is read-only")
+	}
+	project, err := r.ResolveProject(ctx, selector)
+	if err != nil {
+		return err
+	}
+	canonical, err := CanonicalExistingDirectory(newRoot)
+	if err != nil {
+		return fmt.Errorf("rebind project root: %w", err)
+	}
+	if canonical == project.SubjectRoot {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin project rebind: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := r.now().UTC().UnixMilli()
+	result, err := tx.ExecContext(ctx, "UPDATE projects SET subject_root=?,updated_at=? WHERE id=?", canonical, now, project.ID)
+	if err != nil {
+		return fmt.Errorf("update project subject root: %w", err)
+	}
+	if err = requireAffected(result, "project", project.ID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE workspaces SET requires_fresh_session=1,updated_at=? WHERE project_id=?", now, project.ID); err != nil {
+		return fmt.Errorf("mark active workspaces for fresh session: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE trash_workspaces SET requires_fresh_session=1 WHERE project_id=?", project.ID); err != nil {
+		return fmt.Errorf("mark trash workspaces for fresh session: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit project rebind: %w", err)
+	}
+	return nil
 }
 
 const projectSelect = `SELECT id,slug,COALESCE(alias,''),subject_root,state_dir,status,created_at,updated_at,last_used_at FROM projects`

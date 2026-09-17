@@ -35,6 +35,8 @@ type runOptions struct {
 	// canonical facades set exact, root, or default explicitly.
 	workspaceMode string
 	canonicalRun  bool
+	startDir      string
+	subjectRoot   string
 	intent        string
 	// decisionProfile is the run-scoped --decision-profile override, the top
 	// layer of the decision profile precedence chain

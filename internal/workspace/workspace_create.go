@@ -306,6 +306,25 @@ func (r *SQLiteRegistry) ListTrashWorkspaces(ctx context.Context) ([]TrashWorksp
 	return trash, nil
 }
 
+func (r *SQLiteRegistry) SetWorkspaceRequiresFreshSession(ctx context.Context, workspaceID string, required bool) error {
+	if r.readOnly {
+		return errors.New("update workspace fresh-session requirement: registry is read-only")
+	}
+	value := 0
+	if required {
+		value = 1
+	}
+	result, err := r.db.ExecContext(ctx, "UPDATE workspaces SET requires_fresh_session=?,updated_at=? WHERE id=?", value, r.now().UTC().UnixMilli(), workspaceID)
+	if err != nil {
+		return fmt.Errorf("update workspace fresh-session requirement: %w", err)
+	}
+	return requireAffected(result, "workspace", workspaceID)
+}
+
+func (r *SQLiteRegistry) GetWorkspaceByID(ctx context.Context, workspaceID string) (Workspace, error) {
+	return scanWorkspace(r.db.QueryRowContext(ctx, workspaceSelect+" WHERE id=?", workspaceID))
+}
+
 const operationSelect = `SELECT id,kind,COALESCE(project_id,''),COALESCE(workspace_id,''),state,detail_code,started_at,finished_at FROM registry_operations`
 
 func scanOperation(row rowScanner) (Operation, error) {

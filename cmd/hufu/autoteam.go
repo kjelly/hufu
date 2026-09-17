@@ -234,7 +234,7 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 		return nil
 	}
 	session.Workspace = getWorkspace()
-	if err := session.SetCompatibilityWorkspaceScope(currentWorkingDir()); err != nil {
+	if err := session.SetCompatibilityWorkspaceScope(runtimeSubjectRoot()); err != nil {
 		return nil
 	}
 	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)

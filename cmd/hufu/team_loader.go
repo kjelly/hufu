@@ -13,9 +13,9 @@ import (
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/notify"
-	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 // resolveTeamWorkspacePath computes the per-team workspace directory path
@@ -24,32 +24,28 @@ import (
 // The computed directory path is assigned to session.Workspace and
 // session.Config.WorkspaceDir before returning.
 func resolveTeamWorkspacePath(teamName string, session *team.TeamSession) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
+	request := commandWorkspaceRequest{
+		StartDir: runtimeStartDir(), TeamName: teamName,
+		Mode: workspacepkg.ResolveEnsure, LegacyDefault: true, NewSession: opts.newSession,
 	}
-	mode := "default"
-	if opts.workspaceMode != "" {
-		mode = opts.workspaceMode
-	} else if opts.workspace != "" {
-		mode = "legacy_base"
-		if strings.TrimSpace(teamName) == "" {
-			mode = "exact"
-		}
+	switch {
+	case opts.tempWorkspace:
+		request.TemporaryRoot = opts.workspace
+	case opts.workspaceMode == "exact":
+		request.ExplicitExact = opts.workspace
+	case opts.workspaceMode == "root":
+		request.ExplicitRoot = opts.workspace
+	case opts.workspace != "":
+		request.ExplicitRoot = opts.workspace
 	}
-	resolution, err := operatorpkg.ResolveWorkspacePath(operatorpkg.WorkspaceRequest{
-		RequestedPath: opts.workspace,
-		Mode:          mode,
-		TeamName:      teamName,
-		ProjectDir:    cwd,
-	})
+	if opts.dryRun {
+		request.Mode = workspacepkg.ResolvePreview
+	}
+	resolution, lease, err := resolveCommandWorkspace(context.Background(), request)
 	if err != nil {
 		return fmt.Errorf("invalid workspace path: %w", err)
 	}
-	teamWorkspace := resolution.WorkspaceExact
-	session.Workspace = teamWorkspace
-	session.Config.WorkspaceDir = teamWorkspace
-	return nil
+	return applyWorkspaceResolution(session, resolution, lease)
 }
 
 // canonicalRuntimePath gives repository-bound runtime components one stable

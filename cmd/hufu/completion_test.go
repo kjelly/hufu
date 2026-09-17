@@ -53,6 +53,7 @@ func TestNushellCompletionIncludesWorkspaceCommands(t *testing.T) {
 		`export extern "hufu workspace subject-path"`,
 		`export extern "hufu workspace alias set"`,
 		`export extern "hufu workspace alias clear"`,
+		`export extern "hufu workspace rebind"`,
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("Nushell completion does not contain %q", expected)

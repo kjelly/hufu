@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -121,7 +120,7 @@ func learningCount(value *int64) string {
 }
 
 func runContextOutcomes(cmd *cobra.Command, args []string) error {
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -144,7 +143,7 @@ func runContextExplainMemory(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(contextProject) == "" || strings.TrimSpace(contextMemoryQuery) == "" {
 		return fmt.Errorf("--project and --query are required")
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -198,7 +197,7 @@ func runContextLearningDoctor(cmd *cobra.Command, _ []string) error {
 	if !contextLearningCheck {
 		return fmt.Errorf("--learning is required")
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return fmt.Errorf("learning database: %w", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +81,7 @@ type EventStore struct {
 	stateValid      bool
 	stateErr        error
 	closed          bool
+	readOnly        bool
 	scanCount       int
 	cacheHitCount   int
 	cachedEvents    []RunEvent
@@ -143,6 +145,40 @@ func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 // OpenEventStore opens an existing EventStore without modifying runID or sessionID defaults.
 func OpenEventStore(workspace string) (*EventStore, error) {
 	return NewEventStore(workspace, "", "")
+}
+
+// OpenEventStoreReadOnly opens and validates an existing event log without
+// creating the workspace, logs directory, or event file. Mutation methods on
+// the returned store fail closed.
+func OpenEventStoreReadOnly(workspace string) (*EventStore, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return nil, fmt.Errorf("open read-only event store: empty workspace")
+	}
+	path := filepath.Join(workspace, logsDir, eventStoreFile)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only event store: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("open read-only event store: %q is not a regular file", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only event store: %w", err)
+	}
+	es := &EventStore{
+		mu:              make(chan struct{}, 1),
+		f:               f,
+		path:            path,
+		readOnly:        true,
+		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
+	}
+	es.mu <- struct{}{}
+	if err := es.rescan(); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("open read-only event store: %w", err)
+	}
+	return es, nil
 }
 
 func generateEventID() string {
@@ -265,6 +301,9 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 
 	if es.closed {
 		return RunEvent{}, fmt.Errorf("event store closed")
+	}
+	if es.readOnly {
+		return RunEvent{}, fmt.Errorf("event store is read-only")
 	}
 	if es.f == nil || es.degraded || !es.stateValid {
 		if err := es.reopenAndRescan(); err != nil {
@@ -441,7 +480,15 @@ func (es *EventStore) reopenAndRescan() error {
 	if es.closed {
 		return fmt.Errorf("event store closed")
 	}
-	f, err := os.OpenFile(es.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	var (
+		f   *os.File
+		err error
+	)
+	if es.readOnly {
+		f, err = os.Open(es.path)
+	} else {
+		f, err = os.OpenFile(es.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	}
 	if err != nil {
 		es.invalidateState(err)
 		return err

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/improve"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 
 	"github.com/spf13/cobra"
 )
@@ -91,11 +92,11 @@ func runImprove(cmd *cobra.Command, args []string) error {
 
 func resolveImproveWorkspace(value string) (string, error) {
 	if strings.TrimSpace(value) != "" {
-		return filepath.Abs(value)
+		return workspacepkg.CanonicalExistingDirectory(value)
 	}
-	cwd, err := os.Getwd()
+	workspace, err := legacyDefaultWorkspaceRoot(runtimeStartDir())
 	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
+		return "", fmt.Errorf("resolve default workspace: %w", err)
 	}
-	return filepath.Join(cwd, "workspace"), nil
+	return workspacepkg.CanonicalExistingDirectory(workspace)
 }

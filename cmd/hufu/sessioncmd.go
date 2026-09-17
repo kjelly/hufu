@@ -41,7 +41,7 @@ var sessionListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
 		}
-		es, _ := team.OpenEventStore(ws)
+		es, _ := team.OpenEventStoreReadOnly(ws)
 		if es != nil {
 			defer func() { _ = es.Close() }()
 		}
@@ -90,7 +90,7 @@ var sessionTreeCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
 		}
-		es, _ := team.OpenEventStore(ws)
+		es, _ := team.OpenEventStoreReadOnly(ws)
 		if es != nil {
 			defer func() { _ = es.Close() }()
 		}
@@ -235,7 +235,7 @@ var sessionDiffCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
 		}
-		es, _ := team.OpenEventStore(ws)
+		es, _ := team.OpenEventStoreReadOnly(ws)
 		if es != nil {
 			defer func() { _ = es.Close() }()
 		}

@@ -37,6 +37,9 @@ func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	}
 
 	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(project)
 	opts = runOptions{}
 	session = &team.TeamSession{}

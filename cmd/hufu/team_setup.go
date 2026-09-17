@@ -33,10 +33,14 @@ type teamContext struct {
 }
 
 func (tc *teamContext) Close() error {
-	if tc == nil || tc.coordinator == nil {
+	if tc == nil {
 		return nil
 	}
-	return tc.coordinator.Close()
+	var coordinatorErr error
+	if tc.coordinator != nil {
+		coordinatorErr = tc.coordinator.Close()
+	}
+	return errors.Join(coordinatorErr, closeSessionWorkspaceLease(tc.session))
 }
 
 func closeTeamContexts(contexts map[string]*teamContext) error {
@@ -143,8 +147,8 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 // The session must already be loaded (via team.LoadTeam or team.LoadDefaultTeam)
 // and have its Workspace set.
 func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (*teamContext, error) {
-	if err := session.SetCompatibilityWorkspaceScope(currentWorkingDir()); err != nil {
-		return nil, fmt.Errorf("bind compatibility workspace scope: %w", err)
+	if err := ensureSessionWorkspaceScope(session); err != nil {
+		return nil, err
 	}
 	// Apply CLI model overrides as the highest-priority model config layer.
 	cliModelOverrides := currentModelOverrides()
@@ -301,6 +305,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
 		return nil, errors.Join(fmt.Errorf("freeze execution policy before provider preflight: %w", err), coordinator.Close())
 	}
+	if err := completeManagedFreshSession(ctx, session); err != nil {
+		return nil, errors.Join(fmt.Errorf("complete rebound workspace fresh-session checkpoint: %w", err), coordinator.Close())
+	}
 	// Warm provider-bound profiles after the coordinator owns the exact
 	// ProviderManager used for invocation. This covers configured agents,
 	// extra models, model-list candidates, and all auxiliary role models.
@@ -333,6 +340,16 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		sessionData: sessionData,
 		notifier:    notifierInst,
 	}, nil
+}
+
+func ensureSessionWorkspaceScope(session *team.TeamSession) error {
+	if session.Scope.ControlRoot != "" {
+		return nil
+	}
+	if err := session.SetCompatibilityWorkspaceScope(currentWorkingDir()); err != nil {
+		return fmt.Errorf("bind compatibility workspace scope: %w", err)
+	}
+	return nil
 }
 
 func preflightHistoricalExecutionTargets(session *team.TeamSession, cfg *config.Config, startsFresh bool) error {
@@ -409,13 +426,13 @@ func contractErrorMessages(findings []team.ContractFinding) []string {
 }
 
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
-	return loadTeamByNameAtWorkspace(ctx, teamName, "", registry, defaultProviderURL, defaultProviderAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkillsMode)
+	return loadTeamByNameWithWorkspaceBinding(ctx, teamName, nil, registry, defaultProviderURL, defaultProviderAPIKey, pathConsent, vars, forcedSkills, planMode, autoSkillsMode)
 }
 
-// loadTeamByNameAtWorkspace is the recovery-command seam: unlike ordinary
-// prompt execution, an operator passes the already-resolved per-team session
-// directory rather than a base workspace that should receive a team suffix.
-func loadTeamByNameAtWorkspace(ctx context.Context, teamName, workspace string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
+// loadTeamByNameWithWorkspaceBinding is the recovery-command seam: unlike
+// ordinary prompt execution, resume/recovery pass a resolution whose exact
+// workspace identity and lock were acquired before any session I/O.
+func loadTeamByNameWithWorkspaceBinding(ctx context.Context, teamName string, binding *commandWorkspaceBinding, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
 	teamDir, err := registry.Resolve(teamName)
 	if err != nil {
 		return nil, err
@@ -426,20 +443,22 @@ func loadTeamByNameAtWorkspace(ctx context.Context, teamName, workspace string, 
 		return nil, err
 	}
 
-	if strings.TrimSpace(workspace) == "" {
+	if binding == nil {
 		if err := resolveTeamWorkspacePath(teamName, session); err != nil {
 			return nil, err
 		}
 	} else {
-		absWorkspace, err := filepath.Abs(workspace)
-		if err != nil {
-			return nil, fmt.Errorf("invalid recovery workspace: %w", err)
+		if err = applyWorkspaceResolution(session, binding.Resolution, binding.Lease); err != nil {
+			return nil, fmt.Errorf("bind recovery workspace scope: %w", err)
 		}
-		session.Workspace = canonicalRuntimePath(absWorkspace)
-		session.Config.WorkspaceDir = session.Workspace
+		binding.Lease = nil
 	}
 
-	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, registry, forcedSkills, planMode, autoSkillsMode, true)
+	loaded, err := loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, registry, forcedSkills, planMode, autoSkillsMode, true)
+	if err != nil {
+		return nil, errors.Join(err, closeSessionWorkspaceLease(session))
+	}
+	return loaded, nil
 }
 
 // loadDefaultTeam builds an in-memory default team (coordinator + Helper)
@@ -455,19 +474,28 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 
 	session, err := team.LoadDefaultTeam(teamWorkspace, forcedSkills, opts.helperTools)
 	if err != nil {
+		_ = closeSessionWorkspaceLease(dummySession)
 		return nil, err
 	}
-	session.Workspace = teamWorkspace
-	session.Config.WorkspaceDir = teamWorkspace
+	if err = session.SetWorkspaceScope(dummySession.Scope); err != nil {
+		_ = closeSessionWorkspaceLease(dummySession)
+		return nil, err
+	}
+	session.WorkspaceLease = dummySession.WorkspaceLease
+	dummySession.WorkspaceLease = nil
 
-	return loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, nil, forcedSkills, planMode, autoSkillsMode, false)
+	loaded, err := loadTeamCommon(ctx, teamName, session, defaultProviderURL, defaultProviderAPIKey, pathConsent, nil, forcedSkills, planMode, autoSkillsMode, false)
+	if err != nil {
+		return nil, errors.Join(err, closeSessionWorkspaceLease(session))
+	}
+	return loaded, nil
 }
 
 func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, cfg *config.Config) []string {
 	seen := make(map[string]bool)
 	var paths []string
 
-	if projectDir := currentWorkingDir(); projectDir != "" && !seen[projectDir] {
+	if projectDir := sessionSubjectRoot(session); projectDir != "" && !seen[projectDir] {
 		seen[projectDir] = true
 		paths = append(paths, projectDir)
 	}
@@ -533,7 +561,7 @@ func buildAllowedPaths(session *team.TeamSession, registry *team.TeamRegistry, c
 func teamSkillDirs(session *team.TeamSession, registry *team.TeamRegistry) []string {
 	skillDirs := []string{
 		filepath.Join(session.Dir, "skills"),
-		filepath.Join(currentWorkingDir(), ".agents", "skills"),
+		filepath.Join(sessionSubjectRoot(session), ".agents", "skills"),
 		filepath.Join(os.Getenv("HOME"), ".agents", "skills"),
 	}
 	if registry != nil {
@@ -542,6 +570,13 @@ func teamSkillDirs(session *team.TeamSession, registry *team.TeamRegistry) []str
 		}
 	}
 	return skillDirs
+}
+
+func sessionSubjectRoot(session *team.TeamSession) string {
+	if session != nil && session.Scope.SubjectRoot != "" {
+		return session.Scope.SubjectRoot
+	}
+	return currentWorkingDir()
 }
 
 func normalizeAllowedPaths(paths []string) []string {

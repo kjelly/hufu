@@ -169,6 +169,41 @@ func TestWorkspaceCommandValidationAndRootRegistration(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRebindCommandPreservesControlIdentity(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	fixture.run(t, "register")
+	registry, err := workspacepkg.OpenReadWrite(fixture.stateRoot,
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x22, 0x33)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := registry.CreateWorkspace(t.Context(), fixture.projectID, "default")
+	if closeErr := registry.Close(); err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	newRoot := filepath.Join(fixture.root, "moved project")
+	if err = os.Mkdir(newRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output := fixture.run(t, "rebind", fixture.projectID, newRoot, "--output", "json")
+	if !strings.Contains(output, `"subject_root": "`+newRoot+`"`) || !strings.Contains(output, `"requires_fresh_session": true`) {
+		t.Fatalf("rebind output = %s", output)
+	}
+	registry, err = workspacepkg.OpenReadOnly(fixture.stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebound, err := registry.GetWorkspaceByID(t.Context(), workspace.ID)
+	if closeErr := registry.Close(); err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	if rebound.ControlRoot != workspace.ControlRoot || rebound.ContextScopeID != workspace.ContextScopeID || !rebound.RequiresFreshSession {
+		t.Fatalf("rebound workspace = %+v; before = %+v", rebound, workspace)
+	}
+}
+
 type workspaceCLIFixture struct {
 	root        string
 	stateRoot   string

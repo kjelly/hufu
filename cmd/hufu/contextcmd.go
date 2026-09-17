@@ -20,6 +20,7 @@ import (
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 var contextWorkspace string
@@ -301,7 +302,7 @@ func runContextMigrateMemory(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("backup canonical context before migration: %w", err)
 	}
-	repo, err := contextstore.OpenSQLite(dbPath)
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -373,7 +374,7 @@ func openContextMutationRepo() (contextstore.Repository, error) {
 	if strings.TrimSpace(contextProject) == "" {
 		return nil, fmt.Errorf("--project is required")
 	}
-	return contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	return openExistingContextRepository(getContextWorkspace())
 }
 
 func loadExactMutationItems(cmd *cobra.Command, repo contextstore.Repository, ids []string) ([]contextstore.ContextItem, error) {
@@ -517,7 +518,7 @@ func addContextReadFlags(cmd *cobra.Command, includeAllAgents bool) {
 }
 
 func runContextRebuild(cmd *cobra.Command, _ []string) error {
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -584,7 +585,7 @@ func runContextQuery(cmd *cobra.Command, args []string) error {
 	if err := validateContextReadFilters(false); err != nil {
 		return err
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -759,7 +760,7 @@ func runContextList(cmd *cobra.Command, _ []string) error {
 	if err := validateContextReadFilters(true); err != nil {
 		return err
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -787,7 +788,7 @@ func runContextShow(cmd *cobra.Command, args []string) error {
 	if err := validateContextReadFilters(true); err != nil {
 		return err
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -819,7 +820,7 @@ func runContextHistory(cmd *cobra.Command, args []string) error {
 	if err := validateContextReadFilters(true); err != nil {
 		return err
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -953,7 +954,7 @@ func runContextRepair(cmd *cobra.Command, _ []string) error {
 		_, werr := fmt.Fprintln(cmd.OutOrStdout(), "context repair: no pending writes")
 		return werr
 	}
-	repo, err := contextstore.OpenSQLite(dbPath)
+	repo, err := openExistingContextRepository(workspace)
 	if err != nil {
 		return fmt.Errorf("opening context store at %s: %w", dbPath, err)
 	}
@@ -965,4 +966,12 @@ func runContextRepair(cmd *cobra.Command, _ []string) error {
 	}
 	_, werr := fmt.Fprintf(cmd.OutOrStdout(), "context repair: %d recovered, %d still pending\n", recovered, remaining)
 	return werr
+}
+
+func openExistingContextRepository(workspace string) (*contextstore.SQLiteRepository, error) {
+	root, err := workspacepkg.CanonicalExistingDirectory(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve existing workspace: %w", err)
+	}
+	return contextstore.OpenSQLite(filepath.Join(root, "context.sqlite"))
 }

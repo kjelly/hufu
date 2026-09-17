@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -48,7 +47,7 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 	if err := validateContextReadFilters(true); err != nil {
 		return err
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return err
 	}
@@ -234,7 +233,7 @@ func loadConsolidationRepo(cmd *cobra.Command, id string) (*contextstore.SQLiteR
 	if contextProject == "" {
 		return nil, contextstore.ConsolidationProposal{}, fmt.Errorf("--project is required")
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(getContextWorkspace(), "context.sqlite"))
+	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {
 		return nil, contextstore.ConsolidationProposal{}, err
 	}

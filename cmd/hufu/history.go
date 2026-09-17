@@ -105,7 +105,7 @@ var historyCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		repo, err := contextstore.OpenSQLite(filepath.Join(getWorkspace(), "history-context.sqlite"))
+		repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(getWorkspace(), "history-context.sqlite"))
 		if err != nil {
 			return fmt.Errorf("failed to open canonical prompt history: %w", err)
 		}

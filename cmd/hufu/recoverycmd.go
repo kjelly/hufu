@@ -13,6 +13,7 @@ import (
 
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 var (
@@ -41,10 +42,18 @@ var retryCmd = &cobra.Command{
 }
 
 func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr error) {
-	workspace, teamName, err := resolveCommandWorkspaceAndTeam(getWorkspace(), targetedRecoveryTeamName, opts.workspace != "")
+	if err := captureRuntimeRoots(); err != nil {
+		return err
+	}
+	binding, teamName, err := resolveExistingExecutionWorkspace(context.Background(), targetedRecoveryTeamName, opts.workspace != "")
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if binding != nil && binding.Lease != nil {
+			runErr = errors.Join(runErr, binding.Lease.Close())
+		}
+	}()
 
 	searchPaths := resolveSearchPaths()
 	if strings.TrimSpace(targetedRecoverySearch) != "" {
@@ -62,7 +71,7 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr erro
 	if err != nil {
 		return err
 	}
-	tc, err := loadTeamByNameAtWorkspace(context.Background(), teamName, workspace, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
+	tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return fmt.Errorf("failed to load team %q: %w", teamName, err)
 	}
@@ -81,6 +90,30 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr erro
 	}
 	printTargetedRecoveryReport(report)
 	return err
+}
+
+func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string, workspaceExplicit bool) (*commandWorkspaceBinding, string, error) {
+	workspacePath := getWorkspace()
+	teamName := strings.ToLower(strings.TrimSpace(requestedTeam))
+	if teamName == "" {
+		base := filepath.Base(filepath.Clean(strings.TrimSpace(workspacePath)))
+		if base == "." || base == "workspace" || base == "" {
+			return nil, "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspacePath)
+		}
+		teamName = base
+	}
+	request := commandWorkspaceRequest{
+		StartDir: runtimeStartDir(), TeamName: teamName, Mode: workspacepkg.ResolveExisting,
+		LegacyDefault: !workspaceExplicit, NewSession: opts.newSession,
+	}
+	if workspaceExplicit {
+		request.ExplicitExact = workspacePath
+	}
+	resolution, lease, err := resolveCommandWorkspace(ctx, request)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid workspace path: %w", err)
+	}
+	return &commandWorkspaceBinding{Resolution: resolution, Lease: lease}, teamName, nil
 }
 
 func resolveCommandWorkspaceAndTeam(workspace, requestedTeam string, workspaceExplicit bool) (string, string, error) {

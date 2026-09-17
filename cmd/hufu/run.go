@@ -19,6 +19,7 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 	tuipkg "github.com/kjelly/hufu/internal/tui"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 func runTeam(cmd *cobra.Command, args []string) (runErr error) {
@@ -40,7 +41,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 		cmd.Root().SilenceErrors = true
 		defer func() { emitJSONLCommandError(runErr) }()
 	}
-	if err := validateRunFlags(); err != nil {
+	if err := validateAndCaptureRunScope(); err != nil {
 		return err
 	}
 	// Profiles and validation may change output suppression after the initial
@@ -189,6 +190,27 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
+}
+
+func validateAndCaptureRunScope() error {
+	if err := validateRunFlags(); err != nil {
+		return err
+	}
+	return captureRuntimeRoots()
+}
+
+func captureRuntimeRoots() error {
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("read current directory: %w", err)
+	}
+	subjectRoot, err := workspacepkg.DiscoverSubjectRoot(startDir)
+	if err != nil {
+		return err
+	}
+	opts.startDir = canonicalRuntimePath(startDir)
+	opts.subjectRoot = subjectRoot
+	return nil
 }
 
 func resolveRunPrompt(prompt string, pr *readline.PromptReader, vars map[string]string) (string, *team.DecisionResumeInfo, error) {

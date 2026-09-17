@@ -16,6 +16,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
@@ -366,8 +367,12 @@ func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
 	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
 		t.Fatalf("dry-run created workspace %q: %v", workspace, err)
 	}
-	if tc.session.Scope.ControlRoot != workspace || tc.session.Scope.SubjectRoot != currentWorkingDir() {
-		t.Fatalf("dry-run scope = %#v, want control %q subject %q", tc.session.Scope, workspace, currentWorkingDir())
+	wantSubject, err := workspacepkg.DiscoverSubjectRoot(currentWorkingDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc.session.Scope.ControlRoot != workspace || tc.session.Scope.SubjectRoot != wantSubject {
+		t.Fatalf("dry-run scope = %#v, want control %q subject %q", tc.session.Scope, workspace, wantSubject)
 	}
 	if tc.session.Scope.ContextScopeID != tc.session.Scope.SubjectRoot || tc.session.Workspace != tc.session.Scope.ControlRoot {
 		t.Fatalf("dry-run compatibility aliases diverged: session=%#v", tc.session)

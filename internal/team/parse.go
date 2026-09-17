@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,10 +27,13 @@ type TeamSession struct {
 	Dir               string
 	Workspace         string
 	Scope             WorkspaceScope
-	Agents            map[string]*agent.AgentDef
-	MCPServers        map[string]mcp.MCPServerConfig
-	Skills            []*skill.SkillDef
-	ContractTasks     []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// WorkspaceLease holds the managed runtime lock for the lifetime of the
+	// coordinator. It is process-local and is never serialized.
+	WorkspaceLease io.Closer
+	Agents         map[string]*agent.AgentDef
+	MCPServers     map[string]mcp.MCPServerConfig
+	Skills         []*skill.SkillDef
+	ContractTasks  []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition
