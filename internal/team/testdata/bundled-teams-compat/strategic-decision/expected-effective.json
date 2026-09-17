@@ -1,7 +1,7 @@
 {
   "team": {
     "name": "strategic-decision",
-    "description": "Evidence-first decision team with outside view, isolated judgments, deterministic aggregation, premortem, no-go alternatives, and explicit dissent. Adapted from spec.md against Hufu's actual decision-aware runtime schema (internal/agent/decision_config.go, internal/team/parse.go) — see README.md in this directory for every point where spec.md's proposed team.yaml did not match the real, strict (KnownFields) parser and had to be corrected.\n",
+    "description": "Evidence-first decision team with outside-view research, isolated judgments, deterministic aggregation, premortem, no-go alternatives, and explicit dissent.\n",
     "max_rounds": 10,
     "max_steps": 20,
     "timeout": 600,
