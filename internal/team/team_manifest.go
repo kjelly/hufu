@@ -180,7 +180,8 @@ type teamManifestSpecFields struct {
 	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities,omitempty"`
 	Verification            agent.VerificationConfig                `yaml:"verification,omitempty"`
 	Retry                   agent.RetryConfig                       `yaml:"retry,omitempty"`
-	Decision                agent.DecisionConfig                    `yaml:"decision,omitempty"`
+	Decision                DecisionAuthoringConfig                 `yaml:"decision,omitempty"`
+	Request                 RequestAuthoringConfig                  `yaml:"request,omitempty"`
 	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry,omitempty"`
 	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy,omitempty"`
 	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers,omitempty"`
@@ -390,6 +391,9 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		if err := mergeAdvancedNamespace(&yc); err != nil {
 			return teamConfigYAML{}, "", fmt.Errorf("invalid team config: %w", err)
 		}
+		if err := annotateManifestAuthoringPresence(data, SchemaVersionLegacyFlatV0, &yc); err != nil {
+			return teamConfigYAML{}, "", err
+		}
 		return yc, SchemaVersionLegacyFlatV0, nil
 
 	case SchemaVersionV1Alpha1:
@@ -411,9 +415,55 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		}
 		yc := teamConfigYAML{teamManifestSpecFields: manifest.Spec.teamManifestSpecFields}
 		yc.Name = metadataName
+		if err := annotateManifestAuthoringPresence(data, SchemaVersionV1Alpha1, &yc); err != nil {
+			return teamConfigYAML{}, "", err
+		}
 		return yc, SchemaVersionV1Alpha1, nil
 
 	default:
 		return teamConfigYAML{}, "", &UnsupportedSchemaVersionError{File: file, APIVersion: envelope.APIVersion}
 	}
+}
+
+// annotateManifestAuthoringPresence records manifest keys whose zero value is
+// semantically different from absence. YAML unmarshalling into a value field
+// cannot distinguish request: {} from an omitted request key, so this scan is
+// intentionally performed on the already version-dispatched mapping node.
+func annotateManifestAuthoringPresence(data []byte, version string, yc *teamConfigYAML) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return fmt.Errorf("scan manifest authoring presence: %w", err)
+	}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("scan manifest authoring presence: manifest must be a mapping")
+	}
+	mapping := document.Content[0]
+	if version == SchemaVersionV1Alpha1 {
+		for i := 0; i < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value != "spec" {
+				continue
+			}
+			mapping = mapping.Content[i+1]
+			break
+		}
+	}
+	if mapping.Kind != yaml.MappingNode {
+		return fmt.Errorf("scan manifest authoring presence: spec must be a mapping")
+	}
+	seen := make(map[string]struct{}, len(mapping.Content)/2)
+	for i := 0; i < len(mapping.Content); i += 2 {
+		key, value := mapping.Content[i], mapping.Content[i+1]
+		if _, ok := seen[key.Value]; ok {
+			return fmt.Errorf("manifest field %q is duplicated", key.Value)
+		}
+		seen[key.Value] = struct{}{}
+		if key.Value != "request" {
+			continue
+		}
+		if value.Tag == "!!null" {
+			return fmt.Errorf("request must be a non-null mapping")
+		}
+		yc.requestSet = true
+	}
+	return nil
 }

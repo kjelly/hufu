@@ -26,6 +26,54 @@ func (r DecisionProfileRef) MarshalYAML() (any, error) {
 	return r.Name, nil
 }
 
+// UnmarshalYAML decodes exactly one local profile declaration. A declaration
+// can either be the historical inline policy shape or an explicit tagged
+// preset/policy shape, but never a mixture of the two.
+func (s *DecisionProfileSpec) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil || node.Kind != yaml.MappingNode || node.Tag == "!!null" {
+		return fmt.Errorf("decision profile must be a mapping")
+	}
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	isTagged := false
+	for i := 0; i < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("field %q is duplicated", key)
+		}
+		seen[key] = struct{}{}
+		if key == "preset" || key == "policy" {
+			isTagged = true
+		}
+	}
+	if !isTagged {
+		var policy DecisionPolicy
+		if err := decodeDecisionYAMLNodeStrict(node, &policy); err != nil {
+			return err
+		}
+		*s = DecisionProfileSpec{Policy: &policy}
+		return nil
+	}
+	for key := range seen {
+		if key != "preset" && key != "policy" {
+			return fmt.Errorf("tagged profile contains unknown or legacy field %q", key)
+		}
+	}
+	type taggedProfile struct {
+		Preset *DecisionProfileRef `yaml:"preset,omitempty"`
+		Policy *DecisionPolicy     `yaml:"policy,omitempty"`
+	}
+	var tagged taggedProfile
+	if err := decodeDecisionYAMLNodeStrict(node, &tagged); err != nil {
+		return err
+	}
+	spec := DecisionProfileSpec(tagged)
+	if (spec.Preset == nil) == (spec.Policy == nil) {
+		return fmt.Errorf("profile spec requires exactly one of preset or policy")
+	}
+	*s = spec
+	return nil
+}
+
 func (c *DecisionConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return fmt.Errorf("decision must be a mapping")
@@ -103,7 +151,8 @@ func decodeDecisionProfilesYAML(node *yaml.Node) (map[string]DecisionPolicy, map
 		if value.Kind != yaml.MappingNode || value.Tag == "!!null" {
 			return nil, nil, fmt.Errorf("decision profile %q must be a mapping", name)
 		}
-		spec, err := decodeDecisionProfileSpecYAML(value)
+		var spec DecisionProfileSpec
+		err := spec.UnmarshalYAML(value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("decision.profiles.%s: %w", name, err)
 		}
@@ -114,46 +163,6 @@ func decodeDecisionProfilesYAML(node *yaml.Node) (map[string]DecisionPolicy, map
 		profiles[name], specs[name] = policy, spec
 	}
 	return profiles, specs, nil
-}
-
-func decodeDecisionProfileSpecYAML(node *yaml.Node) (DecisionProfileSpec, error) {
-	seen := make(map[string]struct{}, len(node.Content)/2)
-	isTagged := false
-	for i := 0; i < len(node.Content); i += 2 {
-		key := node.Content[i].Value
-		if _, ok := seen[key]; ok {
-			return DecisionProfileSpec{}, fmt.Errorf("field %q is duplicated", key)
-		}
-		seen[key] = struct{}{}
-		if key == "preset" || key == "policy" {
-			isTagged = true
-		}
-	}
-	if !isTagged {
-		var policy DecisionPolicy
-		if err := decodeDecisionYAMLNodeStrict(node, &policy); err != nil {
-			return DecisionProfileSpec{}, err
-		}
-		return DecisionProfileSpec{Policy: &policy}, nil
-	}
-	for key := range seen {
-		if key != "preset" && key != "policy" {
-			return DecisionProfileSpec{}, fmt.Errorf("tagged profile contains unknown or legacy field %q", key)
-		}
-	}
-	type taggedProfile struct {
-		Preset *DecisionProfileRef `yaml:"preset,omitempty"`
-		Policy *DecisionPolicy     `yaml:"policy,omitempty"`
-	}
-	var tagged taggedProfile
-	if err := decodeDecisionYAMLNodeStrict(node, &tagged); err != nil {
-		return DecisionProfileSpec{}, err
-	}
-	spec := DecisionProfileSpec(tagged)
-	if (spec.Preset == nil) == (spec.Policy == nil) {
-		return DecisionProfileSpec{}, fmt.Errorf("profile spec requires exactly one of preset or policy")
-	}
-	return spec, nil
 }
 
 func decodeDecisionYAMLNodeStrict(node *yaml.Node, target any) error {

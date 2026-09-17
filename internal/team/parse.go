@@ -21,13 +21,14 @@ import (
 )
 
 type TeamSession struct {
-	Config        agent.TeamConfig
-	Dir           string
-	Workspace     string
-	Agents        map[string]*agent.AgentDef
-	MCPServers    map[string]mcp.MCPServerConfig
-	Skills        []*skill.SkillDef
-	ContractTasks []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	Config            agent.TeamConfig
+	DecisionAuthoring DecisionAuthoringMetadata
+	Dir               string
+	Workspace         string
+	Agents            map[string]*agent.AgentDef
+	MCPServers        map[string]mcp.MCPServerConfig
+	Skills            []*skill.SkillDef
+	ContractTasks     []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition
@@ -83,6 +84,7 @@ type agentFrontmatter struct {
 type teamConfigYAML struct {
 	teamManifestSpecFields `yaml:",inline"`
 	Advanced               rawAdvancedSection `yaml:"advanced"`
+	requestSet             bool
 }
 
 // rawAdvancedSection is the authoring-time `advanced:` namespace (spec.md
@@ -730,6 +732,11 @@ func ExtractCapabilitiesFromSystem(system string) string {
 }
 
 func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, error) {
+	cfg, _, err := parseTeamYMLWithAuthoring(teamDir, vars)
+	return cfg, err
+}
+
+func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.TeamConfig, DecisionAuthoringMetadata, error) {
 	cfg := agent.TeamConfig{
 		MaxRounds:     10,
 		WorkspaceDir:  "workspace",
@@ -747,17 +754,21 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 
 	data, dataFilename, found, err := readTeamManifestSource(teamDir, vars)
 	if err != nil {
-		return cfg, err
+		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	if !found {
 		// team.yml/team.yaml is optional. Return defaults; LoadTeam will
 		// fall back to using the directory basename as the team name.
-		return cfg, nil
+		return cfg, DecisionAuthoringMetadata{}, nil
 	}
 
 	yc, _, err := decodeTeamManifestYAML(dataFilename, data)
 	if err != nil {
-		return cfg, err
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
+	decision, _, authoringMetadata, err := NormalizeDecisionAuthoring(yc.Decision, yc.Request, yc.requestSet, agent.BuiltInDecisionProfileCatalog())
+	if err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
 	}
 
 	if yc.Name != "" {
@@ -912,13 +923,13 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		case map[string]interface{}, map[interface{}]interface{}:
 			rawBytes, err := yaml.Marshal(v)
 			if err != nil {
-				return cfg, fmt.Errorf("failed to marshal acceptance config: %w", err)
+				return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("failed to marshal acceptance config: %w", err)
 			}
 			var spec agent.AcceptanceSpec
 			dec := yaml.NewDecoder(bytes.NewReader(rawBytes))
 			dec.KnownFields(true)
 			if err := dec.Decode(&spec); err != nil {
-				return cfg, fmt.Errorf("invalid acceptance spec format: %w", err)
+				return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid acceptance spec format: %w", err)
 			}
 			cfg.AcceptanceSpec = &spec
 			if spec.Mode != "" {
@@ -928,7 +939,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 				default:
 					mode, err := ParseGoalMode(spec.Mode)
 					if err != nil {
-						return cfg, fmt.Errorf("invalid acceptance goal mode: %w", err)
+						return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid acceptance goal mode: %w", err)
 					}
 					// An explicit team-level goal-mode remains authoritative; otherwise
 					// preserve the mode embedded in the acceptance contract.
@@ -941,7 +952,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 				cfg.Acceptance = spec.Commands[0]
 			}
 		default:
-			return cfg, fmt.Errorf("unsupported acceptance config type: %T", v)
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("unsupported acceptance config type: %T", v)
 		}
 	}
 	if yc.Rollback != "" {
@@ -953,31 +964,31 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	if yc.GoalMode != "" {
 		gm, err := ParseGoalMode(yc.GoalMode)
 		if err != nil {
-			return cfg, fmt.Errorf("invalid team configuration: %w", err)
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid team configuration: %w", err)
 		}
 		cfg.GoalMode = string(gm)
 	}
 	if yc.WorkerMemory.isSet() {
 		cfg.WorkerMemory = resolveWorkerMemoryPolicy(yc.WorkerMemory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
 		if err := validateWorkerMemoryPolicy(cfg.WorkerMemory); err != nil {
-			return cfg, fmt.Errorf("invalid worker-memory config: %w", err)
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid worker-memory config: %w", err)
 		}
 	} else {
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
 	cfg.MemoryLearning, err = resolveMemoryLearningPolicy(yc.MemoryLearning)
 	if err != nil {
-		return cfg, fmt.Errorf("invalid memory-learning config: %w", err)
+		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid memory-learning config: %w", err)
 	}
 	if err := validateMemoryLearningPolicy(cfg.MemoryLearning); err != nil {
-		return cfg, fmt.Errorf("invalid memory-learning config: %w", err)
+		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid memory-learning config: %w", err)
 	}
 	effectiveGoalMode, err := ResolveEffectiveGoalMode(cfg.GoalMode, cfg.ExecutionProfile)
 	if err != nil {
-		return cfg, fmt.Errorf("invalid effective goal mode: %w", err)
+		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid effective goal mode: %w", err)
 	}
 	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
-		return cfg, err
+		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.Reliability = agent.DefaultReliabilityConfig()
 	if strings.TrimSpace(yc.Reliability.Rollout) != "" {
@@ -1038,7 +1049,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.WorkerContextSize = yc.WorkerContextSize
 	}
 	if policy, err := yc.Compaction.apply(cfg.Compaction); err != nil {
-		return cfg, err
+		return cfg, DecisionAuthoringMetadata{}, err
 	} else {
 		cfg.Compaction = policy
 	}
@@ -1084,7 +1095,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	for i, rule := range yc.Delegation.CapabilityRouting {
 		if strings.TrimSpace(rule.RequiredCapability) == "" {
-			return cfg, fmt.Errorf("delegation.capability-routing[%d].required-capability must not be empty", i)
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("delegation.capability-routing[%d].required-capability must not be empty", i)
 		}
 	}
 	if len(yc.Delegation.CapabilityRouting) > 0 {
@@ -1095,7 +1106,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	}
 	if len(yc.RequiredResources) > 0 {
 		if err := agent.ValidateRequiredResources(yc.RequiredResources); err != nil {
-			return cfg, fmt.Errorf("invalid team config: %w", err)
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid team config: %w", err)
 		}
 		cfg.RequiredResources = yc.RequiredResources
 	}
@@ -1106,16 +1117,10 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		cfg.Verification = yc.Verification
 		cfg.Retry = yc.Retry
 	}
-	// Decision profiles are independent of the optional phase workflow: a team
-	// may configure decision rigor without adopting the runtime workflow. An
-	// absent block leaves cfg.Decision zero, which resolves every task to the
-	// reserved "off" profile (spec §8).
-	if yc.Decision.DefaultProfile != "" || len(yc.Decision.Profiles) > 0 {
-		if err := yc.Decision.Validate(); err != nil {
-			return cfg, fmt.Errorf("invalid team config: %w", err)
-		}
-		cfg.Decision = yc.Decision
-	}
+	// Decision profiles are independent of the optional phase workflow. The
+	// authoring normalizer has already validated and materialized this config;
+	// an absent block leaves it at the reserved "off" profile.
+	cfg.Decision = decision
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the
 	// optional phase workflow and of decision profiles: a team may declare
@@ -1124,7 +1129,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		for agentName, decls := range yc.CapabilityRegistry {
 			for i, decl := range decls {
 				if err := decl.Validate(); err != nil {
-					return cfg, fmt.Errorf("capability-registry.%s[%d]: %w", agentName, i, err)
+					return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("capability-registry.%s[%d]: %w", agentName, i, err)
 				}
 			}
 		}
@@ -1135,7 +1140,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 	// independent of decision profiles: they configure how
 	// CapabilityRegistry ranks candidates, not whether any role uses it.
 	if err := yc.RoutingPolicy.Scoring.Weights.Validate(); err != nil {
-		return cfg, fmt.Errorf("routing-policy.scoring.weights: %w", err)
+		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("routing-policy.scoring.weights: %w", err)
 	}
 	cfg.RoutingPolicy = yc.RoutingPolicy
 
@@ -1161,7 +1166,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		for name, provider := range yc.SubagentProviders {
 			normalized := strings.ToLower(strings.TrimSpace(name))
 			if normalized == localSubagentProviderName {
-				return cfg, fmt.Errorf("subagent-providers: %q is a reserved provider name and cannot be overridden", name)
+				return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("subagent-providers: %q is a reserved provider name and cannot be overridden", name)
 			}
 			cfg.SubagentProviders[normalized] = agent.SubagentProviderConfig{
 				Type: provider.Type, Command: append([]string(nil), provider.Command...), Protocol: provider.Protocol,
@@ -1173,7 +1178,7 @@ func parseTeamYML(teamDir string, vars map[string]string) (agent.TeamConfig, err
 		}
 	}
 
-	return cfg, nil
+	return cfg, authoringMetadata, nil
 }
 
 func resolveMemoryLearningPolicy(raw rawMemoryLearningPolicy) (agent.MemoryLearningPolicy, error) {
@@ -1331,7 +1336,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, fmt.Errorf("invalid team directory: %w", err)
 	}
 
-	cfg, err := parseTeamYML(absDir, vars)
+	cfg, authoringMetadata, err := parseTeamYMLWithAuthoring(absDir, vars)
 	if err != nil {
 		return nil, err
 	}
@@ -1388,6 +1393,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	}
 	session := &TeamSession{
 		Config:              cfg,
+		DecisionAuthoring:   authoringMetadata,
 		Dir:                 absDir,
 		Workspace:           workspace,
 		Agents:              make(map[string]*agent.AgentDef),
