@@ -66,7 +66,112 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceSubjectPathCommand(deps),
 		newWorkspaceAliasCommand(deps),
 		newWorkspaceRebindCommand(deps),
+		newWorkspaceMigrateCommand(deps),
+		newWorkspaceDoctorCommand(deps),
 	)
+	return command
+}
+
+type workspaceOutcomeError struct {
+	outcome string
+	cause   error
+}
+
+func (e *workspaceOutcomeError) Error() string {
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+	return "workspace operation finished with outcome " + e.outcome
+}
+
+func (e *workspaceOutcomeError) Unwrap() error { return e.cause }
+
+func newWorkspaceMigrateCommand(deps workspaceCommandDeps) *cobra.Command {
+	var teamName, legacyRoot, output string
+	var allTeams bool
+	command := &cobra.Command{
+		Use:   "migrate [selector]",
+		Short: "Import legacy workspaces without modifying their sources",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			if allTeams && command.Flags().Changed("team") {
+				return errors.New("--team and --all-teams are mutually exclusive")
+			}
+			start, err := deps.getwd()
+			if err != nil {
+				return fmt.Errorf("read current directory: %w", err)
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, migrateErr := manager.Migrate(command.Context(), workspacepkg.MigrateRequest{
+				StartDir: start, Selector: firstArgument(args), TeamName: teamName,
+				AllTeams: allTeams, LegacyRoot: legacyRoot,
+			})
+			if migrateErr != nil && len(result.Failed) == 0 && len(result.Completed) == 0 {
+				return migrateErr
+			}
+			if err = writeWorkspaceMigration(command.OutOrStdout(), output, result); err != nil {
+				return errors.Join(migrateErr, err)
+			}
+			if migrateErr != nil || result.Outcome != "complete" {
+				return &workspaceOutcomeError{outcome: result.Outcome, cause: migrateErr}
+			}
+			return nil
+		},
+	}
+	command.Flags().StringVar(&teamName, "team", "", "Legacy team to migrate (default: default)")
+	command.Flags().BoolVar(&allTeams, "all-teams", false, "Migrate every legacy team in sorted order")
+	command.Flags().StringVar(&legacyRoot, "legacy-root", "", "Explicit legacy workspace parent directory")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = completeWorkspaceProjectSelectors(deps)
+	return command
+}
+
+func newWorkspaceDoctorCommand(deps workspaceCommandDeps) *cobra.Command {
+	var output string
+	var repair bool
+	command := &cobra.Command{
+		Use:   "doctor [selector]",
+		Short: "Inspect workspace registry and managed storage consistency",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			start, err := deps.getwd()
+			if err != nil {
+				return fmt.Errorf("read current directory: %w", err)
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, doctorErr := manager.Doctor(command.Context(), workspacepkg.DoctorRequest{StartDir: start, Selector: firstArgument(args), Repair: repair})
+			if err = writeWorkspaceDoctor(command.OutOrStdout(), output, result); err != nil {
+				return errors.Join(doctorErr, err)
+			}
+			if doctorErr != nil || result.Outcome != "complete" {
+				return &workspaceOutcomeError{outcome: result.Outcome, cause: doctorErr}
+			}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&repair, "repair", false, "Apply only deterministic, marker-verified repairs")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = completeWorkspaceProjectSelectors(deps)
 	return command
 }
 
@@ -473,10 +578,68 @@ func writeWorkspaceList(writer io.Writer, output string, data workspaceListData,
 }
 
 func writeWorkspaceJSON(writer io.Writer, data any) error {
+	return writeWorkspaceJSONWarnings(writer, data, []string{})
+}
+
+func writeWorkspaceJSONWarnings(writer io.Writer, data any, warnings []string) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(workspaceOutputEnvelope{SchemaVersion: workspaceOutputSchemaVersion, Data: data, Warnings: []string{}})
+	return encoder.Encode(workspaceOutputEnvelope{SchemaVersion: workspaceOutputSchemaVersion, Data: data, Warnings: warnings})
+}
+
+func writeWorkspaceMigration(writer io.Writer, output string, result workspacepkg.MigrationResult) error {
+	warnings := make([]string, 0)
+	for _, item := range result.Completed {
+		warnings = append(warnings, item.Warnings...)
+	}
+	sort.Strings(warnings)
+	if output == "json" {
+		return writeWorkspaceJSONWarnings(writer, result, warnings)
+	}
+	if _, err := fmt.Fprintf(writer, "outcome=%s\n", result.Outcome); err != nil {
+		return err
+	}
+	for _, item := range result.Completed {
+		if _, err := fmt.Fprintf(writer, "completed\t%s\t%s\t%s\n", item.TeamName, item.Workspace.ID, item.Workspace.ControlRoot); err != nil {
+			return err
+		}
+	}
+	for _, team := range result.Failed {
+		if _, err := fmt.Fprintf(writer, "failed\t%s\n", team); err != nil {
+			return err
+		}
+	}
+	for _, team := range result.Pending {
+		if _, err := fmt.Fprintf(writer, "pending\t%s\n", team); err != nil {
+			return err
+		}
+	}
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(writer, "warning=%s\n", warning); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeWorkspaceDoctor(writer io.Writer, output string, result workspacepkg.DoctorResult) error {
+	if output == "json" {
+		return writeWorkspaceJSON(writer, result)
+	}
+	if _, err := fmt.Fprintf(writer, "outcome=%s\n", result.Outcome); err != nil {
+		return err
+	}
+	for _, issue := range result.Issues {
+		status := "found"
+		if issue.Repaired {
+			status = "repaired"
+		}
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", issue.Code, status, displayEmpty(issue.ProjectID), displayEmpty(issue.WorkspaceID), displayEmpty(issue.Path)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func workspaceStartPath(deps workspaceCommandDeps, args []string) (string, error) {

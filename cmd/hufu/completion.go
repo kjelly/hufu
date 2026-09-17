@@ -370,6 +370,8 @@ export extern "hufu workspace subject-path" [selector?: string@'nu-complete hufu
 export extern "hufu workspace alias set" [selector: string@'nu-complete hufu workspace projects' alias: string --output: string]
 export extern "hufu workspace alias clear" [selector: string@'nu-complete hufu workspace projects' --output: string]
 export extern "hufu workspace rebind" [selector: string@'nu-complete hufu workspace projects' new_root: path --output: string]
+export extern "hufu workspace migrate" [selector?: string@'nu-complete hufu workspace projects' --team: string --all-teams --legacy-root: path --output: string]
+export extern "hufu workspace doctor" [selector?: string@'nu-complete hufu workspace projects' --repair --output: string]
 
 def "nu-complete hufu inspect formats" [] {
   [text json]

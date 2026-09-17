@@ -22,6 +22,7 @@ type SQLiteRegistry struct {
 	idGenerator IDGenerator
 	now         func() time.Time
 	createHook  func(CreateStage) error
+	migrateHook func(MigrationStage) error
 	readOnly    bool
 }
 
@@ -136,6 +137,7 @@ func openRegistry(path, stateRoot string, readOnly bool, options ...RegistryOpti
 		idGenerator: configuration.idGenerator,
 		now:         configuration.now,
 		createHook:  configuration.createHook,
+		migrateHook: configuration.migrateHook,
 		readOnly:    readOnly,
 	}, nil
 }

@@ -142,12 +142,66 @@ const (
 	CreateStageBeforeActivation CreateStage = "before_activation"
 )
 
+type MigrationStage string
+
+const (
+	MigrationStageReserved       MigrationStage = "reserved"
+	MigrationStageCopied         MigrationStage = "copied"
+	MigrationStageVerified       MigrationStage = "verified"
+	MigrationStageRenamed        MigrationStage = "renamed"
+	MigrationStageBeforeActivate MigrationStage = "before_activation"
+)
+
+type MigrateRequest struct {
+	StartDir   string
+	Selector   string
+	TeamName   string
+	AllTeams   bool
+	LegacyRoot string
+}
+
+type MigrationItem struct {
+	TeamName    string    `json:"team_name"`
+	Source      string    `json:"source"`
+	Workspace   Workspace `json:"workspace"`
+	OperationID string    `json:"operation_id"`
+	Warnings    []string  `json:"warnings"`
+}
+
+type MigrationResult struct {
+	Outcome   string          `json:"outcome"`
+	Completed []MigrationItem `json:"completed"`
+	Failed    []string        `json:"failed"`
+	Pending   []string        `json:"pending"`
+}
+
+type DoctorIssue struct {
+	Code        string `json:"code"`
+	ProjectID   string `json:"project_id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	Repaired    bool   `json:"repaired,omitempty"`
+}
+
+type DoctorResult struct {
+	Outcome string        `json:"outcome"`
+	Issues  []DoctorIssue `json:"issues"`
+}
+
+type DoctorRequest struct {
+	StartDir string
+	Selector string
+	Repair   bool
+}
+
 type RegistryOption func(*registryOptions)
 
 type registryOptions struct {
 	idGenerator IDGenerator
 	now         func() time.Time
 	createHook  func(CreateStage) error
+	migrateHook func(MigrationStage) error
 }
 
 func WithIDGenerator(generator IDGenerator) RegistryOption {
@@ -160,4 +214,8 @@ func WithClock(now func() time.Time) RegistryOption {
 
 func WithCreateHook(hook func(CreateStage) error) RegistryOption {
 	return func(options *registryOptions) { options.createHook = hook }
+}
+
+func WithMigrationHook(hook func(MigrationStage) error) RegistryOption {
+	return func(options *registryOptions) { options.migrateHook = hook }
 }

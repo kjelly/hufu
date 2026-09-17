@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +43,37 @@ func AcquireWorkspaceLocks(stateRoot string, workspaceIDs []string) (*WorkspaceL
 		if lockErr != nil {
 			_ = locks.Close()
 			return nil, fmt.Errorf("lock workspace %s: %w", id, lockErr)
+		}
+		locks.locks = append(locks.locks, lock)
+	}
+	return locks, nil
+}
+
+func acquireMigrationLocks(stateRoot, source, workspaceID string) (*WorkspaceLocks, error) {
+	if !validWorkspaceID(workspaceID) {
+		return nil, fmt.Errorf("invalid workspace lock ID %q", workspaceID)
+	}
+	canonicalSource, err := canonicalPath(source)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256([]byte(canonicalSource))
+	names := []string{"legacy_" + hex.EncodeToString(sum[:]), workspaceID}
+	slices.Sort(names)
+	root, err := canonicalPath(stateRoot)
+	if err != nil {
+		return nil, err
+	}
+	lockRoot := filepath.Join(root, "locks")
+	if err = os.MkdirAll(lockRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create workspace lock directory: %w", err)
+	}
+	locks := &WorkspaceLocks{locks: make([]*workspaceFileLock, 0, len(names))}
+	for _, name := range names {
+		lock, lockErr := acquireWorkspaceFileLock(filepath.Join(lockRoot, name+".lock"))
+		if lockErr != nil {
+			_ = locks.Close()
+			return nil, fmt.Errorf("lock migration %s: %w", name, lockErr)
 		}
 		locks.locks = append(locks.locks, lock)
 	}

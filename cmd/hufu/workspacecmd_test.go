@@ -204,6 +204,55 @@ func TestWorkspaceRebindCommandPreservesControlIdentity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMigrateAndDoctorMachineOutput(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	legacy := filepath.Join(projectRoot, "workspace", "default")
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "artifact.txt"), []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	deps := workspaceCommandDeps{
+		stateRoot: func() (string, error) { return stateRoot, nil },
+		getwd:     func() (string, error) { return projectRoot, nil },
+		registryOptions: []workspacepkg.RegistryOption{
+			workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(bytes.Repeat([]byte{0x61}, 128)))),
+		},
+	}
+	stdout, err := executeWorkspaceCommand(t, deps, "migrate", "--team", "default", "--output", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, `"outcome": "complete"`) || !strings.Contains(stdout, `"context_store_created"`) {
+		t.Fatalf("migration JSON = %s", stdout)
+	}
+	stdout, err = executeWorkspaceCommand(t, deps, "doctor", "--output", "json")
+	var outcomeErr *workspaceOutcomeError
+	if !errors.As(err, &outcomeErr) || outcomeErr.outcome != "partial" {
+		t.Fatalf("doctor error = %v", err)
+	}
+	if !strings.Contains(stdout, `"code": "legacy_source_present"`) {
+		t.Fatalf("doctor JSON = %s", stdout)
+	}
+}
+
+func TestWorkspaceMigratePreflightFailureWritesNoStdout(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	stdout, err := executeWorkspaceCommand(t, fixture.deps, "migrate", "--team", "missing", "--output", "json")
+	if err == nil || stdout != "" {
+		t.Fatalf("preflight output=%q error=%v", stdout, err)
+	}
+	if _, statErr := os.Stat(fixture.stateRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("preflight created state root: %v", statErr)
+	}
+}
+
 type workspaceCLIFixture struct {
 	root        string
 	stateRoot   string
