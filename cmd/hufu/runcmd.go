@@ -6,10 +6,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 type canonicalRunOptions struct {
 	team, agentTeam, workspace, workspaceRoot, searchPath string
+	intent, primaryDecisionProfile, rigor, resumeDecision string
 	providerURL, providerAPIKey                           string
 	model, coordinatorModel, output, eventFormat          string
 	route                                                 string
@@ -17,6 +20,7 @@ type canonicalRunOptions struct {
 	temperature, maxTokens, topP, topK, reasoningEffort   string
 	sidecarModel, guardModel, judgeModel, planReviewer    string
 	quiet, verbose, dryRun, defaultTeam, noNet, forceMCP  bool
+	autoTeam, newSession, tempWorkspace                   bool
 	noSpinner, noSummary, tuiCompact                      bool
 	unattended, plan, autoSkills, report, steps, tui      bool
 	rbash, direnv, noJournal, autoApprove, think          bool
@@ -29,21 +33,35 @@ type canonicalRunOptions struct {
 // package globals; the legacy runner sees a temporary option snapshot only
 // for the duration of RunE.
 func newRunCommand() *cobra.Command {
-	command, _ := newRunCommandWithOptions()
+	command, _ := newCanonicalRunCommandWithOptions("run", "execute")
 	return command
 }
 
 func newRunCommandWithOptions() (*cobra.Command, *canonicalRunOptions) {
+	return newCanonicalRunCommandWithOptions("run", "execute")
+}
+
+func newDecideCommand() *cobra.Command {
+	command, _ := newCanonicalRunCommandWithOptions("decide", "decision")
+	return command
+}
+
+func newCanonicalRunCommandWithOptions(name, defaultIntent string) (*cobra.Command, *canonicalRunOptions) {
 	options := new(canonicalRunOptions)
 	command := &cobra.Command{
-		Use:   "run [--] <task>",
-		Short: "Run one team with explicit workspace semantics",
+		Use:   name + " [--] <task>",
+		Short: "Run one team with explicit workspace and intent semantics",
 		Long: `Run one team through the canonical execution facade.
 
 --workspace is the exact team workspace. --workspace-root is a parent under
 which the team name is joined exactly once. Omit both to use
 <project>/workspace/<team>.`,
-		Args:              cobra.ExactArgs(1),
+		Args: func(command *cobra.Command, args []string) error {
+			if strings.TrimSpace(options.resumeDecision) != "" {
+				return cobra.NoArgs(command, args)
+			}
+			return cobra.ExactArgs(1)(command, args)
+		},
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) (runErr error) {
 			previous := opts
@@ -52,7 +70,7 @@ which the team name is joined exactly once. Omit both to use
 				syncLogState()
 			}()
 
-			resolved, err := resolveCanonicalRunOptions(command, options)
+			resolved, err := resolveCanonicalRunOptionsForIntent(command, options, defaultIntent)
 			delegated := false
 			// A valid profile may select JSONL before a later alias/scope check
 			// fails, so establish command-error framing from the resolved local
@@ -75,12 +93,19 @@ which the team name is joined exactly once. Omit both to use
 	}
 
 	flags := command.Flags()
+	flags.StringVar(&options.intent, "intent", defaultIntent, "Run intent: execute or decision")
 	flags.StringVar(&options.team, "team", "", "Team name")
 	flags.StringVar(&options.agentTeam, "agent-team", "", "Legacy alias for --team")
 	flags.StringVarP(&options.workspace, "workspace", "w", "", "Exact team workspace")
 	flags.StringVar(&options.workspaceRoot, "workspace-root", "", "Workspace root; team name is joined once")
 	flags.StringVar(&options.searchPath, "agent-team-search-path", "", "Comma-separated team search paths")
 	flags.BoolVar(&options.defaultTeam, "default", false, "Use the built-in default team")
+	flags.BoolVar(&options.autoTeam, "auto-team", false, "Auto-select one team from the task domain")
+	flags.BoolVarP(&options.newSession, "new", "n", false, "Archive the old session and start fresh")
+	flags.BoolVarP(&options.tempWorkspace, "temp", "t", false, "Use a temporary workspace")
+	flags.StringVar(&options.primaryDecisionProfile, "primary-decision-profile", "", "Exact primary decision profile or team-local primary profile")
+	flags.StringVar(&options.rigor, "rigor", "", "Primary decision rigor: light, standard, or high")
+	flags.StringVar(&options.resumeDecision, "resume-decision", "", "Resume an existing logical decision run")
 	flags.StringVar(&options.providerURL, "provider-url", "", "Provider API base URL")
 	flags.StringVar(&options.providerAPIKey, "provider-api-key", "", "Provider API key")
 	flags.StringVarP(&options.model, "model", "m", "", "Override the worker execution target")
@@ -139,6 +164,8 @@ which the team name is joined exactly once. Omit both to use
 	registerStaticFlagCompletion(command, "display-mode", []string{"auto", "terminal", "plain"})
 	registerStaticFlagCompletion(command, "theme", []string{"auto", "light", "dark", "mono"})
 	registerStaticFlagCompletion(command, "display-preset", []string{"default", "epaper"})
+	registerStaticFlagCompletion(command, "intent", []string{"execute", "decision"})
+	registerStaticFlagCompletion(command, "rigor", []string{"light", "standard", "high"})
 	return command, options
 }
 
@@ -146,6 +173,10 @@ which the team name is joined exactly once. Omit both to use
 // before producing the single runtime option snapshot consumed by runTeam.
 // The caller owns restoring opts because root-only profile flags may bind to it.
 func resolveCanonicalRunOptions(command *cobra.Command, options *canonicalRunOptions) (runOptions, error) {
+	return resolveCanonicalRunOptionsForIntent(command, options, "execute")
+}
+
+func resolveCanonicalRunOptionsForIntent(command *cobra.Command, options *canonicalRunOptions, commandIntent string) (runOptions, error) {
 	if err := applyProfile(command); err != nil {
 		return runOptions{}, err
 	}
@@ -160,6 +191,20 @@ func resolveCanonicalRunOptions(command *cobra.Command, options *canonicalRunOpt
 	if options.defaultTeam && teamName != "" {
 		return runOptions{}, fmt.Errorf("--default cannot be combined with --team or --agent-team")
 	}
+	if options.autoTeam && (options.defaultTeam || teamName != "") {
+		return runOptions{}, fmt.Errorf("--auto-team cannot be combined with an explicit team or --default")
+	}
+	intent := strings.ToLower(strings.TrimSpace(options.intent))
+	if intent != "execute" && intent != "decision" {
+		return runOptions{}, fmt.Errorf("--intent must be execute or decision")
+	}
+	if commandIntent == "decision" && intent != "decision" {
+		return runOptions{}, fmt.Errorf("hufu decide requires --intent decision")
+	}
+	primaryProfile, err := resolvePrimaryDecisionFlags(command, options, intent)
+	if err != nil {
+		return runOptions{}, err
+	}
 
 	resolved := opts
 	resolved.agentTeamName = teamName
@@ -167,7 +212,14 @@ func resolveCanonicalRunOptions(command *cobra.Command, options *canonicalRunOpt
 	resolved.workspace = path
 	resolved.workspaceMode = mode
 	resolved.canonicalRun = true
+	resolved.intent = intent
+	resolved.primaryDecisionProfile = primaryProfile
+	resolved.decisionRigor = strings.TrimSpace(options.rigor)
+	resolved.resumeDecision = strings.TrimSpace(options.resumeDecision)
 	resolved.defaultTeam = options.defaultTeam
+	resolved.autoTeam = options.autoTeam
+	resolved.newSession = options.newSession
+	resolved.tempWorkspace = options.tempWorkspace
 	resolved.providerURL = options.providerURL
 	resolved.providerAPIKey = options.providerAPIKey
 	resolved.modelOverride = options.model
@@ -221,6 +273,60 @@ func resolveCanonicalRunOptions(command *cobra.Command, options *canonicalRunOpt
 	resolved.inputFiles = slices.Clone(options.inputFiles)
 	resolved.forcedSkills = slices.Clone(options.skills)
 	return resolved, nil
+}
+
+func resolvePrimaryDecisionFlags(command *cobra.Command, options *canonicalRunOptions, intent string) (string, error) {
+	profileChanged := command.Flags().Changed("primary-decision-profile")
+	rigorChanged := command.Flags().Changed("rigor")
+	resume := strings.TrimSpace(options.resumeDecision)
+	if intent == "execute" {
+		if profileChanged || rigorChanged || resume != "" {
+			return "", fmt.Errorf("primary decision flags require --intent decision")
+		}
+		return "", nil
+	}
+	if options.noJournal {
+		return "", fmt.Errorf("--no-journal is not supported for decision intent")
+	}
+	if profileChanged && rigorChanged {
+		return "", fmt.Errorf("--primary-decision-profile and --rigor are mutually exclusive")
+	}
+	if resume != "" {
+		if !strings.HasPrefix(resume, "ldr_") || len(resume) != 36 {
+			return "", fmt.Errorf("--resume-decision requires a logical run id")
+		}
+		for _, flag := range []string{"primary-decision-profile", "rigor", "model", "coordinator-model", "sidecar-model", "guard-model", "judge-model", "plan-reviewer-model", "temperature", "max-tokens", "top-p", "top-k", "reasoning-effort", "context-window", "decision-profile", "input", "input-file", "var", "var-file", "new", "temp", "max-duration", "max-total-tokens", "auto-team", "dry-run", "route", "skill", "auto-skills", "plan", "report", "allow-path", "helper-tools"} {
+			if command.Flags().Changed(flag) || command.InheritedFlags().Changed(flag) {
+				return "", fmt.Errorf("--resume-decision cannot be combined with --%s", flag)
+			}
+		}
+		return "", nil
+	}
+	if rigorChanged {
+		switch strings.TrimSpace(options.rigor) {
+		case "light":
+			return agent.DecisionProfileBuiltinLightV2, nil
+		case "standard":
+			return agent.DecisionProfileBuiltinStandardV2, nil
+		case "high":
+			return agent.DecisionProfileBuiltinHighStakesV2, nil
+		default:
+			return "", fmt.Errorf("--rigor must be light, standard, or high")
+		}
+	}
+	profile := strings.TrimSpace(options.primaryDecisionProfile)
+	if profile == "" {
+		return agent.DecisionProfileBuiltinStandardV2, nil
+	}
+	if profile == agent.DecisionProfileOff {
+		return "", fmt.Errorf("primary decision profile cannot be off for decision intent")
+	}
+	if strings.HasPrefix(profile, "builtin/") {
+		if _, err := agent.ResolveBuiltInDecisionProfileBundle(profile); err != nil {
+			return "", fmt.Errorf("unknown primary decision profile %q: %w", profile, err)
+		}
+	}
+	return profile, nil
 }
 
 func resolveCanonicalTeamAlias(command *cobra.Command, options *canonicalRunOptions) (string, error) {

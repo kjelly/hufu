@@ -61,6 +61,28 @@ func TestRequestRunTerminationRunsOnePreparationForConcurrentFinishers(t *testin
 	}
 }
 
+func TestDecisionTerminalPromotesUnverifiedOnlyAfterPrimaryBinding(t *testing.T) {
+	c := &Coordinator{executionRunID: "run-unverified-primary"}
+	logicalID := "ldr_09090909090909090909090909090909"
+	binding := terminalTestBinding(t, logicalID)
+	eventID := "evt-primary-bound"
+	preparer := DecisionTerminalPreparerFunc(func(context.Context, DecisionTerminalPreparationRequest) (DecisionTerminalPreparationResult, error) {
+		return DecisionTerminalPreparationResult{Action: TerminalPreparationCommitTerminal, PrimaryBinding: &binding, PrimaryBindingEventID: &eventID}, nil
+	})
+	if err := c.ConfigureDecisionTerminal(DecisionTerminalConfig{LogicalRunID: logicalID, BranchID: "main", Generation: 1, Preparer: preparer}); err != nil {
+		t.Fatal(err)
+	}
+	c.resetDecisionTerminalInvocation("run-unverified-primary")
+	candidate := &RunResult{RunID: "run-unverified-primary", Outcome: RunOutcomeUnverified, ExitCode: 7, Acceptance: &AcceptanceResult{State: AcceptanceNotConfigured}}
+	prepared, err := c.PrepareDecisionForTerminal(context.Background(), TerminalIntent{EntryPoint: TerminalEntryFinishTool}, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Candidate == nil || prepared.Candidate.Outcome != RunOutcomeCompleted || !prepared.Candidate.GoalSatisfied || prepared.Candidate.ExitCode != 0 {
+		t.Fatalf("prepared candidate = %#v", prepared.Candidate)
+	}
+}
+
 func TestHardStopCancelsDecisionPreparationAndOwnsTerminalCandidate(t *testing.T) {
 	c := &Coordinator{executionRunID: "run-terminal-signal"}
 	logicalID := "ldr_02020202020202020202020202020202"

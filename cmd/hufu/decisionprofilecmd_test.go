@@ -138,6 +138,19 @@ func TestDecisionProfileInspectionTeamStillResolvesBuiltins(t *testing.T) {
 	}
 }
 
+func TestDecisionProfileInspectionExposesV2BundleContract(t *testing.T) {
+	view, err := resolveDecisionProfileView(agent.DecisionProfileBuiltinStandardV2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Identity.ResolvedRef != agent.DecisionProfileBuiltinStandardV2 || view.Identity.Version != "v2" || view.Identity.BundleDigest == "" {
+		t.Fatalf("identity = %#v", view.Identity)
+	}
+	if view.RoleResolution == nil || view.Evidence == nil || view.Limits == nil || view.RoleResolution.Version != "decision-role-resolver@v2" {
+		t.Fatalf("V2 contract missing from inspect view: %#v", view)
+	}
+}
+
 func TestDecisionAuthoringDocumentationCommandsAreRegistered(t *testing.T) {
 	root := newRootCommand()
 	for _, path := range [][]string{{"decision", "profile", "list"}, {"decision", "profile", "show"}, {"decision", "plan"}, {"team", "migrate"}, {"team", "explain"}, {"team", "validate"}} {

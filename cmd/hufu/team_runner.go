@@ -62,6 +62,22 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 	if err != nil {
 		return fmt.Errorf("dry-run failed: %w", err)
 	}
+	if opts.intent == "decision" {
+		output, outputErr := buildDecisionOutput(ctx, loadedTeams, true, 0)
+		if outputErr != nil {
+			return outputErr
+		}
+		if opts.outputFormat == "json" || opts.eventFormat == "jsonl" {
+			if outputErr = writeDecisionOutput(os.Stdout, output, opts.eventFormat != "jsonl"); outputErr != nil {
+				return outputErr
+			}
+			return decisionOutputProcessResult(output)
+		}
+		if outputErr = renderDecisionOutputText(os.Stdout, output); outputErr != nil {
+			return outputErr
+		}
+		return decisionOutputProcessResult(output)
+	}
 	renderDryRun(result)
 	generateRequestedReports(loadedTeams, "(dry-run — no tasks executed)")
 	return nil
@@ -164,7 +180,19 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		// process returns non-zero; otherwise an abort is indistinguishable from
 		// missing output (and callers may incorrectly treat it as completed).
 		generateRequestedReports(loadedTeams, result)
-		if opts.outputFormat == "json" {
+		if opts.intent == "decision" {
+			output, outputErr := buildDecisionOutput(ctx, loadedTeams, false, time.Since(startedAt))
+			if outputErr != nil {
+				return errors.Join(runErr, fmt.Errorf("decision output: %w", outputErr))
+			}
+			if opts.outputFormat == "json" || opts.eventFormat == "jsonl" {
+				if outputErr = writeDecisionOutput(os.Stdout, output, opts.eventFormat != "jsonl"); outputErr != nil {
+					return fmt.Errorf("%w (decision output failed: %v)", runErr, outputErr)
+				}
+			} else if outputErr = renderDecisionOutputText(os.Stdout, output); outputErr != nil {
+				return fmt.Errorf("%w (decision output failed: %v)", runErr, outputErr)
+			}
+		} else if opts.outputFormat == "json" {
 			if outputErr := printResultJSONWithPrior(result, loadedTeams, nil, priorUnresolved); outputErr != nil {
 				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
 			}
@@ -173,6 +201,22 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 	}
 
 	generateRequestedReports(loadedTeams, result)
+	if opts.intent == "decision" {
+		output, outputErr := buildDecisionOutput(ctx, loadedTeams, false, time.Since(startedAt))
+		if outputErr != nil {
+			return outputErr
+		}
+		if opts.outputFormat == "json" || opts.eventFormat == "jsonl" {
+			if outputErr = writeDecisionOutput(os.Stdout, output, opts.eventFormat != "jsonl"); outputErr != nil {
+				return outputErr
+			}
+			return decisionOutputProcessResult(output)
+		}
+		if outputErr = renderDecisionOutputText(os.Stdout, output); outputErr != nil {
+			return outputErr
+		}
+		return decisionOutputProcessResult(output)
+	}
 
 	var allSkillUsage []team.SkillUsageEntry
 	seenSkill := map[string]int{}

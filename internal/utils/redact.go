@@ -72,6 +72,8 @@ var numericTelemetryKeys = map[string]struct{}{
 	"diagnostic_max_tokens":           {},
 	"diagnostic_max_lines":            {},
 	"tokens_used":                     {},
+	"used_tokens":                     {},
+	"used_duration_ms":                {},
 	"tokens_since_progress":           {},
 	"tokens_since_criterion_progress": {},
 	"max_tokens_without_progress":     {},
@@ -87,7 +89,10 @@ var numericTelemetryKeys = map[string]struct{}{
 	"tokens":      {},
 	// Universal decision-runtime limit frozen into correctness events. This is
 	// a numeric budget, not a credential value.
-	"total_decision_tokens": {},
+	"total_decision_tokens":      {},
+	"total-decision-tokens":      {},
+	"max-evidence-input-tokens":  {},
+	"per-call-max-output-tokens": {},
 }
 
 // Structured telemetry keys contain a bounded metadata object rather than a

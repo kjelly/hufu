@@ -1397,6 +1397,15 @@ type jsonStatusEvent struct {
 	ModelProfile    *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
 }
 
+type decisionJSONLEnvelope struct {
+	SchemaVersion int    `json:"schema_version"`
+	Type          string `json:"type"`
+	Sequence      uint64 `json:"sequence"`
+	Data          any    `json:"data"`
+}
+
+var decisionJSONLSequence atomic.Uint64
+
 func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 	var mu sync.Mutex
 	return func(event team.StatusEvent) {
@@ -1406,6 +1415,10 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
 		mu.Lock()
 		defer mu.Unlock()
+		if opts.intent == "decision" {
+			_ = json.NewEncoder(os.Stderr).Encode(decisionJSONLEnvelope{SchemaVersion: 1, Type: "status", Sequence: decisionJSONLSequence.Add(1), Data: encoded})
+			return
+		}
 		_ = json.NewEncoder(os.Stderr).Encode(encoded)
 	}
 }
@@ -1421,6 +1434,10 @@ func emitJSONLCommandError(err error) {
 		Type:    "error",
 		Message: err.Error(),
 		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if opts.intent == "decision" {
+		_ = json.NewEncoder(os.Stderr).Encode(decisionJSONLEnvelope{SchemaVersion: 1, Type: "status", Sequence: decisionJSONLSequence.Add(1), Data: encoded})
+		return
 	}
 	_ = json.NewEncoder(os.Stderr).Encode(encoded)
 }

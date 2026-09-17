@@ -44,6 +44,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	// Add skill management commands
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(newRunCommand())
+	rootCmd.AddCommand(newDecideCommand())
 	rootCmd.AddCommand(replCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)

@@ -35,13 +35,19 @@ type runOptions struct {
 	// canonical facades set exact, root, or default explicitly.
 	workspaceMode string
 	canonicalRun  bool
+	intent        string
 	// decisionProfile is the run-scoped --decision-profile override, the top
 	// layer of the decision profile precedence chain
 	// (docs/architecture/decision-runtime.md §8).
 	decisionProfile string
-	newSession      bool
-	tempWorkspace   bool
-	showHistory     bool
+	// primaryDecisionProfile is exclusively the one runtime-owned primary
+	// decision. It never changes the auxiliary per-task decisionProfile above.
+	primaryDecisionProfile string
+	decisionRigor          string
+	resumeDecision         string
+	newSession             bool
+	tempWorkspace          bool
+	showHistory            bool
 
 	// Memory
 	memoryEnabled bool

@@ -21,6 +21,9 @@ import (
 )
 
 func runTeam(cmd *cobra.Command, args []string) (runErr error) {
+	if opts.intent == "decision" && opts.eventFormat == "jsonl" {
+		decisionJSONLSequence.Store(0)
+	}
 	// Push current quiet/JSON/TUI state into internal/log so internal/* packages
 	// that log through it stay in sync with the CLI.
 	syncLogState()
@@ -88,9 +91,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 		return runArchiveMemory(context.Background(), registry, vars)
 	}
 
-	// resolveInitialPrompt handles stdin/template/file/project/interactive
-	// sources and returns a fully-resolved prompt.
-	prompt, err = resolveInitialPrompt(prompt, pr, vars)
+	prompt, resumeInfo, err := resolveRunPrompt(prompt, pr, vars)
 	if err != nil {
 		return err
 	}
@@ -149,7 +150,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 		return err
 	}
 	if opts.canonicalRun {
-		if err := validateCanonicalRunSegments(initialSegments, initialTeam, opts.workspaceMode); err != nil {
+		if err := validateCanonicalRunSegments(initialSegments, initialTeam, opts.workspaceMode, opts.intent); err != nil {
 			return err
 		}
 	}
@@ -172,11 +173,73 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if opts.dryRun {
 		return executeDryRun(ctx, segments, prompt, loadedTeams)
 	}
+	if opts.intent == "decision" {
+		if err := configureDecisionIntent(loadedTeams, prompt, resumeInfo); err != nil {
+			return err
+		}
+		if resumeInfo != nil && resumeInfo.ExistingBinding != nil {
+			return renderResumedDecision(ctx, loadedTeams)
+		}
+	}
 
 	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
 }
 
-func validateCanonicalRunSegments(segments []team.PromptSegment, explicitTeam, workspaceMode string) error {
+func resolveRunPrompt(prompt string, pr *readline.PromptReader, vars map[string]string) (string, *team.DecisionResumeInfo, error) {
+	if opts.resumeDecision == "" {
+		// resolveInitialPrompt handles stdin/template/file/project/interactive
+		// sources and returns a fully-resolved prompt.
+		resolved, err := resolveInitialPrompt(prompt, pr, vars)
+		return resolved, nil, err
+	}
+	if opts.workspaceMode != "exact" || strings.TrimSpace(opts.workspace) == "" {
+		return "", nil, fmt.Errorf("--resume-decision requires an exact --workspace")
+	}
+	resolved, err := team.InspectDecisionResume(context.Background(), opts.workspace, opts.resumeDecision)
+	if err != nil {
+		return "", nil, err
+	}
+	if opts.agentTeamName != "" && !strings.EqualFold(opts.agentTeamName, resolved.TeamName) {
+		return "", nil, fmt.Errorf("--team %q does not own logical decision %s", opts.agentTeamName, opts.resumeDecision)
+	}
+	opts.agentTeamName = strings.ToLower(resolved.TeamName)
+	opts.primaryDecisionProfile = resolved.ProfileRef
+	return resolved.Question, &resolved, nil
+}
+
+func configureDecisionIntent(loadedTeams map[string]*teamContext, question string, resumeInfo *team.DecisionResumeInfo) error {
+	if len(loadedTeams) != 1 {
+		return fmt.Errorf("a decision run requires exactly one loaded owner team")
+	}
+	for _, tc := range loadedTeams {
+		if tc == nil || tc.coordinator == nil {
+			return fmt.Errorf("decision owner team is unavailable")
+		}
+		logicalRunID := strings.TrimSpace(opts.resumeDecision)
+		if logicalRunID == "" {
+			var err error
+			logicalRunID, err = team.NewLogicalRunID()
+			if err != nil {
+				return err
+			}
+		}
+		preparer, err := team.NewPrimaryDecisionPreparer(tc.coordinator, question, opts.primaryDecisionProfile)
+		if err != nil {
+			return err
+		}
+		config := team.DecisionTerminalConfig{LogicalRunID: logicalRunID, BranchID: tc.coordinator.ActiveBranchID(), Generation: 1, Preparer: preparer}
+		if resumeInfo != nil {
+			config.BranchID = resumeInfo.BranchID
+			config.Generation = resumeInfo.Generation
+			config.ExistingBinding = resumeInfo.ExistingBinding
+			config.ExistingBindingEventID = resumeInfo.ExistingBindingEvent
+		}
+		return tc.coordinator.ConfigureDecisionTerminal(config)
+	}
+	return fmt.Errorf("decision owner team is unavailable")
+}
+
+func validateCanonicalRunSegments(segments []team.PromptSegment, explicitTeam, workspaceMode, intent string) error {
 	explicitTeam = strings.ToLower(strings.TrimSpace(explicitTeam))
 	teams := make(map[string]struct{})
 	for _, segment := range segments {
@@ -194,6 +257,9 @@ func validateCanonicalRunSegments(segments []team.PromptSegment, explicitTeam, w
 	}
 	if workspaceMode == "exact" && len(teams) > 1 {
 		return fmt.Errorf("an exact --workspace cannot be shared by multiple teams; use --workspace-root or run each team separately")
+	}
+	if intent == "decision" && len(teams) > 1 {
+		return fmt.Errorf("a decision run must have exactly one owner team; run each team decision separately")
 	}
 	return nil
 }

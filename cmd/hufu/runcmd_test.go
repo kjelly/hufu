@@ -187,13 +187,78 @@ func TestValidateCanonicalRunSegments(t *testing.T) {
 		{Type: team.SegmentSwitchTeam, Name: "alpha"},
 		{Type: team.SegmentSwitchTeam, Name: "beta"},
 	}
-	if err := validateCanonicalRunSegments(segments, "alpha", "root"); err == nil || !strings.Contains(err.Error(), "prompt switches") {
+	if err := validateCanonicalRunSegments(segments, "alpha", "root", "execute"); err == nil || !strings.Contains(err.Error(), "prompt switches") {
 		t.Fatalf("explicit team conflict error = %v", err)
 	}
-	if err := validateCanonicalRunSegments(segments, "", "exact"); err == nil || !strings.Contains(err.Error(), "multiple teams") {
+	if err := validateCanonicalRunSegments(segments, "", "exact", "execute"); err == nil || !strings.Contains(err.Error(), "multiple teams") {
 		t.Fatalf("exact multi-team error = %v", err)
 	}
-	if err := validateCanonicalRunSegments(segments, "", "root"); err != nil {
+	if err := validateCanonicalRunSegments(segments, "", "root", "execute"); err != nil {
 		t.Fatalf("root multi-team error = %v", err)
+	}
+	if err := validateCanonicalRunSegments(segments, "", "root", "decision"); err == nil || !strings.Contains(err.Error(), "one owner team") {
+		t.Fatalf("decision multi-team error = %v", err)
+	}
+}
+
+func TestCanonicalDecisionFlagMatrix(t *testing.T) {
+	tests := []struct {
+		name          string
+		commandIntent string
+		args          []string
+		wantProfile   string
+		wantError     string
+	}{
+		{name: "run decision default", commandIntent: "execute", args: []string{"--intent", "decision", "question"}, wantProfile: "builtin/standard@v2"},
+		{name: "decide fixed intent", commandIntent: "decision", args: []string{"question"}, wantProfile: "builtin/standard@v2"},
+		{name: "rigor light", commandIntent: "decision", args: []string{"--rigor", "light", "question"}, wantProfile: "builtin/light@v2"},
+		{name: "rigor high", commandIntent: "decision", args: []string{"--rigor", "high", "question"}, wantProfile: "builtin/high-stakes@v2"},
+		{name: "decide rejects execute", commandIntent: "decision", args: []string{"--intent", "execute", "question"}, wantError: "requires --intent decision"},
+		{name: "execute rejects primary", commandIntent: "execute", args: []string{"--primary-decision-profile", "builtin/light@v2", "question"}, wantError: "require --intent decision"},
+		{name: "primary and rigor conflict", commandIntent: "decision", args: []string{"--primary-decision-profile", "builtin/light@v2", "--rigor", "high", "question"}, wantError: "mutually exclusive"},
+		{name: "decision requires journal", commandIntent: "decision", args: []string{"--no-journal", "question"}, wantError: "not supported"},
+		{name: "off cannot disable primary", commandIntent: "decision", args: []string{"--primary-decision-profile", "off", "question"}, wantError: "cannot be off"},
+		{name: "unknown exact builtin", commandIntent: "decision", args: []string{"--primary-decision-profile", "builtin/unknown@v2", "question"}, wantError: "unknown primary decision profile"},
+		{name: "supporting profile stays separate", commandIntent: "decision", args: []string{"--primary-decision-profile", "builtin/light@v2", "question"}, wantProfile: "builtin/light@v2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previous := opts
+			t.Cleanup(func() { opts = previous })
+			command, options := newCanonicalRunCommandWithOptions("test", tt.commandIntent)
+			if err := command.ParseFlags(tt.args); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := resolveCanonicalRunOptionsForIntent(command, options, tt.commandIntent)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.primaryDecisionProfile != tt.wantProfile || resolved.intent != "decision" {
+				t.Fatalf("resolved = %#v", resolved)
+			}
+		})
+	}
+}
+
+func TestCanonicalDecisionResumeRejectsSemanticChanges(t *testing.T) {
+	logical := "ldr_0123456789abcdef0123456789abcdef"
+	for _, changed := range [][]string{
+		{"--model", "other"}, {"--new"}, {"--temp"}, {"--input", "x=1"}, {"--rigor", "high"},
+		{"--auto-team"}, {"--dry-run"}, {"--route", "fast"}, {"--skill", "audit"}, {"--allow-path", "/tmp"},
+	} {
+		command, options := newCanonicalRunCommandWithOptions("decide", "decision")
+		args := append([]string{"--resume-decision", logical}, changed...)
+		if err := command.ParseFlags(args); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveCanonicalRunOptionsForIntent(command, options, "decision"); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("args %v error = %v", args, err)
+		}
 	}
 }

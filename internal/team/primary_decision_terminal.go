@@ -8,6 +8,21 @@ import (
 	"strings"
 )
 
+// DecisionTerminalSnapshot is a read-only presentation projection of the
+// common terminal state. It contains immutable identities and artifact refs,
+// never provider prompts or raw model output.
+type DecisionTerminalSnapshot struct {
+	Configured            bool
+	LogicalRunID          string
+	ExecutionRunID        string
+	BranchID              string
+	Generation            uint32
+	Prepared              bool
+	PrimaryBinding        *PrimaryBindingV1
+	PrimaryBindingEventID *string
+	ReasonCodes           []string
+}
+
 const (
 	ReasonDecisionTerminalPreparationMissing = "decision_terminal_preparation_missing"
 	ReasonDecisionPrimaryMissing             = "decision_primary_missing"
@@ -113,6 +128,65 @@ func (c *Coordinator) decisionTerminalEnabled() bool {
 	c.decisionTerminalMu.Lock()
 	defer c.decisionTerminalMu.Unlock()
 	return c.decisionTerminal.configured
+}
+
+func (c *Coordinator) DecisionTerminalSnapshot() DecisionTerminalSnapshot {
+	if c == nil {
+		return DecisionTerminalSnapshot{}
+	}
+	c.decisionTerminalMu.Lock()
+	defer c.decisionTerminalMu.Unlock()
+	runtime := c.decisionTerminal
+	binding := runtime.preparation.PrimaryBinding
+	bindingEventID := runtime.existingBindingEventID
+	if runtime.preparation.Proof != nil && runtime.preparation.Proof.PrimaryBindingEventID != nil {
+		bindingEventID = runtime.preparation.Proof.PrimaryBindingEventID
+	}
+	if binding == nil {
+		binding = runtime.existingBinding
+	}
+	return DecisionTerminalSnapshot{
+		Configured: runtime.configured, LogicalRunID: runtime.logicalRunID, ExecutionRunID: runtime.executionRunID,
+		BranchID: runtime.branchID, Generation: runtime.generation, Prepared: runtime.prepared,
+		PrimaryBinding: clonePrimaryBinding(binding), PrimaryBindingEventID: cloneStringPointer(bindingEventID),
+		ReasonCodes: slices.Clone(runtime.preparation.ReasonCodes),
+	}
+}
+
+// ActiveBranchID returns the branch identity used by durable runtime events.
+func (c *Coordinator) ActiveBranchID() string { return c.activeBranchID() }
+
+// ResolvePrimaryDecisionRecord verifies and decodes the immutable record ref.
+func (c *Coordinator) ResolvePrimaryDecisionRecord(ctx context.Context, ref DecisionArtifactRef) (DecisionRecord, error) {
+	artifact, err := resolveDecisionArtifactRef(ctx, c.decisionArtifactStore(), ref, "primary decision record")
+	if err != nil {
+		return DecisionRecord{}, err
+	}
+	record, err := FetchDecisionArtifact[DecisionRecord](ctx, c.decisionArtifactStore(), artifact)
+	if err != nil {
+		return DecisionRecord{}, err
+	}
+	if err := record.ValidateSchemaVersion(); err != nil {
+		return DecisionRecord{}, err
+	}
+	return record, nil
+}
+
+// ResolvePrimaryDecisionEvidence verifies and decodes the immutable bounded
+// evidence packet used by the bound primary decision.
+func (c *Coordinator) ResolvePrimaryDecisionEvidence(ctx context.Context, ref DecisionArtifactRef) (PrimaryDecisionEvidenceV1, error) {
+	artifact, err := resolveDecisionArtifactRef(ctx, c.decisionArtifactStore(), ref, "primary decision evidence")
+	if err != nil {
+		return PrimaryDecisionEvidenceV1{}, err
+	}
+	evidence, err := FetchDecisionArtifact[PrimaryDecisionEvidenceV1](ctx, c.decisionArtifactStore(), artifact)
+	if err != nil {
+		return PrimaryDecisionEvidenceV1{}, err
+	}
+	if err := ValidatePrimaryDecisionEvidence(&evidence); err != nil {
+		return PrimaryDecisionEvidenceV1{}, err
+	}
+	return evidence, nil
 }
 
 func (c *Coordinator) authorizeTerminalPreparation(candidate *RunResult, proof *TerminalPreparationProof) {
@@ -256,7 +330,7 @@ func (c *Coordinator) prepareDecisionTermination(ctx context.Context, policy Ter
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	wantsSuccess := intent.WantsSuccess && terminalCandidateWantsSuccess(candidate)
+	wantsSuccess := terminalCandidateWantsSuccess(candidate) || decisionCandidateAwaitingPrimary(candidate)
 
 	c.decisionTerminalMu.Lock()
 	runtime := &c.decisionTerminal
@@ -392,8 +466,12 @@ func (c *Coordinator) runDecisionTerminalPreparer(ctx context.Context, request D
 		supportDigest = &result.PrimaryBinding.SupportRevisionDigest
 	}
 	proof := terminalProofFor(request, result.Action, supportDigest, result.PrimaryBindingEventID, result.ReasonCodes)
+	candidate := request.Candidate
+	if decisionCandidateAwaitingPrimary(candidate) {
+		candidate = promoteDecisionCandidateWithPrimary(candidate)
+	}
 	return TerminalPreparation{
-		Action: result.Action, Candidate: request.Candidate, PrimaryBinding: clonePrimaryBinding(result.PrimaryBinding),
+		Action: result.Action, Candidate: candidate, PrimaryBinding: clonePrimaryBinding(result.PrimaryBinding),
 		Proof: proof, ReasonCodes: slices.Clone(result.ReasonCodes),
 	}, nil
 }
@@ -423,6 +501,26 @@ func terminalProofFor(request DecisionTerminalPreparationRequest, action Termina
 
 func terminalCandidateWantsSuccess(candidate *RunResult) bool {
 	return candidate != nil && (candidate.GoalSatisfied || candidate.Outcome == RunOutcomeCompleted)
+}
+
+func decisionCandidateAwaitingPrimary(candidate *RunResult) bool {
+	if candidate == nil || candidate.Outcome != RunOutcomeUnverified || candidate.GoalSatisfied || candidate.ExitCode != 7 {
+		return false
+	}
+	return candidate.Acceptance == nil || candidate.Acceptance.EffectiveState() == AcceptanceNotConfigured
+}
+
+func promoteDecisionCandidateWithPrimary(candidate *RunResult) *RunResult {
+	if candidate == nil {
+		return nil
+	}
+	clone := *candidate
+	clone.Outcome = RunOutcomeCompleted
+	clone.GoalSatisfied = true
+	clone.ExitCode = 0
+	clone.StopReason = StopReasonCompleted
+	clone.Reason = ""
+	return &clone
 }
 
 func blockDecisionTerminalCandidate(candidate *RunResult, detail string) *RunResult {

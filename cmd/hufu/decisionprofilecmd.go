@@ -22,6 +22,7 @@ type decisionProfileIdentityView struct {
 	Origin        string `json:"origin,omitempty" yaml:"origin,omitempty"`
 	Version       string `json:"version,omitempty" yaml:"version,omitempty"`
 	PolicyDigest  string `json:"policy_digest,omitempty" yaml:"policy_digest,omitempty"`
+	BundleDigest  string `json:"bundle_digest,omitempty" yaml:"bundle_digest,omitempty"`
 }
 
 type decisionPlanView struct {
@@ -39,11 +40,14 @@ type decisionPlanView struct {
 }
 
 type decisionProfileView struct {
-	SchemaVersion int                         `json:"schema_version" yaml:"schema_version"`
-	Kind          string                      `json:"kind" yaml:"kind"`
-	Enabled       bool                        `json:"enabled" yaml:"enabled"`
-	Identity      decisionProfileIdentityView `json:"identity" yaml:"identity"`
-	Plan          *decisionPlanView           `json:"plan,omitempty" yaml:"plan,omitempty"`
+	SchemaVersion  int                                    `json:"schema_version" yaml:"schema_version"`
+	Kind           string                                 `json:"kind" yaml:"kind"`
+	Enabled        bool                                   `json:"enabled" yaml:"enabled"`
+	Identity       decisionProfileIdentityView            `json:"identity" yaml:"identity"`
+	Plan           *decisionPlanView                      `json:"plan,omitempty" yaml:"plan,omitempty"`
+	RoleResolution *agent.DecisionProfileRoleResolutionV2 `json:"role_resolution,omitempty" yaml:"role_resolution,omitempty"`
+	Evidence       *agent.DecisionProfileEvidenceV2       `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	Limits         *agent.DecisionProfileLimitsV2         `json:"limits,omitempty" yaml:"limits,omitempty"`
 }
 
 type decisionProfileListItemView struct {
@@ -188,6 +192,21 @@ func resolveDecisionProfileView(name, teamName string) (decisionProfileView, err
 	if alias := decisionAliasRef(name); alias != "" {
 		ref = alias
 	}
+	if slices.Contains(agent.BuiltInDecisionProfileBundleRefs(), ref) {
+		bundle, err := agent.ResolveBuiltInDecisionProfileBundle(ref)
+		if err != nil {
+			return decisionProfileView{}, err
+		}
+		view, err := profileViewFromPolicy(name, "decision_profile", bundle.Policy, agent.DecisionProfileMetadata{Ref: bundle.Ref, Origin: agent.DecisionProfileOriginBuiltin, Version: "v2"})
+		if err != nil {
+			return decisionProfileView{}, err
+		}
+		view.Identity.BundleDigest = bundle.BundleDigest
+		view.RoleResolution = &bundle.RoleResolution
+		view.Evidence = &bundle.Evidence
+		view.Limits = &bundle.Limits
+		return view, nil
+	}
 	policy, metadata, err := agent.BuiltInDecisionProfileCatalog().Resolve(agent.DecisionProfileRef{Name: ref})
 	if err != nil {
 		return decisionProfileView{}, err
@@ -209,6 +228,11 @@ func runDecisionProfileShow(cmd *cobra.Command, args []string) error {
 	if view.Identity.ResolvedRef != "" {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "resolved: %s\norigin: %s\nversion: %s\n", view.Identity.ResolvedRef, view.Identity.Origin, view.Identity.Version); err != nil {
 			return err
+		}
+		if view.Identity.BundleDigest != "" {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "bundle-digest: %s\n", view.Identity.BundleDigest); err != nil {
+				return err
+			}
 		}
 	}
 	if view.Plan != nil {
