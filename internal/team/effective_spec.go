@@ -3,11 +3,15 @@ package team
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // TeamCompileMode selects fail-closed runtime compilation or recoverable
@@ -60,6 +64,61 @@ type EffectiveAgentSpec struct {
 	SideEffect ResolvedValue[string]
 }
 
+// DecisionProfileProjection is the stable, provider-free inspection view of
+// one resolved decision profile.
+type DecisionProfileProjection struct {
+	Name    string                `json:"name" yaml:"name"`
+	Origin  string                `json:"origin" yaml:"origin"`
+	Ref     string                `json:"ref,omitempty" yaml:"ref,omitempty"`
+	Version string                `json:"version,omitempty" yaml:"version,omitempty"`
+	Policy  agent.DecisionPolicy  `json:"policy" yaml:"policy"`
+	Plan    DecisionExecutionPlan `json:"plan" yaml:"plan"`
+}
+
+// DecisionAuthoringProjection is shared by team explain and profile
+// inspection commands. It contains only normalized authoring/runtime data and
+// never performs provider or workspace I/O.
+type DecisionAuthoringProjection struct {
+	Profile            string                      `json:"profile" yaml:"profile"`
+	ProfileSource      string                      `json:"profile_source,omitempty" yaml:"profile_source,omitempty"`
+	RequestedProfile   string                      `json:"requested_profile,omitempty" yaml:"requested_profile,omitempty"`
+	ResolvedProfileRef string                      `json:"resolved_profile_ref,omitempty" yaml:"resolved_profile_ref,omitempty"`
+	RoutingHints       []agent.RoutingHint         `json:"routing_hints,omitempty" yaml:"routing_hints,omitempty"`
+	RequestContract    agent.RequestContractConfig `json:"request_contract" yaml:"request_contract"`
+	Deprecations       []string                    `json:"deprecations,omitempty" yaml:"deprecations,omitempty"`
+	Profiles           []DecisionProfileProjection `json:"profiles" yaml:"profiles"`
+}
+
+func BuildDecisionAuthoringProjection(session *TeamSession) DecisionAuthoringProjection {
+	if session == nil {
+		return DecisionAuthoringProjection{}
+	}
+	cfg := session.Config
+	out := DecisionAuthoringProjection{
+		Profile:            session.DecisionAuthoring.RequestedProfile,
+		ProfileSource:      session.DecisionAuthoring.ProfileSource,
+		RequestedProfile:   session.DecisionAuthoring.RequestedProfile,
+		ResolvedProfileRef: session.DecisionAuthoring.ResolvedProfileRef,
+		RoutingHints:       slices.Clone(cfg.Decision.RoutingHints),
+		RequestContract:    cloneRequestContractConfig(cfg.RequestContract),
+		Deprecations:       slices.Clone(session.DecisionAuthoring.Deprecations),
+	}
+	names := slices.Collect(maps.Keys(cfg.Decision.ProfileSpecs))
+	slices.Sort(names)
+	for _, name := range names {
+		policy, metadata, ok, err := agent.ResolveDecisionProfileSpec(cfg.Decision, name, agent.BuiltInDecisionProfileCatalog())
+		if err != nil || !ok {
+			continue
+		}
+		plan, err := CompileDecisionExecutionPlan(policy)
+		if err != nil {
+			continue
+		}
+		out.Profiles = append(out.Profiles, DecisionProfileProjection{Name: name, Origin: metadata.Origin, Ref: metadata.Ref, Version: metadata.Version, Policy: policy, Plan: plan})
+	}
+	return out
+}
+
 // EffectiveTeamSpec is the immutable, provenance-annotated result of
 // compiling a team directory (spec.md Specification 02). It is produced
 // once by CompileTeam and never mutated afterward; every exported field is
@@ -93,6 +152,7 @@ type EffectiveTeamSpec struct {
 	MaxRounds   ResolvedValue[int]
 	Timeout     ResolvedValue[int64]
 	MaxRetries  ResolvedValue[int]
+	Decision    DecisionAuthoringProjection
 
 	Agents map[string]EffectiveAgentSpec
 
@@ -212,6 +272,7 @@ func newEffectiveTeamSpec(absDir string, session *TeamSession) (*EffectiveTeamSp
 	cfg := session.Config
 
 	spec := &EffectiveTeamSpec{session: session}
+	spec.Decision = BuildDecisionAuthoringProjection(session)
 
 	if hasNonEmptyKey(teamRaw, "name") {
 		spec.Name = ResolvedValue[string]{Value: cfg.Name, Source: SourceTeam, Detail: "team.yaml"}

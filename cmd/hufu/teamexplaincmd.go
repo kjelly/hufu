@@ -86,14 +86,15 @@ type explainAgent struct {
 // not for reconstructing runtime state (that projection point is
 // EffectiveTeamSpec.RuntimeSession(), reserved for Go callers).
 type explainOutput struct {
-	Name        internalteam.ResolvedValue[string] `json:"name" yaml:"name"`
-	Description internalteam.ResolvedValue[string] `json:"description,omitempty" yaml:"description,omitempty"`
-	Model       internalteam.ResolvedValue[string] `json:"model,omitempty" yaml:"model,omitempty"`
-	MaxRounds   internalteam.ResolvedValue[int]    `json:"max_rounds" yaml:"max_rounds"`
-	Timeout     internalteam.ResolvedValue[int64]  `json:"timeout" yaml:"timeout"`
-	MaxRetries  internalteam.ResolvedValue[int]    `json:"max_retries" yaml:"max_retries"`
-	Agents      []explainAgent                     `json:"agents" yaml:"agents"`
-	Diagnostics []internalteam.ContractFinding     `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
+	Name        internalteam.ResolvedValue[string]       `json:"name" yaml:"name"`
+	Description internalteam.ResolvedValue[string]       `json:"description,omitempty" yaml:"description,omitempty"`
+	Model       internalteam.ResolvedValue[string]       `json:"model,omitempty" yaml:"model,omitempty"`
+	MaxRounds   internalteam.ResolvedValue[int]          `json:"max_rounds" yaml:"max_rounds"`
+	Timeout     internalteam.ResolvedValue[int64]        `json:"timeout" yaml:"timeout"`
+	MaxRetries  internalteam.ResolvedValue[int]          `json:"max_retries" yaml:"max_retries"`
+	Agents      []explainAgent                           `json:"agents" yaml:"agents"`
+	Decision    internalteam.DecisionAuthoringProjection `json:"decision" yaml:"decision"`
+	Diagnostics []internalteam.ContractFinding           `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty"`
 }
 
 // dedupedExplainAgents collapses EffectiveTeamSpec.Agents' dual file-alias/
@@ -134,6 +135,7 @@ func buildExplainOutput(spec *internalteam.EffectiveTeamSpec) explainOutput {
 		Timeout:     spec.Timeout,
 		MaxRetries:  spec.MaxRetries,
 		Agents:      dedupedExplainAgents(spec),
+		Decision:    spec.Decision,
 		Diagnostics: internalteam.ValidateEffectiveTeam(spec),
 	}
 }
@@ -155,6 +157,21 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 	writeResolvedLine(&b, "  ", "max-retries", spec.MaxRetries.Value, spec.MaxRetries.Source, spec.MaxRetries.Detail)
 
 	session := spec.RuntimeSession()
+	if spec.Decision.Profile != "" || len(spec.Decision.Profiles) > 0 || spec.Decision.RequestContract.Enabled {
+		fmt.Fprintln(&b, "\nDecision authoring")
+		if spec.Decision.Profile != "" {
+			fmt.Fprintf(&b, "  profile: %s (source: %s)\n", spec.Decision.Profile, spec.Decision.ProfileSource)
+		}
+		if spec.Decision.ResolvedProfileRef != "" {
+			fmt.Fprintf(&b, "  resolved-ref: %s\n", spec.Decision.ResolvedProfileRef)
+		}
+		if spec.Decision.RequestContract.Enabled {
+			fmt.Fprintf(&b, "  request objective: %s\n", spec.Decision.RequestContract.Objective)
+		}
+		if len(spec.Decision.Deprecations) > 0 {
+			fmt.Fprintf(&b, "  deprecated: %s\n", strings.Join(spec.Decision.Deprecations, ", "))
+		}
+	}
 	if session != nil {
 		cfg := session.Config
 		var restrictions []string
