@@ -76,6 +76,7 @@ func resolveDecisionTeamDir(name string) (string, error) {
 func init() {
 	decisionCmd.AddCommand(decisionProfileCmd, decisionPlanCmd)
 	decisionProfileCmd.AddCommand(decisionProfileListCmd, decisionProfileShowCmd)
+	decisionProfileListCmd.Flags().StringVar(&decisionProfileTeam, "team", "", "Discoverable team name or team directory")
 	decisionProfileShowCmd.Flags().StringVar(&decisionProfileTeam, "team", "", "Discoverable team name or team directory")
 	decisionPlanCmd.Flags().StringVar(&decisionProfileName, "profile", "", "Decision profile name (required)")
 	decisionPlanCmd.Flags().StringVar(&decisionProfileTeam, "team", "", "Discoverable team name or team directory")

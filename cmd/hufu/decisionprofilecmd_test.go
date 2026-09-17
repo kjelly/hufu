@@ -66,3 +66,16 @@ func TestDecisionProfileInspectionTeamAddsLocalProfile(t *testing.T) {
 		t.Fatalf("team show = %s", out)
 	}
 }
+
+func TestDecisionAuthoringDocumentationCommandsAreRegistered(t *testing.T) {
+	root := newRootCommand()
+	for _, path := range [][]string{{"decision", "profile", "list"}, {"decision", "profile", "show"}, {"decision", "plan"}, {"team", "migrate"}, {"team", "explain"}, {"team", "validate"}} {
+		command, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("documented command %v is not registered: %v", path, err)
+		}
+		if len(path) >= 2 && path[0] == "decision" && (path[1] == "profile" || path[1] == "plan") && command.Flags().Lookup("team") == nil {
+			t.Fatalf("documented command %v is missing --team", path)
+		}
+	}
+}
