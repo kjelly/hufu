@@ -80,6 +80,29 @@ max-rounds: 4
 	}
 }
 
+func TestRunTeamMigrate_CanonicalAuthoringSmoke(t *testing.T) {
+	dir := t.TempDir()
+	writeMigrateCmdFixture(t, dir, `decision:
+  default-profile: standard
+  request-contract:
+    enabled: true
+    objective: decide safely
+    success-criteria:
+      - id: safe
+        statement: risks are represented
+`)
+	teamMigrateDryRun, teamMigrateCanonicalAuthoring = true, true
+	teamMigrateTo = "hufu.io/v1alpha1"
+	t.Cleanup(func() { teamMigrateDryRun, teamMigrateCanonicalAuthoring = false, false })
+	out, err := runTeamMigrateCaptured(t, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "profile: standard") || !strings.Contains(out, "request:") || strings.Contains(out, "default-profile:") || strings.Contains(out, "request-contract:") {
+		t.Fatalf("canonical migration output:\n%s", out)
+	}
+}
+
 func TestRunTeamMigrate_RejectsBothDirAndTeamFlag(t *testing.T) {
 	teamMigrateDryRun = true
 	t.Cleanup(func() { teamMigrateDryRun = false })

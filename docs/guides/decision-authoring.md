@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: guide
-> Verified-Commit: `1e9f1e4`
+> Verified-Commit: 2026-09-17
 > Supersedes: —
 > Superseded-By: —
 
@@ -28,8 +28,9 @@ This is a tested guarantee, not an intention:
 `TestDecisionV1OffProfileIsInert`, `TestParseTeamYMLWithoutDecisionBlock`,
 `TestDisciplineHooksAreNoOpsWhenUnarmed`.
 
-You opt in per task, or set a team default. There is no migration step for an
-existing team.
+You opt in per task, or set a team default. Existing legacy fields continue to
+load; `hufu team migrate --dry-run --canonical-authoring <team-directory>`
+previews the canonical spelling without writing the source file.
 
 ---
 
@@ -45,57 +46,53 @@ since v1alpha1 keeps identical field names inside an envelope — see
 [team schema versioning](../archive/implementation-plans/team-schema-versioning.md).
 
 ```yaml
+request:
+  objective: keep the bridge reachable while changing it
+  success-criteria:
+    - id: reachable
+      statement: the bridge answers after the change
+  assumptions:
+    - id: service-accepts
+      statement: the target service accepts the change
+      critical: true
+
 decision:
-  default-profile: off          # the reserved name; tasks opt in individually
-  request-contract:
-    enabled: true
-    objective: keep the bridge reachable while changing it
-    success-criteria:
-      - id: reachable
-        statement: the bridge answers after the change
-    assumptions:
-      - id: service-accepts
-        statement: the target service accepts the change
-        critical: true
+  profile: custom
   profiles:
-    standard:
-      independent-judgments: 3
-      context-isolation: strict
-      score-scale: 0-10
-      criteria:
-        - id: impact
-          statement: how much this moves the objective
-          weight: 1
-          direction: higher-is-better   # or lower-is-better
-      aggregation:
-        method: mean-score
-      challenge:
-        enabled: true
-        count: 1
-        trigger:
-          dispersion-above: 0.5         # challenge only when judges disagree
-      revision:
-        enabled: true
-      finalization:
-        mode: aggregate                 # or coordinator, or judge + judge-id
-      discipline:
-        alternatives:
-          require-no-action-option: true
-          min-options: 2
-        stop:
-          checkpoint-every: 2
-          require-kill-criteria: true
-          kill-criteria:
-            - id: tool-calls
-              kind: tool_calls
-              threshold: 20
-            - id: assumption
-              kind: assumption_invalid
-        commit:
-          require-verification: true
-          require-reconcile: true
-        replan:
-          on-critical-assumption-contradicted: replan
+    custom:
+      policy:
+        independent-judgments: 3
+        context-isolation: strict
+        score-scale: 0-10
+        criteria:
+          - id: impact
+            statement: how much this moves the objective
+            weight: 1
+            direction: higher-is-better   # or lower-is-better
+        aggregation:
+          method: mean-score
+        challenge:
+          enabled: true
+          count: 1
+        revision:
+          enabled: true
+        finalization:
+          mode: aggregate
+```
+
+Most teams do not need a local policy. The ergonomic built-ins are selected
+directly with `decision.profile: light`, `standard`, or `high-stakes`; exact
+versioned references such as `builtin/standard@v1` are also accepted. A local
+profile with the same name takes precedence over the ergonomic alias.
+
+Inspect the catalog and effective stage plan without a provider call:
+
+```text
+hufu decision profile list
+hufu decision profile list --team my-team
+hufu decision profile show standard
+hufu decision plan --profile standard
+hufu decision profile show custom --team my-team
 ```
 
 A complete three-profile example (light, standard, high-stakes) is kept as an

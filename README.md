@@ -206,6 +206,35 @@ required tool availability, `force-mcp`, `no-net`, unattended interaction,
 plan-first, environment variables, and allowed paths. It does not infer
 mandatory behavior from free-form prompts.
 
+#### Decision authoring
+
+Select a built-in rigor profile and, when decision formation is enabled,
+declare its request contract with canonical authoring fields:
+
+```yaml
+request:
+  objective: Keep the service reachable during migration.
+  success-criteria:
+    - id: reachable
+      statement: The service remains reachable after migration.
+
+decision:
+  profile: standard
+```
+
+These read-only commands inspect the catalog and effective stage plan without
+calling a provider or creating a workspace:
+
+```bash
+hufu decision profile list
+hufu decision profile show standard
+hufu decision plan --profile standard
+```
+
+Legacy `decision.default-profile`, `decision.request-contract`, and
+`decision.routing-hints` remain accepted. Preview canonical YAML with
+`hufu team migrate --dry-run --canonical-authoring <team-directory>`.
+
 ### 3. Run a Task
 
 ```bash

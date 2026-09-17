@@ -1,6 +1,10 @@
 # Hufu Decision Authoring UX 簡化實作規格
 
 > Status: Implemented
+> Authority: normative
+> Verified-Commit: 2026-09-17
+> Supersedes: —
+> Superseded-By: —
 > Audience: Hufu maintainer / coding agent
 > Source baseline: 33a634b2d4f0743323e600d05a05a4733f162171
 > Scope: team manifest authoring、normalization、request contract ownership、inspection、migration、bundled team、tests、documentation

@@ -36,6 +36,9 @@ to re-create an abstraction that already exists in the runtime.
   compatibility.
 - [Decision-aware runtime](architecture/decision-runtime.md) — decision
   stages, evidence, deterministic aggregation, routing, and commit gates.
+- [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
+  profile/request/routing schema, compatibility normalization, inspection,
+  and dry-run migration contract.
 - [Run outcome](architecture/run-outcome.md) — the policy implemented by
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)

@@ -924,6 +924,13 @@ stderr。不得輸出 env value、credential、完整 remote response 或任意 
 
 `team check` 預設先顯示 blockers 與下一步，詳細 provenance 透過 explain 展開。Lint finding 不得被合併成一條泛稱「配置錯誤」。
 
+Decision authoring 的 provider-free inspection 已由既有 `decision` namespace
+提供：`hufu decision profile list`、`hufu decision profile show <name>` 與
+`hufu decision plan --profile <name>`。Team-specific local profiles 以
+`--team <discoverable-name>` 載入；`team explain` 則顯示 effective profile、
+request、routing provenance 與同一 plan projection。這些入口不取代
+`team validate/check`，也不建立 workspace。
+
 ### 9.3 `team create --wizard`
 
 只做顯式可選的 interactive authoring；普通 `team create` 保持 deterministic scripting。

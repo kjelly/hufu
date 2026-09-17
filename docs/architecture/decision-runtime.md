@@ -2,13 +2,13 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `4242666`
+> Verified-Commit: 2026-09-17
 > Supersedes: the former decision-runtime drafts and the root `spec.md` decision draft
 > Superseded-By: —
 
 **Implementation status:** V1 phases 0–3.5 are wired to dispatch. Capability-aware
 REFERENCE/JUDGE/CHALLENGE/REVISE routing, diversity reporting, and pinned
-bindings are also implemented. Outcome learning/calibration remains deferred
+bindings and canonical decision authoring are also implemented. Outcome learning/calibration remains deferred
 until its documented evidence threshold is met. Versioned decision-profile
 materialization, tagged YAML specs, schema-v2 admission/envelope identity, and
 the derived execution-plan projection are implemented and verified.
@@ -346,7 +346,7 @@ CLI / request override      --decision-profile <name>
     >
 Task contract override      TaskDef.DecisionProfile（configuration-only）
     >
-Team default                decision.default-profile
+Team default                decision.profile
     >
 Runtime built-in default    off
 ```
@@ -365,7 +365,7 @@ Runtime built-in default    off
 **相容性**：未宣告 `decision` 區段的舊 `team.yaml`，其 effective profile 為
 `off`（未指定 request/task override 時），行為與升級前完全一致。
 
-### 8.1 版本化 profile 與 materialization（核准契約，待實作）
+### 8.1 版本化 profile 與 materialization（已實作）
 
 本節擴充 profile authoring 與持久化身分，不改 stage 順序、授權集合或
 既有 recovery 判定。增量實作計畫見
@@ -449,16 +449,23 @@ type TaskDef struct {
 type TeamConfig struct {
     // existing fields...
 
-    Decision DecisionConfig `yaml:"decision,omitempty"`
+    Decision        DecisionConfig
+    RequestContract RequestContractConfig
 }
 
 type DecisionConfig struct {
-    DefaultProfile string                    `yaml:"default-profile,omitempty"`
-    Profiles       map[string]DecisionPolicy `yaml:"profiles,omitempty"`
-    // Authoritative profile authoring specs (§8.1).
-    ProfileSpecs   map[string]DecisionProfileSpec `yaml:"-"`
+    DefaultProfile string
+    Profiles       map[string]DecisionPolicy
+    ProfileSpecs   map[string]DecisionProfileSpec
+    RoutingHints   []RoutingHint
 }
 ```
+
+Manifest authoring is normalized by `internal/team.DecisionAuthoringConfig`.
+Canonical YAML uses top-level `request`, `decision.profile`, and
+`decision.routing.hints`; the legacy nested spellings remain decoder-only
+compatibility inputs. Runtime execution has one request-contract authority:
+`TeamConfig.RequestContract`.
 
 沿用 `parse.go` 既有的 `KnownFields(true)`：typed schema 宣稱支援的欄位，
 未知鍵一律解碼失敗，不得靜默忽略。
@@ -467,7 +474,7 @@ type DecisionConfig struct {
 
 ```yaml
 decision:
-  default-profile: off
+  profile: off
 
   profiles:
     light:
