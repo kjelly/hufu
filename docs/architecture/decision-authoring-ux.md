@@ -2,7 +2,8 @@
 
 > Status: Implemented
 > Authority: normative
-> Verified-Commit: 2026-09-17
+> Verified-Commit: f0fc9f7
+> Verified-Date: 2026-09-17
 > Supersedes: —
 > Superseded-By: —
 > Audience: Hufu maintainer / coding agent
