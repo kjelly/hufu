@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -87,6 +88,69 @@ func TestBuiltInDecisionProfilesEqualStrategicBaseline(t *testing.T) {
 		}
 		if want := cfg.Decision.Profiles[local]; !reflect.DeepEqual(got, want) {
 			t.Fatalf("built-in %q differs from strategic profile %q", ref, local)
+		}
+	}
+}
+
+func TestStrategicDecisionRuntimeContractBaseline(t *testing.T) {
+	teamDir := filepath.Join("..", "..", ".agent-teams", "strategic-decision")
+	cfg, err := parseTeamYML(teamDir, nil)
+	if err != nil {
+		t.Fatalf("parse strategic decision team: %v", err)
+	}
+
+	if cfg.Decision.DefaultProfile != "standard" {
+		t.Fatalf("default profile = %q, want standard", cfg.Decision.DefaultProfile)
+	}
+	if contract := cfg.Decision.RequestContract; !contract.Enabled || len(contract.SuccessCriteria) != 2 {
+		t.Fatalf("request contract = %#v, want enabled with two success criteria", contract)
+	}
+	wantHints := []agent.RoutingHint{{
+		WhenGoalContains:      "storage",
+		PreferredCapabilities: []string{"architecture"},
+	}}
+	if !reflect.DeepEqual(cfg.Decision.RoutingHints, wantHints) {
+		t.Fatalf("routing hints = %#v, want %#v", cfg.Decision.RoutingHints, wantHints)
+	}
+	if got := cfg.RoutingPolicy.Scoring.Weights.Cost; got != 0.05 {
+		t.Fatalf("routing cost weight = %v, want 0.05", got)
+	}
+	wantWorkers := []string{"reference", "reference-specialist", "juror", "challenger"}
+	if !slices.Equal(cfg.Delegation.AllowedWorkers, wantWorkers) {
+		t.Fatalf("allowed workers = %v, want %v", cfg.Delegation.AllowedWorkers, wantWorkers)
+	}
+	wantTools := []string{"view", "grep", "glob", "ls"}
+	if !slices.Equal(cfg.ToolsAllowed, wantTools) {
+		t.Fatalf("allowed tools = %v, want %v", cfg.ToolsAllowed, wantTools)
+	}
+
+	wantPlans := map[string]DecisionExecutionPlan{
+		"light": {
+			SchemaVersion: 1, Proposal: true, JudgeCount: 2,
+			Aggregation: agent.AggregationMeanScore, Finalization: agent.FinalizationAggregate,
+		},
+		"standard": {
+			SchemaVersion: 1, Proposal: true, Reference: true, JudgeCount: 3,
+			Aggregation: agent.AggregationMeanScore, Challenge: true, ChallengeCount: 1,
+			Revision: true, Premortem: true, Forecast: true, Finalization: agent.FinalizationAggregate,
+		},
+		"high-stakes": {
+			SchemaVersion: 1, Proposal: true, Reference: true, JudgeCount: 5,
+			Aggregation: agent.AggregationMeanScore, Challenge: true, ChallengeCount: 2,
+			Revision: true, Premortem: true, Forecast: true, Finalization: agent.FinalizationAggregate,
+		},
+	}
+	for name, want := range wantPlans {
+		policy, ok := DecisionPolicyFor(cfg.Decision, name)
+		if !ok {
+			t.Fatalf("profile %q is missing", name)
+		}
+		got, err := CompileDecisionExecutionPlan(policy)
+		if err != nil {
+			t.Fatalf("compile profile %q plan: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("profile %q plan = %#v, want %#v", name, got, want)
 		}
 	}
 }
