@@ -58,7 +58,7 @@ func TestDecisionAdmissionFreezesResolvedProfile(t *testing.T) {
 func TestRetryCreatesNextDecisionAdmission(t *testing.T) {
 	c := &Coordinator{
 		sessionTime: time.Now(), eventJournal: &memoryJournal{}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
-		session: &TeamSession{Config: agent.TeamConfig{Decision: dispatchConfig()}},
+		session: &TeamSession{Config: agent.TeamConfig{Decision: dispatchConfig(), RequestContract: dispatchRequestContract()}},
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "retry", DecisionOptions: decisionTask().DecisionOptions}})[0]
 	if err := c.CommitTaskResetForRetry(context.Background(), item.ID, "retry"); err != nil {

@@ -766,7 +766,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
-	decision, _, authoringMetadata, err := NormalizeDecisionAuthoring(yc.Decision, yc.Request, yc.requestSet, agent.BuiltInDecisionProfileCatalog())
+	decision, requestContract, authoringMetadata, err := NormalizeDecisionAuthoring(yc.Decision, yc.Request, yc.requestSet, agent.BuiltInDecisionProfileCatalog())
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
@@ -1121,6 +1121,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	// authoring normalizer has already validated and materialized this config;
 	// an absent block leaves it at the reserved "off" profile.
 	cfg.Decision = decision
+	cfg.RequestContract = requestContract
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the
 	// optional phase workflow and of decision profiles: a team may declare

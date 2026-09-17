@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -134,6 +135,122 @@ func TestNormalizeDecisionAuthoringRejectsBlankUnknownAndConflicts(t *testing.T)
 				t.Fatalf("error = %v, want routing conflict", err)
 			}
 		})
+	}
+}
+
+func TestNormalizeDecisionAuthoringTopLevelRequestMaterializesContract(t *testing.T) {
+	dir := writeDecisionAuthoringManifest(t, `request:
+  objective: ship the migration
+  success-criteria:
+    - id: tests
+      statement: all tests pass
+  constraints:
+    - id: api
+      statement: preserve the public API
+  assumptions:
+    - id: target
+      statement: target accepts the migration
+      critical: true
+`)
+	cfg, metadata, err := parseTeamYMLWithAuthoring(dir, nil)
+	if err != nil {
+		t.Fatalf("parse request: %v", err)
+	}
+	want := agent.RequestContractConfig{
+		Enabled: true, Objective: "ship the migration",
+		SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "tests", Statement: "all tests pass"}},
+		Constraints:     []agent.RequestConstraint{{ID: "api", Statement: "preserve the public API"}},
+		Assumptions:     []agent.RequestContractAssumption{{ID: "target", Statement: "target accepts the migration", Critical: true}},
+	}
+	if !reflect.DeepEqual(cfg.RequestContract, want) {
+		t.Fatalf("request contract = %#v, want %#v", cfg.RequestContract, want)
+	}
+	if metadata.RequestSource != "request" || metadata.UsedLegacyContract || len(metadata.Deprecations) != 0 {
+		t.Fatalf("request provenance = %#v", metadata)
+	}
+}
+
+func TestNormalizeDecisionAuthoringRequestPresenceAndCompatibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{name: "absent", content: "name: no-request\n", wantErr: ""},
+		{name: "null", content: "request: null\n", wantErr: "non-null mapping"},
+		{name: "empty", content: "request: {}\n", wantErr: "requires an objective"},
+		{name: "conflict", content: "request:\n  objective: new\n  success-criteria:\n    - id: ok\n      statement: done\ndecision:\n  request-contract:\n    enabled: true\n    objective: old\n    success-criteria:\n      - id: ok\n        statement: done\n", wantErr: "request_authoring_conflict"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeDecisionAuthoringManifest(t, tc.content)
+			cfg, metadata, err := parseTeamYMLWithAuthoring(dir, nil)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.RequestContract.Enabled || metadata.RequestSource != "" {
+				t.Fatalf("absent request materialized unexpectedly: cfg=%#v metadata=%#v", cfg.RequestContract, metadata)
+			}
+		})
+	}
+}
+
+func TestNormalizeDecisionAuthoringLegacyRequestMatchesCanonicalIdentity(t *testing.T) {
+	canonicalDir := writeDecisionAuthoringManifest(t, `request:
+  objective: ship safely
+  success-criteria:
+    - id: tests
+      statement: tests pass
+`)
+	legacyDir := writeDecisionAuthoringManifest(t, `decision:
+  request-contract:
+    enabled: true
+    objective: ship safely
+    success-criteria:
+      - id: tests
+        statement: tests pass
+`)
+	canonical, canonicalMeta, err := parseTeamYMLWithAuthoring(canonicalDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, legacyMeta, err := parseTeamYMLWithAuthoring(legacyDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(canonical.RequestContract, legacy.RequestContract) {
+		t.Fatalf("canonical/legacy request contracts differ: %#v != %#v", canonical.RequestContract, legacy.RequestContract)
+	}
+	first, _, err := BuildRequestContract("same request", "same question", canonical.RequestContract, 3, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := BuildRequestContract("same request", "same question", legacy.RequestContract, 3, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || first.MaterialHash != second.MaterialHash {
+		t.Fatalf("canonical/legacy contract identity differs: %#v != %#v", first, second)
+	}
+	if canonicalMeta.RequestSource != "request" || legacyMeta.RequestSource != "decision.request-contract" || !legacyMeta.UsedLegacyContract {
+		t.Fatalf("request provenance = %#v / %#v", canonicalMeta, legacyMeta)
+	}
+}
+
+func TestCoordinatorRequestContractConfigUsesTeamConfigOwnership(t *testing.T) {
+	want := dispatchRequestContract()
+	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{RequestContract: want}}}
+	if got := c.requestContractConfig(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requestContractConfig = %#v, want %#v", got, want)
+	}
+	if got := (&Coordinator{}).requestContractConfig(); got.Enabled {
+		t.Fatal("nil session returned an enabled request contract")
 	}
 }
 

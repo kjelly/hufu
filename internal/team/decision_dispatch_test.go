@@ -22,7 +22,11 @@ func dispatchCoordinator(t *testing.T, cfg DecisionConfig) *Coordinator {
 		reportStatus: func(StatusEvent) {},
 		session: &TeamSession{
 			Workspace: workspace,
-			Config:    agent.TeamConfig{Decision: cfg, WorkspaceDir: workspace},
+			Config: agent.TeamConfig{
+				Decision:        cfg,
+				RequestContract: dispatchRequestContract(),
+				WorkspaceDir:    workspace,
+			},
 		},
 	}
 }
@@ -30,10 +34,6 @@ func dispatchCoordinator(t *testing.T, cfg DecisionConfig) *Coordinator {
 func dispatchConfig() DecisionConfig {
 	return DecisionConfig{
 		DefaultProfile: agent.DecisionProfileOff,
-		RequestContract: agent.RequestContractConfig{
-			Enabled: true, Objective: "complete the requested migration",
-			SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "success", Statement: "the migration is complete"}},
-		},
 		Profiles: map[string]DecisionPolicy{
 			"standard": {
 				IndependentJudgments: 2,
@@ -42,6 +42,13 @@ func dispatchConfig() DecisionConfig {
 				Criteria:             []DecisionCriterion{{ID: "cost", Weight: 1}},
 			},
 		},
+	}
+}
+
+func dispatchRequestContract() agent.RequestContractConfig {
+	return agent.RequestContractConfig{
+		Enabled: true, Objective: "complete the requested migration",
+		SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "success", Statement: "the migration is complete"}},
 	}
 }
 
@@ -175,8 +182,9 @@ func TestResumeInterruptedDecisionTaskRetainsAdmissionBeforeFirstDecisionEvent(t
 		executionRunID: runID,
 		reportStatus:   func(StatusEvent) {},
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
-			WorkspaceDir: workspace,
-			Decision:     dispatchConfig(),
+			WorkspaceDir:    workspace,
+			Decision:        dispatchConfig(),
+			RequestContract: dispatchRequestContract(),
 		}},
 	}
 	first.SetSessionData(NewSession())
@@ -234,8 +242,9 @@ func TestResumeInterruptedDecisionTaskRetainsAdmissionBeforeFirstDecisionEvent(t
 		workerAgentOverride: &countingTextAgent{calls: &workerCalls, text: "unsafe worker dispatch"},
 		reportStatus:        func(StatusEvent) {},
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
-			WorkspaceDir: workspace,
-			Decision:     dispatchConfig(),
+			WorkspaceDir:    workspace,
+			Decision:        dispatchConfig(),
+			RequestContract: dispatchRequestContract(),
 		}},
 	}
 	resumed.SetAgentPool(&mockAgentPool{resolveDef: &agent.AgentDef{Name: "worker"}})

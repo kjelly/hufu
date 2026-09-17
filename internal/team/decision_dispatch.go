@@ -42,6 +42,16 @@ func (c *Coordinator) decisionConfig() DecisionConfig {
 	return c.session.Config.Decision
 }
 
+// requestContractConfig returns the team's single normalized request contract
+// owner. Keeping this lookup separate from decisionConfig prevents admission
+// and execution paths from retaining the legacy nested authority.
+func (c *Coordinator) requestContractConfig() agent.RequestContractConfig {
+	if c == nil || c.session == nil {
+		return agent.RequestContractConfig{}
+	}
+	return cloneRequestContractConfig(c.session.Config.RequestContract)
+}
+
 // prepareTaskDecision forms a decision for a task when its profile calls for
 // one, then arms the execution discipline. It returns a cleanup function the
 // caller must defer so the discipline is disarmed on every exit path.
@@ -103,7 +113,7 @@ func (c *Coordinator) prepareTaskDecision(ctx context.Context, task TaskDef, tod
 	if !c.hasDurableEventJournal() {
 		return noop, fmt.Errorf("decision profile %q requires a durable event journal: event journal is unavailable", resolution.Profile)
 	}
-	if !c.decisionConfig().RequestContract.Enabled {
+	if !c.requestContractConfig().Enabled {
 		return noop, fmt.Errorf("decision request contract is required when profile %q is enabled", resolution.Profile)
 	}
 	if err := ValidateTaskDecisionEvidence(task); err != nil {
@@ -195,7 +205,7 @@ func (c *Coordinator) formTaskDecisionWithAdmission(
 		if requestContractRef != requestContractArtifact.ID || requestContractRevision != envelope.Revision {
 			return nil, fmt.Errorf("decision admission request contract identity is invalid for task %s", todoID)
 		}
-	} else if contractConfig := c.decisionConfig().RequestContract; contractConfig.Enabled {
+	} else if contractConfig := c.requestContractConfig(); contractConfig.Enabled {
 		envelope, contractErr := c.requestContractFor(ctx, contractConfig)
 		if contractErr != nil {
 			return nil, contractErr
@@ -542,7 +552,7 @@ func (c *Coordinator) requestContractFor(ctx context.Context, cfg agent.RequestC
 }
 
 func (c *Coordinator) advanceRequestContractRevision(prompt string) {
-	if c == nil || !c.decisionConfig().RequestContract.Enabled {
+	if c == nil || !c.requestContractConfig().Enabled {
 		return
 	}
 	input := strings.TrimSpace(c.initialPrompt)

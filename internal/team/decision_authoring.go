@@ -204,20 +204,15 @@ func decodeAuthoringProfiles(node *yaml.Node) (map[string]agent.DecisionProfileS
 	return profiles, nil
 }
 
-// NormalizeDecisionAuthoring converts canonical and legacy decision
-// authoring into the existing runtime DecisionConfig. Top-level request
-// materialization is deliberately reserved for Phase 2; seeing it here is a
-// hard error rather than a silent drop.
+// NormalizeDecisionAuthoring converts canonical and legacy authoring into
+// runtime decision and request configuration. Both outputs are deep copies;
+// callers may safely retain them as immutable team configuration.
 func NormalizeDecisionAuthoring(
 	decision DecisionAuthoringConfig,
 	request RequestAuthoringConfig,
 	requestSet bool,
 	catalog agent.DecisionProfileCatalog,
 ) (agent.DecisionConfig, agent.RequestContractConfig, DecisionAuthoringMetadata, error) {
-	if requestSet {
-		return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("top-level request authoring requires Phase 2 request ownership")
-	}
-	_ = request
 	if catalog == nil {
 		return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("decision profile catalog is unavailable")
 	}
@@ -229,10 +224,9 @@ func NormalizeDecisionAuthoring(
 	}
 
 	cfg := agent.DecisionConfig{
-		Profiles:        make(map[string]agent.DecisionPolicy, len(decision.Profiles)),
-		ProfileSpecs:    make(map[string]agent.DecisionProfileSpec, len(decision.Profiles)),
-		RoutingHints:    nil,
-		RequestContract: agent.RequestContractConfig{},
+		Profiles:     make(map[string]agent.DecisionPolicy, len(decision.Profiles)),
+		ProfileSpecs: make(map[string]agent.DecisionProfileSpec, len(decision.Profiles)),
+		RoutingHints: nil,
 	}
 	for _, name := range slices.Sorted(maps.Keys(decision.Profiles)) {
 		spec := decision.Profiles[name]
@@ -276,13 +270,29 @@ func NormalizeDecisionAuthoring(
 		}
 	}
 
-	if decision.legacyContractSet {
+	var requestContract agent.RequestContractConfig
+	if requestSet && decision.legacyContractSet {
+		return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("request_authoring_conflict: request conflicts with deprecated decision.request-contract")
+	}
+	if requestSet {
+		metadata.RequestSource = "request"
+		requestContract = agent.RequestContractConfig{
+			Enabled:         true,
+			Objective:       request.Objective,
+			SuccessCriteria: slices.Clone(request.SuccessCriteria),
+			Constraints:     slices.Clone(request.Constraints),
+			Assumptions:     slices.Clone(request.Assumptions),
+		}
+		if err := requestContract.Validate(); err != nil {
+			return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("request: %w", err)
+		}
+	} else if decision.legacyContractSet {
 		metadata.RequestSource = "decision.request-contract"
 		metadata.UsedLegacyContract = true
 		if decision.RequestContract != nil {
-			cfg.RequestContract = cloneRequestContractConfig(*decision.RequestContract)
+			requestContract = cloneRequestContractConfig(*decision.RequestContract)
 		}
-		if err := cfg.RequestContract.Validate(); err != nil {
+		if err := requestContract.Validate(); err != nil {
 			return agent.DecisionConfig{}, agent.RequestContractConfig{}, DecisionAuthoringMetadata{}, fmt.Errorf("decision.request-contract: %w", err)
 		}
 	}
@@ -323,7 +333,7 @@ func NormalizeDecisionAuthoring(
 			metadata.ResolvedProfileRef = metadataRef.Ref
 		}
 	}
-	return materialized, agent.RequestContractConfig{}, metadata, nil
+	return materialized, requestContract, metadata, nil
 }
 
 func cloneRequestContractConfig(in agent.RequestContractConfig) agent.RequestContractConfig {

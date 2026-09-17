@@ -102,7 +102,7 @@ func TestStrategicDecisionRuntimeContractBaseline(t *testing.T) {
 	if cfg.Decision.DefaultProfile != "standard" {
 		t.Fatalf("default profile = %q, want standard", cfg.Decision.DefaultProfile)
 	}
-	if contract := cfg.Decision.RequestContract; !contract.Enabled || len(contract.SuccessCriteria) != 2 {
+	if contract := cfg.RequestContract; !contract.Enabled || len(contract.SuccessCriteria) != 2 {
 		t.Fatalf("request contract = %#v, want enabled with two success criteria", contract)
 	}
 	wantHints := []agent.RoutingHint{{

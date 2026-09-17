@@ -226,7 +226,7 @@ func TestDecisionV1FixtureLoadsAllProfiles(t *testing.T) {
 			t.Fatalf("profile %q has no judges", profile)
 		}
 	}
-	if !config.RequestContract.Enabled {
+	if !session.Config.RequestContract.Enabled {
 		t.Fatal("fixture request contract is not enabled")
 	}
 

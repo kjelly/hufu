@@ -90,10 +90,9 @@ const maxDecisionRounds = 2
 
 // DecisionConfig is the team-level decision configuration (spec §10).
 type DecisionConfig struct {
-	DefaultProfile  string                         `yaml:"default-profile,omitempty"`
-	Profiles        map[string]DecisionPolicy      `yaml:"profiles,omitempty"`
-	ProfileSpecs    map[string]DecisionProfileSpec `yaml:"-" json:"-"`
-	RequestContract RequestContractConfig          `yaml:"request-contract,omitempty"`
+	DefaultProfile string                         `yaml:"default-profile,omitempty"`
+	Profiles       map[string]DecisionPolicy      `yaml:"profiles,omitempty"`
+	ProfileSpecs   map[string]DecisionProfileSpec `yaml:"-" json:"-"`
 	// RoutingHints widen a role's preferred-capability list for a specific
 	// decision, based on the task's own question text (spec.md v2 §16,
 	// §30-31). Team-wide, not per-profile: every profile that opts a role

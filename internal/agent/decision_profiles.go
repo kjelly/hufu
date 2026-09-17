@@ -140,9 +140,6 @@ func MaterializeDecisionConfig(cfg DecisionConfig, catalog DecisionProfileCatalo
 	if catalog == nil {
 		return DecisionConfig{}, fmt.Errorf("decision profile catalog is unavailable")
 	}
-	if err := cfg.RequestContract.Validate(); err != nil {
-		return DecisionConfig{}, fmt.Errorf("decision.request-contract: %w", err)
-	}
 	for i, hint := range cfg.RoutingHints {
 		if err := hint.Validate(); err != nil {
 			return DecisionConfig{}, fmt.Errorf("decision.routing-hints[%d]: %w", i, err)

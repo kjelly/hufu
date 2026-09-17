@@ -675,7 +675,7 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 		// would remove that tamper detection from every legacy run.
 		return appendDecisionAdmission(ctx, journal, a)
 	}
-	if !c.decisionConfig().RequestContract.Enabled {
+	if !c.requestContractConfig().Enabled {
 		return DecisionAdmission{}, fmt.Errorf("decision request contract is required when profile %q is enabled", a.Profile)
 	}
 	if _, err := CompileDecisionExecutionPlan(materialized.Policy); err != nil {
@@ -684,7 +684,7 @@ func (c *Coordinator) admitTaskOccurrence(ctx context.Context, input any, taskID
 	if err := ValidateTaskDecisionEvidence(task); err != nil {
 		return DecisionAdmission{}, fmt.Errorf("decision task evidence: %w", err)
 	}
-	contract, err := c.requestContractFor(ctx, c.decisionConfig().RequestContract)
+	contract, err := c.requestContractFor(ctx, c.requestContractConfig())
 	if err != nil {
 		return DecisionAdmission{}, err
 	}

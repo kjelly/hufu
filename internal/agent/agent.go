@@ -395,6 +395,10 @@ type TeamConfig struct {
 	// preserves pre-decision behavior exactly
 	// (docs/architecture/decision-runtime.md §8, §10).
 	Decision DecisionConfig
+	// RequestContract is the single normalized team-level request contract
+	// owner. It is authoring-independent so decision profile selection cannot
+	// accidentally carry a second request contract authority.
+	RequestContract RequestContractConfig
 	// CapabilityRegistry holds maintainer-authored capability claims per
 	// configured agent name, keyed by agent name (plan.md Stage 8; spec1.md
 	// §12). These are distinct from — and trusted above — an agent's
