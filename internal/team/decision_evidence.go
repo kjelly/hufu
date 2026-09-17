@@ -31,6 +31,10 @@ type DecisionEvidencePacket struct {
 	BaseRates   []BaseRateEvidence   `json:"base_rates,omitempty"`
 	Assumptions []DecisionAssumption `json:"assumptions,omitempty"`
 	Provenance  []EvidenceProvenance `json:"provenance,omitempty"`
+	// AvailableMetadata carries runtime-owned coverage and source context for
+	// V2 adapters. It is intentionally excluded from the legacy V1 evidence
+	// hash so existing packet digests remain byte-identical.
+	AvailableMetadata map[string]any `json:"available_metadata,omitempty"`
 
 	RequestContractRef string    `json:"request_contract_ref,omitempty"`
 	CreatedAt          time.Time `json:"created_at,omitzero"`
