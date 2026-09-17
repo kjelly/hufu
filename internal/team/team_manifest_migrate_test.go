@@ -182,6 +182,49 @@ decision:
 	}
 }
 
+func TestTeamMigrateCanonicalizesDecisionAuthoring(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `name: canonicalize
+decision:
+  default-profile: standard
+  routing-hints:
+    - when-goal-contains: storage
+      preferred-capabilities: [architecture]
+  request-contract:
+    enabled: true
+    objective: ship safely
+    success-criteria:
+      - id: tests
+        statement: tests pass
+`)
+	out, _, err := MigrateTeamManifestToV1Alpha1CanonicalAuthoring(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, forbidden := range []string{"default-profile:", "routing-hints:", "request-contract:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("canonical output contains %q:\n%s", forbidden, text)
+		}
+	}
+	for _, required := range []string{"profile: standard", "routing:", "hints:", "request:", "objective: ship safely"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("canonical output missing %q:\n%s", required, text)
+		}
+	}
+	roundTrip := t.TempDir()
+	if err := os.WriteFile(filepath.Join(roundTrip, "team.yaml"), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseTeamYML(roundTrip, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Decision.DefaultProfile != "standard" || !cfg.RequestContract.Enabled || cfg.RequestContract.Objective != "ship safely" || len(cfg.Decision.RoutingHints) != 1 {
+		t.Fatalf("canonical round trip lost semantics: decision=%#v request=%#v", cfg.Decision, cfg.RequestContract)
+	}
+}
+
 // TestTeamMigrateExpandsAdvancedNamespaceAlias pins §7's migrator
 // requirement directly: a legacy source using the `advanced:` alias
 // namespace must never produce an `advanced:` block in the migrated

@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	teamMigrateName   string
-	teamMigrateTo     string
-	teamMigrateDryRun bool
+	teamMigrateName               string
+	teamMigrateTo                 string
+	teamMigrateDryRun             bool
+	teamMigrateCanonicalAuthoring bool
 )
 
 var teamMigrateCmd = &cobra.Command{
@@ -34,6 +35,7 @@ func init() {
 	teamMigrateCmd.Flags().StringVar(&teamMigrateName, "team", "", "Discoverable team name to migrate")
 	teamMigrateCmd.Flags().StringVar(&teamMigrateTo, "to", internalteam.SchemaVersionV1Alpha1, "Target schema version")
 	teamMigrateCmd.Flags().BoolVar(&teamMigrateDryRun, "dry-run", false, "Print the migrated manifest without writing it (required in this version)")
+	teamMigrateCmd.Flags().BoolVar(&teamMigrateCanonicalAuthoring, "canonical-authoring", false, "Rewrite supported legacy decision/request fields to canonical authoring")
 }
 
 func runTeamMigrate(_ *cobra.Command, args []string) error {
@@ -48,7 +50,13 @@ func runTeamMigrate(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("team migrate only supports --dry-run in this version; writing the migrated manifest directly is not yet implemented")
 	}
 
-	out, already, err := internalteam.MigrateTeamManifestToV1Alpha1(teamDir)
+	var out []byte
+	var already bool
+	if teamMigrateCanonicalAuthoring {
+		out, already, err = internalteam.MigrateTeamManifestToV1Alpha1CanonicalAuthoring(teamDir)
+	} else {
+		out, already, err = internalteam.MigrateTeamManifestToV1Alpha1(teamDir)
+	}
 	if err != nil {
 		return err
 	}

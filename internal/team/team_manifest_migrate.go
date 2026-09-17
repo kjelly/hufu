@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // MigrateTeamManifestToV1Alpha1 reads teamDir's team.yml/team.yaml — in
@@ -27,6 +29,17 @@ import (
 // mergeAdvancedNamespace on the legacy path before returning), so the
 // migrated output never contains an `advanced:` block.
 func MigrateTeamManifestToV1Alpha1(teamDir string) (out []byte, already bool, err error) {
+	return migrateTeamManifestToV1Alpha1(teamDir, false)
+}
+
+// MigrateTeamManifestToV1Alpha1CanonicalAuthoring performs the same dry-run
+// migration while rewriting supported legacy decision/request spellings to
+// the canonical authoring shape. It never writes the source file.
+func MigrateTeamManifestToV1Alpha1CanonicalAuthoring(teamDir string) ([]byte, bool, error) {
+	return migrateTeamManifestToV1Alpha1(teamDir, true)
+}
+
+func migrateTeamManifestToV1Alpha1(teamDir string, canonicalAuthoring bool) (out []byte, already bool, err error) {
 	data, filename, found, err := findTeamManifestFile(teamDir)
 	if err != nil {
 		return nil, false, err
@@ -39,12 +52,39 @@ func MigrateTeamManifestToV1Alpha1(teamDir string) (out []byte, already bool, er
 	if err != nil {
 		return nil, false, err
 	}
+	if canonicalAuthoring {
+		if err := canonicalizeTeamAuthoring(&yc); err != nil {
+			return nil, false, err
+		}
+	}
 
 	out, err = marshalTeamManifestV1Alpha1(teamDir, yc)
 	if err != nil {
 		return nil, false, err
 	}
 	return out, version == SchemaVersionV1Alpha1, nil
+}
+
+func canonicalizeTeamAuthoring(yc *teamConfigYAML) error {
+	if yc == nil {
+		return fmt.Errorf("cannot canonicalize nil team manifest")
+	}
+	decision := &yc.Decision
+	if !decision.profileSet && decision.defaultProfileSet {
+		decision.Profile = strings.TrimSpace(decision.DefaultProfile)
+	}
+	decision.DefaultProfile = ""
+	if !decision.Routing.hintsSet && decision.routingHintsSet {
+		decision.Routing.Hints = append([]agent.RoutingHint(nil), decision.RoutingHints...)
+	}
+	decision.RoutingHints = nil
+	if !yc.requestSet && decision.legacyContractSet && decision.RequestContract != nil && decision.RequestContract.Enabled {
+		contract := decision.RequestContract
+		yc.Request = RequestAuthoringConfig{Objective: contract.Objective, SuccessCriteria: append([]agent.RequestSuccessCriterion(nil), contract.SuccessCriteria...), Constraints: append([]agent.RequestConstraint(nil), contract.Constraints...), Assumptions: append([]agent.RequestContractAssumption(nil), contract.Assumptions...)}
+		yc.requestSet = true
+	}
+	decision.RequestContract = nil
+	return nil
 }
 
 // marshalTeamManifestV1Alpha1 renders yc as a hufu.io/v1alpha1 manifest.

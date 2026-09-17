@@ -18,21 +18,6 @@ spec:
   max-retries: 2
   max-concurrent: 5
 
-  # REQUIRED, and not mentioned anywhere in spec.md: the whole decision engine
-  # is driven by one non-tool-using "judge sidecar" model
-  # (internal/team/decision_runners.go). Without judge-model, every task that
-  # resolves to a non-off decision profile fails closed with "needs a judge
-  # model and none is configured" (internal/team/decision_dispatch.go:178).
-  # Point this at a model already configured for this environment (see
-  # `hufu models` / your provider config) before running this team.
-  judge-model: CHANGE_ME_TO_A_CONFIGURED_MODEL_ID
-
-  # REQUIRED for the capability-routed REFERENCE stage (see
-  # decision.profiles.*.outside-view.role below): reference.md and
-  # reference-specialist.md don't declare their own model, so both fall back to
-  # this team default. Same placeholder as judge-model — fill both in.
-  model: CHANGE_ME_TO_A_CONFIGURED_MODEL_ID
-
   # Maintainer-declared capability evidence (plan.md Stage 8;
   # internal/agent/agent.go DeclaredCapability). This is the trust tier above a
   # worker's own self-declared capabilities (extracted from its system prompt) —
@@ -135,12 +120,21 @@ spec:
       - challenger
     forbid-context-files: false
 
-  # REQUIRED, and not mentioned in spec.md: prepareTaskDecision refuses to form
-  # any decision unless decision.request-contract.enabled is true
-  # (internal/team/decision_dispatch.go:106-108). Objective/success-criteria are
-  # fixed per team (not something the coordinator can author per request: see
-  # README.md "Gap 2"), so keep this generic across whatever question the
-  # coordinator delegates as the task Goal.
+  request:
+    objective: >
+      Reach the highest-quality decision on the request the coordinator
+      delegates, using sealed independent judgment and evidence rather than
+      the model's own first instinct.
+    success-criteria:
+      - id: sealed-judgment
+        statement: >
+          The chosen option was scored by independently sealed judges against
+          a deterministic aggregate, not by a single pass of reasoning.
+      - id: legitimate-alternative
+        statement: >
+          A no-go / defer / reduce-scope / request-information alternative
+          was considered on equal footing and was not excluded by default.
+
   decision:
     # Goal-driven routing hints (spec.md v2 §16): unlike the routing-policy
     # cost weight above, this one *does* visibly change a ranking — but only
@@ -152,28 +146,12 @@ spec:
     # plain 0.7 — so judge-1 binds to reference-specialist instead of juror
     # specifically for storage questions, and nowhere else. See
     # TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt.
-    routing-hints:
-      - when-goal-contains: storage
-        preferred-capabilities:
-          - architecture
-
-    request-contract:
-      enabled: true
-      objective: >
-        Reach the highest-quality decision on the request the coordinator
-        delegates, using sealed independent judgment and evidence rather than
-        the model's own first instinct.
-      success-criteria:
-        - id: sealed-judgment
-          statement: >
-            The chosen option was scored by independently sealed judges against
-            a deterministic aggregate, not by a single pass of reasoning.
-        - id: legitimate-alternative
-          statement: >
-            A no-go / defer / reduce-scope / request-information alternative
-            was considered on equal footing and was not excluded by default.
-
-    default-profile: standard
+    profile: standard
+    routing:
+      hints:
+        - when-goal-contains: storage
+          preferred-capabilities:
+            - architecture
 
     # These local names consume Decision Runtime's versioned built-ins. The
     # team still owns authorization, routing hints, and request intent above.
