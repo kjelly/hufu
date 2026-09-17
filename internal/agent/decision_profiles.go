@@ -69,9 +69,12 @@ func BuiltInDecisionProfileCatalog() DecisionProfileCatalog {
 // BuiltInDecisionProfileMetadata returns the immutable catalog identities in
 // deterministic reference order for provider-free inspection commands.
 func BuiltInDecisionProfileMetadata() []DecisionProfileMetadata {
-	metadata := make([]DecisionProfileMetadata, 0, len(builtInDecisionProfiles))
+	metadata := make([]DecisionProfileMetadata, 0, len(builtInDecisionProfiles)+len(decisionProfileBundleFiles))
 	for _, entry := range builtInDecisionProfiles {
 		metadata = append(metadata, entry.metadata)
+	}
+	for _, ref := range BuiltInDecisionProfileBundleRefs() {
+		metadata = append(metadata, builtInProfileMetadata(ref, builtInDecisionProfileBundleDescription(ref)))
 	}
 	slices.SortFunc(metadata, func(a, b DecisionProfileMetadata) int { return strings.Compare(a.Ref, b.Ref) })
 	return metadata
@@ -222,14 +225,35 @@ func EqualMaterializedDecisionPolicies(a, b DecisionPolicy) bool {
 func (builtInDecisionProfileCatalog) Resolve(ref DecisionProfileRef) (DecisionPolicy, DecisionProfileMetadata, error) {
 	name := strings.TrimSpace(ref.Name)
 	entry, ok := builtInDecisionProfiles[name]
-	if !ok {
-		return DecisionPolicy{}, DecisionProfileMetadata{}, fmt.Errorf("unknown decision profile preset %q", name)
+	if ok {
+		policy, err := CloneDecisionPolicy(entry.policy)
+		if err != nil {
+			return DecisionPolicy{}, DecisionProfileMetadata{}, fmt.Errorf("clone decision profile preset %q: %w", name, err)
+		}
+		return policy, entry.metadata, nil
 	}
-	policy, err := CloneDecisionPolicy(entry.policy)
+	bundle, err := ResolveBuiltInDecisionProfileBundle(name)
+	if err != nil {
+		return DecisionPolicy{}, DecisionProfileMetadata{}, fmt.Errorf("unknown decision profile preset %q: %w", name, err)
+	}
+	policy, err := CloneDecisionPolicy(bundle.Policy)
 	if err != nil {
 		return DecisionPolicy{}, DecisionProfileMetadata{}, fmt.Errorf("clone decision profile preset %q: %w", name, err)
 	}
-	return policy, entry.metadata, nil
+	return policy, builtInProfileMetadata(name, builtInDecisionProfileBundleDescription(name)), nil
+}
+
+func builtInDecisionProfileBundleDescription(ref string) string {
+	switch ref {
+	case DecisionProfileBuiltinLightV2:
+		return "Bounded primary decision formation"
+	case DecisionProfileBuiltinStandardV2:
+		return "Evidence-first primary decision formation"
+	case DecisionProfileBuiltinHighStakesV2:
+		return "High-rigor primary decision formation"
+	default:
+		return ""
+	}
 }
 
 var builtInDecisionProfiles = map[string]builtInDecisionProfile{

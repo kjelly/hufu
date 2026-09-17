@@ -184,7 +184,7 @@ func TestResolveMaterializedDecisionProfileAcceptsBuiltInsAtEveryLayer(t *testin
 
 func TestResolveMaterializedDecisionProfileRejectsMalformedBuiltinWithoutFallback(t *testing.T) {
 	cfg := decisionConfigFixture()
-	for _, name := range []string{"builtin/standard", "builtin/standard@v2", "builtin/missing@v1"} {
+	for _, name := range []string{"builtin/standard", "builtin/standard@v3", "builtin/missing@v1"} {
 		if _, _, err := ResolveMaterializedDecisionProfile(cfg, name, TaskDef{}, agent.BuiltInDecisionProfileCatalog()); err == nil || !strings.Contains(err.Error(), ReasonDecisionProfileUnknown) {
 			t.Fatalf("profile %q error = %v", name, err)
 		}

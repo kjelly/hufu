@@ -33,7 +33,7 @@ func TestDecisionProfileInspectionUsesStableDTOs(t *testing.T) {
 	if list.SchemaVersion != 1 || list.Kind != "decision_profile_list" {
 		t.Fatalf("list envelope = %#v", list)
 	}
-	if len(list.Profiles) != 7 || list.Profiles[0].Name != "builtin/high-stakes@v1" || list.Profiles[len(list.Profiles)-1].Name != "standard" {
+	if len(list.Profiles) != 10 || list.Profiles[0].Name != "builtin/high-stakes@v1" || list.Profiles[len(list.Profiles)-1].Name != "standard" {
 		t.Fatalf("unexpected built-in list: %#v", list.Profiles)
 	}
 	out = captureStdout(t, func() {

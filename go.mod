@@ -21,6 +21,7 @@ require (
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/muesli/termenv v0.16.0
 	github.com/philippgille/chromem-go v0.7.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	github.com/traefik/yaegi v0.16.1
@@ -68,7 +69,6 @@ require (
 	github.com/openai/openai-go/v3 v3.50.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

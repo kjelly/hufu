@@ -1,0 +1,217 @@
+{
+  "schema_version": 2,
+  "kind": "decision_profile_bundle",
+  "ref": "builtin/high-stakes@v2",
+  "policy": {
+    "independent-judgments": 5,
+    "min-independent-judgments": 5,
+    "context-isolation": "sealed",
+    "score-scale": "0-10",
+    "outside-view": {
+      "required": true,
+      "reference-evidence": true,
+      "role": null
+    },
+    "criteria": [],
+    "judge-role": null,
+    "aggregation": {
+      "method": "mean-score"
+    },
+    "challenge": {
+      "enabled": true,
+      "count": 2,
+      "trigger": null
+    },
+    "challenge-role": null,
+    "revision": {
+      "enabled": true
+    },
+    "premortem": {
+      "enabled": true,
+      "required-before-commit": true
+    },
+    "forecast": {
+      "required": true
+    },
+    "finalization": {
+      "mode": "aggregate",
+      "judge-id": ""
+    },
+    "option-proposal": {
+      "enabled": true,
+      "max-options": 5
+    },
+    "discipline": {
+      "alternatives": {
+        "require-no-action-option": true,
+        "require-information-option": true,
+        "min-options": 3
+      },
+      "stop": {
+        "max-attempts": 3,
+        "max-tool-calls": 0,
+        "max-tokens": 0,
+        "max-duration": "",
+        "checkpoint-every": 1,
+        "require-kill-criteria": true,
+        "kill-criteria": [
+          {
+            "id": "critical-assumption",
+            "kind": "assumption_invalid",
+            "threshold": 0,
+            "description": "A critical assumption is contradicted."
+          }
+        ]
+      },
+      "commit": {
+        "required-for-side-effects": [],
+        "require-rollback": false,
+        "require-reconcile": true,
+        "require-observability": true,
+        "require-verification": true,
+        "require-evidence": true
+      },
+      "replan": {
+        "on-critical-assumption-contradicted": "replan",
+        "on-material-evidence-changed": "replan",
+        "on-repeated-failure": "stop"
+      },
+      "evidence": {
+        "required-independent-groups": 2,
+        "reject-circular-citation": true,
+        "warn-shared-origin": true
+      },
+      "routing": {
+        "capability-aware": false,
+        "allow-pinned-binding": false
+      }
+    },
+    "max-rounds": 2,
+    "max-tokens": 480000,
+    "budget-degradation": "forbidden"
+  },
+  "role-resolution": {
+    "version": "decision-role-resolver@v2",
+    "roles": {
+      "proposal": {
+        "count": 1,
+        "preferred-capabilities": [],
+        "required-capabilities": [],
+        "candidate-order": [
+          "capability-match",
+          "authorized-generalist",
+          "runtime-reviewer"
+        ],
+        "fallback": "if-no-match",
+        "allow-repeated-definition": true,
+        "tool-policy": "none"
+      },
+      "reference": {
+        "count": 1,
+        "preferred-capabilities": [
+          "evidence-research"
+        ],
+        "required-capabilities": [],
+        "candidate-order": [
+          "capability-match",
+          "authorized-generalist",
+          "runtime-reviewer"
+        ],
+        "fallback": "if-no-match",
+        "allow-repeated-definition": true,
+        "tool-policy": "authorized-read-only"
+      },
+      "judge": {
+        "count": 5,
+        "preferred-capabilities": [
+          "decision-analysis"
+        ],
+        "required-capabilities": [],
+        "candidate-order": [
+          "capability-match",
+          "authorized-generalist",
+          "runtime-reviewer"
+        ],
+        "fallback": "if-no-match",
+        "allow-repeated-definition": true,
+        "tool-policy": "none"
+      },
+      "challenge": {
+        "count": 2,
+        "preferred-capabilities": [
+          "adversarial-analysis"
+        ],
+        "required-capabilities": [],
+        "candidate-order": [
+          "capability-match",
+          "authorized-generalist",
+          "runtime-reviewer"
+        ],
+        "fallback": "if-no-match",
+        "allow-repeated-definition": true,
+        "tool-policy": "none"
+      },
+      "premortem": {
+        "count": 1,
+        "preferred-capabilities": [
+          "risk-analysis"
+        ],
+        "required-capabilities": [],
+        "candidate-order": [
+          "capability-match",
+          "authorized-generalist",
+          "runtime-reviewer"
+        ],
+        "fallback": "if-no-match",
+        "allow-repeated-definition": true,
+        "tool-policy": "none"
+      }
+    },
+    "revision": "reuse-original-judge-binding",
+    "finalization": "deterministic-aggregate",
+    "diversity": {
+      "scope": "judge-round-1",
+      "min-distinct-agents": 0,
+      "min-distinct-models": 0,
+      "min-distinct-providers": 0,
+      "prefer-distinct-agents": true,
+      "prefer-distinct-models": true,
+      "prefer-distinct-providers": true
+    },
+    "fallback-on-invocation-error": false,
+    "allow-new-credentials": false,
+    "allow-cross-team": false
+  },
+  "evidence": {
+    "collector": "primary-collector@v1",
+    "max-candidates": 4096,
+    "max-scan-bytes": 33554432,
+    "max-selected-items": 256,
+    "max-item-view-bytes": 8192,
+    "max-total-view-bytes": 65536,
+    "max-evidence-input-tokens": 24576,
+    "framing-reserve-tokens": 4096,
+    "per-call-max-output-tokens": 4096,
+    "unknown-context-window": "block",
+    "text-extraction": "head-tail-lines@v1",
+    "structured-truncation": "forbidden",
+    "mandatory-overflow": "block",
+    "max-json-depth": 16,
+    "max-json-nodes": 8192,
+    "max-line-bytes": 16384,
+    "min-known-independent-groups": 2,
+    "require-artifact-backed-base-rate": true,
+    "include-failed-assertions": true,
+    "unknown-provenance-counts-as-independent": false
+  },
+  "limits": {
+    "total-decision-tokens": 480000,
+    "active-decision-duration-ms": 1200000,
+    "max-generations": 3,
+    "max-stage-invocation-attempts": 2,
+    "unknown-usage-reservation": "retain-full",
+    "transport-retry": "same-binding-only",
+    "unknown-result-replay": "bounded-tool-less-only",
+    "cleanup-timeout-ms": 10000
+  }
+}

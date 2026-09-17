@@ -78,7 +78,7 @@ unknown-field: true
 `,
 		"unknown version": `profiles:
   bad:
-    preset: builtin/light@v2
+    preset: builtin/light@v3
 `,
 		"duplicate field": `profiles:
   bad:
