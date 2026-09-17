@@ -193,16 +193,18 @@ func TestValidateEffectiveTeamReportsDecisionAuthoringDeprecations(t *testing.T)
 		t.Fatal(err)
 	}
 	findings := ValidateEffectiveTeam(spec)
-	want := map[string]bool{"decision.default-profile": false, "decision.request-contract": false, "decision.routing-hints": false}
+	want := map[string]string{"decision.default-profile": "decision.profile", "decision.request-contract": "request", "decision.routing-hints": "decision.routing.hints"}
 	for _, finding := range findings {
 		if finding.Code == "deprecated_decision_authoring" {
-			want[finding.Field] = finding.Severity == FindingSeverityWarning
+			replacement, ok := want[finding.Field]
+			if !ok || finding.Severity != FindingSeverityWarning || !strings.Contains(finding.Message, "use "+replacement) {
+				t.Errorf("unexpected deprecation finding: %#v", finding)
+			}
+			delete(want, finding.Field)
 		}
 	}
-	for field, found := range want {
-		if !found {
-			t.Errorf("missing deprecation warning for %s: %#v", field, findings)
-		}
+	for field := range want {
+		t.Errorf("missing deprecation warning for %s: %#v", field, findings)
 	}
 }
 

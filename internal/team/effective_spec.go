@@ -274,7 +274,12 @@ func ValidateEffectiveTeam(spec *EffectiveTeamSpec) []ContractFinding {
 	findings := append(ValidateTeamTaskContracts(spec.session), ValidateTeamPolicyContracts(spec.session)...)
 	findings = append(findings, LintTeamContracts(spec.session)...)
 	for _, deprecation := range spec.session.DecisionAuthoring.Deprecations {
-		findings = append(findings, ContractFinding{Severity: FindingSeverityWarning, Code: "deprecated_decision_authoring", Field: deprecation, Message: deprecation + " is deprecated", Hint: "use the canonical decision authoring field"})
+		replacement := map[string]string{
+			"decision.default-profile":  "decision.profile",
+			"decision.request-contract": "request",
+			"decision.routing-hints":    "decision.routing.hints",
+		}[deprecation]
+		findings = append(findings, ContractFinding{Severity: FindingSeverityWarning, Code: "deprecated_decision_authoring", Field: deprecation, Message: deprecation + " is deprecated; use " + replacement, Hint: "migrate to canonical decision authoring"})
 	}
 	cfg := spec.session.Config
 	if cfg.Decision.DefaultProfile != "" && cfg.Decision.DefaultProfile != DecisionProfileOff && !cfg.RequestContract.Enabled {
