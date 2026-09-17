@@ -82,6 +82,7 @@ type Registry interface {
 	GetWorkspace(context.Context, string, string) (Workspace, error)
 	ListWorkspaces(context.Context, string) ([]Workspace, error)
 	ListTrashWorkspaces(context.Context) ([]TrashWorkspace, error)
+	GetTrashWorkspace(context.Context, string) (TrashWorkspace, error)
 	ListIncompleteOperations(context.Context) ([]Operation, error)
 	CreateWorkspace(context.Context, string, string) (Workspace, error)
 	GetWorkspaceByID(context.Context, string) (Workspace, error)
@@ -195,13 +196,60 @@ type DoctorRequest struct {
 	Repair   bool
 }
 
+type DeleteRequest struct {
+	StartDir  string
+	Selector  string
+	TeamName  string
+	AllTeams  bool
+	Retention time.Duration
+}
+
+type RestoreRequest struct {
+	TrashID string
+}
+
+type PurgeRequest struct {
+	TrashID string
+}
+
+type LifecycleItem struct {
+	OperationID string `json:"operation_id"`
+	TrashID     string `json:"trash_id,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id"`
+	TeamName    string `json:"team_name"`
+	ControlRoot string `json:"control_root"`
+	TrashPath   string `json:"trash_path,omitempty"`
+}
+
+type LifecycleResult struct {
+	Outcome string          `json:"outcome"`
+	Items   []LifecycleItem `json:"items"`
+}
+
+type DeleteResult = LifecycleResult
+type RestoreResult = LifecycleResult
+type PurgeResult = LifecycleResult
+
+type LifecycleStage string
+
+const (
+	DeleteStageReserved  LifecycleStage = "delete_reserved"
+	DeleteStageRenamed   LifecycleStage = "delete_renamed"
+	RestoreStageReserved LifecycleStage = "restore_reserved"
+	RestoreStageRenamed  LifecycleStage = "restore_renamed"
+	PurgeStageReserved   LifecycleStage = "purge_reserved"
+	PurgeStageRemoved    LifecycleStage = "purge_removed"
+)
+
 type RegistryOption func(*registryOptions)
 
 type registryOptions struct {
-	idGenerator IDGenerator
-	now         func() time.Time
-	createHook  func(CreateStage) error
-	migrateHook func(MigrationStage) error
+	idGenerator   IDGenerator
+	now           func() time.Time
+	createHook    func(CreateStage) error
+	migrateHook   func(MigrationStage) error
+	lifecycleHook func(LifecycleStage) error
 }
 
 func WithIDGenerator(generator IDGenerator) RegistryOption {
@@ -218,4 +266,8 @@ func WithCreateHook(hook func(CreateStage) error) RegistryOption {
 
 func WithMigrationHook(hook func(MigrationStage) error) RegistryOption {
 	return func(options *registryOptions) { options.migrateHook = hook }
+}
+
+func WithLifecycleHook(hook func(LifecycleStage) error) RegistryOption {
+	return func(options *registryOptions) { options.lifecycleHook = hook }
 }

@@ -17,13 +17,14 @@ import (
 const registryFilename = "registry.sqlite"
 
 type SQLiteRegistry struct {
-	db          *sql.DB
-	stateRoot   string
-	idGenerator IDGenerator
-	now         func() time.Time
-	createHook  func(CreateStage) error
-	migrateHook func(MigrationStage) error
-	readOnly    bool
+	db            *sql.DB
+	stateRoot     string
+	idGenerator   IDGenerator
+	now           func() time.Time
+	createHook    func(CreateStage) error
+	migrateHook   func(MigrationStage) error
+	lifecycleHook func(LifecycleStage) error
+	readOnly      bool
 }
 
 func OpenReadWrite(stateRoot string, options ...RegistryOption) (*SQLiteRegistry, error) {
@@ -132,13 +133,14 @@ func openRegistry(path, stateRoot string, readOnly bool, options ...RegistryOpti
 		return nil, errors.Join(fmt.Errorf("configure workspace registry: %w", err), db.Close())
 	}
 	return &SQLiteRegistry{
-		db:          db,
-		stateRoot:   stateRoot,
-		idGenerator: configuration.idGenerator,
-		now:         configuration.now,
-		createHook:  configuration.createHook,
-		migrateHook: configuration.migrateHook,
-		readOnly:    readOnly,
+		db:            db,
+		stateRoot:     stateRoot,
+		idGenerator:   configuration.idGenerator,
+		now:           configuration.now,
+		createHook:    configuration.createHook,
+		migrateHook:   configuration.migrateHook,
+		lifecycleHook: configuration.lifecycleHook,
+		readOnly:      readOnly,
 	}, nil
 }
 

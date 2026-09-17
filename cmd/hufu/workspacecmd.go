@@ -9,13 +9,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/x/term"
+	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 const workspaceOutputSchemaVersion = 1
+const workspaceTrashRetention = 720 * time.Hour
 
 type workspaceCommandDeps struct {
 	stateRoot       func() (string, error)
@@ -67,9 +71,147 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceAliasCommand(deps),
 		newWorkspaceRebindCommand(deps),
 		newWorkspaceMigrateCommand(deps),
+		newWorkspaceDeleteCommand(deps),
+		newWorkspaceRestoreCommand(deps),
+		newWorkspacePurgeCommand(deps),
 		newWorkspaceDoctorCommand(deps),
 	)
 	return command
+}
+
+func newWorkspaceDeleteCommand(deps workspaceCommandDeps) *cobra.Command {
+	var teamName, output string
+	var allTeams, yes bool
+	command := &cobra.Command{
+		Use:   "delete [selector]",
+		Short: "Move managed team workspaces to recoverable trash",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			if allTeams && command.Flags().Changed("team") {
+				return errors.New("--team and --all-teams are mutually exclusive")
+			}
+			if err := confirmWorkspaceMutation("delete", yes); err != nil {
+				return err
+			}
+			start, err := deps.getwd()
+			if err != nil {
+				return fmt.Errorf("read current directory: %w", err)
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, lifecycleErr := manager.Delete(command.Context(), workspacepkg.DeleteRequest{
+				StartDir: start, Selector: firstArgument(args), TeamName: teamName,
+				AllTeams: allTeams, Retention: workspaceTrashRetention,
+			})
+			return finishWorkspaceLifecycle(command, output, "delete", result, lifecycleErr)
+		},
+	}
+	command.Flags().StringVar(&teamName, "team", "default", "Team workspace name")
+	command.Flags().BoolVar(&allTeams, "all-teams", false, "Delete every active team workspace")
+	command.Flags().BoolVar(&yes, "yes", false, "Confirm moving the selected workspace(s) to trash")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = completeWorkspaceProjectSelectors(deps)
+	return command
+}
+
+func newWorkspaceRestoreCommand(deps workspaceCommandDeps) *cobra.Command {
+	var output string
+	var yes bool
+	command := &cobra.Command{
+		Use:   "restore <trash-id>",
+		Short: "Restore one trashed managed workspace",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			if err := confirmWorkspaceMutation("restore", yes); err != nil {
+				return err
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, lifecycleErr := manager.Restore(command.Context(), workspacepkg.RestoreRequest{TrashID: args[0]})
+			return finishWorkspaceLifecycle(command, output, "restore", result, lifecycleErr)
+		},
+	}
+	command.Flags().BoolVar(&yes, "yes", false, "Confirm restoring the selected workspace")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = completeWorkspaceTrashIDs(deps)
+	return command
+}
+
+func newWorkspacePurgeCommand(deps workspaceCommandDeps) *cobra.Command {
+	var output string
+	var yes bool
+	command := &cobra.Command{
+		Use:   "purge <trash-id>",
+		Short: "Permanently remove one trashed managed workspace",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateWorkspaceOutput(output); err != nil {
+				return err
+			}
+			if !yes {
+				return errors.New("workspace purge requires explicit --yes confirmation")
+			}
+			stateRoot, err := deps.stateRoot()
+			if err != nil {
+				return err
+			}
+			manager, err := workspacepkg.NewManager(stateRoot, deps.registryOptions...)
+			if err != nil {
+				return err
+			}
+			result, lifecycleErr := manager.Purge(command.Context(), workspacepkg.PurgeRequest{TrashID: args[0]})
+			return finishWorkspaceLifecycle(command, output, "purge", result, lifecycleErr)
+		},
+	}
+	command.Flags().BoolVar(&yes, "yes", false, "Confirm permanent deletion")
+	addWorkspaceOutputFlag(command, &output)
+	command.ValidArgsFunction = completeWorkspaceTrashIDs(deps)
+	return command
+}
+
+func confirmWorkspaceMutation(action string, yes bool) error {
+	if yes {
+		return nil
+	}
+	if !term.IsTerminal(os.Stdin.Fd()) {
+		return fmt.Errorf("workspace %s requires --yes when stdin is not a TTY", action)
+	}
+	prompt := promptui.Prompt{Label: fmt.Sprintf("Confirm workspace %s", action), IsConfirm: true}
+	if _, err := prompt.Run(); err != nil {
+		return fmt.Errorf("workspace %s cancelled: %w", action, err)
+	}
+	return nil
+}
+
+func finishWorkspaceLifecycle(command *cobra.Command, output, action string, result workspacepkg.LifecycleResult, lifecycleErr error) error {
+	if len(result.Items) == 0 && lifecycleErr != nil {
+		return lifecycleErr
+	}
+	if err := writeWorkspaceLifecycle(command.OutOrStdout(), output, action, result); err != nil {
+		return errors.Join(lifecycleErr, err)
+	}
+	if lifecycleErr != nil || result.Outcome != "complete" {
+		return &workspaceOutcomeError{outcome: result.Outcome, cause: lifecycleErr}
+	}
+	return nil
 }
 
 type workspaceOutcomeError struct {
@@ -514,6 +656,38 @@ func completeWorkspaceProjectSelectors(deps workspaceCommandDeps) func(*cobra.Co
 	}
 }
 
+func completeWorkspaceTrashIDs(deps workspaceCommandDeps) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(command *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
+		if len(args) > 0 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		stateRoot, err := deps.stateRoot()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		registry, err := workspacepkg.OpenReadOnly(stateRoot)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		defer func() { _ = registry.Close() }()
+		trash, err := registry.ListTrashWorkspaces(command.Context())
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		values := make([]string, 0, len(trash))
+		for _, item := range trash {
+			if item.State == "trashed" && strings.HasPrefix(item.TrashID, prefix) {
+				values = append(values, item.TrashID)
+			}
+		}
+		sort.Strings(values)
+		if len(values) > completionResultLimit {
+			values = values[:completionResultLimit]
+		}
+		return values, cobra.ShellCompDirectiveNoFileComp
+	}
+}
+
 func writeWorkspaceProject(writer io.Writer, output string, project workspacepkg.Project) error {
 	if output == "json" {
 		return writeWorkspaceJSON(writer, workspaceProjectData{Project: project})
@@ -636,6 +810,21 @@ func writeWorkspaceDoctor(writer io.Writer, output string, result workspacepkg.D
 			status = "repaired"
 		}
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", issue.Code, status, displayEmpty(issue.ProjectID), displayEmpty(issue.WorkspaceID), displayEmpty(issue.Path)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeWorkspaceLifecycle(writer io.Writer, output, action string, result workspacepkg.LifecycleResult) error {
+	if output == "json" {
+		return writeWorkspaceJSON(writer, result)
+	}
+	if _, err := fmt.Fprintf(writer, "%s outcome=%s\n", action, result.Outcome); err != nil {
+		return err
+	}
+	for _, item := range result.Items {
+		if _, err := fmt.Fprintf(writer, "control_root=%s\noperation_id=%s\nproject_id=%s\nteam_name=%s\ntrash_id=%s\ntrash_path=%s\nworkspace_id=%s\n", item.ControlRoot, item.OperationID, item.ProjectID, item.TeamName, displayEmpty(item.TrashID), displayEmpty(item.TrashPath), item.WorkspaceID); err != nil {
 			return err
 		}
 	}

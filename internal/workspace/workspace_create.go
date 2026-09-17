@@ -306,6 +306,27 @@ func (r *SQLiteRegistry) ListTrashWorkspaces(ctx context.Context) ([]TrashWorksp
 	return trash, nil
 }
 
+func (r *SQLiteRegistry) GetTrashWorkspace(ctx context.Context, trashID string) (TrashWorkspace, error) {
+	return scanTrashWorkspace(r.db.QueryRowContext(ctx, `SELECT trash_id,workspace_id,project_id,team_name,context_scope_id,original_control_root,trash_path,state,COALESCE(operation_id,''),requires_fresh_session,deleted_at,purge_after FROM trash_workspaces WHERE trash_id=?`, trashID))
+}
+
+func scanTrashWorkspace(row rowScanner) (TrashWorkspace, error) {
+	var item TrashWorkspace
+	var requiresFresh int
+	var deletedAt int64
+	var purgeAfter sql.NullInt64
+	if err := row.Scan(&item.TrashID, &item.WorkspaceID, &item.ProjectID, &item.TeamName, &item.ContextScopeID, &item.OriginalControlRoot, &item.TrashPath, &item.State, &item.OperationID, &requiresFresh, &deletedAt, &purgeAfter); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TrashWorkspace{}, ErrNotFound
+		}
+		return TrashWorkspace{}, fmt.Errorf("scan trash workspace: %w", err)
+	}
+	item.RequiresFreshSession = requiresFresh != 0
+	item.DeletedAt = time.UnixMilli(deletedAt).UTC()
+	item.PurgeAfter = nullableTime(purgeAfter)
+	return item, nil
+}
+
 func (r *SQLiteRegistry) SetWorkspaceRequiresFreshSession(ctx context.Context, workspaceID string, required bool) error {
 	if r.readOnly {
 		return errors.New("update workspace fresh-session requirement: registry is read-only")

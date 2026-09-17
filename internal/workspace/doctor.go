@@ -2,12 +2,14 @@ package workspace
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
@@ -73,12 +75,18 @@ func (m *WorkspaceManager) Doctor(ctx context.Context, request DoctorRequest) (D
 	trash, trashErr := registry.ListTrashWorkspaces(ctx)
 	if trashErr == nil {
 		for _, item := range trash {
-			if _, statErr := os.Lstat(item.TrashPath); os.IsNotExist(statErr) {
-				code := IssueTrashMissing
-				if item.State == "purging" {
-					code = IssuePurgingIncomplete
+			switch item.State {
+			case "restoring":
+				if _, workspaceErr := registry.GetWorkspaceByID(ctx, item.WorkspaceID); workspaceErr != nil {
+					result.Issues = append(result.Issues, DoctorIssue{Code: IssueRestoringIncomplete, ProjectID: item.ProjectID, WorkspaceID: item.WorkspaceID, Path: item.TrashPath})
 				}
-				result.Issues = append(result.Issues, DoctorIssue{Code: code, ProjectID: item.ProjectID, WorkspaceID: item.WorkspaceID, Path: item.TrashPath})
+			case "purging":
+				result.Issues = append(result.Issues, DoctorIssue{Code: IssuePurgingIncomplete, ProjectID: item.ProjectID, WorkspaceID: item.WorkspaceID, Path: item.TrashPath})
+			}
+			if _, statErr := os.Lstat(item.TrashPath); os.IsNotExist(statErr) {
+				if item.State == "trashed" {
+					result.Issues = append(result.Issues, DoctorIssue{Code: IssueTrashMissing, ProjectID: item.ProjectID, WorkspaceID: item.WorkspaceID, Path: item.TrashPath})
+				}
 			}
 		}
 	}
@@ -230,22 +238,41 @@ func (m *WorkspaceManager) repairDoctorIssues(ctx context.Context, result *Docto
 			}
 			continue
 		}
-		if issue.Code != IssueCreatingIncomplete || issue.WorkspaceID == "" {
+		if issue.WorkspaceID == "" {
 			continue
 		}
-		workspace, lookupErr := registry.GetWorkspaceByID(ctx, issue.WorkspaceID)
-		if lookupErr != nil {
-			continue
-		}
-		locks, lockErr := AcquireWorkspaceLocks(m.stateRoot, []string{workspace.ID})
+		locks, lockErr := AcquireWorkspaceLocks(m.stateRoot, []string{issue.WorkspaceID})
 		if lockErr != nil {
 			if errors.Is(lockErr, ErrBusy) {
-				result.Issues = append(result.Issues, DoctorIssue{Code: IssueWorkspaceBusy, ProjectID: workspace.ProjectID, WorkspaceID: workspace.ID})
+				result.Issues = append(result.Issues, DoctorIssue{Code: IssueWorkspaceBusy, ProjectID: issue.ProjectID, WorkspaceID: issue.WorkspaceID})
 				continue
 			}
 			return lockErr
 		}
-		repaired, repairErr := registry.repairCreating(ctx, workspace)
+		var repaired bool
+		var repairErr error
+		switch issue.Code {
+		case IssueCreatingIncomplete:
+			workspace, lookupErr := registry.GetWorkspaceByID(ctx, issue.WorkspaceID)
+			if lookupErr == nil {
+				repaired, repairErr = registry.repairCreating(ctx, workspace)
+			}
+		case IssueDeletingIncomplete:
+			workspace, lookupErr := registry.GetWorkspaceByID(ctx, issue.WorkspaceID)
+			if lookupErr == nil {
+				repaired, repairErr = registry.repairDeleting(ctx, workspace)
+			}
+		case IssueRestoringIncomplete:
+			workspace, lookupErr := registry.GetWorkspaceByID(ctx, issue.WorkspaceID)
+			if lookupErr == nil {
+				repaired, repairErr = registry.repairRestoring(ctx, workspace)
+			}
+		case IssuePurgingIncomplete:
+			trash, lookupErr := registry.findTrashByWorkspaceID(ctx, issue.WorkspaceID)
+			if lookupErr == nil {
+				repaired, repairErr = registry.repairPurging(ctx, trash)
+			}
+		}
 		_ = locks.Close()
 		if repairErr != nil {
 			continue
@@ -253,6 +280,194 @@ func (m *WorkspaceManager) repairDoctorIssues(ctx context.Context, result *Docto
 		issue.Repaired = repaired
 	}
 	return nil
+}
+
+func (r *SQLiteRegistry) repairDeleting(ctx context.Context, workspace Workspace) (bool, error) {
+	if workspace.State != "deleting" || workspace.OperationID == "" || workspace.PendingPath == "" {
+		return false, errors.New("workspace is not an incomplete delete")
+	}
+	originalExists := doctorPathExists(workspace.ControlRoot)
+	trashExists := doctorPathExists(workspace.PendingPath)
+	if originalExists == trashExists {
+		return false, errors.New("delete paths are both present or both missing")
+	}
+	repairID, err := r.startLifecycleRepair(ctx, workspace)
+	if err != nil {
+		return false, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = r.finishRepairOperation(context.Background(), repairID, "failed", "validation_failed")
+		}
+	}()
+	if originalExists {
+		if !markerMatchesWorkspace(workspace.ControlRoot, workspace) {
+			return false, errors.New("delete source marker does not match registry")
+		}
+		err = r.rollbackDelete(ctx, workspace)
+	} else {
+		if filepath.Dir(workspace.PendingPath) != filepath.Join(r.stateRoot, "trash") || !markerMatchesWorkspace(workspace.PendingPath, workspace) {
+			return false, errors.New("delete trash marker does not match registry")
+		}
+		item := lifecycleItem(workspace.OperationID, filepath.Base(workspace.PendingPath), workspace, workspace.PendingPath)
+		err = r.completeDelete(ctx, workspace, item, r.now().UTC(), nil)
+	}
+	if err != nil {
+		return false, err
+	}
+	if err = r.finishRepairOperation(ctx, repairID, "completed", ""); err != nil {
+		return false, err
+	}
+	completed = true
+	return true, nil
+}
+
+func (r *SQLiteRegistry) rollbackDelete(ctx context.Context, workspace Workspace) error {
+	now := r.now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, "UPDATE workspaces SET state='active',operation_id=NULL,pending_path=NULL,updated_at=? WHERE id=? AND state='deleting' AND operation_id=?", now.UnixMilli(), workspace.ID, workspace.OperationID)
+	if err != nil {
+		return err
+	}
+	if err = requireAffected(result, "workspace", workspace.ID); err != nil {
+		return err
+	}
+	if err = failLifecycleOperation(ctx, tx, workspace.OperationID, now, "deleting_incomplete"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *SQLiteRegistry) repairRestoring(ctx context.Context, workspace Workspace) (bool, error) {
+	if workspace.State != "restoring" || workspace.OperationID == "" || workspace.PendingPath == "" {
+		return false, errors.New("workspace is not an incomplete restore")
+	}
+	trash, err := r.findTrashByWorkspaceID(ctx, workspace.ID)
+	if err != nil || trash.State != "restoring" || trash.OperationID != workspace.OperationID {
+		return false, errors.New("restore workspace and trash rows do not match")
+	}
+	originalExists := doctorPathExists(workspace.ControlRoot)
+	trashExists := doctorPathExists(trash.TrashPath)
+	if originalExists == trashExists {
+		return false, errors.New("restore paths are both present or both missing")
+	}
+	repairID, err := r.startLifecycleRepair(ctx, workspace)
+	if err != nil {
+		return false, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = r.finishRepairOperation(context.Background(), repairID, "failed", "validation_failed")
+		}
+	}()
+	if trashExists {
+		if !markerMatchesWorkspace(trash.TrashPath, workspace) {
+			return false, errors.New("restore trash marker does not match registry")
+		}
+		err = r.rollbackRestore(ctx, workspace, trash)
+	} else {
+		if !markerMatchesWorkspace(workspace.ControlRoot, workspace) {
+			return false, errors.New("restored workspace marker does not match registry")
+		}
+		item := lifecycleItem(workspace.OperationID, trash.TrashID, workspace, trash.TrashPath)
+		err = r.completeRestore(ctx, trash, item, r.now().UTC())
+	}
+	if err != nil {
+		return false, err
+	}
+	if err = r.finishRepairOperation(ctx, repairID, "completed", ""); err != nil {
+		return false, err
+	}
+	completed = true
+	return true, nil
+}
+
+func (r *SQLiteRegistry) rollbackRestore(ctx context.Context, workspace Workspace, trash TrashWorkspace) error {
+	now := r.now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM workspaces WHERE id=? AND state='restoring' AND operation_id=?", workspace.ID, workspace.OperationID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE trash_workspaces SET state='trashed',operation_id=NULL WHERE trash_id=? AND state='restoring' AND operation_id=?", trash.TrashID, workspace.OperationID)
+	if err != nil {
+		return err
+	}
+	if err = requireAffected(result, "trash workspace", trash.TrashID); err != nil {
+		return err
+	}
+	if err = failLifecycleOperation(ctx, tx, workspace.OperationID, now, "restoring_incomplete"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *SQLiteRegistry) repairPurging(ctx context.Context, trash TrashWorkspace) (bool, error) {
+	if trash.State != "purging" || trash.OperationID == "" {
+		return false, errors.New("trash workspace is not an incomplete purge")
+	}
+	workspace := workspaceFromTrash(trash)
+	repairID, err := r.startLifecycleRepair(ctx, workspace)
+	if err != nil {
+		return false, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = r.finishRepairOperation(context.Background(), repairID, "failed", "validation_failed")
+		}
+	}()
+	if doctorPathExists(trash.TrashPath) {
+		if filepath.Dir(trash.TrashPath) != filepath.Join(r.stateRoot, "trash") || !markerMatchesWorkspace(trash.TrashPath, workspace) {
+			return false, errors.New("purge trash marker does not match registry")
+		}
+		if err = os.RemoveAll(trash.TrashPath); err != nil {
+			return false, err
+		}
+	}
+	item := lifecycleItem(trash.OperationID, trash.TrashID, workspace, trash.TrashPath)
+	if err = r.completePurge(ctx, trash, item, r.now().UTC()); err != nil {
+		return false, err
+	}
+	if err = r.finishRepairOperation(ctx, repairID, "completed", ""); err != nil {
+		return false, err
+	}
+	completed = true
+	return true, nil
+}
+
+func (r *SQLiteRegistry) findTrashByWorkspaceID(ctx context.Context, workspaceID string) (TrashWorkspace, error) {
+	return scanTrashWorkspace(r.db.QueryRowContext(ctx, `SELECT trash_id,workspace_id,project_id,team_name,context_scope_id,original_control_root,trash_path,state,COALESCE(operation_id,''),requires_fresh_session,deleted_at,purge_after FROM trash_workspaces WHERE workspace_id=? ORDER BY trash_id LIMIT 1`, workspaceID))
+}
+
+func (r *SQLiteRegistry) startLifecycleRepair(ctx context.Context, workspace Workspace) (string, error) {
+	repairID, err := r.idGenerator.New(OperationIDKind)
+	if err != nil {
+		return "", err
+	}
+	if err = r.startRepairOperation(ctx, repairID, workspace); err != nil {
+		return "", err
+	}
+	return repairID, nil
+}
+
+func failLifecycleOperation(ctx context.Context, tx interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, operationID string, finishedAt time.Time, detail string) error {
+	result, err := tx.ExecContext(ctx, "UPDATE registry_operations SET state='failed',detail_code=?,finished_at=? WHERE id=? AND state='started'", detail, finishedAt.UnixMilli(), operationID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "operation", operationID)
 }
 
 func (r *SQLiteRegistry) repairCreating(ctx context.Context, workspace Workspace) (bool, error) {

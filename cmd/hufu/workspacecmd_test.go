@@ -169,6 +169,88 @@ func TestWorkspaceCommandValidationAndRootRegistration(t *testing.T) {
 	}
 }
 
+func TestWorkspaceLifecycleCommandsRequireConfirmationAndRoundTrip(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	fixture.run(t, "register")
+	registry, err := workspacepkg.OpenReadWrite(fixture.stateRoot,
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x22, 0x23)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := registry.CreateWorkspace(t.Context(), fixture.projectID, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Close()
+	fixture.deps.registryOptions = []workspacepkg.RegistryOption{
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x31, 0x32, 0x33, 0x34, 0x35, 0x36)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+	}
+
+	stdout, err := executeWorkspaceCommand(t, fixture.deps, "delete")
+	if err == nil || stdout != "" || !pathExistsForCLI(workspace.ControlRoot) {
+		t.Fatalf("unconfirmed delete = output %q, error %v", stdout, err)
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "delete", "--yes")
+	if err != nil || !strings.HasPrefix(stdout, "delete outcome=complete\n") {
+		t.Fatalf("delete output = %q, %v", stdout, err)
+	}
+	trashID := lifecycleOutputValue(stdout, "trash_id")
+	if trashID == "" {
+		t.Fatalf("delete output has no trash ID: %q", stdout)
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "restore", trashID, "--yes", "--output", "json")
+	if err != nil || !strings.Contains(stdout, `"outcome": "complete"`) || !pathExistsForCLI(workspace.ControlRoot) {
+		t.Fatalf("restore output = %q, %v", stdout, err)
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "delete", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trashID = lifecycleOutputValue(stdout, "trash_id")
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "purge", trashID)
+	if err == nil || stdout != "" {
+		t.Fatalf("unconfirmed purge = output %q, error %v", stdout, err)
+	}
+	stdout, err = executeWorkspaceCommand(t, fixture.deps, "purge", trashID, "--yes")
+	if err != nil || !strings.HasPrefix(stdout, "purge outcome=complete\n") {
+		t.Fatalf("purge output = %q, %v", stdout, err)
+	}
+}
+
+func TestWorkspaceLifecyclePostReservationFailureWritesPartialResult(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	fixture.run(t, "register")
+	registry, err := workspacepkg.OpenReadWrite(fixture.stateRoot,
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x22, 0x23)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.CreateWorkspace(t.Context(), fixture.projectID, "default"); err != nil {
+		t.Fatal(err)
+	}
+	registry.Close()
+	stop := errors.New("stop after rename")
+	fixture.deps.registryOptions = []workspacepkg.RegistryOption{
+		workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x31, 0x32)))),
+		workspacepkg.WithClock(func() time.Time { return fixture.now }),
+		workspacepkg.WithLifecycleHook(func(stage workspacepkg.LifecycleStage) error {
+			if stage == workspacepkg.DeleteStageRenamed {
+				return stop
+			}
+			return nil
+		}),
+	}
+	stdout, err := executeWorkspaceCommand(t, fixture.deps, "delete", "--yes", "--output", "json")
+	if !errors.Is(err, stop) || !strings.Contains(stdout, `"outcome": "partial"`) || !strings.Contains(stdout, `"operation_id"`) {
+		t.Fatalf("partial lifecycle output = %q, %v", stdout, err)
+	}
+}
+
 func TestWorkspaceRebindCommandPreservesControlIdentity(t *testing.T) {
 	fixture := newWorkspaceCLIFixture(t)
 	fixture.run(t, "register")
@@ -333,4 +415,19 @@ func directoryNames(t *testing.T, path string) []string {
 		names = append(names, entry.Name())
 	}
 	return names
+}
+
+func lifecycleOutputValue(output, key string) string {
+	prefix := key + "="
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
+}
+
+func pathExistsForCLI(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
