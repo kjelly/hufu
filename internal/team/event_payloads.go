@@ -127,6 +127,12 @@ func ValidateEventPayload(event RunEvent) error {
 		if err := validateExecutionCompatibilityObservedPayload(payload); err != nil {
 			return err
 		}
+	case EventDecisionRunOpened, EventDecisionRunAttached,
+		EventPrimaryDecisionPrepared, EventPrimaryDecisionAdmitted,
+		EventDecisionRoleCallStarted, EventDecisionRoleCallUnconfirmed,
+		EventDecisionRoleCallSettled, EventPrimaryDecisionBlocked,
+		EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated:
+		return validateDecisionCorrectnessEvent(event)
 	}
 	return nil
 }

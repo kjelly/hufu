@@ -318,6 +318,15 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		}
 		identity := newEventIdempotencyIdentity(branchID, event.IdempotencyKey)
 		if durable, exists := es.idempotencyKeys[identity]; exists {
+			if isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(durable.Type) {
+				equivalent, compareErr := decisionIdempotencyEquivalent(durable, event)
+				if compareErr != nil {
+					return RunEvent{}, fmt.Errorf("compare decision idempotency payload: %w", compareErr)
+				}
+				if !equivalent {
+					return RunEvent{}, fmt.Errorf("%w: branch %q key %q", ErrDecisionIdempotencyConflict, identity.branchID, identity.key)
+				}
+			}
 			// The event was already acknowledged as durable. Callers may safely
 			// apply their idempotent projection using its original identity; no
 			// second transition is written.
@@ -519,6 +528,15 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 		state.lastHash = event.Hash
 		if event.IdempotencyKey != "" {
 			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+			if existing, exists := state.idempotencyKeys[identity]; exists && (isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(existing.Type)) {
+				equivalent, compareErr := decisionIdempotencyEquivalent(existing, event)
+				if compareErr != nil {
+					return eventStoreState{}, fmt.Errorf("compare event %d decision idempotency payload: %w", state.sequence, compareErr)
+				}
+				if !equivalent {
+					return eventStoreState{}, fmt.Errorf("%w: branch %q key %q", ErrDecisionIdempotencyConflict, identity.branchID, identity.key)
+				}
+			}
 			state.idempotencyKeys[identity] = cloneRunEvent(event)
 		}
 		state.sequence++

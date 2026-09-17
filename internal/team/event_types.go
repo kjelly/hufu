@@ -45,6 +45,16 @@ const (
 	EventExecutionPolicySnapshot                 EventType = "execution_policy_snapshot"
 	EventRunInputsResolved                       EventType = "run_inputs_resolved"
 	EventDecisionAdmitted                        EventType = "decision_admitted"
+	EventDecisionRunOpened                       EventType = "decision_run_opened"
+	EventDecisionRunAttached                     EventType = "decision_run_attached"
+	EventPrimaryDecisionPrepared                 EventType = "primary_decision_prepared"
+	EventPrimaryDecisionAdmitted                 EventType = "primary_decision_admitted"
+	EventDecisionRoleCallStarted                 EventType = "decision_role_call_started"
+	EventDecisionRoleCallUnconfirmed             EventType = "decision_role_call_unconfirmed"
+	EventDecisionRoleCallSettled                 EventType = "decision_role_call_settled"
+	EventPrimaryDecisionBlocked                  EventType = "primary_decision_blocked"
+	EventPrimaryDecisionBound                    EventType = "primary_decision_bound"
+	EventPrimaryDecisionInvalidated              EventType = "primary_decision_invalidated"
 	// EventProviderSessionBound records an external SubagentProvider's
 	// durable session identity (e.g. a Codex thread_id) established mid-attempt,
 	// after task_created but before the first turn that depends on it
@@ -95,6 +105,9 @@ func IsKnownEventType(eventType string) bool {
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,
 		EventModelProfileResolved, EventExecutionPolicySnapshot, EventRunInputsResolved, EventDecisionAdmitted, EventProviderSessionBound, EventBackendSessionBound, EventExecutionTargetMigrated,
+		EventDecisionRunOpened, EventDecisionRunAttached, EventPrimaryDecisionPrepared, EventPrimaryDecisionAdmitted,
+		EventDecisionRoleCallStarted, EventDecisionRoleCallUnconfirmed, EventDecisionRoleCallSettled,
+		EventPrimaryDecisionBlocked, EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated,
 		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
 		EventResourceLocked:
 		return true

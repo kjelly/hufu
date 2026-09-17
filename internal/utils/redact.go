@@ -85,6 +85,9 @@ var numericTelemetryKeys = map[string]struct{}{
 	// makes the manifest unparseable.
 	"token_count": {},
 	"tokens":      {},
+	// Universal decision-runtime limit frozen into correctness events. This is
+	// a numeric budget, not a credential value.
+	"total_decision_tokens": {},
 }
 
 // Structured telemetry keys contain a bounded metadata object rather than a
