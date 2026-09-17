@@ -171,6 +171,56 @@ func TestValidateEffectiveTeam_MatchesCompileTeamPipeline(t *testing.T) {
 	}
 }
 
+func TestValidateEffectiveTeamReportsDecisionAuthoringDeprecations(t *testing.T) {
+	dir := t.TempDir()
+	writeEffectiveSpecFile(t, dir, "team.yaml", `decision:
+  default-profile: standard
+  profiles:
+    standard:
+      preset: builtin/standard@v1
+  routing-hints:
+    - when-goal-contains: storage
+      preferred-capabilities: [architecture]
+  request-contract:
+    enabled: true
+    objective: decide safely
+    success-criteria:
+      - id: safe
+        statement: risks are represented
+`)
+	spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := ValidateEffectiveTeam(spec)
+	want := map[string]bool{"decision.default-profile": false, "decision.request-contract": false, "decision.routing-hints": false}
+	for _, finding := range findings {
+		if finding.Code == "deprecated_decision_authoring" {
+			want[finding.Field] = finding.Severity == FindingSeverityWarning
+		}
+	}
+	for field, found := range want {
+		if !found {
+			t.Errorf("missing deprecation warning for %s: %#v", field, findings)
+		}
+	}
+}
+
+func TestValidateEffectiveTeamRejectsEnabledDecisionWithoutRequest(t *testing.T) {
+	dir := t.TempDir()
+	writeEffectiveSpecFile(t, dir, "team.yaml", "decision:\n  profile: standard\n")
+	spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range ValidateEffectiveTeam(spec) {
+		if finding.Severity == FindingSeverityError && finding.Field == "request" {
+			return
+		}
+	}
+	t.Fatal("missing request contract validation error")
+}
+
 func TestValidateEffectiveTeam_NilSpecReturnsNoFindings(t *testing.T) {
 	if findings := ValidateEffectiveTeam(nil); findings != nil {
 		t.Fatalf("ValidateEffectiveTeam(nil) = %v, want nil", findings)
