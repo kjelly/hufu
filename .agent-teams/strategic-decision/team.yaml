@@ -4,13 +4,9 @@ metadata:
   name: strategic-decision
 spec:
   description: >
-    Evidence-first decision team with outside view, isolated judgments,
-    deterministic aggregation, premortem, no-go alternatives, and
-    explicit dissent. Adapted from spec.md against Hufu's actual
-    decision-aware runtime schema (internal/agent/decision_config.go,
-    internal/team/parse.go) — see README.md in this directory for every
-    point where spec.md's proposed team.yaml did not match the real,
-    strict (KnownFields) parser and had to be corrected.
+    Evidence-first decision team with outside-view research, isolated
+    judgments, deterministic aggregation, premortem, no-go alternatives,
+    and explicit dissent.
 
   max-rounds: 10
   max-steps: 20
@@ -18,11 +14,9 @@ spec:
   max-retries: 2
   max-concurrent: 5
 
-  # Maintainer-declared capability evidence (plan.md Stage 8;
-  # internal/agent/agent.go DeclaredCapability). This is the trust tier above a
+  # Maintainer-declared capability evidence is the trust tier above a
   # worker's own self-declared capabilities (extracted from its system prompt) —
-  # a human wrote this, the agent did not claim it about itself. See README.md
-  # "Gap 1" for what this now genuinely changes at runtime.
+  # a human wrote this, the agent did not claim it about itself.
   capability-registry:
     reference:
       - capability: evidence-research
@@ -56,8 +50,8 @@ spec:
         confidence: 0.7
         cost-class: medium
 
-  # Cost-aware weighted scoring (spec.md v2 §12): CapabilityRegistry.scoreAgent
-  # already contributes required/preferred capability matches at weight
+  # CapabilityRegistry.scoreAgent already contributes required/preferred
+  # capability matches at weight
   # 1.0/0.5 with no config at all (internal/team/capability_registry.go). This
   # block adds a small cost term on top, using the cost-class declarations
   # above. At 0.05 it never overrides this team's primary rankings — it only
@@ -72,16 +66,6 @@ spec:
       weights:
         cost: 0.05
 
-  # Goal-driven routing hints (spec.md v2 §16): unlike the block above, this
-  # one *does* visibly change a ranking — but only for a decision whose
-  # question actually matches. A judge-role/challenge-role query for a
-  # storage-related question gets "architecture" added to its preferred list;
-  # reference-specialist (architecture: 0.7) already wins REFERENCE outright,
-  # but for JUDGE this pushes reference-specialist's score from 0.6 to
-  # 0.6+0.5*0.7=0.95, past juror's plain 0.7 — so judge-1 binds to
-  # reference-specialist instead of juror specifically for storage questions,
-  # and nowhere else. See
-  # TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt.
   # Decision workers should not mutate workspace/external state.
   tools:
     allowed:
@@ -98,21 +82,9 @@ spec:
     phases: []
 
   delegation:
-    # NOTE (runtime gap, see README.md "Gap 1" — now resolved for every routed
-    # role spec2.md defines): PREMORTEM/FINALIZE still call the team's
-    # judge-model sidecar directly (internal/team/decision_runners.go) — that
-    # is by spec2.md's own design, not a gap (§9/§10: AGGREGATE/FINALIZE are
-    # never capability-routed roles). REFERENCE, JUDGE, and CHALLENGE are all
-    # genuinely capability-routed to whichever of
-    # reference/reference-specialist/juror/challenger below qualifies
-    # (internal/team/decision_reference_capability_runner.go,
-    # internal/team/decision_judge_capability_runner.go,
-    # internal/team/decision_challenge_capability_runner.go); REVISE reuses
-    # whichever judge candidate JUDGE round 1 already bound, by construction
-    # (spec2.md §8), not a fourth independent routed role. This
-    # allowed-workers list is exactly the eligible/authorized set that routing
-    # is only ever allowed to narrow, never expand
-    # (Coordinator.eligibleWorkerIDs).
+    # REFERENCE, JUDGE, and CHALLENGE are capability-routed within this
+    # authorized set. Routing may narrow this list, never expand it; REVISE
+    # reuses the candidate already bound by JUDGE.
     allowed-workers:
       - reference
       - reference-specialist
@@ -136,16 +108,8 @@ spec:
           was considered on equal footing and was not excluded by default.
 
   decision:
-    # Goal-driven routing hints (spec.md v2 §16): unlike the routing-policy
-    # cost weight above, this one *does* visibly change a ranking — but only
-    # for a decision whose question actually matches. A judge-role/
-    # challenge-role query for a storage-related question gets "architecture"
-    # added to its preferred list; reference-specialist (architecture: 0.7)
-    # already wins REFERENCE outright, but for JUDGE this pushes
-    # reference-specialist's score from 0.6 to 0.6+0.5*0.7=0.95, past juror's
-    # plain 0.7 — so judge-1 binds to reference-specialist instead of juror
-    # specifically for storage questions, and nowhere else. See
-    # TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt.
+    # Storage questions prefer architecture capability. This can route JUDGE
+    # or CHALLENGE to reference-specialist while preserving the authorized set.
     profile: standard
     routing:
       hints:

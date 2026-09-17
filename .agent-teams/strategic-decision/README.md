@@ -15,9 +15,9 @@ Provider-free inspection commands:
 ```text
 hufu team validate .agent-teams/strategic-decision
 hufu team explain .agent-teams/strategic-decision
-hufu team profile list .agent-teams/strategic-decision
-hufu team profile show standard .agent-teams/strategic-decision
-hufu team profile plan standard .agent-teams/strategic-decision
+hufu decision profile list --team .agent-teams/strategic-decision
+hufu decision profile show standard --team .agent-teams/strategic-decision
+hufu decision plan --profile standard --team .agent-teams/strategic-decision
 ```
 
 These commands compile without model calls or workspace writes. Legacy
@@ -26,7 +26,7 @@ These commands compile without model calls or workspace writes. Legacy
 should use the canonical fields. To preview a migration:
 
 ```text
-hufu team migrate .agent-teams/strategic-decision --dry-run --canonical-authoring
+hufu team migrate --dry-run --canonical-authoring .agent-teams/strategic-decision
 ```
 
 The migrator is dry-run only and never edits this directory.
