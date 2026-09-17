@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "decision_run_terminal_extension",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "branch_id": "main",
+  "requirement_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+  "disposition": "closed",
+  "generation": 1,
+  "primary_binding_event_id": "evt-primary-bound-1",
+  "primary_record_ref": {
+    "id": "fixture_record",
+    "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "media_type": "application/vnd.hufu.decision-record+json",
+    "size_bytes": 512
+  },
+  "terminal_preparation_proof_ref": {
+    "id": "fixture_terminal_proof",
+    "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "media_type": "application/vnd.hufu.terminal-preparation-proof+json",
+    "size_bytes": 256
+  },
+  "reason_codes": []
+}

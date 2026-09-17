@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "decision_run_preview",
+  "logical_run_id": null,
+  "execution_run_id": null,
+  "branch_id": null,
+  "team": {
+    "id": "fixture-team",
+    "definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "intent": "decision",
+  "terminal_persisted": false,
+  "logical_disposition": "not_created",
+  "outcome": "preview",
+  "exit_code": 0,
+  "goal_satisfied": false,
+  "profile": {
+    "requested": "builtin/light@v2",
+    "resolved_ref": "builtin/light@v2",
+    "origin": "builtin",
+    "version": "v2",
+    "policy_digest": "09239cd18ccb36ec86d70bcf58735cf6516ba0cb371a66b04a9de781b298ad73",
+    "bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753"
+  },
+  "primary": {
+    "state": "missing",
+    "task_id": null,
+    "generation": 0,
+    "decision_id": null,
+    "binding_event_id": null,
+    "record_ref": null,
+    "base_evidence_ref": null,
+    "sealed_evidence_hash": null,
+    "view": null
+  },
+  "acceptance": {
+    "decision_process": "not_evaluated",
+    "team": "not_evaluated",
+    "combined": "not_evaluated"
+  },
+  "coverage": null,
+  "budget": {
+    "used_tokens": 0,
+    "reserved_tokens": 0,
+    "used_duration_ms": 0
+  },
+  "reasons": [],
+  "warnings": [],
+  "redaction": {
+    "applied": true,
+    "policy_version": "fixture-redaction@v1",
+    "record_view_truncated": false
+  },
+  "continuation": null
+}

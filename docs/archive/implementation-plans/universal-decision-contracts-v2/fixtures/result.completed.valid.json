@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "kind": "decision_run_result",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "execution_run_id": "run-fixture-1",
+  "branch_id": "main",
+  "team": {
+    "id": "fixture-team",
+    "definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "intent": "decision",
+  "terminal_persisted": true,
+  "logical_disposition": "closed",
+  "outcome": "completed",
+  "exit_code": 0,
+  "goal_satisfied": true,
+  "profile": {
+    "requested": "builtin/light@v2",
+    "resolved_ref": "builtin/light@v2",
+    "origin": "builtin",
+    "version": "v2",
+    "policy_digest": "09239cd18ccb36ec86d70bcf58735cf6516ba0cb371a66b04a9de781b298ad73",
+    "bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753"
+  },
+  "primary": {
+    "state": "bound",
+    "task_id": "__hufu_pd_022e76e7152401093a8164f3dad9cdeca829a8fcb9053ddae7c51e7818a38006",
+    "generation": 1,
+    "decision_id": "pd_9c8da055a527c9bd3e41c024a87bc7b87e64954447092a41465a3db07bdcf02b",
+    "binding_event_id": "evt-bound-1",
+    "record_ref": {
+      "id": "fixture_44beface892f2faa7b918095413a3638b5a6dd1058d43e5a91c0fc5c06fc1c7b",
+      "sha256": "44beface892f2faa7b918095413a3638b5a6dd1058d43e5a91c0fc5c06fc1c7b",
+      "media_type": "application/json",
+      "size_bytes": 706
+    },
+    "base_evidence_ref": {
+      "id": "fixture_0b18fea5eb921bb7c4d1d6a8fc0da50000a1d45361731d90207d0ee4b46047ca",
+      "sha256": "0b18fea5eb921bb7c4d1d6a8fc0da50000a1d45361731d90207d0ee4b46047ca",
+      "media_type": "application/json",
+      "size_bytes": 4941
+    },
+    "sealed_evidence_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "view": {
+      "record_schema_version": 3,
+      "selected_option_id": "defer",
+      "options": [
+        {
+          "id": "execute",
+          "kind": "execute",
+          "title": "執行變更",
+          "origin": "proposed"
+        },
+        {
+          "id": "defer",
+          "kind": "defer",
+          "title": "暫緩變更",
+          "origin": "runtime"
+        }
+      ],
+      "forecast_ppm": null,
+      "forecast_is_calibrated": false,
+      "rationale": [
+        {
+          "subject_id": "defer",
+          "text": "此內容僅是schema fixture，不是實際決策。",
+          "evidence_item_ids": [
+            "ei_af068ef4410e0798da3d1978398e6646789d384b63976d7672f741bdefc5f367"
+          ]
+        }
+      ],
+      "dissent": [],
+      "critical_assumptions": [],
+      "missing_information": [],
+      "premortem_findings": [],
+      "falsification_conditions": [],
+      "limitations": [
+        "Synthetic fixture; no Hufu execution or domain conclusion is represented."
+      ]
+    }
+  },
+  "acceptance": {
+    "decision_process": "passed",
+    "team": "not_configured",
+    "combined": "passed"
+  },
+  "coverage": {
+    "inventory_ref": {
+      "id": "fixture_b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "sha256": "b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "media_type": "application/json",
+      "size_bytes": 846
+    },
+    "inventory_count": 2,
+    "selected_count": 2,
+    "excluded_count": 0,
+    "excluded_reason_counts": {
+      "duplicate": 0,
+      "out_of_scope": 0,
+      "superseded": 0,
+      "redacted_unusable": 0,
+      "optional_oversize": 0,
+      "budget": 0,
+      "unsupported_media": 0
+    },
+    "mandatory_selected_count": 2,
+    "known_independent_groups": 1,
+    "unresolved_provenance_count": 1
+  },
+  "budget": {
+    "used_tokens": 1000,
+    "reserved_tokens": 0,
+    "used_duration_ms": 100
+  },
+  "reasons": [],
+  "warnings": [],
+  "redaction": {
+    "applied": true,
+    "policy_version": "fixture-redaction@v1",
+    "record_view_truncated": false
+  },
+  "continuation": null
+}

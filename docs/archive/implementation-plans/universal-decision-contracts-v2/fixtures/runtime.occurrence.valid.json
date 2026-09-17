@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "runtime_task_occurrence",
+  "task_id": "__hufu_pd_022e76e7152401093a8164f3dad9cdeca829a8fcb9053ddae7c51e7818a38006",
+  "task_kind": "outcome",
+  "occurrence_revision": 1,
+  "status": "pending",
+  "runtime": {
+    "schema_version": 1,
+    "origin": "runtime",
+    "purpose": "primary_decision",
+    "execution_owner": "decision_engine",
+    "logical_run_id": "ldr_01010101010101010101010101010101",
+    "branch_id": "main",
+    "generation": 1,
+    "decision_id": "pd_9c8da055a527c9bd3e41c024a87bc7b87e64954447092a41465a3db07bdcf02b"
+  }
+}

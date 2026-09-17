@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "kind": "primary_decision_evidence",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "branch_id": "main",
+  "generation": 1,
+  "requirement_digest": "b3720b6546ebb19235ee338ba52a5a39ee03dfedd98e61b6d6374d706833bcad",
+  "support_cursor": {
+    "event_id": "evt-result-1",
+    "event_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lineage_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "support_revision_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "source_index_digest": "e0ee604a1d5fd00550d009c7dcc2a412415bc26a479b6b0ff3ee4abd7c0dbe6d",
+  "collector_version": "primary-collector@v1",
+  "normalizer_version": "hufu-json-c14n@v1",
+  "redaction_policy_ref": {
+    "id": "fixture_da1547548a8987759306465e965140d3125466c891112624985b84b41a1ce916",
+    "sha256": "da1547548a8987759306465e965140d3125466c891112624985b84b41a1ce916",
+    "media_type": "application/json",
+    "size_bytes": 33
+  },
+  "limits_ref": {
+    "id": "fixture_b0cb2a27e0950ec8d0e7fe60e9b06bac859e93605459a4a7d613906f14d95385",
+    "sha256": "b0cb2a27e0950ec8d0e7fe60e9b06bac859e93605459a4a7d613906f14d95385",
+    "media_type": "application/json",
+    "size_bytes": 620
+  },
+  "scope": {
+    "execution_run_ids": [
+      "run-fixture-1"
+    ],
+    "imported_evidence_refs": [],
+    "excludes_primary_lineage": true
+  },
+  "items": [
+    {
+      "item_id": "ei_06619bc6b38f7c5963f6c72285cc40fd9f54ebdae1d2b8849a37338206575a3b",
+      "source": {
+        "source_kind": "fact",
+        "task": null,
+        "source_artifact": {
+          "id": "fixture_55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+          "sha256": "55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+          "media_type": "application/json",
+          "size_bytes": 120
+        },
+        "json_pointer": "/original_request_safe",
+        "source_event_id": "evt-open-1",
+        "producer_agent_id": null,
+        "model_identity": null,
+        "provider_identity": null,
+        "derived_parent_item_ids": [],
+        "provenance_authority": "operator_declared"
+      },
+      "view_ref": {
+        "id": "fixture_fb3a301a9d4ae8daadc552ec833cd93a085c8dfee486e6bc83d3dfc658623cc5",
+        "sha256": "fb3a301a9d4ae8daadc552ec833cd93a085c8dfee486e6bc83d3dfc658623cc5",
+        "media_type": "text/plain",
+        "size_bytes": 21
+      },
+      "content_format": "text",
+      "content": "是否暫緩變更？",
+      "verification": {
+        "state": "not_checked",
+        "scope": "none",
+        "assertion_refs": []
+      },
+      "mandatory_reasons": [
+        "request_input"
+      ],
+      "epistemic_status": "reported",
+      "independence": {
+        "group_id": "ig_unknown",
+        "known_root": false,
+        "counts_toward_minimum": false
+      },
+      "extraction": {
+        "algorithm": "whole_text_v1",
+        "truncated": false,
+        "selected_line_ranges": [
+          {
+            "start": 1,
+            "end": 1
+          }
+        ],
+        "source_bytes": 21,
+        "view_bytes": 21,
+        "removed_line_count": 0
+      }
+    },
+    {
+      "item_id": "ei_af068ef4410e0798da3d1978398e6646789d384b63976d7672f741bdefc5f367",
+      "source": {
+        "source_kind": "assertion",
+        "task": {
+          "task_id": "task-1",
+          "occurrence_revision": 1,
+          "attempt": 1,
+          "producer_execution_run_id": "run-fixture-1",
+          "result_event_id": "evt-result-1"
+        },
+        "source_artifact": {
+          "id": "fixture_6ed044f88f7cb120d07d06c4baeb92a6f4f19fc70e56c7b9fd7c3509ed7db035",
+          "sha256": "6ed044f88f7cb120d07d06c4baeb92a6f4f19fc70e56c7b9fd7c3509ed7db035",
+          "media_type": "application/json",
+          "size_bytes": 80
+        },
+        "json_pointer": "/observation",
+        "source_event_id": "evt-result-1",
+        "producer_agent_id": "worker-1",
+        "model_identity": "fixture/model",
+        "provider_identity": "fixture-provider",
+        "derived_parent_item_ids": [],
+        "provenance_authority": "runtime_observed"
+      },
+      "view_ref": {
+        "id": "fixture_e586e154415f6c5b7314914ef1ecf3663c15d34fe049ffa38065d6abfd5c7742",
+        "sha256": "e586e154415f6c5b7314914ef1ecf3663c15d34fe049ffa38065d6abfd5c7742",
+        "media_type": "text/plain",
+        "size_bytes": 48
+      },
+      "content_format": "text",
+      "content": "The measured check returned the expected result.",
+      "verification": {
+        "state": "passed",
+        "scope": "specific_assertion",
+        "assertion_refs": [
+          {
+            "id": "fixture_6ed044f88f7cb120d07d06c4baeb92a6f4f19fc70e56c7b9fd7c3509ed7db035",
+            "sha256": "6ed044f88f7cb120d07d06c4baeb92a6f4f19fc70e56c7b9fd7c3509ed7db035",
+            "media_type": "application/json",
+            "size_bytes": 80
+          }
+        ]
+      },
+      "mandatory_reasons": [
+        "required_criterion",
+        "independence_minimum"
+      ],
+      "epistemic_status": "observed",
+      "independence": {
+        "group_id": "ig_fixture-1",
+        "known_root": true,
+        "counts_toward_minimum": true
+      },
+      "extraction": {
+        "algorithm": "whole_text_v1",
+        "truncated": false,
+        "selected_line_ranges": [
+          {
+            "start": 1,
+            "end": 1
+          }
+        ],
+        "source_bytes": 48,
+        "view_bytes": 48,
+        "removed_line_count": 0
+      }
+    }
+  ],
+  "coverage": {
+    "inventory_ref": {
+      "id": "fixture_b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "sha256": "b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "media_type": "application/json",
+      "size_bytes": 846
+    },
+    "inventory_count": 2,
+    "selected_count": 3,
+    "excluded_count": 0,
+    "excluded_reason_counts": {
+      "duplicate": 0,
+      "out_of_scope": 0,
+      "superseded": 0,
+      "redacted_unusable": 0,
+      "optional_oversize": 0,
+      "budget": 0,
+      "unsupported_media": 0
+    },
+    "mandatory_selected_count": 2,
+    "known_independent_groups": 1,
+    "unresolved_provenance_count": 1
+  },
+  "budget": {
+    "used_view_bytes": 69,
+    "used_tokens": 100,
+    "reserved_framing_tokens": 4096,
+    "count_method": "utf8_byte_upper_budget",
+    "tokenizer_id": null,
+    "tokenizer_revision": null,
+    "max_context_input_tokens": 8192
+  },
+  "base_rate_item_ids": [],
+  "assumption_item_ids": []
+}

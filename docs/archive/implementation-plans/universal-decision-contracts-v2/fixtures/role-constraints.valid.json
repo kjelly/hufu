@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "decision_role_constraints",
+  "required_capabilities": {
+    "proposal": [],
+    "reference": [],
+    "judge": [],
+    "challenge": [],
+    "premortem": []
+  },
+  "preferred_capabilities": {
+    "proposal": [],
+    "reference": [],
+    "judge": [],
+    "challenge": [],
+    "premortem": []
+  },
+  "diversity": {
+    "min_distinct_agents": 0,
+    "min_distinct_models": 0,
+    "min_distinct_providers": 0
+  },
+  "fallback": "inherit",
+  "candidate_limit": 64
+}

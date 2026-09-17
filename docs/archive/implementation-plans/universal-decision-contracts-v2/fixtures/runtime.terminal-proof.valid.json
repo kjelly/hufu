@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "terminal_preparation_proof",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "execution_run_id": "run-fixture-1",
+  "branch_id": "main",
+  "generation": 1,
+  "support_revision_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "action": "commit_terminal",
+  "primary_binding_event_id": "evt-primary-bound-1",
+  "reason_codes": []
+}

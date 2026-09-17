@@ -1,0 +1,221 @@
+[
+  {
+    "domain": "hufu/test/v1",
+    "input": {
+      "b": true,
+      "a": "繁體中文<&> \n"
+    },
+    "canonical_utf8_hex": "7b2261223a22e7b981e9ab94e4b8ade696873c263ee280a85c6e222c2262223a747275657d",
+    "digest": "3820045ed19dd3d4d9c430881f0e891a275ed24612178a5b4cd6727a3645a783"
+  },
+  {
+    "domain": "hufu/test/v1",
+    "input": {
+      "a": null,
+      "z": [
+        0,
+        1,
+        9007199254740991
+      ]
+    },
+    "canonical_utf8_hex": "7b2261223a6e756c6c2c227a223a5b302c312c393030373139393235343734303939315d7d",
+    "digest": "281b25cc4b401e4e31b93eed69d55c37b38b0a0224f4816bb96c6e720a156d17"
+  },
+  {
+    "domain": "hufu/test/v1",
+    "input": {
+      "s": "\"\\\b\t\n\f\r\u0001"
+    },
+    "canonical_utf8_hex": "7b2273223a225c225c5c5c625c745c6e5c665c725c7530303031227d",
+    "digest": "56c130210722fc056a74dab96eab41c92afd3e254cdf98fd5e7f48339423cbaf"
+  },
+  {
+    "name": "team_id",
+    "domain": "hufu/team-identity/v1",
+    "input": {
+      "name": "fixture-team"
+    },
+    "digest": "fb375d896910b18ee57646004c0190ff67c58a93ac276948b4ad7eb99e9a8d8f"
+  },
+  {
+    "name": "authority_policy_digest",
+    "domain": "hufu/decision-authority-policy/v1",
+    "input": {
+      "security_flags": {
+        "no_net": true,
+        "force_mcp": false,
+        "unattended": true,
+        "rbash": true
+      },
+      "targets": [
+        {
+          "target_id": "fixture-target",
+          "execution_target_ref": {
+            "id": "fixture_5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+            "sha256": "5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+            "media_type": "application/json",
+            "size_bytes": 45
+          },
+          "provider_identity": "fixture-provider",
+          "model_identity": "fixture/model",
+          "credential_reference": null,
+          "authorized": true,
+          "tool_isolation": "none_enforced",
+          "session_isolation": true,
+          "supports_receipt_reconcile": true,
+          "capabilities": ["decision-review"]
+        }
+      ]
+    },
+    "digest": "0c2c646d02f605ff662fb084211dd14e15b1a2234f84a0e29390c02dafc8f40c"
+  },
+  {
+    "name": "requirement_digest",
+    "domain": "hufu/decision-requirement/v1",
+    "input_fixture": "fixtures/runtime.requirement.valid.json",
+    "digest": "9fe86322ca96d911132d6abd6cd23a8a2738ea14fccc2ba17f369eb17c858ea3"
+  },
+  {
+    "name": "primary_task_id",
+    "domain": "hufu/primary-task/v1",
+    "input": {
+      "branch_id": "main",
+      "logical_run_id": "ldr_01010101010101010101010101010101"
+    },
+    "digest": "022e76e7152401093a8164f3dad9cdeca829a8fcb9053ddae7c51e7818a38006"
+  },
+  {
+    "name": "decision_id",
+    "domain": "hufu/primary-decision/v1",
+    "input": {
+      "branch_id": "main",
+      "generation": 1,
+      "logical_run_id": "ldr_01010101010101010101010101010101"
+    },
+    "digest": "9c8da055a527c9bd3e41c024a87bc7b87e64954447092a41465a3db07bdcf02b"
+  },
+  {
+    "name": "lineage_digest",
+    "domain": "hufu/event-lineage/v1",
+    "input": {
+      "branch_id": "main",
+      "event_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "event_id": "evt-support-1"
+    },
+    "digest": "c6e225966e8ce319b9b8393f5f5855d7f12101e533603f5bdabe90196ea26d57"
+  },
+  {
+    "name": "source_index_digest",
+    "domain": "hufu/decision-source-index/v1",
+    "input": {
+      "branch_id": "main",
+      "logical_run_id": "ldr_01010101010101010101010101010101",
+      "sources": [
+        {
+          "id": "source-1",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "media_type": "application/json",
+          "size_bytes": 10
+        }
+      ],
+      "task_occurrences": [
+        {
+          "occurrence_revision": 1,
+          "result_event_id": "evt-result-1",
+          "task_id": "task-1"
+        }
+      ]
+    },
+    "digest": "cd846cc22c3e965e3ed77c68b94f350b61be9ed276f68e0c6e1f3718246aeafe"
+  },
+  {
+    "name": "support_revision_digest",
+    "domain": "hufu/decision-support-revision/v1",
+    "input": {
+      "branch_id": "main",
+      "lineage_digest": "c6e225966e8ce319b9b8393f5f5855d7f12101e533603f5bdabe90196ea26d57",
+      "logical_run_id": "ldr_01010101010101010101010101010101",
+      "source_index_digest": "cd846cc22c3e965e3ed77c68b94f350b61be9ed276f68e0c6e1f3718246aeafe",
+      "support_cursor_event_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "support_cursor_event_id": "evt-support-1"
+    },
+    "digest": "aef864cfd32a2990ea9880a3a570ac7e2564b37f5b5c3e71acdaa2127ecccfd3"
+  },
+  {
+    "name": "preparation_digest",
+    "domain": "hufu/decision-preparation/v1",
+    "input": {
+      "base_evidence_ref": {
+        "id": "fixture_base",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "media_type": "application/json",
+        "size_bytes": 1024
+      },
+      "bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753",
+      "generation": 1,
+      "logical_run_id": "ldr_01010101010101010101010101010101",
+      "requirement_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "role_plan_ref": {
+        "id": "fixture_role",
+        "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "media_type": "application/json",
+        "size_bytes": 512
+      },
+      "support_revision_digest": "aef864cfd32a2990ea9880a3a570ac7e2564b37f5b5c3e71acdaa2127ecccfd3"
+    },
+    "digest": "83c0ee1e111cb809495cdc71e9ee561c1d9c7454eb27f3cdcebfd31d1d07c18f"
+  },
+  {
+    "name": "binding_id",
+    "domain": "hufu/decision-role-binding/v1",
+    "input": {
+      "agent_definition_digest": null,
+      "agent_id": null,
+      "execution_mode": "runtime_reviewer",
+      "execution_target_ref": {
+        "id": "fixture_target",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "media_type": "application/json",
+        "size_bytes": 45
+      },
+      "generation": 1,
+      "logical_run_id": "ldr_01010101010101010101010101010101",
+      "model_identity": "fixture/model",
+      "ordinal": 1,
+      "provider_identity": "fixture-provider",
+      "role": "judge",
+      "role_instruction_ref": {
+        "id": "fixture_instruction",
+        "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "media_type": "application/json",
+        "size_bytes": 34
+      }
+    },
+    "digest": "601032c4a629ee8acd2348661917f91b0aecee76e430adc3f3f4f9baae08894f"
+  },
+  {
+    "name": "evidence_item_id",
+    "domain": "hufu/decision-evidence-item/v1",
+    "input": {
+      "collector_version": "primary-collector@v1",
+      "json_pointer": "/result",
+      "source_artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "source_event_id": "evt-result-1",
+      "task_attempt": 1,
+      "task_id": "task-1",
+      "task_occurrence_revision": 1
+    },
+    "digest": "8b4cbb12157c4303a908d3af55d9c99677727d6a3c09335551108568f0e7ba0c"
+  },
+  {
+    "name": "independence_group_id",
+    "domain": "hufu/decision-independence-group/v1",
+    "input": {
+      "root_identities": [
+        "artifact:1111111111111111111111111111111111111111111111111111111111111111",
+        "measurement:fixture-1"
+      ]
+    },
+    "digest": "36bd92d726edf10effc4a21b1371f7d39b7ea9ceb51ddfec93f2e1e359fdbc41"
+  }
+]

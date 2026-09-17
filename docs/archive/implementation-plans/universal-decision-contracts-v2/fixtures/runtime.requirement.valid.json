@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "decision_requirement",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "branch_id": "main",
+  "team_id": "team_fb375d896910b18ee57646004c0190ff67c58a93ac276948b4ad7eb99e9a8d8f",
+  "team_definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "original_request_safe": "是否暫緩變更？",
+  "request_was_redacted": false,
+  "request_contract_ref": {
+    "id": "fixture_request_contract",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "media_type": "application/vnd.hufu.request-contract+json",
+    "size_bytes": 128
+  },
+  "primary_profile_ref": {
+    "id": "builtin/light@v2",
+    "sha256": "e390083086ce0c588a8d8d541caa0678d8f2bd303513c7da5e6ef748d92f578d",
+    "media_type": "application/json",
+    "size_bytes": 5751
+  },
+  "profile_bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753",
+  "authority_snapshot_ref": {
+    "id": "fixture_authority_v1",
+    "sha256": "1658af1c85fa2dbba7effadee41b78e01a44a71aeaadce3539489eb4810b3876",
+    "media_type": "application/json",
+    "size_bytes": 1232
+  },
+  "allowed_import_refs": [],
+  "effective_limits": {
+    "total_decision_tokens": 480000,
+    "active_decision_duration_ms": 1200000,
+    "max_generations": 3,
+    "max_stage_invocation_attempts": 2,
+    "cleanup_timeout_ms": 10000
+  },
+  "intent": "decision"
+}

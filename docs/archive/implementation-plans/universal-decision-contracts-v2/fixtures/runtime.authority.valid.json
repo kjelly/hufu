@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "decision_authority_snapshot",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "execution_run_id": "run-fixture-1",
+  "branch_id": "main",
+  "team_id": "team_fb375d896910b18ee57646004c0190ff67c58a93ac276948b4ad7eb99e9a8d8f",
+  "team_definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "policy_digest": "0c2c646d02f605ff662fb084211dd14e15b1a2234f84a0e29390c02dafc8f40c",
+  "security_flags": {
+    "no_net": true,
+    "force_mcp": false,
+    "unattended": true,
+    "rbash": true
+  },
+  "targets": [
+    {
+      "target_id": "fixture-target",
+      "execution_target_ref": {
+        "id": "fixture_5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "sha256": "5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "media_type": "application/json",
+        "size_bytes": 45
+      },
+      "provider_identity": "fixture-provider",
+      "model_identity": "fixture/model",
+      "credential_reference": null,
+      "authorized": true,
+      "tool_isolation": "none_enforced",
+      "session_isolation": true,
+      "supports_receipt_reconcile": true,
+      "capabilities": ["decision-review"]
+    }
+  ]
+}

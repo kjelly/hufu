@@ -1,0 +1,38 @@
+{
+  "type": "decision_run_opened",
+  "payload": {
+    "schema_version": 99,
+    "logical_run_id": "ldr_01010101010101010101010101010101",
+    "branch_id": "main",
+    "execution_run_id": "run-fixture-1",
+    "owner_epoch": 1,
+    "team_id": "fixture-team",
+    "team_definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "requirement_ref": {
+      "id": "fixture_55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+      "sha256": "55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+      "media_type": "application/json",
+      "size_bytes": 120
+    },
+    "requirement_digest": "b3720b6546ebb19235ee338ba52a5a39ee03dfedd98e61b6d6374d706833bcad",
+    "profile_bundle_ref": {
+      "id": "fixture_feabf07c29ed6a154a89f9f003dc9eeeb1d12f5b17a294c0e51c35f41eba96c4",
+      "sha256": "feabf07c29ed6a154a89f9f003dc9eeeb1d12f5b17a294c0e51c35f41eba96c4",
+      "media_type": "application/json",
+      "size_bytes": 4103
+    },
+    "authority_snapshot_ref": {
+      "id": "fixture_45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+      "sha256": "45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+      "media_type": "application/json",
+      "size_bytes": 35
+    },
+    "effective_limits": {
+      "total_decision_tokens": 80000,
+      "active_decision_duration_ms": 300000,
+      "max_generations": 2,
+      "max_stage_invocation_attempts": 2,
+      "cleanup_timeout_ms": 10000
+    }
+  }
+}

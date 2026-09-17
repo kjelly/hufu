@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "logical_decision_run",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "branch_id": "main",
+  "team_id": "fixture-team",
+  "team_definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "requirement_ref": {
+    "id": "fixture_55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+    "sha256": "55c2bfe8d2316ca3b5d85a7d5f45082724e9400d363d1c20638185b93b90e43d",
+    "media_type": "application/json",
+    "size_bytes": 120
+  },
+  "requirement_digest": "b3720b6546ebb19235ee338ba52a5a39ee03dfedd98e61b6d6374d706833bcad",
+  "profile_bundle_ref": {
+    "id": "fixture_feabf07c29ed6a154a89f9f003dc9eeeb1d12f5b17a294c0e51c35f41eba96c4",
+    "sha256": "feabf07c29ed6a154a89f9f003dc9eeeb1d12f5b17a294c0e51c35f41eba96c4",
+    "media_type": "application/json",
+    "size_bytes": 4103
+  },
+  "execution_run_ids": [
+    "run-fixture-1"
+  ],
+  "owner_epoch": 1,
+  "phase": "SUPPORTING",
+  "current_generation": 0,
+  "active_primary": null,
+  "last_applied_event_id": "evt-open-1",
+  "last_applied_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "usage": {
+    "tokens_used": 0,
+    "reserved_tokens": 0,
+    "active_duration_ms": 0,
+    "generations_started": 0,
+    "invocation_settlements_ref": null
+  }
+}

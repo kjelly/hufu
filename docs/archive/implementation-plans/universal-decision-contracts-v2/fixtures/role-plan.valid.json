@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "kind": "decision_role_binding_plan",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "generation": 1,
+  "policy_bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753",
+  "resolver_version": "decision-role-resolver@v2",
+  "bindings": [
+    {
+      "binding_id": "bind-proposal-1",
+      "role": "proposal",
+      "ordinal": 1,
+      "execution_mode": "runtime_reviewer",
+      "agent_id": null,
+      "agent_definition_digest": null,
+      "execution_target_ref": {
+        "id": "fixture_5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "sha256": "5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "media_type": "application/json",
+        "size_bytes": 45
+      },
+      "model_identity": "fixture/model",
+      "provider_identity": "fixture-provider",
+      "invocation_policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "authorization_snapshot_ref": {
+        "id": "fixture_45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "sha256": "45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "media_type": "application/json",
+        "size_bytes": 35
+      },
+      "role_instruction_ref": {
+        "id": "fixture_9dc4e4c9cb31207f6370b6c60532e69fa31943cbba71252740c004be0f097812",
+        "sha256": "9dc4e4c9cb31207f6370b6c60532e69fa31943cbba71252740c004be0f097812",
+        "media_type": "application/json",
+        "size_bytes": 34
+      },
+      "context_policy": "sealed_packet",
+      "tool_policy": "none",
+      "allowed_tool_ids": [],
+      "selection_reason": "runtime_fallback",
+      "fallback_from": "no_capability_match",
+      "provenance": "runtime_bound",
+      "revalidate_on_resume": true
+    },
+    {
+      "binding_id": "bind-judge-1",
+      "role": "judge",
+      "ordinal": 1,
+      "execution_mode": "runtime_reviewer",
+      "agent_id": null,
+      "agent_definition_digest": null,
+      "execution_target_ref": {
+        "id": "fixture_5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "sha256": "5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "media_type": "application/json",
+        "size_bytes": 45
+      },
+      "model_identity": "fixture/model",
+      "provider_identity": "fixture-provider",
+      "invocation_policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "authorization_snapshot_ref": {
+        "id": "fixture_45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "sha256": "45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "media_type": "application/json",
+        "size_bytes": 35
+      },
+      "role_instruction_ref": {
+        "id": "fixture_a12603d55e39ee25b3feb5f1a403d9101d36c95dd216a10b974ef9e3b7a329b9",
+        "sha256": "a12603d55e39ee25b3feb5f1a403d9101d36c95dd216a10b974ef9e3b7a329b9",
+        "media_type": "application/json",
+        "size_bytes": 31
+      },
+      "context_policy": "sealed_packet",
+      "tool_policy": "none",
+      "allowed_tool_ids": [],
+      "selection_reason": "runtime_fallback",
+      "fallback_from": "no_capability_match",
+      "provenance": "runtime_bound",
+      "revalidate_on_resume": true
+    },
+    {
+      "binding_id": "bind-judge-2",
+      "role": "judge",
+      "ordinal": 2,
+      "execution_mode": "runtime_reviewer",
+      "agent_id": null,
+      "agent_definition_digest": null,
+      "execution_target_ref": {
+        "id": "fixture_5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "sha256": "5c421b88e180d364067a606be9b5da104168bb067f46ebfddb11f64c554a84a5",
+        "media_type": "application/json",
+        "size_bytes": 45
+      },
+      "model_identity": "fixture/model",
+      "provider_identity": "fixture-provider",
+      "invocation_policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "authorization_snapshot_ref": {
+        "id": "fixture_45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "sha256": "45aff4eb16f2b2e77076bd5988871ebb3fc40cc2d40c3d14136da6fb632a5750",
+        "media_type": "application/json",
+        "size_bytes": 35
+      },
+      "role_instruction_ref": {
+        "id": "fixture_a12603d55e39ee25b3feb5f1a403d9101d36c95dd216a10b974ef9e3b7a329b9",
+        "sha256": "a12603d55e39ee25b3feb5f1a403d9101d36c95dd216a10b974ef9e3b7a329b9",
+        "media_type": "application/json",
+        "size_bytes": 31
+      },
+      "context_policy": "sealed_packet",
+      "tool_policy": "none",
+      "allowed_tool_ids": [],
+      "selection_reason": "runtime_fallback",
+      "fallback_from": "no_capability_match",
+      "provenance": "runtime_bound",
+      "revalidate_on_resume": true
+    }
+  ],
+  "revision_binding_rule": "reuse_original_judge_binding",
+  "finalization": "deterministic_aggregate",
+  "diversity": {
+    "distinct_agents": 0,
+    "distinct_models": 1,
+    "distinct_providers": 1,
+    "unknown_agent_count": 2,
+    "unknown_model_count": 0,
+    "unknown_provider_count": 0,
+    "isolated_judgment_slots": 2,
+    "statistical_independence_proven": false
+  }
+}

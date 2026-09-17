@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hufu universal decision runtime supporting contracts",
+  "oneOf": [
+    { "$ref": "#/$defs/DecisionRequirementV1" },
+    { "$ref": "#/$defs/DecisionAuthoritySnapshotV1" },
+    { "$ref": "#/$defs/RuntimeOccurrenceV1" },
+    { "$ref": "#/$defs/TerminalPreparationProofV1" },
+    { "$ref": "#/$defs/PrimaryManifestProofV1" },
+    { "$ref": "#/$defs/RunFinishedDecisionExtensionV1" }
+  ],
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9_.:@/-]+$"
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ArtifactRef": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Identifier" },
+        "sha256": { "$ref": "#/$defs/Digest" },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "size_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "required": ["id", "sha256", "media_type", "size_bytes"],
+      "additionalProperties": false
+    },
+    "NullableArtifactRef": {
+      "oneOf": [
+        { "$ref": "#/$defs/ArtifactRef" },
+        { "type": "null" }
+      ]
+    },
+    "EffectiveLimits": {
+      "type": "object",
+      "properties": {
+        "total_decision_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "active_decision_duration_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "max_generations": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "max_stage_invocation_attempts": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "cleanup_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "required": [
+        "total_decision_tokens",
+        "active_decision_duration_ms",
+        "max_generations",
+        "max_stage_invocation_attempts",
+        "cleanup_timeout_ms"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionAuthoritySnapshotV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "decision_authority_snapshot" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "execution_run_id": { "$ref": "#/$defs/Identifier" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "team_id": { "$ref": "#/$defs/Identifier" },
+        "team_definition_digest": { "$ref": "#/$defs/Digest" },
+        "policy_digest": { "$ref": "#/$defs/Digest" },
+        "security_flags": {
+          "type": "object",
+          "properties": {
+            "no_net": { "type": "boolean" },
+            "force_mcp": { "type": "boolean" },
+            "unattended": { "type": "boolean" },
+            "rbash": { "type": "boolean" }
+          },
+          "required": ["no_net", "force_mcp", "unattended", "rbash"],
+          "additionalProperties": false
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "target_id": { "$ref": "#/$defs/Identifier" },
+              "execution_target_ref": { "$ref": "#/$defs/ArtifactRef" },
+              "provider_identity": { "$ref": "#/$defs/Identifier" },
+              "model_identity": { "$ref": "#/$defs/Identifier" },
+              "credential_reference": {
+                "oneOf": [
+                  { "$ref": "#/$defs/Identifier" },
+                  { "type": "null" }
+                ]
+              },
+              "authorized": { "const": true },
+              "tool_isolation": { "enum": ["none_enforced", "read_only_enforced", "unrestricted", "unknown"] },
+              "session_isolation": { "type": "boolean" },
+              "supports_receipt_reconcile": { "type": "boolean" },
+              "capabilities": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Identifier" },
+                "maxItems": 128,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "target_id",
+              "execution_target_ref",
+              "provider_identity",
+              "model_identity",
+              "credential_reference",
+              "authorized",
+              "tool_isolation",
+              "session_isolation",
+              "supports_receipt_reconcile",
+              "capabilities"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "logical_run_id",
+        "execution_run_id",
+        "branch_id",
+        "team_id",
+        "team_definition_digest",
+        "policy_digest",
+        "security_flags",
+        "targets"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionRequirementV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "decision_requirement" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "team_id": { "$ref": "#/$defs/Identifier" },
+        "team_definition_digest": { "$ref": "#/$defs/Digest" },
+        "original_request_safe": { "type": "string", "minLength": 1, "maxLength": 1048576 },
+        "request_was_redacted": { "type": "boolean" },
+        "request_contract_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "primary_profile_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "profile_bundle_digest": { "$ref": "#/$defs/Digest" },
+        "authority_snapshot_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "allowed_import_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ArtifactRef" },
+          "maxItems": 256
+        },
+        "effective_limits": { "$ref": "#/$defs/EffectiveLimits" },
+        "intent": { "const": "decision" }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "logical_run_id",
+        "branch_id",
+        "team_id",
+        "team_definition_digest",
+        "original_request_safe",
+        "request_was_redacted",
+        "request_contract_ref",
+        "primary_profile_ref",
+        "profile_bundle_digest",
+        "authority_snapshot_ref",
+        "allowed_import_refs",
+        "effective_limits",
+        "intent"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeOccurrenceMetaV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "origin": { "const": "runtime" },
+        "purpose": { "const": "primary_decision" },
+        "execution_owner": { "const": "decision_engine" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "generation": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "decision_id": { "type": "string", "pattern": "^pd_[0-9a-f]{64}$" }
+      },
+      "required": [
+        "schema_version",
+        "origin",
+        "purpose",
+        "execution_owner",
+        "logical_run_id",
+        "branch_id",
+        "generation",
+        "decision_id"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeOccurrenceV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "runtime_task_occurrence" },
+        "task_id": { "type": "string", "pattern": "^__hufu_pd_[0-9a-f]{64}$" },
+        "task_kind": { "const": "outcome" },
+        "occurrence_revision": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "status": {
+          "enum": [
+            "pending",
+            "planned",
+            "in_progress",
+            "verifying",
+            "paused",
+            "done",
+            "error",
+            "blocked",
+            "skipped",
+            "protocol_incomplete"
+          ]
+        },
+        "runtime": { "$ref": "#/$defs/RuntimeOccurrenceMetaV1" }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "task_id",
+        "task_kind",
+        "occurrence_revision",
+        "status",
+        "runtime"
+      ],
+      "additionalProperties": false
+    },
+    "TerminalPreparationProofV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "terminal_preparation_proof" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "execution_run_id": { "$ref": "#/$defs/Identifier" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "generation": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "support_revision_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/Digest" },
+            { "type": "null" }
+          ]
+        },
+        "action": { "enum": ["continue_work", "commit_terminal", "recover_only"] },
+        "primary_binding_event_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/Identifier" },
+            { "type": "null" }
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Identifier" },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "logical_run_id",
+        "execution_run_id",
+        "branch_id",
+        "generation",
+        "support_revision_digest",
+        "action",
+        "primary_binding_event_id",
+        "reason_codes"
+      ],
+      "additionalProperties": false
+    },
+    "PrimaryManifestProofV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "primary_decision_valid" },
+        "state": { "const": "satisfied" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "requirement_digest": { "$ref": "#/$defs/Digest" },
+        "primary_task_id": { "type": "string", "pattern": "^__hufu_pd_[0-9a-f]{64}$" },
+        "generation": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "decision_id": { "type": "string", "pattern": "^pd_[0-9a-f]{64}$" },
+        "admission_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "record_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "base_evidence_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "sealed_evidence_hash": { "$ref": "#/$defs/Digest" },
+        "role_plan_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "binding_event_id": { "$ref": "#/$defs/Identifier" },
+        "support_revision_digest": { "$ref": "#/$defs/Digest" },
+        "validation_version": { "const": "primary-decision-process@v1" }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "state",
+        "logical_run_id",
+        "branch_id",
+        "requirement_digest",
+        "primary_task_id",
+        "generation",
+        "decision_id",
+        "admission_ref",
+        "record_ref",
+        "base_evidence_ref",
+        "sealed_evidence_hash",
+        "role_plan_ref",
+        "binding_event_id",
+        "support_revision_digest",
+        "validation_version"
+      ],
+      "additionalProperties": false
+    },
+    "RunFinishedDecisionExtensionV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "decision_run_terminal_extension" },
+        "logical_run_id": { "type": "string", "pattern": "^ldr_[0-9a-f]{32}$" },
+        "branch_id": { "$ref": "#/$defs/Identifier" },
+        "requirement_digest": { "$ref": "#/$defs/Digest" },
+        "disposition": { "enum": ["closed", "suspended"] },
+        "generation": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "primary_binding_event_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/Identifier" },
+            { "type": "null" }
+          ]
+        },
+        "primary_record_ref": { "$ref": "#/$defs/NullableArtifactRef" },
+        "terminal_preparation_proof_ref": { "$ref": "#/$defs/ArtifactRef" },
+        "reason_codes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Identifier" },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "logical_run_id",
+        "branch_id",
+        "requirement_digest",
+        "disposition",
+        "generation",
+        "primary_binding_event_id",
+        "primary_record_ref",
+        "terminal_preparation_proof_ref",
+        "reason_codes"
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "disposition": { "const": "closed" } }, "required": ["disposition"] },
+          "then": {
+            "properties": {
+              "generation": { "minimum": 1 },
+              "primary_binding_event_id": { "$ref": "#/$defs/Identifier" },
+              "primary_record_ref": { "$ref": "#/$defs/ArtifactRef" }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

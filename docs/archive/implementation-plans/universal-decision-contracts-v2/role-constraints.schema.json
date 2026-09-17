@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "decision_role_constraints"
+    },
+    "required_capabilities": {
+      "type": "object",
+      "properties": {
+        "proposal": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "reference": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "judge": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "challenge": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "premortem": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "proposal",
+        "reference",
+        "judge",
+        "challenge",
+        "premortem"
+      ],
+      "additionalProperties": false
+    },
+    "preferred_capabilities": {
+      "type": "object",
+      "properties": {
+        "proposal": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "reference": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "judge": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "challenge": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        },
+        "premortem": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9_.:@/-]+$"
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "proposal",
+        "reference",
+        "judge",
+        "challenge",
+        "premortem"
+      ],
+      "additionalProperties": false
+    },
+    "diversity": {
+      "type": "object",
+      "properties": {
+        "min_distinct_agents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "min_distinct_models": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "min_distinct_providers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "min_distinct_agents",
+        "min_distinct_models",
+        "min_distinct_providers"
+      ],
+      "additionalProperties": false
+    },
+    "fallback": {
+      "enum": [
+        "inherit",
+        "forbid"
+      ]
+    },
+    "candidate_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "required_capabilities",
+    "preferred_capabilities",
+    "diversity",
+    "fallback",
+    "candidate_limit"
+  ],
+  "additionalProperties": false
+}

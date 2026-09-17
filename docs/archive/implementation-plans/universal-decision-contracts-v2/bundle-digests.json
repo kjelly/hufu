@@ -1,0 +1,5 @@
+{
+  "builtin/light@v2": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753",
+  "builtin/standard@v2": "281bb57c062e7329505239d46bf586ab3d935ea3077a094820e0cf9c55c4ce37",
+  "builtin/high-stakes@v2": "cb2e3124822a8b8800e0d7753d283ed112c1e4ae6a1def3fe4d0c87adab2a9b1"
+}

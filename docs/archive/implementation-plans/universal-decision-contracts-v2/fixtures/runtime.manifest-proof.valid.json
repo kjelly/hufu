@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "kind": "primary_decision_valid",
+  "state": "satisfied",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "branch_id": "main",
+  "requirement_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+  "primary_task_id": "__hufu_pd_022e76e7152401093a8164f3dad9cdeca829a8fcb9053ddae7c51e7818a38006",
+  "generation": 1,
+  "decision_id": "pd_9c8da055a527c9bd3e41c024a87bc7b87e64954447092a41465a3db07bdcf02b",
+  "admission_ref": {
+    "id": "fixture_admission",
+    "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "media_type": "application/vnd.hufu.decision-admission+json",
+    "size_bytes": 256
+  },
+  "record_ref": {
+    "id": "fixture_record",
+    "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "media_type": "application/vnd.hufu.decision-record+json",
+    "size_bytes": 512
+  },
+  "base_evidence_ref": {
+    "id": "fixture_evidence",
+    "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "media_type": "application/vnd.hufu.primary-decision-evidence+json",
+    "size_bytes": 1024
+  },
+  "sealed_evidence_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+  "role_plan_ref": {
+    "id": "fixture_role_plan",
+    "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+    "media_type": "application/vnd.hufu.decision-role-plan+json",
+    "size_bytes": 512
+  },
+  "binding_event_id": "evt-primary-bound-1",
+  "support_revision_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "validation_version": "primary-decision-process@v1"
+}

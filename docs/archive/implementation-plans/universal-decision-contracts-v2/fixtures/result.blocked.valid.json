@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "kind": "decision_run_result",
+  "logical_run_id": "ldr_01010101010101010101010101010101",
+  "execution_run_id": "run-fixture-1",
+  "branch_id": "main",
+  "team": {
+    "id": "fixture-team",
+    "definition_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "intent": "decision",
+  "terminal_persisted": true,
+  "logical_disposition": "suspended",
+  "outcome": "blocked",
+  "exit_code": 7,
+  "goal_satisfied": false,
+  "profile": {
+    "requested": "builtin/light@v2",
+    "resolved_ref": "builtin/light@v2",
+    "origin": "builtin",
+    "version": "v2",
+    "policy_digest": "09239cd18ccb36ec86d70bcf58735cf6516ba0cb371a66b04a9de781b298ad73",
+    "bundle_digest": "856a78bcd82dc4c8e648eb8309ac773a9a7bb36527ba6c592da5acb4cc181753"
+  },
+  "primary": {
+    "state": "blocked",
+    "task_id": null,
+    "generation": 0,
+    "decision_id": null,
+    "binding_event_id": null,
+    "record_ref": null,
+    "base_evidence_ref": null,
+    "sealed_evidence_hash": null,
+    "view": null
+  },
+  "acceptance": {
+    "decision_process": "failed",
+    "team": "not_evaluated",
+    "combined": "failed"
+  },
+  "coverage": {
+    "inventory_ref": {
+      "id": "fixture_b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "sha256": "b54be24e4457929d74d75e6eafcde08635a9a32873b623e8e21efa172868471b",
+      "media_type": "application/json",
+      "size_bytes": 846
+    },
+    "inventory_count": 2,
+    "selected_count": 2,
+    "excluded_count": 0,
+    "excluded_reason_counts": {
+      "duplicate": 0,
+      "out_of_scope": 0,
+      "superseded": 0,
+      "redacted_unusable": 0,
+      "optional_oversize": 0,
+      "budget": 0,
+      "unsupported_media": 0
+    },
+    "mandatory_selected_count": 2,
+    "known_independent_groups": 1,
+    "unresolved_provenance_count": 1
+  },
+  "budget": {
+    "used_tokens": 1000,
+    "reserved_tokens": 0,
+    "used_duration_ms": 100
+  },
+  "reasons": [
+    {
+      "code": "decision_evidence_insufficient",
+      "message": "Synthetic missing evidence fixture.",
+      "retryable": true,
+      "field_path": null
+    }
+  ],
+  "warnings": [],
+  "redaction": {
+    "applied": true,
+    "policy_version": "fixture-redaction@v1",
+    "record_view_truncated": false
+  },
+  "continuation": {
+    "resume_logical_run_id": "ldr_01010101010101010101010101010101",
+    "requires_operator": true
+  }
+}
