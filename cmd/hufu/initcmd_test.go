@@ -116,6 +116,9 @@ func TestRunInitWritesMinimalTeamYAMLWithModelOverride(t *testing.T) {
 	if want := "model: local-model\n"; string(got) != want {
 		t.Fatalf("team.yaml = %q, want %q", got, want)
 	}
+	if strings.Contains(string(got), "decision:") || strings.Contains(string(got), "request:") {
+		t.Fatalf("init unexpectedly enabled decision authoring: %q", got)
+	}
 
 	if _, err := internalteam.LoadTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry); err != nil {
 		t.Fatalf("generated team with minimal team.yaml failed to load: %v", err)

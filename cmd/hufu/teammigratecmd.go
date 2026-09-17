@@ -52,13 +52,19 @@ func runTeamMigrate(_ *cobra.Command, args []string) error {
 
 	var out []byte
 	var already bool
+	var warnings []string
 	if teamMigrateCanonicalAuthoring {
-		out, already, err = internalteam.MigrateTeamManifestToV1Alpha1CanonicalAuthoring(teamDir)
+		out, already, warnings, err = internalteam.MigrateTeamManifestToV1Alpha1CanonicalAuthoringDetailed(teamDir)
 	} else {
 		out, already, err = internalteam.MigrateTeamManifestToV1Alpha1(teamDir)
 	}
 	if err != nil {
 		return err
+	}
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(os.Stderr, "warning: %s\n", warning); err != nil {
+			return err
+		}
 	}
 	if already {
 		if _, err := fmt.Fprintf(os.Stderr, "team at %s already declares apiVersion %s; showing its canonical re-serialization\n", teamDir, internalteam.SchemaVersionV1Alpha1); err != nil {

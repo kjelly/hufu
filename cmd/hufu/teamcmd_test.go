@@ -42,6 +42,14 @@ func TestValidateGeneratedTeam(t *testing.T) {
 	}
 }
 
+func TestBuildGeneratedTeamDoesNotEnableDecisionAuthoring(t *testing.T) {
+	generated := buildGeneratedTeam("feature-work", "Add a new CLI command", "ollama/qwen3:8b")
+	manifest := generated.Files["team.yaml"]
+	if strings.Contains(manifest, "decision:") || strings.Contains(manifest, "request:") {
+		t.Fatalf("generated team unexpectedly enabled decision authoring:\n%s", manifest)
+	}
+}
+
 func TestWriteGeneratedTeamRefusesOverwrite(t *testing.T) {
 	g := buildGeneratedTeam("feature-work", "Add a new CLI command", "")
 	target := filepath.Join(t.TempDir(), g.Name)

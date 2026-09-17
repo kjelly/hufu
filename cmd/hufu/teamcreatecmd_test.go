@@ -65,6 +65,9 @@ func TestRunTeamCreate_ModelWritesMinimalTeamYAML(t *testing.T) {
 	if string(got) != "model: local-model\n" {
 		t.Fatalf("team.yaml = %q, want minimal model-only content", got)
 	}
+	if strings.Contains(string(got), "decision:") || strings.Contains(string(got), "request:") {
+		t.Fatalf("team create unexpectedly enabled decision authoring: %q", got)
+	}
 }
 
 func TestRunTeamCreate_ExpandedPinsDefaults(t *testing.T) {

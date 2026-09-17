@@ -184,7 +184,7 @@ decision:
 
 func TestTeamMigrateCanonicalizesDecisionAuthoring(t *testing.T) {
 	dir := t.TempDir()
-	writeTeamManifest(t, dir, `name: canonicalize
+	source := `name: canonicalize
 decision:
   default-profile: standard
   routing-hints:
@@ -196,7 +196,8 @@ decision:
     success-criteria:
       - id: tests
         statement: tests pass
-`)
+`
+	writeTeamManifest(t, dir, source)
 	out, _, err := MigrateTeamManifestToV1Alpha1CanonicalAuthoring(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +223,52 @@ decision:
 	}
 	if cfg.Decision.DefaultProfile != "standard" || !cfg.RequestContract.Enabled || cfg.RequestContract.Objective != "ship safely" || len(cfg.Decision.RoutingHints) != 1 {
 		t.Fatalf("canonical round trip lost semantics: decision=%#v request=%#v", cfg.Decision, cfg.RequestContract)
+	}
+	afterSource, err := os.ReadFile(filepath.Join(dir, "team.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterSource) != source {
+		t.Fatal("canonical migration modified its source file")
+	}
+	again, _, err := MigrateTeamManifestToV1Alpha1CanonicalAuthoring(roundTrip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(out) {
+		t.Fatalf("canonical migration is not byte-stable:\n--- first ---\n%s\n--- second ---\n%s", out, again)
+	}
+}
+
+func TestTeamMigrateCanonicalAuthoringPreservesDisabledRequestContent(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `decision:
+  request-contract:
+    enabled: false
+    objective: retained but disabled
+`)
+	out, _, warnings, err := MigrateTeamManifestToV1Alpha1CanonicalAuthoringDetailed(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "was preserved") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if !strings.Contains(string(out), "request-contract:") || !strings.Contains(string(out), "objective: retained but disabled") {
+		t.Fatalf("disabled contract was not preserved:\n%s", out)
+	}
+	if strings.Contains(string(out), "\n    request:\n") {
+		t.Fatalf("disabled contract was incorrectly enabled:\n%s", out)
+	}
+}
+
+func TestTeamMigrateCanonicalAuthoringRejectsTemplates(t *testing.T) {
+	dir := t.TempDir()
+	writeTeamManifest(t, dir, `decision:
+  default-profile: "{{.DecisionProfile}}"
+`)
+	if _, _, err := MigrateTeamManifestToV1Alpha1CanonicalAuthoring(dir); err == nil || !strings.Contains(err.Error(), "resolved decision/request templates") {
+		t.Fatalf("error = %v, want unresolved template diagnostic", err)
 	}
 }
 
