@@ -30,6 +30,7 @@ type executionPolicySnapshotCoordinatorOptions struct {
 	workerNoNet           bool
 	workerExtraModels     []string
 	codexWorkerNoNet      bool
+	subjectRoot           string
 }
 
 func defaultExecutionPolicyCodexConfig() agent.SubagentProviderConfig {
@@ -86,6 +87,17 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 			},
 		},
 	}
+	subjectRoot := options.subjectRoot
+	if subjectRoot == "" {
+		var err error
+		subjectRoot, err = os.Getwd()
+		if err != nil {
+			t.Fatalf("get current project root: %v", err)
+		}
+	}
+	if err := session.SetCompatibilityWorkspaceScope(subjectRoot); err != nil {
+		t.Fatalf("bind execution-policy workspace scope: %v", err)
+	}
 	c, err := NewCoordinator(session, options.defaultProviderURL, options.defaultProviderAPIKey, nil, nil, options.modelList, RoleModels{
 		Sidecar: "remote/sidecar-model", Guard: "remote/guard-model", Judge: "ollama/judge-model", PlanReviewer: "remote/plan-model",
 	}, maxConcurrent, false, false, false, nil, nil, nil, false, "", options.noNet, false, nil, false, false)
@@ -103,18 +115,7 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 
 func newExecutionPolicySnapshotCoordinatorAtProjectRoot(t *testing.T, projectRoot, workspace string, maxConcurrent int, remoteLimit int, options executionPolicySnapshotCoordinatorOptions) *Coordinator {
 	t.Helper()
-	originalRoot, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get current project root: %v", err)
-	}
-	if err := os.Chdir(projectRoot); err != nil {
-		t.Fatalf("enter project root %q: %v", projectRoot, err)
-	}
-	defer func() {
-		if err := os.Chdir(originalRoot); err != nil {
-			t.Errorf("restore project root %q: %v", originalRoot, err)
-		}
-	}()
+	options.subjectRoot = projectRoot
 	return newExecutionPolicySnapshotCoordinatorWithOptions(t, workspace, maxConcurrent, remoteLimit, options)
 }
 

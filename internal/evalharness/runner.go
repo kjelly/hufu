@@ -108,6 +108,9 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err != nil {
 		return EvalCaseResult{}, err
 	}
+	if err := session.SetCompatibilityWorkspaceScope(projectDir); err != nil {
+		return EvalCaseResult{}, fmt.Errorf("bind eval workspace scope: %w", err)
+	}
 	if err := seedCanonicalContext(context.WithoutCancel(ctx), workspace, projectDir, session.Config.Name, c.ContextItems, c.SeedMemoryPolicy, session.Config.MemoryLearning); err != nil {
 		return EvalCaseResult{}, err
 	}

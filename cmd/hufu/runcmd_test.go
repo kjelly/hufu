@@ -35,6 +35,18 @@ func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	if session.Workspace != want {
 		t.Fatalf("root workspace = %q, want %q", session.Workspace, want)
 	}
+
+	project := t.TempDir()
+	t.Chdir(project)
+	opts = runOptions{}
+	session = &team.TeamSession{}
+	if err := resolveTeamWorkspacePath("review", session); err != nil {
+		t.Fatal(err)
+	}
+	want = filepath.Join(project, "workspace", "review")
+	if session.Workspace != want {
+		t.Fatalf("default workspace = %q, want %q", session.Workspace, want)
+	}
 }
 
 func TestCanonicalRunResolvesProfileBeforeRuntimeBridge(t *testing.T) {

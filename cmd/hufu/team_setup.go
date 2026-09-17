@@ -143,6 +143,9 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 // The session must already be loaded (via team.LoadTeam or team.LoadDefaultTeam)
 // and have its Workspace set.
 func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (*teamContext, error) {
+	if err := session.SetCompatibilityWorkspaceScope(currentWorkingDir()); err != nil {
+		return nil, fmt.Errorf("bind compatibility workspace scope: %w", err)
+	}
 	// Apply CLI model overrides as the highest-priority model config layer.
 	cliModelOverrides := currentModelOverrides()
 	applyCLIModelOverrides(&session.Config, cliModelOverrides)
@@ -171,8 +174,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// Validate workspace isolation early BEFORE any workspace directory creation,
 	// file initialization (InitLTM/InitSTM), or session lifecycle I/O so rejected
 	// strict workspaces leave no side effects on disk.
-	projectDir, _ := os.Getwd()
-	if err := team.ValidateWorkspaceIsolationPaths(session.Workspace, projectDir, session.Dir, session.Config.Name, execProfile); err != nil {
+	if err := team.ValidateWorkspaceIsolationPaths(session.Scope.ControlRoot, session.Scope.SubjectRoot, session.Dir, session.Config.Name, execProfile); err != nil {
 		return nil, err
 	}
 

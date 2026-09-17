@@ -25,7 +25,7 @@ func (c *Coordinator) shadowContextAppend(kind contextstore.ContextKind, content
 	}
 	item := contextstore.ContextItem{
 		Kind: kind, Content: content,
-		Scope:     contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID},
+		Scope:     contextstore.Scope{ProjectID: c.contextScopeProjectID(), TeamID: c.session.Config.Name, SessionID: sessionID},
 		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal,
 		Priority: contextstore.PriorityNormal, Confidence: 1.0,
 		Source: contextstore.SourceRef{Type: "legacy-shadow", Ref: source},
@@ -190,7 +190,7 @@ func (c *Coordinator) appendCanonicalContext(ctx context.Context, kind contextst
 	}
 	item := contextstore.ContextItem{
 		Kind: kind, Content: content,
-		Scope:     contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID},
+		Scope:     contextstore.Scope{ProjectID: c.contextScopeProjectID(), TeamID: c.session.Config.Name, SessionID: sessionID},
 		Authority: contextstore.AuthorityAgent, TrustLevel: contextstore.TrustInternal,
 		Priority: contextstore.PriorityNormal, Confidence: 1.0,
 		Source:    contextstore.SourceRef{Type: sourceType, Ref: source},
@@ -236,7 +236,17 @@ func (c *Coordinator) contextScope() contextstore.Scope {
 	}
 	// Shared canonical context deliberately remains branch-neutral. Branch
 	// isolation is applied only to private worker memory via resolveWorkerScope.
-	return contextstore.Scope{ProjectID: c.projectDir, TeamID: c.session.Config.Name, SessionID: sessionID}
+	return contextstore.Scope{ProjectID: c.contextScopeProjectID(), TeamID: c.session.Config.Name, SessionID: sessionID}
+}
+
+func (c *Coordinator) contextScopeProjectID() string {
+	if c != nil && c.session != nil && c.session.Scope.ContextScopeID != "" {
+		return c.session.Scope.ContextScopeID
+	}
+	if c == nil {
+		return ""
+	}
+	return c.projectDir
 }
 
 // contextPendingPath is where failed shadow writes are durably queued so

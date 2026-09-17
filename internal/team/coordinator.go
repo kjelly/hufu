@@ -1266,6 +1266,30 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	if params.Session == nil {
 		return nil, fmt.Errorf("coordinator session is required")
 	}
+	if err := ensureCoordinatorWorkspaceScope(params.Session); err != nil {
+		return nil, err
+	}
+	return newScopedCoordinator(params, services)
+}
+
+func ensureCoordinatorWorkspaceScope(session *TeamSession) error {
+	if session.Scope.SubjectRoot != "" {
+		return nil
+	}
+	fallbackSubject := session.Workspace
+	if fallbackSubject == "" {
+		fallbackSubject = session.Dir
+	}
+	if fallbackSubject == "" {
+		return fmt.Errorf("coordinator workspace scope is required")
+	}
+	if err := session.SetCompatibilityWorkspaceScope(fallbackSubject); err != nil {
+		return fmt.Errorf("initialize compatibility workspace scope: %w", err)
+	}
+	return nil
+}
+
+func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*Coordinator, error) {
 	session := params.Session
 	defaultProviderURL := params.DefaultProviderURL
 	defaultProviderAPIKey := params.DefaultProviderAPIKey
@@ -1288,8 +1312,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	planMode := params.PlanMode
 	autoSkillsMode := params.AutoSkillsMode
 
-	projectDir, _ := os.Getwd()
-	projectDir = canonicalPath(projectDir)
+	projectDir := session.Scope.SubjectRoot
 	var coordinator *Coordinator
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithArtifactOpener(func(ctx context.Context, ref string) (io.ReadCloser, error) {
 		if coordinator == nil {

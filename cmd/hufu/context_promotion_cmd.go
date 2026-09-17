@@ -360,6 +360,9 @@ func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.Draft
 	// before constructing the coordinator so the draft lineage is replayable
 	// next to context.sqlite rather than in an ambient project workspace.
 	session.Workspace = promotionWorkspacePath()
+	if err := session.SetCompatibilityWorkspaceScope(currentWorkingDir()); err != nil {
+		return nil, nil, fmt.Errorf("bind promotion workspace scope: %w", err)
+	}
 	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil, nil, err

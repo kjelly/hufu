@@ -53,7 +53,7 @@ func materializeInvariantContextItem(c *Coordinator, definition InvariantDefinit
 		Content:     content,
 		ContentHash: fullContentHash(content),
 		Scope: contextstore.Scope{
-			ProjectID: c.projectDir,
+			ProjectID: c.contextScopeProjectID(),
 			TeamID:    c.session.Config.Name,
 		},
 		Authority:  contextstore.AuthorityRepository,

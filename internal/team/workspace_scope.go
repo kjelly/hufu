@@ -9,9 +9,79 @@ import (
 // WorkspaceScope separates hufu's durable control state from the subject
 // workspace that workers are allowed to mutate.
 type WorkspaceScope struct {
-	ControlRoot string `json:"control_root" yaml:"control-root"`
-	SubjectRoot string `json:"subject_root" yaml:"subject-root"`
-	ProjectRoot string `json:"project_root,omitempty" yaml:"project-root,omitempty"`
+	ProjectID      string `json:"project_id,omitempty" yaml:"project-id,omitempty"`
+	ContextScopeID string `json:"context_scope_id" yaml:"context-scope-id"`
+	ControlRoot    string `json:"control_root" yaml:"control-root"`
+	SubjectRoot    string `json:"subject_root" yaml:"subject-root"`
+	ProjectRoot    string `json:"project_root,omitempty" yaml:"project-root,omitempty"`
+	Managed        bool   `json:"managed" yaml:"managed"`
+}
+
+// NewCompatibilityWorkspaceScope describes the legacy runtime layout without
+// changing its paths. The current working directory remains the subject and
+// context identity while the already-resolved session workspace remains the
+// durable control root.
+func NewCompatibilityWorkspaceScope(controlRoot, subjectRoot string) (WorkspaceScope, error) {
+	control, err := canonicalWorkspacePath(controlRoot)
+	if err != nil {
+		return WorkspaceScope{}, fmt.Errorf("control workspace: %w", err)
+	}
+	subject, err := canonicalWorkspacePath(subjectRoot)
+	if err != nil {
+		return WorkspaceScope{}, fmt.Errorf("subject workspace: %w", err)
+	}
+	return WorkspaceScope{
+		ContextScopeID: subject,
+		ControlRoot:    control,
+		SubjectRoot:    subject,
+		ProjectRoot:    subject,
+	}, nil
+}
+
+// SetWorkspaceScope installs the canonical runtime scope and keeps Workspace
+// as the compatibility alias for ControlRoot. Managed scopes are always
+// isolated; unmanaged compatibility scopes retain the execution-profile
+// validation performed by the CLI boundary.
+func (s *TeamSession) SetWorkspaceScope(scope WorkspaceScope) error {
+	if s == nil {
+		return fmt.Errorf("team session is nil")
+	}
+	control, err := canonicalWorkspacePath(scope.ControlRoot)
+	if err != nil {
+		return fmt.Errorf("control workspace: %w", err)
+	}
+	subject, err := canonicalWorkspacePath(scope.SubjectRoot)
+	if err != nil {
+		return fmt.Errorf("subject workspace: %w", err)
+	}
+	scope.ControlRoot = control
+	scope.SubjectRoot = subject
+	scope.ProjectRoot = subject
+	if scope.ContextScopeID == "" {
+		return fmt.Errorf("context scope ID is empty")
+	}
+	if scope.Managed && scope.ProjectID == "" {
+		return fmt.Errorf("managed workspace scope requires a project ID")
+	}
+	if scope.Managed {
+		if err := ValidateWorkspaceScope(scope); err != nil {
+			return err
+		}
+	}
+	s.Scope = scope
+	s.Workspace = control
+	s.Config.WorkspaceDir = control
+	return nil
+}
+
+// SetCompatibilityWorkspaceScope binds the legacy runtime paths to the new
+// explicit scope contract. It is intentionally side-effect free.
+func (s *TeamSession) SetCompatibilityWorkspaceScope(subjectRoot string) error {
+	scope, err := NewCompatibilityWorkspaceScope(s.Workspace, subjectRoot)
+	if err != nil {
+		return err
+	}
+	return s.SetWorkspaceScope(scope)
 }
 
 func canonicalWorkspacePath(path string) (string, error) {

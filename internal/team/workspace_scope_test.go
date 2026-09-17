@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func TestValidateWorkspaceSeparation(t *testing.T) {
@@ -20,6 +22,82 @@ func TestValidateWorkspaceSeparation(t *testing.T) {
 	}
 	if err := ValidateWorkspaceSeparation(filepath.Join(root, "control"), link); err == nil {
 		t.Fatal("expected symlink overlap to be rejected")
+	}
+}
+
+func TestSetCompatibilityWorkspaceScopePreservesLegacyPaths(t *testing.T) {
+	control := filepath.Join(t.TempDir(), "workspace", "review")
+	subject := t.TempDir()
+	session := &TeamSession{Workspace: control}
+
+	if err := session.SetCompatibilityWorkspaceScope(subject); err != nil {
+		t.Fatal(err)
+	}
+	if session.Scope.ControlRoot != control || session.Workspace != control || session.Config.WorkspaceDir != control {
+		t.Fatalf("control aliases diverged: scope=%q workspace=%q config=%q", session.Scope.ControlRoot, session.Workspace, session.Config.WorkspaceDir)
+	}
+	if session.Scope.SubjectRoot != subject || session.Scope.ProjectRoot != subject || session.Scope.ContextScopeID != subject {
+		t.Fatalf("compatibility subject scope = %#v, want %q", session.Scope, subject)
+	}
+	if session.Scope.Managed || session.Scope.ProjectID != "" {
+		t.Fatalf("compatibility scope unexpectedly managed: %#v", session.Scope)
+	}
+}
+
+func TestSetWorkspaceScopeRequiresManagedIdentityAndSeparation(t *testing.T) {
+	root := t.TempDir()
+	session := &TeamSession{}
+	if err := session.SetWorkspaceScope(WorkspaceScope{
+		ContextScopeID: root,
+		ControlRoot:    filepath.Join(root, "control"),
+		SubjectRoot:    filepath.Join(root, "subject"),
+		Managed:        true,
+	}); err == nil {
+		t.Fatal("managed scope without project ID was accepted")
+	}
+	if err := session.SetWorkspaceScope(WorkspaceScope{
+		ProjectID:      "prj_test",
+		ContextScopeID: root,
+		ControlRoot:    root,
+		SubjectRoot:    filepath.Join(root, "subject"),
+		Managed:        true,
+	}); err == nil {
+		t.Fatal("overlapping managed scope was accepted")
+	}
+}
+
+func TestContextScopeUsesCompatibilityIdentityInsteadOfSubjectRoot(t *testing.T) {
+	session := &TeamSession{
+		Workspace: "/control",
+		Config:    agent.TeamConfig{Name: "review"},
+		Scope: WorkspaceScope{
+			ContextScopeID: "/legacy/context/root",
+			ControlRoot:    "/control",
+			SubjectRoot:    "/current/subject/root",
+			ProjectRoot:    "/current/subject/root",
+		},
+	}
+	c := &Coordinator{session: session, projectDir: session.Scope.SubjectRoot}
+	if got := c.contextScope().ProjectID; got != session.Scope.ContextScopeID {
+		t.Fatalf("context project ID = %q, want %q", got, session.Scope.ContextScopeID)
+	}
+}
+
+func TestNewCoordinatorUsesSessionSubjectRoot(t *testing.T) {
+	control := t.TempDir()
+	subject := t.TempDir()
+	session := &TeamSession{Workspace: control, Config: agent.TeamConfig{Name: "review"}}
+	if err := session.SetCompatibilityWorkspaceScope(subject); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	if coordinator.projectDir != subject {
+		t.Fatalf("coordinator project directory = %q, want scope subject %q", coordinator.projectDir, subject)
 	}
 }
 

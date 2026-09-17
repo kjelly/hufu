@@ -25,6 +25,7 @@ type TeamSession struct {
 	DecisionAuthoring DecisionAuthoringMetadata
 	Dir               string
 	Workspace         string
+	Scope             WorkspaceScope
 	Agents            map[string]*agent.AgentDef
 	MCPServers        map[string]mcp.MCPServerConfig
 	Skills            []*skill.SkillDef
