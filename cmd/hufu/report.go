@@ -118,6 +118,7 @@ type reportData struct {
 	ContextUsageSection   string
 	ResolvedProfile       team.ExecutionProfile
 	RunResult             *team.RunResult
+	InvocationID          string
 	SourceRunID           string
 	EvidenceIdentity      string
 	TerminalSessions      []team.TerminalSession
@@ -227,6 +228,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		TaskHistory:           make(map[string]string),
 		CurrentRunDiagnostics: make(map[string]string),
 		StartedAt:             time.Now(),
+		InvocationID:          opts.invocationID,
 	}
 
 	if tc.sessionData != nil {
@@ -704,6 +706,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		snapshotState = "confirmed"
 	}
 	b.WriteString("## Run Snapshot\n\n")
+	if data.InvocationID != "" {
+		fmt.Fprintf(&b, "- **Invocation ID:** `%s`\n", reportSafeMetadata(data.InvocationID, 160))
+	}
 	fmt.Fprintf(&b, "- **Source run_id:** `%s`\n", reportSafeMetadata(data.SourceRunID, 160))
 	fmt.Fprintf(&b, "- **Snapshot:** `%s` (canonical run_finished reducer snapshot)\n", snapshotState)
 	fmt.Fprintf(&b, "- **Evidence identity:** `%s`\n\n", reportSafeMetadata(data.EvidenceIdentity, 160))

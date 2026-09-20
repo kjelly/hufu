@@ -58,9 +58,15 @@ func (l *commandWorkspaceLease) completeFreshSession(ctx context.Context) error 
 }
 
 func resolveCommandWorkspace(ctx context.Context, request commandWorkspaceRequest) (workspacepkg.Resolution, io.Closer, error) {
-	teamName, err := workspacepkg.NormalizeTeamName(request.TeamName)
-	if err != nil {
-		return workspacepkg.Resolution{}, nil, err
+	teamName := strings.TrimSpace(request.TeamName)
+	if teamName != "" {
+		var err error
+		teamName, err = workspacepkg.NormalizeTeamName(teamName)
+		if err != nil {
+			return workspacepkg.Resolution{}, nil, err
+		}
+	} else if request.Mode != workspacepkg.ResolveExisting && request.ExplicitExact == "" && request.ExplicitRoot == "" && request.TemporaryRoot == "" {
+		return workspacepkg.Resolution{}, nil, fmt.Errorf("team name is required when resolving a new workspace")
 	}
 	resolveRequest := workspacepkg.ResolveRequest{
 		StartDir: request.StartDir, TeamName: teamName,
@@ -82,7 +88,12 @@ func resolveCommandWorkspace(ctx context.Context, request commandWorkspaceReques
 	if err != nil {
 		return workspacepkg.Resolution{}, nil, err
 	}
-	resolution, err := manager.Resolve(ctx, resolveRequest)
+	var resolution workspacepkg.Resolution
+	if teamName == "" {
+		resolution, err = manager.ResolveActive(ctx, request.StartDir)
+	} else {
+		resolution, err = manager.Resolve(ctx, resolveRequest)
+	}
 	if err != nil {
 		return workspacepkg.Resolution{}, nil, err
 	}
@@ -174,11 +185,26 @@ func resolveExistingManagedWorkspacePath(ctx context.Context, startDir, teamName
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(teamName) == "" {
+		resolution, resolveErr := manager.ResolveActive(ctx, startDir)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		return resolution.ControlRoot, nil
+	}
 	resolution, err := manager.Resolve(ctx, workspacepkg.ResolveRequest{StartDir: startDir, TeamName: teamName, Mode: workspacepkg.ResolveExisting})
 	if err != nil {
 		return "", err
 	}
 	return resolution.ControlRoot, nil
+}
+
+func resolveWorkspaceForTeam(ctx context.Context, teamName string) string {
+	workspace, err := resolveExistingManagedWorkspacePath(ctx, runtimeStartDir(), teamName)
+	if err != nil {
+		return ""
+	}
+	return workspace
 }
 
 func requireResolvedWorkspace(path string) (string, error) {

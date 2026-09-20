@@ -29,6 +29,7 @@ func buildDecisionOutput(ctx context.Context, loadedTeams map[string]*teamContex
 		kind = "decision_run_preview"
 	}
 	out := team.NewDecisionOutputV1(kind)
+	out.InvocationID = stringPointer(opts.invocationID)
 	if preview {
 		out.Outcome, out.ExitCode = "preview", 0
 	}

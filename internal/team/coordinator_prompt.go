@@ -283,11 +283,6 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 		b.WriteString("Load the full content of a skill by name. You can call `load_skill` multiple times to load all relevant skills. Workers receive full skill instructions by default and may call `load_skill` only when it is explicitly granted; do not instruct them to call it otherwise.\n")
 		b.WriteString("```json\n{\"name\": \"skill-name\"}\n```\n\n")
 	}
-	if !c.coordinatorToolDenied("save_skill") {
-		b.WriteString("### save_skill\n")
-		b.WriteString("Create a reusable skill proposal as a reviewable draft. It is not active until explicit human approval applies it.\n")
-		b.WriteString("```json\n{\"name\": \"skill-name\", \"description\": \"what it does\", \"content\": \"# Skill\\n\\nStep-by-step workflow...\"}\n```\n\n")
-	}
 	b.WriteString("### finish\n")
 	b.WriteString("Signal completion and provide your final answer to the user. ALWAYS call this when you are done.\n")
 	b.WriteString("Failed or blocked tasks prevent a normal finish; fix them first, or explicitly acknowledge a partial result.\n")

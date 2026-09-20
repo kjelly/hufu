@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -122,8 +123,41 @@ func TestResolveReviewScopeInputGrammar(t *testing.T) {
 			if test.wantValue != "" && string(response.Value) != test.wantValue {
 				t.Fatalf("value = %s, want %s", response.Value, test.wantValue)
 			}
-			if response.Status == "matched" && (response.ResolverVersion != "1" || len(response.Evidence) == 0) {
+			if response.Status == "matched" && (response.ResolverVersion != "2" || len(response.Evidence) == 0) {
 				t.Fatalf("matched response lacks provenance: %#v", response)
+			}
+		})
+	}
+}
+
+func TestResolveReviewScopeInputRelativeDays(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 23, 30, 0, 0, time.FixedZone("test", 8*60*60))
+	for _, test := range []struct {
+		name   string
+		prompt string
+		status string
+		kind   string
+	}{
+		{name: "traditional chinese compact", prompt: "review 最近3天的 git commit", status: "matched", kind: "recent_days_zh"},
+		{name: "traditional chinese spaced", prompt: "審查最近 3 天的提交", status: "matched", kind: "recent_days_zh"},
+		{name: "english", prompt: "review the last 3 days", status: "matched", kind: "last_days"},
+		{name: "invalid", prompt: "review 最近0天的提交", status: "invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := resolveReviewScopeInputAt(team.RunInputResolverRequest{
+				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
+			}, now)
+			if response.Status != test.status {
+				t.Fatalf("status = %q diagnostic=%q, want %q", response.Status, response.Diagnostic, test.status)
+			}
+			if test.status != "matched" {
+				return
+			}
+			if got, want := string(response.Value), `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-15"}`; got != want {
+				t.Fatalf("value = %s, want %s", got, want)
+			}
+			if response.ResolverVersion != "2" || len(response.Evidence) != 1 || response.Evidence[0].Kind != test.kind {
+				t.Fatalf("relative-day provenance = %#v", response)
 			}
 		})
 	}
@@ -598,6 +632,48 @@ func TestPrepareUsesHufuEnvironmentVariables(t *testing.T) {
 	manifestFile := filepath.Join(ws, "workset", "workset-manifest.json")
 	if _, err := os.Stat(manifestFile); err != nil {
 		t.Fatalf("manifest file does not exist at %s: %v", manifestFile, err)
+	}
+}
+
+func TestPrepareSupportsDisjointArtifactRoot(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/foo.go", "package team\n", "foo change", "2025-01-02T00:00:00Z")
+	artifactRoot := filepath.Join(t.TempDir(), "action")
+	outputDir := filepath.Join(artifactRoot, "workset")
+	config := fixtureConfig(repo, outputDir)
+	config.ArtifactRoot = artifactRoot
+
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare with disjoint artifact root: %v", err)
+	}
+	if got, want := result.Artifacts[0].Path, "workset/workset-manifest.json"; got != want {
+		t.Fatalf("manifest artifact path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "out")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("producer wrote repository output: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "workset-manifest.json")); err != nil {
+		t.Fatalf("manifest missing from disjoint artifact root: %v", err)
+	}
+}
+
+func TestPrepareRejectsSymlinkEscapeFromArtifactRoot(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/foo.go", "package team\n", "foo change", "2025-01-02T00:00:00Z")
+	artifactRoot := t.TempDir()
+	outside := t.TempDir()
+	outputDir := filepath.Join(artifactRoot, "workset")
+	if err := os.Symlink(outside, outputDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	config := fixtureConfig(repo, outputDir)
+	config.ArtifactRoot = artifactRoot
+	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), "output_dir") {
+		t.Fatalf("Prepare accepted output symlink escape: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "workset-manifest.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink escape produced output: %v", err)
 	}
 }
 

@@ -79,6 +79,97 @@ func TestGetWorkspaceReturnsActiveManagedControlRoot(t *testing.T) {
 	}
 }
 
+func TestGetWorkspaceAutoSelectsSoleNamedManagedWorkspace(t *testing.T) {
+	previousOpts := opts
+	t.Cleanup(func() { opts = previousOpts })
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := manager.Resolve(context.Background(), workspacepkg.ResolveRequest{
+		StartDir: project, TeamName: "hufu-code-review", Mode: workspacepkg.ResolveEnsure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts = runOptions{}
+	if got := getWorkspace(); got != want.ControlRoot {
+		t.Fatalf("getWorkspace = %q, want %q", got, want.ControlRoot)
+	}
+}
+
+func TestResolveImproveWorkspaceAutoSelectsSoleNamedManagedWorkspace(t *testing.T) {
+	previousOpts, previousWorkspace, previousTeam := opts, improveWorkspace, improveTeam
+	t.Cleanup(func() { opts, improveWorkspace, improveTeam = previousOpts, previousWorkspace, previousTeam })
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := manager.Resolve(context.Background(), workspacepkg.ResolveRequest{
+		StartDir: project, TeamName: "hufu-code-review", Mode: workspacepkg.ResolveEnsure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts = runOptions{}
+	improveWorkspace = ""
+	improveTeam = ""
+	got, err := resolveImproveWorkspace("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want.ControlRoot {
+		t.Fatalf("improve workspace = %q, want %q", got, want.ControlRoot)
+	}
+}
+
+func TestResolveSkillWorkspaceAutoSelectsSoleNamedManagedWorkspace(t *testing.T) {
+	previousOpts := opts
+	t.Cleanup(func() { opts = previousOpts })
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(project)
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := manager.Resolve(context.Background(), workspacepkg.ResolveRequest{
+		StartDir: project, TeamName: "hufu-code-review", Mode: workspacepkg.ResolveEnsure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts = runOptions{}
+	got, err := resolveSkillWorkspace("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want.ControlRoot {
+		t.Fatalf("skill workspace = %q, want %q", got, want.ControlRoot)
+	}
+}
+
 func TestSessionReadCommandsDoNotCreateEventStore(t *testing.T) {
 	previousWorkspace := sessionWorkspace
 	t.Cleanup(func() { sessionWorkspace = previousWorkspace })

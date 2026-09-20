@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1384,6 +1385,8 @@ func loadTUIOperatorDetails(ctx context.Context, workspace string, snapshot oper
 type jsonStatusEvent struct {
 	Type            string                            `json:"type"`
 	Team            string                            `json:"team,omitempty"`
+	InvocationID    string                            `json:"invocation_id,omitempty"`
+	RunID           string                            `json:"run_id,omitempty"`
 	Agent           string                            `json:"agent,omitempty"`
 	TodoID          string                            `json:"todo_id,omitempty"`
 	Model           string                            `json:"model,omitempty"`
@@ -1404,22 +1407,28 @@ type decisionJSONLEnvelope struct {
 	Data          any    `json:"data"`
 }
 
-var decisionJSONLSequence atomic.Uint64
+var (
+	decisionJSONLSequence atomic.Uint64
+	jsonlOutputMu         sync.Mutex
+)
+
+func writeJSONLStatusEvent(w io.Writer, event jsonStatusEvent) {
+	jsonlOutputMu.Lock()
+	defer jsonlOutputMu.Unlock()
+	if opts.intent == "decision" {
+		_ = json.NewEncoder(w).Encode(decisionJSONLEnvelope{SchemaVersion: 1, Type: "status", Sequence: decisionJSONLSequence.Add(1), Data: event})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(event)
+}
 
 func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
-	var mu sync.Mutex
 	return func(event team.StatusEvent) {
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
-		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
-		mu.Lock()
-		defer mu.Unlock()
-		if opts.intent == "decision" {
-			_ = json.NewEncoder(os.Stderr).Encode(decisionJSONLEnvelope{SchemaVersion: 1, Type: "status", Sequence: decisionJSONLSequence.Add(1), Data: encoded})
-			return
-		}
-		_ = json.NewEncoder(os.Stderr).Encode(encoded)
+		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, InvocationID: opts.invocationID, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
+		writeJSONLStatusEvent(os.Stderr, encoded)
 	}
 }
 
@@ -1431,15 +1440,12 @@ func emitJSONLCommandError(err error) {
 		return
 	}
 	encoded := jsonStatusEvent{
-		Type:    "error",
-		Message: err.Error(),
-		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+		Type:         "error",
+		InvocationID: opts.invocationID,
+		Message:      err.Error(),
+		Time:         time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if opts.intent == "decision" {
-		_ = json.NewEncoder(os.Stderr).Encode(decisionJSONLEnvelope{SchemaVersion: 1, Type: "status", Sequence: decisionJSONLSequence.Add(1), Data: encoded})
-		return
-	}
-	_ = json.NewEncoder(os.Stderr).Encode(encoded)
+	writeJSONLStatusEvent(os.Stderr, encoded)
 }
 
 // thinkingEntry tracks one agent's LLM wait so the TUI status bar keeps
@@ -1896,6 +1902,10 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	if err != nil {
 		return "", err
 	}
+	gracefulTimeout, err := resolvedGracefulWrapUpTimeout(opts.gracefulWrapUpTimeout, opts.timeoutOverride, config.LoadConfig().GracefulWrapUpTimeout)
+	if err != nil {
+		return "", err
+	}
 	model := tuipkg.NewWithOptions(prompt, teamInfo, presentationOptions)
 	if opts.isChatTUI {
 		model.IsChat = true
@@ -1921,24 +1931,51 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 		defer close(promptCh)
 	}
 
+	finished := make(chan struct{})
 	var wrapUpCount int
 	wrapUpCh := model.WrapUpCh
+	wrapUpDone := make(chan struct{})
 	go func() {
-		for range wrapUpCh {
-			wrapUpCount++
-			if wrapUpCount == 1 {
-				if c := activeCoord.Load(); c != nil {
-					c.SetWrapUp()
+		defer close(wrapUpDone)
+		var gracefulTimer *time.Timer
+		defer func() {
+			if gracefulTimer != nil {
+				gracefulTimer.Stop()
+			}
+		}()
+		for {
+			select {
+			case _, ok := <-wrapUpCh:
+				if !ok {
+					return
 				}
-				if injector != nil {
-					injector.injectWrapUp()
+				wrapUpCount++
+				if wrapUpCount == 1 {
+					if c := activeCoord.Load(); c != nil {
+						c.SetWrapUp()
+					}
+					if injector != nil {
+						injector.injectWrapUp()
+					}
+					gracefulTimer = time.AfterFunc(gracefulTimeout, func() {
+						p.Send(tuipkg.StatusBarMsg{Text: errStyle.Render(fmt.Sprintf("Graceful wrap-up exceeded %s; cancelling active work", gracefulTimeout))})
+						cancel()
+					})
+				} else {
+					if gracefulTimer != nil {
+						gracefulTimer.Stop()
+					}
+					cancel()
 				}
-			} else {
-				cancel()
+			case <-finished:
+				return
 			}
 		}
 	}()
-	defer close(wrapUpCh)
+	defer func() {
+		close(wrapUpCh)
+		<-wrapUpDone
+	}()
 
 	reportCh := model.ReportCh
 	var execResult string
@@ -1951,7 +1988,6 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	defer close(reportCh)
 
 	var execErr error
-	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
 		execResult, execErr = executeSegments(ctx, segments, registry, opts.providerURL, loadedTeams, injector, activeCoord, pathConsent, vars, route)

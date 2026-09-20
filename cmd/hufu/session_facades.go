@@ -35,7 +35,7 @@ func newSessionStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			workspace := getSessionWorkspace()
+			workspace := getSessionWorkspaceForTeam(options.team)
 			resolution, err := operatorpkg.ResolveWorkspacePath(operatorpkg.WorkspaceRequest{RequestedPath: workspace, Mode: "exact", TeamName: options.team})
 			if err != nil {
 				return err
@@ -64,7 +64,7 @@ func newSessionResumeCommand() *cobra.Command {
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, _ []string) error {
-			target, err := bindActiveMutationTarget(command.Context(), getSessionWorkspace(), options, false)
+			target, err := bindActiveMutationTarget(command.Context(), getSessionWorkspaceForTeam(options.team), options, false)
 			if err != nil {
 				return err
 			}
@@ -96,7 +96,7 @@ func newSessionRecoveryCommand(action team.TargetedRecoveryAction) *cobra.Comman
 			if err != nil {
 				return err
 			}
-			target, err := bindActiveMutationTarget(command.Context(), getSessionWorkspace(), options, true)
+			target, err := bindActiveMutationTarget(command.Context(), getSessionWorkspaceForTeam(options.team), options, true)
 			if err != nil {
 				return err
 			}

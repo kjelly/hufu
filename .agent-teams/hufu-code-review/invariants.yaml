@@ -1,7 +1,229 @@
 schema-version: 1
 invariants:
+  - id: runtime-owner-boundary
+    statement: |
+      Canonical owner: every durable state, identity, resource lifetime, and
+      compatibility normalization has one closest existing domain owner;
+      callers and presentation layers may consume or project it but must not
+      create a parallel source of truth. New code must name and route through
+      that owner, preserve fail-closed errors, and update every durable and
+      user-visible projection affected by the contract. Regression evidence:
+      inspect the changed source plus its caller or consumer and provide a
+      focused boundary test; when ownership is unaffected, cite evidence that
+      the change is projection-only or stateless.
+    severity: error
+    applies-to:
+      - cmd/hufu/
+      - internal/
+
+  - id: task-lifecycle-single-owner
+    statement: |
+      Canonical owner: TodoItem's durable task occurrence and
+      Coordinator.executeTask own attempt, result, verification, retry, and
+      terminal transitions. The scheduler may only admit work, route
+      dependencies, and drain already-admitted work. Recovery, replay,
+      checkpoint, wrap-up, and UI/report projections must consume those
+      canonical transitions; they must not reconstruct a competing terminal
+      state. Cancellation or a terminal transition forbids new dependency
+      starts, buffered-event commits, and late results. Regression evidence:
+      cover retry, fail-fast, cancellation, timeout/process death, resume,
+      dependency routing, and projection parity; concurrency changes require
+      race-safe drain/close coverage.
+    severity: error
+    applies-to:
+      - cmd/hufu/display.go
+      - cmd/hufu/json_output.go
+      - cmd/hufu/report.go
+      - cmd/hufu/resumecmd.go
+      - cmd/hufu/session_facades.go
+      - cmd/hufu/team_runner.go
+      - internal/inspect/recovery.go
+      - internal/operator/actions.go
+      - internal/team/coordinator_close.go
+      - internal/team/coordinator_execute.go
+      - internal/team/coordinator_run.go
+      - internal/team/coordinator_session.go
+      - internal/team/coordinator_task_run.go
+      - internal/team/dag_scheduler.go
+      - internal/team/failure_event.go
+      - internal/team/phase.go
+      - internal/team/recovery.go
+      - internal/team/repair_controller.go
+      - internal/team/run_finalizer.go
+      - internal/team/run_result.go
+      - internal/team/runtime_workflow.go
+      - internal/team/session.go
+      - internal/team/targeted_recovery.go
+      - internal/team/terminal_session.go
+      - internal/team/workset.go
+      - internal/team/workset_state.go
+      - internal/tui/tui.go
+
+  - id: decision-projection-lifecycle
+    statement: |
+      Canonical owner: the durable decision/assumption occurrence and event
+      lineage own decision state. decision_assumptions.go may project that
+      state only through the canonical refresh, invalidation, checkpoint, and
+      retry lifecycle. A persistence failure fails closed and remains
+      retryable without leaving stale indexes, journals, status, TUI, session,
+      or report projections. Regression evidence: cover refresh, invalidation,
+      checkpoint ordering, persistence failure, bounded retry, and
+      restart/replay projection parity.
+    severity: error
+    applies-to:
+      - cmd/hufu/decisionprofilecmd.go
+      - cmd/hufu/display.go
+      - cmd/hufu/report.go
+      - internal/team/coordinator_eventstore.go
+      - internal/team/decision_assumptions.go
+      - internal/team/decision_discipline.go
+      - internal/team/decision_engine.go
+      - internal/team/decision_index.go
+      - internal/team/decision_store.go
+      - internal/team/session.go
+      - internal/team/status.go
+      - internal/team/task_journal.go
+      - internal/tui/
+
+  - id: provider-stream-process-owner
+    statement: |
+      Canonical owner: CodexRPCClient plus the typed Codex protocol/result
+      boundary own frame decoding, notification ordering, turn identity,
+      failure classification, interrupt, and process/session lifetime; the
+      provider proxy owns transport isolation. Coordinator callers consume
+      typed results and must not reparse raw provider payloads. Each backend
+      has one explicit concurrency, stream, cancellation, and reap owner.
+      Cancellation forbids late results or orphaned processes. Regression evidence:
+      cover interleaved notifications, wrong/early-ended turns, oversized
+      frames, files_read shape, same-backend concurrency,
+      keep-alive isolation, interrupt, and child-process cleanup.
+    severity: error
+    applies-to:
+      - cmd/hufu/backend_config.go
+      - cmd/hufu/execution_target_preflight.go
+      - internal/providerproxy/
+      - internal/team/codex_appserver_client.go
+      - internal/team/codex_appserver_protocol.go
+      - internal/team/codex_process.go
+      - internal/team/codex_result_schema.go
+      - internal/team/execution_backend.go
+      - internal/team/subagent_codex.go
+      - internal/team/subagent_external_result.go
+      - internal/team/subagent_provider.go
+      - internal/team/terminal_session.go
+
+  - id: workspace-execution-world-boundary
+    statement: |
+      Canonical owner: ExecutionWorld and the workspace snapshot/lease layer
+      own path authorization, symlink policy, workspace identity, snapshot
+      exclusions, and process cleanup. Callers must not derive authorization,
+      leases, artifact scope, or checkpoint exclusions independently. Hufu
+      control state is distinct from project content; parallel attempts must
+      not observe each other's deltas. Regression evidence: cover symlink
+      escape, canonicalized roots, overlapping leases, parallel attempts,
+      control-checkpoint exclusion, snapshot replay, artifact access, and
+      cancellation cleanup.
+    severity: error
+    applies-to:
+      - cmd/hufu/operator_traceability_test.go
+      - internal/team/action_provider.go
+      - internal/team/artifact_access.go
+      - internal/team/evidence_store.go
+      - internal/team/execution_world.go
+      - internal/team/execution_world_local.go
+      - internal/team/subagent_codex.go
+      - internal/team/subagent_external_result.go
+      - internal/team/workspace_snapshot.go
+      - internal/team/workspace_snapshot_git.go
+
+  - id: resolved-model-identity
+    statement: |
+      Canonical owner: modelprofile catalog/runtime resolution produces one
+      provider-bound resolved identity containing provider, model, profile,
+      estimator, context capacity, and catalog namespace. Preflight,
+      admission, context compilation, invocation, cache, telemetry, report,
+      and inspect must reuse that identity rather than re-resolve aliases or
+      legacy fallbacks. Telemetry is emitted only for the model actually bound
+      to a successful provider construction. Regression evidence: cover alias
+      and profile changes, downshift, reconnect, catalog refresh, no-runtime
+      lookup, estimator propagation, cache isolation, and projection parity.
+    severity: error
+    applies-to:
+      - cmd/hufu/models.go
+      - internal/agent/provider_request.go
+      - internal/modelprofile/
+      - internal/team/context_compiler.go
+      - internal/team/context_window.go
+      - internal/team/coordinator_preflight.go
+      - internal/team/model_profile_adapter.go
+      - internal/team/model_profile_runtime.go
+      - internal/team/model_profile_telemetry.go
+      - internal/team/provider_admission.go
+      - internal/team/token_counter.go
+
+  - id: durable-contract-provenance
+    statement: |
+      Canonical owner: the durable task contract and unique branch-scoped task
+      occurrence/attempt own result, verification, rejection category,
+      execution receipt, evidence, policy snapshot, and provenance. Model
+      prose and transient status are never authoritative. Result-only repair
+      may use only its frozen workspace delta and must not replay completed
+      side effects. Event idempotency and inspect/JSON/report attribution must
+      resolve to the same branch, occurrence, attempt, and provider.
+      Regression evidence: cover stable rejection classification, invariant
+      repair scope, contract recovery, branch replay, receipt/evidence
+      validation, journal lineage, and all user-visible projections.
+    severity: error
+    applies-to:
+      - cmd/hufu/inspectcmd.go
+      - cmd/hufu/json_output.go
+      - cmd/hufu/report.go
+      - internal/auditverify/
+      - internal/inspect/
+      - internal/team/contract_compile.go
+      - internal/team/event_reducers.go
+      - internal/team/event_store.go
+      - internal/team/execution_events.go
+      - internal/team/execution_policy_snapshot.go
+      - internal/team/execution_receipt.go
+      - internal/team/invariant_attestation.go
+      - internal/team/invariant_completion.go
+      - internal/team/task_result.go
+      - internal/team/task_result_contract.go
+
+  - id: compatibility-normalization-boundary
+    statement: |
+      Canonical owner: schema parsers and explicit migration adapters alone
+      normalize legacy team, task-contract, session, profile, decision, and
+      output forms into the canonical runtime representation. Runtime code
+      consumes only canonical values. Explicit CLI values override profiles
+      and defaults, unknown configuration fails closed, and migration must not
+      silently reinterpret documentation as agents or discard durable state.
+      Regression evidence: cover legacy read/migrate/restart/replay/reserialize
+      round trips, canonical authoring output, profile precedence (including
+      explicit false), unknown fields/profiles, and bundled-team fixtures.
+    severity: error
+    applies-to:
+      - cmd/hufu/decisionprofilecmd.go
+      - cmd/hufu/output_alias.go
+      - cmd/hufu/profile.go
+      - cmd/hufu/run.go
+      - cmd/hufu/runcmd.go
+      - cmd/hufu/teamexplaincmd.go
+      - cmd/hufu/teammigratecmd.go
+      - internal/team/decision_authoring.go
+      - internal/team/effective_spec.go
+      - internal/team/execution_compatibility_migration.go
+      - internal/team/parse.go
+      - internal/team/team_manifest_migrate.go
+
   - id: sqlite-canonical-memory
-    statement: "context.sqlite is canonical; context-stm.md and context-ltm.md are disposable projections and never runtime inputs"
+    statement: |
+      Canonical owner: context.sqlite and its repository contract own durable
+      memory. context-stm.md and context-ltm.md are disposable debug
+      projections and must never become runtime inputs. Regression evidence:
+      cover scoped reads, restart/replay, projection regeneration, and reject
+      any fallback that treats Markdown projections as canonical state.
     severity: error
     applies-to:
       - internal/context/

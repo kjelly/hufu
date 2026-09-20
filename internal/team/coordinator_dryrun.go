@@ -161,7 +161,7 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 				}
 			}
 			if role == "coordinator" || role == "orchestrator" {
-				tools = []string{"agent", "finish", "load_skill", "save_skill", "ask_user"}
+				tools = []string{"agent", "finish", "load_skill", "ask_user"}
 			}
 			result.Agents = append(result.Agents, DryRunAgentInfo{
 				Name:            def.Name,

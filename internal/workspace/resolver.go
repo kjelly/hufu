@@ -47,6 +47,50 @@ func (m *WorkspaceManager) Resolve(ctx context.Context, request ResolveRequest) 
 	}
 }
 
+// ResolveActive finds the active workspace for the project containing startDir.
+// A default team is preferred for compatibility; otherwise the project must
+// have exactly one active team workspace so callers do not silently inspect
+// the wrong team's state.
+func (m *WorkspaceManager) ResolveActive(ctx context.Context, startDir string) (Resolution, error) {
+	subjectRoot, err := DiscoverSubjectRoot(startDir)
+	if err != nil {
+		return Resolution{}, err
+	}
+	registry, err := OpenReadOnly(m.stateRoot)
+	if err != nil {
+		return Resolution{}, err
+	}
+	defer func() { _ = registry.Close() }()
+
+	project, err := registry.ResolveProjectByRoot(ctx, subjectRoot)
+	if err != nil {
+		return Resolution{}, err
+	}
+	workspaces, err := registry.ListWorkspaces(ctx, project.ID)
+	if err != nil {
+		return Resolution{}, err
+	}
+
+	active := make([]Workspace, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		if workspace.State == "active" {
+			active = append(active, workspace)
+		}
+	}
+	if len(active) == 0 {
+		return Resolution{}, fmt.Errorf("%w: project %s has no active workspaces", ErrNotFound, project.ID)
+	}
+	for _, workspace := range active {
+		if workspace.TeamName == "default" {
+			return managedResolution(project, workspace)
+		}
+	}
+	if len(active) != 1 {
+		return Resolution{}, fmt.Errorf("%w: project %s has multiple active team workspaces; specify --agent-team or --workspace", ErrAmbiguous, project.ID)
+	}
+	return managedResolution(project, active[0])
+}
+
 func ResolveUnmanaged(request ResolveRequest) (Resolution, error) {
 	teamName, err := NormalizeTeamName(request.TeamName)
 	if err != nil {

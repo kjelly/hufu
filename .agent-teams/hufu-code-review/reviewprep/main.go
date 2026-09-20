@@ -54,6 +54,8 @@ type scopeCandidate struct {
 
 var (
 	lastCommitsPattern  = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commits?\b`)
+	lastDaysPattern     = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+days?\b`)
+	recentDaysPattern   = regexp.MustCompile(`最近[ \t]*([0-9]+)[ \t]*天`)
 	headRangePattern    = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
 	revisionPattern     = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/-]{0,159})`)
 	revisionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
@@ -242,7 +244,11 @@ func decodeStrictJSON(data []byte, target any) error {
 }
 
 func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInputResolverResponse {
-	response := team.RunInputResolverResponse{ResolverVersion: "1"}
+	return resolveReviewScopeInputAt(request, time.Now().UTC())
+}
+
+func resolveReviewScopeInputAt(request team.RunInputResolverRequest, now time.Time) team.RunInputResolverResponse {
+	response := team.RunInputResolverResponse{ResolverVersion: "2"}
 	if request.Type != "resolve_run_input" || request.InputName != "review.scope" || request.ResolverID != "review-scope-v1" {
 		response.Status = "invalid"
 		response.Diagnostic = "resolver request identity is unsupported"
@@ -261,7 +267,7 @@ func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInput
 			return response
 		}
 	}
-	candidates, invalid := parseScopeCandidates(request.Prompt)
+	candidates, invalid := parseScopeCandidates(request.Prompt, now)
 	if invalid != "" {
 		response.Status = "invalid"
 		response.Diagnostic = invalid
@@ -294,7 +300,7 @@ func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInput
 	return response
 }
 
-func parseScopeCandidates(prompt string) ([]scopeCandidate, string) {
+func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, string) {
 	candidates := make([]scopeCandidate, 0)
 	headRanges := headRangePattern.FindAllStringSubmatchIndex(prompt, -1)
 	for _, match := range lastCommitsPattern.FindAllStringSubmatchIndex(prompt, -1) {
@@ -310,6 +316,25 @@ func parseScopeCandidates(prompt string) ([]scopeCandidate, string) {
 			return nil, err.Error()
 		}
 		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "head_relative_range"))
+	}
+	for _, pattern := range []struct {
+		expression *regexp.Regexp
+		kind       string
+	}{
+		{expression: lastDaysPattern, kind: "last_days"},
+		{expression: recentDaysPattern, kind: "recent_days_zh"},
+	} {
+		for _, match := range pattern.expression.FindAllStringSubmatchIndex(prompt, -1) {
+			days, err := parseRelativeDayCount(prompt[match[2]:match[3]])
+			if err != nil {
+				return nil, err.Error()
+			}
+			date := now.UTC().AddDate(0, 0, -days).Format(time.DateOnly)
+			candidates = append(candidates, scopeCandidate{
+				value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
+				evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: pattern.kind},
+			})
+		}
 	}
 	for _, match := range revisionPattern.FindAllStringSubmatchIndex(prompt, -1) {
 		if overlapsAny(match[0], match[1], headRanges) {
@@ -331,6 +356,14 @@ func parseScopeCandidates(prompt string) ([]scopeCandidate, string) {
 		})
 	}
 	return candidates, ""
+}
+
+func parseRelativeDayCount(value string) (int, error) {
+	days, err := strconv.Atoi(value)
+	if err != nil || days < 1 || days > 366 {
+		return 0, errors.New("relative review day count must be a base-10 integer between 1 and 366")
+	}
+	return days, nil
 }
 
 func parseScopeCount(value string) (int, error) {
@@ -470,7 +503,7 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	if err := ensureEmptyOutputDir(outputDir); err != nil {
 		return actionResult{}, err
 	}
-	if rel, relErr := filepath.Rel(artifactRoot, outputDir); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !pathWithin(artifactRoot, outputDir) {
 		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
 
@@ -633,12 +666,7 @@ func resolveOutputDir(repo, output string) (string, error) {
 	if !filepath.IsAbs(output) {
 		output = filepath.Join(repo, output)
 	}
-	output = filepath.Clean(output)
-	rel, err := filepath.Rel(repo, output)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("output_dir %q must be inside repository", output)
-	}
-	return output, nil
+	return canonicalPath(output)
 }
 
 func resolveArtifactRoot(repo, root string) (string, error) {
@@ -652,12 +680,40 @@ func resolveArtifactRoot(repo, root string) (string, error) {
 	if !filepath.IsAbs(root) {
 		root = filepath.Join(repo, root)
 	}
-	root = filepath.Clean(root)
-	rel, err := filepath.Rel(repo, root)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("artifact_root %q must be inside repository", root)
+	return canonicalPath(root)
+}
+
+// canonicalPath resolves the existing portion of path before appending any
+// missing suffix. This keeps containment checks correct when a path contains a
+// symlink, while still allowing the producer to create a new action directory.
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
 	}
-	return root, nil
+	abs = filepath.Clean(abs)
+	for current := abs; ; current = filepath.Dir(current) {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			suffix, suffixErr := filepath.Rel(current, abs)
+			if suffixErr != nil {
+				return "", suffixErr
+			}
+			return filepath.Clean(filepath.Join(resolved, suffix)), nil
+		}
+		if !errors.Is(resolveErr, os.ErrNotExist) {
+			return "", fmt.Errorf("resolve path %q: %w", path, resolveErr)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("resolve path %q: %w", path, resolveErr)
+		}
+	}
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func ensureEmptyOutputDir(path string) error {
@@ -1027,7 +1083,18 @@ func fileArtifact(root, path, kind string) (artifact, error) {
 	if err != nil {
 		return artifact{}, fmt.Errorf("read artifact %q: %w", path, err)
 	}
-	rel, err := filepath.Rel(root, path)
+	canonicalRoot, err := canonicalPath(root)
+	if err != nil {
+		return artifact{}, fmt.Errorf("resolve artifact root: %w", err)
+	}
+	resolvedPath, err := canonicalPath(path)
+	if err != nil {
+		return artifact{}, fmt.Errorf("resolve artifact path: %w", err)
+	}
+	if !pathWithin(canonicalRoot, resolvedPath) {
+		return artifact{}, fmt.Errorf("artifact path %q escapes artifact root %q", path, root)
+	}
+	rel, err := filepath.Rel(canonicalRoot, resolvedPath)
 	if err != nil {
 		return artifact{}, fmt.Errorf("make artifact path relative: %w", err)
 	}

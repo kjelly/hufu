@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/skillname"
 )
 
 type createSkillArgs struct {
@@ -60,6 +62,9 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 
 			if !validSkillName.MatchString(args.Name) {
 				return fantasy.NewTextErrorResponse("invalid name: must contain only letters, digits, '-', or '_' (no path separators)"), nil
+			}
+			if err := skillname.Validate(args.Name); err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
 			if cfg.WorkDir == "" {

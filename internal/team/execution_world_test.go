@@ -179,8 +179,9 @@ func TestExecutionWorldSerializesSharedWorkspace(t *testing.T) {
 	secondWorld := NewLocalExecutionWorld()
 	secondReady := make(chan *PreparedExecutionWorld, 1)
 	secondErr := make(chan error, 1)
+	secondContext := t.Context()
 	go func() {
-		prepared, prepareErr := secondWorld.Prepare(context.Background(), ExecutionWorldSpec{Root: root, SideEffect: SideEffectWorkspaceWrite})
+		prepared, prepareErr := secondWorld.Prepare(secondContext, ExecutionWorldSpec{Root: root, SideEffect: SideEffectWorkspaceWrite})
 		if prepareErr != nil {
 			secondErr <- prepareErr
 			return
@@ -197,11 +198,43 @@ func TestExecutionWorldSerializesSharedWorkspace(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 
+	if err := os.WriteFile(filepath.Join(root, "attempt-one.txt"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	firstFinal, err := firstWorld.Snapshot(t.Context(), first)
+	if err != nil {
+		t.Fatalf("first final Snapshot: %v", err)
+	}
+	firstDelta, err := firstWorld.snapshotter.Diff(t.Context(), first.Baseline, firstFinal)
+	if err != nil {
+		t.Fatalf("first Diff: %v", err)
+	}
+	if len(firstDelta.Added) != 1 || firstDelta.Added[0].Path != "attempt-one.txt" {
+		t.Fatalf("first delta = %#v, want only attempt-one.txt", firstDelta)
+	}
+
 	if err := firstWorld.Release(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case prepared := <-secondReady:
+		if _, err := prepared.Baseline.fileState("attempt-one.txt"); err != nil {
+			t.Fatalf("second baseline did not include the completed first attempt: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "attempt-two.txt"), []byte("second"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		secondFinal, err := secondWorld.Snapshot(t.Context(), prepared)
+		if err != nil {
+			t.Fatalf("second final Snapshot: %v", err)
+		}
+		secondDelta, err := secondWorld.snapshotter.Diff(t.Context(), prepared.Baseline, secondFinal)
+		if err != nil {
+			t.Fatalf("second Diff: %v", err)
+		}
+		if len(secondDelta.Added) != 1 || secondDelta.Added[0].Path != "attempt-two.txt" {
+			t.Fatalf("second delta = %#v, want only attempt-two.txt", secondDelta)
+		}
 		if err := secondWorld.Release(context.Background(), prepared); err != nil {
 			t.Fatal(err)
 		}

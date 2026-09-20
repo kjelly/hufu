@@ -96,9 +96,6 @@ func resolveImproveWorkspace(value string) (string, error) {
 		return workspacepkg.CanonicalExistingDirectory(value)
 	}
 	teamName := strings.ToLower(strings.TrimSpace(improveTeam))
-	if teamName == "" {
-		teamName = "default"
-	}
 	workspace, err := resolveExistingManagedWorkspacePath(context.Background(), runtimeStartDir(), teamName)
 	if err != nil {
 		return "", fmt.Errorf("resolve managed workspace: %w", err)

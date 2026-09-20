@@ -33,6 +33,41 @@ func TestSkillPatternSnapshotEmptyEvaluationReplacesPreviousData(t *testing.T) {
 	}
 }
 
+func TestSkillPatternAnalysisRequiresAutoSkills(t *testing.T) {
+	workspace := t.TempDir()
+	c := skillPatternSnapshotTestCoordinator(workspace)
+	c.autoSkillsEnabled = false
+	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
+
+	c.checkSkillPatterns(t.Context())
+
+	if _, available, err := skill.LoadSkillPatternSnapshot(skill.SkillPatternSnapshotPath(workspace)); err != nil {
+		t.Fatal(err)
+	} else if available {
+		t.Fatal("skill pattern snapshot written while auto-skills was disabled")
+	}
+}
+
+func TestSkillPatternRecordingRequiresAutoSkillsAndIgnoresControlTools(t *testing.T) {
+	c := skillPatternSnapshotTestCoordinator(t.TempDir())
+	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
+	c.autoSkillsEnabled = false
+	c.recordSkillPatternToolCall("coder", "view", `{}`, "inspect")
+	if got := c.skillDetector.GetToolCallCount(); got != 0 {
+		t.Fatalf("disabled auto-skills recorded %d calls, want 0", got)
+	}
+
+	c.autoSkillsEnabled = true
+	c.recordSkillPatternToolCall("coder", "submit_result", `{}`, "finish")
+	if got := c.skillDetector.GetToolCallCount(); got != 0 {
+		t.Fatalf("runtime control tool recorded %d calls, want 0", got)
+	}
+	c.recordSkillPatternToolCall("coder", "view", `{}`, "inspect")
+	if got := c.skillDetector.GetToolCallCount(); got != 1 {
+		t.Fatalf("ordinary tool calls recorded = %d, want 1", got)
+	}
+}
+
 func TestSkillPatternSnapshotAtomicWriteFailureDoesNotFailRun(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "skills"), []byte("not a directory"), 0o600); err != nil {
@@ -73,6 +108,7 @@ func TestSkillPatternEvaluationDoesNotReplaceSnapshotAfterCancellation(t *testin
 
 func TestRunDirectAgentEvaluatesSkillPatternsAtInvocationBoundary(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
+	c.autoSkillsEnabled = true
 	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
 
 	if _, err := c.RunDirectAgent(t.Context(), "worker", "perform direct work"); err != nil {
@@ -156,7 +192,8 @@ func skillPatternSnapshotTestCoordinator(workspace string) *Coordinator {
 			Workspace: workspace,
 			Config:    agent.TeamConfig{Name: "test-team"},
 		},
-		executionRunID: "run-test",
+		executionRunID:    "run-test",
+		autoSkillsEnabled: true,
 	}
 }
 

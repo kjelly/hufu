@@ -291,7 +291,7 @@ func resolveSkillLifecycleTarget() (skillLifecycleTarget, error) {
 		return skillLifecycleTarget{skillsDir: skillsDir, discoveryDirs: []string{skillsDir}, usageDir: usageDir}, nil
 	}
 
-	workspace, err := resolveSkillWorkspace("default")
+	workspace, err := resolveSkillWorkspace("")
 	if err != nil {
 		return skillLifecycleTarget{}, err
 	}
@@ -319,9 +319,6 @@ func getWorkspace() string {
 		return opts.workspace
 	}
 	teamName := strings.ToLower(strings.TrimSpace(opts.agentTeamName))
-	if teamName == "" {
-		teamName = "default"
-	}
 	workspace, err := resolveExistingManagedWorkspacePath(context.Background(), runtimeStartDir(), teamName)
 	if err != nil {
 		return ""

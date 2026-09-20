@@ -21,6 +21,15 @@ test evidence needed to support a conclusion. Do not use shell, write files,
 run a repository-wide review, infer a range from Git, or call `load_skill`; the
 assigned review does not need dynamic skill loading.
 
+The assigned diff artifact is the complete immutable boundary of this workset
+item. Treat artifact EOF as the end of the assigned batch, not as evidence that
+the artifact was truncated merely because the surrounding source file
+continues. Do not request offsets beyond EOF or read every touched path as a
+completeness exercise. Before reading repository source beyond the artifact,
+name the specific suspected finding, invariant, caller/callee, or focused test
+that requires it; stop exploring once that evidence is sufficient and preserve
+enough budget for the final typed `submit_result`.
+
 Apply the checklist selected by the lens:
 
 - `general`: correctness, regressions, API behavior, errors, concurrency, and

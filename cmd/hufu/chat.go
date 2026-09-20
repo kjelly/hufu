@@ -315,6 +315,11 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 
 		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
 		// returns to the prompt rather than exiting the REPL.
+		turnInvocationID := team.NewInvocationID()
+		opts.invocationID = turnInvocationID
+		tc.coordinator.SetInvocationID(turnInvocationID)
+		turnRunCounts := snapshotExecutionRunCounts(map[string]*teamContext{teamName: tc})
+		stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval)
 		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
 		disp := newCoordDisplay(tc)
 		var result string
@@ -325,21 +330,26 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 		}
 		disp.stopTimer()
 		cancel()
+		stopIdentityHeartbeat()
+		turnRunIdentities := collectExecutionRunIdentities(map[string]*teamContext{teamName: tc}, turnRunCounts)
 
 		if err != nil {
 			if turnCtx.Err() == context.Canceled {
 				fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
+				emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
 				// A cancelled first turn still established history inside the
 				// coordinator, so next turn must use ContinueWithPrompt.
 				turn++
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "%s Error executing: %v\n\n", errStyle.Render("✗"), err)
+			emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
 			continue
 		}
 
 		disp.finalizeTasks()
 		fmt.Println(result)
+		emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
 		fmt.Fprintln(os.Stderr)
 		turn++
 

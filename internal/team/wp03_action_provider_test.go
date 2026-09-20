@@ -151,6 +151,7 @@ func TestIngestActionProviderArtifactsRejectsMissingAndEscapedPaths(t *testing.T
 func newCommandActionCoordinator(t *testing.T, command []string, runID string) (*Coordinator, *TeamSession) {
 	t.Helper()
 	session := workflowTestSession(t)
+	session.Dir = t.TempDir()
 	registry := NewProviderRegistry()
 	registry.Register("structured-actions", &commandActionProvider{capability: "structured-actions", command: command})
 	session.ProviderRegistry = registry
@@ -167,19 +168,28 @@ func newCommandActionCoordinator(t *testing.T, command []string, runID string) (
 	if err := w.observe([]*TodoItem{{Agent: "auditor", ContractID: "audit", Phase: PhaseAudit, Status: TaskDone}}); err != nil {
 		t.Fatal(err)
 	}
-	return &Coordinator{session: session, taskTracker: NewTaskTracker(), phaseWorkflow: w, executionRunID: runID}, session
+	return &Coordinator{session: session, projectDir: session.Dir, taskTracker: NewTaskTracker(), phaseWorkflow: w, executionRunID: runID}, session
 }
 
 func TestRuntimeActionCommandProviderGetsFreshNamespacesAndPreservesEvidence(t *testing.T) {
 	command := []string{"/bin/sh", "-c", `set -eu
+if [ ! -d "$HUFU_REPOSITORY" ] || [ "$HUFU_REPOSITORY" = "$HUFU_WORKSPACE" ]; then
+  echo "provider did not receive distinct repository and action workspace roots" >&2
+  exit 40
+fi
+if [ "$HUFU_REPOSITORY" != "$HUFU_EXPECTED_REPOSITORY" ]; then
+  echo "provider did not receive the coordinator subject root" >&2
+  exit 42
+fi
 if [ -n "$(find "$HUFU_WORKSPACE" -mindepth 1 -print -quit)" ]; then
   echo "provider workspace is not empty" >&2
   exit 41
 fi
 printf '%s' "$HUFU_ACTION_INVOCATION_ID" > "$HUFU_WORKSPACE/artifact.txt"
 printf '{"outputs":{"action_id":"%s"},"artifacts":[{"path":"artifact.txt","kind":"provider-output"}]}' "$HUFU_ACTION_INVOCATION_ID"
-`}
+	`}
 	c, session := newCommandActionCoordinator(t, command, "run-command")
+	t.Setenv("HUFU_EXPECTED_REPOSITORY", session.Dir)
 	oldEvidence := filepath.Join(session.Workspace, "workset", "workset-manifest.json")
 	if err := os.MkdirAll(filepath.Dir(oldEvidence), 0o755); err != nil {
 		t.Fatal(err)

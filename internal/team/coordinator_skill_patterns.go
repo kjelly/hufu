@@ -23,7 +23,7 @@ import (
 // checkSkillPatterns checks for repeating tool call patterns and auto-generates skill drafts.
 // A canceled invocation does not replace the last completed projection.
 func (c *Coordinator) checkSkillPatterns(ctx context.Context) {
-	if c.skillDetector == nil {
+	if !c.autoSkillsEnabled || c.skillDetector == nil {
 		return
 	}
 	if ctx == nil || ctx.Err() != nil {
@@ -88,6 +88,13 @@ func (c *Coordinator) checkSkillPatterns(ctx context.Context) {
 	}
 
 	c.report(c.newEvent("step").withMessage(msg.String()))
+}
+
+func (c *Coordinator) recordSkillPatternToolCall(agentName, toolName, input, taskDesc string) {
+	if c == nil || !c.autoSkillsEnabled || c.skillDetector == nil {
+		return
+	}
+	c.skillDetector.RecordToolCall(agentName, toolName, input, taskDesc)
 }
 
 func (c *Coordinator) skillDraftReviewCommand(draftName string) string {

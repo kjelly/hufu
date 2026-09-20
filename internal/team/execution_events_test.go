@@ -22,7 +22,7 @@ func TestExecutionEventLoggerWritesStructuredEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := ExecutionEvent{Version: 1, Timestamp: "2026-07-12T12:00:00Z", RunID: "run-test", Team: "dev", TaskID: "42", Agent: "developer", Attempt: 2, Status: "done", Usage: ExecutionUsage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}}
+	event := ExecutionEvent{Version: 1, Timestamp: "2026-07-12T12:00:00Z", InvocationID: "inv-test", RunID: "run-test", Team: "dev", TaskID: "42", Agent: "developer", Attempt: 2, Status: "done", Usage: ExecutionUsage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8}}
 	if err := logger.append(event); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,23 @@ func TestExecutionEventLoggerWritesStructuredEvent(t *testing.T) {
 	if err := json.Unmarshal(scanner.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.RunID != event.RunID || got.TaskID != event.TaskID || got.Attempt != 2 || got.Usage.TotalTokens != 8 {
+	if got.InvocationID != event.InvocationID || got.RunID != event.RunID || got.TaskID != event.TaskID || got.Attempt != 2 || got.Usage.TotalTokens != 8 {
 		t.Fatalf("event = %+v", got)
+	}
+}
+
+func TestNewInvocationIDIsDistinctFromExecutionRunID(t *testing.T) {
+	first := NewInvocationID()
+	second := NewInvocationID()
+	runID := newExecutionRunID()
+	if !strings.HasPrefix(first, "inv-") || !strings.HasPrefix(second, "inv-") {
+		t.Fatalf("invocation IDs = %q, %q; want inv- prefix", first, second)
+	}
+	if first == second {
+		t.Fatalf("NewInvocationID reused %q", first)
+	}
+	if !strings.HasPrefix(runID, "run-") {
+		t.Fatalf("execution run ID = %q, want run- prefix", runID)
 	}
 }
 

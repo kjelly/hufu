@@ -204,6 +204,7 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 				if opts.stepsMode {
 					loaded.coordinator.SetStepConfirmFn(makeStepConfirmFn())
 				}
+				loaded.coordinator.SetInvocationID(opts.invocationID)
 				tc = loaded
 				loadedTeams[teamName] = tc
 			}

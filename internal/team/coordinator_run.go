@@ -1136,7 +1136,6 @@ var coordinatorCoreToolNames = map[string]bool{
 	"ask_user":       true,
 	"finish":         true,
 	"load_skill":     true,
-	"save_skill":     true,
 	"view":           true,
 	"grep":           true,
 	"glob":           true,
@@ -1170,7 +1169,6 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 			c.RunAgentsTool(),
 			&finishTool{coordinator: c},
 			&loadSkillTool{coordinator: c},
-			&saveSkillTool{coordinator: c},
 		}
 		for _, t := range c.coreTools {
 			name := t.Info().Name
@@ -1191,7 +1189,6 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 		&modifyPlanTool{coordinator: c},
 		&rejectPlanTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
-		&saveSkillTool{coordinator: c},
 	}
 	for _, t := range c.coreTools {
 		name := t.Info().Name

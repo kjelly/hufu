@@ -70,6 +70,9 @@ func parseSkillBytes(raw []byte) (*SkillDef, error) {
 	if fm["name"] == "" {
 		return nil, fmt.Errorf("skill draft is missing required name")
 	}
+	if err := ValidateSkillName(fm["name"]); err != nil {
+		return nil, err
+	}
 	def := &SkillDef{
 		Name:         fm["name"],
 		Description:  fm["description"],

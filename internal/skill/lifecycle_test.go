@@ -106,6 +106,25 @@ func TestPromoteDraft_NotFound(t *testing.T) {
 	}
 }
 
+func TestPromoteDraftRejectsRuntimeControlName(t *testing.T) {
+	dir := t.TempDir()
+	draftDir := filepath.Join(dir, "drafts", "draft-submit-result")
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "SKILL.md"),
+		[]byte("---\nname: draft-submit-result\n---\n\n# Submit result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := PromoteDraft(dir, "draft-submit-result"); err == nil {
+		t.Fatal("PromoteDraft() succeeded for runtime-owned submit-result")
+	}
+	if _, err := os.Stat(draftDir); err != nil {
+		t.Fatalf("rejected draft was moved: %v", err)
+	}
+}
+
 func TestCleanDrafts_DryRun(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"old", "new"} {

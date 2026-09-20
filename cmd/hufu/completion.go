@@ -269,6 +269,7 @@ export extern "hufu" [
   --sidecar-model: string # Override sidecar model
   --guard-model: string # Override guard model
   --timeout: int # Override agent/coordinator timeout in seconds
+  --graceful-wrap-up-timeout: string # Maximum wait after the first Ctrl+C (for example 45m or 2h)
   --unattended # Run with no human present
   --max-duration: int # Budget: max total wall-clock seconds
   --max-total-tokens: int # Budget: max cumulative LLM tokens

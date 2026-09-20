@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +24,21 @@ func TestSkillPatternDetector_RecordToolCall(t *testing.T) {
 
 	if detector.GetSequenceCount() == 0 {
 		t.Error("Expected at least 1 sequence to be detected")
+	}
+}
+
+func TestSkillPatternDetectorIgnoresRuntimeControlTools(t *testing.T) {
+	detector := NewSkillPatternDetector(1, 2, 3)
+
+	for _, tool := range []string{"submit_result", "submit-result", "save_skill", "finish"} {
+		detector.RecordToolCall("agent1", tool, `{}`, "complete task")
+	}
+
+	if got := detector.GetToolCallCount(); got != 0 {
+		t.Fatalf("runtime control calls recorded = %d, want 0", got)
+	}
+	if got := detector.GetSequenceCount(); got != 0 {
+		t.Fatalf("runtime control sequences recorded = %d, want 0", got)
 	}
 }
 
@@ -217,6 +233,23 @@ func TestAutoSkillGenerator(t *testing.T) {
 	}
 	if !strings.Contains(content, "last_modified:") {
 		t.Error("Expected last_modified frontmatter field")
+	}
+}
+
+func TestAutoSkillGeneratorRejectsRuntimeControlName(t *testing.T) {
+	baseDir := t.TempDir()
+	generator := NewAutoSkillGenerator(baseDir)
+	candidate := PatternCandidate{
+		Sequence:      &ToolSequence{Tools: []string{"view"}, Count: 1},
+		SuggestedName: "submit-result",
+		SuggestedDesc: "must remain a runtime protocol",
+	}
+
+	if _, err := generator.GenerateSkill(candidate); err == nil {
+		t.Fatal("GenerateSkill() succeeded for runtime-owned submit-result")
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "drafts", "submit-result")); !os.IsNotExist(err) {
+		t.Fatalf("reserved draft directory exists after rejection: %v", err)
 	}
 }
 

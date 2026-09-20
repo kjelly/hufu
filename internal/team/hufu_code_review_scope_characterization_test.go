@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -118,4 +119,79 @@ func TestHufuCodeReviewCompatibilityVarNoLongerControlsScope(t *testing.T) {
 		return
 	}
 	t.Fatal("hufu-code-review produce-workset static action is missing")
+}
+
+func TestHufuCodeReviewGatesRecurringRuntimeInvariants(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+
+	var reviewTask *TaskDef
+	for index := range session.ContractTasks {
+		if session.ContractTasks[index].ID == "review-workset" {
+			reviewTask = &session.ContractTasks[index]
+			break
+		}
+	}
+	if reviewTask == nil {
+		t.Fatal("hufu-code-review review-workset static task is missing")
+	}
+	if reviewTask.InvariantVerification != InvariantVerificationReport || reviewTask.Optional {
+		t.Fatalf("review-workset invariant policy = %q optional=%t, want report", reviewTask.InvariantVerification, reviewTask.Optional)
+	}
+
+	required := map[string]string{
+		"runtime-owner-boundary":               "closest existing domain owner",
+		"task-lifecycle-single-owner":          "Coordinator.executeTask",
+		"decision-projection-lifecycle":        "durable decision/assumption occurrence",
+		"provider-stream-process-owner":        "CodexRPCClient",
+		"workspace-execution-world-boundary":   "ExecutionWorld",
+		"resolved-model-identity":              "modelprofile catalog/runtime resolution",
+		"durable-contract-provenance":          "durable task contract",
+		"compatibility-normalization-boundary": "schema parsers and explicit migration adapters",
+	}
+	byID := make(map[string]InvariantDefinition, len(session.InvariantCatalog))
+	for _, definition := range session.InvariantCatalog {
+		byID[definition.ID] = definition
+	}
+	for invariantID, owner := range required {
+		definition, ok := byID[invariantID]
+		if !ok {
+			t.Errorf("recurring runtime invariant %q is absent from the review gate", invariantID)
+			continue
+		}
+		if definition.Severity != InvariantSeverityError {
+			t.Errorf("recurring runtime invariant %q severity = %q, want error", invariantID, definition.Severity)
+		}
+		for _, requiredText := range []string{"Canonical owner:", owner, "Regression evidence:"} {
+			if !strings.Contains(definition.Statement, requiredText) {
+				t.Errorf("recurring runtime invariant %q omits %q", invariantID, requiredText)
+			}
+		}
+	}
+
+	hotspots := map[string][]string{
+		"internal/team/future_runtime_boundary.go":           {"runtime-owner-boundary"},
+		"internal/team/coordinator_task_run.go":              {"task-lifecycle-single-owner"},
+		"internal/team/decision_assumptions.go":              {"decision-projection-lifecycle"},
+		"internal/team/codex_appserver_client.go":            {"provider-stream-process-owner"},
+		"internal/team/workspace_snapshot.go":                {"workspace-execution-world-boundary"},
+		"internal/team/model_profile_runtime.go":             {"resolved-model-identity"},
+		"internal/team/event_store.go":                       {"durable-contract-provenance"},
+		"internal/team/execution_compatibility_migration.go": {"compatibility-normalization-boundary"},
+	}
+	for path, invariantIDs := range hotspots {
+		for _, invariantID := range invariantIDs {
+			definition, ok := byID[invariantID]
+			if !ok {
+				continue
+			}
+			if !invariantAppliesToTouchedPaths(definition, []string{path}) {
+				t.Errorf("hotspot %q is not covered by recurring runtime invariant %q; applies-to=%v", path, invariantID, definition.AppliesTo)
+			}
+		}
+	}
+
+	memory, ok := byID["sqlite-canonical-memory"]
+	if !ok || !slices.Contains(memory.AppliesTo, "internal/context/") {
+		t.Errorf("canonical memory invariant lost internal/context coverage: %#v", memory)
+	}
 }

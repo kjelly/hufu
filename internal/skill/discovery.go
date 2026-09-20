@@ -148,6 +148,10 @@ func (d *SkillPatternDetector) SetModelInvoker(invoker SkillModelInvoker) {
 
 // RecordToolCall records a tool call for pattern analysis
 func (d *SkillPatternDetector) RecordToolCall(agent, tool, input, taskDesc string) {
+	if IsReservedSkillName(tool) {
+		return
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

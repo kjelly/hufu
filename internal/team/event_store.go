@@ -3,6 +3,7 @@ package team
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -38,6 +39,7 @@ type RunEvent struct {
 	SchemaVersion  int             `json:"schema_version"`
 	ID             string          `json:"id"`
 	PreviousID     string          `json:"previous_id,omitempty"`
+	InvocationID   string          `json:"invocation_id,omitempty"`
 	RunID          string          `json:"run_id"`
 	SessionID      string          `json:"session_id"`
 	BranchID       string          `json:"branch_id,omitempty"`
@@ -72,6 +74,7 @@ type EventStore struct {
 	f               *os.File
 	path            string
 	runID           string
+	invocationID    string
 	sessionID       string
 	branchID        string
 	lastEventID     string
@@ -96,6 +99,14 @@ func (es *EventStore) SetBranchID(branchID string) {
 	es.lock()
 	defer es.release()
 	es.branchID = branchID
+}
+
+// SetInvocationID binds subsequent events to their top-level CLI invocation.
+// Historical writers that do not set it remain valid and omit the field.
+func (es *EventStore) SetInvocationID(invocationID string) {
+	es.lock()
+	defer es.release()
+	es.invocationID = strings.TrimSpace(invocationID)
 }
 
 // ComputeEventHash computes a SHA-256 hash over an event's prevHash, ID, type, timestamp, and payload.
@@ -405,6 +416,7 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		}
 		event.RunID = es.runID
 	}
+	event.InvocationID = cmp.Or(event.InvocationID, es.invocationID)
 	if event.SessionID == "" {
 		if es.sessionID == "" {
 			es.sessionID = filepath.Base(filepath.Dir(filepath.Dir(es.path)))

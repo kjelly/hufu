@@ -69,3 +69,25 @@ func TestCreateSkillToolAcceptsValidName(t *testing.T) {
 		t.Errorf("skill content = %q, want %q", string(data), "# hello")
 	}
 }
+
+func TestCreateSkillToolRejectsRuntimeControlName(t *testing.T) {
+	workDir := t.TempDir()
+	tool := NewCreateSkillTool(WithWorkDir(workDir))
+	ctx := SetToolsAllowed(t.Context(), []string{"create_skill"})
+
+	for _, name := range []string{"submit_result", "submit-result", "save_skill"} {
+		t.Run(name, func(t *testing.T) {
+			input := fmt.Sprintf(`{"name": %q, "description": "d", "content": "# control"}`, name)
+			result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
+			if err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+			if !result.IsError || !strings.Contains(result.Content, "reserved for runtime control") {
+				t.Fatalf("reserved name %q result = %#v", name, result)
+			}
+			if _, err := os.Stat(filepath.Join(workDir, "skills", name)); !os.IsNotExist(err) {
+				t.Fatalf("reserved skill directory exists: %v", err)
+			}
+		})
+	}
+}

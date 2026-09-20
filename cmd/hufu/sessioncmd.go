@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -276,8 +278,15 @@ var sessionDiffCmd = &cobra.Command{
 }
 
 func getSessionWorkspace() string {
+	return getSessionWorkspaceForTeam("")
+}
+
+func getSessionWorkspaceForTeam(teamName string) string {
 	if sessionWorkspace != "" {
 		return sessionWorkspace
+	}
+	if strings.TrimSpace(teamName) != "" {
+		return resolveWorkspaceForTeam(context.Background(), teamName)
 	}
 	return getWorkspace()
 }

@@ -9,6 +9,7 @@ const (
 	EventRunStarted                              EventType = "run_started"
 	EventRunFinished                             EventType = "run_finished"
 	EventWrapUpPhase                             EventType = "wrap_up_phase"
+	EventRunCancellationRequested                EventType = "run_cancellation_requested"
 	EventUserMessageAdded                        EventType = "user_message_added"
 	EventAssistantMessageAdded                   EventType = "assistant_message_added"
 	EventTaskCreated                             EventType = "task_created"
@@ -91,7 +92,7 @@ func (e EventType) String() string { return string(e) }
 // reducers intentionally ignore what they do not understand.
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
-	case EventRunStarted, EventRunFinished, EventWrapUpPhase,
+	case EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
 		EventUserMessageAdded, EventAssistantMessageAdded,
 		EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted,
 		EventTaskFailed, EventTaskBlocked, EventTaskSkipped,

@@ -18,10 +18,10 @@ func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := []RunEvent{
-		{Type: string(EventRunStarted), RunID: "run-1", Timestamp: "2026-01-01T00:00:00Z", Payload: []byte(`{"team":"team"}`)},
-		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Timestamp: "2026-01-01T00:00:01Z", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
-		{Type: string(EventTaskCompleted), RunID: "run-1", TaskID: "1", Actor: "worker", Timestamp: "2026-01-01T00:00:02Z", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
-		{Type: string(EventRunFinished), RunID: "run-1", Timestamp: "2026-01-01T00:00:03Z", Payload: payload},
+		{Type: string(EventRunStarted), InvocationID: "inv-1", RunID: "run-1", Timestamp: "2026-01-01T00:00:00Z", Payload: []byte(`{"team":"team"}`)},
+		{Type: string(EventTaskStarted), InvocationID: "inv-1", RunID: "run-1", TaskID: "1", Actor: "worker", Timestamp: "2026-01-01T00:00:01Z", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
+		{Type: string(EventTaskCompleted), InvocationID: "inv-1", RunID: "run-1", TaskID: "1", Actor: "worker", Timestamp: "2026-01-01T00:00:02Z", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
+		{Type: string(EventRunFinished), InvocationID: "inv-1", RunID: "run-1", Timestamp: "2026-01-01T00:00:03Z", Payload: payload},
 	}
 	workspace := t.TempDir()
 	if err := ExportExecutionEvents(workspace, events); err != nil {
@@ -32,7 +32,7 @@ func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 4 || !strings.Contains(lines[1], `"status":"in_progress"`) || !strings.Contains(lines[3], `"evidence_manifest_hash":"manifest-1"`) {
+	if len(lines) != 4 || !strings.Contains(lines[1], `"status":"in_progress"`) || !strings.Contains(lines[1], `"invocation_id":"inv-1"`) || !strings.Contains(lines[3], `"evidence_manifest_hash":"manifest-1"`) {
 		t.Fatalf("exported events = %s", data)
 	}
 }

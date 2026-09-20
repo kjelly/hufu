@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,7 +36,6 @@ import (
 // pseudo-task that appears in the TUI and status reporting.
 const CoordTodoID = "__coord__"
 
-var skillSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
 var taskStatusRe = regexp.MustCompile(`\*\*Status:\*\*\s*(\S+)`)
 var extraWSSeq atomic.Uint64
 var actionWorkspaceSeq atomic.Uint64
@@ -663,6 +663,14 @@ type Coordinator struct {
 	executionEvents       *executionEventLogger
 	executionRunID        string
 	executionTeamRevision string
+	invocationIDMu        sync.RWMutex
+	invocationID          string
+	// executionRunHistory retains every run identity allocated by this
+	// coordinator instance, including a run whose terminal projection later
+	// fails. CLI callers snapshot the length before dispatch and publish the
+	// newly allocated IDs so operators can inspect every attempted invocation.
+	executionRunHistoryMu sync.RWMutex
+	executionRunHistory   []string
 	wrapUpMu              sync.Mutex
 	runInputAssignments   []RunInputAssignment
 	// executionCompatibilityObserver contains only a read-only, content-free
@@ -1021,6 +1029,43 @@ func (c *Coordinator) LastRunResult() *RunResult {
 	c.lastRunResultMu.RLock()
 	defer c.lastRunResultMu.RUnlock()
 	return c.lastRunResult
+}
+
+// ExecutionRunIDs returns the run identities allocated during this
+// coordinator instance's lifetime in allocation order. The returned slice is
+// detached from coordinator state and is safe for callers to retain.
+func (c *Coordinator) ExecutionRunIDs() []string {
+	if c == nil {
+		return nil
+	}
+	c.executionRunHistoryMu.RLock()
+	defer c.executionRunHistoryMu.RUnlock()
+	return slices.Clone(c.executionRunHistory)
+}
+
+// SetInvocationID binds subsequent execution runs to the operator-visible CLI
+// invocation that owns them. Callers may update it between public Run calls,
+// as the interactive chat command does for each independently reviewable turn.
+func (c *Coordinator) SetInvocationID(invocationID string) {
+	if c == nil {
+		return
+	}
+	invocationID = strings.TrimSpace(invocationID)
+	c.invocationIDMu.Lock()
+	c.invocationID = invocationID
+	c.invocationIDMu.Unlock()
+	if c.eventStore != nil {
+		c.eventStore.SetInvocationID(invocationID)
+	}
+}
+
+func (c *Coordinator) currentInvocationID() string {
+	if c == nil {
+		return ""
+	}
+	c.invocationIDMu.RLock()
+	defer c.invocationIDMu.RUnlock()
+	return c.invocationID
 }
 
 // SetLastRunResult sets the computed RunResult for this coordinator.
@@ -1509,7 +1554,6 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		&requestAgentTool{coordinator: c},
 		&todoTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
-		&saveSkillTool{coordinator: c},
 		&stmWriteTool{coordinator: c},
 		&ltmUpdateTool{coordinator: c},
 		&teamInfoTool{coordinator: c},

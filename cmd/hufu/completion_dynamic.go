@@ -191,6 +191,9 @@ func completionWorkspace(command *cobra.Command) string {
 	if value := strings.TrimSpace(commandFlagValue(command, "workspace")); value != "" {
 		return value
 	}
+	if teamName := strings.TrimSpace(commandFlagValue(command, "team")); teamName != "" {
+		return resolveWorkspaceForTeam(completionContext(command), teamName)
+	}
 	return getWorkspace()
 }
 

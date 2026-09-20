@@ -54,6 +54,7 @@ type ExecutionUsage struct {
 type ExecutionEvent struct {
 	Version              int             `json:"version"`
 	Timestamp            string          `json:"timestamp"`
+	InvocationID         string          `json:"invocation_id,omitempty"`
 	RunID                string          `json:"run_id"`
 	Team                 string          `json:"team"`
 	TaskID               string          `json:"task_id"`
@@ -185,11 +186,21 @@ func (l *executionEventLogger) close() {
 }
 
 func newExecutionRunID() string {
+	return newRuntimeIdentity("run")
+}
+
+// NewInvocationID returns the operator-visible identity for one top-level CLI
+// execution. Every durable run created by that command carries this parent ID.
+func NewInvocationID() string {
+	return newRuntimeIdentity("inv")
+}
+
+func newRuntimeIdentity(prefix string) string {
 	buf := make([]byte, 6)
 	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("run-%d", time.Now().UnixNano())
+		return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	}
-	return fmt.Sprintf("run-%s-%s", time.Now().UTC().Format("20060102T150405.000000000Z"), hex.EncodeToString(buf))
+	return fmt.Sprintf("%s-%s-%s", prefix, time.Now().UTC().Format("20060102T150405.000000000Z"), hex.EncodeToString(buf))
 }
 
 func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
@@ -304,6 +315,9 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.executionAttemptSeq.Store(0)
 	c.rebuildAntiThrashingState()
 	runID := newExecutionRunID()
+	c.executionRunHistoryMu.Lock()
+	c.executionRunHistory = append(c.executionRunHistory, runID)
+	c.executionRunHistoryMu.Unlock()
 	teamRevision := ""
 	if c.session != nil {
 		teamRevision = teamDefinitionRevision(c.session.Dir)
@@ -380,6 +394,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 		_ = logger.append(ExecutionEvent{
 			Version:      executionEventSchemaVersion,
 			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+			InvocationID: c.currentInvocationID(),
 			RunID:        runID,
 			Team:         teamName,
 			Status:       "run_started",
@@ -604,7 +619,7 @@ func (c *Coordinator) recordRunTelemetry(result *RunResult) {
 		hash = result.EvidenceManifest.ManifestHash
 	}
 	_ = logger.append(ExecutionEvent{
-		Version: executionEventSchemaVersion, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), RunID: runID,
+		Version: executionEventSchemaVersion, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), InvocationID: c.currentInvocationID(), RunID: runID,
 		Team: c.session.Config.Name, Status: "run_finished", TeamRevision: revision,
 		Outcome: result.Outcome, StopReason: result.StopReason, AcceptanceState: state,
 		EvidenceManifestHash: hash, RepairAttempts: telemetry.RepairCost.Attempts,
@@ -716,6 +731,7 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	_ = logger.append(ExecutionEvent{
 		Version:          executionEventSchemaVersion,
 		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
+		InvocationID:     c.currentInvocationID(),
 		RunID:            runID,
 		Team:             c.session.Config.Name,
 		TaskID:           taskID,

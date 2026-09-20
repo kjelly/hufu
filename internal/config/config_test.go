@@ -717,3 +717,17 @@ stall-threshold: 30m
 		t.Errorf("StallThreshold = %q, want %q", cfg.StallThreshold, "30m")
 	}
 }
+
+func TestGracefulWrapUpTimeoutMergeFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hufu.yaml")
+	if err := os.WriteFile(path, []byte("graceful-wrap-up-timeout: 45m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{}
+	cfg.mergeFromFile(path)
+	if cfg.GracefulWrapUpTimeout != "45m" {
+		t.Fatalf("GracefulWrapUpTimeout = %q, want %q", cfg.GracefulWrapUpTimeout, "45m")
+	}
+}

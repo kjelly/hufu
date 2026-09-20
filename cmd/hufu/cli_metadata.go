@@ -16,7 +16,7 @@ type commandGroupMetadata struct {
 var commandGroups = []commandGroupMetadata{
 	{ID: "execution", Title: "Execution", Commands: []string{"run", "chat"}},
 	{ID: "team", Title: "Teams and readiness", Commands: []string{"team", "doctor", "init", "list"}},
-	{ID: "progress", Title: "Progress and recovery", Commands: []string{"session", "inspect", "status", "resume", "retry", "reconcile", "history"}},
+	{ID: "progress", Title: "Progress and recovery", Commands: []string{"explain", "session", "inspect", "status", "resume", "retry", "reconcile", "history"}},
 	{ID: "experience", Title: "Context and skills", Commands: []string{"context", "skill", "install"}},
 	{ID: "environment", Title: "Environment", Commands: []string{"config", "models", "version"}},
 	{ID: "advanced", Title: "Advanced and diagnostics", Commands: []string{"audit", "decision", "improve", "eval", "debug", "terminal", "migrate", "completion", "__complete", "examples", "help-flags"}},
@@ -33,6 +33,8 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu team check dev-team"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
+	{Section: "Progress and recovery", Argv: `hufu explain --ai "why did the task fail?" --model local/qwen3:8b`},
 	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main"},
 	{Section: "Learning and publication", Argv: "hufu context learning --workspace ./workspace/dev-team --project project-id --team dev-team"},
@@ -44,7 +46,7 @@ var canonicalExamples = []exampleMetadata{
 
 var cliFlagGroups = map[string][]string{
 	"core":       {"team", "agent-team", "model", "coordinator-model", "default", "workspace", "workspace-root"},
-	"execution":  {"route", "plan", "auto-skills", "steps", "dry-run", "timeout", "max-rounds", "input", "input-file"},
+	"execution":  {"route", "plan", "auto-skills", "steps", "dry-run", "timeout", "graceful-wrap-up-timeout", "max-rounds", "input", "input-file"},
 	"output":     {"verbose", "quiet", "output", "event-format", "report", "think"},
 	"safety":     {"rbash", "no-net", "force-mcp", "allow-path", "unattended", "auto-approve"},
 	"security":   {"rbash", "no-net", "force-mcp", "allow-path", "direnv"},

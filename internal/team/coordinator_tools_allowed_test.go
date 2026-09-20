@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -89,6 +90,30 @@ func TestBuildOrchestratorToolsAreRuntimeAllowed(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDoesNotExposeSaveSkill(t *testing.T) {
+	c := &Coordinator{
+		coreTools: []fantasy.AgentTool{namedCoordinatorTool("save_skill")},
+		session: &TeamSession{
+			Config: agent.TeamConfig{Name: "team"},
+			Agents: map[string]*agent.AgentDef{
+				"coordinator": {Name: "coordinator", Role: "coordinator"},
+				"worker":      {Name: "worker", Role: "worker"},
+			},
+		},
+		taskTracker: NewTaskTracker(),
+	}
+
+	if coordinatorCoreToolNames["save_skill"] {
+		t.Fatal("save_skill remains in the coordinator runtime allowlist")
+	}
+	if got := agentToolNames(c.buildOrchestratorTools()); slices.Contains(got, "save_skill") {
+		t.Fatalf("coordinator tools expose save_skill: %v", got)
+	}
+	if prompt := c.BuildOrchestratorPrompt(); strings.Contains(prompt, "save_skill") {
+		t.Fatalf("coordinator prompt advertises save_skill:\n%s", prompt)
+	}
+}
+
 func TestCoordinatorLegacyMemoryAliasesAreScopedExactOptIn(t *testing.T) {
 	core := workerInvariantCoreTools(t)
 	for _, raw := range []string{"", "all", "ask_user"} {
@@ -154,7 +179,7 @@ func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegat
 // hand any of them to a worker (alwaysIncludeTools forces several in regardless
 // of the declared tool list), so the invariant test must model them.
 var workerCoordinatorToolNames = []string{
-	"request_agent", "todo", "load_skill", "save_skill", "stm_write", "ltm_update",
+	"request_agent", "todo", "load_skill", "stm_write", "ltm_update",
 	"team_info", "terminal", "terminal_start", "terminal_write", "terminal_read",
 	"terminal_wait", "terminal_close", "terminal_list", "terminal_reconcile",
 	"reconcile_task", "memory_save", "memory_query",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -954,6 +955,9 @@ func runContextExplain(cmd *cobra.Command, _ []string) error {
 func getContextWorkspace() string {
 	if contextWorkspace != "" {
 		return contextWorkspace
+	}
+	if strings.TrimSpace(contextTeam) != "" {
+		return resolveWorkspaceForTeam(context.Background(), contextTeam)
 	}
 	return getWorkspace()
 }

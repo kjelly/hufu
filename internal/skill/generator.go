@@ -30,6 +30,9 @@ func (g *AutoSkillGenerator) GenerateSkill(candidate PatternCandidate) (string, 
 	if candidate.LLMGeneratedName != "" {
 		skillName = candidate.LLMGeneratedName
 	}
+	if err := ValidateSkillName(skillName); err != nil {
+		return "", err
+	}
 
 	skillDir := filepath.Join(g.baseDir, "drafts", skillName)
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {

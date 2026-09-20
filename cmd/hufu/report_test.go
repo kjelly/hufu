@@ -523,6 +523,17 @@ func TestBuildReportMDIncludesAuditSection(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDIncludesInvocationIdentity(t *testing.T) {
+	report := buildReportMD(&reportData{
+		StartedAt:    time.Now(),
+		InvocationID: "inv-report",
+		SourceRunID:  "run-report",
+	}, "demo", "completed")
+	if !strings.Contains(report, "Invocation ID:** `inv-report`") {
+		t.Fatalf("report missing invocation identity:\n%s", report)
+	}
+}
+
 func TestBuildReportMDIncludesInvariantAssessments(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now(),

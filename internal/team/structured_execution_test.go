@@ -579,6 +579,28 @@ func TestFailureEventPreservesFirstCausalStepReceipt(t *testing.T) {
 	}
 }
 
+func TestCancellationFailureDoesNotInheritPriorStepFailure(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker(), projectDir: "/workspace"}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "validate then wait"}})[0]
+	item.LastOperation = "view"
+	c.setCurrentTaskAttempt(item.ID, 1)
+	if err := c.executionStepReceiptRegistry().Record(ExecutionStepReceipt{
+		ID: "grep-failure", TaskID: item.ID, Attempt: 1, StepID: "inspect", Tool: "grep",
+		InputSHA256: "one", StartedAt: time.Now().Add(-time.Minute), ExitCode: 1,
+		Stderr: "path consent could not be granted", FailureClass: "policy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	event := c.failureEventForItem(item, FailureCancelled, RetryNone, "source=sigint | error=context canceled", FailureFingerprint{Digest: "cancelled"}, item.ID)
+	if event.Summary != "source=sigint | error=context canceled" || event.FailureClass != FailureCancelled {
+		t.Fatalf("cancellation terminal evidence = %#v", event)
+	}
+	if event.Command != "" || event.ExitCode != nil || event.Stdout != "" || event.Stderr != "" || event.FailedStepID != "" || event.ReceiptID != "" || event.FailureType != "" {
+		t.Fatalf("cancellation inherited an unrelated step failure = %#v", event)
+	}
+}
+
 func TestReceiptRegistryIgnoresRepairedValidatorWhenFindingCausalFailure(t *testing.T) {
 	registry := NewExecutionStepReceiptRegistry()
 	started := time.Now().UTC()

@@ -93,8 +93,14 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr erro
 }
 
 func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string, workspaceExplicit bool) (*commandWorkspaceBinding, string, error) {
-	workspacePath := getWorkspace()
 	teamName := strings.ToLower(strings.TrimSpace(requestedTeam))
+	if teamName == "" {
+		teamName = strings.ToLower(strings.TrimSpace(opts.agentTeamName))
+	}
+	workspacePath := ""
+	if workspaceExplicit {
+		workspacePath = getWorkspace()
+	}
 	if teamName == "" {
 		if workspaceExplicit {
 			base := filepath.Base(filepath.Clean(strings.TrimSpace(workspacePath)))
@@ -102,11 +108,6 @@ func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string
 				return nil, "", fmt.Errorf("cannot infer team from workspace %q; pass --agent-team", workspacePath)
 			}
 			teamName = base
-		} else {
-			teamName = strings.ToLower(strings.TrimSpace(opts.agentTeamName))
-			if teamName == "" {
-				teamName = "default"
-			}
 		}
 	}
 	request := commandWorkspaceRequest{
@@ -119,6 +120,9 @@ func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string
 	resolution, lease, err := resolveCommandWorkspace(ctx, request)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid workspace path: %w", err)
+	}
+	if teamName == "" {
+		teamName = resolution.TeamName
 	}
 	return &commandWorkspaceBinding{Resolution: resolution, Lease: lease}, teamName, nil
 }

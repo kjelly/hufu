@@ -253,7 +253,7 @@ func latestChanges(events []IndexedEvent, runID string, limit int) []operatorpkg
 func isOverviewChange(eventType string) bool {
 	switch team.EventType(eventType) {
 	case team.EventRunStarted, team.EventRunFinished,
-		team.EventWrapUpPhase,
+		team.EventWrapUpPhase, team.EventRunCancellationRequested,
 		team.EventTaskCreated, team.EventTaskPlanned, team.EventTaskStarted,
 		team.EventTaskVerifying, team.EventTaskPaused, team.EventTaskCompleted,
 		team.EventTaskFailed, team.EventTaskBlocked, team.EventTaskSkipped,

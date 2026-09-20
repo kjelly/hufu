@@ -78,7 +78,7 @@ func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error 
 	// Skill-pattern analysis is an invocation-owned model consumer. It is
 	// deliberately wired only after the proxy is live; NewCoordinator must not
 	// construct this sidecar against the direct provider.
-	if c.skillDetector != nil && c.sidecarModel != "" && c.agentPool != nil {
+	if c.autoSkillsEnabled && c.skillDetector != nil && c.sidecarModel != "" && c.agentPool != nil {
 		if s := c.AgentPool().Sidecar(); s != nil {
 			c.skillDetector.SetSidecar(s)
 		}

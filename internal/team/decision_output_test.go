@@ -39,7 +39,7 @@ func TestDecisionOutputNullableFieldsAreExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"logical_run_id":null`, `"execution_run_id":null`, `"branch_id":null`, `"team":null`, `"profile":null`, `"coverage":null`, `"continuation":null`, `"view":null`} {
+	for _, field := range []string{`"invocation_id":null`, `"logical_run_id":null`, `"execution_run_id":null`, `"branch_id":null`, `"team":null`, `"profile":null`, `"coverage":null`, `"continuation":null`, `"view":null`} {
 		if !strings.Contains(string(data), field) {
 			t.Errorf("JSON missing explicit nullable field %s: %s", field, data)
 		}

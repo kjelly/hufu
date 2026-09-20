@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
@@ -63,6 +64,7 @@ profiles:
     unattended: "true"
     max-duration: "60"
     max-total-tokens: "1200"
+    graceful-wrap-up-timeout: "45m"
     model: "profile-model"
     output: "json"
     workspace: "/profile/workspace"
@@ -83,7 +85,7 @@ profiles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resolved.noNet || !resolved.unattended || resolved.maxDuration != 60 || resolved.maxTotalTokens != 1200 {
+	if !resolved.noNet || !resolved.unattended || resolved.maxDuration != 60 || resolved.maxTotalTokens != 1200 || resolved.gracefulWrapUpTimeout != 45*time.Minute {
 		t.Fatalf("profile safety/budget options not bridged: %#v", resolved)
 	}
 	if resolved.modelOverride != "profile-model" || resolved.outputFormat != "json" || resolved.workspace != "/profile/workspace" || resolved.workspaceMode != "exact" {

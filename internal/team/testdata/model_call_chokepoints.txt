@@ -8,3 +8,4 @@ internal/promotion/analyzer.go<TAB>a.Generator.Generate(ctx, DraftRequest{<TAB>p
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.sidecarModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.Sidecar<TAB>skill_matcher<TAB>runtime_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.guardModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.GuardSidecar<TAB>guard_reviewer<TAB>runtime_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.JudgeSidecar<TAB>judge<TAB>runtime_boundary
+cmd/hufu/explaincmd_ai.go<TAB>sidecar.NewSidecar(callCtx, provider, model)<TAB>analyzeExplainAI<TAB>explain_analysis<TAB>projection_boundary

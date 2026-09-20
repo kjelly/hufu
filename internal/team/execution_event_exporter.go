@@ -19,11 +19,12 @@ const eventStoreExecutionEventsFile = "execution-events.event-store.jsonl"
 // output fields because EventStore holds only redacted metadata.
 func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 	out := ExecutionEvent{
-		Version:   executionEventSchemaVersion,
-		Timestamp: event.Timestamp,
-		RunID:     event.RunID,
-		TaskID:    event.TaskID,
-		Agent:     event.Actor,
+		Version:      executionEventSchemaVersion,
+		Timestamp:    event.Timestamp,
+		InvocationID: event.InvocationID,
+		RunID:        event.RunID,
+		TaskID:       event.TaskID,
+		Agent:        event.Actor,
 	}
 	switch event.Type {
 	case string(EventRunStarted):

@@ -40,6 +40,19 @@ type RunFinishedEventPayload struct {
 	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 }
 
+// RunCancellationRequestedPayload records the exact runtime boundary that
+// changed a graceful wrap-up into context cancellation. It intentionally
+// contains no task or model output.
+type RunCancellationRequestedPayload struct {
+	RunID                 string `json:"run_id"`
+	BranchID              string `json:"branch_id"`
+	RequestedAt           string `json:"requested_at"`
+	Status                string `json:"status"`
+	ReasonCode            string `json:"reason_code"`
+	Source                string `json:"source"`
+	GracefulTimeoutMillis int64  `json:"graceful_timeout_millis,omitzero"`
+}
+
 // ValidateEventPayload validates an event after EventStore has filled its
 // identity and redacted its payload, but before it becomes durable. Schema v1
 // is deliberately accepted as a read/replay compatibility format. Unknown
@@ -69,14 +82,8 @@ func ValidateEventPayload(event RunEvent) error {
 	}
 
 	switch EventType(event.Type) {
-	case EventWrapUpPhase:
-		var payload PendingWrapUp
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return fmt.Errorf("decode wrap_up_phase payload: %w", err)
-		}
-		if strings.TrimSpace(payload.RunID) == "" || payload.RunID != event.RunID || strings.TrimSpace(payload.BranchID) == "" || strings.TrimSpace(payload.RequestedAt) == "" {
-			return fmt.Errorf("wrap_up_phase payload has invalid run binding")
-		}
+	case EventWrapUpPhase, EventRunCancellationRequested:
+		return validateRunLifecycleControlPayload(event)
 	case EventUserMessageAdded, EventAssistantMessageAdded:
 		var payload SessionMessageEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -133,6 +140,31 @@ func ValidateEventPayload(event RunEvent) error {
 		EventDecisionRoleCallSettled, EventPrimaryDecisionBlocked,
 		EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated:
 		return validateDecisionCorrectnessEvent(event)
+	}
+	return nil
+}
+
+func validateRunLifecycleControlPayload(event RunEvent) error {
+	switch EventType(event.Type) {
+	case EventWrapUpPhase:
+		var payload PendingWrapUp
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("decode wrap_up_phase payload: %w", err)
+		}
+		if strings.TrimSpace(payload.RunID) == "" || payload.RunID != event.RunID || strings.TrimSpace(payload.BranchID) == "" || strings.TrimSpace(payload.RequestedAt) == "" {
+			return fmt.Errorf("wrap_up_phase payload has invalid run binding")
+		}
+	case EventRunCancellationRequested:
+		var payload RunCancellationRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("decode run_cancellation_requested payload: %w", err)
+		}
+		if strings.TrimSpace(payload.RunID) == "" || payload.RunID != event.RunID ||
+			strings.TrimSpace(payload.BranchID) == "" || strings.TrimSpace(payload.RequestedAt) == "" ||
+			payload.Status != "cancellation_requested" || strings.TrimSpace(payload.ReasonCode) == "" ||
+			strings.TrimSpace(payload.Source) == "" || payload.GracefulTimeoutMillis < 0 {
+			return fmt.Errorf("run_cancellation_requested payload is invalid")
+		}
 	}
 	return nil
 }

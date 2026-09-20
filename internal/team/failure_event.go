@@ -247,6 +247,15 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 	if c != nil && c.session != nil && c.session.Config.Shell != "" {
 		event.Shell = c.session.Config.Shell
 	}
+	if class == FailureCancelled {
+		// Cancellation is a coordination-level terminal cause. A failed tool or
+		// verifier from earlier in the attempt is historical context and must not
+		// be copied into this payload as though it caused the cancellation.
+		event.Command = ""
+		event.WorkDir = ""
+		event.Shell = ""
+		return RedactedFailureEvent(event)
+	}
 	if event.Command == "" && c != nil {
 		event.Command = c.GetCurrentTool()
 	}

@@ -12,7 +12,7 @@
 
 - **Execution:** `hufu run`, `hufu chat`
 - **Teams and readiness:** `hufu team`, `hufu doctor`, `hufu init`, `hufu list`
-- **Progress and recovery:** `hufu session`, `hufu inspect`, `hufu status`, `hufu resume`, `hufu retry`, `hufu reconcile`, `hufu history`
+- **Progress and recovery:** `hufu explain`, `hufu session`, `hufu inspect`, `hufu status`, `hufu resume`, `hufu retry`, `hufu reconcile`, `hufu history`
 - **Context and skills:** `hufu context`, `hufu skill`, `hufu install`
 - **Environment:** `hufu config`, `hufu models`, `hufu version`
 - **Advanced and diagnostics:** `hufu audit`, `hufu decision`, `hufu improve`, `hufu eval`, `hufu debug`, `hufu terminal`, `hufu migrate`, `hufu completion`, `hufu __complete`, `hufu examples`, `hufu help-flags`
@@ -41,6 +41,14 @@ hufu run --team dev-team -- "review this codebase"
 
 ```sh
 hufu inspect overview --workspace ./workspace/dev-team
+```
+
+```sh
+hufu explain --team dev-team
+```
+
+```sh
+hufu explain --ai "why did the task fail?" --model local/qwen3:8b
 ```
 
 ```sh
@@ -82,7 +90,7 @@ hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor
 - **advanced:** `--provider-url`, `--provider-api-key`, `--profile`, `--var`, `--var-file`, `--memory`, `--template`
 - **core:** `--team`, `--agent-team`, `--model`, `--coordinator-model`, `--default`, `--workspace`, `--workspace-root`
 - **display:** `--tui`, `--tui-compact`, `--display-mode`, `--theme`, `--display-preset`, `--no-color`, `--no-spinner`, `--no-summary`
-- **execution:** `--route`, `--plan`, `--auto-skills`, `--steps`, `--dry-run`, `--timeout`, `--max-rounds`, `--input`, `--input-file`
+- **execution:** `--route`, `--plan`, `--auto-skills`, `--steps`, `--dry-run`, `--timeout`, `--graceful-wrap-up-timeout`, `--max-rounds`, `--input`, `--input-file`
 - **output:** `--verbose`, `--quiet`, `--output`, `--event-format`, `--report`, `--think`
 - **safety:** `--rbash`, `--no-net`, `--force-mcp`, `--allow-path`, `--unattended`, `--auto-approve`
 - **security:** `--rbash`, `--no-net`, `--force-mcp`, `--allow-path`, `--direnv`

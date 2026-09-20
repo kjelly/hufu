@@ -108,6 +108,64 @@ func TestReducersDeduplicateAndDoNotReopenTerminalTask(t *testing.T) {
 	}
 }
 
+func TestReducersReplaceReceiptSnapshotWithTerminalFailure(t *testing.T) {
+	zero, one := 0, 1
+	initial := ExecutionReceipt{
+		RunID: "run-receipt", TaskID: "task-1", Attempt: 1,
+		ModelExecutionID: "model-exec-1", ProducerID: "reviewer",
+		TranscriptRef: "sha256-attempt-1", ExitCode: &zero,
+	}
+	rejected := initial
+	rejected.ExitCode = &one
+	rejected.HandoffState = ResultHandoffSubmitted
+	success := ExecutionReceipt{
+		RunID: "run-receipt", TaskID: "task-1", Attempt: 2,
+		ModelExecutionID: "model-exec-1", ProducerID: "reviewer",
+		TranscriptRef: "sha256-attempt-2", ExitCode: &zero,
+	}
+	payload := func(status TaskStatus, current ExecutionReceipt, history []ExecutionReceipt) json.RawMessage {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"id": "task-1", "status": status,
+			"execution_receipt": current, "execution_receipts": history,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	events := []RunEvent{
+		{Type: string(EventTaskStarted), TaskID: "task-1", Payload: payload(TaskInProgress, initial, []ExecutionReceipt{initial})},
+		{Type: string(EventTaskFailed), TaskID: "task-1", Payload: payload(TaskError, rejected, []ExecutionReceipt{rejected})},
+		{Type: string(EventTaskCompleted), TaskID: "task-1", Payload: payload(TaskDone, success, []ExecutionReceipt{rejected, success})},
+	}
+
+	todos := ReduceToTodoList(events)
+	if len(todos) != 1 || len(todos[0].ExecutionReceipts) != 2 {
+		t.Fatalf("replayed receipts = %#v, want two attempts", todos)
+	}
+	if got := todos[0].ExecutionReceipts[0].ExitCode; got == nil || *got != 1 {
+		t.Fatalf("rejected receipt exit code = %v, want 1", got)
+	}
+	if got := todos[0].ExecutionReceipts[1].ExitCode; got == nil || *got != 0 {
+		t.Fatalf("successful receipt exit code = %v, want 0", got)
+	}
+}
+
+func TestAppendExecutionReceiptKeepsDistinctModelExecutionsInAttempt(t *testing.T) {
+	first := ExecutionReceipt{
+		RunID: "run-candidates", TaskID: "task-1", Attempt: 1,
+		ModelExecutionID: "candidate-a", TranscriptRef: "shared-transcript",
+	}
+	second := first
+	second.ModelExecutionID = "candidate-b"
+
+	receipts := appendExecutionReceipt([]ExecutionReceipt{first}, second)
+	if len(receipts) != 2 {
+		t.Fatalf("receipts = %#v, want distinct model executions retained", receipts)
+	}
+}
+
 func TestReducersRestoreCancelledTaskAsCanonicalError(t *testing.T) {
 	events := []RunEvent{
 		{Type: string(EventTaskCreated), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"pending","desc":"cancelled work"}`)},

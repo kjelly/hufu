@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -90,14 +88,6 @@ func (c *Coordinator) getSkills() []*skill.SkillDef {
 	return c.skills
 }
 
-func (c *Coordinator) skillDirs() []string {
-	dirs := []string{filepath.Join(c.session.Dir, "skills")}
-	if cwd, err := os.Getwd(); err == nil && cwd != "" {
-		dirs = append(dirs, filepath.Join(cwd, ".agents", "skills"))
-	}
-	return append(dirs, filepath.Join(os.Getenv("HOME"), ".agents", "skills"))
-}
-
 func (c *Coordinator) setAutoLoadedSkills(skills []*skill.SkillDef) {
 	c.autoLoadedSkillsMu.Lock()
 	defer c.autoLoadedSkillsMu.Unlock()
@@ -108,68 +98,6 @@ func (c *Coordinator) getAutoLoadedSkills() []*skill.SkillDef {
 	c.autoLoadedSkillsMu.RLock()
 	defer c.autoLoadedSkillsMu.RUnlock()
 	return c.autoLoadedSkills
-}
-
-// saveAndReloadSkill writes a SKILL.md to the team's local skill directory and
-// immediately hot-reloads c.skills so the new skill is available in the same session.
-// When asDraft is true, the file is written under skills/drafts/ instead of skills/.
-func (c *Coordinator) saveAndReloadSkill(name, description, content string, asDraft bool) (string, error) {
-	slug := strings.Trim(skillSlugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
-	if slug == "" {
-		return "", fmt.Errorf("invalid skill name %q", name)
-	}
-
-	skillDir := filepath.Join(c.session.Dir, "skills", slug)
-	if asDraft {
-		skillDir = filepath.Join(c.session.Dir, "skills", "drafts", slug)
-	}
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create skill directory: %w", err)
-	}
-
-	// Build YAML-safe description block.
-	descLines := strings.Split(strings.TrimSpace(description), "\n")
-	var descYAML string
-	if len(descLines) == 1 {
-		descYAML = "description: " + descLines[0]
-	} else {
-		var db strings.Builder
-		db.WriteString("description: |\n")
-		for _, l := range descLines {
-			db.WriteString("  ")
-			db.WriteString(l)
-			db.WriteString("\n")
-		}
-		descYAML = strings.TrimRight(db.String(), "\n")
-	}
-
-	var fileContent string
-	if asDraft {
-		now := time.Now().UTC().Format(time.RFC3339)
-		fileContent = fmt.Sprintf("---\nname: %s\n%s\ncreated_at: %s\nlast_modified: %s\n---\n\n%s\n",
-			name, descYAML, now, now, strings.TrimSpace(content))
-	} else {
-		fileContent = fmt.Sprintf("---\nname: %s\n%s\n---\n\n%s\n", name, descYAML, strings.TrimSpace(content))
-	}
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(fileContent), 0o644); err != nil {
-		return "", fmt.Errorf("failed to write skill file: %w", err)
-	}
-
-	// Hot-reload: rediscover and re-filter skills from all directories.
-	allSkills := skill.DiscoverSkills(c.skillDirs(), false)
-	includeSkills := skill.ParseSkillList(c.session.Config.Skills)
-	excludeSkills := skill.ParseSkillList(c.session.Config.SkillsExclude)
-	newSkills := skill.FilterSkills(allSkills, includeSkills, excludeSkills)
-	newSkills = skill.ExpandSkillDependenciesForSet(newSkills, allSkills, excludeSkills)
-
-	func() {
-		c.skillsMu.Lock()
-		defer c.skillsMu.Unlock()
-		c.skills = newSkills
-	}()
-
-	return skillPath, nil
 }
 
 // appendSkillContext appends skill prefix and auto-matched skill suggestions to

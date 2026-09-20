@@ -132,12 +132,20 @@ func StartCodexAppServer(ctx context.Context, sup ProcessSupervisor, cfg CodexPr
 	}
 
 	client := NewCodexRPCClient(stdinWrite, stdoutRead, cfg.MaxFrameBytes)
+	proc := &CodexAppServerProcess{Client: client, sup: sup, handle: handle, stderr: stderrBuf, stdout: stdoutWrite}
 	if _, err := codexInitialize(startCtx, client); err != nil {
-		_ = sup.KillTree(context.Background(), handle)
+		// Initialization failure is still a started process lifecycle. Close
+		// the transport, terminate the complete process tree, and synchronously
+		// reap it before returning so failed admissions cannot leak a child or
+		// a blocked pipe-copy goroutine.
+		_ = client.Close()
+		if killErr := sup.KillTree(context.Background(), handle); killErr != nil {
+			return nil, fmt.Errorf("codex process: initialize: %w (stderr: %s; cleanup: %v)", err, stderrBuf.String(), killErr)
+		}
+		_ = proc.Wait()
 		return nil, fmt.Errorf("codex process: initialize: %w (stderr: %s)", err, stderrBuf.String())
 	}
 
-	proc := &CodexAppServerProcess{Client: client, sup: sup, handle: handle, stderr: stderrBuf, stdout: stdoutWrite}
 	// The process's real stdout is bridged into stdoutRead through an
 	// io.Pipe (see the type doc above): os/exec's internal copy goroutine
 	// never closes a non-*os.File Stdout writer once the child exits, so an

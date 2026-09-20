@@ -156,6 +156,7 @@ func init() {
 	f.StringVar(&opts.coordinatorModelOverride, "coordinator-model", "", "Override coordinator LLM target for the resumed team")
 	f.IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens")
 	f.Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
+	f.DurationVar(&opts.gracefulWrapUpTimeout, "graceful-wrap-up-timeout", 0, "Maximum time to let active work finish after the first Ctrl+C")
 	f.StringArrayVar(&opts.varFlags, "var", nil, "Set template variable key=value (repeatable)")
 	f.StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
 	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")

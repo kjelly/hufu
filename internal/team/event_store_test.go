@@ -55,6 +55,34 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestEventStoreStampsInvocationIdentity(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-invocation", "session-invocation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	store.SetInvocationID(" inv-parent ")
+	persisted, err := store.AppendPersistedContext(t.Context(), RunEvent{
+		Type:    "invocation_identity_probe",
+		Actor:   "test",
+		Payload: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.InvocationID != "inv-parent" {
+		t.Fatalf("persisted invocation_id = %q, want inv-parent", persisted.InvocationID)
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].InvocationID != "inv-parent" {
+		t.Fatalf("durable events = %#v, want invocation_id inv-parent", events)
+	}
+}
+
 func TestOpenEventStoreReadOnlyDoesNotCreateAndRejectsAppend(t *testing.T) {
 	missingWorkspace := filepath.Join(t.TempDir(), "missing")
 	if _, err := OpenEventStoreReadOnly(missingWorkspace); !errors.Is(err, os.ErrNotExist) {

@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 // runOptions holds every CLI flag for the root `hufu` command, replacing the
 // former sprawl of package-level globals. Flags are bound to fields of the
 // single package-level instance `opts` in newRootCommand; tests that need a
@@ -38,6 +40,9 @@ type runOptions struct {
 	startDir      string
 	subjectRoot   string
 	intent        string
+	// invocationID identifies one top-level CLI execution and groups every
+	// durable coordinator run allocated while servicing it.
+	invocationID string
 	// decisionProfile is the run-scoped --decision-profile override, the top
 	// layer of the decision profile precedence chain
 	// (docs/architecture/decision-runtime.md §8).
@@ -71,6 +76,7 @@ type runOptions struct {
 	think                                 bool
 	direnv                                bool
 	timeoutOverride                       int64
+	gracefulWrapUpTimeout                 time.Duration
 	verifyTimeoutOverride                 int64
 	maxRoundsOverride                     int
 	maxConcurrentOverride                 int

@@ -124,6 +124,33 @@ func TestProjectTaskIncludesReadOnlyKnowledgeCoverage(t *testing.T) {
 	}
 }
 
+func TestProjectTaskIncludesDetachedRedactedFailure(t *testing.T) {
+	exitCode := 1
+	item := &team.TodoItem{
+		ID: "task-1",
+		FailureEvent: &team.FailureEventPayload{
+			TaskID: "task-1", FailureClass: team.TaskFailureClass("execution"),
+			RetryDisposition: team.RetryDisposition("retryable"), ExitCode: &exitCode,
+			Summary: "request failed api_key=super-secret-value", Stderr: "Authorization: Bearer super-secret-value",
+		},
+	}
+	data := projectTask(item, InspectQuery{RunID: "run-1", TaskID: item.ID})
+	if data.Failure == nil || !strings.Contains(data.Failure.Summary, "[REDACTED]") {
+		t.Fatalf("failure projection = %#v", data.Failure)
+	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "super-secret-value") {
+		t.Fatalf("failure projection leaked a secret: %s", encoded)
+	}
+	data.Failure.Summary = "changed"
+	if item.FailureEvent.Summary == "changed" {
+		t.Fatal("failure projection aliases the replayed task")
+	}
+}
+
 func TestInspectTaskRequiresExistingAttempt(t *testing.T) {
 	fixture := buildRunFixture(t)
 	_, err := InspectTask(t.Context(), InspectQuery{

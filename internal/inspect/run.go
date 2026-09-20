@@ -48,22 +48,23 @@ type AttemptData struct {
 }
 
 type TaskData struct {
-	RunID             string                 `json:"run_id"`
-	TaskID            string                 `json:"task_id"`
-	Status            string                 `json:"status"`
-	Phase             string                 `json:"phase,omitempty"`
-	AgentID           string                 `json:"agent_id,omitempty"`
-	ExecutionTarget   string                 `json:"execution_target,omitempty"`
-	ExecutionTopology []string               `json:"execution_topology"`
-	Attempts          []AttemptData          `json:"attempts"`
-	RetryDisposition  string                 `json:"retry_disposition,omitempty"`
-	FailureClass      string                 `json:"failure_class,omitempty"`
-	ReasonCode        string                 `json:"reason_code,omitempty"`
-	RecoveryState     string                 `json:"recovery_state,omitempty"`
-	ArtifactRefs      []string               `json:"artifact_refs"`
-	ContextRefs       []string               `json:"context_refs"`
-	MemoryRefs        []string               `json:"memory_refs"`
-	KnowledgeCoverage *KnowledgeCoverageData `json:"knowledge_coverage,omitempty"`
+	RunID             string                    `json:"run_id"`
+	TaskID            string                    `json:"task_id"`
+	Status            string                    `json:"status"`
+	Phase             string                    `json:"phase,omitempty"`
+	AgentID           string                    `json:"agent_id,omitempty"`
+	ExecutionTarget   string                    `json:"execution_target,omitempty"`
+	ExecutionTopology []string                  `json:"execution_topology"`
+	Attempts          []AttemptData             `json:"attempts"`
+	RetryDisposition  string                    `json:"retry_disposition,omitempty"`
+	FailureClass      string                    `json:"failure_class,omitempty"`
+	ReasonCode        string                    `json:"reason_code,omitempty"`
+	RecoveryState     string                    `json:"recovery_state,omitempty"`
+	Failure           *team.FailureEventPayload `json:"failure,omitempty"`
+	ArtifactRefs      []string                  `json:"artifact_refs"`
+	ContextRefs       []string                  `json:"context_refs"`
+	MemoryRefs        []string                  `json:"memory_refs"`
+	KnowledgeCoverage *KnowledgeCoverageData    `json:"knowledge_coverage,omitempty"`
 }
 
 type selectedRun struct {
@@ -293,6 +294,7 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		data.ExecutionTopology = append(data.ExecutionTopology, target.String())
 	}
 	if item.FailureEvent != nil {
+		data.Failure = team.RedactedFailureEvent(item.FailureEvent)
 		data.RetryDisposition = string(item.FailureEvent.RetryDisposition)
 		data.FailureClass = string(item.FailureEvent.FailureClass)
 		data.ReasonCode = item.FailureEvent.FailureType

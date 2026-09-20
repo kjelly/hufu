@@ -124,6 +124,7 @@ type DecisionRecordViewV1 struct {
 type DecisionOutputV1 struct {
 	SchemaVersion      int                           `json:"schema_version"`
 	Kind               string                        `json:"kind"`
+	InvocationID       *string                       `json:"invocation_id"`
 	LogicalRunID       *string                       `json:"logical_run_id"`
 	ExecutionRunID     *string                       `json:"execution_run_id"`
 	BranchID           *string                       `json:"branch_id"`
@@ -203,7 +204,7 @@ func (value DecisionOutputV1) Validate() error {
 }
 
 func validateDecisionOutputIdentity(value DecisionOutputV1) error {
-	for _, id := range []*string{value.LogicalRunID, value.ExecutionRunID, value.BranchID, value.Primary.TaskID, value.Primary.DecisionID, value.Primary.BindingEventID} {
+	for _, id := range []*string{value.InvocationID, value.LogicalRunID, value.ExecutionRunID, value.BranchID, value.Primary.TaskID, value.Primary.DecisionID, value.Primary.BindingEventID} {
 		if id != nil && !validDecisionIdentifier(*id) {
 			return fmt.Errorf("invalid decision output identifier %q", *id)
 		}

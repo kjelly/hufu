@@ -111,9 +111,19 @@ func PromoteDraft(skillsDir, draftName string) (string, error) {
 	if _, err := os.Stat(srcDir); err != nil {
 		return "", fmt.Errorf("draft not found: %s", draftName)
 	}
+	raw, err := os.ReadFile(filepath.Join(srcDir, "SKILL.md"))
+	if err != nil {
+		return "", fmt.Errorf("read draft: %w", err)
+	}
+	if _, err := parseSkillBytes(raw); err != nil {
+		return "", fmt.Errorf("validate draft: %w", err)
+	}
 	newName := strings.TrimPrefix(draftName, "draft-")
 	if newName == "" || newName == draftName {
 		newName = draftName
+	}
+	if err := ValidateSkillName(newName); err != nil {
+		return "", err
 	}
 	dstDir := filepath.Join(skillsDir, newName)
 	if _, err := os.Stat(dstDir); err == nil {

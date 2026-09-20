@@ -157,6 +157,12 @@ func TestCLIProcessExitContract(t *testing.T) {
 		if output.Outcome != string(team.RunOutcomeFailed) || output.GoalSatisfied {
 			t.Fatalf("JSON result = outcome=%q goal_satisfied=%t, want failed/false", output.Outcome, output.GoalSatisfied)
 		}
+		if output.InvocationID == "" || !bytes.Contains(stderr, []byte("Invocation ID: "+output.InvocationID)) {
+			t.Fatalf("failed invocation identity = %q; stderr=%q", output.InvocationID, truncateContractOutput(stderr))
+		}
+		if output.RunID == "" || len(output.RunIDs) == 0 || output.RunIDs[len(output.RunIDs)-1].RunID != output.RunID {
+			t.Fatalf("failed JSON run identity = run_id=%q run_ids=%#v", output.RunID, output.RunIDs)
+		}
 		if output.ExitCode != 1 {
 			t.Fatalf("JSON exit_code = %d, want 1", output.ExitCode)
 		}
@@ -300,6 +306,12 @@ func TestCLIProcessExitContract(t *testing.T) {
 		if output.Outcome != string(team.RunOutcomePartial) || output.GoalSatisfied {
 			t.Fatalf("JSON result = outcome=%q goal_satisfied=%t, want partial/false", output.Outcome, output.GoalSatisfied)
 		}
+		if output.InvocationID == "" || !bytes.Contains(stderr, []byte("Invocation ID: "+output.InvocationID)) {
+			t.Fatalf("partial invocation identity = %q; stderr=%q", output.InvocationID, truncateContractOutput(stderr))
+		}
+		if output.RunID == "" || len(output.RunIDs) == 0 || output.RunIDs[len(output.RunIDs)-1].RunID != output.RunID {
+			t.Fatalf("partial JSON run identity = run_id=%q run_ids=%#v", output.RunID, output.RunIDs)
+		}
 		if output.ExitCode != 7 {
 			t.Fatalf("JSON exit_code = %d, want 7", output.ExitCode)
 		}
@@ -403,6 +415,8 @@ func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
 		t.Fatalf("stderr JSONL lines = %d, want runtime events plus command error\nstderr=%s", len(lines), stderr)
 	}
 	foundCommandError := false
+	foundInvocationIdentity := false
+	foundRunIdentities := make(map[string]bool, len(output.RunIDs))
 	for index, line := range lines {
 		var event jsonStatusEvent
 		if err := json.Unmarshal(line, &event); err != nil {
@@ -417,9 +431,26 @@ func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
 		if event.Type == "error" && strings.Contains(event.Message, "task") {
 			foundCommandError = true
 		}
+		if event.InvocationID != output.InvocationID {
+			t.Fatalf("stderr line %d invocation_id = %q, want %q: %#v", index+1, event.InvocationID, output.InvocationID, event)
+		}
+		if event.Type == "invocation_identity" {
+			foundInvocationIdentity = true
+		}
+		if event.Type == "run_identity" && event.RunID != "" {
+			foundRunIdentities[event.RunID] = true
+		}
 	}
 	if !foundCommandError {
 		t.Fatalf("stderr lacks structured command-boundary error:\n%s", stderr)
+	}
+	if output.InvocationID == "" || !foundInvocationIdentity {
+		t.Fatalf("stderr lacks invocation identity %q:\n%s", output.InvocationID, stderr)
+	}
+	for _, identity := range output.RunIDs {
+		if !foundRunIdentities[identity.RunID] {
+			t.Fatalf("stderr lacks structured run identity for %q:\n%s", identity.RunID, stderr)
+		}
 	}
 }
 

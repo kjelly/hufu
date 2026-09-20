@@ -9,7 +9,7 @@ spec:
   timeout: 3600
   verify-timeout: 120
   max-retries: 1
-  max-concurrent: 1
+  max-concurrent: 2
   workspace: workspace
   goal-mode: outcome
   execution-profile: fresh-session

@@ -106,3 +106,16 @@ func TestTraceSupplementalEntriesKeepZeroEventOrdinal(t *testing.T) {
 		}
 	}
 }
+
+func TestEventStatusAndReasonProjectsRunCancellationCause(t *testing.T) {
+	payload, err := json.Marshal(team.RunCancellationRequestedPayload{
+		Status: "cancellation_requested", ReasonCode: string(team.RunCancellationGracefulTimeout),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, reason := eventStatusAndReason(payload)
+	if status != "cancellation_requested" || reason != string(team.RunCancellationGracefulTimeout) {
+		t.Fatalf("cancellation trace metadata = status:%q reason:%q", status, reason)
+	}
+}

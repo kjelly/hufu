@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,10 +10,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
 var (
 	statusWorkspace string
+	statusTeam      string
 	statusJSON      bool
 )
 
@@ -38,13 +41,25 @@ type workspaceStatus struct {
 
 func init() {
 	statusCmd.Flags().StringVarP(&statusWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
+	statusCmd.Flags().StringVar(&statusTeam, "team", "", "Team name when the project has multiple active managed workspaces")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Write machine-readable JSON to stdout")
 }
 
-func runStatus(_ *cobra.Command, _ []string) error {
+func runStatus(command *cobra.Command, _ []string) error {
 	ws := statusWorkspace
 	if ws == "" {
-		ws = getWorkspace()
+		teamName := statusTeam
+		if teamName == "" {
+			teamName = opts.agentTeamName
+		}
+		var err error
+		ws, err = resolveExistingManagedWorkspacePath(command.Context(), runtimeStartDir(), teamName)
+		if err != nil {
+			if errors.Is(err, workspacepkg.ErrAmbiguous) {
+				return err
+			}
+			return fmt.Errorf("managed workspace not found; run hufu first or pass --workspace: %w", err)
+		}
 	}
 	if ws == "" {
 		return fmt.Errorf("managed workspace not found; run hufu first or pass --workspace")

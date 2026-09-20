@@ -26,7 +26,7 @@ func TestHelpAllShowsCanonicalGroupsAndSafetyFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, flag := range []string{"no-net", "force-mcp", "unattended", "rbash", "allow-path", "auto-approve", "max-duration", "max-total-tokens", "workspace", "workspace-root"} {
+	for _, flag := range []string{"no-net", "force-mcp", "unattended", "rbash", "allow-path", "auto-approve", "max-duration", "max-total-tokens", "graceful-wrap-up-timeout", "workspace", "workspace-root"} {
 		if run.Flags().Lookup(flag) == nil {
 			t.Fatalf("canonical run help lost safety flag --%s", flag)
 		}

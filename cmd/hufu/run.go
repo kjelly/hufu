@@ -23,6 +23,11 @@ import (
 )
 
 func runTeam(cmd *cobra.Command, args []string) (runErr error) {
+	opts.invocationID = team.NewInvocationID()
+	var loadedTeams map[string]*teamContext
+	defer func() {
+		emitExecutionIdentity(os.Stderr, opts.invocationID, collectExecutionRunIdentities(loadedTeams, nil))
+	}()
 	if opts.intent == "decision" && opts.eventFormat == "jsonl" {
 		decisionJSONLSequence.Store(0)
 	}
@@ -52,6 +57,8 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// default or resolved absolute path.
 	compatibilityWarnings := newExecutionCompatibilityWarningState(opts.workspace)
 	configureOutputRendering()
+	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval)
+	defer stopIdentityHeartbeat()
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
 	if err != nil {
@@ -110,7 +117,6 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// the pointer to print session paths during the watchdog step.
 	// Declared as a top-level var so the closure captures the
 	// pointer, not the value.
-	var loadedTeams map[string]*teamContext
 	defer func() {
 		runErr = errors.Join(runErr, closeTeamContexts(loadedTeams))
 	}()
@@ -163,6 +169,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	bindInvocationIdentity(loadedTeams, opts.invocationID)
 	if opts.intent == "decision" {
 		if err := resolveLoadedPrimaryDecisionProfile(loadedTeams, resumeInfo != nil); err != nil {
 			return err
@@ -514,6 +521,9 @@ func resolveInitialSegments(prompt, initialTeam string, registry *team.TeamRegis
 // command cannot run, otherwise nil (with side effects on stepsMode
 // and tuiMode as needed).
 func validateRunFlags() error {
+	if _, err := resolvedGracefulWrapUpTimeout(opts.gracefulWrapUpTimeout, opts.timeoutOverride, config.LoadConfig().GracefulWrapUpTimeout); err != nil {
+		return err
+	}
 	switch opts.outputFormat {
 	case "", "text", "json":
 	default:

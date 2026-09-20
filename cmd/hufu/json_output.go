@@ -13,6 +13,9 @@ import (
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
 type jsonRunOutput struct {
+	InvocationID        string                     `json:"invocation_id,omitempty"`
+	RunID               string                     `json:"run_id,omitempty"`
+	RunIDs              []cliRunIdentity           `json:"run_ids,omitempty"`
 	Outcome             string                     `json:"outcome"`
 	GoalSatisfied       bool                       `json:"goal_satisfied"`
 	GoalMode            string                     `json:"goal_mode,omitempty"`
@@ -37,6 +40,7 @@ type jsonRunOutput struct {
 
 type jsonRunTeam struct {
 	Name                 string                            `json:"name"`
+	RunIDs               []string                          `json:"run_ids,omitempty"`
 	Tokens               int64                             `json:"tokens"`
 	Tasks                []jsonRunTask                     `json:"tasks,omitempty"`
 	MemoryLearning       team.MemoryLearningReport         `json:"memory_learning,omitempty"`
@@ -80,7 +84,28 @@ func printResultJSON(result string, loadedTeams map[string]*teamContext, skills 
 }
 
 func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry, priorUnresolved map[string]map[string]time.Time) error {
-	out := jsonRunOutput{Result: result}
+	return printResultJSONForInvocation(result, loadedTeams, skills, priorUnresolved, collectExecutionRunIdentities(loadedTeams, nil))
+}
+
+func printResultJSONForInvocation(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry, priorUnresolved map[string]map[string]time.Time, identities []cliRunIdentity) error {
+	out := jsonRunOutput{InvocationID: opts.invocationID, Result: result, RunIDs: slices.Clone(identities)}
+	if len(identities) > 0 {
+		// Within one team, allocation order is execution order, so the last ID is
+		// the terminal/latest invocation and the most useful singular handle.
+		// Cross-team histories have no shared ordering clock here; keep only the
+		// complete RunIDs projection instead of choosing an arbitrary run_id.
+		out.RunID = identities[len(identities)-1].RunID
+		for _, identity := range identities[:len(identities)-1] {
+			if identity.Team != identities[len(identities)-1].Team {
+				out.RunID = ""
+				break
+			}
+		}
+	}
+	runIDsByTeam := make(map[string][]string, len(identities))
+	for _, identity := range identities {
+		runIDsByTeam[identity.Team] = append(runIDsByTeam[identity.Team], identity.RunID)
+	}
 
 	names := make([]string, 0, len(loadedTeams))
 	for name := range loadedTeams {
@@ -101,7 +126,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 			runResults = append(runResults, lastRes)
 			out.UnresolvedTasks = append(out.UnresolvedTasks, lastRes.UnresolvedTasks...)
 		}
-		jt := jsonRunTeam{Name: name, Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport(), DeprecatedMemory: tc.coordinator.DeprecatedMemoryToolReport(), ContextRouting: tc.coordinator.ContextManifestReport()}
+		jt := jsonRunTeam{Name: name, RunIDs: slices.Clone(runIDsByTeam[name]), Tokens: tc.coordinator.TokensUsed(), MemoryLearning: tc.coordinator.MemoryLearningReport(), DeprecatedMemory: tc.coordinator.DeprecatedMemoryToolReport(), ContextRouting: tc.coordinator.ContextManifestReport()}
 		if lastRes := tc.coordinator.LastRunResult(); lastRes != nil {
 			jt.RunInputs = redactedJSONRunInputs(lastRes.RunInputs)
 			jt.InputBoundAssertions = slices.Clone(lastRes.InputBoundAssertions)

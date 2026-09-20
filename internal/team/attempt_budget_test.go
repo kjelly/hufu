@@ -73,6 +73,46 @@ func TestAttemptBudgetChargesOutputOnly(t *testing.T) {
 	}
 }
 
+func TestAttemptBudgetDoesNotDoubleChargeOutputReflectedInContext(t *testing.T) {
+	budget := newAttemptBudget(100)
+	if err := budget.reserveContext(20); err != nil {
+		t.Fatalf("initial context: %v", err)
+	}
+	if err := budget.chargeOutput(30); err != nil {
+		t.Fatalf("generated output: %v", err)
+	}
+	// The next request contains the 30 generated tokens plus 20 tokens of new
+	// tool evidence. Only the tool evidence is new at this boundary.
+	if err := budget.reserveContext(70); err != nil {
+		t.Fatalf("context containing prior output: %v", err)
+	}
+	if used, _ := budget.snapshot(); used != 70 {
+		t.Fatalf("used = %d, want 70 unique tokens", used)
+	}
+}
+
+func TestAttemptBudgetOutputCreditExpiresAfterNextRequest(t *testing.T) {
+	budget := newAttemptBudget(100)
+	if err := budget.reserveContext(20); err != nil {
+		t.Fatalf("initial context: %v", err)
+	}
+	if err := budget.chargeOutput(30); err != nil {
+		t.Fatalf("generated output: %v", err)
+	}
+	// Only part of the provider-reported output is retained in the next
+	// request. The unreflected part remains charged and must not subsidize a
+	// later, unrelated context increase.
+	if err := budget.reserveContext(30); err != nil {
+		t.Fatalf("partially reflected output: %v", err)
+	}
+	if err := budget.reserveContext(40); err != nil {
+		t.Fatalf("later unrelated growth: %v", err)
+	}
+	if used, _ := budget.snapshot(); used != 60 {
+		t.Fatalf("used = %d, want 60 after expired output credit", used)
+	}
+}
+
 func TestAttemptBudgetZeroDisablesGuard(t *testing.T) {
 	if got := newAttemptBudget(0); got != nil {
 		t.Fatalf("newAttemptBudget(0) = %#v, want nil", got)

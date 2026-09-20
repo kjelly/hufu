@@ -115,6 +115,7 @@ func (c *Coordinator) initEventStore() {
 		c.markSessionRecovery("event-store initialization failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
+	es.SetInvocationID(c.currentInvocationID())
 	// NewEventStore's strict rescan already validates every persisted record and
 	// restores the durable chain head. Do not replay the complete history a
 	// second time through VerifyHashChain during coordinator startup.

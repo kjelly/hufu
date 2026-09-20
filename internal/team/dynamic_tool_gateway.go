@@ -425,8 +425,8 @@ func dynamicInvocationDiagnosticsReporter(c *Coordinator, transcript *taskTransc
 			}
 			if event.Phase == "authorized" {
 				c.taskTracker.TodoList().SetLastOperation(todoID, event.LogicalTool)
-				if c.skillDetector != nil {
-					c.skillDetector.RecordToolCall(agentName, event.LogicalTool, boundedInput, "dynamic MCP invocation")
+				if c.autoSkillsEnabled && c.skillDetector != nil {
+					c.recordSkillPatternToolCall(agentName, event.LogicalTool, boundedInput, "dynamic MCP invocation")
 				}
 			}
 		}

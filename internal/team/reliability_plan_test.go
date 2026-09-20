@@ -975,12 +975,17 @@ func TestBeginExecutionRun_EventLoggerFailure_PreservesRunID(t *testing.T) {
 	}
 
 	endRun := c.beginExecutionRun()
-	defer endRun()
 
 	if c.executionRunID == "" {
 		t.Error("c.executionRunID MUST be initialized even if event logger creation fails")
 	}
+	runID := c.executionRunID
 	if c.taskTracker.TodoList().RunID() == "" {
 		t.Error("TodoList.RunID() MUST be initialized even if event logger creation fails")
+	}
+	endRun()
+
+	if got := c.ExecutionRunIDs(); len(got) != 1 || got[0] != runID {
+		t.Fatalf("ExecutionRunIDs() after cleanup = %v, want [%s]", got, runID)
 	}
 }

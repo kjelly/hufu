@@ -49,6 +49,39 @@ func TestResolveCommandWorkspaceManagedLockLifecycle(t *testing.T) {
 	}
 }
 
+func TestResolveExistingExecutionWorkspaceAutoSelectsNamedTeam(t *testing.T) {
+	previousOpts := opts
+	t.Cleanup(func() { opts = previousOpts })
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	subjectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HUFU_STATE_HOME", stateRoot)
+	t.Chdir(subjectRoot)
+	manager, err := workspacepkg.NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Resolve(t.Context(), workspacepkg.ResolveRequest{
+		StartDir: subjectRoot, TeamName: "hufu-code-review", Mode: workspacepkg.ResolveEnsure,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opts = runOptions{}
+	binding, teamName, err := resolveExistingExecutionWorkspace(t.Context(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding == nil || binding.Resolution.TeamName != "hufu-code-review" || teamName != "hufu-code-review" {
+		t.Fatalf("auto-selected execution workspace = %+v, team=%q", binding, teamName)
+	}
+	if err = binding.Lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveCommandWorkspacePreviewAndUnmanagedDoNotCreateState(t *testing.T) {
 	root := t.TempDir()
 	stateRoot := filepath.Join(root, "missing-state")

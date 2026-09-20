@@ -174,6 +174,7 @@ Results joined and printed to stdout
 | `--judge-model` | — | `""` | Override judge model used for multi-model result selection (e.g. `ollama/qwen3:1b`); falls back to sidecar when not set |
 | `--plan-reviewer-model` | — | `""` | Override plan reviewer model (e.g. `ollama/qwen3:8b`); falls back to `--model` when not set |
 | `--timeout` | — | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. Highest priority — overrides agent `.md` and `team.yaml`. |
+| `--graceful-wrap-up-timeout` | — | `0` | Maximum wait after the first Ctrl+C before cancelling active work. `0` uses 15m or `--timeout + 1m`, whichever is longer; accepts Go durations such as `45m` or `2h`. |
 | `--max-rounds` | — | `0` | Override team.yaml max-rounds (coordinator round limit). `0` = use team default. |
 | `--max-concurrent` | — | `0` | Override team.yaml max-concurrent (parallel worker dispatch). `0` = use team default. |
 | `--max-steps` | — | `0` | Override team.yaml max-steps (per-agent step budget). `0` = use team/agent default. |
@@ -854,7 +855,6 @@ func (r *PromptReader) Close() error
 
 - **`agent`** — Delegate tasks to workers
 - **`load_skill`** — Load skill content by name
-- **`save_skill`** — Save skill definition
 - **`finish`** — Signal completion with final answer
 - **`ask_user`** — Request user input
 

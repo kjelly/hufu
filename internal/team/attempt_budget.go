@@ -30,6 +30,13 @@ type attemptBudget struct {
 	// request down as well as up: after compaction shrinks the conversation,
 	// regrowing it is new content again and is charged again.
 	context int64
+	// outputContextCredit is provider-reported output already charged when it
+	// was generated. The immediately following request normally includes that
+	// output in its context, so reserveContext credits only the reflected part
+	// instead of charging the same content twice. The credit expires at the
+	// next request; hidden reasoning or output removed by compaction therefore
+	// remains charged and cannot subsidize unrelated later growth.
+	outputContextCredit int64
 }
 
 type attemptBudgetExceededError struct {
@@ -62,22 +69,33 @@ func (b *attemptBudget) reserveContext(estimate int64) error {
 	growth := estimate - b.context
 	if growth <= 0 {
 		// A resend, or a compaction. Track the new size so later regrowth is
-		// charged from here rather than from a high-water mark.
+		// charged from here rather than from a high-water mark. Any generated
+		// output not reflected in this request remains charged, but cannot be
+		// used as credit against unrelated future growth.
 		b.context = estimate
+		b.outputContextCredit = 0
 		return nil
 	}
-	if b.used+growth > b.limit {
-		return &attemptBudgetExceededError{Limit: b.limit, Used: b.used, Requested: growth}
+	credit := b.outputContextCredit
+	if credit > growth {
+		credit = growth
 	}
-	b.used += growth
+	charge := growth - credit
+	if b.used+charge > b.limit {
+		return &attemptBudgetExceededError{Limit: b.limit, Used: b.used, Requested: charge}
+	}
+	b.used += charge
 	b.context = estimate
+	b.outputContextCredit = 0
 	return nil
 }
 
-// reserve charges tokens that are not part of the request context, currently
-// provider-reported output. Charges are never refunded: a provider that omits
-// usage must not be able to generate for free.
-func (b *attemptBudget) reserve(tokens int64) error {
+// chargeOutput charges what the model generated on one step. The charge is
+// retained immediately so a terminal output cannot escape the budget. The
+// next request may credit the portion reflected in its context, preventing
+// the same assistant output from being counted once as generated output and a
+// second time as context growth.
+func (b *attemptBudget) chargeOutput(tokens int64) error {
 	if b == nil || tokens <= 0 {
 		return nil
 	}
@@ -87,15 +105,8 @@ func (b *attemptBudget) reserve(tokens int64) error {
 		return &attemptBudgetExceededError{Limit: b.limit, Used: b.used, Requested: tokens}
 	}
 	b.used += tokens
+	b.outputContextCredit += tokens
 	return nil
-}
-
-// chargeOutput charges what the model generated on one step. Output re-enters
-// the next request and is therefore also seen as context growth; charging it
-// here too is deliberate, so a provider that reports usage is not treated more
-// leniently than one that stays silent.
-func (b *attemptBudget) chargeOutput(outputTokens int64) error {
-	return b.reserve(outputTokens)
 }
 
 // snapshot reports the charged total and the limit, for telemetry.

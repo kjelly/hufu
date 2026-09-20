@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +27,7 @@ type canonicalRunOptions struct {
 	rbash, direnv, noJournal, autoApprove, think          bool
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
 	timeout, verifyTimeout, maxDuration, maxTotalTokens   int64
+	gracefulWrapUpTimeout                                 time.Duration
 	maxRounds, maxConcurrent, maxSteps, contextWindow     int
 }
 
@@ -149,6 +151,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.BoolVar(&options.tui, "tui", false, "Show the real-time TUI")
 	flags.BoolVar(&options.think, "think", false, "Show coordinator decision reasoning")
 	flags.Int64Var(&options.timeout, "timeout", 0, "Override agent/coordinator timeout in seconds")
+	flags.DurationVar(&options.gracefulWrapUpTimeout, "graceful-wrap-up-timeout", 0, "Maximum time to let active work finish after the first Ctrl+C")
 	flags.Int64Var(&options.verifyTimeout, "verify-timeout", 0, "Override verification timeout in seconds")
 	flags.IntVar(&options.maxRounds, "max-rounds", 0, "Override coordinator round limit")
 	flags.IntVar(&options.maxConcurrent, "max-concurrent", 0, "Override parallel worker limit")
@@ -260,6 +263,7 @@ func resolveCanonicalRunOptionsForIntent(command *cobra.Command, options *canoni
 	resolved.tuiMode = options.tui
 	resolved.think = options.think
 	resolved.timeoutOverride = options.timeout
+	resolved.gracefulWrapUpTimeout = options.gracefulWrapUpTimeout
 	resolved.verifyTimeoutOverride = options.verifyTimeout
 	resolved.maxDuration = options.maxDuration
 	resolved.maxTotalTokens = options.maxTotalTokens

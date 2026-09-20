@@ -17,11 +17,11 @@ var legacyMemoryMutationTools = map[string]bool{
 	"memory_save": true,
 }
 
-// coordinatorOnlyWorkerTools are orchestration capabilities. They may be
-// present in the global tool registry because the coordinator needs them, but
-// they are never part of an ordinary worker's model-visible surface. Keeping
-// this boundary in team runtime (rather than in a team definition) also
-// protects dynamically loaded and direct-invocation workers.
+// coordinatorOnlyWorkerTools are orchestration capabilities, including retired
+// names that must not be reintroduced through a custom tool. They are never
+// part of an ordinary worker's model-visible surface. Keeping this boundary in
+// team runtime (rather than in a team definition) also protects dynamically
+// loaded and direct-invocation workers.
 var coordinatorOnlyWorkerTools = map[string]bool{
 	"agent":          true,
 	"request_agent":  true,
@@ -31,6 +31,7 @@ var coordinatorOnlyWorkerTools = map[string]bool{
 	"reject_plan":    true,
 	"team_info":      true,
 	"reconcile_task": true,
+	"save_skill":     true,
 }
 
 func isCoordinatorOnlyWorkerTool(name string) bool {

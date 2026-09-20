@@ -58,6 +58,76 @@ func TestManagerResolveManagedModes(t *testing.T) {
 	}
 }
 
+func TestManagerResolveActiveSelectsSoleNamedTeam(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	subjectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "hufu-code-review", Mode: ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := manager.ResolveActive(t.Context(), subjectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("active resolution = %+v, want %+v", got, want)
+	}
+}
+
+func TestManagerResolveActivePrefersDefaultAndRejectsAmbiguousTeams(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	subjectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultWorkspace, err := manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "default", Mode: ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Resolve(t.Context(), ResolveRequest{StartDir: subjectRoot, TeamName: "review", Mode: ResolveEnsure}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.ResolveActive(t.Context(), subjectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != defaultWorkspace {
+		t.Fatalf("active resolution = %+v, want default workspace %+v", got, defaultWorkspace)
+	}
+
+	otherRoot := filepath.Join(root, "other-project")
+	if err = os.MkdirAll(filepath.Join(otherRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	otherManager, err := NewManager(filepath.Join(root, "other-state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = otherManager.Resolve(t.Context(), ResolveRequest{StartDir: otherRoot, TeamName: "review", Mode: ResolveEnsure}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = otherManager.Resolve(t.Context(), ResolveRequest{StartDir: otherRoot, TeamName: "ops", Mode: ResolveEnsure}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = otherManager.ResolveActive(t.Context(), otherRoot); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("ambiguous active resolution error = %v, want ErrAmbiguous", err)
+	}
+}
+
 func TestManagerResolveExplicitAndTemporaryNeverOpenRegistry(t *testing.T) {
 	root := t.TempDir()
 	stateRoot := filepath.Join(root, "missing-state")

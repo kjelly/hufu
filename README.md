@@ -302,6 +302,7 @@ go run ./cmd/hufu
 | `--judge-model` | — | `string` | `""` | Override the judge's independent LLM target |
 | `--plan-reviewer-model` | — | `string` | `""` | Override the plan reviewer's independent LLM target |
 | `--timeout` | — | `int64` | `0` | Override agent/coordinator timeout in seconds (e.g. `1800` for 30 min). `0` = use team/agent default. |
+| `--graceful-wrap-up-timeout` | — | `duration` | `0` | Maximum wait after the first Ctrl+C before active work is cancelled. `0` uses 15 minutes, or `--timeout + 1m` when that is longer. Accepts values such as `45m` or `2h`; `hufu.yaml` may set `graceful-wrap-up-timeout`. |
 | `--max-rounds` | — | `int` | `0` | Override team.yaml max-rounds (coordinator round limit) |
 | `--max-concurrent` | — | `int` | `0` | Override team.yaml max-concurrent (parallel worker dispatch) |
 | `--max-steps` | — | `int` | `0` | Override team.yaml max-steps (per-agent step budget) |
@@ -1255,7 +1256,7 @@ tools: view,write,edit,bash,grep,glob,ls
 
 | Signal | Key | Behavior |
 |--------|-----|----------|
-| `SIGINT` | `Ctrl+C` | First press: enter wrap-up mode (graceful shutdown); second press: force exit |
+| `SIGINT` | `Ctrl+C` | First press: enter wrap-up mode and let active work finish for `--graceful-wrap-up-timeout`; second press: cancel immediately |
 | `SIGTSTP` | `Ctrl+Z` | Inject an additional prompt via readline |
 | `SIGUSR1` | — | Inject an additional prompt (alternative method) |
 

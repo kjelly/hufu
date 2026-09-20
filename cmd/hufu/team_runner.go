@@ -193,7 +193,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 				return fmt.Errorf("%w (decision output failed: %v)", runErr, outputErr)
 			}
 		} else if opts.outputFormat == "json" {
-			if outputErr := printResultJSONWithPrior(result, loadedTeams, nil, priorUnresolved); outputErr != nil {
+			if outputErr := printResultJSONForInvocation(result, loadedTeams, nil, priorUnresolved, collectExecutionRunIdentities(loadedTeams, nil)); outputErr != nil {
 				return fmt.Errorf("%w (json output failed: %v)", runErr, outputErr)
 			}
 		}
@@ -246,7 +246,7 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		}
 	}
 	if opts.outputFormat == "json" {
-		if err := printResultJSONWithPrior(result, loadedTeams, allSkillUsage, priorUnresolved); err != nil {
+		if err := printResultJSONForInvocation(result, loadedTeams, allSkillUsage, priorUnresolved, collectExecutionRunIdentities(loadedTeams, nil)); err != nil {
 			return err
 		}
 	} else {

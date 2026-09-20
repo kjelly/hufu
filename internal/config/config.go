@@ -134,32 +134,33 @@ func (p ProviderConfig) Validate() error {
 }
 
 type Config struct {
-	ProviderURL       string                    `yaml:"provider-url"`
-	ProviderAPIKey    string                    `yaml:"provider-api-key"`
-	Providers         map[string]ProviderConfig `yaml:"providers"`
-	Backends          map[string]BackendConfig  `yaml:"backends"`
-	Model             string                    `yaml:"model"`
-	WorkerModel       string                    `yaml:"worker-model"`
-	CoordinatorModel  string                    `yaml:"coordinator-model"`
-	DefaultLLMBackend string                    `yaml:"default-llm-backend"`
-	EmbeddingModel    string                    `yaml:"embedding-model"`
-	ModelList         []ModelEntry              `yaml:"model-list"`
-	SidecarModel      string                    `yaml:"sidecar-model"`
-	GuardModel        string                    `yaml:"guard-model"`
-	JudgeModel        string                    `yaml:"judge-model"`
-	PlanReviewerModel string                    `yaml:"plan-reviewer-model"`
-	MaxConcurrent     int                       `yaml:"max-concurrent"`
-	StallThreshold    string                    `yaml:"stall-threshold"`
-	AllowedPaths      []string                  `yaml:"allowed-paths"`
-	RestrictedPath    string                    `yaml:"restricted-path"`
-	NoNet             bool                      `yaml:"no-net"`
-	ForceMCP          bool                      `yaml:"force-mcp"`
-	ProjectContext    bool                      `yaml:"project-context"`
-	Presentation      PresentationConfig        `yaml:"presentation"`
-	Shell             string                    `yaml:"shell"`
-	RawVars           interface{}               `yaml:"vars"`
-	Hooks             map[string]string         `yaml:"hooks"`
-	Notify            notify.NotifyConfig       `yaml:"notify"`
+	ProviderURL           string                    `yaml:"provider-url"`
+	ProviderAPIKey        string                    `yaml:"provider-api-key"`
+	Providers             map[string]ProviderConfig `yaml:"providers"`
+	Backends              map[string]BackendConfig  `yaml:"backends"`
+	Model                 string                    `yaml:"model"`
+	WorkerModel           string                    `yaml:"worker-model"`
+	CoordinatorModel      string                    `yaml:"coordinator-model"`
+	DefaultLLMBackend     string                    `yaml:"default-llm-backend"`
+	EmbeddingModel        string                    `yaml:"embedding-model"`
+	ModelList             []ModelEntry              `yaml:"model-list"`
+	SidecarModel          string                    `yaml:"sidecar-model"`
+	GuardModel            string                    `yaml:"guard-model"`
+	JudgeModel            string                    `yaml:"judge-model"`
+	PlanReviewerModel     string                    `yaml:"plan-reviewer-model"`
+	MaxConcurrent         int                       `yaml:"max-concurrent"`
+	StallThreshold        string                    `yaml:"stall-threshold"`
+	GracefulWrapUpTimeout string                    `yaml:"graceful-wrap-up-timeout"`
+	AllowedPaths          []string                  `yaml:"allowed-paths"`
+	RestrictedPath        string                    `yaml:"restricted-path"`
+	NoNet                 bool                      `yaml:"no-net"`
+	ForceMCP              bool                      `yaml:"force-mcp"`
+	ProjectContext        bool                      `yaml:"project-context"`
+	Presentation          PresentationConfig        `yaml:"presentation"`
+	Shell                 string                    `yaml:"shell"`
+	RawVars               interface{}               `yaml:"vars"`
+	Hooks                 map[string]string         `yaml:"hooks"`
+	Notify                notify.NotifyConfig       `yaml:"notify"`
 	// Profiles are named bundles of CLI flag values, selectable with --profile.
 	// Each value maps a flag name to a string the flag knows how to parse, e.g.
 	//   profiles:
@@ -268,6 +269,7 @@ func (c *Config) mergeScalarFields(fileCfg *Config) {
 		{&c.SidecarModel, &fileCfg.SidecarModel}, {&c.PlanReviewerModel, &fileCfg.PlanReviewerModel},
 		{&c.GuardModel, &fileCfg.GuardModel}, {&c.JudgeModel, &fileCfg.JudgeModel},
 		{&c.StallThreshold, &fileCfg.StallThreshold},
+		{&c.GracefulWrapUpTimeout, &fileCfg.GracefulWrapUpTimeout},
 		{&c.Presentation.Theme, &fileCfg.Presentation.Theme},
 		{&c.Presentation.DisplayPreset, &fileCfg.Presentation.DisplayPreset},
 	} {

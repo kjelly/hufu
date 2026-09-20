@@ -1242,10 +1242,13 @@ func isReducerTerminalTaskStatus(status TaskStatus) bool {
 
 func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceipt) []ExecutionReceipt {
 	for i, existing := range receipts {
-		if existing.RunID == receipt.RunID && existing.TaskID == receipt.TaskID && existing.Attempt == receipt.Attempt && existing.TranscriptRef == receipt.TranscriptRef {
-			if existing.RepairProvenance == nil && receipt.RepairProvenance != nil {
-				receipts[i] = receipt
-			}
+		if sameExecutionReceiptProjection(existing, receipt) {
+			// Task transition events carry progressively richer snapshots of one
+			// receipt. The later event is authoritative for terminal fields such
+			// as ExitCode, verification, handoff state, and repair provenance.
+			// Keeping the first snapshot made replay disagree with session.json
+			// and could make audit count a rejected attempt as successful.
+			receipts[i] = receipt
 			return receipts
 		}
 	}
@@ -1257,6 +1260,16 @@ func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceip
 		return res[i].StartedAt.Before(res[j].StartedAt)
 	})
 	return res
+}
+
+func sameExecutionReceiptProjection(left, right ExecutionReceipt) bool {
+	// Keep replay identity identical to TodoList.SetExecutionReceipt. A single
+	// retry attempt may contain multiple model executions (for example judge
+	// candidates), so neither attempt number nor transcript alone is enough.
+	return left.RunID == right.RunID &&
+		left.TaskID == right.TaskID &&
+		left.Attempt == right.Attempt &&
+		left.ModelExecutionID == right.ModelExecutionID
 }
 
 func mergeExecutionReceipts(existing, incoming []ExecutionReceipt) []ExecutionReceipt {

@@ -4024,7 +4024,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			loopDetectMu.Unlock()
 
 			// Record tool call for skill pattern detection
-			if c.skillDetector != nil {
+			if c.autoSkillsEnabled && c.skillDetector != nil {
 				taskDesc := ""
 				if s := c.current.Load(); s != nil {
 					taskDesc = s.Task
@@ -4032,7 +4032,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				if taskDesc == "" {
 					taskDesc = "coordinator task"
 				}
-				c.skillDetector.RecordToolCall(agentName, tc.ToolName, tc.Input, taskDesc)
+				c.recordSkillPatternToolCall(agentName, tc.ToolName, tc.Input, taskDesc)
 			}
 
 			// load_skill records usage only after its handler successfully
