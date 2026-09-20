@@ -81,7 +81,7 @@ func TestInspectOverviewTextUsesUnifiedOperatorSummary(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"State:", "What:", "Next:", "Data:"} {
+	for _, label := range []string{"Invocation:", "State:", "What:", "Next:", "Data:"} {
 		if strings.Count(stdout.String(), label) != 1 {
 			t.Fatalf("overview summary label %q missing or duplicated:\n%s", label, stdout.String())
 		}
@@ -480,6 +480,7 @@ func buildInspectCommandFixture(t *testing.T) (workspace, runID, taskID string) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.SetInvocationID("inv-cli-inspect")
 	appendEvent := func(event team.RunEvent) {
 		t.Helper()
 		if _, err := store.AppendPersisted(event); err != nil {

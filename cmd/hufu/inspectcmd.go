@@ -383,9 +383,9 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		}
 		snapshot := data.Snapshot
 		summary := operatorpkg.BuildSummaryForShell(*snapshot, filepath.Base(os.Getenv("SHELL")))
-		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nBranch: %s\nState: %s\nWhat: %s\nNext: %s\nData: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
+		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nInvocation: %s\nBranch: %s\nState: %s\nWhat: %s\nNext: %s\nData: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
 			safeOverviewValue(snapshot.Scope.WorkspaceExact), safeOverviewValue(valueOrUnavailable(snapshot.Scope.TeamName)), safeOverviewValue(snapshot.Scope.RunID),
-			safeOverviewValue(snapshot.Scope.BranchID), summary.State, summary.What, summary.Next, summary.Data,
+			safeOverviewValue(valueOrUnavailable(snapshot.Scope.InvocationID)), safeOverviewValue(snapshot.Scope.BranchID), summary.State, summary.What, summary.Next, summary.Data,
 			snapshot.Activity.State, snapshot.Attention,
 			valueOrUnavailable(snapshot.Outcome.RunOutcome), snapshot.Outcome.AcceptanceState,
 			snapshot.Outcome.CompletionState, snapshot.Integrity.Status); err != nil {

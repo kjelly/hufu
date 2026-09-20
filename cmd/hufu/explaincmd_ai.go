@@ -68,10 +68,11 @@ type explainAIPromptEvidence struct {
 }
 
 type explainAIScope struct {
-	Team      string `json:"team"`
-	Run       string `json:"run"`
-	Branch    string `json:"branch"`
-	Workspace string `json:"workspace"`
+	Team       string `json:"team"`
+	Run        string `json:"run"`
+	Invocation string `json:"invocation,omitempty"`
+	Branch     string `json:"branch"`
+	Workspace  string `json:"workspace"`
 }
 
 type explainAITask struct {
@@ -144,10 +145,11 @@ func collectExplainAIEvidence(ctx context.Context, query inspectpkg.InspectQuery
 	}
 	evidence := explainAIPromptEvidence{
 		Scope: explainAIScope{
-			Team:      operatorpkg.SafeDisplayText(snapshot.Scope.TeamName, 200),
-			Run:       operatorpkg.SafeDisplayText(snapshot.Scope.RunID, 200),
-			Branch:    operatorpkg.SafeDisplayText(snapshot.Scope.BranchID, 200),
-			Workspace: operatorpkg.SafeDisplayText(snapshot.Scope.WorkspaceExact, 500),
+			Team:       operatorpkg.SafeDisplayText(snapshot.Scope.TeamName, 200),
+			Run:        operatorpkg.SafeDisplayText(snapshot.Scope.RunID, 200),
+			Invocation: operatorpkg.SafeDisplayText(snapshot.Scope.InvocationID, 200),
+			Branch:     operatorpkg.SafeDisplayText(snapshot.Scope.BranchID, 200),
+			Workspace:  operatorpkg.SafeDisplayText(snapshot.Scope.WorkspaceExact, 500),
 		},
 		Activity: snapshot.Activity, Outcome: snapshot.Outcome, Integrity: snapshot.Integrity,
 		Attention: snapshot.Attention, Blockers: slices.Clone(snapshot.Blockers), Changes: slices.Clone(snapshot.LatestChanges),

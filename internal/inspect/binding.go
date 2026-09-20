@@ -42,6 +42,10 @@ func BindReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (Bo
 	if err != nil {
 		return BoundReadTarget{}, err
 	}
+	invocationID, err := persistedInvocationID(lineage, runID)
+	if err != nil {
+		return BoundReadTarget{}, err
+	}
 	sessionID, err := selectBindingSession(lineage, runID, request.SessionID)
 	if err != nil {
 		return BoundReadTarget{}, err
@@ -76,6 +80,7 @@ func BindReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (Bo
 			ProjectID:          projectID,
 			TeamName:           persistedTeam,
 			SessionID:          sessionID,
+			InvocationID:       invocationID,
 			RunID:              runID,
 			BranchID:           lineage.BranchID,
 			SelectionSource:    selection,
@@ -84,6 +89,26 @@ func BindReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (Bo
 		Lineage: lineage,
 		Session: session,
 	}, nil
+}
+
+func persistedInvocationID(lineage Lineage, runID string) (string, error) {
+	var invocationIDs []string
+	for _, indexed := range lineage.Events {
+		if indexed.Event.RunID != runID {
+			continue
+		}
+		invocationIDs = appendNonEmpty(invocationIDs, indexed.Event.InvocationID)
+	}
+	slices.Sort(invocationIDs)
+	invocationIDs = slices.Compact(invocationIDs)
+	switch len(invocationIDs) {
+	case 0:
+		return "", nil
+	case 1:
+		return invocationIDs[0], nil
+	default:
+		return "", fmt.Errorf("%w: run %q has conflicting invocation IDs %v", ErrIntegrity, runID, invocationIDs)
+	}
 }
 
 func selectBindingRun(lineage Lineage, request operatorpkg.BindingRequest, session *team.SessionData) (string, string, error) {

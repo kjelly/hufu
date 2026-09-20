@@ -266,6 +266,7 @@ func TestExplainCommandTextSummarizesCanonicalOverview(t *testing.T) {
 		"Hufu progress",
 		"Workspace: " + workspace,
 		"Run: " + runID,
+		"Invocation: inv-cli-inspect",
 		"State: FINISHED",
 		"Tasks: 1 done · 0 active · 0 waiting · 0 need attention · 0 skipped (1 total)",
 		"What: run outcome is partial; activity is finished",

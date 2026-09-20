@@ -228,10 +228,11 @@ func renderExplainText(writer io.Writer, snapshot *operatorpkg.OperatorSnapshot)
 	summary := operatorpkg.BuildSummaryForShell(*snapshot, filepath.Base(os.Getenv("SHELL")))
 	progress := summarizeExplainTaskProgress(snapshot.Activity.RawTaskStates)
 	if _, err := fmt.Fprintf(writer,
-		"Hufu progress\nWorkspace: %s\nTeam: %s\nRun: %s\nBranch: %s\nState: %s\nTasks: %d done · %d active · %d waiting · %d need attention · %d skipped (%d total)\nWhat: %s\nNext: %s\nEvidence: %s\nIntegrity: %s\n",
+		"Hufu progress\nWorkspace: %s\nTeam: %s\nRun: %s\nInvocation: %s\nBranch: %s\nState: %s\nTasks: %d done · %d active · %d waiting · %d need attention · %d skipped (%d total)\nWhat: %s\nNext: %s\nEvidence: %s\nIntegrity: %s\n",
 		safeOverviewValue(snapshot.Scope.WorkspaceExact),
 		safeOverviewValue(valueOrUnavailable(snapshot.Scope.TeamName)),
 		safeOverviewValue(valueOrUnavailable(snapshot.Scope.RunID)),
+		safeOverviewValue(valueOrUnavailable(snapshot.Scope.InvocationID)),
 		safeOverviewValue(valueOrUnavailable(snapshot.Scope.BranchID)),
 		summary.State,
 		progress.done, progress.active, progress.waiting, progress.attention, progress.skipped, progress.total,

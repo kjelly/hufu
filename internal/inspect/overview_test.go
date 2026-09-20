@@ -44,6 +44,25 @@ func TestBindReadTargetSelectionMatrix(t *testing.T) {
 	}
 }
 
+func TestPersistedInvocationIDRequiresOneCanonicalParent(t *testing.T) {
+	lineage := Lineage{Events: []IndexedEvent{
+		{Event: team.RunEvent{RunID: "run-1"}},
+		{Event: team.RunEvent{RunID: "run-1", InvocationID: "inv-1"}},
+		{Event: team.RunEvent{RunID: "other", InvocationID: "inv-other"}},
+	}}
+	invocationID, err := persistedInvocationID(lineage, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocationID != "inv-1" {
+		t.Fatalf("invocation ID = %q, want inv-1", invocationID)
+	}
+	lineage.Events = append(lineage.Events, IndexedEvent{Event: team.RunEvent{RunID: "run-1", InvocationID: "inv-conflict"}})
+	if _, err := persistedInvocationID(lineage, "run-1"); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("conflicting invocation IDs error = %v, want integrity failure", err)
+	}
+}
+
 func TestBindReadTargetRejectsSessionAndPersistedScopeCollisions(t *testing.T) {
 	lineage := Lineage{Events: []IndexedEvent{
 		{Event: team.RunEvent{RunID: "run-1", SessionID: "session-a", Payload: []byte(`{"scope":{"project_id":"project-a","team_id":"team-a"}}`)}},
@@ -171,6 +190,7 @@ func TestInspectOverviewReturnsCompleteStableSnapshotForFailedRun(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.SetInvocationID("inv-failed")
 	appendOverviewEvent(t, store, team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: jsonBytes(t, map[string]any{
 		"scope": map[string]string{"project_id": "project-1", "team_id": "team-1"},
 	})})
@@ -198,7 +218,7 @@ func TestInspectOverviewReturnsCompleteStableSnapshotForFailedRun(t *testing.T) 
 	if snapshot.Outcome.RunOutcome != string(team.RunOutcomeFailed) || snapshot.Activity.State != operatorpkg.ActivityFinished || snapshot.Attention != operatorpkg.AttentionReviewRequired {
 		t.Fatalf("terminal failed snapshot = %#v", snapshot)
 	}
-	if snapshot.Scope.ProjectID != "project-1" || snapshot.Scope.TeamName != "team-1" || snapshot.Scope.SelectionSource != "single_candidate" {
+	if snapshot.Scope.ProjectID != "project-1" || snapshot.Scope.TeamName != "team-1" || snapshot.Scope.InvocationID != "inv-failed" || snapshot.Scope.SelectionSource != "single_candidate" {
 		t.Fatalf("persisted scope = %#v", snapshot.Scope)
 	}
 	if snapshot.SnapshotID != second.Snapshot.SnapshotID || snapshot.Freshness.QueriedAt == "" {

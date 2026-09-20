@@ -72,6 +72,7 @@ type ResolvedScope struct {
 	TeamName           string `json:"team_name"`
 	TeamDir            string `json:"team_dir"`
 	SessionID          string `json:"session_id"`
+	InvocationID       string `json:"invocation_id,omitempty"`
 	RunID              string `json:"run_id"`
 	BranchID           string `json:"branch_id"`
 	SelectionSource    string `json:"selection_source"`
