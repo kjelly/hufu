@@ -120,6 +120,31 @@ func TestRebindRejectsRootOwnedByAnotherProject(t *testing.T) {
 	}
 }
 
+func TestRebindRejectsSubjectStateOverlap(t *testing.T) {
+	stateRoot, oldRoot, registry, project := rebindFixture(t)
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	newRoot := filepath.Join(stateRoot, "nested-project")
+	if err := os.Mkdir(newRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Rebind(t.Context(), project.ID, newRoot); !errors.Is(err, ErrConflict) {
+		t.Fatalf("overlap rebind error = %v, want ErrConflict", err)
+	}
+
+	registry = openTestRegistry(t, stateRoot)
+	defer registry.Close()
+	unchanged, err := registry.ResolveProject(t.Context(), project.ID)
+	if err != nil || unchanged.SubjectRoot != oldRoot {
+		t.Fatalf("project changed during overlap rebind: %+v, %v", unchanged, err)
+	}
+}
+
 func rebindFixture(t *testing.T) (string, string, *SQLiteRegistry, Project) {
 	t.Helper()
 	root := t.TempDir()

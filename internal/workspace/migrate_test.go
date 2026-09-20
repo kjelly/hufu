@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/eventchain"
 )
 
 func TestMigrateLegacyWorkspaceIsNonDestructive(t *testing.T) {
@@ -70,7 +71,7 @@ func TestMigrateRejectsAmbiguousLegacyContextScopeBeforeRegistryWrites(t *testin
 }
 
 func TestDoctorRepairsInterruptedMigrationWindows(t *testing.T) {
-	for _, stage := range []MigrationStage{MigrationStageReserved, MigrationStageVerified, MigrationStageRenamed} {
+	for _, stage := range []MigrationStage{MigrationStageReserved, MigrationStageCopied, MigrationStageVerified, MigrationStageRenamed} {
 		t.Run(string(stage), func(t *testing.T) {
 			fixture := newMigrationFixture(t)
 			interrupted := errors.New("crash")
@@ -113,7 +114,7 @@ func TestDoctorRepairsInterruptedMigrationWindows(t *testing.T) {
 			}
 			workspace, lookupErr := registry.GetWorkspace(t.Context(), project.ID, "default")
 			_ = registry.Close()
-			if stage == MigrationStageReserved {
+			if stage == MigrationStageReserved || stage == MigrationStageCopied {
 				if !errors.Is(lookupErr, ErrNotFound) {
 					t.Fatalf("reservation-only workspace remained: %+v, %v", workspace, lookupErr)
 				}
@@ -148,6 +149,27 @@ func TestMigrationMutationDetectionCleansOwnedStaging(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("owned staging was not cleaned: %v", entries)
+	}
+}
+
+func TestMigrateRejectsSubjectStateOverlapBeforeReservation(t *testing.T) {
+	projectRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, "workspace", "default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(projectRoot, ".hufu-state")
+	manager, err := NewManager(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Migrate(t.Context(), MigrateRequest{StartDir: projectRoot, TeamName: "default"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("overlap migration error = %v, want ErrConflict", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(stateRoot, registryFilename)); !os.IsNotExist(statErr) {
+		t.Fatalf("overlap migration created registry: %v", statErr)
 	}
 }
 
@@ -188,8 +210,8 @@ func TestVerifyLegacySessionValidatesEventHashChain(t *testing.T) {
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	event := persistedEvent{ID: "evt-1", Type: "run_started", Timestamp: "2026-09-17T00:00:00Z", Payload: json.RawMessage(`{"ok":true}`)}
-	event.Hash = persistedEventHash("", event.ID, event.Type, event.Timestamp, event.Payload)
+	event := eventchain.Entry{ID: "evt-1", Type: "run_started", Timestamp: "2026-09-17T00:00:00Z", Payload: json.RawMessage(`{"ok":true}`)}
+	event.Hash = eventchain.ComputeHash("", event.ID, event.Type, event.Timestamp, event.Payload)
 	data, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)

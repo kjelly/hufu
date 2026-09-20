@@ -103,6 +103,93 @@ func TestDoctorRepairRemovesOnlyMarkerBackedOrphanStaging(t *testing.T) {
 	}
 }
 
+func TestDoctorRepairRemovesIncompleteOwnedCreatingStaging(t *testing.T) {
+	for _, markerState := range []string{"operation-only", "temporary-operation"} {
+		t.Run(markerState, func(t *testing.T) {
+			root := t.TempDir()
+			projectRoot := filepath.Join(root, "project")
+			if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stateRoot := filepath.Join(root, "state")
+			crash := errors.New("crash")
+			registry, err := OpenReadWrite(stateRoot,
+				WithIDGenerator(NewIDGenerator(bytes.NewReader(bytes.Repeat([]byte{0x74}, 128)))),
+				WithCreateHook(func(stage CreateStage) error {
+					if stage == CreateStageOperationMarked {
+						return crash
+					}
+					return nil
+				}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project, err := registry.RegisterProject(t.Context(), projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = registry.CreateWorkspace(t.Context(), project.ID, "default"); !errors.Is(err, crash) {
+				t.Fatalf("create interruption = %v", err)
+			}
+			workspace, err := registry.GetWorkspace(t.Context(), project.ID, "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if markerState == "temporary-operation" {
+				markerPath := filepath.Join(workspace.PendingPath, "operation.json")
+				if err = os.Rename(markerPath, markerPath+".tmp"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = registry.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			manager, err := NewManager(stateRoot, WithIDGenerator(NewIDGenerator(bytes.NewReader(bytes.Repeat([]byte{0x75}, 32)))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := manager.Doctor(t.Context(), DoctorRequest{StartDir: projectRoot, Repair: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasRepairedDoctorIssue(result, IssueCreatingIncomplete) {
+				t.Fatalf("doctor result = %+v", result)
+			}
+			if _, statErr := os.Stat(workspace.PendingPath); !os.IsNotExist(statErr) {
+				t.Fatalf("incomplete staging remains: %v", statErr)
+			}
+			registry = openTestRegistry(t, stateRoot)
+			defer registry.Close()
+			if _, lookupErr := registry.GetWorkspaceByID(t.Context(), workspace.ID); !errors.Is(lookupErr, ErrNotFound) {
+				t.Fatalf("creating workspace remains after repair: %v", lookupErr)
+			}
+			op, lookupErr := registry.GetOperation(t.Context(), workspace.OperationID)
+			if lookupErr != nil || op.State != "failed" || op.DetailCode != "creating_incomplete" {
+				t.Fatalf("repaired operation = %+v, %v", op, lookupErr)
+			}
+		})
+	}
+}
+
+func TestRemoveIncompleteCreatingStagingRejectsEscapingOperationPath(t *testing.T) {
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	registry := openTestRegistry(t, stateRoot)
+	defer registry.Close()
+	victim := filepath.Join(stateRoot, "victim")
+	if err := os.Mkdir(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := Workspace{ID: "ws_test", ProjectID: "prj_test", OperationID: "../victim", PendingPath: victim}
+	if err := registry.removeIncompleteCreatingStaging(t.Context(), workspace); err == nil {
+		t.Fatal("escaping operation path was accepted")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("escaping operation removed victim: %v", err)
+	}
+}
+
 func hasDoctorIssue(result DoctorResult, code string) bool {
 	for _, issue := range result.Issues {
 		if issue.Code == code {

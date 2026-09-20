@@ -133,13 +133,10 @@ func applyWorkspaceResolution(session *team.TeamSession, resolution workspacepkg
 		// Preview scopes deliberately carry no fabricated project/workspace IDs.
 		// StateRoot is only a non-overlapping, non-created control placeholder;
 		// dry-run exits before any workspace reads or writes.
-		session.Scope = team.WorkspaceScope{
+		return session.SetWorkspacePreviewScope(team.WorkspaceScope{
 			ContextScopeID: resolution.SubjectRoot, ControlRoot: stateRoot,
 			SubjectRoot: resolution.SubjectRoot, ProjectRoot: resolution.SubjectRoot, Managed: true,
-		}
-		session.Workspace = stateRoot
-		session.Config.WorkspaceDir = stateRoot
-		return nil
+		})
 	}
 	scope := team.WorkspaceScope{
 		ProjectID: resolution.ProjectID, ContextScopeID: resolution.ContextScopeID,

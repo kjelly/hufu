@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kjelly/hufu/internal/eventchain"
 
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -111,13 +112,7 @@ func (es *EventStore) SetInvocationID(invocationID string) {
 
 // ComputeEventHash computes a SHA-256 hash over an event's prevHash, ID, type, timestamp, and payload.
 func ComputeEventHash(prevHash, id, eventType, timestamp string, payload json.RawMessage) string {
-	h := sha256.New()
-	_, _ = h.Write([]byte(prevHash))
-	_, _ = h.Write([]byte(id))
-	_, _ = h.Write([]byte(eventType))
-	_, _ = h.Write([]byte(timestamp))
-	_, _ = h.Write(payload)
-	return hex.EncodeToString(h.Sum(nil))
+	return eventchain.ComputeHash(prevHash, id, eventType, timestamp, payload)
 }
 
 // NewEventStore opens or creates the event_store.jsonl file in workspace/logs.
@@ -562,6 +557,7 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var chainVerifier eventchain.Verifier
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -571,16 +567,11 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 		if err := json.Unmarshal(line, &event); err != nil {
 			return eventStoreState{}, fmt.Errorf("decode event %d: %w", state.sequence+1, err)
 		}
-		if state.sequence == 0 {
-			if event.PreviousID != "" || event.PreviousHash != "" {
-				return eventStoreState{}, fmt.Errorf("first event (%s) must have empty previous_id and previous_hash", event.ID)
-			}
-		} else if event.PreviousID != state.lastEventID || event.PreviousHash != state.lastHash {
-			return eventStoreState{}, fmt.Errorf("event %d (%s) does not continue hash chain", state.sequence, event.ID)
-		}
-		expected := ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-		if event.Hash != expected {
-			return eventStoreState{}, fmt.Errorf("event %d (%s) hash invalid", state.sequence, event.ID)
+		if err := chainVerifier.Verify(eventchain.Entry{
+			ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
+			Payload: event.Payload, PreviousHash: event.PreviousHash, Hash: event.Hash,
+		}); err != nil {
+			return eventStoreState{}, err
 		}
 		state.events = append(state.events, cloneRunEvent(event))
 		state.lastEventID = event.ID

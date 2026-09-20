@@ -180,6 +180,18 @@ func TestSeedWorkspaceFilesRejectsEscape(t *testing.T) {
 	}
 }
 
+func TestBindEvalCaseWorkspaceUsesEphemeralWorkspaceAsSubject(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{Workspace: workspace}
+	projectDir, err := bindEvalCaseWorkspace(session, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectDir != workspace || session.Scope.SubjectRoot != workspace || session.Scope.ContextScopeID != workspace {
+		t.Fatalf("eval scope = %+v projectDir=%q, want ephemeral workspace %q", session.Scope, projectDir, workspace)
+	}
+}
+
 func TestAssertMemoryAggregatesDistinguishesExposureFromCredit(t *testing.T) {
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))

@@ -69,6 +69,35 @@ func TestRegistryOpenModesAndMigrationChecksum(t *testing.T) {
 	}
 }
 
+func TestRegistryReadWriteDSNPreservesSpecialPathCharacters(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state?quoted#root")
+	projectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := openTestRegistry(t, stateRoot)
+	project, err := registry.RegisterProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err = OpenReadOnly(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	resolved, err := registry.ResolveProject(t.Context(), project.ID)
+	if err != nil || resolved.ID != project.ID {
+		t.Fatalf("reopened special-path registry project = %+v, %v", resolved, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "state")); !os.IsNotExist(statErr) {
+		t.Fatalf("SQLite created a truncated DSN target: %v", statErr)
+	}
+}
+
 func TestRegistryRejectsDatabaseSymlink(t *testing.T) {
 	root := t.TempDir()
 	stateRoot := filepath.Join(root, "state")
@@ -179,6 +208,50 @@ func TestProjectRegistrationSelectorsAndAliases(t *testing.T) {
 	if _, err = registry.ResolveProject(t.Context(), "my.project"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cleared alias error = %v, want ErrNotFound", err)
 	}
+}
+
+func TestResolveProjectHexLikeNamesAndIDPrefixes(t *testing.T) {
+	t.Run("hex slug without collision", func(t *testing.T) {
+		root := t.TempDir()
+		projectRoot := filepath.Join(root, "deadbeef")
+		if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		registry := openTestRegistry(t, filepath.Join(root, "state"), WithIDGenerator(NewIDGenerator(bytes.NewReader(bytes.Repeat([]byte{0x11}, 16)))))
+		defer registry.Close()
+		project, err := registry.RegisterProject(t.Context(), projectRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := registry.ResolveProject(t.Context(), "deadbeef")
+		if err != nil || resolved.ID != project.ID {
+			t.Fatalf("hex slug resolved to %+v, %v; want %s", resolved, err, project.ID)
+		}
+	})
+
+	t.Run("hex slug colliding with ID prefix", func(t *testing.T) {
+		root := t.TempDir()
+		idRoot := filepath.Join(root, "ordinary")
+		hexRoot := filepath.Join(root, "deadbeef")
+		for _, path := range []string{idRoot, hexRoot} {
+			if err := os.MkdirAll(filepath.Join(path, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		firstID := append([]byte{0xde, 0xad, 0xbe, 0xef}, bytes.Repeat([]byte{0x01}, 12)...)
+		secondID := bytes.Repeat([]byte{0x22}, 16)
+		registry := openTestRegistry(t, filepath.Join(root, "state"), WithIDGenerator(NewIDGenerator(bytes.NewReader(append(firstID, secondID...)))))
+		defer registry.Close()
+		if _, err := registry.RegisterProject(t.Context(), idRoot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := registry.RegisterProject(t.Context(), hexRoot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := registry.ResolveProject(t.Context(), "deadbeef"); !errors.Is(err, ErrAmbiguous) {
+			t.Fatalf("hex slug/ID collision error = %v, want ErrAmbiguous", err)
+		}
+	})
 }
 
 func TestRegisterProjectRetriesStateDirectoryCollision(t *testing.T) {
@@ -343,6 +416,33 @@ func TestCreateWorkspaceCrashFixtures(t *testing.T) {
 			}
 			assertCrashPaths(t, stage, workspace)
 		})
+	}
+}
+
+func TestConcurrentCreatingWorkspaceNormalizesReservationConflict(t *testing.T) {
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	subjectRoot := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(subjectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("stop after reservation")
+	registry := openTestRegistry(t, stateRoot, WithCreateHook(func(stage CreateStage) error {
+		if stage == CreateStageReserved {
+			return stop
+		}
+		return nil
+	}))
+	defer registry.Close()
+	project, err := registry.RegisterProject(t.Context(), subjectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.CreateWorkspace(t.Context(), project.ID, "dev"); !errors.Is(err, stop) {
+		t.Fatalf("create interruption = %v", err)
+	}
+	_, err = registry.resolveConcurrentWorkspaceReservation(t.Context(), project.ID, "dev", errors.New("unique constraint failed"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("concurrent reservation error = %v, want ErrConflict", err)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/eventchain"
 )
 
 const (
@@ -230,6 +231,9 @@ func (m *WorkspaceManager) migrateOne(ctx context.Context, knownProject Project,
 	}
 	if pathsOverlap(source, m.stateRoot) {
 		return MigrationItem{}, fmt.Errorf("scope_overlap: legacy source %q overlaps state root %q", source, m.stateRoot)
+	}
+	if pathsOverlap(subjectRoot, m.stateRoot) {
+		return MigrationItem{}, fmt.Errorf("%w: subject root %q overlaps state root %q", ErrConflict, subjectRoot, m.stateRoot)
 	}
 	contextScopeID, sourceFacts, hasContext, err := inspectLegacyContext(ctx, source)
 	if err != nil {
@@ -645,19 +649,9 @@ func verifyLegacySession(root string) error {
 		return err
 	}
 	if err := verifyEventChain(eventPath); err != nil {
-		return fmt.Errorf("event_chain_invalid: %w", err)
+		return fmt.Errorf("%s: %w", IssueEventChainInvalid, err)
 	}
 	return nil
-}
-
-type persistedEvent struct {
-	ID           string          `json:"id"`
-	PreviousID   string          `json:"previous_id,omitempty"`
-	Type         string          `json:"type"`
-	Timestamp    string          `json:"timestamp"`
-	Payload      json.RawMessage `json:"payload,omitempty"`
-	PreviousHash string          `json:"previous_hash,omitempty"`
-	Hash         string          `json:"hash,omitempty"`
 }
 
 func verifyEventChain(path string) error {
@@ -668,42 +662,21 @@ func verifyEventChain(path string) error {
 	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var sequence int
-	var previousID, previousHash string
+	var chainVerifier eventchain.Verifier
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
 		}
-		var event persistedEvent
+		var event eventchain.Entry
 		if err = json.Unmarshal(line, &event); err != nil {
-			return fmt.Errorf("decode event %d: %w", sequence+1, err)
+			return fmt.Errorf("decode event %d: %w", chainVerifier.Sequence()+1, err)
 		}
-		if sequence == 0 {
-			if event.PreviousID != "" || event.PreviousHash != "" {
-				return fmt.Errorf("first event %q has a predecessor", event.ID)
-			}
-		} else if event.PreviousID != previousID || event.PreviousHash != previousHash {
-			return fmt.Errorf("event %d %q does not continue hash chain", sequence, event.ID)
+		if err = chainVerifier.Verify(event); err != nil {
+			return err
 		}
-		expected := persistedEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-		if event.Hash != expected {
-			return fmt.Errorf("event %d %q hash invalid", sequence, event.ID)
-		}
-		sequence++
-		previousID, previousHash = event.ID, event.Hash
 	}
 	return scanner.Err()
-}
-
-func persistedEventHash(previousHash, id, eventType, timestamp string, payload json.RawMessage) string {
-	hash := sha256.New()
-	_, _ = hash.Write([]byte(previousHash))
-	_, _ = hash.Write([]byte(id))
-	_, _ = hash.Write([]byte(eventType))
-	_, _ = hash.Write([]byte(timestamp))
-	_, _ = hash.Write(payload)
-	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func markerMatchesOperation(root, operationID, workspaceID string) bool {

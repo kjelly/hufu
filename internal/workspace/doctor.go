@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -508,6 +509,10 @@ func (r *SQLiteRegistry) repairCreating(ctx context.Context, workspace Workspace
 		if err == nil {
 			err = r.activateWorkspace(ctx, workspace)
 		}
+	case stagingExists && !finalExists:
+		if err = r.removeIncompleteCreatingStaging(ctx, workspace); err == nil {
+			err = r.removeCreatingWorkspace(ctx, workspace)
+		}
 	case !stagingExists && !finalExists:
 		err = r.removeCreatingWorkspace(ctx, workspace)
 	default:
@@ -521,6 +526,32 @@ func (r *SQLiteRegistry) repairCreating(ctx context.Context, workspace Workspace
 	}
 	complete = true
 	return true, nil
+}
+
+func (r *SQLiteRegistry) removeIncompleteCreatingStaging(ctx context.Context, workspace Workspace) error {
+	if !ownedDirectory(workspace.PendingPath) {
+		return errors.New("creating workspace staging path is not an owned directory")
+	}
+	canonical, err := canonicalPath(workspace.PendingPath)
+	if err != nil {
+		return err
+	}
+	stagingRoot := filepath.Join(r.stateRoot, "staging")
+	expected := filepath.Join(stagingRoot, workspace.OperationID)
+	if filepath.Base(workspace.OperationID) != workspace.OperationID || filepath.Dir(expected) != stagingRoot || filepath.Dir(canonical) != stagingRoot || canonical != expected {
+		return fmt.Errorf("creating workspace staging path %q does not match operation %q", canonical, workspace.OperationID)
+	}
+	operation, err := r.GetOperation(ctx, workspace.OperationID)
+	if err != nil {
+		return err
+	}
+	if operation.State != "started" || operation.ProjectID != workspace.ProjectID || operation.WorkspaceID != workspace.ID || (operation.Kind != "create" && operation.Kind != operationMigrate) {
+		return errors.New("creating workspace operation does not match registry state")
+	}
+	if err = os.RemoveAll(canonical); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(canonical))
 }
 
 func (r *SQLiteRegistry) repairOrphanStaging(ctx context.Context, path string) (bool, error) {

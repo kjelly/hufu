@@ -66,6 +66,28 @@ func TestSetWorkspaceScopeRequiresManagedIdentityAndSeparation(t *testing.T) {
 	}
 }
 
+func TestSetWorkspacePreviewScopeValidatesPathsWithoutPersistedIdentity(t *testing.T) {
+	root := t.TempDir()
+	session := &TeamSession{}
+	scope := WorkspaceScope{
+		ContextScopeID: filepath.Join(root, "subject"),
+		ControlRoot:    filepath.Join(root, "state"),
+		SubjectRoot:    filepath.Join(root, "subject"),
+		Managed:        true,
+	}
+	if err := session.SetWorkspacePreviewScope(scope); err != nil {
+		t.Fatal(err)
+	}
+	if session.Scope.ProjectID != "" || session.Workspace != scope.ControlRoot || session.Config.WorkspaceDir != scope.ControlRoot {
+		t.Fatalf("preview scope aliases = %#v workspace=%q config=%q", session.Scope, session.Workspace, session.Config.WorkspaceDir)
+	}
+
+	scope.ControlRoot = root
+	if err := session.SetWorkspacePreviewScope(scope); err == nil {
+		t.Fatal("overlapping preview scope was accepted")
+	}
+}
+
 func TestContextScopeUsesCompatibilityIdentityInsteadOfSubjectRoot(t *testing.T) {
 	session := &TeamSession{
 		Workspace: "/control",

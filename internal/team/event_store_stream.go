@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/kjelly/hufu/internal/eventchain"
 )
 
 // StreamValidatedRunEvents reads the durable event log without constructing an
@@ -41,8 +43,7 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var sequence int
-	var previousID, previousHash string
+	var chainVerifier eventchain.Verifier
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -53,25 +54,18 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 		}
 		var event RunEvent
 		if err := json.Unmarshal(line, &event); err != nil {
-			return fmt.Errorf("decode event %d: %w", sequence+1, err)
+			return fmt.Errorf("decode event %d: %w", chainVerifier.Sequence()+1, err)
 		}
-		if sequence == 0 {
-			if event.PreviousID != "" || event.PreviousHash != "" {
-				return fmt.Errorf("first event (%s) must have empty previous_id and previous_hash", event.ID)
-			}
-		} else if event.PreviousID != previousID || event.PreviousHash != previousHash {
-			return fmt.Errorf("event %d (%s) does not continue hash chain", sequence, event.ID)
-		}
-		expected := ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-		if event.Hash != expected {
-			return fmt.Errorf("event %d (%s) hash invalid", sequence, event.ID)
+		if err := chainVerifier.Verify(eventchain.Entry{
+			ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
+			Payload: event.Payload, PreviousHash: event.PreviousHash, Hash: event.Hash,
+		}); err != nil {
+			return err
 		}
 
 		if err := visit(event); err != nil {
-			return fmt.Errorf("visit event %d (%s): %w", sequence+1, event.ID, err)
+			return fmt.Errorf("visit event %d (%s): %w", chainVerifier.Sequence(), event.ID, err)
 		}
-		sequence++
-		previousID, previousHash = event.ID, event.Hash
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan event store: %w", err)

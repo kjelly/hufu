@@ -97,10 +97,7 @@ func (r *SQLiteRegistry) CreateWorkspace(ctx context.Context, projectSelector, t
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err = r.reserveWorkspace(ctx, workspace); err != nil {
-		if concurrent, lookupErr := r.GetWorkspace(ctx, project.ID, team); lookupErr == nil && concurrent.State == "active" {
-			return concurrent, nil
-		}
-		return Workspace{}, err
+		return r.resolveConcurrentWorkspaceReservation(ctx, project.ID, team, err)
 	}
 	if err = r.runCreateHook(CreateStageReserved); err != nil {
 		return Workspace{}, err
@@ -122,6 +119,17 @@ func (r *SQLiteRegistry) CreateWorkspace(ctx context.Context, projectSelector, t
 	workspace.PendingPath = ""
 	workspace.UpdatedAt = r.now().UTC()
 	return workspace, nil
+}
+
+func (r *SQLiteRegistry) resolveConcurrentWorkspaceReservation(ctx context.Context, projectID, team string, reservationErr error) (Workspace, error) {
+	concurrent, lookupErr := r.GetWorkspace(ctx, projectID, team)
+	if lookupErr != nil {
+		return Workspace{}, reservationErr
+	}
+	if concurrent.State == "active" {
+		return concurrent, nil
+	}
+	return Workspace{}, fmt.Errorf("%w: workspace %s/%s was concurrently reserved in state %s: %v", ErrConflict, projectID, team, concurrent.State, reservationErr)
 }
 
 func (r *SQLiteRegistry) reserveWorkspace(ctx context.Context, workspace Workspace) error {

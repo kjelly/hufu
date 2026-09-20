@@ -43,6 +43,23 @@ func NewCompatibilityWorkspaceScope(controlRoot, subjectRoot string) (WorkspaceS
 // isolated; unmanaged compatibility scopes retain the execution-profile
 // validation performed by the CLI boundary.
 func (s *TeamSession) SetWorkspaceScope(scope WorkspaceScope) error {
+	return s.setWorkspaceScope(scope, true)
+}
+
+// SetWorkspacePreviewScope installs a managed dry-run scope that deliberately
+// has no persisted project identity. It applies the same path validation as a
+// runtime scope while preserving the no-state-creation preview contract.
+func (s *TeamSession) SetWorkspacePreviewScope(scope WorkspaceScope) error {
+	if !scope.Managed {
+		return fmt.Errorf("workspace preview scope must be managed")
+	}
+	if scope.ProjectID != "" {
+		return fmt.Errorf("workspace preview scope must not have a project ID")
+	}
+	return s.setWorkspaceScope(scope, false)
+}
+
+func (s *TeamSession) setWorkspaceScope(scope WorkspaceScope, requireManagedIdentity bool) error {
 	if s == nil {
 		return fmt.Errorf("team session is nil")
 	}
@@ -60,7 +77,7 @@ func (s *TeamSession) SetWorkspaceScope(scope WorkspaceScope) error {
 	if scope.ContextScopeID == "" {
 		return fmt.Errorf("context scope ID is empty")
 	}
-	if scope.Managed && scope.ProjectID == "" {
+	if scope.Managed && requireManagedIdentity && scope.ProjectID == "" {
 		return fmt.Errorf("managed workspace scope requires a project ID")
 	}
 	if scope.Managed {

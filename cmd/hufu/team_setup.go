@@ -477,7 +477,12 @@ func loadDefaultTeam(ctx context.Context, defaultProviderURL, defaultProviderAPI
 		_ = closeSessionWorkspaceLease(dummySession)
 		return nil, err
 	}
-	if err = session.SetWorkspaceScope(dummySession.Scope); err != nil {
+	if dummySession.Scope.Managed && dummySession.Scope.ProjectID == "" {
+		err = session.SetWorkspacePreviewScope(dummySession.Scope)
+	} else {
+		err = session.SetWorkspaceScope(dummySession.Scope)
+	}
+	if err != nil {
 		_ = closeSessionWorkspaceLease(dummySession)
 		return nil, err
 	}

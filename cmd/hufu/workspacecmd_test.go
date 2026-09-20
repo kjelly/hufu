@@ -413,6 +413,34 @@ func TestWorkspaceMigratePreflightFailureWritesNoStdout(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDoctorHardFailureWritesNoStdout(t *testing.T) {
+	fixture := newWorkspaceCLIFixture(t)
+	fixture.run(t, "register")
+	stdout, err := executeWorkspaceCommand(t, fixture.deps, "doctor", "missing-project", "--output", "json")
+	if !errors.Is(err, workspacepkg.ErrNotFound) || stdout != "" {
+		t.Fatalf("doctor hard failure output=%q error=%v", stdout, err)
+	}
+}
+
+func TestWorkspaceGCHardFailureWritesNoStdout(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	if err := os.Mkdir(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, "registry.sqlite"), []byte("not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := workspaceCommandDeps{
+		stateRoot: func() (string, error) { return stateRoot, nil },
+		getwd:     func() (string, error) { return root, nil },
+	}
+	stdout, err := executeWorkspaceCommand(t, deps, "gc", "--output", "json")
+	if err == nil || stdout != "" {
+		t.Fatalf("GC hard failure output=%q error=%v", stdout, err)
+	}
+}
+
 type workspaceCLIFixture struct {
 	root        string
 	stateRoot   string

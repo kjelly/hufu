@@ -104,11 +104,8 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err := seedWorkspaceFiles(workspace, c.WorkspaceFiles); err != nil {
 		return EvalCaseResult{}, err
 	}
-	projectDir, err := canonicalWorkingDirectory()
+	projectDir, err := bindEvalCaseWorkspace(session, workspace)
 	if err != nil {
-		return EvalCaseResult{}, err
-	}
-	if err := session.SetCompatibilityWorkspaceScope(projectDir); err != nil {
 		return EvalCaseResult{}, fmt.Errorf("bind eval workspace scope: %w", err)
 	}
 	if err := seedCanonicalContext(context.WithoutCancel(ctx), workspace, projectDir, session.Config.Name, c.ContextItems, c.SeedMemoryPolicy, session.Config.MemoryLearning); err != nil {
@@ -344,19 +341,11 @@ func validateOfflineSelector(label, raw string) error {
 	return nil
 }
 
-func canonicalWorkingDirectory() (string, error) {
-	workingDir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolve project directory: %w", err)
+func bindEvalCaseWorkspace(session *team.TeamSession, workspace string) (string, error) {
+	if err := session.SetCompatibilityWorkspaceScope(workspace); err != nil {
+		return "", err
 	}
-	abs, err := filepath.Abs(workingDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute project directory: %w", err)
-	}
-	if evaluated, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
-		return filepath.Clean(evaluated), nil
-	}
-	return filepath.Clean(abs), nil
+	return session.Scope.SubjectRoot, nil
 }
 
 func seedCanonicalContext(ctx context.Context, workspace, projectDir, teamID string, fixtures []ContextItemFixture, seedMemoryPolicy bool, policy agent.MemoryLearningPolicy) (returnErr error) {

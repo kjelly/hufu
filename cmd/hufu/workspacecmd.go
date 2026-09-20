@@ -117,6 +117,9 @@ func newWorkspaceGCCommand(deps workspaceCommandDeps) *cobra.Command {
 				return err
 			}
 			result, gcErr := manager.GC(command.Context(), workspacepkg.GCRequest{Apply: apply, TrashOlderThan: retention})
+			if gcErr != nil && result.Outcome == "" {
+				return &workspaceOutcomeError{outcome: "failed", cause: gcErr}
+			}
 			if err = writeWorkspaceGC(command.OutOrStdout(), output, result); err != nil {
 				return errors.Join(gcErr, err)
 			}
@@ -423,6 +426,9 @@ func newWorkspaceDoctorCommand(deps workspaceCommandDeps) *cobra.Command {
 				return err
 			}
 			result, doctorErr := manager.Doctor(command.Context(), workspacepkg.DoctorRequest{StartDir: start, Selector: firstArgument(args), Repair: repair})
+			if doctorErr != nil && result.Outcome == "" {
+				return &workspaceOutcomeError{outcome: "failed", cause: doctorErr}
+			}
 			if err = writeWorkspaceDoctor(command.OutOrStdout(), output, result); err != nil {
 				return errors.Join(doctorErr, err)
 			}

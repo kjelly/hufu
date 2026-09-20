@@ -18,6 +18,9 @@ func (m *WorkspaceManager) Rebind(ctx context.Context, selector, newRoot string)
 	if err != nil {
 		return RebindResult{}, fmt.Errorf("rebind project root: %w", err)
 	}
+	if pathsOverlap(canonicalNewRoot, m.stateRoot) {
+		return RebindResult{}, fmt.Errorf("%w: subject root %q overlaps state root %q", ErrConflict, canonicalNewRoot, m.stateRoot)
+	}
 	registry, err := OpenReadWrite(m.stateRoot, m.registryOptions...)
 	if err != nil {
 		return RebindResult{}, err

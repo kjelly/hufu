@@ -110,16 +110,15 @@ func openRegistry(path, stateRoot string, readOnly bool, options ...RegistryOpti
 	if configuration.now == nil {
 		configuration.now = time.Now
 	}
-	var dsn string
+	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	query := uri.Query()
 	if readOnly {
-		uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
-		query := uri.Query()
 		query.Set("mode", "ro")
-		uri.RawQuery = query.Encode()
-		dsn = uri.String()
 	} else {
-		dsn = path
+		query.Set("mode", "rw")
 	}
+	uri.RawQuery = query.Encode()
+	dsn := uri.String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace registry: %w", err)
@@ -211,7 +210,8 @@ func (r *SQLiteRegistry) ResolveProject(ctx context.Context, selector string) (P
 		return scanProject(r.db.QueryRowContext(ctx, projectSelect+" WHERE id=?", selector))
 	}
 	if prefix, ok := validProjectIDPrefix(selector); ok {
-		return r.resolveProjectCandidates(ctx, selector, "id LIKE ?", "prj_"+prefix+"%")
+		normalized := strings.ToLower(selector)
+		return r.resolveProjectCandidates(ctx, selector, "id LIKE ? OR alias=? OR slug=?", "prj_"+prefix+"%", normalized, normalized)
 	}
 	normalizedAlias := strings.ToLower(selector)
 	project, err := scanProject(r.db.QueryRowContext(ctx, projectSelect+" WHERE alias=?", normalizedAlias))
@@ -240,8 +240,8 @@ func validProjectIDPrefix(selector string) (string, bool) {
 	return prefix, true
 }
 
-func (r *SQLiteRegistry) resolveProjectCandidates(ctx context.Context, selector, predicate, value string) (Project, error) {
-	rows, err := r.db.QueryContext(ctx, projectSelect+" WHERE "+predicate+" ORDER BY id", value)
+func (r *SQLiteRegistry) resolveProjectCandidates(ctx context.Context, selector, predicate string, values ...any) (Project, error) {
+	rows, err := r.db.QueryContext(ctx, projectSelect+" WHERE "+predicate+" ORDER BY id", values...)
 	if err != nil {
 		return Project{}, fmt.Errorf("resolve project %q: %w", selector, err)
 	}
