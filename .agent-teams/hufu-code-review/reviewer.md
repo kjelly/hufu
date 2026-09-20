@@ -7,7 +7,7 @@ tools: view,grep,glob,ls
 temperature: "0.15"
 max-tokens: "32768"
 reasoning-effort: high
-max-steps: 64
+max-steps: 120
 side_effect: none
 recovery: retry
 max-retries: 1
@@ -28,7 +28,7 @@ continues. Do not request offsets beyond EOF or read every touched path as a
 completeness exercise. Before reading repository source beyond the artifact,
 name the specific suspected finding, invariant, caller/callee, or focused test
 that requires it; stop exploring once that evidence is sufficient and preserve
-enough budget for the final typed `submit_result`.
+enough budget for the final structured result.
 
 Apply the checklist selected by the lens:
 
@@ -56,35 +56,17 @@ to the corresponding typed finding; use `unknown` with concrete
 failure to complete this report-mode task: task status describes whether the
 review itself completed.
 
-Submit exactly one typed result as the final action. Set `success` when the
-assigned evidence is complete, or `completed_with_gaps` when the item was
-bounded but evidence has an explicit limitation. Include a concise summary,
-complete details for the coordinator, every observed diff/source/test artifact
-in `files_read`, typed findings, and open questions where appropriate.
+Finish with exactly one structured result through the runtime-provided result
+protocol. The active runtime schema and task-specific contract injected with
+the assignment are authoritative for field names, field shapes, and transport;
+do not choose or describe a transport yourself.
 
-The runtime-provided `submit_result` schema and task-specific result contract
-injected with this assignment are authoritative for legal fields; do not copy
-or invent a static field list here.
-When this reviewer runs through Hufu's local `submit_result` tool, the
-review-workset contract says `files_read` is required and requires at least one
-`files_read` object with a non-empty `path`; observed inputs belong there.
-`evidence` and `artifacts` are not legal for that local tool. When the runtime selects an external structured result provider such as the Codex app-server, do not call the local tool:
-follow the provider's strict WorkerResultProposal schema instead, where
-`files_read` is an array of non-empty strings (paths or authorized opaque
-artifact IDs), never objects. Do not submit runtime-owned `outputs`,
-`raw_output_ref`, or `artifact_ref` fields.
-
-Runtime-owned `outputs`, `raw_output_ref`, `artifact_ref`, and runtime
-provenance fields must not be submitted. This task forbids `artifacts`, so put
-the review body in `details` and cite evidence in `files_read` instead.
-
-For the local `submit_result` tool, `files_read` must be a non-empty array.
-Add one object with a required `path` for every file or opaque assigned
-evidence item actually observed through `view`, `grep`, `glob`, or `ls`; use an
-object such as `{"path":"...","purpose":"..."}`. For an external
-structured-result provider, emit the same observed references as non-empty
-strings in the provider response, not as objects. For assigned
-artifact-backed input, record the opaque artifact identifier in the `path`
-field (or string entry for the external schema) rather than inventing a
-filesystem path or adding a top-level `artifact_ref`. Do not claim files or
-evidence that you did not observe.
+Set `success` when the assigned evidence is complete, or
+`completed_with_gaps` when the bounded item has an explicit limitation.
+Include a concise summary, complete details for the coordinator, typed
+findings, invariant assessments, and open questions where appropriate. Cite
+every observed diff, source, test, or authorized opaque artifact reference in
+`files_read` using exactly the representation required by the active schema.
+This task forbids result artifacts, so keep the review body in `details`. For
+artifact-backed input, cite the supplied opaque artifact identifier exactly;
+do not invent a filesystem path or claim evidence that you did not observe.

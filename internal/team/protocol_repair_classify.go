@@ -1,7 +1,10 @@
 package team
 
 import (
+	"strings"
+
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // submitResultToolName is the name of the coordinator tool that workers call
@@ -112,4 +115,41 @@ func scanRepairStepsForSubmitResult(steps []fantasy.StepResult) (called, resultE
 		}
 	}
 	return called, resultError
+}
+
+// repairValidationError returns the latest bounded submit_result rejection
+// from a repair turn. Tool output is runtime-owned evidence; passing it into a
+// schema-only retry keeps the repair coupled to the active generated schema
+// without duplicating field limits in prompts or agent definitions.
+func repairValidationError(steps []fantasy.StepResult) string {
+	var latest string
+	for _, step := range steps {
+		for _, result := range step.Content.ToolResults() {
+			if result.ToolName != submitResultToolName {
+				continue
+			}
+			message, isError := toolResultOutputText(result.Result)
+			if isError && strings.TrimSpace(message) != "" {
+				latest = message
+			}
+		}
+	}
+	return utils.TruncateRunes(strings.TrimSpace(latest), 2000)
+}
+
+func latestRepairAttemptError(history []RepairAttemptProvenance) string {
+	for index := len(history) - 1; index >= 0; index-- {
+		if message := strings.TrimSpace(history[index].Error); message != "" {
+			return message
+		}
+	}
+	return "runtime did not preserve a field-specific validation message"
+}
+
+func schemaRepairDiagnostic(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "runtime did not preserve a field-specific validation message"
+	}
+	return utils.TruncateRunes(utils.RedactSecrets(message), 2000)
 }

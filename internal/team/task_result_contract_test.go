@@ -261,7 +261,7 @@ func TestTaskResultContractAdmissionEnforcesAllAssertions(t *testing.T) {
 	}
 }
 
-func TestReviewerPromptMatchesEffectiveWorksetResultContract(t *testing.T) {
+func TestReviewerPromptDefersToEffectiveWorksetResultContract(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -281,14 +281,16 @@ func TestReviewerPromptMatchesEffectiveWorksetResultContract(t *testing.T) {
 	contract := taskResultSubmissionContractForTask(task)
 	info := submitResultToolInfo(contract)
 	protocol := resultProtocolInstructions(task, map[string]bool{"submit_result": true})
-	staticPrompt := string(promptBytes)
+	staticPrompt := strings.Join(strings.Fields(string(promptBytes)), " ")
 
-	if strings.Contains(staticPrompt, "The only legal top-level `submit_result` fields are:") {
-		t.Fatal("reviewer prompt duplicates the runtime-owned legal field list")
-	}
-	for _, required := range []string{"runtime-provided `submit_result` schema", "`files_read` is required", "`evidence` and `artifacts` are not legal"} {
+	for _, required := range []string{"runtime-provided result protocol", "active runtime schema", "`files_read` using exactly the representation required by the active schema"} {
 		if !strings.Contains(staticPrompt, required) {
 			t.Fatalf("reviewer prompt omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{"`submit_result`", "WorkerResultProposal", "`files_read` object", "array of non-empty strings"} {
+		if strings.Contains(staticPrompt, forbidden) {
+			t.Fatalf("reviewer prompt retained transport-specific instruction %q", forbidden)
 		}
 	}
 	if _, ok := info.Parameters["evidence"]; ok || contract.AllowEvidence {

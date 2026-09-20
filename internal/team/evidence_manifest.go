@@ -384,7 +384,7 @@ func latestSuccessfulExecutionReceipt(item *TodoItem, runID string) *ExecutionRe
 		if receipt.RunID != runID {
 			continue
 		}
-		if receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+		if !receipt.Succeeded() {
 			continue
 		}
 		if strings.TrimSpace(receipt.TranscriptRef) != "" {
@@ -395,7 +395,7 @@ func latestSuccessfulExecutionReceipt(item *TodoItem, runID string) *ExecutionRe
 		if item.ExecutionReceipt.RunID != runID {
 			return nil
 		}
-		if item.ExecutionReceipt.ExitCode == nil || *item.ExecutionReceipt.ExitCode == 0 {
+		if item.ExecutionReceipt.Succeeded() {
 			if strings.TrimSpace(item.ExecutionReceipt.TranscriptRef) != "" {
 				return item.ExecutionReceipt
 			}

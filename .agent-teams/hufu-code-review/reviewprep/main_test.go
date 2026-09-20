@@ -219,22 +219,32 @@ func TestDecodeWireConfigRejectsInvalidMaxCommitsAndJSON(t *testing.T) {
 	}
 }
 
-func TestReviewerPromptMatchesSubmitResultContract(t *testing.T) {
+func TestReviewerPromptDefersToRuntimeResultProtocol(t *testing.T) {
 	prompt, err := os.ReadFile(filepath.Join("..", "reviewer.md"))
 	if err != nil {
 		t.Fatalf("read reviewer prompt: %v", err)
 	}
-	text := string(prompt)
-	if strings.Contains(text, "The only legal top-level `submit_result` fields are:") {
-		t.Fatal("reviewer prompt contains a duplicated static submit_result field list")
-	}
+	text := strings.Join(strings.Fields(string(prompt)), " ")
 	for _, required := range []string{
-		"runtime-provided `submit_result` schema",
-		"`files_read` is required",
-		"`evidence` and `artifacts` are not legal",
+		"runtime-provided result protocol",
+		"active runtime schema",
+		"`files_read` using exactly the representation required by the active schema",
+		"cite the supplied opaque artifact identifier exactly",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("reviewer prompt omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"`submit_result`",
+		"WorkerResultProposal",
+		"local tool",
+		"external structured result provider",
+		"`files_read` object",
+		"array of non-empty strings",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("reviewer prompt retained transport-specific instruction %q", forbidden)
 		}
 	}
 }

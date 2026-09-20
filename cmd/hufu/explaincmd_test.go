@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
+	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
@@ -207,6 +209,46 @@ func TestExplainAIPromptForbidsUnlinkedDiagnosticRootCause(t *testing.T) {
 		if !strings.Contains(prompt, contract) {
 			t.Fatalf("AI prompt omitted causal contract %q:\n%s", contract, prompt)
 		}
+	}
+}
+
+func TestExplainAIPromptCompactsStructurallyWithoutTruncatingJSON(t *testing.T) {
+	blockers := make([]operatorpkg.DiagnosticView, 80)
+	for index := range blockers {
+		blockers[index] = operatorpkg.DiagnosticView{
+			Code: "diagnostic", Severity: "warning", Message: strings.Repeat("evidence-", 200), Ref: fmt.Sprintf("ref-%d", index),
+		}
+	}
+	evidence := explainAIPromptEvidence{
+		Blockers: blockers,
+		Causality: explainAICausality{
+			State: explainAICauseVerified, RootCause: "budget_exceeded",
+			EvidenceEventOrdinals: []int64{42}, Summary: "verified cause",
+		},
+		Evidence: &inspectpkg.EvidenceData{Verification: inspectpkg.EvidenceVerificationData{Verdict: "fail", Provenance: "pass"}},
+		Tasks:    []explainAITask{}, Timeline: []explainAITimelineEntry{},
+	}
+	prompt, err := buildExplainAIPrompt("為什麼失敗", evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(prompt)) > sidecar.CompactorProfile.MaxInputRunes {
+		t.Fatalf("prompt runes = %d, limit = %d", len([]rune(prompt)), sidecar.CompactorProfile.MaxInputRunes)
+	}
+	const marker = "EVIDENCE_JSON:\n"
+	_, encoded, ok := strings.Cut(prompt, marker)
+	if !ok {
+		t.Fatalf("prompt omitted evidence marker:\n%s", prompt)
+	}
+	var decoded explainAIPromptEvidence
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("bounded evidence is not valid JSON: %v\n%s", err, encoded)
+	}
+	if decoded.Causality.RootCause != "budget_exceeded" || decoded.Evidence == nil || decoded.Evidence.Verification.Verdict != "fail" {
+		t.Fatalf("compaction lost causality or verification: %#v", decoded)
+	}
+	if decoded.Omitted["blockers"] != 68 || len(decoded.Blockers) != 12 {
+		t.Fatalf("omission metadata/blockers = %#v/%d", decoded.Omitted, len(decoded.Blockers))
 	}
 }
 

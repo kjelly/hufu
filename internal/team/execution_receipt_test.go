@@ -44,6 +44,26 @@ func TestExecutionReceipt_JSONSerialization(t *testing.T) {
 	}
 }
 
+func TestExecutionReceiptSucceededRequiresExplicitZeroExit(t *testing.T) {
+	zero, failed := 0, 1
+	tests := []struct {
+		name    string
+		receipt ExecutionReceipt
+		want    bool
+	}{
+		{name: "unknown", receipt: ExecutionReceipt{}, want: false},
+		{name: "success", receipt: ExecutionReceipt{ExitCode: &zero}, want: true},
+		{name: "failed", receipt: ExecutionReceipt{ExitCode: &failed}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.receipt.Succeeded(); got != test.want {
+				t.Fatalf("Succeeded() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestExecutionReceiptPersistsCanonicalBackendWithoutLegacyProvider(t *testing.T) {
 	tl := &TodoList{items: []*TodoItem{{
 		ID:              "task-1",

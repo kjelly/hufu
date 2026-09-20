@@ -3,11 +3,11 @@
     "name": "hufu-code-review",
     "description": "Read-only, artifact-backed review of the Hufu Go codebase",
     "max_rounds": 64,
-    "max_steps": 80,
+    "max_steps": 120,
     "timeout": 3600,
     "verify_timeout": 120,
     "max_retries": 1,
-    "max_concurrent": 2,
+    "max_concurrent": 3,
     "no_net": true,
     "unattended": true,
     "max_wall_clock": 86400,
@@ -134,7 +134,7 @@
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": 1,
-      "max_steps": 64
+      "max_steps": 120
     }
   ],
   "tasks": [

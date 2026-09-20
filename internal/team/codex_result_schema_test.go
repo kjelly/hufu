@@ -100,7 +100,7 @@ func TestCodexFilesReadProposalDecodes(t *testing.T) {
 	}
 }
 
-func TestCodexHufuCodeReviewPromptMatchesExternalFilesReadSchema(t *testing.T) {
+func TestCodexHufuCodeReviewPromptDefersToExternalFilesReadSchema(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -109,15 +109,26 @@ func TestCodexHufuCodeReviewPromptMatchesExternalFilesReadSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hufu-code-review reviewer prompt: %v", err)
 	}
-	prompt := string(promptBytes)
+	prompt := strings.Join(strings.Fields(string(promptBytes)), " ")
 	for _, required := range []string{
-		"Hufu's local `submit_result` tool",
-		"external structured result provider such as the Codex app-server",
-		"`files_read` is an array of non-empty strings",
-		"`files_read` object",
+		"runtime-provided result protocol",
+		"active runtime schema",
+		"`files_read` using exactly the representation required by the active schema",
 	} {
 		if !strings.Contains(prompt, required) {
-			t.Fatalf("reviewer prompt omitted backend-specific contract marker %q", required)
+			t.Fatalf("reviewer prompt omitted runtime-owned contract marker %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"`submit_result`",
+		"WorkerResultProposal",
+		"local tool",
+		"external structured result provider",
+		"`files_read` object",
+		"array of non-empty strings",
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("reviewer prompt retained transport-specific instruction %q", forbidden)
 		}
 	}
 

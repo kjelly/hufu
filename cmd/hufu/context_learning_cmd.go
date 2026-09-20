@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -87,7 +88,11 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	view := inspectpkg.InspectLearning(cmd.Context(), getContextWorkspace(), contextProject, contextTeam, string(session.Config.MemoryLearning.Mode))
+	workspace, teamID, err := resolveContextLearningTarget(cmd.Context(), session)
+	if err != nil {
+		return err
+	}
+	view := inspectpkg.InspectLearning(cmd.Context(), workspace, contextProject, teamID, string(session.Config.MemoryLearning.Mode))
 	if contextQueryJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "learning": view})
 	}
@@ -110,6 +115,24 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Next: use context promotion list/review for evidence-backed publication; skill review/promote is a separate draft lifecycle; improve reports execution evidence without publishing either.")
 	}
 	return err
+}
+
+// resolveContextLearningTarget separates the discovery selector from the
+// canonical scope identity. A directory alias selects the team and its managed
+// workspace; the loaded team name is the ID persisted in context.sqlite.
+func resolveContextLearningTarget(ctx context.Context, session *team.TeamSession) (string, string, error) {
+	teamID := strings.TrimSpace(contextTeam)
+	if session != nil && strings.TrimSpace(session.Config.Name) != "" {
+		teamID = strings.TrimSpace(session.Config.Name)
+	}
+	if workspace := strings.TrimSpace(contextWorkspace); workspace != "" {
+		return workspace, teamID, nil
+	}
+	workspace, err := resolveExistingManagedWorkspacePath(ctx, runtimeStartDir(), contextTeam)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve managed workspace for team selector %q: %w", contextTeam, err)
+	}
+	return workspace, teamID, nil
 }
 
 func learningCount(value *int64) string {

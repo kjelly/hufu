@@ -185,8 +185,13 @@ func (a *attemptBudgetStreamAgent) Stream(ctx context.Context, call fantasy.Agen
 
 func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Goal: "review unit-a", WorksetBinding: &WorksetBinding{WorksetID: "review", ItemKey: "unit-a"}},
+		{Agent: "worker", Goal: "review unit-b", WorksetBinding: &WorksetBinding{WorksetID: "review", ItemKey: "unit-b"}},
+	})
 	stream := &attemptBudgetStreamAgent{messages: []fantasy.Message{fantasy.NewUserMessage("inspect")}, usages: make([]fantasy.Usage, 10)}
 	ctx := context.WithValue(context.Background(), workerStepBudgetKey{}, 10)
+	ctx = context.WithValue(ctx, todoIDKey{}, items[0].ID)
 	_, _, err := c.runAgentWithStatusAndHistory(ctx, stream, "worker", "prompt", nil, &taskTiming{})
 	if err != nil {
 		t.Fatalf("run agent: %v", err)
@@ -201,6 +206,9 @@ func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
 	wrapUp := stream.prepareResults[9]
 	if len(wrapUp.ActiveTools) != 1 || wrapUp.ActiveTools[0] != submitResultToolName || len(wrapUp.Messages) == 0 || !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "step_budget_wrap_up") {
 		t.Fatalf("terminal budget tools = %#v", wrapUp)
+	}
+	if !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "Workset item: unit-a") || messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "unit-b") {
+		t.Fatalf("wrap-up task binding drifted to another workset item: %#v", wrapUp.Messages[len(wrapUp.Messages)-1])
 	}
 }
 

@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	summarizeMaxChars   = 4000
-	compactMaxChars     = 4000
-	executeMaxChars     = 8000
-	sidecarMaxSteps     = 1
-	sidecarSystemPrompt = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
+	summarizeMaxChars      = 4000
+	compactMaxChars        = 4000
+	defaultExecuteMaxRunes = 8000
+	sidecarMaxSteps        = 1
+	sidecarSystemPrompt    = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
 )
 
 // SystemPrompt returns the system message included in every sidecar request.
@@ -39,6 +39,10 @@ func SystemPrompt() string { return sidecarSystemPrompt }
 // classification call whose entire output is a few words of JSON.
 type Profile struct {
 	MaxOutputTokens int64
+	// MaxInputRunes is a fail-closed envelope for callers that use Execute.
+	// Execute never slices an oversized prompt because it may contain structured
+	// JSON whose suffix is semantically required.
+	MaxInputRunes   int
 	Temperature     float64
 	ReasoningEffort string
 }
@@ -55,14 +59,14 @@ var (
 	// ClassifierProfile is for short structured-output decisions: route,
 	// skill, and team matching, guard review, dedup, and other calls whose
 	// entire output is a small JSON object or a single name/value.
-	ClassifierProfile = Profile{MaxOutputTokens: 512, Temperature: 0, ReasoningEffort: "none"}
+	ClassifierProfile = Profile{MaxOutputTokens: 512, MaxInputRunes: defaultExecuteMaxRunes, Temperature: 0, ReasoningEffort: "none"}
 	// CompactorProfile is for summarization/compaction, which needs enough
 	// headroom to reproduce a condensed version of its input.
-	CompactorProfile = Profile{MaxOutputTokens: 4096, Temperature: 0.1, ReasoningEffort: "low"}
+	CompactorProfile = Profile{MaxOutputTokens: 4096, MaxInputRunes: 32_000, Temperature: 0.1, ReasoningEffort: "low"}
 	// JudgeProfile is for picking the best of several full candidate
 	// outputs, which needs more than classifier headroom for its reasoning
 	// and any grafted content, but nowhere near a full worker's budget.
-	JudgeProfile = Profile{MaxOutputTokens: 1024, Temperature: 0, ReasoningEffort: "medium"}
+	JudgeProfile = Profile{MaxOutputTokens: 1024, MaxInputRunes: 16_000, Temperature: 0, ReasoningEffort: "medium"}
 )
 
 // apply layers profile onto call as per-call overrides, which take
@@ -475,9 +479,12 @@ func (s *Sidecar) ExecuteProfile(ctx context.Context, task string, profile Profi
 	if s == nil {
 		return "", fmt.Errorf("sidecar not configured")
 	}
-	runes := []rune(task)
-	if len(runes) > executeMaxChars {
-		task = string(runes[:executeMaxChars]) + "\n...(truncated)"
+	inputLimit := profile.MaxInputRunes
+	if inputLimit <= 0 {
+		inputLimit = defaultExecuteMaxRunes
+	}
+	if inputRunes := utf8.RuneCountInString(task); inputRunes > inputLimit {
+		return "", fmt.Errorf("sidecar input exceeds %s profile limit: %d runes > %d", profilePurpose(profile), inputRunes, inputLimit)
 	}
 	result, err := s.generate(ctx, task, profile)
 	if err != nil {

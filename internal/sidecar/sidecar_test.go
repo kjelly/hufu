@@ -374,6 +374,19 @@ func TestExecuteProfileOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestExecuteProfileRejectsOversizedStructuredInputWithoutCallingModel(t *testing.T) {
+	capture := &callCapturingAgent{response: "ok"}
+	s := &Sidecar{agent: capture}
+	profile := Profile{MaxOutputTokens: 32, MaxInputRunes: 8, ReasoningEffort: "none"}
+
+	if _, err := s.ExecuteProfile(t.Context(), `{"evidence":"must remain valid"}`, profile); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ExecuteProfile() error = %v, want explicit size rejection", err)
+	}
+	if capture.captured.Prompt != "" {
+		t.Fatalf("oversized structured input reached the model as %q", capture.captured.Prompt)
+	}
+}
+
 type mockAgent struct {
 	response string
 	err      error

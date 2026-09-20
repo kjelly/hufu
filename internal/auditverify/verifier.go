@@ -283,7 +283,7 @@ func verifyInputBoundTask(runID string, item *team.TodoItem, snapshot *team.RunI
 		receipt.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash || !sameHashes(receipt.BoundInputs, item.BoundInputs) {
 		return errors.New("action receipt does not match task input materialization")
 	}
-	if item.Status == team.TaskDone && receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+	if item.Status == team.TaskDone && !receipt.Succeeded() {
 		return errors.New("completed input-bound task has an unsuccessful action receipt")
 	}
 	if item.TypedResult != nil && (item.TypedResult.RunInputSnapshotID != snapshot.ID ||
@@ -512,7 +512,7 @@ func ambiguousSuccessfulReceipts(item *team.TodoItem, runID string) (bool, int) 
 		seen[modelExecutionID+"\x00"+transcriptRef] = true
 	}
 	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != runID || (receipt.ExitCode != nil && *receipt.ExitCode != 0) {
+		if receipt.RunID != runID || !receipt.Succeeded() {
 			continue
 		}
 		if strings.TrimSpace(receipt.TranscriptRef) == "" {
@@ -521,7 +521,7 @@ func ambiguousSuccessfulReceipts(item *team.TodoItem, runID string) (bool, int) 
 		add(receipt.ModelExecutionID, receipt.TranscriptRef)
 	}
 	if r := item.ExecutionReceipt; r != nil && r.RunID == runID &&
-		(r.ExitCode == nil || *r.ExitCode == 0) && strings.TrimSpace(r.TranscriptRef) != "" {
+		r.Succeeded() && strings.TrimSpace(r.TranscriptRef) != "" {
 		add(r.ModelExecutionID, r.TranscriptRef)
 	}
 	return len(seen) > 1, len(seen)

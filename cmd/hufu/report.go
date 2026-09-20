@@ -654,7 +654,7 @@ func itemHasAmbiguousCurrentRunReceipts(item *team.TodoItem, runID string) bool 
 	seen := make(map[string]bool)
 	count := 0
 	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != runID || receipt.ExitCode != nil && *receipt.ExitCode != 0 {
+		if receipt.RunID != runID || !receipt.Succeeded() {
 			continue
 		}
 		identity := receipt.ModelExecutionID + "\x00" + receipt.TranscriptRef
@@ -663,7 +663,7 @@ func itemHasAmbiguousCurrentRunReceipts(item *team.TodoItem, runID string) bool 
 			count++
 		}
 	}
-	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID && (item.ExecutionReceipt.ExitCode == nil || *item.ExecutionReceipt.ExitCode == 0) {
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID && item.ExecutionReceipt.Succeeded() {
 		identity := item.ExecutionReceipt.ModelExecutionID + "\x00" + item.ExecutionReceipt.TranscriptRef
 		if !seen[identity] {
 			count++

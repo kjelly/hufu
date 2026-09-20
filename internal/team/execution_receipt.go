@@ -52,6 +52,11 @@ type RepairAttemptProvenance struct {
 	Prompt          string              `json:"prompt,omitempty"`
 	SubmittedResult *TaskResult         `json:"submitted_result,omitempty"`
 	FailureReason   RepairFailureReason `json:"failure_reason,omitempty"`
+	// Error preserves the bounded validation/preparation diagnostic that
+	// caused this repair turn to fail. Schema-only retries consume this exact
+	// runtime-owned message instead of asking the model to guess which field
+	// violated the active result contract.
+	Error string `json:"error,omitempty"`
 }
 
 // RepairProvenance records details of protocol repair attempts.
@@ -199,6 +204,15 @@ type ExecutionReceipt struct {
 	Semantic                 *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	MemoryManifest           *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
 	ContextManifest          *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+}
+
+// Succeeded reports whether the runtime recorded an explicit successful
+// terminal outcome for this execution attempt. A missing exit code is an
+// incomplete/unknown receipt, never evidence of success. Keeping this rule on
+// the canonical receipt type prevents audit, reports, and evidence selection
+// from independently interpreting nil in incompatible ways.
+func (receipt ExecutionReceipt) Succeeded() bool {
+	return receipt.ExitCode != nil && *receipt.ExitCode == 0
 }
 
 // MarshalJSON keeps old receipts readable while preventing a newly written

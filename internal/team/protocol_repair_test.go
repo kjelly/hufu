@@ -673,7 +673,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 			t.Fatalf("schema repair invocation metadata[%d].TouchedPaths = %v, want durable workset scope", i, touchedPaths)
 		}
 	}
-	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") || !strings.Contains(prompts[1], "`status`") || !strings.Contains(prompts[1], "non-empty `summary`") {
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "Schema-only repair") || !strings.Contains(prompts[1], "Do NOT execute work") || !strings.Contains(prompts[1], "invalid result schema") {
 		t.Fatalf("second repair prompt was not schema-only: %#v", prompts)
 	}
 	got := c.taskTracker.TodoList().Items()[0]
@@ -686,6 +686,9 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 	}
 	if len(prov.History) != 2 || prov.History[0].FailureReason != RepairFailureInvalidSchema || !prov.History[1].Success {
 		t.Fatalf("schema repair history = %#v, want invalid_schema then success", prov.History)
+	}
+	if prov.History[0].Error != "invalid result schema" {
+		t.Fatalf("schema repair lost the runtime validation diagnostic: %#v", prov.History[0])
 	}
 	if got := c.Metrics().ProtocolRepairsAttempted; got != 2 {
 		t.Fatalf("protocol repair attempts metric = %d, want 2 repair turns", got)
@@ -1182,6 +1185,61 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	}
 	if len(item.ExecutionReceipts) != 1 {
 		t.Fatalf("execution receipt history length = %d, want one receipt for attempt 1", len(item.ExecutionReceipts))
+	}
+	if len(item.FailureFingerprints) != 0 {
+		t.Fatalf("recovered protocol checkpoint retained failure fingerprints: %#v", item.FailureFingerprints)
+	}
+}
+
+func TestRecoveredProtocolCheckpointsDoNotEscalateSystemicScope(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config: agent.TeamConfig{
+				Name: "protocol-systemic-recovery", Timeout: 30,
+				Reliability: agent.ReliabilityConfig{MaxSystemicFailureTasks: 3, HardEnforcement: true},
+			},
+			Agents: map[string]*agent.AgentDef{
+				"reviewer": {Name: "reviewer", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-protocol-systemic-recovery",
+	}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "reviewer", Desc: "review unit-a"},
+		{Agent: "reviewer", Desc: "review unit-b"},
+		{Agent: "reviewer", Desc: "review unit-c"},
+		{Agent: "reviewer", Desc: "review unit-d"},
+	})
+	c.workerAgentOverride = &mockWorkerTextAgent{text: "bounded review evidence"}
+
+	for index, item := range items {
+		currentID := item.ID
+		c.repairAgentOverride = &mockRepairAgent{onSubmit: func() {
+			c.storeSubmittedTaskResult(currentID, &TaskResult{
+				TaskID: currentID, Agent: "reviewer", Status: TaskResultStatusSuccess,
+				Summary: "repaired structured result", Source: "submitted",
+			})
+		}}
+		_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+			Agent: "reviewer", Goal: "review " + currentID,
+			Execution: ExecutionContract{RequiresResult: true},
+		}, currentID)
+		if err != nil {
+			t.Fatalf("task %d recovered protocol repair: %v", index+1, err)
+		}
+		got := c.todoItemByID(currentID)
+		if got == nil || got.Status != TaskDone || len(got.FailureFingerprints) != 0 {
+			t.Fatalf("task %d projection after recovery = %#v", index+1, got)
+		}
+	}
+	if c.antiThrashing.SystemicEscalations != 0 || c.antiThrashing.HardBlocked || len(c.antiThrashing.SystemicCounts) != 0 {
+		t.Fatalf("recovered checkpoints polluted systemic state: %#v", c.antiThrashing)
 	}
 }
 

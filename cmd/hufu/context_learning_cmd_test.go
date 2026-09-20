@@ -59,6 +59,44 @@ func TestContextLearningEmptyAndQueryFailureStayDistinct(t *testing.T) {
 	}
 }
 
+func TestResolveContextLearningTargetSeparatesSelectorAndCanonicalTeam(t *testing.T) {
+	previousWorkspace, previousTeam, previousOpts := contextWorkspace, contextTeam, opts
+	t.Cleanup(func() {
+		contextWorkspace, contextTeam, opts = previousWorkspace, previousTeam, previousOpts
+	})
+	contextWorkspace = t.TempDir()
+	contextTeam = "directory-alias"
+	workspace, teamID, err := resolveContextLearningTarget(t.Context(), &team.TeamSession{
+		Config: agent.TeamConfig{Name: "canonical-team"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace != contextWorkspace || teamID != "canonical-team" {
+		t.Fatalf("learning target = workspace %q, team %q", workspace, teamID)
+	}
+}
+
+func TestResolveContextLearningTargetReportsMissingManagedWorkspace(t *testing.T) {
+	previousWorkspace, previousTeam, previousOpts := contextWorkspace, contextTeam, opts
+	t.Cleanup(func() {
+		contextWorkspace, contextTeam, opts = previousWorkspace, previousTeam, previousOpts
+	})
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HUFU_STATE_HOME", filepath.Join(root, "state"))
+	contextWorkspace = ""
+	contextTeam = "directory-alias"
+	opts.startDir = project
+	_, _, err := resolveContextLearningTarget(t.Context(), &team.TeamSession{Config: agent.TeamConfig{Name: "canonical-team"}})
+	if err == nil || !strings.Contains(err.Error(), "resolve managed workspace") {
+		t.Fatalf("missing managed workspace error = %v", err)
+	}
+}
+
 // TestContextExplainMemoryUsesAdoptedPolicyAndRetrievalID is the CLI/JSON
 // regression for spec §7 HF-MEM4-005: explain-memory must report the final
 // score computed with the adopted runtime policy (not the default weights) and

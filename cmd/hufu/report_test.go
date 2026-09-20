@@ -700,9 +700,10 @@ func TestLatestRunTodosRetainsCurrentFailedTaskWithoutVerifiedBinding(t *testing
 }
 
 func TestCurrentRunDiagnosticsOmitsAmbiguousWinnerBinding(t *testing.T) {
+	zero := 0
 	item := &team.TodoItem{ID: "task-1", Agent: "worker", ExecutionReceipts: []team.ExecutionReceipt{
-		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a", TranscriptRef: "sha256-a"},
-		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-b", TranscriptRef: "sha256-b"},
+		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a", TranscriptRef: "sha256-a", ExitCode: &zero},
+		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-b", TranscriptRef: "sha256-b", ExitCode: &zero},
 	}}
 	manifest := &team.EvidenceManifest{RunID: "run-current", EvidenceResults: []team.EvidenceResult{{
 		RequirementID: "task:task-1", Status: "passed", Binding: &team.EvidenceBinding{
@@ -711,6 +712,17 @@ func TestCurrentRunDiagnosticsOmitsAmbiguousWinnerBinding(t *testing.T) {
 	}}}
 	if diagnostics := currentRunReportDiagnostics([]*team.TodoItem{item}, manifest); len(diagnostics) != 0 {
 		t.Fatalf("ambiguous winner produced diagnostics: %#v", diagnostics)
+	}
+}
+
+func TestCurrentRunDiagnosticsIgnoresUnknownRetryReceipt(t *testing.T) {
+	zero := 0
+	item := &team.TodoItem{ID: "task-1", Agent: "worker", ExecutionReceipts: []team.ExecutionReceipt{
+		{RunID: "run-current", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a", TranscriptRef: "sha256-unknown"},
+		{RunID: "run-current", TaskID: "task-1", Attempt: 2, ModelExecutionID: "model-a", TranscriptRef: "sha256-success", ExitCode: &zero},
+	}}
+	if itemHasAmbiguousCurrentRunReceipts(item, "run-current") {
+		t.Fatal("unknown retry receipt was counted as a successful producer identity")
 	}
 }
 

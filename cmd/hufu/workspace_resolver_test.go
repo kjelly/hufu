@@ -34,7 +34,7 @@ func TestResolveCommandWorkspaceManagedLockLifecycle(t *testing.T) {
 	if err = applyWorkspaceResolution(session, resolution, lease); err != nil {
 		t.Fatal(err)
 	}
-	if session.Workspace != resolution.ControlRoot || session.Scope.SubjectRoot != subjectRoot || !session.Scope.Managed {
+	if session.Workspace != resolution.ControlRoot || session.Scope.SubjectRoot != resolution.SubjectRoot || !session.Scope.Managed {
 		t.Fatalf("session scope = %+v", session.Scope)
 	}
 	if err = closeSessionWorkspaceLease(session); err != nil {
@@ -46,6 +46,33 @@ func TestResolveCommandWorkspaceManagedLockLifecycle(t *testing.T) {
 	}
 	if err = reacquired.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResolveCommandWorkspaceSessionUsesCanonicalSymlinkTarget(t *testing.T) {
+	root := t.TempDir()
+	actualRoot := filepath.Join(root, "actual-project")
+	if err := os.MkdirAll(filepath.Join(actualRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedRoot := filepath.Join(root, "linked-project")
+	if err := os.Symlink(actualRoot, linkedRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("HUFU_STATE_HOME", filepath.Join(root, "state"))
+	resolution, lease, err := resolveCommandWorkspace(t.Context(), commandWorkspaceRequest{
+		StartDir: linkedRoot, TeamName: "dev", Mode: workspacepkg.ResolveEnsure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &team.TeamSession{}
+	if err := applyWorkspaceResolution(session, resolution, lease); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeSessionWorkspaceLease(session) })
+	if session.Scope.SubjectRoot != resolution.SubjectRoot || session.Scope.SubjectRoot == linkedRoot {
+		t.Fatalf("session subject root = %q, resolution=%q, symlink=%q", session.Scope.SubjectRoot, resolution.SubjectRoot, linkedRoot)
 	}
 }
 

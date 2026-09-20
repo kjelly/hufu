@@ -5,11 +5,11 @@ metadata:
 spec:
   description: "Read-only, artifact-backed review of the Hufu Go codebase"
   max-rounds: 64
-  max-steps: 80
+  max-steps: 120
   timeout: 3600
   verify-timeout: 120
   max-retries: 1
-  max-concurrent: 2
+  max-concurrent: 3
   workspace: workspace
   goal-mode: outcome
   execution-profile: fresh-session
@@ -133,7 +133,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"max_total_diff_bytes":1048576,"max_total_diff_lines":20000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":24000,"max_diff_lines":600,"max_paths":16}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32}
         input-bindings:
           - input: review.scope
             target: /scope
