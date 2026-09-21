@@ -812,7 +812,8 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 		diffArtifact.Description = "bounded workset diff"
 		artifacts = append(artifacts, diffArtifact)
 	}
-	return manifestArtifact, artifacts, len(items), nil
+	itemCount := len(items)
+	return manifestArtifact, artifacts, itemCount, nil
 }
 
 func noopBatch(route string) *batch {
@@ -831,7 +832,7 @@ func setBatchLens(batches []*batch, lens string) {
 
 func annotateBatches(batches []*batch, route string) {
 	for _, current := range batches {
-		content := current.diff.Bytes()
+		content := bytes.Clone(current.diff.Bytes())
 		current.diff.Reset()
 		fmt.Fprintf(&current.diff, "# hufu-review-route: %s\n", route)
 		_, _ = current.diff.Write(content)

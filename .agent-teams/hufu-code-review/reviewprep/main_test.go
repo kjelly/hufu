@@ -13,7 +13,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/golangruntime"
 )
+
+func TestMain(m *testing.M) {
+	if len(os.Args) == 4 && os.Args[1] == golangruntime.ChildArg {
+		os.Exit(golangruntime.RunChild(os.Args[2], os.Args[3], os.Stdin, os.Stdout, os.Stderr))
+	}
+	os.Exit(m.Run())
+}
 
 func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	repo := newFixtureRepo(t)
@@ -55,6 +64,57 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 	if scope.Requested.Count != 10 || scope.Resolved.SelectedCommitCount != 10 || !scope.Satisfied {
 		t.Fatalf("canonical action scope = %#v, want exactly 10 selected commits", scope)
+	}
+}
+
+func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "README.md"), "See the [runtime documentation](docs/architecture/runtime.md).\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "# Runtime\n\n`RuntimeContract` is defined in [`runtime.go`](../../internal/team/runtime.go).\n")
+	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\ntype RuntimeContract struct{}\n")
+	commit(t, repo, "mixed runtime and documentation changes", "2025-01-02T00:00:00Z")
+
+	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
+	payload, err := json.Marshal(wireConfig{
+		Scope: &scope, Routing: routingDocumentation,
+		MaxTotalDiffBytes: defaultMaxTotalDiffBytes, MaxTotalDiffLines: defaultMaxTotalDiffLines,
+		MaxChangedPaths: defaultMaxChangedPaths, MaxWorksetItems: defaultMaxWorksetItems,
+		MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(actionRequest{Type: "prepare_review_workset", Payload: string(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := golangruntime.Prepare(source, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	env := append(os.Environ(), "HUFU_REPOSITORY="+repo, "HUFU_WORKSPACE="+workspace)
+	result, err := golangruntime.Execute(t.Context(), "", program, request, env, 1<<20, 16<<10)
+	if err != nil {
+		t.Fatalf("execute embedded reviewprep runtime: %v; stderr=%s", err, result.Stderr)
+	}
+
+	var actionOutput actionResult
+	if err := json.Unmarshal(result.Stdout, &actionOutput); err != nil {
+		t.Fatalf("decode embedded runtime output: %v; stdout=%s", err, result.Stdout)
+	}
+	if actionOutput.Outputs["primary_manifest_path"] == nil ||
+		actionOutput.Outputs["documentation_manifest_path"] == nil ||
+		actionOutput.Outputs["documentation-escalation_manifest_path"] == nil {
+		t.Fatalf("embedded runtime omitted routed manifests: %#v", actionOutput.Outputs)
+	}
+	if len(actionOutput.Artifacts) == 0 {
+		t.Fatal("embedded runtime produced no artifacts")
 	}
 }
 
@@ -422,6 +482,14 @@ func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
 		for _, entry := range value.Items {
 			if entry.Bindings["route"] != route {
 				t.Fatalf("%s item route binding = %q", route, entry.Bindings["route"])
+			}
+			patch, err := os.ReadFile(filepath.Join(repo, "out", route, filepath.FromSlash(entry.DiffPath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			header := "# hufu-review-route: " + route + "\n"
+			if !bytes.HasPrefix(patch, []byte(header+"diff --git ")) || bytes.Count(patch, []byte(header)) != 1 {
+				t.Fatalf("%s diff header corrupted the Git patch: %q", route, patch[:min(len(patch), 160)])
 			}
 		}
 	}
