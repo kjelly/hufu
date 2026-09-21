@@ -50,7 +50,8 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 		t.Fatal("hufu-code-review produce-workset static action is missing")
 	}
 	var payload struct {
-		Scope map[string]any `json:"scope"`
+		Scope   map[string]any `json:"scope"`
+		Routing string         `json:"routing"`
 	}
 	if err := json.Unmarshal([]byte(producer.Action.Payload), &payload); err != nil {
 		t.Fatalf("decode produce-workset payload: %v", err)
@@ -58,15 +59,61 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	if payload.Scope["kind"] != "last_n" || payload.Scope["count"] != float64(10) {
 		t.Fatalf("static scope = %#v, want typed last_n 10", payload.Scope)
 	}
+	if payload.Routing != "documentation" {
+		t.Fatalf("producer routing = %q, want documentation", payload.Routing)
+	}
 	if len(producer.Action.InputBindings) != 1 || producer.Action.InputBindings[0] != (ActionInputBinding{Input: "review.scope", Target: "/scope"}) {
 		t.Fatalf("producer input bindings = %#v", producer.Action.InputBindings)
 	}
 	acceptance := session.Config.AcceptanceSpec
-	if acceptance == nil || len(acceptance.Verifications) != 2 || acceptance.Verifications[0].Type != VerifyTaskOutputAssert || acceptance.Verifications[1].Type != VerifyWorksetComplete {
+	if acceptance == nil || len(acceptance.Verifications) != 5 ||
+		acceptance.Verifications[0].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[1].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[2].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[3].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[4].Type != VerifyWorksetComplete {
 		t.Fatalf("acceptance wiring = %#v", acceptance)
 	}
 	if coordinator := session.Agents["coordinator"]; coordinator == nil || strings.Contains(coordinator.System, "Natural-language scope text cannot override") {
 		t.Fatalf("coordinator retained compatibility scope warning: %#v", coordinator)
+	}
+}
+
+func TestHufuCodeReviewUsesNativeLowCostDocumentationReviewer(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	documentationReviewer := session.Agents["documentation-reviewer"]
+	if documentationReviewer == nil {
+		t.Fatal("hufu-code-review documentation-reviewer is missing")
+	}
+	if documentationReviewer.Generation.Model != "minimax-m2.7:cloud" {
+		t.Fatalf("documentation reviewer model = %q, want minimax-m2.7:cloud", documentationReviewer.Generation.Model)
+	}
+	if documentationReviewer.Generation.ReasoningEffort != "low" {
+		t.Fatalf("documentation reviewer reasoning effort = %q, want low", documentationReviewer.Generation.ReasoningEffort)
+	}
+	if documentationReviewer.SubagentProvider != "" {
+		t.Fatalf("documentation reviewer subagent provider = %q, want native default", documentationReviewer.SubagentProvider)
+	}
+	reviewer := session.Agents["reviewer"]
+	if reviewer == nil || reviewer.SubagentProvider != "codex" || reviewer.Generation.Model != "gpt-5.6-sol" {
+		t.Fatalf("high-reasoning reviewer execution target = %#v, want codex/gpt-5.6-sol", reviewer)
+	}
+	critic := session.Agents["critic"]
+	if critic == nil || critic.Generation.Model != "qwen3.5:cloud" {
+		t.Fatalf("high-reasoning critic execution target = %#v, want qwen3.5:cloud", critic)
+	}
+	coordinator := session.Agents["coordinator"]
+	if coordinator == nil || coordinator.Generation.Model != "qwen3.5:cloud" {
+		t.Fatalf("coordinator execution target = %#v, want qwen3.5:cloud", coordinator)
+	}
+	if session.Config.CoordinatorModel != "ollama/qwen3.5:cloud" {
+		t.Fatalf("team coordinator model = %q, want ollama/qwen3.5:cloud", session.Config.CoordinatorModel)
+	}
+	for _, name := range []string{"reviewer", "critic"} {
+		worker := session.Agents[name]
+		if worker == nil || worker.Generation.ReasoningEffort != "high" {
+			t.Fatalf("high-risk worker %q = %#v, want high reasoning effort", name, worker)
+		}
 	}
 }
 
@@ -126,16 +173,16 @@ func TestHufuCodeReviewGatesRecurringRuntimeInvariants(t *testing.T) {
 
 	var reviewTask *TaskDef
 	for index := range session.ContractTasks {
-		if session.ContractTasks[index].ID == "review-workset" {
+		if session.ContractTasks[index].ID == "review-primary-workset" {
 			reviewTask = &session.ContractTasks[index]
 			break
 		}
 	}
 	if reviewTask == nil {
-		t.Fatal("hufu-code-review review-workset static task is missing")
+		t.Fatal("hufu-code-review review-primary-workset static task is missing")
 	}
 	if reviewTask.InvariantVerification != InvariantVerificationReport || reviewTask.Optional {
-		t.Fatalf("review-workset invariant policy = %q optional=%t, want report", reviewTask.InvariantVerification, reviewTask.Optional)
+		t.Fatalf("review-primary-workset invariant policy = %q optional=%t, want report", reviewTask.InvariantVerification, reviewTask.Optional)
 	}
 
 	required := map[string]string{

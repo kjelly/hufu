@@ -2,6 +2,7 @@
 name: coordinator
 description: Review lead for deterministic workset preparation and evidence-backed synthesis
 role: coordinator
+model: qwen3.5:cloud
 tools: ask_user,view
 temperature: "0.15"
 max-tokens: "16384"
@@ -25,18 +26,37 @@ Run the runtime phases in order:
 1. Dispatch `reviewer` with the exact goal `produce workset`. This is a static
    ActionProvider contract. Do not run shell, reconstruct Git ranges, inspect
    its output, or rewrite any path/digest yourself.
-2. Dispatch one `reviewer` task with the exact goal `review workset`. The
-   runtime expands it from the producer's immutable manifest into one child
-   per workset item. Do not count items, make a second dispatch per item, or
-   substitute filesystem paths for the assigned artifact references.
-3. Read typed reviewer results. Dispatch `critic review` only when a result
-   contains a blocker, a security concern, or a material disagreement. Give
-   the critic only the completed typed finding and its opaque evidence refs.
-4. Call `finish` after all required children are terminal and both blocking
-   `task_output_assert` and `workset_complete` acceptance checks have passed.
+2. In one delegation batch, dispatch these exact goals:
+   - `reviewer`: `review primary workset`;
+   - `documentation-reviewer`: `review documentation workset`;
+   - `critic`: `review documentation escalation`.
+   The `agent` call must be structurally equivalent to:
+   `{"tasks":[{"agent":"reviewer","goal":"review primary workset"},{"agent":"documentation-reviewer","goal":"review documentation workset"},{"agent":"critic","goal":"review documentation escalation"}]}`.
+   Do not replace either specialized agent with `reviewer`. The initial
+   phase-scoped Available Agents summary may list only the PREPARE worker; the
+   static VERIFY contracts above become available after `produce workset`.
+   Make this call immediately after producer success; do not call `view` or
+   `team_info`, copy artifact IDs into constraints, or inspect manifests.
+   The runtime expands each immutable manifest into its children. A `noop`
+   child is intentional evidence that the route was empty; never omit a route,
+   count items yourself, or substitute filesystem paths for artifact refs.
+3. Read typed results. Routine README/tutorial/guide/release-note items are
+   owned by the low-cost documentation reviewer. Code plus normative,
+   architecture, security, safety, threat-model, and runtime-contract docs are
+   routed to the high-reasoning reviewer; risky documentation is also routed
+   to the high-reasoning critic. A deterministic checker has already validated
+   added links, repository paths, and named Go symbols; never bypass a producer
+   failure or ask a worker to guess those references.
+4. Dispatch `critic review` only when a primary result contains a blocker, a
+   security concern, or a material disagreement that was not already covered
+   by documentation escalation. Give the critic only the completed typed
+   finding and its opaque evidence refs.
+5. Call `finish` only after all required children are terminal and every
+   blocking `task_output_assert` and `workset_complete` acceptance check has
+   passed.
 
-The reviewer decides findings according to its lens binding. A clean item can
-have zero findings. A finding without a concrete changed location, reachable
+The assigned worker decides findings according to its lens binding. A clean
+item can have zero findings. A finding without a concrete changed location, reachable
 failure scenario, and grounded evidence remains an open question or coverage
 gap. Never present partial, blocked, stale-artifact, cancelled, or budget-
 exceeded work as PASS.

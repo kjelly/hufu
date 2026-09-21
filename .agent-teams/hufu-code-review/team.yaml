@@ -4,6 +4,7 @@ metadata:
   name: hufu-code-review
 spec:
   description: "Read-only, artifact-backed review of the Hufu Go codebase"
+  coordinator-model: ollama/qwen3.5:cloud
   max-rounds: 64
   max-steps: 120
   timeout: 3600
@@ -99,8 +100,8 @@ spec:
 
   delegation:
     bind-task-goal-contracts: true
-    allowed-workers: [reviewer, critic]
-    no-redispatch-after-success: [reviewer, critic]
+    allowed-workers: [reviewer, documentation-reviewer, critic]
+    no-redispatch-after-success: [reviewer, documentation-reviewer]
 
   acceptance:
     mode: blocking
@@ -114,14 +115,29 @@ spec:
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
           - { pointer: /resolved/selected_commit_count, op: minimum, value: 1 }
+      - type: task_output_assert
+        source-task: produce-workset
+        output: documentation_verification
+        assertions:
+          - { pointer: /passed, op: equals, value: true }
       - type: workset_complete
-        source-task: review-workset
+        source-task: review-primary-workset
+        require-all-terminal: true
+        require-all-verified: true
+        accepted-statuses: [success, completed_with_gaps]
+      - type: workset_complete
+        source-task: review-documentation-workset
+        require-all-terminal: true
+        require-all-verified: true
+        accepted-statuses: [success, completed_with_gaps]
+      - type: workset_complete
+        source-task: review-documentation-escalation
         require-all-terminal: true
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
 
-  # The producer is deterministic. The optional critic is authorized in VERIFY
-  # but does not block a clean review.
+  # The producer and all three routed worksets are blocking. A second critic
+  # pass over a typed primary finding remains optional.
   tasks:
     - id: produce-workset
       agent: reviewer
@@ -133,21 +149,59 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32}
         input-bindings:
           - input: review.scope
             target: /scope
 
-    - id: review-workset
+    - id: review-primary-workset
       agent: reviewer
-      when-goal-contains: review workset
+      when-goal-contains: review primary workset
       phase: verify
       invariant-verification: report
       fan_out:
         source-artifact:
           task_id: produce-workset
-          artifact: workset manifest
-        goal-template: "Review workset item {key} with the {lens} lens."
+          artifact: primary review workset manifest
+        goal-template: "Review primary workset item {key} with the {lens} lens."
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+        forbid-artifacts: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /summary, op: non_empty }
+          - { pointer: /files_read, op: min_items, value: 1 }
+
+    - id: review-documentation-workset
+      agent: documentation-reviewer
+      when-goal-contains: review documentation workset
+      phase: verify
+      fan_out:
+        source-artifact:
+          task_id: produce-workset
+          artifact: documentation review workset manifest
+        goal-template: "Review routine documentation workset item {key} with the {lens} lens."
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+        forbid-artifacts: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /summary, op: non_empty }
+          - { pointer: /files_read, op: min_items, value: 1 }
+
+    - id: review-documentation-escalation
+      agent: critic
+      when-goal-contains: review documentation escalation
+      phase: verify
+      fan_out:
+        source-artifact:
+          task_id: produce-workset
+          artifact: documentation escalation workset manifest
+        goal-template: "Adversarially review escalated documentation workset item {key} with the {lens} lens."
       execution:
         requires-result: true
         requires-grounded-result: true

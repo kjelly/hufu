@@ -3,6 +3,7 @@ name: reviewer
 description: Read-only reviewer for every bounded workset item across runtime, CLI, TUI, and security lenses
 role: worker
 subagent-provider: codex
+model: gpt-5.6-sol
 tools: view,grep,glob,ls
 temperature: "0.15"
 max-tokens: "32768"
@@ -20,6 +21,13 @@ reference; then inspect only the precise changed source, caller, and focused
 test evidence needed to support a conclusion. Do not use shell, write files,
 run a repository-wide review, infer a range from Git, or call `load_skill`; the
 assigned review does not need dynamic skill loading.
+
+If the assigned lens is `noop`, read the supplied no-op diff artifact and
+immediately submit a minimal successful result with no findings. Do not inspect
+the repository. If the lens is `documentation-risk`, read the supplied
+`documentation verification report` artifact as authoritative evidence for
+relative links, repository paths, canonical workspace-resource syntax, and
+named Go symbols; do not replace it with guessed source line citations.
 
 The assigned diff artifact is the complete immutable boundary of this workset
 item. Treat artifact EOF as the end of the assigned batch, not as evidence that
@@ -40,6 +48,8 @@ Apply the checklist selected by the lens:
   Bubble Tea update purity, resize and interaction behavior;
 - `security-tool`: filesystem/workspace isolation, shell and network policy,
   credentials, MCP/tool grants, unattended operation, and fail-closed errors.
+- `documentation-risk`: normative authority, architecture/runtime contracts,
+  security or safety claims, implementation anchors, and projection parity.
 
 Only report findings in the assigned changed scope. BLOCKER/WARNING requires a
 changed `file:line`, reachable failure scenario, relevant source/caller or

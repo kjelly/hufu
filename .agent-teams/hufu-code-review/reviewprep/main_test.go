@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -296,6 +297,160 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	want := readGoldenSummary(t)
 	if string(mustJSON(t, got)) != string(mustJSON(t, want)) {
 		t.Fatalf("golden summary mismatch\n got: %s\nwant: %s", mustJSON(t, got), mustJSON(t, want))
+	}
+}
+
+func TestClassifyReviewPathRoutesRoutineAndRiskDocumentation(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "README.md"), "ordinary readme\n")
+	writeFile(t, filepath.Join(repo, "docs/README.md"), "documentation index\n")
+	writeFile(t, filepath.Join(repo, "docs/tutorials/start.md"), "tutorial\n")
+	writeFile(t, filepath.Join(repo, "docs/releases/v1.md"), "release notes\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "> Authority: reference\n")
+	writeFile(t, filepath.Join(repo, "docs/reference/normative.md"), "> Authority: normative\n")
+	writeFile(t, filepath.Join(repo, "docs/security-guide.md"), "security\n")
+	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n")
+	commit(t, repo, "routing fixtures", "2025-01-02T00:00:00Z")
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "README.md", want: "documentation"},
+		{path: "docs/README.md", want: "documentation"},
+		{path: "docs/tutorials/start.md", want: "documentation"},
+		{path: "docs/releases/v1.md", want: "documentation"},
+		{path: "docs/architecture/runtime.md", want: "documentation-risk"},
+		{path: "docs/reference/normative.md", want: "documentation-risk"},
+		{path: "docs/security-guide.md", want: "documentation-risk"},
+		{path: "internal/team/runtime.go", want: "primary"},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := classifyReviewPath(t.Context(), repo, "HEAD", test.path); got != test.want {
+				t.Fatalf("classifyReviewPath(%q) = %q, want %q", test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseScopeCandidatesAcceptsGitParentRevision(t *testing.T) {
+	candidates, invalid := parseScopeCandidates("review 88402b4^..88402b4", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	if invalid != "" || len(candidates) != 1 {
+		t.Fatalf("parseScopeCandidates() = %#v, %q", candidates, invalid)
+	}
+	if got := candidates[0].value; got.Kind != "revision_range" || got.Base != "88402b4^" || got.Head != "88402b4" {
+		t.Fatalf("revision scope = %#v", got)
+	}
+}
+
+func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "README.md"), "See the [tutorial](docs/tutorials/start.md).\n")
+	writeFile(t, filepath.Join(repo, "docs/tutorials/start.md"), "# Start\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/execution.md"), "`TaskExecutionEnvelope` is defined in [`runtime.go`](../../internal/team/runtime.go). The `crypto/rand` import and `internal/operator.ResolveWorkspacePath()` reference are not repository file paths.\n")
+	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\ntype TaskExecutionEnvelope struct{}\n")
+	commit(t, repo, "mixed documentation", "2025-01-02T00:00:00Z")
+
+	config := fixtureConfig(repo, "out")
+	config.Routing = routingDocumentation
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare routed worksets: %v", err)
+	}
+	verification, ok := result.Outputs["documentation_verification"].(documentationVerification)
+	if !ok || !verification.Passed || verification.CheckedLinks != 2 || verification.CheckedSymbols != 1 {
+		t.Fatalf("documentation verification = %#v", result.Outputs["documentation_verification"])
+	}
+
+	primary := readManifest(t, filepath.Join(repo, "out", "primary", "workset-manifest.json"))
+	documentation := readManifest(t, filepath.Join(repo, "out", "documentation", "workset-manifest.json"))
+	escalation := readManifest(t, filepath.Join(repo, "out", "documentation-escalation", "workset-manifest.json"))
+	assertManifestPaths(t, primary, []string{"docs/architecture/execution.md", "internal/team/runtime.go"})
+	assertManifestPaths(t, documentation, []string{"README.md", "docs/tutorials/start.md"})
+	assertManifestPaths(t, escalation, []string{"docs/architecture/execution.md"})
+	if escalation.Items[0].Lens != "documentation-risk" || len(escalation.Items[0].Inputs) != 2 {
+		t.Fatalf("escalation item = %#v, want risk lens plus diff and verifier inputs", escalation.Items[0])
+	}
+	for route, value := range map[string]manifest{"primary": primary, "documentation": documentation, "documentation-escalation": escalation} {
+		for _, entry := range value.Items {
+			if entry.Bindings["route"] != route {
+				t.Fatalf("%s item route binding = %q", route, entry.Bindings["route"])
+			}
+		}
+	}
+
+	descriptions := make(map[string]struct{})
+	artifactIDs := make(map[string]string)
+	for _, ref := range result.Artifacts {
+		descriptions[ref.Description] = struct{}{}
+		if previous, duplicate := artifactIDs[ref.ID]; duplicate {
+			t.Fatalf("routed artifacts %q and %q share content ID %q", previous, ref.Path, ref.ID)
+		}
+		artifactIDs[ref.ID] = ref.Path
+	}
+	for _, description := range []string{"primary review workset manifest", "documentation review workset manifest", "documentation escalation workset manifest", "documentation verification report"} {
+		if _, ok := descriptions[description]; !ok {
+			t.Errorf("result omitted artifact %q", description)
+		}
+	}
+}
+
+func TestPrepareDocumentationRoutingEmitsNoopItemsForEmptyPartitions(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "README.md", "routine documentation only\n", "readme", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, "out")
+	config.Routing = routingDocumentation
+	if _, err := Prepare(t.Context(), config); err != nil {
+		t.Fatalf("Prepare routed worksets: %v", err)
+	}
+	for _, route := range []string{"primary", "documentation-escalation"} {
+		value := readManifest(t, filepath.Join(repo, "out", route, "workset-manifest.json"))
+		if len(value.Items) != 1 || value.Items[0].Lens != "noop" || len(value.Items[0].TouchedPaths) != 0 {
+			t.Fatalf("%s manifest = %#v, want one no-op item", route, value.Items)
+		}
+	}
+}
+
+func TestPrepareDocumentationVerificationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "missing link", content: "See [missing](missing.md).\n", want: "relative link target"},
+		{name: "missing root path", content: "Update `missing-config.yaml` first.\n", want: "repository path"},
+		{name: "missing relative path", content: "Read `../reference/missing.md` first.\n", want: "repository path"},
+		{name: "missing symbol", content: "The `MissingRuntimeContract` is required.\n", want: "Go symbol"},
+		{name: "noncanonical resource", content: "Use `workspace:path/...` claims.\n", want: "canonical workspace resource syntax"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := newFixtureRepo(t)
+			writeAndCommit(t, repo, "docs/tutorials/start.md", test.content, test.name, "2025-01-02T00:00:00Z")
+			config := fixtureConfig(repo, "out")
+			config.Routing = routingDocumentation
+			_, err := Prepare(t.Context(), config)
+			if err == nil || !strings.Contains(err.Error(), "documentation_verification_failed") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Prepare error = %v, want deterministic %q failure", err, test.want)
+			}
+			if _, statErr := os.Stat(filepath.Join(repo, "out")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("failed verification published output: %v", statErr)
+			}
+		})
+	}
+}
+
+func assertManifestPaths(t *testing.T, value manifest, want []string) {
+	t.Helper()
+	got := make([]string, 0)
+	for _, entry := range value.Items {
+		got = append(got, entry.TouchedPaths...)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("manifest paths = %v, want %v", got, want)
 	}
 }
 

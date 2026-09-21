@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -30,6 +31,7 @@ const (
 	defaultMaxTotalDiffLines = 20_000
 	defaultMaxChangedPaths   = 256
 	defaultMaxWorksetItems   = 64
+	routingDocumentation     = "documentation"
 )
 
 type actionRequest struct {
@@ -57,7 +59,7 @@ var (
 	lastDaysPattern     = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+days?\b`)
 	recentDaysPattern   = regexp.MustCompile(`最近[ \t]*([0-9]+)[ \t]*天`)
 	headRangePattern    = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
-	revisionPattern     = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/-]{0,159})`)
+	revisionPattern     = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})`)
 	revisionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
 	sincePattern        = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
 )
@@ -80,6 +82,7 @@ type Config struct {
 	MaxDiffBytes      int    `json:"max_diff_bytes"`
 	MaxDiffLines      int    `json:"max_diff_lines"`
 	MaxPaths          int    `json:"max_paths"`
+	Routing           string `json:"routing"`
 }
 
 type wireConfig struct {
@@ -96,6 +99,7 @@ type wireConfig struct {
 	MaxDiffBytes      int            `json:"max_diff_bytes"`
 	MaxDiffLines      int            `json:"max_diff_lines"`
 	MaxPaths          int            `json:"max_paths"`
+	Routing           string         `json:"routing,omitempty"`
 }
 
 type actionResult struct {
@@ -180,6 +184,30 @@ type batch struct {
 	diff     bytes.Buffer
 	lines    int
 }
+
+type documentationVerification struct {
+	Passed         bool     `json:"passed"`
+	CheckedFiles   []string `json:"checked_files,omitempty"`
+	CheckedLinks   int      `json:"checked_links"`
+	CheckedPaths   int      `json:"checked_paths"`
+	CheckedSymbols int      `json:"checked_symbols"`
+	Issues         []string `json:"issues,omitempty"`
+}
+
+type routedWorkset struct {
+	name        string
+	description string
+	paths       []string
+	batches     []*batch
+	extraInputs []artifact
+}
+
+var (
+	markdownLinkPattern = regexp.MustCompile(`\[[^\]]*\]\(([^)[:space:]]+)(?:[[:space:]]+"[^"]*")?\)`)
+	inlineCodePattern   = regexp.MustCompile("`([^`\\n]+)`")
+	goSymbolPattern     = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
+	qualifiedGoSymbol   = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*\.[A-Z][A-Za-z0-9_]*$`)
+)
 
 func main() {
 	if err := run(context.Background(), os.Stdin, os.Stdout); err != nil {
@@ -429,6 +457,7 @@ func decodeWireConfig(payload string) (Config, error) {
 		MaxTotalDiffBytes: wire.MaxTotalDiffBytes, MaxTotalDiffLines: wire.MaxTotalDiffLines,
 		MaxChangedPaths: wire.MaxChangedPaths, MaxWorksetItems: wire.MaxWorksetItems,
 		MaxDiffBytes: wire.MaxDiffBytes, MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
+		Routing: wire.Routing,
 	}
 	return config, nil
 }
@@ -519,6 +548,9 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	if err != nil {
 		return actionResult{}, err
 	}
+	if config.Routing == routingDocumentation {
+		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, config)
+	}
 	batches, err := buildBatches(ctx, repo, reviewRangeValue, paths, config)
 	if err != nil {
 		return actionResult{}, err
@@ -585,6 +617,192 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	}, Artifacts: artifacts}, nil
 }
 
+func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, config Config) (actionResult, error) {
+	r := resolution.Range
+	documentationPaths := make([]string, 0)
+	primaryPaths := make([]string, 0)
+	routineDocumentationPaths := make([]string, 0)
+	escalatedDocumentationPaths := make([]string, 0)
+	for _, path := range paths {
+		switch classifyReviewPath(ctx, repo, r.End, path) {
+		case "documentation":
+			documentationPaths = append(documentationPaths, path)
+			routineDocumentationPaths = append(routineDocumentationPaths, path)
+		case "documentation-risk":
+			documentationPaths = append(documentationPaths, path)
+			primaryPaths = append(primaryPaths, path)
+			escalatedDocumentationPaths = append(escalatedDocumentationPaths, path)
+		default:
+			primaryPaths = append(primaryPaths, path)
+		}
+	}
+
+	verification, err := verifyDocumentationChanges(ctx, repo, r, documentationPaths)
+	if err != nil {
+		return actionResult{}, err
+	}
+	primaryBatches, err := buildBatches(ctx, repo, r, primaryPaths, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	documentationBatches, err := buildBatches(ctx, repo, r, routineDocumentationPaths, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	escalationBatches, err := buildBatches(ctx, repo, r, escalatedDocumentationPaths, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	setBatchLens(documentationBatches, "documentation")
+	setBatchLens(escalationBatches, "documentation-risk")
+	for _, current := range primaryBatches {
+		if slices.ContainsFunc(current.paths, isDocumentationPath) {
+			current.lens = "documentation-risk"
+		}
+	}
+	annotateBatches(primaryBatches, "primary")
+	annotateBatches(documentationBatches, "documentation")
+	annotateBatches(escalationBatches, "documentation-escalation")
+	allBatches := append(append(slices.Clone(primaryBatches), documentationBatches...), escalationBatches...)
+	observed := observeBudget(allBatches, paths)
+	if err := enforceTotalBudget(config, observed); err != nil {
+		return actionResult{}, err
+	}
+	scope := scopeAttestation{
+		Requested:          config.Scope,
+		RequestedInputHash: scopeInputDigest(config.Scope),
+		Resolved: resolvedScope{
+			Base: r.Start, Head: r.End,
+			SelectedCommitCount: r.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
+			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
+		},
+		ObservedBudget: observed,
+		Satisfied:      true,
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return actionResult{}, fmt.Errorf("create output directory: %w", err)
+	}
+
+	verificationPath := filepath.Join(outputDir, "documentation-verification.json")
+	verificationData, err := json.MarshalIndent(verification, "", "  ")
+	if err != nil {
+		return actionResult{}, fmt.Errorf("encode documentation verification: %w", err)
+	}
+	verificationData = append(verificationData, '\n')
+	if err := os.WriteFile(verificationPath, verificationData, 0o644); err != nil {
+		return actionResult{}, fmt.Errorf("write documentation verification: %w", err)
+	}
+	verificationArtifact, err := fileArtifact(artifactRoot, verificationPath, "documentation_verification")
+	if err != nil {
+		return actionResult{}, err
+	}
+	verificationArtifact.Description = "documentation verification report"
+
+	worksets := []routedWorkset{
+		{name: "primary", description: "primary review workset manifest", paths: primaryPaths, batches: primaryBatches, extraInputs: []artifact{verificationArtifact}},
+		{name: "documentation", description: "documentation review workset manifest", paths: routineDocumentationPaths, batches: documentationBatches, extraInputs: []artifact{verificationArtifact}},
+		{name: "documentation-escalation", description: "documentation escalation workset manifest", paths: escalatedDocumentationPaths, batches: escalationBatches, extraInputs: []artifact{verificationArtifact}},
+	}
+	artifacts := make([]artifact, 0, 1+len(worksets)*2)
+	outputs := map[string]any{
+		"scope":                      scope,
+		"range_start":                r.Start,
+		"range_end":                  r.End,
+		"commit_count":               r.CommitCount,
+		"changed_files":              len(paths),
+		"total_diff_bytes":           observed.TotalDiffBytes,
+		"total_diff_lines":           observed.TotalDiffLines,
+		"documentation_verification": verification,
+	}
+	for index := range worksets {
+		current := &worksets[index]
+		if len(current.batches) == 0 {
+			current.batches = []*batch{noopBatch(current.name)}
+		}
+		manifestArtifact, worksetArtifacts, itemCount, writeErr := writeRoutedWorkset(artifactRoot, outputDir, r, scope, *current)
+		if writeErr != nil {
+			return actionResult{}, writeErr
+		}
+		if index == 0 {
+			outputs["manifest_path"] = manifestArtifact.Path
+		}
+		outputs[current.name+"_manifest_path"] = manifestArtifact.Path
+		outputs[current.name+"_item_count"] = itemCount
+		artifacts = append(artifacts, manifestArtifact)
+		artifacts = append(artifacts, worksetArtifacts...)
+	}
+	artifacts = append(artifacts, verificationArtifact)
+	outputs["item_count"] = len(primaryBatches) + len(documentationBatches) + len(escalationBatches)
+	return actionResult{Outputs: outputs, Artifacts: artifacts}, nil
+}
+
+func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope scopeAttestation, workset routedWorkset) (artifact, []artifact, int, error) {
+	worksetDir := filepath.Join(outputDir, workset.name)
+	items, err := writeItems(artifactRoot, worksetDir, workset.batches)
+	if err != nil {
+		return artifact{}, nil, 0, err
+	}
+	for index := range items {
+		items[index].Bindings["route"] = workset.name
+		if items[index].Lens == "documentation" || items[index].Lens == "documentation-risk" {
+			items[index].Inputs = append(items[index].Inputs, workset.extraInputs...)
+		}
+	}
+	partitionObserved := observeBudget(workset.batches, workset.paths)
+	partitionScope := scope
+	partitionScope.ObservedBudget = partitionObserved
+	m := manifest{SchemaVersion: manifestSchemaVersion, Scope: partitionScope, Observed: partitionObserved, Range: r, ChangedFiles: len(workset.paths), Items: items}
+	encoded, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return artifact{}, nil, 0, fmt.Errorf("encode %s manifest: %w", workset.name, err)
+	}
+	encoded = append(encoded, '\n')
+	manifestPath := filepath.Join(worksetDir, "workset-manifest.json")
+	if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+		return artifact{}, nil, 0, fmt.Errorf("write %s manifest: %w", workset.name, err)
+	}
+	manifestArtifact, err := fileArtifact(artifactRoot, manifestPath, "workset_manifest")
+	if err != nil {
+		return artifact{}, nil, 0, err
+	}
+	manifestArtifact.Description = workset.description
+	artifacts := make([]artifact, 0, len(items))
+	for _, entry := range items {
+		path := filepath.Join(worksetDir, filepath.FromSlash(entry.DiffPath))
+		diffArtifact, artifactErr := fileArtifact(artifactRoot, path, "review_diff")
+		if artifactErr != nil {
+			return artifact{}, nil, 0, artifactErr
+		}
+		diffArtifact.Description = "bounded workset diff"
+		artifacts = append(artifacts, diffArtifact)
+	}
+	return manifestArtifact, artifacts, len(items), nil
+}
+
+func noopBatch(route string) *batch {
+	content := []byte("No changed paths were routed to " + route + ". Submit a minimal successful no-op result.\n")
+	value := &batch{lens: "noop", pathSeen: make(map[string]struct{})}
+	value.diff.Write(content)
+	value.lines = bytes.Count(content, []byte("\n"))
+	return value
+}
+
+func setBatchLens(batches []*batch, lens string) {
+	for _, current := range batches {
+		current.lens = lens
+	}
+}
+
+func annotateBatches(batches []*batch, route string) {
+	for _, current := range batches {
+		content := current.diff.Bytes()
+		current.diff.Reset()
+		fmt.Fprintf(&current.diff, "# hufu-review-route: %s\n", route)
+		_, _ = current.diff.Write(content)
+		current.lines++
+	}
+}
+
 func applyConfigDefaults(config *Config) {
 	legacyScope := config.Scope.Kind == ""
 	if strings.TrimSpace(config.Repository) == "" {
@@ -643,6 +861,9 @@ func validateConfig(config Config) error {
 	}
 	if config.MaxTotalDiffBytes <= 0 || config.MaxTotalDiffLines <= 0 || config.MaxChangedPaths <= 0 || config.MaxWorksetItems <= 0 {
 		return errors.New("max_total_diff_bytes, max_total_diff_lines, max_changed_paths, and max_workset_items must be positive")
+	}
+	if config.Routing != "" && config.Routing != routingDocumentation {
+		return fmt.Errorf("unsupported routing mode %q", config.Routing)
 	}
 	return nil
 }
@@ -897,6 +1118,249 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 	return paths, nil
 }
 
+func classifyReviewPath(ctx context.Context, repo, head, path string) string {
+	if !isDocumentationPath(path) {
+		return "primary"
+	}
+	lower := strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(lower, "docs/architecture/") ||
+		strings.Contains(lower, "security") || strings.Contains(lower, "safety") || strings.Contains(lower, "threat") ||
+		strings.Contains(lower, "runtime") || strings.Contains(lower, "contract") {
+		return "documentation-risk"
+	}
+	content, err := git(ctx, repo, "show", head+":"+path)
+	if err == nil && strings.Contains(strings.ToLower(content), "> authority: normative") {
+		return "documentation-risk"
+	}
+	if isRoutineDocumentationPath(lower) {
+		return "documentation"
+	}
+	return "documentation-risk"
+}
+
+func isDocumentationPath(path string) bool {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	base := strings.ToLower(filepath.Base(lower))
+	return strings.HasPrefix(lower, "docs/") ||
+		strings.HasPrefix(base, "readme") || strings.HasPrefix(base, "changelog") || strings.HasPrefix(base, "release")
+}
+
+func isRoutineDocumentationPath(lower string) bool {
+	base := filepath.Base(lower)
+	if strings.HasPrefix(base, "readme") || strings.HasPrefix(base, "changelog") || strings.HasPrefix(base, "release") {
+		return true
+	}
+	for _, prefix := range []string{"docs/tutorial/", "docs/tutorials/", "docs/guide/", "docs/guides/", "docs/getting-started/", "docs/releases/", "docs/release-notes/"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, paths []string) (documentationVerification, error) {
+	verification := documentationVerification{Passed: true, CheckedFiles: slices.Clone(paths)}
+	seenLinks := make(map[string]struct{})
+	seenPaths := make(map[string]struct{})
+	seenSymbols := make(map[string]struct{})
+	for _, documentPath := range paths {
+		exists, err := gitObjectExists(ctx, repo, r.End+":"+documentPath)
+		if err != nil {
+			return verification, err
+		}
+		if !exists {
+			continue
+		}
+		addedLines, err := addedDocumentationLines(ctx, repo, r, documentPath)
+		if err != nil {
+			return verification, err
+		}
+		for _, line := range addedLines {
+			for _, match := range markdownLinkPattern.FindAllStringSubmatch(line, -1) {
+				target := strings.Trim(match[1], "<>")
+				repositoryPath, ok := repositoryLinkPath(documentPath, target)
+				if !ok {
+					continue
+				}
+				key := documentPath + "\x00" + repositoryPath
+				if _, duplicate := seenLinks[key]; duplicate {
+					continue
+				}
+				seenLinks[key] = struct{}{}
+				verification.CheckedLinks++
+				found, checkErr := gitObjectExists(ctx, repo, r.End+":"+repositoryPath)
+				if checkErr != nil {
+					return verification, checkErr
+				}
+				if !found {
+					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, r.End))
+				}
+			}
+			inlineText := markdownLinkPattern.ReplaceAllString(line, "")
+			for _, match := range inlineCodePattern.FindAllStringSubmatch(inlineText, -1) {
+				token := strings.TrimSpace(match[1])
+				if strings.HasPrefix(token, "workspace:path/") {
+					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: %q is not the canonical workspace resource syntax; use workspace:path:<path>", documentPath, token))
+					continue
+				}
+				if repositoryPath, ok := repositoryCodePath(documentPath, token); ok {
+					if _, duplicate := seenPaths[repositoryPath]; !duplicate {
+						seenPaths[repositoryPath] = struct{}{}
+						verification.CheckedPaths++
+						found, checkErr := gitObjectExists(ctx, repo, r.End+":"+repositoryPath)
+						if checkErr != nil {
+							return verification, checkErr
+						}
+						if !found {
+							verification.Issues = append(verification.Issues, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, r.End))
+						}
+					}
+				}
+				if !isGoSymbolCandidate(token) {
+					continue
+				}
+				if _, duplicate := seenSymbols[token]; duplicate {
+					continue
+				}
+				seenSymbols[token] = struct{}{}
+				verification.CheckedSymbols++
+				found, checkErr := gitSymbolExists(ctx, repo, r.End, token)
+				if checkErr != nil {
+					return verification, checkErr
+				}
+				if !found {
+					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, r.End))
+				}
+			}
+		}
+	}
+	if len(verification.Issues) > 0 {
+		verification.Passed = false
+		return verification, fmt.Errorf("documentation_verification_failed:\n%s", strings.Join(verification.Issues, "\n"))
+	}
+	return verification, nil
+}
+
+func addedDocumentationLines(ctx context.Context, repo string, r reviewRange, path string) ([]string, error) {
+	diff, err := git(ctx, repo, "diff", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
+	if err != nil {
+		return nil, fmt.Errorf("diff documentation %q: %w", path, err)
+	}
+	lines := make([]string, 0)
+	for line := range strings.SplitSeq(diff, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			lines = append(lines, strings.TrimPrefix(line, "+"))
+		}
+	}
+	return lines, nil
+}
+
+func repositoryLinkPath(documentPath, target string) (string, bool) {
+	if target == "" || strings.HasPrefix(target, "#") || strings.HasPrefix(target, "/") || strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
+		return "", false
+	}
+	if before, _, found := strings.Cut(target, "#"); found {
+		target = before
+	}
+	if before, _, found := strings.Cut(target, "?"); found {
+		target = before
+	}
+	if target == "" {
+		return "", false
+	}
+	joined := filepath.ToSlash(filepath.Clean(filepath.Join(filepath.Dir(documentPath), filepath.FromSlash(target))))
+	if joined == ".." || strings.HasPrefix(joined, "../") || filepath.IsAbs(joined) {
+		return "", false
+	}
+	return joined, true
+}
+
+func repositoryCodePath(documentPath, token string) (string, bool) {
+	if before, _, found := strings.Cut(token, "#"); found {
+		token = before
+	}
+	if before, _, found := strings.Cut(token, ":"); found && strings.HasSuffix(before, ".go") {
+		token = before
+	}
+	token = filepath.ToSlash(token)
+	if token == "" || strings.ContainsAny(token, " <>*{}()") || filepath.IsAbs(token) {
+		return "", false
+	}
+	if strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
+		token = filepath.ToSlash(filepath.Clean(filepath.Join(filepath.Dir(documentPath), filepath.FromSlash(token))))
+	} else {
+		token = filepath.ToSlash(filepath.Clean(token))
+	}
+	if token == "." || token == ".." || strings.HasPrefix(token, "../") {
+		return "", false
+	}
+	base := strings.ToLower(filepath.Base(token))
+	if slices.Contains([]string{"go.mod", "go.sum", "agents.md", "makefile", "dockerfile", "hufu.yaml", "hufu.yml"}, base) {
+		return token, true
+	}
+	for _, suffix := range []string{".go", ".md", ".yaml", ".yml", ".json", ".toml", ".sh", ".nu", ".sql"} {
+		if strings.HasSuffix(base, suffix) {
+			return token, true
+		}
+	}
+	for _, prefix := range []string{"cmd/", "internal/", "docs/", ".agent-teams/", ".agents/", "scripts/"} {
+		if strings.HasPrefix(token, prefix) && !strings.Contains(base, ".") {
+			return token, true
+		}
+	}
+	return "", false
+}
+
+func isGoSymbolCandidate(token string) bool {
+	if qualifiedGoSymbol.MatchString(token) {
+		return true
+	}
+	if !goSymbolPattern.MatchString(token) {
+		return false
+	}
+	uppercase := 0
+	hasLowercase := false
+	for _, current := range token {
+		if unicode.IsUpper(current) {
+			uppercase++
+		}
+		if unicode.IsLower(current) {
+			hasLowercase = true
+		}
+	}
+	return uppercase >= 2 && hasLowercase
+}
+
+func gitObjectExists(ctx context.Context, repo, object string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "-e", object)
+	cmd.Dir = repo
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+		return false, nil
+	}
+	return false, fmt.Errorf("check git object %q: %w: %s", object, err, strings.TrimSpace(stderr.String()))
+}
+
+func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "grep", "-q", "-F", symbol, revision, "--", "*.go")
+	cmd.Dir = repo
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
+}
+
 func buildBatches(ctx context.Context, repo string, r reviewRange, paths []string, config Config) ([]*batch, error) {
 	var batches []*batch
 	for _, path := range paths {
@@ -1067,6 +1531,11 @@ func splitDiff(diff []byte) [][]byte {
 
 func lensForPath(path string) string {
 	switch {
+	case isDocumentationPath(path):
+		if isRoutineDocumentationPath(strings.ToLower(filepath.ToSlash(path))) {
+			return "documentation"
+		}
+		return "documentation-risk"
 	case strings.HasPrefix(path, "internal/tools/"):
 		return "security-tool"
 	case strings.HasPrefix(path, "internal/team/"), strings.HasPrefix(path, "internal/agent/"), strings.HasPrefix(path, "internal/memory/"), strings.HasPrefix(path, "internal/skill/"):

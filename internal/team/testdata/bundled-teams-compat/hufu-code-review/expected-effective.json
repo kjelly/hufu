@@ -43,8 +43,40 @@
           "output": "scope"
         },
         {
+          "type": "task_output_assert",
+          "assertions": [
+            {
+              "pointer": "/passed",
+              "op": "equals",
+              "value": true
+            }
+          ],
+          "source_task": "produce-workset",
+          "output": "documentation_verification"
+        },
+        {
           "type": "workset_complete",
-          "source_task": "review-workset",
+          "source_task": "review-primary-workset",
+          "require_all_terminal": true,
+          "require_all_verified": true,
+          "accepted_statuses": [
+            "success",
+            "completed_with_gaps"
+          ]
+        },
+        {
+          "type": "workset_complete",
+          "source_task": "review-documentation-workset",
+          "require_all_terminal": true,
+          "require_all_verified": true,
+          "accepted_statuses": [
+            "success",
+            "completed_with_gaps"
+          ]
+        },
+        {
+          "type": "workset_complete",
+          "source_task": "review-documentation-escalation",
           "require_all_terminal": true,
           "require_all_verified": true,
           "accepted_statuses": [
@@ -86,6 +118,7 @@
     "delegation": {
       "AllowedWorkers": [
         "reviewer",
+        "documentation-reviewer",
         "critic"
       ],
       "InitialBatch": null,
@@ -95,7 +128,7 @@
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": [
         "reviewer",
-        "critic"
+        "documentation-reviewer"
       ],
       "ForbidContextFiles": false,
       "TaskGoalInvariants": null,
@@ -120,6 +153,15 @@
       "recovery": "retry",
       "max_retries": 1,
       "max_steps": 20
+    },
+    {
+      "name": "documentation-reviewer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 1,
+      "max_steps": 40
     },
     {
       "name": "Helper",
@@ -147,10 +189,22 @@
       "recovery": "retry"
     },
     {
-      "id": "review-workset",
+      "id": "review-primary-workset",
       "agent": "reviewer",
       "phase": "VERIFY",
-      "when_goal_contains": "review workset"
+      "when_goal_contains": "review primary workset"
+    },
+    {
+      "id": "review-documentation-workset",
+      "agent": "documentation-reviewer",
+      "phase": "VERIFY",
+      "when_goal_contains": "review documentation workset"
+    },
+    {
+      "id": "review-documentation-escalation",
+      "agent": "critic",
+      "phase": "VERIFY",
+      "when_goal_contains": "review documentation escalation"
     },
     {
       "id": "critic-review",
