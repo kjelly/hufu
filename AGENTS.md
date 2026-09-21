@@ -104,6 +104,23 @@ executeSegments() ── Processes PromptSegments in order
 Results joined and printed to stdout
 ```
 
+### Core / Agent-Team Boundary
+
+- `cmd/hufu/` and `internal/**` are team-neutral runtime code. Do not introduce branches on a concrete team name or add a core flag, coordinator field, recovery rule, action-provider behavior, or filesystem policy solely for one agent team.
+- Team-specific prompts, capabilities, workflow, acceptance, and action providers belong under `.agent-teams/<team>/`.
+- Do not add per-team executables under `cmd/`, `bin/`, or `scripts/`. If a team appears to require a dedicated launcher or pre-runtime isolation mechanism, stop and obtain an explicit architecture decision instead of creating one implicitly.
+- Change Hufu core only for a reusable, team-agnostic capability with an explicit product requirement and team-independent tests.
+- Before completing a team-specific change, inspect `git diff -- cmd/hufu internal` and remove any newly introduced team-name branch or policy leakage.
+
+### Model-Generated Structured Task Inputs
+
+- When natural-language task descriptions determine execution scope, targets, filters, constraints, routing, or action parameters, use an LLM-backed structured-output resolver to translate the request into a schema-validated typed object.
+- Do not interpret task prose with regular expressions, keyword tables, language-specific phrases, or other hard-coded semantic parsing in deterministic code or action providers.
+- Keep responsibilities separate: the model interprets meaning, the schema defines the permitted data contract, and deterministic code validates and executes only the resulting structured object.
+- Deterministic fallback code must not guess the user's intent. If model resolution is unavailable, ambiguous, invalid, or returns no value, use an explicitly declared safe default, request clarification, or fail closed as appropriate to the task's risk.
+- Treat model output as untrusted data. Reject values that violate the schema, authorization boundary, resource limits, or cross-field invariants before any action executes.
+- Keep domain-specific structured-input vocabulary and semantic guidance with the owning agent team, not in `cmd/hufu/` or `internal/**`.
+
 ### Coordinator Features
 
 | Feature | Description |
