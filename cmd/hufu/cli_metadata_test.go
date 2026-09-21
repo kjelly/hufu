@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestHelpAllShowsCanonicalGroupsAndSafetyFlags(t *testing.T) {
@@ -63,5 +65,32 @@ func TestExactSessionFacadeRegistersTypedScopeFlags(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCoordinatorModelShortFlag(t *testing.T) {
+	originalOpts := opts
+	t.Cleanup(func() { opts = originalOpts })
+
+	tests := []struct {
+		name    string
+		command *cobra.Command
+	}{
+		{name: "root", command: newRootCommand()},
+		{name: "run", command: newRunCommand()},
+		{name: "chat", command: replCmd},
+		{name: "resume", command: resumeCmd},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := tt.command.Flags().Lookup("coordinator-model")
+			if flag == nil {
+				t.Fatal("missing --coordinator-model")
+			}
+			if flag.Shorthand != "c" {
+				t.Fatalf("--coordinator-model shorthand = %q, want %q", flag.Shorthand, "c")
+			}
+		})
 	}
 }

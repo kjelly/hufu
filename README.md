@@ -291,7 +291,7 @@ go run ./cmd/hufu
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
 | `--model` / `-m` | `-m` | `string` | `""` | Override the worker execution target only (for example `codex/gpt-5.6-luna` or `local/qwen3:8b`) |
-| `--coordinator-model` | — | `string` | `""` | Override the coordinator's independent LLM target |
+| `--coordinator-model` / `-c` | `-c` | `string` | `""` | Override the coordinator's independent LLM target |
 | `--context-window` | — | `int` | `0` | Explicit positive model context capacity in tokens for pre-provider admission; `0` uses provider metadata or the model registry |
 | `--temperature` | — | `string` | `""` | Override sampling temperature |
 | `--max-tokens` | — | `string` | `""` | Override max output tokens |

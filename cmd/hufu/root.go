@@ -114,7 +114,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringSliceVar(&opts.allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team; can be repeated.")
 	rootCmd.Flags().BoolVar(&opts.autoApprove, "auto-approve", false, "Automatically choose clearly safe ask_user options; dangerous or ambiguous choices still prompt the user")
 	rootCmd.Flags().StringVarP(&opts.modelOverride, "model", "m", "", "Override worker execution target for the active team (e.g. local-model or codex/model)")
-	rootCmd.Flags().StringVar(&opts.coordinatorModelOverride, "coordinator-model", "", "Override coordinator LLM target without changing worker targets")
+	rootCmd.Flags().StringVarP(&opts.coordinatorModelOverride, "coordinator-model", "c", "", "Override coordinator LLM target without changing worker targets")
 	rootCmd.Flags().IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens (0 = use team/provider metadata)")
 	rootCmd.Flags().StringVar(&opts.temperatureOverride, "temperature", "", "Override sampling temperature (e.g. 0.2)")
 	rootCmd.Flags().StringVar(&opts.maxTokensOverride, "max-tokens", "", "Override max output tokens (e.g. 4096)")

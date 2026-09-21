@@ -111,7 +111,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.StringVar(&options.providerURL, "provider-url", "", "Provider API base URL")
 	flags.StringVar(&options.providerAPIKey, "provider-api-key", "", "Provider API key")
 	flags.StringVarP(&options.model, "model", "m", "", "Override the worker execution target")
-	flags.StringVar(&options.coordinatorModel, "coordinator-model", "", "Override the coordinator LLM target")
+	flags.StringVarP(&options.coordinatorModel, "coordinator-model", "c", "", "Override the coordinator LLM target")
 	flags.IntVar(&options.contextWindow, "context-window", 0, "Override model context window in tokens")
 	flags.StringVar(&options.temperature, "temperature", "", "Override sampling temperature")
 	flags.StringVar(&options.maxTokens, "max-tokens", "", "Override max output tokens")
