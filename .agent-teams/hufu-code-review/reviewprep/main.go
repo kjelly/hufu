@@ -22,7 +22,10 @@ import (
 	"unicode"
 )
 
-const manifestSchemaVersion = 2
+const (
+	manifestSchemaVersion = 2
+	scopeResolverVersion  = "3"
+)
 
 const (
 	defaultMaxTotalDiffBytes = 1_048_576
@@ -77,13 +80,14 @@ type runInputResolverResponse struct {
 }
 
 var (
-	lastCommitsPattern  = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commits?\b`)
-	lastDaysPattern     = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+days?\b`)
-	recentDaysPattern   = regexp.MustCompile(`最近[ \t]*([0-9]+)[ \t]*天`)
-	headRangePattern    = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
-	revisionPattern     = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})`)
-	revisionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
-	sincePattern        = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
+	lastCommitsPattern   = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commit(?:s|\(s\))?(?:\b|[^[:alnum:]_]|$)`)
+	recentCommitsPattern = regexp.MustCompile(`(?i)最近[ \t]*([0-9]+)[ \t]*(?:個|个|條|条|次)?[ \t]*(?:的[ \t]*)?(?:git[ \t]*)?commit(?:s|\(s\))?(?:\b|[^[:alnum:]_]|$)`)
+	lastDaysPattern      = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+days?\b`)
+	recentDaysPattern    = regexp.MustCompile(`最近[ \t]*([0-9]+)[ \t]*天`)
+	headRangePattern     = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
+	revisionPattern      = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})`)
+	revisionNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
+	sincePattern         = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
 )
 
 // Config intentionally contains only team-owned workset semantics. Hufu
@@ -298,7 +302,7 @@ func resolveReviewScopeInput(request runInputResolverRequest) runInputResolverRe
 }
 
 func resolveReviewScopeInputAt(request runInputResolverRequest, now time.Time) runInputResolverResponse {
-	response := runInputResolverResponse{ResolverVersion: "2"}
+	response := runInputResolverResponse{ResolverVersion: scopeResolverVersion}
 	if request.Type != "resolve_run_input" || request.InputName != "review.scope" || request.ResolverID != "review-scope-v1" {
 		response.Status = "invalid"
 		response.Diagnostic = "resolver request identity is unsupported"
@@ -359,6 +363,13 @@ func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, strin
 			return nil, err.Error()
 		}
 		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "last_n_commits"))
+	}
+	for _, match := range recentCommitsPattern.FindAllStringSubmatchIndex(prompt, -1) {
+		count, err := parseScopeCount(prompt[match[2]:match[3]])
+		if err != nil {
+			return nil, err.Error()
+		}
+		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "recent_commits_zh"))
 	}
 	for _, match := range headRanges {
 		count, err := parseScopeCount(prompt[match[2]:match[3]])
@@ -1341,7 +1352,10 @@ func repositoryCodePath(documentPath, token string) (string, bool) {
 		token = before
 	}
 	token = filepath.ToSlash(token)
-	if token == "" || strings.ContainsAny(token, " <>*{}()") || filepath.IsAbs(token) {
+	if token == "" || strings.ContainsAny(token, " <>*{}()") || strings.Contains(token, "://") || strings.HasPrefix(token, "mailto:") || filepath.IsAbs(token) {
+		return "", false
+	}
+	if !hasExplicitRepositoryPath(token) {
 		return "", false
 	}
 	if strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
@@ -1367,6 +1381,10 @@ func repositoryCodePath(documentPath, token string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func hasExplicitRepositoryPath(token string) bool {
+	return strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") || strings.Contains(token, "/")
 }
 
 func isGoSymbolCandidate(token string) bool {

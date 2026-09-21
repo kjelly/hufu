@@ -26,6 +26,7 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"agent_matcher":               {Trigger: ContextTriggerSkillMatch, FallbackAllowed: true, FallbackOutcome: "deterministic_agent_match"},
 	"guard_reviewer":              {Trigger: ContextTriggerGuardReview, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"path_reviewer":               {Trigger: ContextTriggerGuardReview, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"run_input_resolver":          {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_resolver"},
 	"plan_reviewer":               {Trigger: ContextTriggerPlanReview, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"judge":                       {Trigger: ContextTriggerJudge, FallbackAllowed: true, FallbackOutcome: "deterministic_judge"},
 	"decision-reference-evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},

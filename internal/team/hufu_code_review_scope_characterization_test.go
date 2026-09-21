@@ -33,7 +33,7 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 		t.Fatalf("run input definitions = %#v", session.RunInputDefinitions)
 	}
 	definition := session.RunInputDefinitions[0]
-	if definition.Name != "review.scope" || definition.Resolver == nil || definition.Resolver.ID != "review-scope-v1" {
+	if definition.Name != "review.scope" || definition.Resolver == nil || definition.Resolver.ID != "review-scope-v1" || definition.Resolver.Mode != runInputResolverModeSemanticJSON {
 		t.Fatalf("review scope definition = %#v", definition)
 	}
 	if string(definition.Default) != `{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}` {
@@ -104,6 +104,16 @@ func TestHufuCodeReviewResolverRunsThroughEmbeddedGolangRuntime(t *testing.T) {
 	}
 	if response.Status != "matched" || string(response.Value) != `{"kind":"last_n","count":7,"history":"first_parent","head":"HEAD"}` {
 		t.Fatalf("resolver response = %#v", response)
+	}
+	chinese, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", Prompt: "審查最近5個的 git commit",
+		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+	})
+	if err != nil {
+		t.Fatalf("ResolveRunInput Chinese prompt: %v", err)
+	}
+	if chinese.Status != "matched" || string(chinese.Value) != `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}` {
+		t.Fatalf("Chinese resolver response = %#v", chinese)
 	}
 	if name := session.ProviderRegistry.ProviderName("resolve-review-scope"); !strings.HasPrefix(name, "golang:sha256:") {
 		t.Fatalf("provider identity = %q", name)

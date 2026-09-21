@@ -71,7 +71,7 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 	if err != nil {
 		return err
 	}
-	resolverAssignments, err := c.resolveRunInputCandidates(ctx, prompt, explicit, runID)
+	resolverAssignments, err := c.resolveRunInputCandidates(ctx, prompt, explicit, runID, true)
 	if err != nil {
 		return err
 	}
@@ -132,15 +132,8 @@ func validateResumeRunInputAssignments(definitions []RunInputDefinition, assignm
 	return nil
 }
 
-func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt string, explicit map[string]json.RawMessage, runID string) ([]RunInputAssignment, error) {
+func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt string, explicit map[string]json.RawMessage, runID string, allowSemantic bool) ([]RunInputAssignment, error) {
 	assignments := make([]RunInputAssignment, 0)
-	if c.session.ProviderRegistry == nil {
-		for _, definition := range c.session.RunInputDefinitions {
-			if definition.Resolver != nil {
-				return nil, errors.New("input_resolver_failed: action provider registry is unavailable")
-			}
-		}
-	}
 	schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
 	if err != nil {
 		return nil, err
@@ -149,6 +142,15 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 		resolver := definition.Resolver
 		if resolver == nil {
 			continue
+		}
+		if allowSemantic && resolver.Mode == runInputResolverModeSemanticJSON {
+			if assignment, matched := c.resolveSemanticRunInputCandidate(ctx, prompt, explicit[definition.Name], definition, resolver, schemaHash); matched {
+				assignments = append(assignments, assignment)
+				continue
+			}
+		}
+		if c.session.ProviderRegistry == nil {
+			return nil, errors.New("input_resolver_failed: action provider registry is unavailable")
 		}
 		provider, ok := c.session.ProviderRegistry.Get(resolver.Capability)
 		if !ok {
@@ -205,6 +207,40 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 	return assignments, nil
 }
 
+func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prompt string, explicit json.RawMessage, definition RunInputDefinition, resolver *RunInputResolverSpec, schemaHash string) (RunInputAssignment, bool) {
+	semanticResolver := c.semanticRunInputResolver()
+	if semanticResolver == nil {
+		return RunInputAssignment{}, false
+	}
+	resolverCtx := ctx
+	var cancel context.CancelFunc
+	if resolver.Timeout > 0 {
+		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
+	}
+	raw, err := semanticResolver.Resolve(resolverCtx, SemanticRunInputRequest{
+		InputName: definition.Name, Prompt: prompt, Schema: definition.Schema, SchemaHash: schemaHash,
+		ResolverID: resolver.ID, ExplicitValue: slices.Clone(explicit),
+	})
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return RunInputAssignment{}, false
+	}
+	canonical, err := validateAndCanonicalizeRunInput(definition.Schema, raw)
+	if err != nil {
+		return RunInputAssignment{}, false
+	}
+	if semanticJSONContainsCommand(canonical) {
+		return RunInputAssignment{}, false
+	}
+	return RunInputAssignment{
+		Name: definition.Name, RawValue: canonical, Source: RunInputSourceResolver,
+		ResolverID: resolver.ID, ResolverVersion: semanticRunInputResolverVersion,
+		Evidence: []InputEvidence{{Source: RunInputSourceResolver, Location: "invocation_prompt", Kind: "semantic_json"}},
+	}, true
+}
+
 func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*RunInputSnapshot, error) {
 	if c == nil || c.session == nil {
 		return nil, nil
@@ -216,7 +252,7 @@ func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*Run
 	if err != nil {
 		return nil, err
 	}
-	resolverAssignments, err := c.resolveRunInputCandidates(ctx, prompt, explicit, "dry-run")
+	resolverAssignments, err := c.resolveRunInputCandidates(ctx, prompt, explicit, "dry-run", false)
 	if err != nil {
 		return nil, err
 	}

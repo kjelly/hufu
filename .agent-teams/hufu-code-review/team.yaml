@@ -56,6 +56,7 @@ spec:
         id: review-scope-v1
         capability: resolve-review-scope
         type: resolve_review_scope
+        mode: semantic_json
         source: invocation_prompt
         side_effect: none
         timeout: 10

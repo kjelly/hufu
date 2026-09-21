@@ -110,12 +110,24 @@ requires the strict resolver response contract:
   "status": "matched",
   "value": {"kind":"last_n","count":10},
   "evidence": [{"source":"prompt","start":7,"end":24,"kind":"last_commits"}],
-  "resolver_version": "1"
+  "resolver_version": "3"
 }
 ```
 
 Unknown fields, malformed JSON, oversized output, and non-zero adapter exits
 are failures. Resolver providers should be deterministic and side-effect free.
+
+An input may additionally declare `resolver.mode: semantic_json`. In that
+mode Hufu first asks its provider-bound sidecar to translate the invocation
+prompt into exactly one JSON value matching the input schema (or `null`). The
+sidecar cannot return a command, action payload, path request, or prose. Hufu
+strictly parses and schema-validates the value, stamps resolver provenance,
+and then passes the typed value to the normal typed consumer path. A valid
+semantic value replaces natural-language matching; the deterministic resolver
+is retained only as the unavailable/invalid-output fallback. `--dry-run` never
+invokes the semantic resolver. Command-shaped strings inside a semantic value
+are rejected before snapshot/event persistence and also use the deterministic
+fallback.
 
 ## Runtime environment
 

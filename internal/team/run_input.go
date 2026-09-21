@@ -20,6 +20,9 @@ import (
 
 const (
 	runInputSnapshotVersion            = 1
+	runInputResolverModeDeterministic  = "deterministic"
+	runInputResolverModeSemanticJSON   = "semantic_json"
+	semanticRunInputResolverVersion    = "3"
 	maxRunInputDefinitions             = 64
 	maxRunInputValueBytes              = 64 * 1024
 	maxRunInputSnapshotBytes           = 256 * 1024
@@ -79,6 +82,7 @@ type RunInputResolverSpec struct {
 	ID         string `json:"id" yaml:"id"`
 	Capability string `json:"capability" yaml:"capability"`
 	Type       string `json:"type" yaml:"type"`
+	Mode       string `json:"mode,omitempty" yaml:"mode,omitempty"`
 	Source     string `json:"source" yaml:"source"`
 	SideEffect string `json:"side_effect" yaml:"side_effect"`
 	Timeout    int    `json:"timeout" yaml:"timeout"`
@@ -328,6 +332,9 @@ func validateRunInputResolver(resolver *RunInputResolverSpec) error {
 	}
 	if resolver.SideEffect != "none" {
 		return fmt.Errorf("side-effect must be none, got %q", resolver.SideEffect)
+	}
+	if resolver.Mode != "" && resolver.Mode != runInputResolverModeSemanticJSON && resolver.Mode != runInputResolverModeDeterministic {
+		return fmt.Errorf("unsupported mode %q", resolver.Mode)
 	}
 	if resolver.Timeout <= 0 {
 		return errors.New("timeout must be positive")
@@ -1056,6 +1063,7 @@ func normalizeRunInputResolver(src *RunInputResolverSpec) *RunInputResolverSpec 
 	resolver.ID = strings.TrimSpace(resolver.ID)
 	resolver.Capability = normalizeCapability(resolver.Capability)
 	resolver.Type = strings.TrimSpace(resolver.Type)
+	resolver.Mode = strings.ToLower(strings.TrimSpace(resolver.Mode))
 	resolver.Source = strings.ToLower(strings.TrimSpace(resolver.Source))
 	resolver.SideEffect = strings.ToLower(strings.TrimSpace(resolver.SideEffect))
 	return resolver

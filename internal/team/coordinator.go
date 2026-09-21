@@ -553,42 +553,43 @@ type Coordinator struct {
 	// isolated extra-model leaf starts. It keeps decision artifacts, the
 	// cross-run index, and the branch-scoped journal in the parent control
 	// workspace even though the leaf owns a separate worker workspace.
-	decisionControlPlaneMu  sync.Mutex
-	decisionControlPlane    *decisionControlPlane
-	decisionStore           ArtifactStore
-	decisionIndexProjection *DecisionIndex
-	dualWriteFailures       atomic.Int64
-	memoryStore             *memory.MemoryStore
-	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
-	ownsContextRepo         bool
-	contextRepoCloseOnce    sync.Once
-	contextRepoCloseErr     error
-	memoryRankingPolicy     MemoryRuntimeRankingPolicy
-	workerMemorySvc         WorkerMemoryService // WP-3 per-worker memory recall service.
-	sharedMemorySvc         SharedMemoryService // canonical shared persistent memory service.
-	asyncTasksWg            sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
-	skillsMu                sync.RWMutex
-	modelList               []config.ModelEntry
-	modelProfileRuntime     *ModelProfileRuntime
-	sidecarModel            string
-	sidecarInst             *sidecar.Sidecar
-	sidecarInitMu           sync.Mutex
-	sidecarInit             bool
-	guardModel              string
-	guardInst               *sidecar.Sidecar
-	guardInitMu             sync.Mutex
-	guardInit               bool
-	judgeModel              string
-	judgeInst               *sidecar.Sidecar
-	judgeInitMu             sync.Mutex
-	judgeInit               bool
-	planReviewerModel       string
-	cachedWorkerContext     string
-	workerCtxOnce           sync.Once
-	autoLoadedSkills        []*skill.SkillDef
-	autoLoadedSkillsMu      sync.RWMutex
-	forcedSkillNames        map[string]bool // set of skill names specified via --skill
-	maxConcurrent           int
+	decisionControlPlaneMu           sync.Mutex
+	decisionControlPlane             *decisionControlPlane
+	decisionStore                    ArtifactStore
+	decisionIndexProjection          *DecisionIndex
+	dualWriteFailures                atomic.Int64
+	memoryStore                      *memory.MemoryStore
+	contextRepo                      contextstore.Repository // canonical context store used by prompt assembly and maintenance
+	ownsContextRepo                  bool
+	contextRepoCloseOnce             sync.Once
+	contextRepoCloseErr              error
+	memoryRankingPolicy              MemoryRuntimeRankingPolicy
+	workerMemorySvc                  WorkerMemoryService // WP-3 per-worker memory recall service.
+	sharedMemorySvc                  SharedMemoryService // canonical shared persistent memory service.
+	asyncTasksWg                     sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
+	skillsMu                         sync.RWMutex
+	modelList                        []config.ModelEntry
+	modelProfileRuntime              *ModelProfileRuntime
+	sidecarModel                     string
+	semanticRunInputResolverOverride SemanticRunInputResolver
+	sidecarInst                      *sidecar.Sidecar
+	sidecarInitMu                    sync.Mutex
+	sidecarInit                      bool
+	guardModel                       string
+	guardInst                        *sidecar.Sidecar
+	guardInitMu                      sync.Mutex
+	guardInit                        bool
+	judgeModel                       string
+	judgeInst                        *sidecar.Sidecar
+	judgeInitMu                      sync.Mutex
+	judgeInit                        bool
+	planReviewerModel                string
+	cachedWorkerContext              string
+	workerCtxOnce                    sync.Once
+	autoLoadedSkills                 []*skill.SkillDef
+	autoLoadedSkillsMu               sync.RWMutex
+	forcedSkillNames                 map[string]bool // set of skill names specified via --skill
+	maxConcurrent                    int
 	// executionPolicy is constructed once after all execution backends have
 	// been registered. Its public snapshot is persisted at run admission; all
 	// scheduler and backend semaphores consume this immutable state instead of

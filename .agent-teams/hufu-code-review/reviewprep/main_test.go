@@ -103,12 +103,17 @@ func TestResolveReviewScopeInputGrammar(t *testing.T) {
 		wantValue  string
 	}{
 		{name: "last commits", prompt: "Review the last 10 commits", wantStatus: "matched", wantValue: `{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}`},
+		{name: "commit(s) variant", prompt: "Review the last 5 commit(s)", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
+		{name: "traditional chinese commits", prompt: "審查最近5個的 git commit", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
+		{name: "simplified chinese spaced commits", prompt: "审查最近 5 个 git commits", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
 		{name: "head relative", prompt: "Review HEAD~3..HEAD", wantStatus: "matched", wantValue: `{"kind":"last_n","count":3,"history":"first_parent","head":"HEAD"}`},
 		{name: "revision range", prompt: "Review release-1..feature/head", wantStatus: "matched", wantValue: `{"kind":"revision_range","history":"first_parent","head":"feature/head","base":"release-1"}`},
 		{name: "since", prompt: "Review changes since 2026-09-01", wantStatus: "matched", wantValue: `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-01"}`},
 		{name: "absent", prompt: "Review the recent code", wantStatus: "no_match"},
 		{name: "ambiguous", prompt: "Review last 10 commits but only HEAD~3..HEAD", wantStatus: "ambiguous"},
+		{name: "conflicting bilingual counts", prompt: "Review last 5 commits and 最近6個 git commit", wantStatus: "ambiguous"},
 		{name: "invalid count", prompt: "Review last 0 commits", wantStatus: "invalid"},
+		{name: "invalid chinese count", prompt: "Review 最近101個 git commit", wantStatus: "invalid"},
 		{name: "invalid date", prompt: "Review since 2026-02-30", wantStatus: "invalid"},
 	}
 	for _, test := range tests {
@@ -122,10 +127,26 @@ func TestResolveReviewScopeInputGrammar(t *testing.T) {
 			if test.wantValue != "" && string(response.Value) != test.wantValue {
 				t.Fatalf("value = %s, want %s", response.Value, test.wantValue)
 			}
-			if response.Status == "matched" && (response.ResolverVersion != "2" || len(response.Evidence) == 0) {
+			if response.Status == "matched" && (response.ResolverVersion != scopeResolverVersion || len(response.Evidence) == 0) {
 				t.Fatalf("matched response lacks provenance: %#v", response)
 			}
 		})
+	}
+}
+
+func TestResolveReviewScopeInputCoalescesBilingualCommitExpressions(t *testing.T) {
+	response := resolveReviewScopeInputAt(runInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
+		Prompt: "Review last 5 commits and 最近 5 個 git commit",
+	}, time.Date(2026, time.September, 21, 0, 0, 0, 0, time.UTC))
+	if response.Status != "matched" || string(response.Value) != `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}` {
+		t.Fatalf("response = %#v, want one matched count-5 scope", response)
+	}
+	if response.ResolverVersion != scopeResolverVersion || len(response.Evidence) != 2 {
+		t.Fatalf("response provenance = %#v, want resolver version %q and two evidence entries", response, scopeResolverVersion)
+	}
+	if response.Evidence[0].Kind != "last_n_commits" || response.Evidence[1].Kind != "recent_commits_zh" {
+		t.Fatalf("response evidence = %#v, want English and Chinese provenance", response.Evidence)
 	}
 }
 
@@ -155,7 +176,7 @@ func TestResolveReviewScopeInputRelativeDays(t *testing.T) {
 			if got, want := string(response.Value), `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-15"}`; got != want {
 				t.Fatalf("value = %s, want %s", got, want)
 			}
-			if response.ResolverVersion != "2" || len(response.Evidence) != 1 || response.Evidence[0].Kind != test.kind {
+			if response.ResolverVersion != scopeResolverVersion || len(response.Evidence) != 1 || response.Evidence[0].Kind != test.kind {
 				t.Fatalf("relative-day provenance = %#v", response)
 			}
 		})
@@ -342,11 +363,38 @@ func TestParseScopeCandidatesAcceptsGitParentRevision(t *testing.T) {
 	}
 }
 
+func TestRepositoryCodePathRequiresExplicitPathSyntax(t *testing.T) {
+	tests := []struct {
+		name   string
+		doc    string
+		token  string
+		want   string
+		wantOK bool
+	}{
+		{name: "bare yaml filename", doc: "README.md", token: "team.yaml"},
+		{name: "bare go test filename", doc: "docs/reference/action-providers.md", token: "main_test.go"},
+		{name: "bare special filename", doc: "README.md", token: "go.mod"},
+		{name: "explicit root relative path", doc: "README.md", token: "./team.yaml", want: "team.yaml", wantOK: true},
+		{name: "nested path", doc: "README.md", token: "docs/reference/action-providers.md", want: "docs/reference/action-providers.md", wantOK: true},
+		{name: "document relative path", doc: "docs/tutorials/start.md", token: "../reference/action-providers.md", want: "docs/reference/action-providers.md", wantOK: true},
+		{name: "go path with line", doc: "README.md", token: "internal/team/runtime.go:42", want: "internal/team/runtime.go", wantOK: true},
+		{name: "uri", doc: "README.md", token: "https://example.com/reference.md"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := repositoryCodePath(test.doc, test.token)
+			if ok != test.wantOK || got != test.want {
+				t.Fatalf("repositoryCodePath(%q, %q) = %q, %t; want %q, %t", test.doc, test.token, got, ok, test.want, test.wantOK)
+			}
+		})
+	}
+}
+
 func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "README.md"), "See the [tutorial](docs/tutorials/start.md).\n")
 	writeFile(t, filepath.Join(repo, "docs/tutorials/start.md"), "# Start\n")
-	writeFile(t, filepath.Join(repo, "docs/architecture/execution.md"), "`TaskExecutionEnvelope` is defined in [`runtime.go`](../../internal/team/runtime.go). The `crypto/rand` import and `internal/operator.ResolveWorkspacePath()` reference are not repository file paths.\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/execution.md"), "`TaskExecutionEnvelope` is defined in [`runtime.go`](../../internal/team/runtime.go). The `crypto/rand` import, `internal/operator.ResolveWorkspacePath()`, `team.yaml`, and `main_test.go` references are prose, not repository file paths.\n")
 	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\ntype TaskExecutionEnvelope struct{}\n")
 	commit(t, repo, "mixed documentation", "2025-01-02T00:00:00Z")
 
@@ -357,7 +405,7 @@ func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
 		t.Fatalf("Prepare routed worksets: %v", err)
 	}
 	verification, ok := result.Outputs["documentation_verification"].(documentationVerification)
-	if !ok || !verification.Passed || verification.CheckedLinks != 2 || verification.CheckedSymbols != 1 {
+	if !ok || !verification.Passed || verification.CheckedLinks != 2 || verification.CheckedPaths != 0 || verification.CheckedSymbols != 1 {
 		t.Fatalf("documentation verification = %#v", result.Outputs["documentation_verification"])
 	}
 
@@ -417,7 +465,7 @@ func TestPrepareDocumentationVerificationFailsClosed(t *testing.T) {
 		want    string
 	}{
 		{name: "missing link", content: "See [missing](missing.md).\n", want: "relative link target"},
-		{name: "missing root path", content: "Update `missing-config.yaml` first.\n", want: "repository path"},
+		{name: "missing explicit root path", content: "Update `./missing-config.yaml` first.\n", want: "repository path"},
 		{name: "missing relative path", content: "Read `../reference/missing.md` first.\n", want: "repository path"},
 		{name: "missing symbol", content: "The `MissingRuntimeContract` is required.\n", want: "Go symbol"},
 		{name: "noncanonical resource", content: "Use `workspace:path/...` claims.\n", want: "canonical workspace resource syntax"},
