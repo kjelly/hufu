@@ -220,6 +220,33 @@ func TestWorkspaceLifecycleCommandsRequireConfirmationAndRoundTrip(t *testing.T)
 	}
 }
 
+func TestConfirmWorkspaceMutationUsesInjectedConfirmation(t *testing.T) {
+	wantErr := errors.New("declined")
+	calls := 0
+	confirm := func(action string) error {
+		calls++
+		if action != "delete" {
+			t.Fatalf("confirmation action = %q, want delete", action)
+		}
+		return wantErr
+	}
+	if err := confirmWorkspaceMutation("delete", false, confirm); !errors.Is(err, wantErr) {
+		t.Fatalf("confirmation error = %v, want %v", err, wantErr)
+	}
+	if calls != 1 {
+		t.Fatalf("confirmation calls = %d, want 1", calls)
+	}
+	if err := confirmWorkspaceMutation("delete", true, confirm); err != nil {
+		t.Fatalf("--yes confirmation = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("--yes unexpectedly called confirmation; calls = %d", calls)
+	}
+	if err := confirmWorkspaceMutation("restore", false, nil); err == nil || !strings.Contains(err.Error(), "confirmation input is unavailable") {
+		t.Fatalf("missing confirmation dependency error = %v", err)
+	}
+}
+
 func TestWorkspaceLifecyclePostReservationFailureWritesPartialResult(t *testing.T) {
 	fixture := newWorkspaceCLIFixture(t)
 	fixture.run(t, "register")

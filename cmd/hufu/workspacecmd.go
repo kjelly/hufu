@@ -27,6 +27,7 @@ const (
 type workspaceCommandDeps struct {
 	stateRoot       func() (string, error)
 	getwd           func() (string, error)
+	confirmMutation func(action string) error
 	registryOptions []workspacepkg.RegistryOption
 }
 
@@ -56,7 +57,11 @@ type workspaceProjectListData struct {
 }
 
 func defaultWorkspaceCommandDeps() workspaceCommandDeps {
-	return workspaceCommandDeps{stateRoot: workspacepkg.DefaultStateRoot, getwd: os.Getwd}
+	return workspaceCommandDeps{
+		stateRoot:       workspacepkg.DefaultStateRoot,
+		getwd:           os.Getwd,
+		confirmMutation: promptWorkspaceMutation,
+	}
 }
 
 func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
@@ -217,7 +222,7 @@ func newWorkspaceDeleteCommand(deps workspaceCommandDeps) *cobra.Command {
 			if allTeams && command.Flags().Changed("team") {
 				return errors.New("--team and --all-teams are mutually exclusive")
 			}
-			if err := confirmWorkspaceMutation("delete", yes); err != nil {
+			if err := confirmWorkspaceMutation("delete", yes, deps.confirmMutation); err != nil {
 				return err
 			}
 			start, err := deps.getwd()
@@ -258,7 +263,7 @@ func newWorkspaceRestoreCommand(deps workspaceCommandDeps) *cobra.Command {
 			if err := validateWorkspaceOutput(output); err != nil {
 				return err
 			}
-			if err := confirmWorkspaceMutation("restore", yes); err != nil {
+			if err := confirmWorkspaceMutation("restore", yes, deps.confirmMutation); err != nil {
 				return err
 			}
 			stateRoot, err := deps.stateRoot()
@@ -311,10 +316,17 @@ func newWorkspacePurgeCommand(deps workspaceCommandDeps) *cobra.Command {
 	return command
 }
 
-func confirmWorkspaceMutation(action string, yes bool) error {
+func confirmWorkspaceMutation(action string, yes bool, confirm func(string) error) error {
 	if yes {
 		return nil
 	}
+	if confirm == nil {
+		return fmt.Errorf("workspace %s requires --yes when confirmation input is unavailable", action)
+	}
+	return confirm(action)
+}
+
+func promptWorkspaceMutation(action string) error {
 	if !term.IsTerminal(os.Stdin.Fd()) {
 		return fmt.Errorf("workspace %s requires --yes when stdin is not a TTY", action)
 	}

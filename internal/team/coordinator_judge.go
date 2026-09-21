@@ -15,15 +15,16 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kjelly/hufu/internal/sidecar"
-	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
-	// judgeCandidateMaxRunes caps each candidate's output in the judge prompt.
-	judgeCandidateMaxRunes = 8000
-	judgeTimeout           = 60 * time.Second
+	judgeTimeout         = 60 * time.Second
+	judgeGoalMaxRunes    = 2000
+	judgeGoalWeight      = 2
+	judgeCandidateWeight = 4
 )
 
 // errNoJudgeModel signals the silent fallback path: no judge is configured,
@@ -75,19 +76,29 @@ func parseJudgeVerdict(response string, numCandidates int) (judgeVerdict, error)
 
 // buildJudgePrompt renders the comparison prompt. candidates must all be
 // successful results (err == nil).
-func buildJudgePrompt(goal string, candidates []*agentResult) string {
-	var b strings.Builder
-	b.WriteString("You are a strict judge comparing candidate outputs produced by different models for the same task.\n\n")
-	fmt.Fprintf(&b, "## Task\n\n%s\n\n## Candidates\n\n", goal)
-	for i, r := range candidates {
-		fmt.Fprintf(&b, "### Candidate %d (model: %s)\n\n%s\n\n", i, r.model, utils.TruncateRunes(r.output, judgeCandidateMaxRunes))
+func buildJudgePrompt(goal string, candidates []*agentResult) (string, error) {
+	const prefix = "You are a strict judge comparing candidate outputs produced by different models for the same task.\n\n"
+	sections := []sidecar.PromptSection{
+		{Header: "## Task\n\n", Content: goal, Footer: "\n\n## Candidates\n\n", Weight: judgeGoalWeight, MaxRunes: judgeGoalMaxRunes},
 	}
-	b.WriteString("Score each candidate on correctness, completeness, and clarity, then pick the single best one. ")
-	b.WriteString("If a runner-up contains genuinely useful content the winner lacks, include it as a graft.\n\n")
-	b.WriteString("Respond with STRICT JSON only, no other text:\n")
-	b.WriteString(`{"best_index": <0-based index>, "reason": "<one sentence>", "grafts": [{"from_index": <index>, "content": "<useful content the winner lacks>"}]}`)
-	b.WriteString("\nThe grafts array may be empty.")
-	return b.String()
+	for i, r := range candidates {
+		model := strings.TrimSpace(r.model)
+		if utf8.RuneCountInString(model) > 128 {
+			model = string([]rune(model)[:125]) + "..."
+		}
+		sections = append(sections, sidecar.PromptSection{
+			Header:  fmt.Sprintf("### Candidate %d (model: %s)\n\n", i, model),
+			Content: r.output,
+			Footer:  "\n\n",
+			Weight:  judgeCandidateWeight,
+		})
+	}
+	suffix := "Score each candidate on correctness, completeness, and clarity, then pick the single best one. " +
+		"If a runner-up contains genuinely useful content the winner lacks, include it as a graft.\n\n" +
+		"Respond with STRICT JSON only, no other text:\n" +
+		`{"best_index": <0-based index>, "reason": "<one sentence>", "grafts": [{"from_index": <index>, "content": "<useful content the winner lacks>"}]}` +
+		"\nThe grafts array may be empty."
+	return sidecar.BuildBoundedPrompt(prefix, sections, suffix, sidecar.JudgeProfile.InputRuneLimit())
 }
 
 // composeJudgedOutput assembles the final output: winner first, then any
@@ -135,7 +146,11 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 	judgeCtx, cancel := context.WithTimeout(ctx, judgeTimeout)
 	defer cancel()
 	c.report(c.newEvent("sidecar_call").withMessage("judge"))
-	response, err := s.ExecuteProfile(sidecar.WithPurpose(judgeCtx, "judge"), buildJudgePrompt(goal, valid), sidecar.JudgeProfile)
+	prompt, err := buildJudgePrompt(goal, valid)
+	if err != nil {
+		return "", fmt.Errorf("judge agent results: build prompt: %w", err)
+	}
+	response, err := s.ExecuteProfile(sidecar.WithPurpose(judgeCtx, "judge"), prompt, sidecar.JudgeProfile)
 	if err != nil {
 		return "", fmt.Errorf("judge agent results: %w", err)
 	}

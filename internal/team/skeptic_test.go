@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestParseSkepticVote(t *testing.T) {
@@ -13,9 +16,9 @@ func TestParseSkepticVote(t *testing.T) {
 		want     skepticVote
 		wantErr  bool
 	}{
-		{name: "plain refuted", response: `{"refuted": true, "reason": "file missing"}`, want: skepticVote{Refuted: true, Reason: "file missing"}},
-		{name: "plain confirmed", response: `{"refuted": false, "reason": ""}`, want: skepticVote{}},
-		{name: "fenced", response: "```json\n{\"refuted\": true, \"reason\": \"r\"}\n```", want: skepticVote{Refuted: true, Reason: "r"}},
+		{name: "plain refuted", response: `{"refuted": true, "reason": "file missing"}`, want: skepticVote{Refuted: true, Reason: "file missing", status: skepticVoteCompleted}},
+		{name: "plain confirmed", response: `{"refuted": false, "reason": ""}`, want: skepticVote{status: skepticVoteCompleted}},
+		{name: "fenced", response: "```json\n{\"refuted\": true, \"reason\": \"r\"}\n```", want: skepticVote{Refuted: true, Reason: "r", status: skepticVoteCompleted}},
 		{name: "malformed", response: "I think it is fine", wantErr: true},
 	}
 
@@ -40,26 +43,35 @@ func TestParseSkepticVote(t *testing.T) {
 
 func TestTallySkepticVotes(t *testing.T) {
 	cases := []struct {
-		name        string
-		votes       []skepticVote
-		wantRefuted bool
+		name            string
+		votes           []skepticVote
+		wantRefuted     bool
+		wantSignal      string
+		wantAbstentions int
 	}{
-		{name: "single refute", votes: []skepticVote{{Refuted: true, Reason: "bad"}}, wantRefuted: true},
-		{name: "2-1 refuted", votes: []skepticVote{{Refuted: true, Reason: "a"}, {Refuted: true, Reason: "b"}, {}}, wantRefuted: true},
-		{name: "1-2 confirmed", votes: []skepticVote{{Refuted: true, Reason: "a"}, {}, {}}, wantRefuted: false},
-		{name: "tie confirms", votes: []skepticVote{{Refuted: true}, {}}, wantRefuted: false},
-		{name: "all abstain confirms", votes: []skepticVote{{}, {}, {}}, wantRefuted: false},
-		{name: "empty confirms", votes: nil, wantRefuted: false},
+		{name: "single refute", votes: []skepticVote{{Refuted: true, Reason: "bad", status: skepticVoteCompleted}}, wantRefuted: true, wantSignal: "refuted"},
+		{name: "2-1 refuted", votes: []skepticVote{{Refuted: true, Reason: "a", status: skepticVoteCompleted}, {Refuted: true, Reason: "b", status: skepticVoteCompleted}, {}}, wantRefuted: true, wantSignal: "refuted", wantAbstentions: 1},
+		{name: "1-2 confirmed", votes: []skepticVote{{Refuted: true, Reason: "a", status: skepticVoteCompleted}, {status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
+		{name: "tie confirms", votes: []skepticVote{{Refuted: true, status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
+		{name: "abstention is not confirmation", votes: []skepticVote{{status: skepticVoteCompleted}, {}}, wantSignal: "confirmed_with_abstentions", wantAbstentions: 1},
+		{name: "all abstain", votes: []skepticVote{{}, {}, {}}, wantSignal: "abstained", wantAbstentions: 3},
+		{name: "empty abstains", votes: nil, wantSignal: "abstained"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			refuted, reason := tallySkepticVotes(tc.votes)
-			if refuted != tc.wantRefuted {
-				t.Errorf("refuted = %v, want %v", refuted, tc.wantRefuted)
+			tally := tallySkepticVotes(tc.votes)
+			if tally.Refuted != tc.wantRefuted {
+				t.Errorf("refuted = %v, want %v", tally.Refuted, tc.wantRefuted)
 			}
-			if refuted && reason == "" {
+			if tally.Refuted && tally.Reason == "" {
 				t.Errorf("refutation must carry a reason")
+			}
+			if tally.Signal != tc.wantSignal {
+				t.Errorf("signal = %q, want %q", tally.Signal, tc.wantSignal)
+			}
+			if tally.Abstentions != tc.wantAbstentions {
+				t.Errorf("abstentions = %d, want %d", tally.Abstentions, tc.wantAbstentions)
 			}
 		})
 	}
@@ -82,7 +94,10 @@ func TestSkepticLenses(t *testing.T) {
 }
 
 func TestBuildSkepticPrompt(t *testing.T) {
-	prompt := buildSkepticPrompt("correctness", "the goal", "the constraints", "the output", "go test ./...")
+	prompt, err := buildSkepticPrompt("correctness", "the goal", "the constraints", "the output", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"correctness", "the goal", "the constraints", "the output", "go test ./...", "refuted"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
@@ -90,9 +105,33 @@ func TestBuildSkepticPrompt(t *testing.T) {
 	}
 
 	// Optional sections are omitted when empty.
-	prompt = buildSkepticPrompt("completeness", "g", "", "o", "")
+	prompt, err = buildSkepticPrompt("completeness", "g", "", "o", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(prompt, "## Constraints") || strings.Contains(prompt, "Objective check") {
 		t.Errorf("empty sections should be omitted:\n%s", prompt)
+	}
+}
+
+func TestBuildSkepticPromptBoundsLargeResultWithoutDroppingContract(t *testing.T) {
+	prompt, err := buildSkepticPrompt(
+		"reproducibility",
+		strings.Repeat("goal", 1000),
+		strings.Repeat("constraint", 1000),
+		strings.Repeat("output", 3000),
+		strings.Repeat("verify", 500),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := utf8.RuneCountInString(prompt), sidecar.ClassifierProfile.InputRuneLimit(); got > want {
+		t.Fatalf("skeptic prompt = %d runes, want at most %d", got, want)
+	}
+	for _, want := range []string{"## Goal", "## Constraints", "## Objective check already passed", "## Claimed result", "runes omitted", "Respond with STRICT JSON"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("bounded skeptic prompt missing %q", want)
+		}
 	}
 }
 

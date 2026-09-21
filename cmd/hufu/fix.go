@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -129,8 +131,8 @@ func collectFixData(session *team.TeamSession, taskDesc string) *fixData {
 			if err != nil {
 				continue
 			}
-			sort.Slice(taskEntries, func(i, j int) bool {
-				return taskEntries[i].Name() > taskEntries[j].Name()
+			slices.SortFunc(taskEntries, func(a, b os.DirEntry) int {
+				return cmp.Compare(b.Name(), a.Name())
 			})
 			var b strings.Builder
 			count := 0
@@ -183,11 +185,14 @@ func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskD
 		return runFixAnalysisDirect(ctx, question, taskDesc, data, tc.session.Config.Name, tc.session.Config.SidecarModel)
 	}
 
-	prompt := buildFixPrompt(question, taskDesc, data)
+	prompt, err := buildFixPrompt(question, taskDesc, data)
+	if err != nil {
+		return "", fmt.Errorf("build fix analysis prompt: %w", err)
+	}
 	sidecarCtx, cancel := context.WithTimeout(tc.coordinator.ContextPreflight(), 90*time.Second)
 	defer cancel()
 
-	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "fix_analysis"), prompt)
+	result, err := s.ExecuteProfile(sidecar.WithPurpose(sidecarCtx, "fix_analysis"), prompt, sidecar.CompactorProfile)
 	if err != nil {
 		return "", fmt.Errorf("sidecar analysis failed: %w", err)
 	}
@@ -218,89 +223,46 @@ func runFixAnalysisDirect(ctx context.Context, question string, taskDesc string,
 	return strings.Join(findings, "\n"), nil
 }
 
-func buildFixPrompt(question, taskDesc string, data *fixData) string {
-	var b strings.Builder
+func buildFixPrompt(question, taskDesc string, data *fixData) (string, error) {
+	const prefix = "You are analyzing an agent team execution to find root causes and suggest specific improvements.\n\n" +
+		"Analyze the data below and provide:\n" +
+		"1. Root cause of the reported problem\n" +
+		"2. Specific suggestions for changes: rewrite specific sections of coordinator.md, agent .md files, or team.yaml\n" +
+		"3. Priority-ranked action items (🔴 critical, 🟡 important, 🟢 nice-to-have)\n\n"
+	const suffix = "\nProvide your analysis now. Be specific — quote exact sections that need changes."
 
-	b.WriteString("You are analyzing an agent team execution to find root causes and suggest specific improvements.\n\n")
-	b.WriteString("Analyze the data below and provide:\n")
-	b.WriteString("1. Root cause of the reported problem\n")
-	b.WriteString("2. Specific suggestions for changes: rewrite specific sections of coordinator.md, agent .md files, or team.yaml\n")
-	b.WriteString("3. Priority-ranked action items (🔴 critical, 🟡 important, 🟢 nice-to-have)\n\n")
-
-	b.WriteString("## Problem to Investigate\n")
-	b.WriteString(question)
-	b.WriteString("\n\n")
-
-	if taskDesc != "" {
-		b.WriteString("## Original Task\n")
-		b.WriteString(taskDesc)
-		b.WriteString("\n\n")
+	sections := []sidecar.PromptSection{
+		{Header: "## Problem to Investigate\n", Content: question, Footer: "\n\n", Weight: 4, MaxRunes: 4000},
+		{Header: "## Original Task\n", Content: taskDesc, Footer: "\n\n", Weight: 3, MaxRunes: 4000},
+	}
+	if data == nil {
+		return sidecar.BuildBoundedPrompt(prefix, sections, suffix, sidecar.CompactorProfile.InputRuneLimit())
+	}
+	sections = appendFixPromptSection(sections, "## Team Configuration (team.yaml)\n```yaml\n", data.TeamYAML, "\n```\n\n", 2, 6000)
+	sections = appendFixPromptSection(sections, "## Coordinator Instructions (coordinator.md)\n```markdown\n", data.CoordinatorMD, "\n```\n\n", 2, 3000)
+	for _, name := range slices.Sorted(maps.Keys(data.AgentMDs)) {
+		sections = appendFixPromptSection(sections, fmt.Sprintf("## Agent Definition: %s.md\n```markdown\n", name), data.AgentMDs[name], "\n```\n\n", 2, 1500)
+	}
+	sections = appendFixPromptSection(sections, "## Short-Term Memory (stm.md)\n```\n", data.STM, "\n```\n\n", 2, 6000)
+	sections = appendFixPromptSection(sections, "## Long-Term Memory (ltm.md)\n```\n", data.LTM, "\n```\n\n", 1, 4000)
+	sections = appendFixPromptSection(sections, "## Session History (session.json)\n```\n", data.SessionJSON, "\n```\n\n", 3, 8000)
+	sections = appendFixPromptSection(sections, "## Reliability Metrics\n```\n", data.Reliability, "\n```\n\n", 2, 3000)
+	sections = appendFixPromptSection(sections, "## Execution Log (execution_trace.log)\n```\n", data.SessionLog, "\n```\n\n", 3, 8000)
+	sections = appendFixPromptSection(sections, "## Session Document (chat_history.md)\n```markdown\n", data.SessionMD, "\n```\n\n", 2, 4000)
+	for _, agentName := range slices.Sorted(maps.Keys(data.TaskHistory)) {
+		sections = appendFixPromptSection(sections, fmt.Sprintf("## Worker Task History: %s\n```\n", agentName), data.TaskHistory[agentName], "\n```\n\n", 2, 5000)
 	}
 
-	if data.TeamYAML != "" {
-		b.WriteString("## Team Configuration (team.yaml)\n```yaml\n")
-		b.WriteString(data.TeamYAML)
-		b.WriteString("\n```\n\n")
-	}
+	return sidecar.BuildBoundedPrompt(prefix, sections, suffix, sidecar.CompactorProfile.InputRuneLimit())
+}
 
-	if data.CoordinatorMD != "" {
-		b.WriteString("## Coordinator Instructions (coordinator.md)\n```markdown\n")
-		b.WriteString(limitStr(data.CoordinatorMD, 3000))
-		b.WriteString("\n```\n\n")
+func appendFixPromptSection(sections []sidecar.PromptSection, header, content, footer string, weight, maxRunes int) []sidecar.PromptSection {
+	if strings.TrimSpace(content) == "" {
+		return sections
 	}
-
-	if len(data.AgentMDs) > 0 {
-		b.WriteString("## Agent Definitions\n\n")
-		for name, md := range data.AgentMDs {
-			fmt.Fprintf(&b, "### %s.md\n```markdown\n%s\n```\n\n", name, limitStr(md, 1500))
-		}
-	}
-
-	if data.STM != "" {
-		b.WriteString("## Short-Term Memory (stm.md)\n```\n")
-		b.WriteString(data.STM)
-		b.WriteString("\n```\n\n")
-	}
-
-	if data.LTM != "" {
-		b.WriteString("## Long-Term Memory (ltm.md)\n```\n")
-		b.WriteString(data.LTM)
-		b.WriteString("\n```\n\n")
-	}
-
-	if data.SessionJSON != "" {
-		b.WriteString("## Session History (session.json)\n```\n")
-		b.WriteString(data.SessionJSON)
-		b.WriteString("\n```\n\n")
-	}
-
-	if data.Reliability != "" {
-		b.WriteString("## Reliability Metrics\n```\n")
-		b.WriteString(data.Reliability)
-		b.WriteString("\n```\n\n")
-	}
-
-	if data.SessionLog != "" {
-		b.WriteString("## Execution Log (execution_trace.log)\n```\n")
-		b.WriteString(data.SessionLog)
-		b.WriteString("\n```\n\n")
-	}
-
-	if data.SessionMD != "" {
-		b.WriteString("## Session Document (chat_history.md)\n```markdown\n")
-		b.WriteString(data.SessionMD)
-		b.WriteString("\n```\n\n")
-	}
-
-	if len(data.TaskHistory) > 0 {
-		b.WriteString("## Worker Task History\n\n")
-		for agentName, history := range data.TaskHistory {
-			fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n", agentName, history)
-		}
-	}
-
-	b.WriteString("\nProvide your analysis now. Be specific — quote exact sections that need changes.")
-	return b.String()
+	return append(sections, sidecar.PromptSection{
+		Header: header, Content: content, Footer: footer, Weight: weight, MaxRunes: maxRunes,
+	})
 }
 
 func limitStr(s string, maxChars int) string {

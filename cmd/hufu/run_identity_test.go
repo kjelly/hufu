@@ -8,6 +8,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	hulog "github.com/kjelly/hufu/internal/log"
 )
 
 func TestEmitExecutionIdentityText(t *testing.T) {
@@ -92,6 +96,46 @@ func TestInvocationIdentityHeartbeatEmitsOnlyOnStartAndTicks(t *testing.T) {
 
 	if got := strings.Count(writer.String(), "Invocation ID: inv-heartbeat"); got != 2 {
 		t.Fatalf("heartbeat identity count = %d, want start plus one tick; output=%q", got, writer.String())
+	}
+}
+
+func TestInvocationIdentityHeartbeatDoesNotWriteThroughActiveTUI(t *testing.T) {
+	previous := opts
+	opts.eventFormat = "text"
+	opts.outputFormat = "text"
+	opts.quietMode = false
+	deactivate := activateTUIProgram(new(tea.Program))
+	t.Cleanup(func() {
+		deactivate()
+		opts = previous
+		hulog.SetWriter(nil)
+		syncLogState()
+	})
+
+	var identityOutput bytes.Buffer
+	ticks := make(chan time.Time)
+	stop := startInvocationIdentityHeartbeatWithTicks(&identityOutput, "inv-tui", ticks, func() {})
+	ticks <- time.Now()
+	stop()
+	if identityOutput.Len() != 0 {
+		t.Fatalf("heartbeat wrote through active TUI: %q", identityOutput.String())
+	}
+
+	var logOutput bytes.Buffer
+	hulog.SetWriter(&logOutput)
+	stderrLog("hidden")
+	if logOutput.Len() != 0 {
+		t.Fatalf("logger wrote through active TUI: %q", logOutput.String())
+	}
+
+	deactivate()
+	emitInvocationIdentity(&identityOutput, "inv-visible")
+	stderrLog("visible")
+	if !strings.Contains(identityOutput.String(), "Invocation ID: inv-visible") {
+		t.Fatalf("identity remained suppressed after TUI cleanup: %q", identityOutput.String())
+	}
+	if logOutput.String() != "visible" {
+		t.Fatalf("logger state was not restored after TUI cleanup: %q", logOutput.String())
 	}
 }
 

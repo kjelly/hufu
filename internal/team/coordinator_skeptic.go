@@ -21,14 +21,34 @@ import (
 )
 
 const (
-	maxSkeptics           = 3
-	skepticTimeout        = 60 * time.Second
-	skepticOutputMaxRunes = 8000
+	maxSkeptics                  = 3
+	skepticTimeout               = 60 * time.Second
+	skepticGoalMaxRunes          = 1000
+	skepticConstraintsMaxRunes   = 1000
+	skepticVerifyCommandMaxRunes = 500
+	skepticGoalWeight            = 2
+	skepticSupportingFieldWeight = 1
+	skepticClaimedResultWeight   = 5
+)
+
+type skepticVoteStatus uint8
+
+const (
+	skepticVoteAbstained skepticVoteStatus = iota
+	skepticVoteCompleted
 )
 
 type skepticVote struct {
 	Refuted bool   `json:"refuted"`
 	Reason  string `json:"reason"`
+	status  skepticVoteStatus
+}
+
+type skepticTally struct {
+	Refuted     bool
+	Reason      string
+	Signal      string
+	Abstentions int
 }
 
 func parseSkepticVote(response string) (skepticVote, error) {
@@ -36,6 +56,7 @@ func parseSkepticVote(response string) (skepticVote, error) {
 	if err := json.Unmarshal([]byte(extractJSONPayload(response)), &v); err != nil {
 		return skepticVote{}, fmt.Errorf("parse skeptic vote: %w", err)
 	}
+	v.status = skepticVoteCompleted
 	return v, nil
 }
 
@@ -53,31 +74,45 @@ func skepticLenses(n int) []string {
 	return skepticAllLenses[:n]
 }
 
-func buildSkepticPrompt(lens, goal, constraints, output, verifyCmd string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "You are a skeptical reviewer focusing on %s. Your job is to REFUTE the claim that the output below achieves the goal.\n\n", lens)
-	fmt.Fprintf(&b, "## Goal\n\n%s\n\n", goal)
+func buildSkepticPrompt(lens, goal, constraints, output, verifyCmd string) (string, error) {
+	prefix := fmt.Sprintf("You are a skeptical reviewer focusing on %s. Your job is to REFUTE the claim that the output below achieves the goal.\n\n", lens)
+	sections := []sidecar.PromptSection{
+		{Header: "## Goal\n\n", Content: goal, Footer: "\n\n", Weight: skepticGoalWeight, MaxRunes: skepticGoalMaxRunes},
+	}
 	if constraints != "" {
-		fmt.Fprintf(&b, "## Constraints\n\n%s\n\n", constraints)
+		sections = append(sections, sidecar.PromptSection{
+			Header: "## Constraints\n\n", Content: constraints, Footer: "\n\n",
+			Weight: skepticSupportingFieldWeight, MaxRunes: skepticConstraintsMaxRunes,
+		})
 	}
 	if verifyCmd != "" {
-		fmt.Fprintf(&b, "## Objective check already passed\n\nThe shell command `%s` exited 0.\n\n", verifyCmd)
+		sections = append(sections, sidecar.PromptSection{
+			Header: "## Objective check already passed\n\nThe shell command `", Content: verifyCmd, Footer: "` exited 0.\n\n",
+			Weight: skepticSupportingFieldWeight, MaxRunes: skepticVerifyCommandMaxRunes,
+		})
 	}
-	fmt.Fprintf(&b, "## Claimed result\n\n%s\n\n", utils.TruncateRunes(output, skepticOutputMaxRunes))
-	b.WriteString("Only refute with concrete, specific evidence from the output — vague doubts do not count. ")
-	b.WriteString("Respond with STRICT JSON only, no other text:\n")
-	b.WriteString(`{"refuted": <true|false>, "reason": "<one sentence citing the evidence>"}`)
-	return b.String()
+	sections = append(sections, sidecar.PromptSection{
+		Header: "## Claimed result\n\n", Content: output, Footer: "\n\n", Weight: skepticClaimedResultWeight,
+	})
+	suffix := "Only refute with concrete, specific evidence from the output — vague doubts do not count. " +
+		"Respond with STRICT JSON only, no other text:\n" +
+		`{"refuted": <true|false>, "reason": "<one sentence citing the evidence>"}`
+	return sidecar.BuildBoundedPrompt(prefix, sections, suffix, sidecar.ClassifierProfile.InputRuneLimit())
 }
 
 // tallySkepticVotes applies majority rule: the result fails only when strictly
 // more votes refute than confirm. Abstentions (zero-valued votes from errored
 // skeptics) count as confirmations — fail-open, so a broken skeptic model can
 // never deadlock tasks.
-func tallySkepticVotes(votes []skepticVote) (refuted bool, reason string) {
+func tallySkepticVotes(votes []skepticVote) skepticTally {
 	refutedCount := 0
+	completedCount := 0
 	var reasons []string
 	for _, v := range votes {
+		if v.status != skepticVoteCompleted {
+			continue
+		}
+		completedCount++
 		if v.Refuted {
 			refutedCount++
 			if r := strings.TrimSpace(v.Reason); r != "" {
@@ -85,14 +120,25 @@ func tallySkepticVotes(votes []skepticVote) (refuted bool, reason string) {
 			}
 		}
 	}
+	tally := skepticTally{Abstentions: len(votes) - completedCount}
 	if refutedCount <= len(votes)-refutedCount {
-		return false, ""
+		switch {
+		case completedCount == 0:
+			tally.Signal = "abstained"
+		case tally.Abstentions > 0:
+			tally.Signal = "confirmed_with_abstentions"
+		default:
+			tally.Signal = "confirmed"
+		}
+		return tally
 	}
-	reason = strings.Join(reasons, "; ")
-	if reason == "" {
-		reason = "majority of skeptics refuted the result"
+	tally.Refuted = true
+	tally.Signal = "refuted"
+	tally.Reason = strings.Join(reasons, "; ")
+	if tally.Reason == "" {
+		tally.Reason = "majority of skeptics refuted the result"
 	}
-	return true, reason
+	return tally
 }
 
 // adversarialVerify runs the task's skeptic votes concurrently and returns a
@@ -113,12 +159,14 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	votes := make([]skepticVote, len(lenses))
 	var wg sync.WaitGroup
 	for i, lens := range lenses {
-		wg.Add(1)
-		go func(i int, lens string) {
-			defer wg.Done()
+		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(parentCtx, skepticTimeout)
 			defer cancel()
-			resp, err := s.Execute(sidecar.WithPurpose(ctx, "skeptic"), buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify))
+			prompt, err := buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify)
+			if err != nil {
+				return
+			}
+			resp, err := s.Execute(sidecar.WithPurpose(ctx, "skeptic"), prompt)
 			if err != nil {
 				return // abstain (zero value = confirm)
 			}
@@ -127,17 +175,21 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 				return // abstain
 			}
 			votes[i] = v
-		}(i, lens)
+		})
 	}
 	wg.Wait()
 
-	if refuted, reason := tallySkepticVotes(votes); refuted {
-		if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", "refuted"); err != nil {
+	tally := tallySkepticVotes(votes)
+	if tally.Abstentions > 0 {
+		c.report(c.newEvent("step").withMessage(fmt.Sprintf("skeptic review degraded: %d of %d votes abstained", tally.Abstentions, len(votes))).withTodoID(todoID))
+	}
+	if tally.Refuted {
+		if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", tally.Signal); err != nil {
 			return err
 		}
-		return fmt.Errorf("adversarial verification refuted the result: %s", utils.TruncateString(reason, 500))
+		return fmt.Errorf("adversarial verification refuted the result: %s", utils.TruncateString(tally.Reason, 500))
 	}
-	if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", "confirmed"); err != nil {
+	if err := c.recordAuxiliaryContextSignal(todoID, "skeptic", "skeptic_signal", tally.Signal); err != nil {
 		return err
 	}
 	return nil

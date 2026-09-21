@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestParseJudgeVerdict(t *testing.T) {
@@ -93,17 +96,21 @@ func TestParseJudgeVerdict(t *testing.T) {
 func TestBuildJudgePrompt(t *testing.T) {
 	candidates := []*agentResult{
 		{model: "model-a", output: "output A"},
-		{model: "model-b", output: strings.Repeat("y", judgeCandidateMaxRunes+500)},
+		{model: "model-b", output: strings.Repeat("y", sidecar.JudgeProfile.InputRuneLimit())},
+		{model: "model-c", output: strings.Repeat("z", sidecar.JudgeProfile.InputRuneLimit())},
 	}
-	prompt := buildJudgePrompt("achieve the goal", candidates)
+	prompt, err := buildJudgePrompt(strings.Repeat("achieve the goal ", 1000), candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	for _, want := range []string{"achieve the goal", "Candidate 0 (model: model-a)", "output A", "Candidate 1 (model: model-b)", "best_index"} {
+	for _, want := range []string{"achieve the goal", "Candidate 0 (model: model-a)", "output A", "Candidate 1 (model: model-b)", "Candidate 2 (model: model-c)", "runes omitted", "best_index"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	if len([]rune(prompt)) > 2*judgeCandidateMaxRunes {
-		t.Errorf("candidate truncation not applied: prompt is %d runes", len([]rune(prompt)))
+	if got, want := utf8.RuneCountInString(prompt), sidecar.JudgeProfile.InputRuneLimit(); got > want {
+		t.Errorf("judge prompt = %d runes, want at most %d", got, want)
 	}
 }
 

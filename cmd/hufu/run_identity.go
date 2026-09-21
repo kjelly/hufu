@@ -82,6 +82,9 @@ func emitInvocationIdentity(w io.Writer, invocationID string) {
 		})
 		return
 	}
+	if activeTUIProgram.Load() != nil {
+		return
+	}
 	_, _ = fmt.Fprintf(w, "Invocation ID: %s\n", invocationID)
 }
 
@@ -97,6 +100,9 @@ func emitExecutionIdentity(w io.Writer, invocationID string, identities []cliRun
 				Time:         time.Now().UTC().Format(time.RFC3339Nano),
 			}
 			writeJSONLStatusEvent(w, event)
+			continue
+		}
+		if activeTUIProgram.Load() != nil {
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "Run ID: %s (team: %s)\n", identity.RunID, identity.Team)

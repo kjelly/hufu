@@ -47,6 +47,15 @@ type Profile struct {
 	ReasoningEffort string
 }
 
+// InputRuneLimit returns the effective fail-closed input envelope for the
+// profile, including the package default used by zero-value custom profiles.
+func (p Profile) InputRuneLimit() int {
+	if p.MaxInputRunes > 0 {
+		return p.MaxInputRunes
+	}
+	return defaultExecuteMaxRunes
+}
+
 type purposeContextKey struct{}
 
 // WithPurpose labels a sidecar call with its narrow review/classification
@@ -479,10 +488,7 @@ func (s *Sidecar) ExecuteProfile(ctx context.Context, task string, profile Profi
 	if s == nil {
 		return "", fmt.Errorf("sidecar not configured")
 	}
-	inputLimit := profile.MaxInputRunes
-	if inputLimit <= 0 {
-		inputLimit = defaultExecuteMaxRunes
-	}
+	inputLimit := profile.InputRuneLimit()
 	if inputRunes := utf8.RuneCountInString(task); inputRunes > inputLimit {
 		return "", fmt.Errorf("sidecar input exceeds %s profile limit: %d runes > %d", profilePurpose(profile), inputRunes, inputLimit)
 	}

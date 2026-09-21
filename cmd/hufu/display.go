@@ -1895,6 +1895,15 @@ func syncLogState() {
 	hulog.SetTUIActive(activeTUIProgram.Load() != nil)
 }
 
+func activateTUIProgram(program *tea.Program) func() {
+	activeTUIProgram.Store(program)
+	syncLogState()
+	return sync.OnceFunc(func() {
+		activeTUIProgram.Store(nil)
+		syncLogState()
+	})
+}
+
 // runWithTUI starts executeSegments in a goroutine and blocks on the Bubble Tea
 // program in the main goroutine. Returns when the user quits or the work is done.
 func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, segments []team.PromptSegment, registry *team.TeamRegistry, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, teamInfo tuipkg.TeamInfo, route RouteDecision) (string, error) {
@@ -1916,10 +1925,8 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	}
 	p := tea.NewProgram(model, programOptions...)
 
-	activeTUIProgram.Store(p)
-	syncLogState()
-	defer activeTUIProgram.Store(nil)
-	defer syncLogState()
+	deactivateTUI := activateTUIProgram(p)
+	defer deactivateTUI()
 
 	if injector != nil {
 		promptCh := model.PromptInjectCh
