@@ -118,6 +118,9 @@ func TestAutoThemeWatcherIsIdleUntilBackgroundChanges(t *testing.T) {
 			return ThemeDark
 		},
 	})
+	// The injected detector, rather than the host terminal environment, defines
+	// the watcher's initial baseline for this model-level test.
+	m.effectiveTheme = m.themeDetector(ctx)
 	result := make(chan tea.Msg, 1)
 	go func() { result <- m.watchThemeCmd()() }()
 	select {
