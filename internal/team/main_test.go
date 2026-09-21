@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/golangruntime"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -20,6 +21,9 @@ import (
 // entire purpose is to behave as a JSON-RPC server on stdin/stdout, not to
 // run the test suite.
 func TestMain(m *testing.M) {
+	if len(os.Args) == 4 && os.Args[1] == golangruntime.ChildArg {
+		os.Exit(golangruntime.RunChild(os.Args[2], os.Args[3], os.Stdin, os.Stdout, os.Stderr))
+	}
 	if scriptPath := os.Getenv(fakeCodexServerScriptEnvVar); scriptPath != "" {
 		runFakeCodexAppServer(scriptPath)
 		os.Exit(0)

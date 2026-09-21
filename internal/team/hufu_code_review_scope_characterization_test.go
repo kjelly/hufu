@@ -79,6 +79,37 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	}
 }
 
+func TestHufuCodeReviewResolverRunsThroughEmbeddedGolangRuntime(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	for _, capability := range []string{"resolve-review-scope", "produce-workset"} {
+		config := session.Config.ActionProviders[capability]
+		if config.Runtime != "golang" || config.Mode != "trusted-static" || config.Source != "./reviewprep" || len(config.Command) != 0 {
+			t.Fatalf("action provider %q = %#v, want embedded trusted-static Go runtime without a command", capability, config)
+		}
+	}
+	provider, ok := session.ProviderRegistry.Get("resolve-review-scope")
+	if !ok {
+		t.Fatal("resolve-review-scope provider is not registered")
+	}
+	resolver, ok := provider.(RunInputResolverProvider)
+	if !ok {
+		t.Fatalf("provider %T does not implement RunInputResolverProvider", provider)
+	}
+	response, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review the last 7 commits",
+		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+	})
+	if err != nil {
+		t.Fatalf("ResolveRunInput: %v", err)
+	}
+	if response.Status != "matched" || string(response.Value) != `{"kind":"last_n","count":7,"history":"first_parent","head":"HEAD"}` {
+		t.Fatalf("resolver response = %#v", response)
+	}
+	if name := session.ProviderRegistry.ProviderName("resolve-review-scope"); !strings.HasPrefix(name, "golang:sha256:") {
+		t.Fatalf("provider identity = %q", name)
+	}
+}
+
 func TestHufuCodeReviewUsesNativeLowCostDocumentationReviewer(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	documentationReviewer := session.Agents["documentation-reviewer"]

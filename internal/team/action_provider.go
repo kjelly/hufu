@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/golangruntime"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -206,6 +208,19 @@ type commandActionProvider struct {
 	timeout    time.Duration
 }
 
+type golangRuntimeExecutor func(context.Context, golangruntime.Program, []byte, []string, int, int) (golangruntime.Result, error)
+
+// golangActionProvider executes a maintainer-authored static source package
+// through Hufu's embedded Go runtime. The source is trusted and may launch
+// processes or access files; those domain capabilities remain in the script,
+// not in Hufu's provider contract.
+type golangActionProvider struct {
+	capability string
+	program    golangruntime.Program
+	timeout    time.Duration
+	execute    golangRuntimeExecutor
+}
+
 func (p *commandActionProvider) ProviderName() string {
 	if p == nil || len(p.command) == 0 {
 		return "command"
@@ -213,7 +228,7 @@ func (p *commandActionProvider) ProviderName() string {
 	return "command:" + p.command[0]
 }
 
-func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[string]agent.ActionProviderConfig) error {
+func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[string]agent.ActionProviderConfig, teamDir string) error {
 	if len(configs) == 0 {
 		return nil
 	}
@@ -225,24 +240,74 @@ func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[s
 		if capability == "" {
 			return fmt.Errorf("action-providers contains an empty capability")
 		}
-		if len(config.Command) == 0 || strings.TrimSpace(config.Command[0]) == "" {
-			return fmt.Errorf("action provider %q requires a command", capability)
-		}
 		if config.Timeout < 0 {
 			return fmt.Errorf("action provider %q timeout cannot be negative", capability)
 		}
-		registry.Register(capability, &commandActionProvider{
-			capability: capability,
-			command:    append([]string(nil), config.Command...),
-			dir:        strings.TrimSpace(config.Dir),
-			timeout:    time.Duration(config.Timeout) * time.Second,
-		})
+		runtimeName := strings.ToLower(strings.TrimSpace(config.Runtime))
+		switch runtimeName {
+		case "", "command":
+			if strings.TrimSpace(config.Source) != "" || strings.TrimSpace(config.Mode) != "" {
+				return fmt.Errorf("action provider %q command runtime does not accept source or mode", capability)
+			}
+			if len(config.Command) == 0 || strings.TrimSpace(config.Command[0]) == "" {
+				return fmt.Errorf("action provider %q requires a command", capability)
+			}
+			registry.Register(capability, &commandActionProvider{
+				capability: capability,
+				command:    append([]string(nil), config.Command...),
+				dir:        strings.TrimSpace(config.Dir),
+				timeout:    time.Duration(config.Timeout) * time.Second,
+			})
+		case "golang":
+			if len(config.Command) > 0 || strings.TrimSpace(config.Dir) != "" {
+				return fmt.Errorf("action provider %q golang runtime does not accept command or dir", capability)
+			}
+			if strings.TrimSpace(config.Mode) != golangruntime.TrustedStaticMode {
+				return fmt.Errorf("action provider %q golang runtime requires mode %q", capability, golangruntime.TrustedStaticMode)
+			}
+			program, err := golangruntime.Prepare(teamDir, config.Source)
+			if err != nil {
+				return fmt.Errorf("action provider %q: %w", capability, err)
+			}
+			registry.Register(capability, &golangActionProvider{
+				capability: capability,
+				program:    program,
+				timeout:    time.Duration(config.Timeout) * time.Second,
+				execute:    executeGolangRuntime,
+			})
+		default:
+			return fmt.Errorf("action provider %q has unsupported runtime %q", capability, config.Runtime)
+		}
 	}
 	return nil
 }
 
+func executeGolangRuntime(ctx context.Context, program golangruntime.Program, input []byte, env []string, outputLimit, errorLimit int) (golangruntime.Result, error) {
+	return golangruntime.Execute(ctx, "", program, input, env, outputLimit, errorLimit)
+}
+
 func (p *commandActionProvider) Validate(action Action) error {
 	if p == nil || len(p.command) == 0 {
+		return fmt.Errorf("provider is not configured")
+	}
+	if normalizeCapability(action.Capability) != p.capability {
+		return fmt.Errorf("action capability %q does not match provider capability %q", action.Capability, p.capability)
+	}
+	if strings.TrimSpace(action.Type) == "" {
+		return fmt.Errorf("action type is required")
+	}
+	return nil
+}
+
+func (p *golangActionProvider) ProviderName() string {
+	if p == nil || strings.TrimSpace(p.program.Digest) == "" {
+		return "golang"
+	}
+	return "golang:" + p.program.Digest
+}
+
+func (p *golangActionProvider) Validate(action Action) error {
+	if p == nil || strings.TrimSpace(p.program.Source) == "" || p.execute == nil {
 		return fmt.Errorf("provider is not configured")
 	}
 	if normalizeCapability(action.Capability) != p.capability {
@@ -318,6 +383,28 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	return result, nil
 }
 
+func (p *golangActionProvider) Execute(ctx context.Context, action Action) (interface{}, error) {
+	if err := p.Validate(action); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(action)
+	if err != nil {
+		return nil, fmt.Errorf("encode action: %w", err)
+	}
+	result, err := p.run(ctx, payload, 1024*1024, maxRunInputResolverDiagnosticBytes)
+	if err != nil {
+		return nil, fmt.Errorf("go action failed: %w", err)
+	}
+	if result.StdoutTruncated {
+		return nil, fmt.Errorf("go action output exceeds %d bytes", 1024*1024)
+	}
+	var value interface{}
+	if err := json.Unmarshal(result.Stdout, &value); err != nil {
+		return nil, fmt.Errorf("go action returned invalid JSON: %w", err)
+	}
+	return value, nil
+}
+
 func (p *commandActionProvider) ResolveRunInput(ctx context.Context, request RunInputResolverRequest) (RunInputResolverResponse, error) {
 	if p == nil || len(p.command) == 0 {
 		return RunInputResolverResponse{}, fmt.Errorf("resolver provider is not configured")
@@ -365,6 +452,59 @@ func (p *commandActionProvider) ResolveRunInput(ctx context.Context, request Run
 		return RunInputResolverResponse{}, err
 	}
 	return response, nil
+}
+
+func (p *golangActionProvider) ResolveRunInput(ctx context.Context, request RunInputResolverRequest) (RunInputResolverResponse, error) {
+	if p == nil || strings.TrimSpace(p.program.Source) == "" || p.execute == nil {
+		return RunInputResolverResponse{}, fmt.Errorf("resolver provider is not configured")
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("encode resolver request: %w", err)
+	}
+	result, err := p.run(ctx, payload, maxRunInputResolverOutputBytes, maxRunInputResolverDiagnosticBytes)
+	if err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("go resolver failed: %w", err)
+	}
+	if result.StdoutTruncated {
+		return RunInputResolverResponse{}, fmt.Errorf("resolver output exceeds %d bytes", maxRunInputResolverOutputBytes)
+	}
+	var response RunInputResolverResponse
+	decoder := json.NewDecoder(bytes.NewReader(result.Stdout))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("decode resolver response: %w", err)
+	}
+	if err := ensureRunInputJSONEOF(decoder); err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("decode resolver response: %w", err)
+	}
+	if err := validateRunInputResolverResponse(response); err != nil {
+		return RunInputResolverResponse{}, err
+	}
+	return response, nil
+}
+
+func (p *golangActionProvider) run(ctx context.Context, payload []byte, outputLimit, errorLimit int) (golangruntime.Result, error) {
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
+	result, err := p.execute(ctx, p.program, payload, actionCommandEnvironment(ctx), outputLimit, errorLimit)
+	if err == nil {
+		return result, nil
+	}
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	detail := strings.TrimSpace(string(result.Stderr))
+	if detail == "" {
+		detail = err.Error()
+	}
+	if result.StderrTruncated {
+		detail += " (diagnostic truncated)"
+	}
+	return result, errors.New(utils.RedactSecrets(detail))
 }
 
 func actionCommandEnvironment(ctx context.Context) []string {

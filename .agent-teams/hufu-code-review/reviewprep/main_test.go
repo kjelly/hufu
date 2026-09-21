@@ -13,8 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
@@ -115,7 +113,7 @@ func TestResolveReviewScopeInputGrammar(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			response := resolveReviewScopeInput(team.RunInputResolverRequest{
+			response := resolveReviewScopeInput(runInputResolverRequest{
 				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
 			})
 			if response.Status != test.wantStatus {
@@ -145,7 +143,7 @@ func TestResolveReviewScopeInputRelativeDays(t *testing.T) {
 		{name: "invalid", prompt: "review 最近0天的提交", status: "invalid"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			response := resolveReviewScopeInputAt(team.RunInputResolverRequest{
+			response := resolveReviewScopeInputAt(runInputResolverRequest{
 				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
 			}, now)
 			if response.Status != test.status {
@@ -165,7 +163,7 @@ func TestResolveReviewScopeInputRelativeDays(t *testing.T) {
 }
 
 func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
-	request := team.RunInputResolverRequest{
+	request := runInputResolverRequest{
 		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review last 7 commits",
 		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
 	}
@@ -177,7 +175,7 @@ func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
 	if err := run(t.Context(), bytes.NewReader(encoded), &output); err != nil {
 		t.Fatal(err)
 	}
-	var response team.RunInputResolverResponse
+	var response runInputResolverResponse
 	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +189,7 @@ func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
 }
 
 func TestResolveReviewScopeInputRejectsInvalidExplicitScope(t *testing.T) {
-	response := resolveReviewScopeInput(team.RunInputResolverRequest{
+	response := resolveReviewScopeInput(runInputResolverRequest{
 		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
 		ExplicitValue: json.RawMessage(`{"kind":"revision_range","history":"first_parent","head":"HEAD"}`),
 	})

@@ -437,7 +437,7 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 	if err := json.Unmarshal(receiptBytes, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.RunInputSnapshotID != snapshot.ID || receipt.MaterializedActionPayloadHash != task.MaterializedActionPayloadHash || receipt.BoundInputs["scope"] == "" {
+	if receipt.Provider != "fake-action-adapter" || receipt.RunInputSnapshotID != snapshot.ID || receipt.MaterializedActionPayloadHash != task.MaterializedActionPayloadHash || receipt.BoundInputs["scope"] == "" {
 		t.Fatalf("runtime action receipt input binding = %#v", receipt)
 	}
 }

@@ -1158,6 +1158,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		cfg.ActionProviders = make(map[string]agent.ActionProviderConfig, len(yc.ActionProviders))
 		for capability, provider := range yc.ActionProviders {
 			cfg.ActionProviders[capability] = agent.ActionProviderConfig{
+				Runtime: provider.Runtime, Source: provider.Source, Mode: provider.Mode,
 				Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
 			}
 		}
@@ -1394,7 +1395,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if err != nil {
 		return nil, fmt.Errorf("initialize action provider registry: %w", err)
 	}
-	if err := registerConfiguredActionProviders(effectiveRegistry, cfg.ActionProviders); err != nil {
+	if err := registerConfiguredActionProviders(effectiveRegistry, cfg.ActionProviders, absDir); err != nil {
 		return nil, err
 	}
 	session := &TeamSession{

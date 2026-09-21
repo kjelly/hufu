@@ -1,11 +1,15 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/golangruntime"
 )
 
 func TestMaterializeActionReplacesExistingPointersCanonically(t *testing.T) {
@@ -40,6 +44,39 @@ func TestMaterializeActionReplacesExistingPointersCanonically(t *testing.T) {
 	}
 	if action.Payload == got.Payload {
 		t.Fatal("materialization mutated or reused static payload")
+	}
+}
+
+func TestExecutionRunInputPolicyHashIncludesGolangProviderDigest(t *testing.T) {
+	definition := RunInputDefinition{
+		Name: "scope", Schema: RunInputSchema{Type: "object"},
+		Resolver: &RunInputResolverSpec{Capability: "review"},
+	}
+	newSession := func(digest string) *TeamSession {
+		registry := NewProviderRegistry()
+		registry.Register("review", &golangActionProvider{
+			capability: "review", program: golangruntime.Program{Source: "/team/action", Digest: digest},
+			execute: func(context.Context, golangruntime.Program, []byte, []string, int, int) (golangruntime.Result, error) {
+				return golangruntime.Result{}, nil
+			},
+		})
+		return &TeamSession{
+			Config: agent.TeamConfig{ActionProviders: map[string]agent.ActionProviderConfig{
+				"review": {Runtime: "golang", Source: "./action", Mode: golangruntime.TrustedStaticMode},
+			}},
+			RunInputDefinitions: []RunInputDefinition{definition}, ProviderRegistry: registry,
+		}
+	}
+	firstHash, err := executionRunInputPolicyHash(newSession("sha256:first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := executionRunInputPolicyHash(newSession("sha256:second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash == secondHash {
+		t.Fatal("Go action source digest change did not change run input policy hash")
 	}
 }
 

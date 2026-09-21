@@ -90,12 +90,14 @@ spec:
 
   action-providers:
     resolve-review-scope:
-      command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
-      dir: .
+      runtime: golang
+      source: ./reviewprep
+      mode: trusted-static
       timeout: 30
     produce-workset:
-      command: [go, run, ./.agent-teams/hufu-code-review/reviewprep]
-      dir: .
+      runtime: golang
+      source: ./reviewprep
+      mode: trusted-static
       timeout: 300
 
   delegation:

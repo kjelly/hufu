@@ -601,7 +601,11 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 	}
 	type providerIdentity struct {
 		Capability string   `json:"capability"`
-		Command    []string `json:"command"`
+		Provider   string   `json:"provider,omitempty"`
+		Runtime    string   `json:"runtime,omitempty"`
+		Source     string   `json:"source,omitempty"`
+		Mode       string   `json:"mode,omitempty"`
+		Command    []string `json:"command,omitempty"`
 		Dir        string   `json:"dir,omitempty"`
 		Timeout    int64    `json:"timeout,omitzero"`
 	}
@@ -620,7 +624,14 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 			return "", fmt.Errorf("run input resolver capability %q has no action provider", capability)
 		}
 		seen[capability] = struct{}{}
-		providers = append(providers, providerIdentity{Capability: capability, Command: slices.Clone(provider.Command), Dir: provider.Dir, Timeout: provider.Timeout})
+		providerName := ""
+		if session.ProviderRegistry != nil {
+			providerName = session.ProviderRegistry.ProviderName(capability)
+		}
+		providers = append(providers, providerIdentity{
+			Capability: capability, Provider: providerName, Runtime: provider.Runtime, Source: provider.Source, Mode: provider.Mode,
+			Command: slices.Clone(provider.Command), Dir: provider.Dir, Timeout: provider.Timeout,
+		})
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Capability < providers[j].Capability })
 	definitions := cloneRunInputDefinitions(session.RunInputDefinitions)

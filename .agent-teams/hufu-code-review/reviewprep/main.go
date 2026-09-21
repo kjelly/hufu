@@ -12,16 +12,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/kjelly/hufu/internal/team"
 )
 
 const manifestSchemaVersion = 2
@@ -51,7 +49,31 @@ type resolverScope struct {
 
 type scopeCandidate struct {
 	value    resolverScope
-	evidence team.RunInputResolverEvidence
+	evidence runInputResolverEvidence
+}
+
+type runInputResolverRequest struct {
+	Type          string          `json:"type"`
+	InputName     string          `json:"input_name"`
+	Prompt        string          `json:"prompt"`
+	ExplicitValue json.RawMessage `json:"explicit_value"`
+	SchemaHash    string          `json:"schema_hash"`
+	ResolverID    string          `json:"resolver_id"`
+}
+
+type runInputResolverEvidence struct {
+	Source string `json:"source"`
+	Start  int    `json:"start,omitzero"`
+	End    int    `json:"end,omitzero"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+type runInputResolverResponse struct {
+	Status          string                     `json:"status"`
+	Value           json.RawMessage            `json:"value,omitempty"`
+	Evidence        []runInputResolverEvidence `json:"evidence,omitempty"`
+	ResolverVersion string                     `json:"resolver_version,omitempty"`
+	Diagnostic      string                     `json:"diagnostic,omitempty"`
 }
 
 var (
@@ -209,11 +231,11 @@ var (
 	qualifiedGoSymbol   = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*\.[A-Z][A-Za-z0-9_]*$`)
 )
 
-func main() {
-	if err := run(context.Background(), os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "reviewprep:", err)
-		os.Exit(1)
-	}
+// Run is the stable entrypoint invoked by Hufu's embedded trusted-static Go
+// runtime. The wire format intentionally duplicates the runtime-neutral JSON
+// contract so this team-owned script does not import Hufu internals.
+func Run(ctx context.Context, in io.Reader, out io.Writer) error {
+	return run(ctx, in, out)
 }
 
 func run(ctx context.Context, in io.Reader, out io.Writer) error {
@@ -235,7 +257,7 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("decode request type: %w", err)
 	}
 	if envelope.Type == "resolve_run_input" {
-		var request team.RunInputResolverRequest
+		var request runInputResolverRequest
 		if err := decodeStrictJSON(raw, &request); err != nil {
 			return fmt.Errorf("decode resolver request: %w", err)
 		}
@@ -271,12 +293,12 @@ func decodeStrictJSON(data []byte, target any) error {
 	return ensureJSONEOF(decoder)
 }
 
-func resolveReviewScopeInput(request team.RunInputResolverRequest) team.RunInputResolverResponse {
+func resolveReviewScopeInput(request runInputResolverRequest) runInputResolverResponse {
 	return resolveReviewScopeInputAt(request, time.Now().UTC())
 }
 
-func resolveReviewScopeInputAt(request team.RunInputResolverRequest, now time.Time) team.RunInputResolverResponse {
-	response := team.RunInputResolverResponse{ResolverVersion: "2"}
+func resolveReviewScopeInputAt(request runInputResolverRequest, now time.Time) runInputResolverResponse {
+	response := runInputResolverResponse{ResolverVersion: "2"}
 	if request.Type != "resolve_run_input" || request.InputName != "review.scope" || request.ResolverID != "review-scope-v1" {
 		response.Status = "invalid"
 		response.Diagnostic = "resolver request identity is unsupported"
@@ -305,7 +327,7 @@ func resolveReviewScopeInputAt(request team.RunInputResolverRequest, now time.Ti
 		response.Status = "no_match"
 		return response
 	}
-	byValue := make(map[string][]team.RunInputResolverEvidence)
+	byValue := make(map[string][]runInputResolverEvidence)
 	for _, candidate := range candidates {
 		encoded, err := json.Marshal(candidate.value)
 		if err != nil {
@@ -360,7 +382,7 @@ func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, strin
 			date := now.UTC().AddDate(0, 0, -days).Format(time.DateOnly)
 			candidates = append(candidates, scopeCandidate{
 				value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
-				evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: pattern.kind},
+				evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: pattern.kind},
 			})
 		}
 	}
@@ -370,7 +392,7 @@ func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, strin
 		}
 		candidates = append(candidates, scopeCandidate{
 			value:    resolverScope{Kind: "revision_range", History: "first_parent", Base: prompt[match[2]:match[3]], Head: prompt[match[4]:match[5]]},
-			evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "revision_range"},
+			evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "revision_range"},
 		})
 	}
 	for _, match := range sincePattern.FindAllStringSubmatchIndex(prompt, -1) {
@@ -380,7 +402,7 @@ func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, strin
 		}
 		candidates = append(candidates, scopeCandidate{
 			value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
-			evidence: team.RunInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "since_date"},
+			evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "since_date"},
 		})
 	}
 	return candidates, ""
@@ -405,7 +427,7 @@ func parseScopeCount(value string) (int, error) {
 func lastNScopeCandidate(count, start, end int, kind string) scopeCandidate {
 	return scopeCandidate{
 		value:    resolverScope{Kind: "last_n", Count: count, History: "first_parent", Head: "HEAD"},
-		evidence: team.RunInputResolverEvidence{Source: "prompt", Start: start, End: end, Kind: kind},
+		evidence: runInputResolverEvidence{Source: "prompt", Start: start, End: end, Kind: kind},
 	}
 }
 
@@ -656,14 +678,17 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	setBatchLens(documentationBatches, "documentation")
 	setBatchLens(escalationBatches, "documentation-risk")
 	for _, current := range primaryBatches {
-		if slices.ContainsFunc(current.paths, isDocumentationPath) {
-			current.lens = "documentation-risk"
+		for _, currentPath := range current.paths {
+			if isDocumentationPath(currentPath) {
+				current.lens = "documentation-risk"
+				break
+			}
 		}
 	}
 	annotateBatches(primaryBatches, "primary")
 	annotateBatches(documentationBatches, "documentation")
 	annotateBatches(escalationBatches, "documentation-escalation")
-	allBatches := append(append(slices.Clone(primaryBatches), documentationBatches...), escalationBatches...)
+	allBatches := append(append(append([]*batch(nil), primaryBatches...), documentationBatches...), escalationBatches...)
 	observed := observeBudget(allBatches, paths)
 	if err := enforceTotalBudget(config, observed); err != nil {
 		return actionResult{}, err
@@ -1027,7 +1052,7 @@ func resolveRevisionRange(ctx context.Context, repo string, scope resolverScope)
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("list first-parent history: %w", err)
 	}
-	if !slices.Contains(nonEmptyLines(chainText), base) {
+	if !containsString(nonEmptyLines(chainText), base) {
 		return rangeResolution{}, fmt.Errorf("scope_not_first_parent: base %q is not on the first-parent history of %q", scope.Base, scope.Head)
 	}
 	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", base+".."+head)
@@ -1105,7 +1130,7 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 		if strings.ContainsAny(path, "\r\n\t") {
 			return nil, fmt.Errorf("changed path %q cannot be represented in a line-oriented manifest", path)
 		}
-		normalizedPath, err := team.NormalizeTouchedPath(path)
+		normalizedPath, err := normalizeTouchedPath(path)
 		if err != nil {
 			return nil, fmt.Errorf("normalize changed path %q: %w", path, err)
 		}
@@ -1116,6 +1141,39 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func normalizeTouchedPath(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", errors.New("path must not be empty")
+	}
+	if len(value) > 256 {
+		return "", errors.New("path exceeds 256 bytes")
+	}
+	if strings.ContainsRune(value, 0) || strings.Contains(value, `\`) {
+		return "", errors.New("path must use repository-relative slash-separated syntax")
+	}
+	if path.IsAbs(value) || strings.ContainsAny(value, "*?[]{}") {
+		return "", errors.New("path must be an exact repository-relative path")
+	}
+	directoryPrefix := strings.HasSuffix(value, "/")
+	core := strings.TrimSuffix(value, "/")
+	if core == "" || path.Clean(core) != core {
+		return "", errors.New("path must not contain empty, dot, or parent segments")
+	}
+	for _, segment := range strings.Split(core, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", errors.New("path must not contain empty, dot, or parent segments")
+		}
+	}
+	if core == "*" {
+		return "", errors.New("touched path must not be the global selector")
+	}
+	if directoryPrefix {
+		return core + "/", nil
+	}
+	return core, nil
 }
 
 func classifyReviewPath(ctx context.Context, repo, head, path string) string {
@@ -1159,7 +1217,7 @@ func isRoutineDocumentationPath(lower string) bool {
 }
 
 func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, paths []string) (documentationVerification, error) {
-	verification := documentationVerification{Passed: true, CheckedFiles: slices.Clone(paths)}
+	verification := documentationVerification{Passed: true, CheckedFiles: append([]string(nil), paths...)}
 	seenLinks := make(map[string]struct{})
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})
@@ -1247,7 +1305,7 @@ func addedDocumentationLines(ctx context.Context, repo string, r reviewRange, pa
 		return nil, fmt.Errorf("diff documentation %q: %w", path, err)
 	}
 	lines := make([]string, 0)
-	for line := range strings.SplitSeq(diff, "\n") {
+	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			lines = append(lines, strings.TrimPrefix(line, "+"))
 		}
@@ -1295,7 +1353,7 @@ func repositoryCodePath(documentPath, token string) (string, bool) {
 		return "", false
 	}
 	base := strings.ToLower(filepath.Base(token))
-	if slices.Contains([]string{"go.mod", "go.sum", "agents.md", "makefile", "dockerfile", "hufu.yaml", "hufu.yml"}, base) {
+	if containsString([]string{"go.mod", "go.sum", "agents.md", "makefile", "dockerfile", "hufu.yaml", "hufu.yml"}, base) {
 		return token, true
 	}
 	for _, suffix := range []string{".go", ".md", ".yaml", ".yml", ".json", ".toml", ".sh", ".nu", ".sql"} {
@@ -1340,7 +1398,8 @@ func gitObjectExists(ctx context.Context, repo, object string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		return false, nil
 	}
 	return false, fmt.Errorf("check git object %q: %w: %s", object, err, strings.TrimSpace(stderr.String()))
@@ -1355,7 +1414,8 @@ func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, 
 	if err == nil {
 		return true, nil
 	}
-	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && exitErr.ExitCode() == 1 {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		return false, nil
 	}
 	return false, fmt.Errorf("check Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
@@ -1601,4 +1661,13 @@ func nonEmptyLines(value string) []string {
 		}
 	}
 	return lines
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

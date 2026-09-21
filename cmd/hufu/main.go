@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/kjelly/hufu/internal/golangruntime"
 	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
@@ -24,6 +25,9 @@ var version = "dev"
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == providerproxy.ChildArg {
 		os.Exit(providerproxy.RunChild(os.Stdin, os.Stdout))
+	}
+	if len(os.Args) == 4 && os.Args[1] == golangruntime.ChildArg {
+		os.Exit(golangruntime.RunChild(os.Args[2], os.Args[3], os.Stdin, os.Stdout, os.Stderr))
 	}
 	// Pin the interactivity decision before any prompt widget can take over
 	// stdin; a live per-call probe would flip tool permissions mid-session.

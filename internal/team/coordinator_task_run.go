@@ -2527,6 +2527,7 @@ type runtimeActionReceipt struct {
 	Agent                         string            `json:"agent,omitempty"`
 	ActionID                      string            `json:"action_id"`
 	Capability                    string            `json:"capability"`
+	Provider                      string            `json:"provider,omitempty"`
 	Type                          string            `json:"type"`
 	Status                        string            `json:"status"`
 	StartedAt                     time.Time         `json:"started_at"`
@@ -2560,7 +2561,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
 			Version: 2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
-			Capability: capability, Type: task.Action.Type, Status: status,
+			Capability: capability, Provider: providerName, Type: task.Action.Type, Status: status,
 			StartedAt: startedAt, FinishedAt: finishedAt,
 			RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 			MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),

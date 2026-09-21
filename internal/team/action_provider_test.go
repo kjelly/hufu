@@ -2,11 +2,17 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/golangruntime"
 )
 
 func TestLoadTeamRegistersConfiguredActionProviderInSessionRegistry(t *testing.T) {
@@ -71,6 +77,70 @@ tasks:
 	resultMap, ok := result.(map[string]interface{})
 	if !ok || resultMap["status"] != "ok" {
 		t.Fatalf("configured provider result = %#v", result)
+	}
+}
+
+func TestRegisterConfiguredGolangActionProviderValidatesTrustedStaticContract(t *testing.T) {
+	teamDir := t.TempDir()
+	source := filepath.Join(teamDir, "action")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	program := `package main
+import ("context"; "io")
+func Run(_ context.Context, _ io.Reader, _ io.Writer) error { return nil }
+`
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte(program), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewProviderRegistry()
+	err := registerConfiguredActionProviders(registry, map[string]agent.ActionProviderConfig{
+		"demo": {Runtime: "golang", Source: "./action", Mode: golangruntime.TrustedStaticMode},
+	}, teamDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name := registry.ProviderName("demo"); !strings.HasPrefix(name, "golang:sha256:") {
+		t.Fatalf("provider name = %q", name)
+	}
+
+	for name, config := range map[string]agent.ActionProviderConfig{
+		"missing mode": {Runtime: "golang", Source: "./action"},
+		"mixed command": {
+			Runtime: "golang", Source: "./action", Mode: golangruntime.TrustedStaticMode, Command: []string{"go"},
+		},
+		"unsupported runtime": {Runtime: "python", Source: "./action"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := registerConfiguredActionProviders(NewProviderRegistry(), map[string]agent.ActionProviderConfig{"demo": config}, teamDir); err == nil {
+				t.Fatal("configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestGolangActionProviderUsesWireContractAndActionEnvironment(t *testing.T) {
+	provider := &golangActionProvider{
+		capability: "demo",
+		program:    golangruntime.Program{Source: "/team/action", Digest: "sha256:fixture"},
+		execute: func(_ context.Context, _ golangruntime.Program, input []byte, env []string, _, _ int) (golangruntime.Result, error) {
+			var action Action
+			if err := json.Unmarshal(input, &action); err != nil {
+				t.Fatal(err)
+			}
+			if action.Type != "apply" || !slices.Contains(env, "HUFU_REPOSITORY=/repo") {
+				t.Fatalf("action=%#v env=%#v", action, env)
+			}
+			return golangruntime.Result{Stdout: []byte(`{"status":"ok"}`)}, nil
+		},
+	}
+	ctx := WithActionEnvironment(t.Context(), ActionEnvironment{Repository: "/repo"})
+	result, err := provider.Execute(ctx, Action{Capability: "demo", Type: "apply", Payload: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(map[string]any)["status"] != "ok" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
