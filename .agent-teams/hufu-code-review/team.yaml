@@ -15,6 +15,9 @@ spec:
   goal-mode: outcome
   execution-profile: fresh-session
   unattended: true
+  # This team is read-only. Acceptance failure must never invoke Hufu's
+  # destructive repository rollback default.
+  rollback: "true"
   max-duration: 86400
   max-total-tokens: 0
   no-net: true

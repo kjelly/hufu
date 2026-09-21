@@ -145,28 +145,20 @@ func TestRunRollback_Custom(t *testing.T) {
 	}
 }
 
-func TestRunRollback_Git(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "hufu-rollback-test")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
+func TestRunRollbackRequiresExplicitCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	worktreeFile := filepath.Join(tmpDir, "uncommitted.go")
+	if err := os.WriteFile(worktreeFile, []byte("package uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
-
-	gitDir := filepath.Join(tmpDir, ".git")
-	if err := os.MkdirAll(gitDir, 0755); err != nil {
-		t.Fatalf("failed to create mock git dir: %v", err)
-	}
-
 	c := newBudgetCoordinator(t)
 	c.projectDir = tmpDir
-	// We override the default rollback cmd with a mock script because we are not in a real git repo (just empty .git dir)
-	// and calling 'git' might fail or warn. However, we want to test if it detects the .git dir and falls back to git commands.
-	err = c.runRollback(context.Background())
-	if err == nil {
-		t.Error("expected rollback to fail on empty mock git repo")
+	err := c.runRollback(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "no explicit rollback command") {
+		t.Fatalf("implicit rollback error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "git") {
-		t.Errorf("expected error to mention git, got %v", err)
+	if content, readErr := os.ReadFile(worktreeFile); readErr != nil || string(content) != "package uncommitted\n" {
+		t.Fatalf("implicit rollback changed worktree file: content=%q err=%v", content, readErr)
 	}
 }
 

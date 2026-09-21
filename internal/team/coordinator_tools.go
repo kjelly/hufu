@@ -745,9 +745,12 @@ func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {
 	return AcceptanceSpecHasChecks(spec)
 }
 
-// runRollback runs the team's optional rollback command or default git rollback.
+// runRollback runs the team's explicitly configured rollback command.
 func (c *Coordinator) runRollback(parentCtx context.Context) error {
 	cmd := strings.TrimSpace(c.rollbackCmd)
+	if cmd == "" {
+		return fmt.Errorf("no explicit rollback command configured; refusing implicit destructive rollback")
+	}
 	shell := "sh"
 	if c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
@@ -758,16 +761,6 @@ func (c *Coordinator) runRollback(parentCtx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-
-	if cmd == "" {
-		// Default rollback: git reset --hard and git clean -fd if it's a git repo
-		gitDir := filepath.Join(c.projectDir, ".git")
-		if _, err := os.Stat(gitDir); err == nil {
-			cmd = "git reset --hard && git clean -fd"
-		} else {
-			return fmt.Errorf("no custom rollback command set and no git repository found in workspace")
-		}
-	}
 
 	ex := exec.CommandContext(ctx, shell, "-c", cmd)
 	ex.Env = utils.SanitizeSubprocessEnv(os.Environ())

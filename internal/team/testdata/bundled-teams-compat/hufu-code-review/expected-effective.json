@@ -86,6 +86,7 @@
         }
       ]
     },
+    "rollback": "true",
     "execution_profile": "fresh-session",
     "goal_mode": "outcome",
     "workflow": {
