@@ -116,6 +116,7 @@ type LifecycleEventPayload struct {
 	StopReason                    StopReason                   `json:"stop_reason,omitempty"`
 	ExitCode                      int                          `json:"exit_code,omitempty"`
 	Reason                        string                       `json:"reason,omitempty"`
+	Warnings                      []string                     `json:"warnings,omitempty"`
 	Response                      string                       `json:"response,omitempty"`
 	UnresolvedTasks               []TaskReference              `json:"unresolved_tasks,omitempty"`
 	CompletedReview               bool                         `json:"completed_review,omitempty"`

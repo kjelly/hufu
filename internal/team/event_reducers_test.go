@@ -67,6 +67,20 @@ func TestReducersEmptyAndMalformedEvents(t *testing.T) {
 	}
 }
 
+func TestReduceToSessionDataPreservesRunWarnings(t *testing.T) {
+	payload, err := json.Marshal(LifecycleEventPayload{
+		RunID: "run-warning", Outcome: RunOutcomeCompleted, GoalSatisfied: true,
+		Warnings: []string{"experience finalization timed out"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ReduceToSessionData([]RunEvent{{Type: string(EventRunFinished), RunID: "run-warning", Payload: payload}})
+	if session.RunResult == nil || len(session.RunResult.Warnings) != 1 || session.RunResult.Warnings[0] != "experience finalization timed out" {
+		t.Fatalf("replayed result = %#v, want durable warning", session.RunResult)
+	}
+}
+
 func TestReduceToTodoList_ReconstructsTypedVerificationSpec(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{
 		"id":          "typed-verify",

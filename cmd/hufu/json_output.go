@@ -21,6 +21,7 @@ type jsonRunOutput struct {
 	GoalMode            string                     `json:"goal_mode,omitempty"`
 	Result              string                     `json:"result"`
 	Reason              string                     `json:"reason,omitempty"`
+	Warnings            []string                   `json:"warnings,omitempty"`
 	StopReason          string                     `json:"stop_reason,omitempty"`
 	RecoveryDisposition team.RetryDisposition      `json:"recovery_disposition,omitempty"`
 	ExitCode            int                        `json:"exit_code,omitempty"`
@@ -177,6 +178,7 @@ func printResultJSONForInvocation(result string, loadedTeams map[string]*teamCon
 	out.GoalSatisfied = canonical.GoalSatisfied
 	out.GoalMode = string(canonical.GoalMode)
 	out.Reason = canonical.Reason
+	out.Warnings = slices.Clone(canonical.Warnings)
 	out.StopReason = string(canonical.StopReason)
 	out.RecoveryDisposition = team.RunRecoveryDisposition(canonical.UnresolvedTasks)
 	out.ExitCode = canonical.ExitCode

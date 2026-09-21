@@ -93,7 +93,8 @@ func TestEventStorePreservesRunFinishedContextTelemetryTypes(t *testing.T) {
 	defer store.Close()
 
 	payload, err := json.Marshal(RunFinishedEventPayload{
-		Outcome: RunOutcomeFailed,
+		Outcome:  RunOutcomeFailed,
+		Warnings: []string{"experience finalization timed out"},
 		Metrics: &RunMetrics{ContextWindowTelemetry: ContextWindowTelemetrySummary{
 			LastRequestedTokens: 94029,
 			LastAvailableTokens: 93232,
@@ -117,6 +118,9 @@ func TestEventStorePreservesRunFinishedContextTelemetryTypes(t *testing.T) {
 	}
 	if got.Metrics == nil || got.Metrics.ContextWindowTelemetry.LastRequestedTokens != 94029 || got.Metrics.ContextWindowTelemetry.LastAvailableTokens != 93232 {
 		t.Fatalf("context telemetry = %#v, want numeric values preserved", got.Metrics)
+	}
+	if len(got.Warnings) != 1 || got.Warnings[0] != "experience finalization timed out" {
+		t.Fatalf("warnings = %#v, want durable warning", got.Warnings)
 	}
 }
 

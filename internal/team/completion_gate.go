@@ -132,10 +132,15 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 	})
 	input := c.runFinalizationInput(result, acceptance)
 	input.Evidence = manifest
-	if err := c.ExperienceProcessor().Finalize(ctx, input, decision); err != nil {
-		downgradeRunForFinalizationError(result, err)
-		return result
+	// Candidate lifecycle is auxiliary to the already-computed business gate.
+	// Give it an independent detached budget so prior finalization work cannot
+	// starve it, and preserve any failure as a durable warning. Pending context
+	// remains hidden from recall until a later successful confirmation.
+	experienceCtx, cancelExperience := terminalExperienceFinalizationContext(ctx)
+	if err := c.ExperienceProcessor().Finalize(experienceCtx, input, decision); err != nil {
+		c.appendRunWarning(result, "finalize experience", err)
 	}
+	cancelExperience()
 	// CompletionGate is only allowed to downgrade a claimed accepted run.
 	// Explicit failed, cancelled, partial, and unverified outcomes remain
 	// distinct for reports/recovery, while the processor above has still

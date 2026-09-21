@@ -786,6 +786,9 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		if data.RunResult.StopReason != "" {
 			fmt.Fprintf(&b, "- **Stop reason:** `%s`\n", data.RunResult.StopReason)
 		}
+		for _, warning := range data.RunResult.Warnings {
+			fmt.Fprintf(&b, "- **Warning:** %s\n", reportSafeMetadata(warning, 500))
+		}
 		if disposition := team.RunRecoveryDisposition(data.RunResult.UnresolvedTasks); disposition != "" {
 			fmt.Fprintf(&b, "- **Recovery disposition:** `%s`\n", disposition)
 			for _, task := range data.RunResult.UnresolvedTasks {

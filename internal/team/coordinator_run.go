@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -2342,7 +2343,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("coordinator finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 	c.SetCurrentStage("idle")
 	if lastRes := c.LastRunResult(); lastRes != nil && !IsRunOutcomeSuccess(lastRes.Outcome) {
-		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
+		return finalResult, runCompletionError(lastRes)
 	}
 	return finalResult, nil
 }
@@ -2461,7 +2462,7 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	c.finalizeNormalCompletion()
 	c.report(c.newEvent("done").withAgent(orchDef.Name).withMessage("continuation finished").withData(runResultStatusData(c.LastRunResult())).withTodoID(CoordTodoID))
 	if lastRes := c.LastRunResult(); lastRes != nil && !IsRunOutcomeSuccess(lastRes.Outcome) {
-		return finalResult, fmt.Errorf("%w: %s", ErrTasksUnresolved, lastRes.Response)
+		return finalResult, runCompletionError(lastRes)
 	}
 	return finalResult, nil
 }
@@ -2495,6 +2496,7 @@ func runResultStatusData(result *RunResult) map[string]any {
 		"attempts_total":   result.Stats.AttemptsTotal,
 		"attempts_failed":  result.Stats.AttemptsFailed,
 		"metrics":          result.Metrics,
+		"warnings":         slices.Clone(result.Warnings),
 	}
 	if result.Acceptance != nil {
 		data["acceptance_state"] = result.Acceptance.EffectiveState()
@@ -2502,4 +2504,25 @@ func runResultStatusData(result *RunResult) map[string]any {
 	}
 	data["exit_code"] = result.ExitCode
 	return data
+}
+
+func runCompletionError(result *RunResult) error {
+	if result == nil {
+		return nil
+	}
+	if result.Stats.TasksUnresolved > 0 || len(result.UnresolvedTasks) > 0 || result.StopReason == StopReasonUnresolvedTasks {
+		count := max(result.Stats.TasksUnresolved, len(result.UnresolvedTasks))
+		if count == 0 {
+			count = 1
+		}
+		return fmt.Errorf("%w: %d task(s)", ErrTasksUnresolved, count)
+	}
+	reason := strings.TrimSpace(result.Reason)
+	if reason == "" {
+		reason = string(result.StopReason)
+	}
+	if reason == "" {
+		reason = string(result.Outcome)
+	}
+	return fmt.Errorf("run %s: %s", result.Outcome, utils.TruncateRunes(utils.RedactSecrets(reason), maxRunWarningRunes))
 }

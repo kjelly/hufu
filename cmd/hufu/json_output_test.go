@@ -140,7 +140,8 @@ func TestJSONOutputDoesNotReportAbortedRunAsCompleted(t *testing.T) {
 func TestJSONOutputProjectsRunRecoveryDisposition(t *testing.T) {
 	c := &team.Coordinator{}
 	c.SetLastRunResult(&team.RunResult{
-		Outcome: team.RunOutcomePartial,
+		Outcome:  team.RunOutcomePartial,
+		Warnings: []string{"experience finalization timed out"},
 		UnresolvedTasks: []team.TaskReference{{
 			ID: "task-7", Status: string(team.TaskError), RetryDisposition: team.ReplanRequired,
 			NextAction: team.RecoveryNextAction(team.ReplanRequired),
@@ -164,6 +165,9 @@ func TestJSONOutputProjectsRunRecoveryDisposition(t *testing.T) {
 	}
 	if out.RecoveryDisposition != team.ReplanRequired || len(out.UnresolvedTasks) != 1 || !strings.Contains(out.UnresolvedTasks[0].NextAction, "materially changed plan") {
 		t.Fatalf("recovery JSON = %#v", out)
+	}
+	if len(out.Warnings) != 1 || out.Warnings[0] != "experience finalization timed out" {
+		t.Fatalf("warning JSON = %#v", out.Warnings)
 	}
 }
 

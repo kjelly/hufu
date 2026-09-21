@@ -278,6 +278,18 @@ func TestRunResultStatusDataIncludesAcceptanceState(t *testing.T) {
 	}
 }
 
+func TestRunCompletionErrorDistinguishesUnresolvedTasksFromOtherFailures(t *testing.T) {
+	unresolved := runCompletionError(&RunResult{Outcome: RunOutcomePartial, StopReason: StopReasonUnresolvedTasks, Stats: RunStats{TasksUnresolved: 2}})
+	if !errors.Is(unresolved, ErrTasksUnresolved) {
+		t.Fatalf("unresolved error = %v, want ErrTasksUnresolved", unresolved)
+	}
+
+	finalization := runCompletionError(&RunResult{Outcome: RunOutcomePartial, StopReason: StopReasonEvidenceIncomplete, Reason: "finalization failed"})
+	if errors.Is(finalization, ErrTasksUnresolved) || strings.Contains(finalization.Error(), "tasks unresolved") {
+		t.Fatalf("non-task failure was mislabeled: %v", finalization)
+	}
+}
+
 func TestAggregateRunResultsUsesCanonicalPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string

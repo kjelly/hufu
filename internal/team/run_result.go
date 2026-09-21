@@ -473,6 +473,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	acceptanceAdvisory := false
 	var contextTelemetry ContextWindowTelemetrySummary
 	worksets := make(map[string]WorksetGroupState)
+	var warnings []string
 	for _, result := range results {
 		if result == nil {
 			continue
@@ -507,6 +508,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 		acceptanceAdvisory = acceptanceAdvisory || result.AcceptanceAdvisory
 		mergeWorksetStates(worksets, result.Worksets)
 		mergeContextWindowTelemetrySummary(&contextTelemetry, result.Metrics.ContextWindowTelemetry)
+		warnings = normalizeRunWarnings(append(warnings, result.Warnings...))
 		input.Metrics.TypedRunInputsResolved += result.Metrics.TypedRunInputsResolved
 		input.Metrics.InputBoundActions += result.Metrics.InputBoundActions
 		input.Metrics.InputBoundAssertionsPassed += result.Metrics.InputBoundAssertionsPassed
@@ -586,6 +588,7 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	// A multi-team aggregate can only claim fixed_and_verified when its
 	// canonical outcome is successful and no participating review left findings.
 	aggregated.FixedAndVerified = aggregated.GoalSatisfied && !findingsPresent
+	aggregated.Warnings = warnings
 	return aggregated
 }
 
@@ -838,6 +841,7 @@ type RunResult struct {
 	GoalMode             GoalMode                     `json:"goal_mode,omitempty"`
 	Response             string                       `json:"response"`
 	Reason               string                       `json:"reason,omitempty"`
+	Warnings             []string                     `json:"warnings,omitempty"`
 	StopReason           StopReason                   `json:"stop_reason,omitempty"`
 	ExitCode             int                          `json:"exit_code,omitempty"`
 	Acceptance           *AcceptanceResult            `json:"acceptance,omitempty"`

@@ -38,7 +38,7 @@ func TestAcceptanceObservationOnlyIncludesInjectedItems(t *testing.T) {
 		RequestID: "request-1", RunID: "run-1", Attempt: 1, AgentRole: "coordinator", Phase: PhaseInit, Trigger: ContextTriggerCoordinatorStart,
 		Fingerprint: "manifest-1", Items: []ContextManifestItem{{ID: "a", Source: "shared_persistent", Included: true}, {ID: "b", Source: "shared_persistent", Included: false}},
 	}}
-	if err := c.recordContextAcceptanceObservations(&AcceptanceResult{State: AcceptancePassed}); err != nil {
+	if err := c.recordContextAcceptanceObservations(t.Context(), &AcceptanceResult{State: AcceptancePassed}); err != nil {
 		t.Fatal(err)
 	}
 	count, err := repo.ContextOutcomeCount(context.Background(), "a", string(PhaseInit), string(ContextTriggerCoordinatorStart), "coordinator", "", "acceptance_assessed")

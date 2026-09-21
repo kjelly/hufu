@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -346,7 +347,7 @@ func TestTerminalSnapshotUsesOneRunAndEvidenceIdentity(t *testing.T) {
 		sessionData:            NewSession(),
 		taskTracker:            NewTaskTracker(),
 	}
-	result := c.FinalizeRun(context.Background(), &RunResult{RunID: "run-identity", Outcome: RunOutcomeFailed}, nil)
+	result := c.FinalizeRun(context.Background(), &RunResult{RunID: "run-identity", Outcome: RunOutcomeFailed, Warnings: []string{"experience finalization timed out"}}, nil)
 	if result == nil || !c.TerminalLifecycleConfirmed() || result.EvidenceManifest == nil {
 		t.Fatalf("terminal snapshot incomplete: result=%#v confirmed=%v", result, c.TerminalLifecycleConfirmed())
 	}
@@ -364,6 +365,9 @@ func TestTerminalSnapshotUsesOneRunAndEvidenceIdentity(t *testing.T) {
 		}
 		if payload.RunID != result.RunID || payload.EvidenceManifest == nil || payload.EvidenceManifest.ManifestHash != result.EvidenceManifest.ManifestHash {
 			t.Fatalf("terminal identity mismatch: event=%#v result=%#v", payload, result)
+		}
+		if !slices.Equal(payload.Warnings, result.Warnings) {
+			t.Fatalf("terminal warnings = %#v, want %#v", payload.Warnings, result.Warnings)
 		}
 		return
 	}

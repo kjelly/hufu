@@ -210,6 +210,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				GoalMode             GoalMode                     `json:"goal_mode"`
 				Response             string                       `json:"response"`
 				Reason               string                       `json:"reason"`
+				Warnings             []string                     `json:"warnings,omitempty"`
 				StopReason           StopReason                   `json:"stop_reason"`
 				ExitCode             int                          `json:"exit_code"`
 				UnresolvedTasks      []TaskReference              `json:"unresolved_tasks"`
@@ -237,6 +238,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				session.RunResult = &RunResult{
 					RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
 					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
+					Warnings:   slices.Clone(payload.Warnings),
 					StopReason: payload.StopReason, ExitCode: payload.ExitCode,
 					UnresolvedTasks: payload.UnresolvedTasks,
 					CompletedReview: payload.CompletedReview, FindingsPresent: payload.FindingsPresent,

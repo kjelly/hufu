@@ -30,6 +30,7 @@ type RunFinishedEventPayload struct {
 	GoalMode             GoalMode                     `json:"goal_mode,omitempty"`
 	Response             string                       `json:"response,omitempty"`
 	Reason               string                       `json:"reason,omitempty"`
+	Warnings             []string                     `json:"warnings,omitempty"`
 	StopReason           StopReason                   `json:"stop_reason,omitempty"`
 	ExitCode             int                          `json:"exit_code,omitempty"`
 	UnresolvedTasks      []TaskReference              `json:"unresolved_tasks,omitempty"`
@@ -176,6 +177,14 @@ func validateRunFinishedEventPayload(event RunEvent) error {
 	}
 	if payload.Outcome == "" {
 		return fmt.Errorf("run_finished payload lacks outcome")
+	}
+	if len(payload.Warnings) > maxRunWarnings {
+		return fmt.Errorf("run_finished payload has too many warnings")
+	}
+	for index, warning := range payload.Warnings {
+		if strings.TrimSpace(warning) == "" || len([]rune(warning)) > maxRunWarningRunes {
+			return fmt.Errorf("run_finished warning %d is invalid", index)
+		}
 	}
 	if payload.RunInputs != nil {
 		if err := ValidateRunInputSnapshot(payload.RunInputs); err != nil {

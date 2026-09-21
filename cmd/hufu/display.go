@@ -189,6 +189,9 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		}
 		flushThink(w, st)
 
+	case "warning":
+		w.write(errStyle.Render("⚠ "+event.Message) + "\n")
+
 	case "start":
 		if st.currentAgent != "" && st.textBuf != "" {
 			w.write(flushText(st.currentAgent, st.textBuf))
@@ -1641,6 +1644,12 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.Message != "" {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}
+
+		case "warning":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: errStyle.Render("⚠ " + event.Message), Model: event.Model})
+			}
+			p.Send(tuipkg.StatusBarMsg{Text: errStyle.Render("⚠ " + utils.TruncateLine(event.Message, 60))})
 
 		case "context_routed":
 			if event.Message != "" {

@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +53,60 @@ func TestApplyCompletionGatePromotesCanonicalSharedCandidates(t *testing.T) {
 	items, err := repo.Query(context.Background(), contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: "project", TeamID: "test"}, Visibility: contextstore.VisibilityExact})
 	if err != nil || len(items) != 1 || items[0].Lifecycle != contextstore.LifecycleConfirmed {
 		t.Fatalf("shared candidate was not confirmed: %#v err=%v", items, err)
+	}
+}
+
+func TestApplyCompletionGatePreservesAcceptedRunWhenExperienceFinalizationFails(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
+	manifest := &EvidenceManifest{RunID: "run", Status: "accepted", EvidenceResults: []EvidenceResult{{RequirementID: "run:acceptance", Status: "passed"}}}
+	if err := manifest.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	c.lastEvidenceManifest = manifest
+	processor := &recordingExperienceProcessor{finalizeErr: context.DeadlineExceeded}
+	c.SetExperienceProcessor(processor)
+	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, StopReason: StopReasonCompleted}
+	acceptance := &AcceptanceResult{State: AcceptancePassed, Passed: true}
+	parent, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	got := c.applyCompletionGate(parent, result, acceptance)
+	if got.Outcome != RunOutcomeCompleted || !got.GoalSatisfied || got.StopReason != StopReasonCompleted {
+		t.Fatalf("accepted result was downgraded by auxiliary failure: %#v", got)
+	}
+	if processor.finalizeCtxErr != nil {
+		t.Fatalf("experience finalizer inherited expired context: %v", processor.finalizeCtxErr)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "context deadline exceeded") {
+		t.Fatalf("warnings = %#v, want finalization timeout", got.Warnings)
+	}
+}
+
+func TestApplyCompletionGateStillRejectsInvalidRunWhenExperienceFinalizationFails(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
+		taskTracker: NewTaskTracker(),
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
+	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
+	c.lastEvidenceManifest = &EvidenceManifest{RunID: "run", Status: "accepted", ManifestHash: "hash"}
+	c.SetExperienceProcessor(&recordingExperienceProcessor{finalizeErr: errors.New("sqlite unavailable")})
+	result := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, StopReason: StopReasonCompleted}
+	acceptance := &AcceptanceResult{State: AcceptancePassed, Passed: true}
+
+	got := c.applyCompletionGate(t.Context(), result, acceptance)
+	if got.Outcome != RunOutcomePartial || got.GoalSatisfied || got.StopReason != StopReasonEvidenceIncomplete {
+		t.Fatalf("invalid run bypassed completion gate: %#v", got)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("warnings = %#v, want auxiliary failure", got.Warnings)
 	}
 }
 

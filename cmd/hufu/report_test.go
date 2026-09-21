@@ -430,6 +430,7 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 		RunResult: &team.RunResult{
 			Outcome:       team.RunOutcomePartial,
 			GoalSatisfied: false,
+			Warnings:      []string{"experience finalization timed out"},
 			GoalMode:      team.GoalModeOutcome,
 			StopReason:    team.StopReasonAcceptanceFailed,
 			Acceptance:    &team.AcceptanceResult{State: team.AcceptanceFailed, Passed: false},
@@ -438,7 +439,7 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 		},
 	}
 	report := buildReportMD(data, "demo", "partial")
-	for _, want := range []string{"## Run Outcome", "`partial`", "Goal satisfied:** `false`", "Goal mode:** `outcome`", "Stop reason:** `acceptance_failed`", "Tasks unresolved:** 2", "Acceptance:** `failed`", "Diagnostic tasks since criterion progress:** 3", "Repeated failure fingerprints:** 2", "Recovery strategy changes:** 1", "Time since criterion progress:** 45s", "Tokens since criterion progress:** 123"} {
+	for _, want := range []string{"## Run Outcome", "`partial`", "Goal satisfied:** `false`", "Goal mode:** `outcome`", "Stop reason:** `acceptance_failed`", "Warning:** experience finalization timed out", "Tasks unresolved:** 2", "Acceptance:** `failed`", "Diagnostic tasks since criterion progress:** 3", "Repeated failure fingerprints:** 2", "Recovery strategy changes:** 1", "Time since criterion progress:** 45s", "Tokens since criterion progress:** 123"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}

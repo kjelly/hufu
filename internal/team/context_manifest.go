@@ -489,7 +489,7 @@ func (c *Coordinator) recordContextToolConsulted(manifest *ContextInjectionManif
 // recordContextAcceptanceObservations closes the outcome loop after the sole
 // global acceptance authority has decided. It never reuses raw context
 // content: every row refers back to the exact persisted manifest instead.
-func (c *Coordinator) recordContextAcceptanceObservations(acceptance *AcceptanceResult) error {
+func (c *Coordinator) recordContextAcceptanceObservations(ctx context.Context, acceptance *AcceptanceResult) error {
 	if c == nil || c.session == nil {
 		return nil
 	}
@@ -519,7 +519,7 @@ func (c *Coordinator) recordContextAcceptanceObservations(acceptance *Acceptance
 			observation.IdempotencyKey = manifest.Fingerprint + ":" + item.ID + ":acceptance:" + acceptanceOutcome
 			observation.PolicyRevision = policyRevision
 			observation.AcceptanceOutcome = acceptanceOutcome
-			if _, err := recorder.RecordContextOutcomeObservation(context.Background(), observation); err != nil {
+			if _, err := recorder.RecordContextOutcomeObservation(ctx, observation); err != nil {
 				return fmt.Errorf("record context acceptance observation: %w", err)
 			}
 		}

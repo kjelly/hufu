@@ -12,18 +12,22 @@ import (
 )
 
 type recordingExperienceProcessor struct {
-	prepared  []RunFinalizationInput
-	finalized []CompletionGateDecision
+	prepared       []RunFinalizationInput
+	finalized      []CompletionGateDecision
+	prepareErr     error
+	finalizeErr    error
+	finalizeCtxErr error
 }
 
 func (p *recordingExperienceProcessor) Prepare(_ context.Context, input RunFinalizationInput) error {
 	p.prepared = append(p.prepared, input)
-	return nil
+	return p.prepareErr
 }
 
-func (p *recordingExperienceProcessor) Finalize(_ context.Context, _ RunFinalizationInput, decision CompletionGateDecision) error {
+func (p *recordingExperienceProcessor) Finalize(ctx context.Context, _ RunFinalizationInput, decision CompletionGateDecision) error {
 	p.finalized = append(p.finalized, decision)
-	return nil
+	p.finalizeCtxErr = ctx.Err()
+	return p.finalizeErr
 }
 
 func TestFinalizeRunUsesOneExperienceProcessorForAcceptedRun(t *testing.T) {
@@ -383,7 +387,7 @@ func TestFinalizeRunRejectsAsyncReflexionCandidateBarrier(t *testing.T) {
 	}
 }
 
-func TestFinalizeRun_RejectionAppendFailure_DowngradesRunAndSurfacesError(t *testing.T) {
+func TestFinalizeRunRejectionAppendFailurePreservesOutcomeAndWarns(t *testing.T) {
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	baseRepo, err := contextstore.OpenSQLite(dbPath)
@@ -436,15 +440,16 @@ func TestFinalizeRun_RejectionAppendFailure_DowngradesRunAndSurfacesError(t *tes
 	initialResult := &RunResult{Outcome: RunOutcomeFailed, GoalSatisfied: false}
 	finalResult := c.FinalizeRun(context.Background(), initialResult, &AcceptanceResult{State: AcceptanceFailed})
 
-	// 4. Verify that the finalization error surfaced and was not silently swallowed
+	// 4. The business failure remains intact while the auxiliary persistence
+	// failure is retained as a warning for operators and automation.
 	if finalResult == nil {
 		t.Fatal("FinalizeRun returned nil")
 	}
-	if !strings.Contains(finalResult.Reason, "finalize rejected run") && !strings.Contains(finalResult.Reason, "append") {
-		t.Fatalf("expected finalResult.Reason to contain rejection failure, got: %q", finalResult.Reason)
+	if finalResult.Outcome != RunOutcomeFailed {
+		t.Fatalf("Outcome = %q, want failed", finalResult.Outcome)
 	}
-	if finalResult.StopReason != StopReasonEvidenceIncomplete {
-		t.Fatalf("expected StopReasonEvidenceIncomplete, got: %v", finalResult.StopReason)
+	if len(finalResult.Warnings) != 1 || (!strings.Contains(finalResult.Warnings[0], "finalize rejected run") && !strings.Contains(finalResult.Warnings[0], "append")) {
+		t.Fatalf("expected durable experience warning, got: %#v", finalResult.Warnings)
 	}
 }
 

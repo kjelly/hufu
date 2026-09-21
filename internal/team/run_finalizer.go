@@ -25,7 +25,12 @@ const (
 
 var errTerminalPersistenceUnconfirmed = errors.New("terminal persistence unconfirmed; recovery required")
 
-const terminalFinalizationTimeout = 10 * time.Second
+const (
+	terminalFinalizationTimeout           = 10 * time.Second
+	terminalExperienceFinalizationTimeout = 30 * time.Second
+	maxRunWarnings                        = 8
+	maxRunWarningRunes                    = 500
+)
 
 // RunFinalizationInput is an immutable snapshot of the facts a terminal run
 // decision may use. It deliberately carries references to evidence/context,
@@ -83,17 +88,13 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 		candidate = result
 	}
 	result = candidate
-	// Cancellation stops worker execution, but terminal cleanup owns a separate
-	// bounded lifetime. Detach even while the caller context is still live:
-	// evidence/experience preparation may otherwise consume its final moments
-	// and hand an already-expired deadline to the run_finished append.
-	finalCtx, cancelFinalization := terminalFinalizationContext(ctx)
-	defer cancelFinalization()
 	c.drainAsyncTasks()
 	result.Acceptance = acceptance
-	if err := c.recordContextAcceptanceObservations(acceptance); err != nil {
-		downgradeRunForFinalizationError(result, err)
+	observationCtx, cancelObservations := terminalExperienceFinalizationContext(ctx)
+	if err := c.recordContextAcceptanceObservations(observationCtx, acceptance); err != nil {
+		c.appendRunWarning(result, "record context acceptance observations", err)
 	}
+	cancelObservations()
 	// Some terminal paths have no finish tool (for example cancellation and
 	// LLM-free unresolved-task fallback). They must still receive the same
 	// immutable evidence boundary before CompletionGate and experience policy.
@@ -103,7 +104,10 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 	manifest := c.lastEvidenceManifest
 	c.lastEvidenceManifestMu.RUnlock()
 	if manifest == nil && c.session != nil && c.session.Workspace != "" {
-		if err := c.finalizeEvidenceManifest(finalCtx, acceptance); err != nil {
+		evidenceCtx, cancelEvidence := terminalFinalizationContext(ctx)
+		err := c.finalizeEvidenceManifest(evidenceCtx, acceptance)
+		cancelEvidence()
+		if err != nil {
 			downgradeRunForFinalizationError(result, fmt.Errorf("finalize evidence manifest: %w", err))
 		} else {
 			c.lastEvidenceManifestMu.RLock()
@@ -113,10 +117,14 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 	}
 	result.EvidenceManifest = manifest
 	input := c.runFinalizationInput(result, acceptance)
-	if err := c.ExperienceProcessor().Prepare(finalCtx, input); err != nil {
-		downgradeRunForFinalizationError(result, fmt.Errorf("prepare experience: %w", err))
+	experienceCtx, cancelExperience := terminalExperienceFinalizationContext(ctx)
+	if err := c.ExperienceProcessor().Prepare(experienceCtx, input); err != nil {
+		c.appendRunWarning(result, "prepare experience", err)
 	}
-	finalized := c.applyCompletionGate(finalCtx, result, acceptance)
+	cancelExperience()
+	gateCtx, cancelGate := terminalFinalizationContext(ctx)
+	finalized := c.applyCompletionGate(gateCtx, result, acceptance)
+	cancelGate()
 	if finalized != nil && finalized != result {
 		// CompletionGate may return a replacement value for compatibility with
 		// older callers. Preserve the elected business pointer instead of
@@ -164,11 +172,55 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 }
 
 func terminalFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return detachedTimeoutContext(parent, terminalFinalizationTimeout)
+}
+
+func terminalExperienceFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return detachedTimeoutContext(parent, terminalExperienceFinalizationTimeout)
+}
+
+func detachedTimeoutContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	base := context.Background()
 	if parent != nil {
 		base = context.WithoutCancel(parent)
 	}
-	return context.WithTimeout(base, terminalFinalizationTimeout)
+	return context.WithTimeout(base, timeout)
+}
+
+// appendRunWarning records a bounded, redacted auxiliary-finalization failure
+// without changing the canonical business outcome. Experience candidates are
+// not prompt-visible until confirmed, so leaving them pending is safer than
+// misreporting a fully accepted run as incomplete.
+func (c *Coordinator) appendRunWarning(result *RunResult, stage string, err error) {
+	if result == nil || err == nil {
+		return
+	}
+	warning := boundedRunWarning(stage + ": " + err.Error())
+	if warning == "" || slices.Contains(result.Warnings, warning) || len(result.Warnings) >= maxRunWarnings {
+		return
+	}
+	result.Warnings = append(result.Warnings, warning)
+	if c != nil {
+		c.report(c.newEvent("warning").withAgent("coordinator").withMessage(warning).withTodoID(CoordTodoID))
+	}
+}
+
+func boundedRunWarning(warning string) string {
+	return utils.TruncateRunes(utils.RedactSecrets(strings.TrimSpace(warning)), maxRunWarningRunes)
+}
+
+func normalizeRunWarnings(warnings []string) []string {
+	bounded := make([]string, 0, min(len(warnings), maxRunWarnings))
+	for _, warning := range warnings {
+		warning = boundedRunWarning(warning)
+		if warning != "" && !slices.Contains(bounded, warning) {
+			bounded = append(bounded, warning)
+			if len(bounded) == maxRunWarnings {
+				break
+			}
+		}
+	}
+	return bounded
 }
 
 // prepareTerminalResult fills the bounded fields that must be identical in
@@ -181,6 +233,7 @@ func (c *Coordinator) prepareTerminalResult(result *RunResult) {
 	if strings.TrimSpace(result.RunID) == "" {
 		result.RunID = strings.TrimSpace(c.executionRunID)
 	}
+	result.Warnings = normalizeRunWarnings(result.Warnings)
 	if result.EvidenceManifest != nil && strings.TrimSpace(result.RunID) == "" {
 		result.RunID = result.EvidenceManifest.RunID
 	}
@@ -275,6 +328,7 @@ func terminalLifecyclePayload(c *Coordinator, result *RunResult) LifecycleEventP
 	payload.StopReason = result.StopReason
 	payload.ExitCode = result.ExitCode
 	payload.Reason = result.Reason
+	payload.Warnings = slices.Clone(result.Warnings)
 	payload.Response = result.Response
 	payload.UnresolvedTasks = append([]TaskReference(nil), result.UnresolvedTasks...)
 	payload.CompletedReview = result.CompletedReview
