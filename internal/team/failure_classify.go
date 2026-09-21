@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/tools"
@@ -50,6 +51,50 @@ type FailureClassificationInput struct {
 type failureClassOverrideError struct {
 	class TaskFailureClass
 	err   error
+}
+
+// toolLoopError is the structured boundary emitted when an agent repeats the
+// same rejected tool call. The error deliberately excludes tool arguments:
+// model-controlled input must not influence failure classification or leak
+// into persisted failure summaries. submit_result loops are protocol failures;
+// all other tool loops are execution failures.
+type toolLoopError struct {
+	agentName        string
+	toolName         string
+	rejectedAttempts int
+	class            TaskFailureClass
+}
+
+func (e *toolLoopError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("agent %s is stuck in a loop executing the same failing command: %s after %d rejected attempt(s)", e.agentName, e.toolName, e.rejectedAttempts)
+}
+
+func (e *toolLoopError) FailureClassOverride() TaskFailureClass {
+	if e == nil || e.class == "" {
+		return FailureExecution
+	}
+	return e.class
+}
+
+func newToolLoopError(agentName, toolName string, rejectedAttempts int) error {
+	class := FailureExecution
+	if toolName == submitResultToolName {
+		class = FailureProtocol
+	}
+	return &toolLoopError{
+		agentName:        agentName,
+		toolName:         toolName,
+		rejectedAttempts: rejectedAttempts,
+		class:            class,
+	}
+}
+
+func isSubmitResultProtocolLoop(err error) bool {
+	loopErr, ok := errors.AsType[*toolLoopError](err)
+	return ok && loopErr != nil && loopErr.toolName == submitResultToolName && loopErr.FailureClassOverride() == FailureProtocol
 }
 
 func (e *failureClassOverrideError) Error() string {

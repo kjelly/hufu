@@ -336,13 +336,16 @@ func (m *mockAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fant
 func TestLoopDetection_ToolCallAbort(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
+	var events []StatusEvent
+	c.reportStatus = func(event StatusEvent) { events = append(events, event) }
+	toolInput := `{"command":"false","api_key":"super-secret-value","note":"policy blocked environment verification"}`
 
 	ag := &mockAgent{
 		streamFunc: func(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 			// Call 1: command fails
 			err := call.OnToolCall(fantasy.ToolCallContent{
 				ToolName: "bash",
-				Input:    `{"command":"false"}`,
+				Input:    toolInput,
 			})
 			if err != nil {
 				return nil, err
@@ -361,7 +364,7 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 			// Call 2: command fails
 			err = call.OnToolCall(fantasy.ToolCallContent{
 				ToolName: "bash",
-				Input:    `{"command":"false"}`,
+				Input:    toolInput,
 			})
 			if err != nil {
 				return nil, err
@@ -377,7 +380,7 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 			// Call 3: exact same command called again. This should fail immediately inside OnToolCall!
 			err = call.OnToolCall(fantasy.ToolCallContent{
 				ToolName: "bash",
-				Input:    `{"command":"false"}`,
+				Input:    toolInput,
 			})
 			if err != nil {
 				// This is the expected loop error!
@@ -396,6 +399,25 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "stuck in a loop executing the same failing command") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+	if strings.Contains(err.Error(), "super-secret-value") {
+		t.Fatalf("loop error leaked model-controlled arguments: %v", err)
+	}
+	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureExecution {
+		t.Fatalf("generic tool loop class = %q, want %q", got, FailureExecution)
+	}
+	toolCalls := 0
+	for _, event := range events {
+		if event.Type != "tool_call" {
+			continue
+		}
+		toolCalls++
+		if strings.Contains(event.ToolArgs, "super-secret-value") || !strings.Contains(event.ToolArgs, "[REDACTED]") {
+			t.Fatalf("tool-call status event was not redacted: %#v", event)
+		}
+	}
+	if toolCalls != 3 {
+		t.Fatalf("tool-call status events = %d, want 3", toolCalls)
 	}
 }
 
@@ -425,8 +447,14 @@ func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
 
 	ctx := context.WithValue(withTestAuxiliaryInvocationContext(t.Context()), todoIDKey{}, item.ID)
 	_, _, err := c.runAgentWithStatusAndHistory(ctx, ag, "reviewer", "submit a result", nil, &taskTiming{})
-	if err == nil || !strings.Contains(err.Error(), "deterministic submit_result protocol failure repeated 3 times") {
+	if err == nil || !strings.Contains(err.Error(), "stuck in a loop executing the same failing command: submit_result after 3 rejected attempt(s)") {
 		t.Fatalf("loop error = %v", err)
+	}
+	if strings.Contains(err.Error(), "unexpected-") {
+		t.Fatalf("submit_result loop error leaked model-controlled arguments: %v", err)
+	}
+	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureProtocol {
+		t.Fatalf("submit_result loop class = %q, want %q", got, FailureProtocol)
 	}
 	if manifests := c.todoItemByID(item.ID).ContextManifests; len(manifests) != maxRepeatedSubmitResultFailures-1 {
 		t.Fatalf("recovery manifests = %d, want %d before circuit break", len(manifests), maxRepeatedSubmitResultFailures-1)

@@ -1283,6 +1283,17 @@ retryLoop:
 			continue
 		}
 		err, terminalBlocked := c.finalizeTaskTerminalResources(parentCtx, todoID, err)
+		// A repeated rejected submit_result call means execution evidence was
+		// produced but finalization is malformed. Route that structured protocol
+		// failure through the existing result-only repair path instead of
+		// classifying model-controlled arguments or replaying worker tools.
+		resultProtocolLoop := isSubmitResultProtocolLoop(err) && task.Execution.RequiresResult && !terminalBlocked && parentCtx.Err() == nil
+		if resultProtocolLoop {
+			err = nil
+			zero := 0
+			receipt.ExitCode = &zero
+			c.report(c.newEvent("step").withAgent(agentName).withMessage("submit_result validation loop detected; entering result-only protocol repair").withTodoID(todoID))
+		}
 
 		if err == nil {
 			var typedRes *TaskResult
@@ -1395,6 +1406,9 @@ retryLoop:
 							repairEvidence := utils.TruncateRunes(output, 12000)
 							finalizationBinding := c.taskFinalizationBinding(todoID)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
+							if resultProtocolLoop {
+								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(attemptEvidence.resultText))
+							}
 							if budgetExhausted {
 								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete textual deliverable in `details`. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
 							}
@@ -4021,7 +4035,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					return err
 				}
 			}
-			argsPreview := tc.Input
+			// Status streams and TUI logs are diagnostic projections, not an
+			// authorization boundary. Redact before reporting while retaining the
+			// raw input only in the in-memory execution path and the audit logger,
+			// whose persistence boundary applies its own redactor.
+			argsPreview := utils.RedactSecrets(tc.Input)
 			if len(argsPreview) > 10000 {
 				r := []rune(argsPreview)
 				if len(r) > 10000 {
@@ -4063,7 +4081,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.input == tc.Input {
 				if consecutiveErrCount >= 2 {
 					loopDetectMu.Unlock()
-					return fmt.Errorf("agent %s is stuck in a loop executing the same failing command: %s (args: %s)", agentName, tc.ToolName, argsPreview)
+					return newToolLoopError(agentName, tc.ToolName, consecutiveErrCount)
 				}
 			} else {
 				lastToolCall = &lastToolCallEntry{
@@ -4136,7 +4154,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				if fingerprint, deterministic := submitResultFailureFingerprint(tr.ToolName, resultPreview); deterministic {
 					submitResultFailures[fingerprint]++
 					if submitResultFailures[fingerprint] >= maxRepeatedSubmitResultFailures {
-						repeatedProtocolErr = fmt.Errorf("deterministic submit_result protocol failure repeated %d times in one attempt", submitResultFailures[fingerprint])
+						repeatedProtocolErr = newToolLoopError(agentName, tr.ToolName, submitResultFailures[fingerprint])
 					}
 				}
 			}
@@ -4853,7 +4871,7 @@ func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]b
 		b.WriteString("- `evidence` is not a legal field for this task. Do not submit it; use the documented `files_read` entries instead.\n")
 	}
 	if contract.InvariantVerification != "" {
-		b.WriteString("- `invariant_assessments` must contain exactly one claim for every repository invariant included in this task context. Use only the supplied logical invariant IDs; an unknown assessment must list the missing evidence, and a violated assessment must point to a finding with the same severity as the invariant.\n")
+		writeInvariantAssessmentProtocol(b, false)
 	}
 	b.WriteString("- Reserve your final model step for `submit_result`. Once you have enough evidence, stop writing prose or making new tool calls and submit the result; if you are running out of steps, submit what you have.\n")
 	if len(task.Execution.ToolSequence) > 0 {
@@ -4901,10 +4919,20 @@ func externalResultProtocolInstructions(task TaskDef) string {
 		b.WriteString("- A successful response must include the required non-empty `files_read` string array; report observed paths or authorized opaque artifact IDs there.\n")
 	}
 	if task.InvariantVerification != "" {
-		b.WriteString("- `invariant_assessments` must be a non-null array with exactly one claim for each repository invariant included in this task context; use [] only when none were included.\n")
+		writeInvariantAssessmentProtocol(b, true)
 	}
 	b.WriteString("- Return the structured response as the final provider answer, without a prose wrapper or claims of Hufu receipt/verification authority.\n")
 	return b.String()
+}
+
+func writeInvariantAssessmentProtocol(b *strings.Builder, strictNullableFields bool) {
+	b.WriteString("- `invariant_assessments` must contain exactly one claim for every repository invariant included in this task context. Use only the supplied logical invariant IDs; use [] only when none were included.\n")
+	fmt.Fprintf(b, "- Every invariant assessment requires `invariant_id`, `status`, and a concise `summary` of 1-%d runes (Unicode code points).\n", maxInvariantAssessmentSummaryRunes)
+	if strictNullableFields {
+		b.WriteString("- In the strict external schema, always include `finding_index` and `missing_evidence`: for `preserved`, set both to null; for `unknown`, set `finding_index` to null and provide non-empty `missing_evidence`; for `violated`, provide a non-negative `finding_index` and set `missing_evidence` to null. A violated finding must use the invariant's severity.\n")
+		return
+	}
+	b.WriteString("- For `preserved`, omit `finding_index` and `missing_evidence`; for `unknown`, omit `finding_index` and provide non-empty `missing_evidence`; for `violated`, provide a non-negative `finding_index` and omit `missing_evidence`. A violated finding must use the invariant's severity.\n")
 }
 
 func formatExpectedExitCodes(codes []int) string {

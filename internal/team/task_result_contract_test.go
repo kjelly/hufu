@@ -224,6 +224,37 @@ func TestTaskResultPromptToolDecoderParity(t *testing.T) {
 	}
 }
 
+func TestInvariantResultProtocolStatesConditionalFieldContract(t *testing.T) {
+	task := TaskDef{
+		InvariantVerification: "blocking",
+		Execution:             ExecutionContract{RequiresResult: true},
+	}
+	local := resultProtocolInstructions(task, map[string]bool{"submit_result": true})
+	for _, required := range []string{
+		"1-1000 runes (Unicode code points)",
+		"For `preserved`, omit `finding_index` and `missing_evidence`",
+		"for `unknown`, omit `finding_index` and provide non-empty `missing_evidence`",
+		"for `violated`, provide a non-negative `finding_index` and omit `missing_evidence`",
+	} {
+		if !strings.Contains(local, required) {
+			t.Fatalf("local invariant protocol omitted %q: %s", required, local)
+		}
+	}
+
+	external := externalResultProtocolInstructions(task)
+	for _, required := range []string{
+		"1-1000 runes (Unicode code points)",
+		"always include `finding_index` and `missing_evidence`",
+		"for `preserved`, set both to null",
+		"for `unknown`, set `finding_index` to null and provide non-empty `missing_evidence`",
+		"for `violated`, provide a non-negative `finding_index` and set `missing_evidence` to null",
+	} {
+		if !strings.Contains(external, required) {
+			t.Fatalf("external invariant protocol omitted %q: %s", required, external)
+		}
+	}
+}
+
 func TestTaskResultContractAdmissionEnforcesAllAssertions(t *testing.T) {
 	task := TaskDef{
 		Execution: ExecutionContract{RequiresResult: true},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -195,6 +196,85 @@ func TestClassifyTaskFailure_ExplicitOverrideBeatsProtocolText(t *testing.T) {
 	err := withFailureClassOverride(errors.New("execution failure (reclassified from protocol repair)"), FailureExecution)
 	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureExecution {
 		t.Fatalf("explicit failure class = %q, want %q", got, FailureExecution)
+	}
+}
+
+type rejectedSubmitResultLoopAgent struct {
+	calls *int
+}
+
+func (a *rejectedSubmitResultLoopAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return nil, errors.New("rejectedSubmitResultLoopAgent requires streaming callbacks")
+}
+
+func (a *rejectedSubmitResultLoopAgent) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	*a.calls++
+	input := `{"status":"success","summary":"policy blocked environment verification secret-marker","invariant_assessments":[{"invariant_id":"unexpected"}]}`
+	for attempt := range maxRepeatedSubmitResultFailures {
+		callID := fmt.Sprintf("rejected-submit-%d", attempt)
+		if err := call.OnToolCall(fantasy.ToolCallContent{ToolCallID: callID, ToolName: submitResultToolName, Input: input}); err != nil {
+			return nil, err
+		}
+		toolErr := fantasy.ToolResultOutputContentError{Error: errors.New("invalid invariant assessment: invariant_assessments[0].summary must contain 1-1000 runes after trimming")}
+		if err := call.OnToolResult(fantasy.ToolResultContent{ToolCallID: callID, ToolName: submitResultToolName, Result: toolErr}); err != nil {
+			return nil, err
+		}
+	}
+	return nil, errors.New("submit_result loop was not stopped")
+}
+
+func TestSubmitResultLoopUsesResultOnlyRepairWithoutWorkerReplay(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls := 0
+	repairCalls := 0
+	var repairPrompts []string
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "submit-result-loop-repair", Timeout: 30, MaxRetries: 3},
+			Agents: map[string]*agent.AgentDef{
+				"reviewer": {Name: "reviewer", Role: "worker", SideEffect: string(SideEffectExternalWrite), MaxRetries: 3, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-submit-result-loop-repair",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "finalize a review result"}})[0]
+	c.workerAgentOverride = &rejectedSubmitResultLoopAgent{calls: &workerCalls}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls:   &repairCalls,
+		prompts: &repairPrompts,
+		onCall: func(int) {
+			c.storeSubmittedTaskResult(item.ID, &TaskResult{
+				TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess,
+				Summary: "review result repaired without replaying work", Source: "submitted",
+			})
+		},
+	}
+
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+		Agent: "reviewer", Goal: "finalize a review result", Recovery: RecoveryManual,
+		SideEffect: SideEffectExternalWrite,
+		Execution:  ExecutionContract{RequiresResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	if workerCalls != 1 || repairCalls != 1 {
+		t.Fatalf("worker/repair calls = %d/%d, want one worker execution and one result-only repair", workerCalls, repairCalls)
+	}
+	if len(repairPrompts) != 1 || !strings.Contains(repairPrompts[0], "Runtime validation error") || !strings.Contains(repairPrompts[0], "summary must contain 1-1000 runes") {
+		t.Fatalf("repair prompt did not preserve the bounded validation diagnostic: %#v", repairPrompts)
+	}
+	if strings.Contains(repairPrompts[0], "secret-marker") {
+		t.Fatalf("repair prompt leaked rejected submit_result arguments: %q", repairPrompts[0])
+	}
+	got := c.todoItemByID(item.ID)
+	if got.Status != TaskDone || got.ExecutionReceipt == nil || got.ExecutionReceipt.RepairProvenance == nil || !got.ExecutionReceipt.RepairProvenance.Success {
+		t.Fatalf("task result-only repair projection = %#v", got)
 	}
 }
 
