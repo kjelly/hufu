@@ -234,7 +234,7 @@ For running with no human watching (cron, queue worker, CI):
 - **`--unattended`** is the master switch. It makes `ask_user` non-blocking (choice → first option; free-text → an error telling the agent to proceed on its own), disables `--steps`/`--tui`, and lets the allowlist run without a TTY while still denying non-allowlisted tools.
 - **Budgets** (`--max-duration`, `--max-total-tokens`, or team.yaml `max-duration` / `max-total-tokens`) are the circuit-breaker: when exceeded, `ExecuteTasks` forces wrap-up and refuses new tasks, emitting a notifiable `budget_exceeded` event. Token usage is aggregated from each agent run's `fantasy.StepResult.Usage`.
 - **Notifications** fire on `done` / `error` / `wrap_up` / `budget_exceeded` / `needs_human` via the `notify` config (OSC and/or `command`). `needs_human` fires when an agent calls `ask_user` in unattended mode so an operator can follow up out-of-band.
-- **Acceptance** (`acceptance:` in team.yaml) is an objective whole-run gate run at `finish`. In interactive mode a non-zero exit appends a failure note to the result and emits an `error` notification. In **unattended mode** it drives a self-healing loop: up to 2 retries (the coordinator is told to fix the failures and call `finish` again, tracked by `selfHealingAttempts`); if still failing, it runs **rollback** (`rollback:` command, or a default `git reset --hard && git clean -fd` when the project is a git repo) and reports the outcome.
+- **Acceptance** (`acceptance:` in team.yaml) is an objective whole-run gate run at `finish`. In interactive mode a non-zero exit appends a failure note to the result and emits an `error` notification. In **unattended mode** it drives a self-healing loop: up to 2 retries (the coordinator is told to fix the failures and call `finish` again, tracked by `selfHealingAttempts`); if still failing, it runs the explicitly configured **rollback** command and reports the outcome. With no `rollback:` command, Hufu fails closed without changing the project.
 - **Mid-task crash-resume (re-attaching in-flight workers):** every task status change checkpoints the todo list to `session.json` (`TodoList.onChange → saveCheckpoint`, including full task `Output`). On the next non-`--new` run the CLI `LoadSession`s it and `SetSessionData` restores the tasks and pre-populates the result cache from completed ones. At the start of `Run()`, `ResumeInterruptedTasks` re-drives every task left in a non-terminal state (`in_progress` / `paused` / `planned` / `pending`) on its **original todo ID**, in ascending-ID order so dependencies run first; `done`/`skipped`/`error` tasks are left as-is (completed work is reused, not redone). It is a no-op on a fresh run or with `--new`.
 - **Triggers (by design, external):** scheduling is delegated to the host (system cron / systemd timer / queue) invoking `hufu` per run. Session execution state persists under `workspace/session.json`; shared/private memory truth persists in `workspace/context.sqlite`. `context-stm.md` and `context-ltm.md` are disposable debug projections, never runtime inputs.
 
@@ -579,7 +579,7 @@ unattended: false           # no human present: ask_user auto-answers, deny-by-d
 max-duration: 0             # budget: max total wall-clock seconds (0 = unlimited)
 max-total-tokens: 0         # budget: max cumulative LLM tokens (0 = unlimited)
 acceptance: ""              # shell command run at finish; non-zero exit = run not accepted
-rollback: ""                # unattended: command run after self-healing fails (default: git reset --hard && git clean -fd)
+rollback: ""                # unattended: explicit command run after self-healing fails; empty means no rollback mutation
 
 # === Template Variables ===
 vars:
@@ -713,7 +713,7 @@ Your system prompt here.
 | `max-duration` | Budget: max total wall-clock seconds before forced wrap-up (`0` = unlimited) |
 | `max-total-tokens` | Budget: max cumulative LLM tokens before forced wrap-up (`0` = unlimited) |
 | `acceptance` | Shell command run at `finish` as a whole-run gate; non-zero exit marks the run not-accepted |
-| `rollback` | Unattended: command run after self-healing is exhausted on acceptance failure (default: `git reset --hard && git clean -fd` when a git repo) |
+| `rollback` | Unattended: explicit command run after self-healing is exhausted on acceptance failure; empty fails closed without changing the project |
 | `vars` | Template variables map |
 | `notify` | Notification configuration |
 
@@ -1141,7 +1141,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 53. **Mid-task crash-resume** — `Coordinator.ResumeInterruptedTasks` (called at the top of `Run()`) re-drives tasks restored in a non-terminal state (`isInterruptedStatus`: in_progress/paused/planned/pending) via `executeTask` on their **original todo ID**, ordered by `todoIDLess` (ascending numeric ID) so dependencies run first. Completed tasks are skipped and their outputs reused (cache pre-populated in `SetSessionData`). `error` tasks are NOT auto-retried across restarts (they already exhausted retries). Selection/reset is factored into `resetInterruptedTasks` for testing without a provider. No-op on fresh runs / `--new`.
 
-54. **Self-healing acceptance + rollback (unattended)** — On acceptance failure in unattended mode, `finishTool.Run` retries up to `selfHealingAttempts` (2), returning an error response that tells the coordinator to fix and re-`finish`. After exhaustion it calls `runRollback` (team `rollback:` command, or default `git reset --hard && git clean -fd` when `.git` exists). Interactive mode keeps the original non-blocking "append failure note" behavior.
+54. **Self-healing acceptance + rollback (unattended)** — On acceptance failure in unattended mode, `finishTool.Run` retries up to `selfHealingAttempts` (2), returning an error response that tells the coordinator to fix and re-`finish`. After exhaustion it calls `runRollback` only for an explicit team `rollback:` command; otherwise it fails closed without mutating the project. Interactive mode keeps the original non-blocking "append failure note" behavior.
 
 55. **`runAgentWithStatusAndHistory` token aggregation is nil-safe** — `ag.Stream` returns `(*AgentResult, error)` and yields a `nil` result on error; `addStepTokens` is only called when `result != nil` (guarding both the success and error paths) so a failed/aborted stream — including a loop-detection abort — never nil-derefs.
 
