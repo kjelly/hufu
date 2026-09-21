@@ -34,7 +34,7 @@
               "value": true
             },
             {
-              "pointer": "/resolved/selected_commit_count",
+              "pointer": "/observed_budget/changed_paths",
               "op": "minimum",
               "value": 1
             }
@@ -86,7 +86,6 @@
         }
       ]
     },
-    "rollback": "true",
     "execution_profile": "fresh-session",
     "goal_mode": "outcome",
     "workflow": {

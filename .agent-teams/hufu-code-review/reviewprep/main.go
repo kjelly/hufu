@@ -24,7 +24,7 @@ import (
 
 const (
 	manifestSchemaVersion = 2
-	scopeResolverVersion  = "3"
+	scopeResolverVersion  = "semantic-fallback-1"
 )
 
 const (
@@ -48,11 +48,6 @@ type resolverScope struct {
 	Head    string `json:"head"`
 	Base    string `json:"base,omitempty"`
 	Since   string `json:"since,omitempty"`
-}
-
-type scopeCandidate struct {
-	value    resolverScope
-	evidence runInputResolverEvidence
 }
 
 type runInputResolverRequest struct {
@@ -80,14 +75,7 @@ type runInputResolverResponse struct {
 }
 
 var (
-	lastCommitsPattern   = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+commit(?:s|\(s\))?(?:\b|[^[:alnum:]_]|$)`)
-	recentCommitsPattern = regexp.MustCompile(`(?i)最近[ \t]*([0-9]+)[ \t]*(?:個|个|條|条|次)?[ \t]*(?:的[ \t]*)?(?:git[ \t]*)?commit(?:s|\(s\))?(?:\b|[^[:alnum:]_]|$)`)
-	lastDaysPattern      = regexp.MustCompile(`(?i)\blast[ \t]+([0-9]+)[ \t]+days?\b`)
-	recentDaysPattern    = regexp.MustCompile(`最近[ \t]*([0-9]+)[ \t]*天`)
-	headRangePattern     = regexp.MustCompile(`(?i)\bHEAD~([0-9]+)\.\.HEAD\b`)
-	revisionPattern      = regexp.MustCompile(`(?i)([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})\.\.([A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159})`)
-	revisionNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
-	sincePattern         = regexp.MustCompile(`(?i)\bsince[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\b`)
+	revisionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/~^{}-]{0,159}$`)
 )
 
 // Config intentionally contains only team-owned workset semantics. Hufu
@@ -189,6 +177,7 @@ type reviewRange struct {
 	End         string `json:"end"`
 	Since       string `json:"since"`
 	CommitCount int    `json:"commit_count"`
+	Source      string `json:"source,omitempty"`
 }
 
 type item struct {
@@ -298,10 +287,6 @@ func decodeStrictJSON(data []byte, target any) error {
 }
 
 func resolveReviewScopeInput(request runInputResolverRequest) runInputResolverResponse {
-	return resolveReviewScopeInputAt(request, time.Now().UTC())
-}
-
-func resolveReviewScopeInputAt(request runInputResolverRequest, now time.Time) runInputResolverResponse {
 	response := runInputResolverResponse{ResolverVersion: scopeResolverVersion}
 	if request.Type != "resolve_run_input" || request.InputName != "review.scope" || request.ResolverID != "review-scope-v1" {
 		response.Status = "invalid"
@@ -321,134 +306,15 @@ func resolveReviewScopeInputAt(request runInputResolverRequest, now time.Time) r
 			return response
 		}
 	}
-	candidates, invalid := parseScopeCandidates(request.Prompt, now)
-	if invalid != "" {
-		response.Status = "invalid"
-		response.Diagnostic = invalid
-		return response
-	}
-	if len(candidates) == 0 {
-		response.Status = "no_match"
-		return response
-	}
-	byValue := make(map[string][]runInputResolverEvidence)
-	for _, candidate := range candidates {
-		encoded, err := json.Marshal(candidate.value)
-		if err != nil {
-			response.Status = "invalid"
-			response.Diagnostic = "scope candidate could not be encoded"
-			return response
-		}
-		byValue[string(encoded)] = append(byValue[string(encoded)], candidate.evidence)
-	}
-	if len(byValue) != 1 {
-		response.Status = "ambiguous"
-		response.Diagnostic = "prompt contains incompatible review scope expressions"
-		return response
-	}
-	for value, evidence := range byValue {
-		response.Status = "matched"
-		response.Value = json.RawMessage(value)
-		response.Evidence = evidence
-	}
+	// Natural-language interpretation belongs to Hufu's semantic_json model
+	// resolver. This deterministic provider is only the fail-closed fallback;
+	// it validates explicit structured input but never guesses scope from prose.
+	response.Status = "no_match"
 	return response
 }
 
-func parseScopeCandidates(prompt string, now time.Time) ([]scopeCandidate, string) {
-	candidates := make([]scopeCandidate, 0)
-	headRanges := headRangePattern.FindAllStringSubmatchIndex(prompt, -1)
-	for _, match := range lastCommitsPattern.FindAllStringSubmatchIndex(prompt, -1) {
-		count, err := parseScopeCount(prompt[match[2]:match[3]])
-		if err != nil {
-			return nil, err.Error()
-		}
-		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "last_n_commits"))
-	}
-	for _, match := range recentCommitsPattern.FindAllStringSubmatchIndex(prompt, -1) {
-		count, err := parseScopeCount(prompt[match[2]:match[3]])
-		if err != nil {
-			return nil, err.Error()
-		}
-		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "recent_commits_zh"))
-	}
-	for _, match := range headRanges {
-		count, err := parseScopeCount(prompt[match[2]:match[3]])
-		if err != nil {
-			return nil, err.Error()
-		}
-		candidates = append(candidates, lastNScopeCandidate(count, match[0], match[1], "head_relative_range"))
-	}
-	for _, pattern := range []struct {
-		expression *regexp.Regexp
-		kind       string
-	}{
-		{expression: lastDaysPattern, kind: "last_days"},
-		{expression: recentDaysPattern, kind: "recent_days_zh"},
-	} {
-		for _, match := range pattern.expression.FindAllStringSubmatchIndex(prompt, -1) {
-			days, err := parseRelativeDayCount(prompt[match[2]:match[3]])
-			if err != nil {
-				return nil, err.Error()
-			}
-			date := now.UTC().AddDate(0, 0, -days).Format(time.DateOnly)
-			candidates = append(candidates, scopeCandidate{
-				value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
-				evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: pattern.kind},
-			})
-		}
-	}
-	for _, match := range revisionPattern.FindAllStringSubmatchIndex(prompt, -1) {
-		if overlapsAny(match[0], match[1], headRanges) {
-			continue
-		}
-		candidates = append(candidates, scopeCandidate{
-			value:    resolverScope{Kind: "revision_range", History: "first_parent", Base: prompt[match[2]:match[3]], Head: prompt[match[4]:match[5]]},
-			evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "revision_range"},
-		})
-	}
-	for _, match := range sincePattern.FindAllStringSubmatchIndex(prompt, -1) {
-		date := prompt[match[2]:match[3]]
-		if _, err := time.Parse(time.DateOnly, date); err != nil {
-			return nil, "since date must use a valid YYYY-MM-DD calendar date"
-		}
-		candidates = append(candidates, scopeCandidate{
-			value:    resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: date},
-			evidence: runInputResolverEvidence{Source: "prompt", Start: match[0], End: match[1], Kind: "since_date"},
-		})
-	}
-	return candidates, ""
-}
-
-func parseRelativeDayCount(value string) (int, error) {
-	days, err := strconv.Atoi(value)
-	if err != nil || days < 1 || days > 366 {
-		return 0, errors.New("relative review day count must be a base-10 integer between 1 and 366")
-	}
-	return days, nil
-}
-
-func parseScopeCount(value string) (int, error) {
-	count, err := strconv.Atoi(value)
-	if err != nil || count < 1 || count > 100 {
-		return 0, fmt.Errorf("review commit count must be a base-10 integer between 1 and 100")
-	}
-	return count, nil
-}
-
-func lastNScopeCandidate(count, start, end int, kind string) scopeCandidate {
-	return scopeCandidate{
-		value:    resolverScope{Kind: "last_n", Count: count, History: "first_parent", Head: "HEAD"},
-		evidence: runInputResolverEvidence{Source: "prompt", Start: start, End: end, Kind: kind},
-	}
-}
-
-func overlapsAny(start, end int, ranges [][]int) bool {
-	for _, match := range ranges {
-		if start < match[1] && end > match[0] {
-			return true
-		}
-	}
-	return false
+func lastNScope(count int) resolverScope {
+	return resolverScope{Kind: "last_n", Count: count, History: "first_parent", Head: "HEAD"}
 }
 
 func decodeWireConfig(payload string) (Config, error) {
@@ -474,7 +340,7 @@ func decodeWireConfig(payload string) (Config, error) {
 			return Config{}, fmt.Errorf("max_commits must be a base-10 integer string between 1 and 100: %w", err)
 		}
 		maxCommits = parsed
-		scope = lastNScopeCandidate(parsed, 0, 0, "compatibility").value
+		scope = lastNScope(parsed)
 	}
 	if scope.Kind != "" {
 		if err := validateRequestedScope(scope); err != nil {
@@ -521,6 +387,10 @@ func validateRequestedScope(scope resolverScope) error {
 		if _, err := time.Parse(time.DateOnly, scope.Since); err != nil {
 			return errors.New("since review scope requires a valid YYYY-MM-DD date")
 		}
+	case "working_tree":
+		if scope.Count != 0 || scope.Base != "" || scope.Since != "" || scope.Head != "HEAD" {
+			return errors.New("working_tree review scope requires head HEAD and cannot set count, base, or since")
+		}
 	default:
 		return fmt.Errorf("unsupported review scope kind %q", scope.Kind)
 	}
@@ -542,10 +412,12 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-// Prepare materialises a deterministic, bounded review workset. It never
-// reads the working tree: every path and patch comes from the selected commit
-// range. OutputDir must be new or empty to avoid replacing another run's data.
-func Prepare(ctx context.Context, config Config) (actionResult, error) {
+// Prepare materialises a deterministic, bounded review workset. Commit scopes
+// read Git objects; working_tree scope reads the caller's current staged,
+// unstaged, and non-ignored untracked changes. OutputDir must be new or empty,
+// and the repository mutation canary verifies that preparation does not change
+// repository state.
+func Prepare(ctx context.Context, config Config) (result actionResult, resultErr error) {
 	applyConfigDefaults(&config)
 	if err := validateConfig(config); err != nil {
 		return actionResult{}, err
@@ -568,18 +440,36 @@ func Prepare(ctx context.Context, config Config) (actionResult, error) {
 	if !pathWithin(artifactRoot, outputDir) {
 		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
 	}
+	if err := rejectGitAdministrativeOutput(ctx, repo, outputDir); err != nil {
+		return actionResult{}, err
+	}
+	before, err := captureRepositorySnapshot(ctx, repo, outputDir)
+	if err != nil {
+		return actionResult{}, fmt.Errorf("capture repository mutation baseline: %w", err)
+	}
+	defer func() {
+		after, err := captureRepositorySnapshot(ctx, repo, outputDir)
+		if err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("verify repository remained unchanged: %w", err))
+			return
+		}
+		resultErr = errors.Join(resultErr, compareRepositorySnapshots(before, after))
+	}()
 
 	resolution, err := resolveRequestedRange(ctx, repo, config)
 	if err != nil {
 		return actionResult{}, err
 	}
 	reviewRangeValue := resolution.Range
-	if reviewRangeValue.CommitCount == 0 {
+	if reviewRangeValue.CommitCount == 0 && !reviewRangeValue.isWorkingTree() {
 		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no commits", compactScope(config.Scope))
 	}
 	paths, err := changedPaths(ctx, repo, reviewRangeValue)
 	if err != nil {
 		return actionResult{}, err
+	}
+	if len(paths) == 0 {
+		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no changed paths", compactScope(config.Scope))
 	}
 	if config.Routing == routingDocumentation {
 		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, config)
@@ -657,7 +547,7 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	routineDocumentationPaths := make([]string, 0)
 	escalatedDocumentationPaths := make([]string, 0)
 	for _, path := range paths {
-		switch classifyReviewPath(ctx, repo, r.End, path) {
+		switch classifyReviewPath(ctx, repo, r, path) {
 		case "documentation":
 			documentationPaths = append(documentationPaths, path)
 			routineDocumentationPaths = append(routineDocumentationPaths, path)
@@ -866,7 +756,7 @@ func applyConfigDefaults(config *Config) {
 		config.MaxCommits = 10
 	}
 	if legacyScope {
-		config.Scope = lastNScopeCandidate(config.MaxCommits, 0, 0, "compatibility").value
+		config.Scope = lastNScope(config.MaxCommits)
 	} else if config.Scope.Kind == "last_n" {
 		config.MaxCommits = config.Scope.Count
 	}
@@ -995,6 +885,213 @@ func ensureEmptyOutputDir(path string) error {
 	return nil
 }
 
+type repositorySnapshot struct {
+	headDigest  string
+	indexDigest string
+	status      string
+	dirtyDigest string
+}
+
+func rejectGitAdministrativeOutput(ctx context.Context, repo, outputDir string) error {
+	gitDir, err := git(ctx, repo, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return fmt.Errorf("resolve git administrative directory: %w", err)
+	}
+	commonDir, err := git(ctx, repo, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("resolve git common directory: %w", err)
+	}
+	for _, raw := range []string{gitDir, commonDir} {
+		candidate := strings.TrimSpace(raw)
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(repo, candidate)
+		}
+		candidate, err = canonicalPath(candidate)
+		if err != nil {
+			return fmt.Errorf("canonicalize git administrative directory: %w", err)
+		}
+		if pathWithin(candidate, outputDir) {
+			return fmt.Errorf("output_dir %q must not be inside Git administrative directory %q", outputDir, candidate)
+		}
+	}
+	return nil
+}
+
+func captureRepositorySnapshot(ctx context.Context, repo, outputDir string) (repositorySnapshot, error) {
+	head, err := git(ctx, repo, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return repositorySnapshot{}, fmt.Errorf("read HEAD: %w", err)
+	}
+	indexPath, err := git(ctx, repo, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return repositorySnapshot{}, fmt.Errorf("resolve index path: %w", err)
+	}
+	indexPath = strings.TrimSpace(indexPath)
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		return repositorySnapshot{}, fmt.Errorf("read index: %w", err)
+	}
+	status, err := git(ctx, repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no")
+	if err != nil {
+		return repositorySnapshot{}, fmt.Errorf("read worktree status: %w", err)
+	}
+	status, err = excludeOutputStatus(status, repo, outputDir)
+	if err != nil {
+		return repositorySnapshot{}, err
+	}
+	dirtyDigest, err := digestDirtyWorktree(repo, status)
+	if err != nil {
+		return repositorySnapshot{}, fmt.Errorf("hash dirty worktree: %w", err)
+	}
+	return repositorySnapshot{
+		headDigest:  strings.TrimSpace(head),
+		indexDigest: sha256Hex(indexData),
+		status:      status,
+		dirtyDigest: dirtyDigest,
+	}, nil
+}
+
+func excludeOutputStatus(status, repo, outputDir string) (string, error) {
+	relativeOutput, err := filepath.Rel(repo, outputDir)
+	if err != nil || relativeOutput == "." || relativeOutput == ".." || strings.HasPrefix(relativeOutput, ".."+string(filepath.Separator)) || filepath.IsAbs(relativeOutput) {
+		return status, nil
+	}
+	relativeOutput = filepath.ToSlash(relativeOutput)
+	records := strings.Split(status, "\x00")
+	var filtered strings.Builder
+	for index := 0; index < len(records)-1; index++ {
+		record := records[index]
+		if len(record) < 4 || record[2] != ' ' {
+			return "", fmt.Errorf("parse git status record %q", record)
+		}
+		paths := []string{record[3:]}
+		isRenameOrCopy := record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C'
+		if isRenameOrCopy {
+			index++
+			if index >= len(records)-1 {
+				return "", errors.New("parse git status rename record: missing source path")
+			}
+			paths = append(paths, records[index])
+		}
+		allWithinOutput := true
+		for _, current := range paths {
+			if current != relativeOutput && !strings.HasPrefix(current, relativeOutput+"/") {
+				allWithinOutput = false
+				break
+			}
+		}
+		if allWithinOutput {
+			continue
+		}
+		filtered.WriteString(record)
+		filtered.WriteByte(0)
+		if isRenameOrCopy {
+			filtered.WriteString(paths[1])
+			filtered.WriteByte(0)
+		}
+	}
+	return filtered.String(), nil
+}
+
+func digestDirtyWorktree(repo, status string) (string, error) {
+	paths, err := statusPaths(status)
+	if err != nil {
+		return "", err
+	}
+	hasher := sha256.New()
+	for _, path := range paths {
+		if _, err := io.WriteString(hasher, path+"\x00"); err != nil {
+			return "", err
+		}
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		info, err := os.Lstat(fullPath)
+		if errors.Is(err, os.ErrNotExist) {
+			if _, err := io.WriteString(hasher, "missing\x00"); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("stat %q: %w", path, err)
+		}
+		if _, err := fmt.Fprintf(hasher, "%s\x00", info.Mode()); err != nil {
+			return "", err
+		}
+		switch {
+		case info.Mode().IsRegular():
+			file, err := os.Open(fullPath)
+			if err != nil {
+				return "", fmt.Errorf("open %q: %w", path, err)
+			}
+			_, copyErr := io.Copy(hasher, file)
+			closeErr := file.Close()
+			if copyErr != nil || closeErr != nil {
+				return "", errors.Join(copyErr, closeErr)
+			}
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(fullPath)
+			if err != nil {
+				return "", fmt.Errorf("read symlink %q: %w", path, err)
+			}
+			if _, err := io.WriteString(hasher, target); err != nil {
+				return "", err
+			}
+		}
+		if _, err := io.WriteString(hasher, "\x00"); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func statusPaths(status string) ([]string, error) {
+	records := strings.Split(status, "\x00")
+	seen := make(map[string]struct{})
+	for index := 0; index < len(records)-1; index++ {
+		record := records[index]
+		if len(record) < 4 || record[2] != ' ' {
+			return nil, fmt.Errorf("parse git status record %q", record)
+		}
+		seen[record[3:]] = struct{}{}
+		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
+			index++
+			if index >= len(records)-1 {
+				return nil, errors.New("parse git status rename record: missing source path")
+			}
+			seen[records[index]] = struct{}{}
+		}
+	}
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func compareRepositorySnapshots(before, after repositorySnapshot) error {
+	changes := make([]string, 0, 4)
+	if before.headDigest != after.headDigest {
+		changes = append(changes, fmt.Sprintf("HEAD changed from %s to %s", before.headDigest, after.headDigest))
+	}
+	if before.indexDigest != after.indexDigest {
+		changes = append(changes, "Git index content changed")
+	}
+	if before.status != after.status {
+		changes = append(changes, fmt.Sprintf("worktree status changed (before sha256:%s, after sha256:%s)", sha256Hex([]byte(before.status)), sha256Hex([]byte(after.status))))
+	}
+	if before.dirtyDigest != after.dirtyDigest {
+		changes = append(changes, "dirty tracked or untracked file content changed")
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	return fmt.Errorf("repository mutation detected: %s", strings.Join(changes, "; "))
+}
+
 func resolveRequestedRange(ctx context.Context, repo string, config Config) (rangeResolution, error) {
 	shallowText, err := git(ctx, repo, "rev-parse", "--is-shallow-repository")
 	if err != nil {
@@ -1010,15 +1107,25 @@ func resolveRequestedRange(ctx context.Context, repo string, config Config) (ran
 		return resolveRevisionRange(ctx, repo, config.Scope)
 	case "since":
 		return resolveSinceRange(ctx, repo, config.Scope)
+	case "working_tree":
+		return resolveWorkingTreeRange(ctx, repo)
 	default:
 		return rangeResolution{}, fmt.Errorf("unsupported review scope kind %q", config.Scope.Kind)
 	}
 }
 
+func resolveWorkingTreeRange(ctx context.Context, repo string) (rangeResolution, error) {
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return rangeResolution{}, fmt.Errorf("resolve working tree base: %w", err)
+	}
+	return rangeResolution{Range: reviewRange{Start: strings.TrimSpace(head), End: "WORKTREE", Source: "working_tree"}}, nil
+}
+
 // resolveRange preserves the direct helper contract used by the producer's
 // focused tests while action requests migrate to typed Scope payloads.
 func resolveRange(ctx context.Context, repo, since string, maxCommits int) (rangeResolution, error) {
-	config := Config{Since: since, MaxCommits: maxCommits, Scope: lastNScopeCandidate(maxCommits, 0, 0, "compatibility").value}
+	config := Config{Since: since, MaxCommits: maxCommits, Scope: lastNScope(maxCommits)}
 	return resolveRequestedRange(ctx, repo, config)
 }
 
@@ -1126,10 +1233,18 @@ func finalizeSelectedRange(ctx context.Context, repo string, commits []string, r
 }
 
 func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, error) {
-	if r.CommitCount == 0 {
-		return nil, nil
+	var output string
+	var err error
+	if r.isWorkingTree() {
+		output, err = git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", r.Start, "--")
+		if err == nil {
+			var untracked string
+			untracked, err = git(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+			output += untracked
+		}
+	} else {
+		output, err = git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", r.Start+".."+r.End)
 	}
-	output, err := git(ctx, repo, "diff", "--no-renames", "--name-only", "-z", r.Start+".."+r.End)
 	if err != nil {
 		return nil, fmt.Errorf("list changed paths: %w", err)
 	}
@@ -1153,6 +1268,10 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func (r reviewRange) isWorkingTree() bool {
+	return r.Source == "working_tree"
 }
 
 func normalizeTouchedPath(raw string) (string, error) {
@@ -1188,7 +1307,7 @@ func normalizeTouchedPath(raw string) (string, error) {
 	return core, nil
 }
 
-func classifyReviewPath(ctx context.Context, repo, head, path string) string {
+func classifyReviewPath(ctx context.Context, repo string, r reviewRange, path string) string {
 	if !isDocumentationPath(path) {
 		return "primary"
 	}
@@ -1198,7 +1317,7 @@ func classifyReviewPath(ctx context.Context, repo, head, path string) string {
 		strings.Contains(lower, "runtime") || strings.Contains(lower, "contract") {
 		return "documentation-risk"
 	}
-	content, err := git(ctx, repo, "show", head+":"+path)
+	content, err := reviewPathContent(ctx, repo, r, path)
 	if err == nil && strings.Contains(strings.ToLower(content), "> authority: normative") {
 		return "documentation-risk"
 	}
@@ -1234,7 +1353,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})
 	for _, documentPath := range paths {
-		exists, err := gitObjectExists(ctx, repo, r.End+":"+documentPath)
+		exists, err := reviewPathExists(ctx, repo, r, documentPath)
 		if err != nil {
 			return verification, err
 		}
@@ -1258,12 +1377,12 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				}
 				seenLinks[key] = struct{}{}
 				verification.CheckedLinks++
-				found, checkErr := gitObjectExists(ctx, repo, r.End+":"+repositoryPath)
+				found, checkErr := reviewPathExists(ctx, repo, r, repositoryPath)
 				if checkErr != nil {
 					return verification, checkErr
 				}
 				if !found {
-					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, r.End))
+					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, reviewTargetLabel(r)))
 				}
 			}
 			inlineText := markdownLinkPattern.ReplaceAllString(line, "")
@@ -1277,12 +1396,12 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 					if _, duplicate := seenPaths[repositoryPath]; !duplicate {
 						seenPaths[repositoryPath] = struct{}{}
 						verification.CheckedPaths++
-						found, checkErr := gitObjectExists(ctx, repo, r.End+":"+repositoryPath)
+						found, checkErr := reviewPathExists(ctx, repo, r, repositoryPath)
 						if checkErr != nil {
 							return verification, checkErr
 						}
 						if !found {
-							verification.Issues = append(verification.Issues, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, r.End))
+							verification.Issues = append(verification.Issues, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)))
 						}
 					}
 				}
@@ -1294,12 +1413,12 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				}
 				seenSymbols[token] = struct{}{}
 				verification.CheckedSymbols++
-				found, checkErr := gitSymbolExists(ctx, repo, r.End, token)
+				found, checkErr := reviewSymbolExists(ctx, repo, r, token)
 				if checkErr != nil {
 					return verification, checkErr
 				}
 				if !found {
-					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, r.End))
+					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)))
 				}
 			}
 		}
@@ -1312,7 +1431,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 }
 
 func addedDocumentationLines(ctx context.Context, repo string, r reviewRange, path string) ([]string, error) {
-	diff, err := git(ctx, repo, "diff", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
+	diff, err := reviewDiff(ctx, repo, r, path)
 	if err != nil {
 		return nil, fmt.Errorf("diff documentation %q: %w", path, err)
 	}
@@ -1409,8 +1528,7 @@ func isGoSymbolCandidate(token string) bool {
 }
 
 func gitObjectExists(ctx context.Context, repo, object string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "-e", object)
-	cmd.Dir = repo
+	cmd := newGitCommand(ctx, repo, "cat-file", "-e", object)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -1424,9 +1542,59 @@ func gitObjectExists(ctx context.Context, repo, object string) (bool, error) {
 	return false, fmt.Errorf("check git object %q: %w: %s", object, err, strings.TrimSpace(stderr.String()))
 }
 
+func reviewPathContent(ctx context.Context, repo string, r reviewRange, path string) (string, error) {
+	if !r.isWorkingTree() {
+		return git(ctx, repo, "show", r.End+":"+path)
+	}
+	resolved, err := resolveWorktreePath(repo, path)
+	if err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func reviewPathExists(ctx context.Context, repo string, r reviewRange, path string) (bool, error) {
+	if !r.isWorkingTree() {
+		return gitObjectExists(ctx, repo, r.End+":"+path)
+	}
+	resolved, err := resolveWorktreePath(repo, path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	_, err = os.Stat(resolved)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func resolveWorktreePath(repo, path string) (string, error) {
+	normalized, err := normalizeTouchedPath(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := canonicalPath(filepath.Join(repo, filepath.FromSlash(normalized)))
+	if err != nil {
+		return "", err
+	}
+	if !pathWithin(repo, resolved) {
+		return "", fmt.Errorf("worktree path %q escapes repository %q", path, repo)
+	}
+	return resolved, nil
+}
+
 func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "grep", "-q", "-F", symbol, revision, "--", "*.go")
-	cmd.Dir = repo
+	cmd := newGitCommand(ctx, repo, "grep", "-q", "-F", symbol, revision, "--", "*.go")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -1440,10 +1608,35 @@ func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, 
 	return false, fmt.Errorf("check Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
 }
 
+func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol string) (bool, error) {
+	if !r.isWorkingTree() {
+		return gitSymbolExists(ctx, repo, r.End, symbol)
+	}
+	cmd := newGitCommand(ctx, repo, "grep", "--untracked", "-q", "-F", symbol, "--", "*.go")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check worktree Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
+}
+
+func reviewTargetLabel(r reviewRange) string {
+	if r.isWorkingTree() {
+		return "working tree"
+	}
+	return r.End
+}
+
 func buildBatches(ctx context.Context, repo string, r reviewRange, paths []string, config Config) ([]*batch, error) {
 	var batches []*batch
 	for _, path := range paths {
-		diff, err := git(ctx, repo, "diff", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
+		diff, err := reviewDiff(ctx, repo, r, path)
 		if err != nil {
 			return nil, fmt.Errorf("diff %q: %w", path, err)
 		}
@@ -1464,6 +1657,28 @@ func buildBatches(ctx context.Context, repo string, r reviewRange, paths []strin
 	}
 
 	return batches, nil
+}
+
+func reviewDiff(ctx context.Context, repo string, r reviewRange, path string) (string, error) {
+	if !r.isWorkingTree() {
+		return git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
+	}
+	diff, err := git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", r.Start, "--", path)
+	if err != nil || diff != "" {
+		return diff, err
+	}
+	fullPath := filepath.Join(repo, filepath.FromSlash(path))
+	if _, err := os.Lstat(fullPath); err != nil {
+		return "", err
+	}
+	diff, err = gitWithExitCodeOne(ctx, repo, "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", "--", os.DevNull, path)
+	if err != nil {
+		return "", err
+	}
+	if diff == "" {
+		return fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n", path, path), nil
+	}
+	return diff, nil
 }
 
 func writeItems(artifactRoot, outputDir string, batches []*batch) ([]item, error) {
@@ -1660,8 +1875,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func gitWithInput(ctx context.Context, dir string, input []byte, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
+	cmd := newGitCommand(ctx, dir, args...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1670,6 +1884,59 @@ func gitWithInput(ctx context.Context, dir string, input []byte, args ...string)
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+func gitWithExitCodeOne(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := newGitCommand(ctx, dir, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return stdout.String(), nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return stdout.String(), nil
+	}
+	return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+}
+
+func newGitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	guardedArgs := []string{
+		"-c", "core.hooksPath=" + os.DevNull,
+		"-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false",
+	}
+	guardedArgs = append(guardedArgs, args...)
+	cmd := exec.CommandContext(ctx, "git", guardedArgs...)
+	cmd.Dir = dir
+	cmd.Env = sanitizedGitEnvironment()
+	return cmd
+}
+
+func sanitizedGitEnvironment() []string {
+	env := make([]string, 0, 12)
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR":
+			env = append(env, entry)
+		default:
+			if strings.HasPrefix(key, "LC_") {
+				env = append(env, entry)
+			}
+		}
+	}
+	return append(env,
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_TERMINAL_PROMPT=0",
+	)
 }
 
 func nonEmptyLines(value string) []string {

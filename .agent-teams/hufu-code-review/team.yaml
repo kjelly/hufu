@@ -15,9 +15,8 @@ spec:
   goal-mode: outcome
   execution-profile: fresh-session
   unattended: true
-  # This team is read-only. Acceptance failure must never invoke Hufu's
-  # destructive repository rollback default.
-  rollback: "true"
+  # This team is read-only. No rollback command is configured: acceptance
+  # failure must fail closed without modifying the repository.
   max-duration: 86400
   max-total-tokens: 0
   no-net: true
@@ -35,7 +34,7 @@ spec:
       properties:
         kind:
           type: string
-          enum: [last_n, revision_range, since]
+          enum: [last_n, revision_range, since, working_tree]
         count:
           type: integer
           minimum: 1
@@ -120,7 +119,7 @@ spec:
           - { pointer: /requested, op: equals_input, input: review.scope }
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
-          - { pointer: /resolved/selected_commit_count, op: minimum, value: 1 }
+          - { pointer: /observed_budget/changed_paths, op: minimum, value: 1 }
       - type: task_output_assert
         source-task: produce-workset
         output: documentation_verification

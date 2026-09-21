@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kjelly/hufu/internal/golangruntime"
 )
@@ -155,91 +154,19 @@ func TestPrepareSupportsTypedReviewScopeVariants(t *testing.T) {
 	}
 }
 
-func TestResolveReviewScopeInputGrammar(t *testing.T) {
-	tests := []struct {
-		name       string
-		prompt     string
-		wantStatus string
-		wantValue  string
-	}{
-		{name: "last commits", prompt: "Review the last 10 commits", wantStatus: "matched", wantValue: `{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}`},
-		{name: "commit(s) variant", prompt: "Review the last 5 commit(s)", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
-		{name: "traditional chinese commits", prompt: "審查最近5個的 git commit", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
-		{name: "simplified chinese spaced commits", prompt: "审查最近 5 个 git commits", wantStatus: "matched", wantValue: `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}`},
-		{name: "head relative", prompt: "Review HEAD~3..HEAD", wantStatus: "matched", wantValue: `{"kind":"last_n","count":3,"history":"first_parent","head":"HEAD"}`},
-		{name: "revision range", prompt: "Review release-1..feature/head", wantStatus: "matched", wantValue: `{"kind":"revision_range","history":"first_parent","head":"feature/head","base":"release-1"}`},
-		{name: "since", prompt: "Review changes since 2026-09-01", wantStatus: "matched", wantValue: `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-01"}`},
-		{name: "absent", prompt: "Review the recent code", wantStatus: "no_match"},
-		{name: "ambiguous", prompt: "Review last 10 commits but only HEAD~3..HEAD", wantStatus: "ambiguous"},
-		{name: "conflicting bilingual counts", prompt: "Review last 5 commits and 最近6個 git commit", wantStatus: "ambiguous"},
-		{name: "invalid count", prompt: "Review last 0 commits", wantStatus: "invalid"},
-		{name: "invalid chinese count", prompt: "Review 最近101個 git commit", wantStatus: "invalid"},
-		{name: "invalid date", prompt: "Review since 2026-02-30", wantStatus: "invalid"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response := resolveReviewScopeInput(runInputResolverRequest{
-				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
-			})
-			if response.Status != test.wantStatus {
-				t.Fatalf("status = %q diagnostic=%q, want %q", response.Status, response.Diagnostic, test.wantStatus)
-			}
-			if test.wantValue != "" && string(response.Value) != test.wantValue {
-				t.Fatalf("value = %s, want %s", response.Value, test.wantValue)
-			}
-			if response.Status == "matched" && (response.ResolverVersion != scopeResolverVersion || len(response.Evidence) == 0) {
-				t.Fatalf("matched response lacks provenance: %#v", response)
-			}
-		})
-	}
-}
-
-func TestResolveReviewScopeInputCoalescesBilingualCommitExpressions(t *testing.T) {
-	response := resolveReviewScopeInputAt(runInputResolverRequest{
-		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
-		Prompt: "Review last 5 commits and 最近 5 個 git commit",
-	}, time.Date(2026, time.September, 21, 0, 0, 0, 0, time.UTC))
-	if response.Status != "matched" || string(response.Value) != `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}` {
-		t.Fatalf("response = %#v, want one matched count-5 scope", response)
-	}
-	if response.ResolverVersion != scopeResolverVersion || len(response.Evidence) != 2 {
-		t.Fatalf("response provenance = %#v, want resolver version %q and two evidence entries", response, scopeResolverVersion)
-	}
-	if response.Evidence[0].Kind != "last_n_commits" || response.Evidence[1].Kind != "recent_commits_zh" {
-		t.Fatalf("response evidence = %#v, want English and Chinese provenance", response.Evidence)
-	}
-}
-
-func TestResolveReviewScopeInputRelativeDays(t *testing.T) {
-	now := time.Date(2026, time.September, 18, 23, 30, 0, 0, time.FixedZone("test", 8*60*60))
-	for _, test := range []struct {
-		name   string
-		prompt string
-		status string
-		kind   string
-	}{
-		{name: "traditional chinese compact", prompt: "review 最近3天的 git commit", status: "matched", kind: "recent_days_zh"},
-		{name: "traditional chinese spaced", prompt: "審查最近 3 天的提交", status: "matched", kind: "recent_days_zh"},
-		{name: "english", prompt: "review the last 3 days", status: "matched", kind: "last_days"},
-		{name: "invalid", prompt: "review 最近0天的提交", status: "invalid"},
+func TestResolveReviewScopeInputDoesNotInferNaturalLanguage(t *testing.T) {
+	for _, prompt := range []string{
+		"Review the last 5 commits",
+		"審查最近5個的 git commit",
+		"Review the current git diff",
+		"審查目前未提交的修改",
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			response := resolveReviewScopeInputAt(runInputResolverRequest{
-				Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: test.prompt,
-			}, now)
-			if response.Status != test.status {
-				t.Fatalf("status = %q diagnostic=%q, want %q", response.Status, response.Diagnostic, test.status)
-			}
-			if test.status != "matched" {
-				return
-			}
-			if got, want := string(response.Value), `{"kind":"since","history":"first_parent","head":"HEAD","since":"2026-09-15"}`; got != want {
-				t.Fatalf("value = %s, want %s", got, want)
-			}
-			if response.ResolverVersion != scopeResolverVersion || len(response.Evidence) != 1 || response.Evidence[0].Kind != test.kind {
-				t.Fatalf("relative-day provenance = %#v", response)
-			}
+		response := resolveReviewScopeInput(runInputResolverRequest{
+			Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", Prompt: prompt,
 		})
+		if response.Status != "no_match" || len(response.Value) != 0 || len(response.Evidence) != 0 {
+			t.Fatalf("deterministic fallback inferred prompt %q: %#v", prompt, response)
+		}
 	}
 }
 
@@ -260,7 +187,7 @@ func TestRunAcceptsStrictResolverEnvelope(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Status != "matched" || !bytes.Contains(response.Value, []byte(`"count":7`)) {
+	if response.Status != "no_match" || len(response.Value) != 0 {
 		t.Fatalf("response = %#v", response)
 	}
 	bad := append(encoded[:len(encoded)-1], []byte(`,"unknown":true}`)...)
@@ -404,22 +331,13 @@ func TestClassifyReviewPathRoutesRoutineAndRiskDocumentation(t *testing.T) {
 		{path: "docs/security-guide.md", want: "documentation-risk"},
 		{path: "internal/team/runtime.go", want: "primary"},
 	}
+	reviewedRange := reviewRange{End: "HEAD"}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
-			if got := classifyReviewPath(t.Context(), repo, "HEAD", test.path); got != test.want {
+			if got := classifyReviewPath(t.Context(), repo, reviewedRange, test.path); got != test.want {
 				t.Fatalf("classifyReviewPath(%q) = %q, want %q", test.path, got, test.want)
 			}
 		})
-	}
-}
-
-func TestParseScopeCandidatesAcceptsGitParentRevision(t *testing.T) {
-	candidates, invalid := parseScopeCandidates("review 88402b4^..88402b4", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
-	if invalid != "" || len(candidates) != 1 {
-		t.Fatalf("parseScopeCandidates() = %#v, %q", candidates, invalid)
-	}
-	if got := candidates[0].value; got.Kind != "revision_range" || got.Base != "88402b4^" || got.Head != "88402b4" {
-		t.Fatalf("revision scope = %#v", got)
 	}
 }
 
@@ -953,6 +871,210 @@ func TestPrepareRejectsSymlinkEscapeFromArtifactRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "workset-manifest.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("symlink escape produced output: %v", err)
+	}
+}
+
+func TestPreparePreservesDirtyWorktreeWhileProducingCommitDiff(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/committed.go", "package team\n\nfunc Committed() int { return 1 }\n", "committed change", "2025-01-02T00:00:00Z")
+	writeFile(t, filepath.Join(repo, "README.md"), "dirty tracked content\n")
+	writeFile(t, filepath.Join(repo, "notes", "untracked.txt"), "dirty untracked content\n")
+
+	outputDir := filepath.Join(repo, "out")
+	before, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatalf("capture before snapshot: %v", err)
+	}
+	result, err := Prepare(t.Context(), fixtureConfig(repo, "out"))
+	if err != nil {
+		t.Fatalf("Prepare with dirty worktree: %v", err)
+	}
+	after, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatalf("capture after snapshot: %v", err)
+	}
+	if err := compareRepositorySnapshots(before, after); err != nil {
+		t.Fatalf("Prepare changed dirty worktree: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(repo, "README.md")); err != nil || string(got) != "dirty tracked content\n" {
+		t.Fatalf("tracked dirty file changed: content=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(repo, "notes", "untracked.txt")); err != nil || string(got) != "dirty untracked content\n" {
+		t.Fatalf("untracked dirty file changed: content=%q err=%v", got, err)
+	}
+	if len(result.Artifacts) < 2 {
+		t.Fatalf("Prepare produced no review diff artifact: %#v", result.Artifacts)
+	}
+	manifest := readManifest(t, filepath.Join(outputDir, "workset-manifest.json"))
+	if len(manifest.Items) == 0 {
+		t.Fatal("Prepare produced no workset items")
+	}
+	diff, err := os.ReadFile(filepath.Join(outputDir, filepath.FromSlash(manifest.Items[0].DiffPath)))
+	if err != nil {
+		t.Fatalf("read review diff: %v", err)
+	}
+	if !bytes.Contains(diff, []byte("internal/team/committed.go")) {
+		t.Fatalf("review diff omitted committed change:\n%s", diff)
+	}
+	if bytes.Contains(diff, []byte("dirty tracked content")) || bytes.Contains(diff, []byte("dirty untracked content")) {
+		t.Fatalf("commit review diff included uncommitted content:\n%s", diff)
+	}
+}
+
+func TestPrepareReviewsStagedUnstagedAndUntrackedWorkingTreeChanges(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, ".gitignore"), "ignored.txt\n")
+	writeFile(t, filepath.Join(repo, "internal/team/staged.go"), "package team\n\nfunc Staged() int { return 1 }\n")
+	writeFile(t, filepath.Join(repo, "internal/team/unstaged.go"), "package team\n\nfunc Unstaged() int { return 1 }\n")
+	commit(t, repo, "working tree baseline", "2025-01-02T00:00:00Z")
+
+	writeFile(t, filepath.Join(repo, "internal/team/staged.go"), "package team\n\nfunc Staged() int { return 2 }\n")
+	gitRun(t, repo, "add", "internal/team/staged.go")
+	writeFile(t, filepath.Join(repo, "internal/team/unstaged.go"), "package team\n\nfunc Unstaged() int { return 2 }\n")
+	writeFile(t, filepath.Join(repo, "internal/team/untracked.go"), "package team\n\nfunc Untracked() int { return 3 }\n")
+	writeFile(t, filepath.Join(repo, "README.md"), "working tree documentation\n")
+	writeFile(t, filepath.Join(repo, "ignored.txt"), "must not be reviewed\n")
+
+	outputDir := filepath.Join(repo, "out")
+	before, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := fixtureConfig(repo, "out")
+	config.Scope = resolverScope{Kind: "working_tree", History: "first_parent", Head: "HEAD"}
+	config.Since = ""
+	config.MaxCommits = 0
+	config.Routing = routingDocumentation
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare working tree review: %v", err)
+	}
+	after, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compareRepositorySnapshots(before, after); err != nil {
+		t.Fatalf("working tree review changed repository: %v", err)
+	}
+
+	primary := readManifest(t, filepath.Join(outputDir, "primary", "workset-manifest.json"))
+	gotPaths := make([]string, 0)
+	for _, item := range primary.Items {
+		gotPaths = append(gotPaths, item.TouchedPaths...)
+	}
+	for _, want := range []string{"internal/team/staged.go", "internal/team/unstaged.go", "internal/team/untracked.go"} {
+		if !slices.Contains(gotPaths, want) {
+			t.Fatalf("primary working tree paths = %q, missing %q", gotPaths, want)
+		}
+	}
+	if slices.Contains(gotPaths, "ignored.txt") {
+		t.Fatalf("working tree review included ignored file: %q", gotPaths)
+	}
+	documentation := readManifest(t, filepath.Join(outputDir, "documentation", "workset-manifest.json"))
+	if len(documentation.Items) == 0 || !slices.Contains(documentation.Items[0].TouchedPaths, "README.md") {
+		t.Fatalf("documentation working tree paths = %#v, want README.md", documentation.Items)
+	}
+	if result.Outputs["commit_count"] != 0 || result.Outputs["range_end"] != "WORKTREE" {
+		t.Fatalf("working tree outputs = %#v, want commit_count 0 and WORKTREE range", result.Outputs)
+	}
+	if primary.Scope.Requested.Kind != "working_tree" || !primary.Scope.Satisfied {
+		t.Fatalf("working tree scope attestation = %#v", primary.Scope)
+	}
+}
+
+func TestPrepareRejectsEmptyWorkingTreeScope(t *testing.T) {
+	repo := newFixtureRepo(t)
+	config := fixtureConfig(repo, "out")
+	config.Scope = resolverScope{Kind: "working_tree", History: "first_parent", Head: "HEAD"}
+	config.Since = ""
+	config.MaxCommits = 0
+	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), "scope_empty") {
+		t.Fatalf("Prepare empty working tree error = %v, want scope_empty", err)
+	}
+}
+
+func TestPrepareIgnoresInjectedGitEnvironment(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/target.go", "package team\n", "target change", "2025-01-02T00:00:00Z")
+	other := newFixtureRepo(t)
+	writeAndCommit(t, other, "internal/team/wrong.go", "package team\n", "wrong change", "2025-01-02T00:00:00Z")
+
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	t.Setenv("GIT_OBJECT_DIRECTORY", filepath.Join(other, ".git", "objects"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", filepath.Join(other, "hooks"))
+
+	if _, err := Prepare(t.Context(), fixtureConfig(repo, "out")); err != nil {
+		t.Fatalf("Prepare with injected Git environment: %v", err)
+	}
+	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+	if len(manifest.Items) == 0 || !slices.Contains(manifest.Items[0].TouchedPaths, "internal/team/target.go") {
+		t.Fatalf("Prepare reviewed the wrong repository: %#v", manifest.Items)
+	}
+}
+
+func TestSanitizedGitEnvironmentDisablesOptionalLocks(t *testing.T) {
+	t.Setenv("GIT_OPTIONAL_LOCKS", "1")
+	t.Setenv("GIT_DIR", "/tmp/injected-git-dir")
+	env := sanitizedGitEnvironment()
+	if !slices.Contains(env, "GIT_OPTIONAL_LOCKS=0") {
+		t.Fatalf("sanitized environment does not disable optional locks: %q", env)
+	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "GIT_DIR=") || entry == "GIT_OPTIONAL_LOCKS=1" {
+			t.Fatalf("sanitized environment retained unsafe Git setting %q", entry)
+		}
+	}
+}
+
+func TestMutationCanaryDetectsRepositoryChanges(t *testing.T) {
+	repo := newFixtureRepo(t)
+	outputDir := filepath.Join(t.TempDir(), "workset")
+	before, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "README.md"), "mutated\n")
+	after, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compareRepositorySnapshots(before, after); err == nil || !strings.Contains(err.Error(), "repository mutation detected") {
+		t.Fatalf("mutation canary error = %v, want repository mutation detection", err)
+	}
+}
+
+func TestMutationCanaryDetectsContentChangeWhenDirtyStatusIsUnchanged(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "README.md"), "first dirty value\n")
+	outputDir := filepath.Join(t.TempDir(), "workset")
+	before, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "README.md"), "second dirty value\n")
+	after, err := captureRepositorySnapshot(t.Context(), repo, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.status != after.status {
+		t.Fatalf("fixture changed porcelain status: before=%q after=%q", before.status, after.status)
+	}
+	if err := compareRepositorySnapshots(before, after); err == nil || !strings.Contains(err.Error(), "dirty tracked or untracked file content changed") {
+		t.Fatalf("mutation canary error = %v, want dirty content detection", err)
+	}
+}
+
+func TestPrepareRejectsOutputInsideGitAdministrativeDirectory(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/team/foo.go", "package team\n", "foo change", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, filepath.Join(repo, ".git", "review-output"))
+	config.ArtifactRoot = filepath.Join(repo, ".git")
+	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), "Git administrative directory") {
+		t.Fatalf("Prepare accepted output inside .git: %v", err)
 	}
 }
 

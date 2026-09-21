@@ -79,7 +79,7 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	}
 }
 
-func TestHufuCodeReviewResolverRunsThroughEmbeddedGolangRuntime(t *testing.T) {
+func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	for _, capability := range []string{"resolve-review-scope", "produce-workset"} {
 		config := session.Config.ActionProviders[capability]
@@ -95,25 +95,17 @@ func TestHufuCodeReviewResolverRunsThroughEmbeddedGolangRuntime(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider %T does not implement RunInputResolverProvider", provider)
 	}
-	response, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
-		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review the last 7 commits",
-		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
-	})
-	if err != nil {
-		t.Fatalf("ResolveRunInput: %v", err)
-	}
-	if response.Status != "matched" || string(response.Value) != `{"kind":"last_n","count":7,"history":"first_parent","head":"HEAD"}` {
-		t.Fatalf("resolver response = %#v", response)
-	}
-	chinese, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
-		Type: "resolve_run_input", InputName: "review.scope", Prompt: "審查最近5個的 git commit",
-		ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
-	})
-	if err != nil {
-		t.Fatalf("ResolveRunInput Chinese prompt: %v", err)
-	}
-	if chinese.Status != "matched" || string(chinese.Value) != `{"kind":"last_n","count":5,"history":"first_parent","head":"HEAD"}` {
-		t.Fatalf("Chinese resolver response = %#v", chinese)
+	for _, prompt := range []string{"Review the last 7 commits", "審查最近5個的 git commit", "Review the current git diff"} {
+		response, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
+			Type: "resolve_run_input", InputName: "review.scope", Prompt: prompt,
+			ExplicitValue: json.RawMessage(`null`), SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+		})
+		if err != nil {
+			t.Fatalf("ResolveRunInput(%q): %v", prompt, err)
+		}
+		if response.Status != "no_match" || len(response.Value) != 0 || len(response.Evidence) != 0 {
+			t.Fatalf("deterministic resolver inferred prompt %q: %#v", prompt, response)
+		}
 	}
 	if name := session.ProviderRegistry.ProviderName("resolve-review-scope"); !strings.HasPrefix(name, "golang:sha256:") {
 		t.Fatalf("provider identity = %q", name)
