@@ -181,6 +181,79 @@ model: ollama/qwen3:8b
 You are a senior developer skilled at writing high-quality code.
 ```
 
+#### Create a team-owned skill
+
+Create a reusable skill under the team directory and include it from the team
+or from an individual agent:
+
+```bash
+mkdir -p .agent-teams/my-team/skills/code-review
+```
+
+```markdown
+<!-- .agent-teams/my-team/skills/code-review/SKILL.md -->
+---
+name: code-review
+description: Perform a systematic code review
+allowed-tools: view,grep,glob,bash
+---
+# Code Review
+
+1. Inspect the relevant files with `view` and `glob`.
+2. Search for risk patterns with `grep`.
+3. Run the declared checks with `bash`.
+4. Report findings with file locations and evidence.
+```
+
+Reference it in `team.yaml` or an agent frontmatter:
+
+```yaml
+# team.yaml
+skills: code-review
+```
+
+```yaml
+# developer.md frontmatter
+skills: code-review
+```
+
+Team skills are discovered from `<team-dir>/skills/<skill-name>/SKILL.md`.
+Project and global skill paths are also searched; see the [skill discovery
+reference](docs/reference/skill-discovery.md) for precedence and promotion.
+
+#### Add an action provider
+
+Use a command provider for a legacy executable adapter, or use Hufu's embedded
+Go runtime for a pre-written team-owned Go adapter. The Go adapter must export
+`Run(context.Context, io.Reader, io.Writer) error`; it does not use `go run`:
+
+```yaml
+# team.yaml
+action-providers:
+  prepare-workset:
+    runtime: golang
+    source: ./actions/prepare-workset
+    mode: trusted-static
+    timeout: 300
+```
+
+```text
+.agent-teams/my-team/
+├── team.yaml
+├── coordinator.md
+├── developer.md
+├── skills/
+│   └── code-review/SKILL.md
+└── actions/
+    └── prepare-workset/main.go
+```
+
+Trusted-static Go actions may use Git, external processes, and file I/O as
+part of their pre-written domain adapter. Those capabilities remain owned by
+the script; Hufu core does not add a Git host capability. See the [action
+provider reference](docs/reference/action-providers.md) for the request,
+response, validation, provenance, and recovery contract.
+
 #### Machine-readable team requirements
 
 Optional `requires` contracts let hufu reject contradictory teams before any
