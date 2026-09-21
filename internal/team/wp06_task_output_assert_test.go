@@ -44,6 +44,73 @@ func TestCanonicalizeRuntimeOutputsIsDeterministicBoundedAndDetached(t *testing.
 	}
 }
 
+func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
+	const collision = "runtime-output-secret-collision-7f2c9b1e"
+	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{
+		"documentation_verification": map[string]any{
+			"passed":        true,
+			"checked_files": []any{collision},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalVerification := outputs["documentation_verification"].(map[string]any)
+	canonicalFiles := canonicalVerification["checked_files"].([]any)
+	canonicalFile := canonicalFiles[0]
+	result := &TaskResult{
+		TaskID: "1", Status: TaskResultStatusSuccess, Source: "runtime",
+		RuntimeOutputs: outputs, RuntimeOutputsHash: digest,
+	}
+	session := NewSession()
+	session.Entries = []SessionEntry{{Role: "assistant", Content: "api_token: " + collision}}
+	session.Tasks = []*TodoItem{{ID: "1", Status: TaskDone, TypedResult: result}}
+	workspace := t.TempDir()
+	if err := SaveSession(workspace, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeTaskResult(result); err != nil {
+		t.Fatalf("live runtime result became invalid after learned-secret growth: %v", err)
+	}
+	reloaded, err := loadSessionQuiet(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded == nil || len(reloaded.Tasks) != 1 || reloaded.Tasks[0].TypedResult == nil {
+		t.Fatalf("reloaded session lost runtime result: %#v", reloaded)
+	}
+	if err := validateRuntimeTaskResult(reloaded.Tasks[0].TypedResult); err != nil {
+		t.Fatalf("persisted runtime result became invalid after session redaction: %v", err)
+	}
+	verification := reloaded.Tasks[0].TypedResult.RuntimeOutputs["documentation_verification"].(map[string]any)
+	files := verification["checked_files"].([]any)
+	if len(files) != 1 || files[0] != canonicalFile {
+		t.Fatalf("persisted canonical runtime outputs = %#v", reloaded.Tasks[0].TypedResult.RuntimeOutputs)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"id": "1", "status": TaskDone, "typed_result": result,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEventStore(t.TempDir(), "run-runtime-redaction", "session-runtime-redaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := store.AppendPersisted(RunEvent{Type: "task_completed", Actor: "runtime", TaskID: "1", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := reduceToTodoList([]RunEvent{event})
+	if len(replayed.tasks) != 1 || replayed.tasks[0].TypedResult == nil {
+		t.Fatalf("event replay lost runtime result: %#v", replayed.tasks)
+	}
+	if err := validateRuntimeTaskResult(replayed.tasks[0].TypedResult); err != nil {
+		t.Fatalf("event replay invalidated runtime outputs: %v", err)
+	}
+}
+
 func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
 	definitions := []RunInputDefinition{{Name: "review.scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{

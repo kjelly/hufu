@@ -210,9 +210,11 @@ func SaveSession(workspace string, session *SessionData) error {
 		return err
 	}
 	// Redact the decoded JSON tree rather than applying text substitutions to
-	// serialized JSON. The latter can match credential-looking text inside a
-	// task description and corrupt escaped quotes in the document.
-	data, err = utils.RedactJSON(data)
+	// serialized JSON. Runtime outputs have already crossed their own redaction
+	// and hashing boundary, so preserve them byte-for-byte while redacting the
+	// surrounding mutable projection. Re-redacting those values after the
+	// learned-secret set grows would invalidate their execution receipts.
+	data, err = redactJSONPreservingRuntimeOutputs(data)
 	if err != nil {
 		return fmt.Errorf("redact session JSON: %w", err)
 	}

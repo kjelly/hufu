@@ -1636,7 +1636,7 @@ func taskTransitionEventKey(item *TodoItem) string {
 		// surface that original marshal error.
 		return base + ":canonical-unserializable"
 	}
-	redacted, err := utils.RedactJSON(data)
+	redacted, err := redactJSONPreservingRuntimeOutputs(data)
 	if err != nil {
 		return base + ":canonical-unserializable"
 	}

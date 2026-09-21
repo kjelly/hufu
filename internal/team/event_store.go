@@ -18,8 +18,6 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/eventchain"
-
-	"github.com/kjelly/hufu/internal/utils"
 )
 
 const eventStoreFile = "event_store.jsonl"
@@ -383,7 +381,7 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		return RunEvent{}, fmt.Errorf("reject terminal event %q with empty payload", event.Type)
 	}
 	if len(bytes.TrimSpace(event.Payload)) > 0 {
-		redacted, err := utils.RedactJSON(event.Payload)
+		redacted, err := redactJSONPreservingRuntimeOutputs(event.Payload)
 		if err != nil {
 			return RunEvent{}, fmt.Errorf("redact event payload: %w", err)
 		}
