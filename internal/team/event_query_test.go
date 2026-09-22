@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+var benchmarkEventQueryMatches int
+
 func TestEventStoreQueryEventsMatchesRunAndTypesInDurableOrder(t *testing.T) {
 	store, err := NewEventStore(t.TempDir(), "run-default", "session-query")
 	if err != nil {
@@ -180,4 +182,60 @@ func TestEventStoreQueryEventsWildcardMatchesReadEvents(t *testing.T) {
 	if !reflect.DeepEqual(queried, read) {
 		t.Fatalf("wildcard query = %#v, ReadEvents = %#v", queried, read)
 	}
+}
+
+func BenchmarkEventStoreQueryEventsSparse(b *testing.B) {
+	const eventCount = 10_000
+	const targetRunID = "target-run"
+	const targetType = "target-event"
+
+	cached := make([]RunEvent, eventCount)
+	for index := range cached {
+		cached[index] = RunEvent{
+			RunID:   "other-run",
+			Type:    "other-event",
+			Actor:   "benchmark",
+			Payload: []byte(`{"value":"noise"}`),
+		}
+	}
+	for index := 0; index < eventCount; index += 1_000 {
+		cached[index].RunID = targetRunID
+		cached[index].Type = targetType
+		cached[index].Payload = []byte(`{"value":"match"}`)
+	}
+	store := &EventStore{
+		mu:           make(chan struct{}, 1),
+		path:         "benchmark-event-store",
+		stateValid:   true,
+		cachedEvents: cached,
+	}
+	store.mu <- struct{}{}
+
+	b.Run("ReadEventsAndFilter", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			events, err := store.ReadEvents()
+			if err != nil {
+				b.Fatal(err)
+			}
+			matches := 0
+			for _, event := range events {
+				if event.RunID == targetRunID && event.Type == targetType {
+					matches++
+				}
+			}
+			benchmarkEventQueryMatches = matches
+		}
+	})
+
+	b.Run("QueryEvents", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			events, err := store.QueryEvents(EventQuery{RunID: targetRunID, Types: []string{targetType}})
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkEventQueryMatches = len(events)
+		}
+	})
 }
