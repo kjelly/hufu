@@ -23,8 +23,8 @@ action-providers:
     timeout: 300
 ```
 
-`command` is argv, not shell text. `dir` and `timeout` are optional. Existing
-command providers remain supported.
+`command` is argv, not shell text. `dir` and `timeout` are optional; `timeout`
+is expressed in seconds. Existing command providers remain supported.
 
 ### Embedded Go provider
 
@@ -128,6 +128,12 @@ is retained only as the unavailable/invalid-output fallback. `--dry-run` never
 invokes the semantic resolver. Command-shaped strings inside a semantic value
 are rejected before snapshot/event persistence and also use the deterministic
 fallback.
+
+Explicit `--input` or `--input-file` values do not bypass prompt resolution.
+Hufu compares each explicit value with the resolver candidate after canonical
+JSON validation: equal values retain the explicit source plus resolver
+evidence, while different values fail with `input_prompt_conflict`. This is an
+intentional fail-closed consistency check, not an override precedence rule.
 
 ## Runtime environment
 

@@ -16,6 +16,16 @@ hufu 會在 coordinator 執行期間記錄工具呼叫，偵測重複的工具�
 - 技能草稿是待人工審查的 `SKILL.md`。
 - `patterns.json` 是供 `hufu skill graph` 使用的非 canonical、只含安全聚合 metadata 的最新評估投影。
 
+## 技能搜尋路徑與優先順序
+
+具名 team 會依下列順序搜尋技能：
+
+1. `<team-dir>/skills/<skill-name>/SKILL.md`
+2. `<cwd>/.agents/skills/<skill-name>/SKILL.md`
+3. `~/.agents/skills/<skill-name>/SKILL.md`
+
+技能名稱不分大小寫；同名技能只保留第一個找到的定義，因此 team-local 定義會覆蓋 project 與 global 定義，project 定義會覆蓋 global 定義。`skills/drafts/` 不會進入預設的 LLM-facing skill pool；只有明確 promotion 到正式技能目錄後才參與上述優先順序。
+
 ## 偵測流程
 
 ```text
