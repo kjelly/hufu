@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"github.com/traefik/yaegi/stdlib/unrestricted"
@@ -127,11 +128,10 @@ func Execute(ctx context.Context, executable string, program Program, input []by
 		cmd.Env = slices.Clone(env)
 	}
 	configureProcessAttributes(cmd)
-	if err := cmd.Start(); err != nil {
+	wait, err := processutil.StartAndWait(cmd)
+	if err != nil {
 		return Result{}, fmt.Errorf("start embedded Go runtime: %w", err)
 	}
-	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
 	var runErr error
 	select {
 	case runErr = <-wait:

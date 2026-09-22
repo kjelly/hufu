@@ -26,6 +26,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/kjelly/hufu/internal/processutil"
 )
 
 const (
@@ -62,6 +64,7 @@ type Proxy struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	url    string
+	wait   <-chan error
 
 	closeOnce sync.Once
 	closeErr  error
@@ -123,12 +126,13 @@ func start(ctx context.Context, executable string, args, env []string, cfg Confi
 		return nil, fmt.Errorf("create provider proxy status pipe: %w", err)
 	}
 	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
+	wait, err := processutil.StartAndWait(cmd)
+	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		return nil, fmt.Errorf("start provider proxy: %w", err)
 	}
-	p := &Proxy{cmd: cmd, stdin: stdin, stdout: stdout}
+	p := &Proxy{cmd: cmd, stdin: stdin, stdout: stdout, wait: wait}
 	control := controlMessage{Version: ProtocolVersion, Config: cfg}
 	encoded, err := json.Marshal(control)
 	if err != nil {
@@ -243,7 +247,7 @@ func (p *Proxy) Close() error {
 		// The helper synchronously waits below so the proxy never reports Close
 		// before its child has been reaped.
 		terminateProcess(p.cmd)
-		waitErr := p.cmd.Wait()
+		waitErr := <-p.wait
 		if waitErr != nil {
 			var exitErr *exec.ExitError
 			if !errors.As(waitErr, &exitErr) {
