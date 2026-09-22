@@ -190,7 +190,12 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		flushThink(w, st)
 
 	case "warning":
+		if st.textBuf != "" {
+			w.write(flushText(st.currentAgent, st.textBuf))
+			st.textBuf = ""
+		}
 		w.write(errStyle.Render("⚠ "+event.Message) + "\n")
+		flushThink(w, st)
 
 	case "start":
 		if st.currentAgent != "" && st.textBuf != "" {

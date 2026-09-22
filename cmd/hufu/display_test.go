@@ -65,6 +65,27 @@ func TestDispatchStatusEventShowsBudgetExceeded(t *testing.T) {
 	}
 }
 
+func TestDispatchStatusEventFlushesBufferedOutputBeforeWarning(t *testing.T) {
+	w := &testStatusWriter{}
+	st := &reporterState{currentAgent: "helper", textBuf: "answer", thinkBuf: "reasoning"}
+
+	dispatchStatusEvent(w, st, team.StatusEvent{Type: "warning", Message: "check this"})
+
+	out := w.b.String()
+	answerIndex := strings.Index(out, "answer")
+	warningIndex := strings.Index(out, "check this")
+	reasoningIndex := strings.Index(out, "reasoning")
+	if answerIndex < 0 || warningIndex < 0 || reasoningIndex < 0 {
+		t.Fatalf("warning output omitted buffered content: %q", out)
+	}
+	if answerIndex > warningIndex || warningIndex > reasoningIndex {
+		t.Fatalf("warning output order = %q, want answer, warning, reasoning", out)
+	}
+	if st.textBuf != "" || st.thinkBuf != "" {
+		t.Fatalf("warning left buffered output: %#v", st)
+	}
+}
+
 func TestDispatchStatusEventRendersSecretFreeModelProfile(t *testing.T) {
 	w := &testStatusWriter{}
 	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{Type: "model_profile_resolved", ModelProfile: &modelprofile.TelemetryProjection{
