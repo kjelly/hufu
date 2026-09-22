@@ -9,3 +9,4 @@ internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(c
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.guardModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.GuardSidecar<TAB>guard_reviewer<TAB>runtime_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.JudgeSidecar<TAB>judge<TAB>runtime_boundary
 cmd/hufu/explaincmd_ai.go<TAB>sidecar.NewSidecar(callCtx, provider, model)<TAB>analyzeExplainAI<TAB>explain_analysis<TAB>projection_boundary
+cmd/hufu/decisionrt_registry.go<TAB>hufusidecar.NewSidecar(ctx, provider, r.options.SidecarModel)<TAB>defaultDecisionRTRegistry.Resolve<TAB>decisionrt_backend<TAB>runtime_boundary
