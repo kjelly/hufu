@@ -88,11 +88,11 @@ func (r *runtimeImpl) Decide(ctx context.Context, request Request) (Result, Rece
 	if err := request.Validate(); err != nil {
 		return Result{}, Receipt{}, err
 	}
+	started := time.Now()
 	digest, err := Digest(request)
 	if err != nil {
 		return Result{}, Receipt{}, err
 	}
-	started := time.Now()
 
 	backendResult, reason, err := r.attempt(ctx, request, r.primary)
 	if err == nil && reason == "" {
@@ -123,9 +123,19 @@ func (r *runtimeImpl) Decide(ctx context.Context, request Request) (Result, Rece
 }
 
 func (r *runtimeImpl) attempt(ctx context.Context, request Request, backend namedBackend) (BackendResult, string, error) {
+	if err := ctx.Err(); err != nil {
+		return BackendResult{}, "", runtimeError(ErrorBackendFailure, backend.name, err)
+	}
+
 	r.metrics.IncCalls(request.Purpose, backend.name)
 	started := time.Now()
 	attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	if err := attemptCtx.Err(); err != nil {
+		cancel()
+		r.metrics.ObserveDurationMS(request.Purpose, backend.name, elapsedMilliseconds(started))
+		r.metrics.IncErrors(request.Purpose, backend.name)
+		return BackendResult{}, "", runtimeError(ErrorBackendFailure, backend.name, err)
+	}
 	result, err := backend.backend.Decide(attemptCtx, cloneRequest(request))
 	attemptContextErr := attemptCtx.Err()
 	callerContextErr := ctx.Err()

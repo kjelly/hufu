@@ -184,7 +184,7 @@ func validateBackendResult(spec Spec, result BackendResult) error {
 
 	switch result.Status {
 	case StatusAbstained:
-		if !isZeroValue(result.Value) || len(result.Candidates) != 0 || result.Confidence != 0 || (result.ConfidenceSemantics != "" && result.ConfidenceSemantics != ConfidenceNone) {
+		if !isZeroValue(result.Value) || len(result.Candidates) != 0 || result.Confidence != 0 || result.ConfidenceSemantics != ConfidenceNone {
 			return invalidBackendOutput("invalid abstained result")
 		}
 		return nil

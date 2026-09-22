@@ -226,15 +226,16 @@ memory 或 `DecisionEngine`。只有 Go caller 明確呼叫 `Runtime.Decide`，
 
 ```text
 internal/decisionrt/
-    types.go
-    validate.go
-    backend.go
-    runtime.go
-    chain.go
+    architecture_test.go
     digest.go
-    receipt.go
+    digest_test.go
     errors.go
     metrics.go
+    runtime.go
+    runtime_test.go
+    types.go
+    validate.go
+    validation_test.go
 
     backend/
         rule/
@@ -245,10 +246,6 @@ internal/decisionrt/
             sidecar.go
             sidecar_test.go
 
-    decisionrt_test.go
-    validation_test.go
-    chain_test.go
-    digest_test.go
 ```
 
 本規格不建立其他 backend 目錄，也不新增 Python 或外部推論服務依賴。
@@ -1493,8 +1490,9 @@ primary := rule.Func{
     BackendName: "size-policy",
     DecideFunc: func(_ context.Context, _ decisionrt.Request) (decisionrt.BackendResult, error) {
         return decisionrt.BackendResult{
-            Status: decisionrt.StatusDecided,
-            Value:  decisionrt.Value{Choice: "medium"},
+            Status:              decisionrt.StatusDecided,
+            Value:               decisionrt.Value{Choice: "medium"},
+            ConfidenceSemantics: decisionrt.ConfidenceNone,
         }, nil
     },
 }

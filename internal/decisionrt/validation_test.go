@@ -43,6 +43,7 @@ func TestSpecValidate(t *testing.T) {
 	integer := validChoiceSpec()
 	integer.Kind = decisionrt.KindIntegerRange
 	integer.Options = nil
+	assertErrorKind(t, integer.Validate(), decisionrt.ErrorInvalidRequest)
 	integer.Range = &decisionrt.IntegerRange{Min: math.MinInt64, Max: math.MinInt64 + 20}
 	if err := integer.Validate(); err != nil {
 		t.Fatalf("valid integer range: %v", err)

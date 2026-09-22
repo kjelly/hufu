@@ -189,18 +189,38 @@ func TestRuntimeRejectsInvalidCandidateDistribution(t *testing.T) {
 func TestRuntimeRejectsInvalidBackendOutputs(t *testing.T) {
 	trueValue := true
 	tests := map[string]decisionrt.BackendResult{
+		"abstained missing confidence semantics": {
+			Status: decisionrt.StatusAbstained,
+		},
 		"abstained value": {
 			Status: decisionrt.StatusAbstained, Value: decisionrt.Value{Choice: "small"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
+		},
+		"wrong value kind": {
+			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Boolean: &trueValue}, ConfidenceSemantics: decisionrt.ConfidenceNone,
 		},
 		"multiple value fields": {
 			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small", Boolean: &trueValue}, ConfidenceSemantics: decisionrt.ConfidenceNone,
 		},
+		"outside domain": {
+			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "outside"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
+		},
 		"non-finite confidence": {
 			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, Confidence: math.NaN(), ConfidenceSemantics: decisionrt.ConfidenceRaw,
+		},
+		"infinite confidence": {
+			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, Confidence: math.Inf(1), ConfidenceSemantics: decisionrt.ConfidenceRaw,
+		},
+		"probability outside range": {
+			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
+			Candidates: []decisionrt.Candidate{{Value: "small", Probability: 1.1}, {Value: "large", Probability: -0.1}},
 		},
 		"incomplete distribution": {
 			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
 			Candidates: []decisionrt.Candidate{{Value: "small", Probability: 1}},
+		},
+		"distribution outside domain": {
+			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
+			Candidates: []decisionrt.Candidate{{Value: "small", Probability: 0.5}, {Value: "outside", Probability: 0.5}},
 		},
 		"duplicate candidate": {
 			Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "small"}, ConfidenceSemantics: decisionrt.ConfidenceNone,
@@ -217,6 +237,27 @@ func TestRuntimeRejectsInvalidBackendOutputs(t *testing.T) {
 			_, _, err := runtime.Decide(t.Context(), validChoiceRequest())
 			assertErrorKind(t, err, decisionrt.ErrorInvalidBackendOutput)
 		})
+	}
+}
+
+func TestRuntimeRejectsIntegerOutsideRange(t *testing.T) {
+	runtime := mustRuntime(t, decisionrt.RuntimeConfig{Primary: fixedBackend("primary", decisionrt.BackendResult{
+		Status:              decisionrt.StatusDecided,
+		Value:               decisionrt.Value{Integer: new(int64(2))},
+		ConfidenceSemantics: decisionrt.ConfidenceNone,
+	})})
+	request := decisionrt.Request{
+		Purpose: "score@v1",
+		Spec: decisionrt.Spec{
+			ID: "score", Version: "v1", Kind: decisionrt.KindIntegerRange, Question: "Score?",
+			Range: &decisionrt.IntegerRange{Min: -1, Max: 1},
+		},
+	}
+
+	result, receipt, err := runtime.Decide(t.Context(), request)
+	assertErrorKind(t, err, decisionrt.ErrorInvalidBackendOutput)
+	if !reflect.DeepEqual(result, decisionrt.Result{}) || receipt != (decisionrt.Receipt{}) {
+		t.Fatalf("error returned partial output: %#v %#v", result, receipt)
 	}
 }
 
@@ -289,6 +330,33 @@ func TestRuntimeCancellationAfterPrimaryDoesNotInvokeFallback(t *testing.T) {
 	}
 }
 
+func TestRuntimeCancellationFromFallbackMetricDoesNotInvokeFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var fallbackCalls int
+	metrics := &cancelOnFallbackMetrics{cancel: cancel}
+	runtime := mustRuntime(t, decisionrt.RuntimeConfig{
+		Primary: fixedBackend("primary", decisionrt.BackendResult{
+			Status: decisionrt.StatusAbstained, ConfidenceSemantics: decisionrt.ConfidenceNone,
+		}),
+		Fallback: fakeBackend{name: "fallback", decide: func(context.Context, decisionrt.Request) (decisionrt.BackendResult, error) {
+			fallbackCalls++
+			return decidedChoice("large"), nil
+		}},
+		Metrics: metrics,
+	})
+
+	result, receipt, err := runtime.Decide(ctx, validChoiceRequest())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context canceled", err)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("fallback calls = %d", fallbackCalls)
+	}
+	if !reflect.DeepEqual(result, decisionrt.Result{}) || receipt != (decisionrt.Receipt{}) {
+		t.Fatalf("error returned partial output: %#v %#v", result, receipt)
+	}
+}
+
 func TestRuntimeConfigurationAndUnavailableErrorsDoNotFallback(t *testing.T) {
 	for _, kind := range []decisionrt.ErrorKind{decisionrt.ErrorConfiguration, decisionrt.ErrorBackendUnavailable} {
 		t.Run(string(kind), func(t *testing.T) {
@@ -346,6 +414,48 @@ func TestRuntimeMetrics(t *testing.T) {
 	defer metrics.mu.Unlock()
 	if metrics.calls != 2 || metrics.fallbacks != 1 || metrics.decided != 1 || metrics.abstained != 0 || metrics.durations != 2 {
 		t.Fatalf("metrics = %#v", metrics)
+	}
+}
+
+func TestRuntimeMetricsRecordErrorsAndFinalAbstention(t *testing.T) {
+	metrics := &recordingMetrics{}
+	runtime := mustRuntime(t, decisionrt.RuntimeConfig{
+		Primary: fakeBackend{name: "primary", decide: func(context.Context, decisionrt.Request) (decisionrt.BackendResult, error) {
+			return decisionrt.BackendResult{}, errors.New("provider failed")
+		}},
+		Fallback: fixedBackend("fallback", decisionrt.BackendResult{
+			Status: decisionrt.StatusAbstained, ConfidenceSemantics: decisionrt.ConfidenceNone,
+		}),
+		Metrics: metrics,
+	})
+	if _, _, err := runtime.Decide(t.Context(), validChoiceRequest()); err != nil {
+		t.Fatal(err)
+	}
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	if metrics.calls != 2 || metrics.errors != 1 || metrics.fallbacks != 1 || metrics.decided != 0 || metrics.abstained != 1 || metrics.durations != 2 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+}
+
+func TestRuntimeNoopMetricsMatchesExplicitMetrics(t *testing.T) {
+	request := validChoiceRequest()
+	backend := fixedBackend("primary", decidedChoice("small"))
+	withoutMetrics := mustRuntime(t, decisionrt.RuntimeConfig{Primary: backend})
+	withMetrics := mustRuntime(t, decisionrt.RuntimeConfig{Primary: backend, Metrics: &recordingMetrics{}})
+
+	wantResult, wantReceipt, err := withoutMetrics.Decide(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotResult, gotReceipt, err := withMetrics.Decide(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReceipt.DurationMS = 0
+	gotReceipt.DurationMS = 0
+	if !reflect.DeepEqual(gotResult, wantResult) || gotReceipt != wantReceipt {
+		t.Fatalf("with metrics = %#v %#v, without metrics = %#v %#v", gotResult, gotReceipt, wantResult, wantReceipt)
 	}
 }
 
@@ -407,6 +517,16 @@ type recordingMetrics struct {
 	errors    int
 	fallbacks int
 	durations int
+}
+
+type cancelOnFallbackMetrics struct {
+	recordingMetrics
+	cancel context.CancelFunc
+}
+
+func (m *cancelOnFallbackMetrics) IncFallback(purpose, backend string) {
+	m.cancel()
+	m.recordingMetrics.IncFallback(purpose, backend)
 }
 
 func (m *recordingMetrics) IncCalls(string, string) {
