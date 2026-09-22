@@ -132,15 +132,15 @@ func TestHufuCodeReviewUsesNativeLowCostDocumentationReviewer(t *testing.T) {
 		t.Fatalf("high-reasoning reviewer execution target = %#v, want codex/gpt-5.6-sol", reviewer)
 	}
 	critic := session.Agents["critic"]
-	if critic == nil || critic.Generation.Model != "qwen3.5:cloud" {
-		t.Fatalf("high-reasoning critic execution target = %#v, want qwen3.5:cloud", critic)
+	if critic == nil || critic.Generation.Model != "" {
+		t.Fatalf("high-reasoning critic execution target = %#v, want inherited model", critic)
 	}
 	coordinator := session.Agents["coordinator"]
-	if coordinator == nil || coordinator.Generation.Model != "qwen3.5:cloud" {
-		t.Fatalf("coordinator execution target = %#v, want qwen3.5:cloud", coordinator)
+	if coordinator == nil || coordinator.Generation.Model != "" {
+		t.Fatalf("coordinator execution target = %#v, want inherited model", coordinator)
 	}
-	if session.Config.CoordinatorModel != "ollama/qwen3.5:cloud" {
-		t.Fatalf("team coordinator model = %q, want ollama/qwen3.5:cloud", session.Config.CoordinatorModel)
+	if session.Config.CoordinatorModel != "ollama/minimax-m3:cloud" {
+		t.Fatalf("team coordinator model = %q, want ollama/minimax-m3:cloud", session.Config.CoordinatorModel)
 	}
 	for _, name := range []string{"reviewer", "critic"} {
 		worker := session.Agents[name]
