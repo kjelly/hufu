@@ -2290,7 +2290,7 @@ func runtimeActionGateName(action *Action) string {
 	}
 }
 
-func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (string, error) {
+func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
 	if err := c.validateMaterializedActionIdentity(task); err != nil {
 		return "", err
 	}
@@ -2311,6 +2311,13 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	}
 	attempt := c.currentTaskAttempt(todoID) + 1
 	c.setCurrentTaskAttempt(todoID, attempt)
+	defer func() {
+		status := "done"
+		if returnErr != nil {
+			status = "error"
+		}
+		c.recordExecutionEvent(todoID, task.Agent, attempt, status, "", time.Since(startedAt), ExecutionUsage{})
+	}()
 	c.emitRuntimeActionEvent("action_started", task, todoID, actionID, "started", startedAt, time.Time{}, "", nil)
 	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
@@ -2320,6 +2327,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
+	c.recordExecutionEvent(todoID, task.Agent, attempt, "in_progress", "", 0, ExecutionUsage{})
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	actionEnv := ActionEnvironment{
 		Workspace: actionRoot, Repository: c.projectDir, RunID: coordinatorRuntimeRunID(c),
@@ -2362,7 +2370,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
 	}
-	output := actionResultDisplay(rawResult, actionResult)
+	output = actionResultDisplay(rawResult, actionResult)
 	runtimeOutputs, runtimeOutputsHash, err := CanonicalizeRuntimeOutputs(actionResult.Outputs)
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
@@ -2376,6 +2384,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
+		c.recordExecutionEvent(todoID, task.Agent, attempt, "verifying", "", time.Since(startedAt), ExecutionUsage{})
 		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)

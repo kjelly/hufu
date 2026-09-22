@@ -171,6 +171,51 @@ func newCommandActionCoordinator(t *testing.T, command []string, runID string) (
 	return &Coordinator{session: session, projectDir: session.Dir, taskTracker: NewTaskTracker(), phaseWorkflow: w, executionRunID: runID}, session
 }
 
+func TestRuntimeActionExecutionEventShadowParity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		command []string
+		wantErr bool
+	}{
+		{name: "success", command: []string{"/bin/sh", "-c", `printf '{"outputs":{}}'`}},
+		{name: "failure", command: []string{"/bin/sh", "-c", "exit 42"}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runID := "run-action-parity-" + test.name
+			c, session := newCommandActionCoordinator(t, test.command, runID)
+			store, err := NewEventStore(session.Workspace, runID, "session-action-parity")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			c.eventStore = store
+			c.SetEventJournal(eventStoreJournal{store: store})
+			logger, err := newExecutionEventLogger(session.Workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.executionEvents = logger
+
+			task := TaskDef{Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "parity", Phase: PhaseExecute, ContractID: "execute", Action: task.Action, Agent: task.Agent, Desc: task.Goal}})[0]
+			_, actionErr := c.executeRuntimeAction(context.Background(), task, item.ID)
+			if (actionErr != nil) != test.wantErr {
+				t.Fatalf("executeRuntimeAction error=%v, wantErr=%v", actionErr, test.wantErr)
+			}
+			logger.close()
+
+			canonical, err := store.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parity, err := ExportAndVerifyExecutionEvents(session.Workspace, runID, canonical)
+			if err != nil || !parity {
+				t.Fatalf("runtime action execution-event parity=%v, err=%v", parity, err)
+			}
+		})
+	}
+}
+
 func TestRuntimeActionCommandProviderGetsFreshNamespacesAndPreservesEvidence(t *testing.T) {
 	command := []string{"/bin/sh", "-c", `set -eu
 if [ ! -d "$HUFU_REPOSITORY" ] || [ "$HUFU_REPOSITORY" = "$HUFU_WORKSPACE" ]; then

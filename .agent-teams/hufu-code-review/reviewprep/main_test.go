@@ -453,7 +453,7 @@ func TestPrepareDocumentationVerificationFailsClosed(t *testing.T) {
 		{name: "missing link", content: "See [missing](missing.md).\n", want: "relative link target"},
 		{name: "missing explicit root path", content: "Update `./missing-config.yaml` first.\n", want: "repository path"},
 		{name: "missing relative path", content: "Read `../reference/missing.md` first.\n", want: "repository path"},
-		{name: "missing symbol", content: "The `MissingRuntimeContract` is required.\n", want: "Go symbol"},
+		{name: "missing qualified symbol", content: "The `missing.MissingRuntimeContract` is required.\n", want: "Go symbol"},
 		{name: "noncanonical resource", content: "Use `workspace:path/...` claims.\n", want: "canonical workspace resource syntax"},
 	}
 	for _, test := range tests {
@@ -470,6 +470,68 @@ func TestPrepareDocumentationVerificationFailsClosed(t *testing.T) {
 				t.Fatalf("failed verification published output: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestReviewSymbolExistsResolvesQualifiedPackageDeclaration(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/decisionrt/backend/rule/rule.go", "package rule\n\ntype DecideFunc func()\n", "add rule backend", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/consumer/consumer.go", "package consumer\n\nvar _ = rule.Missing\n", "add unresolved use", "2025-01-03T00:00:00Z")
+	revision, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision = strings.TrimSpace(revision)
+
+	for _, test := range []struct {
+		name       string
+		rangeValue reviewRange
+	}{
+		{name: "revision", rangeValue: reviewRange{End: revision}},
+		{name: "working tree", rangeValue: reviewRange{Source: "working_tree"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			found, err := reviewSymbolExists(t.Context(), repo, test.rangeValue, "rule.DecideFunc")
+			if err != nil || !found {
+				t.Fatalf("reviewSymbolExists(rule.DecideFunc) = %t, %v; want true", found, err)
+			}
+			found, err = reviewSymbolExists(t.Context(), repo, test.rangeValue, "rule.Missing")
+			if err != nil || found {
+				t.Fatalf("reviewSymbolExists(rule.Missing) = %t, %v; want false despite a use-site", found, err)
+			}
+		})
+	}
+}
+
+func TestPrepareDocumentationVerificationAllowsUnresolvedConceptNames(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "README.md", "The `DecisionPrimitive` produces a validated `DecisionSpec`.\n", "document decision concepts", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, "out")
+	config.Routing = routingDocumentation
+
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare conceptual documentation: %v", err)
+	}
+	verification, ok := result.Outputs["documentation_verification"].(documentationVerification)
+	if !ok || !verification.Passed || verification.CheckedSymbols != 0 {
+		t.Fatalf("concept verification = %#v, want unresolved bare concepts ignored", result.Outputs["documentation_verification"])
+	}
+}
+
+func TestPrepareDocumentationVerificationTreatsArchiveAsHistorical(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "docs/archive/implementation-plans/old.md", "> Status: Historical — implemented\n> Supersedes: `docs/tmp/now/spec.md`\n\nThe old `missing.LegacyType` no longer exists.\n", "archive old plan", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, "out")
+	config.Routing = routingDocumentation
+
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare archived documentation: %v", err)
+	}
+	verification, ok := result.Outputs["documentation_verification"].(documentationVerification)
+	if !ok || !verification.Passed || verification.CheckedLinks != 0 || verification.CheckedPaths != 0 || verification.CheckedSymbols != 0 {
+		t.Fatalf("archive verification = %#v, want historical references skipped", result.Outputs["documentation_verification"])
 	}
 }
 

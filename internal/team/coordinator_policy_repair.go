@@ -48,6 +48,22 @@ func (c *Coordinator) coordinatorPolicyRepairPrompt(violation error) (string, bo
 	if c.coordinatorPolicyRepairExhausted.Load() {
 		return c.exhaustedPolicyRepairMessage(violation), true
 	}
+	// A failed workflow cannot satisfy the ordinary repair instruction: new
+	// delegation is forbidden by the workflow state, while finish requires the
+	// workflow to be done. Terminalize on the first rejected delegation instead
+	// of spending the repair budget asking the coordinator to choose between two
+	// impossible actions. Explicit reconcile_task calls remain available before
+	// a delegation violation reaches this path.
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() == PhaseFailed {
+		attempt := c.coordinatorPolicyRepairsAttempt.Add(1)
+		c.coordinatorPolicyRepairExhausted.Store(true)
+		c.coordinatorPolicyRepairPending.Store(false)
+		c.wrapUp.Store(1)
+		reason := strings.TrimSpace(violation.Error())
+		message := fmt.Sprintf("%s workflow is already %s, so neither further delegation nor finish can repair this invocation. The runtime will produce an LLM-free partial summary. Violation: %s", coordinatorPolicyRepairExhaustedPrefix, PhaseFailed, reason)
+		c.report(c.newEvent("policy_decision").withTodoID(CoordTodoID).withMessage(fmt.Sprintf("terminal coordinator delegation policy repair at attempt %d: %s", attempt, message)))
+		return message, true
+	}
 	attempt := c.coordinatorPolicyRepairsAttempt.Add(1)
 	reason := strings.TrimSpace(violation.Error())
 	if attempt > maxCoordinatorPolicyRepairs {

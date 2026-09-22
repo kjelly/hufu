@@ -41,6 +41,30 @@ func TestCoordinatorPolicyRepairRecognizesProviderWrappedError(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPolicyRepairTerminalizesFailedWorkflowImmediately(t *testing.T) {
+	c := &Coordinator{
+		taskTracker: NewTaskTracker(),
+		phaseWorkflow: &runtimeWorkflow{
+			enabled: true,
+			state:   PhaseFailed,
+		},
+	}
+
+	prompt, exhausted := c.coordinatorPolicyRepairPrompt(&delegationPolicyViolation{message: "invalid delegation"})
+	if !exhausted || !strings.HasPrefix(prompt, coordinatorPolicyRepairExhaustedPrefix) {
+		t.Fatalf("failed-workflow repair prompt=%q exhausted=%v", prompt, exhausted)
+	}
+	if strings.Contains(prompt, "call finish directly") {
+		t.Fatalf("failed-workflow repair offered an impossible finish action: %q", prompt)
+	}
+	if got := c.coordinatorPolicyRepairsAttempt.Load(); got != 1 {
+		t.Fatalf("failed-workflow repair attempts=%d, want 1", got)
+	}
+	if !c.coordinatorPolicyRepairExhausted.Load() || c.coordinatorPolicyRepairPending.Load() || !c.IsWrapUp() {
+		t.Fatal("failed-workflow repair must latch exhaustion, clear pending repair, and enter wrap-up")
+	}
+}
+
 func TestCoordinatorPolicyRepairResponseSetsPendingState(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	response := c.coordinatorPolicyRepairResponse(&delegationPolicyViolation{message: "invalid delegation"})

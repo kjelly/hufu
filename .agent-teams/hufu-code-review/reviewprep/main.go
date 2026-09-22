@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
@@ -1353,6 +1356,16 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})
 	for _, documentPath := range paths {
+		// Archived documents are immutable historical records. Inline paths and
+		// symbols describe the repository state that the record was written
+		// against, so treating them as live references creates false failures as
+		// soon as scratch inputs are removed or implementations are renamed. The
+		// documentation reviewer still receives these files through the
+		// documentation-risk workset; only this current-tree reference gate is
+		// intentionally skipped.
+		if strings.HasPrefix(filepath.ToSlash(documentPath), "docs/archive/") {
+			continue
+		}
 		exists, err := reviewPathExists(ctx, repo, r, documentPath)
 		if err != nil {
 			return verification, err
@@ -1408,15 +1421,22 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				if !isGoSymbolCandidate(token) {
 					continue
 				}
+				found, checkErr := reviewSymbolExists(ctx, repo, r, token)
+				if checkErr != nil {
+					return verification, checkErr
+				}
+				// A bare CamelCase code span can name a product concept rather than
+				// a Go declaration (for example DecisionPrimitive). Count it as a
+				// symbol only when it resolves. A package-qualified reference is an
+				// unambiguous Go claim and therefore still fails closed when absent.
+				if !found && !qualifiedGoSymbol.MatchString(token) {
+					continue
+				}
 				if _, duplicate := seenSymbols[token]; duplicate {
 					continue
 				}
 				seenSymbols[token] = struct{}{}
 				verification.CheckedSymbols++
-				found, checkErr := reviewSymbolExists(ctx, repo, r, token)
-				if checkErr != nil {
-					return verification, checkErr
-				}
 				if !found {
 					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)))
 				}
@@ -1594,7 +1614,24 @@ func resolveWorktreePath(repo, path string) (string, error) {
 }
 
 func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, error) {
-	cmd := newGitCommand(ctx, repo, "grep", "-q", "-F", symbol, revision, "--", "*.go")
+	if !qualifiedGoSymbol.MatchString(symbol) {
+		return gitGrepSymbol(ctx, repo, revision, symbol)
+	}
+	packageName, symbolName, _ := strings.Cut(symbol, ".")
+	return gitQualifiedGoSymbolExists(ctx, repo, revision, packageName, symbolName)
+}
+
+func gitGrepSymbol(ctx context.Context, repo, revision, symbol string) (bool, error) {
+	args := []string{"grep"}
+	if revision == "" {
+		args = append(args, "--untracked")
+	}
+	args = append(args, "-q", "-F", symbol)
+	if revision != "" {
+		args = append(args, revision)
+	}
+	args = append(args, "--", "*.go")
+	cmd := newGitCommand(ctx, repo, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -1612,18 +1649,127 @@ func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol 
 	if !r.isWorkingTree() {
 		return gitSymbolExists(ctx, repo, r.End, symbol)
 	}
-	cmd := newGitCommand(ctx, repo, "grep", "--untracked", "-q", "-F", symbol, "--", "*.go")
-	var stderr bytes.Buffer
+	if !qualifiedGoSymbol.MatchString(symbol) {
+		return gitGrepSymbol(ctx, repo, "", symbol)
+	}
+	packageName, symbolName, _ := strings.Cut(symbol, ".")
+	return worktreeQualifiedGoSymbolExists(ctx, repo, packageName, symbolName)
+}
+
+func gitQualifiedGoSymbolExists(ctx context.Context, repo, revision, packageName, symbol string) (bool, error) {
+	paths, err := gitSymbolCandidatePaths(ctx, repo, revision, symbol)
+	if err != nil {
+		return false, err
+	}
+	for _, candidatePath := range paths {
+		content, readErr := git(ctx, repo, "show", revision+":"+candidatePath)
+		if readErr != nil {
+			return false, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, readErr)
+		}
+		found, parseErr := sourceDeclaresGoSymbol(candidatePath, []byte(content), packageName, symbol)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func worktreeQualifiedGoSymbolExists(ctx context.Context, repo, packageName, symbol string) (bool, error) {
+	paths, err := gitSymbolCandidatePaths(ctx, repo, "", symbol)
+	if err != nil {
+		return false, err
+	}
+	for _, candidatePath := range paths {
+		resolved, resolveErr := resolveWorktreePath(repo, candidatePath)
+		if resolveErr != nil {
+			return false, resolveErr
+		}
+		content, readErr := os.ReadFile(resolved)
+		if readErr != nil {
+			return false, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, readErr)
+		}
+		found, parseErr := sourceDeclaresGoSymbol(candidatePath, content, packageName, symbol)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func gitSymbolCandidatePaths(ctx context.Context, repo, revision, symbol string) ([]string, error) {
+	args := []string{"grep"}
+	if revision == "" {
+		args = append(args, "--untracked")
+	}
+	args = append(args, "-l", "-F", symbol)
+	if revision != "" {
+		args = append(args, revision)
+	}
+	args = append(args, "--", "*.go")
+	cmd := newGitCommand(ctx, repo, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	if err == nil {
-		return true, nil
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find Go symbol candidates for %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+	prefix := revision + ":"
+	paths := make([]string, 0)
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		candidatePath := strings.TrimSpace(line)
+		if revision != "" {
+			candidatePath = strings.TrimPrefix(candidatePath, prefix)
+		}
+		if candidatePath != "" {
+			paths = append(paths, candidatePath)
+		}
+	}
+	return paths, nil
+}
+
+func sourceDeclaresGoSymbol(filename string, content []byte, packageName, symbol string) (bool, error) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, content, 0)
+	if err != nil {
+		return false, fmt.Errorf("parse Go symbol candidate %q: %w", filename, err)
+	}
+	if parsed.Name.Name != packageName {
 		return false, nil
 	}
-	return false, fmt.Errorf("check worktree Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
+	for _, declaration := range parsed.Decls {
+		switch current := declaration.(type) {
+		case *ast.FuncDecl:
+			if current.Recv == nil && current.Name.Name == symbol {
+				return true, nil
+			}
+		case *ast.GenDecl:
+			for _, spec := range current.Specs {
+				switch declared := spec.(type) {
+				case *ast.TypeSpec:
+					if declared.Name.Name == symbol {
+						return true, nil
+					}
+				case *ast.ValueSpec:
+					for _, name := range declared.Names {
+						if name.Name == symbol {
+							return true, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 func reviewTargetLabel(r reviewRange) string {
