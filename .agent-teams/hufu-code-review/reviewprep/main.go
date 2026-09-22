@@ -220,6 +220,35 @@ type routedWorkset struct {
 	extraInputs []artifact
 }
 
+type listedGoPackage struct {
+	Dir        string   `json:"Dir"`
+	ImportPath string   `json:"ImportPath"`
+	Name       string   `json:"Name"`
+	GoFiles    []string `json:"GoFiles"`
+	CgoFiles   []string `json:"CgoFiles"`
+}
+
+type loadedGoPackage struct {
+	value listedGoPackage
+	err   error
+}
+
+type goImportCandidate struct {
+	path          string
+	explicitAlias bool
+	preferred     bool
+}
+
+type reviewGoSymbolResolver struct {
+	ctx              context.Context
+	repo             string
+	rangeDef         reviewRange
+	packages         map[string]loadedGoPackage
+	standardPackages map[string][]string
+	standardLoaded   bool
+	standardErr      error
+}
+
 var (
 	markdownLinkPattern = regexp.MustCompile(`\[[^\]]*\]\(([^)[:space:]]+)(?:[[:space:]]+"[^"]*")?\)`)
 	inlineCodePattern   = regexp.MustCompile("`([^`\\n]+)`")
@@ -1355,6 +1384,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	seenLinks := make(map[string]struct{})
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})
+	symbolResolver := newReviewGoSymbolResolver(ctx, repo, r)
 	for _, documentPath := range paths {
 		// Archived documents are immutable historical records. Inline paths and
 		// symbols describe the repository state that the record was written
@@ -1421,7 +1451,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				if !isGoSymbolCandidate(token) {
 					continue
 				}
-				found, checkErr := reviewSymbolExists(ctx, repo, r, token)
+				found, checkErr := symbolResolver.exists(token)
 				if checkErr != nil {
 					return verification, checkErr
 				}
@@ -1613,14 +1643,6 @@ func resolveWorktreePath(repo, path string) (string, error) {
 	return resolved, nil
 }
 
-func gitSymbolExists(ctx context.Context, repo, revision, symbol string) (bool, error) {
-	if !qualifiedGoSymbol.MatchString(symbol) {
-		return gitGrepSymbol(ctx, repo, revision, symbol)
-	}
-	packageName, symbolName, _ := strings.Cut(symbol, ".")
-	return gitQualifiedGoSymbolExists(ctx, repo, revision, packageName, symbolName)
-}
-
 func gitGrepSymbol(ctx context.Context, repo, revision, symbol string) (bool, error) {
 	args := []string{"grep"}
 	if revision == "" {
@@ -1646,14 +1668,270 @@ func gitGrepSymbol(ctx context.Context, repo, revision, symbol string) (bool, er
 }
 
 func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol string) (bool, error) {
-	if !r.isWorkingTree() {
-		return gitSymbolExists(ctx, repo, r.End, symbol)
+	return newReviewGoSymbolResolver(ctx, repo, r).exists(symbol)
+}
+
+func newReviewGoSymbolResolver(ctx context.Context, repo string, r reviewRange) *reviewGoSymbolResolver {
+	return &reviewGoSymbolResolver{
+		ctx: ctx, repo: repo, rangeDef: r,
+		packages: make(map[string]loadedGoPackage), standardPackages: make(map[string][]string),
 	}
+}
+
+func (r *reviewGoSymbolResolver) exists(symbol string) (bool, error) {
 	if !qualifiedGoSymbol.MatchString(symbol) {
-		return gitGrepSymbol(ctx, repo, "", symbol)
+		if r.rangeDef.isWorkingTree() {
+			return gitGrepSymbol(r.ctx, r.repo, "", symbol)
+		}
+		return gitGrepSymbol(r.ctx, r.repo, r.rangeDef.End, symbol)
 	}
 	packageName, symbolName, _ := strings.Cut(symbol, ".")
-	return worktreeQualifiedGoSymbolExists(ctx, repo, packageName, symbolName)
+	found, recognized, err := r.importedQualifiedGoSymbolExists(packageName, symbolName)
+	if err != nil || found || recognized {
+		return found, err
+	}
+	found, recognized, err = r.standardLibraryQualifiedGoSymbolExists(packageName, symbolName)
+	if err != nil || found || recognized {
+		return found, err
+	}
+	if r.rangeDef.isWorkingTree() {
+		return worktreeQualifiedGoSymbolExists(r.ctx, r.repo, packageName, symbolName)
+	}
+	return gitQualifiedGoSymbolExists(r.ctx, r.repo, r.rangeDef.End, packageName, symbolName)
+}
+
+// importedQualifiedGoSymbolExists resolves a selector through import
+// declarations at the reviewed revision before inspecting the selected
+// package's actual source. This distinguishes repository packages such as
+// rule.DecideFunc from standard-library and module dependencies such as
+// context.Context or yaml.Node without hard-coding package names.
+func (r *reviewGoSymbolResolver) importedQualifiedGoSymbolExists(packageName, symbol string) (bool, bool, error) {
+	revision := r.rangeDef.End
+	if r.rangeDef.isWorkingTree() {
+		revision = ""
+	}
+	paths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, packageName+"."+symbol)
+	if err != nil {
+		return false, false, err
+	}
+	candidates := make([]goImportCandidate, 0)
+	seen := make(map[string]int)
+	for _, candidatePath := range paths {
+		content, readErr := reviewGoSource(r.ctx, r.repo, r.rangeDef, candidatePath)
+		if readErr != nil {
+			return false, false, readErr
+		}
+		parsed, parseErr := parser.ParseFile(token.NewFileSet(), candidatePath, content, parser.ImportsOnly)
+		if parseErr != nil {
+			return false, false, fmt.Errorf("parse imports for Go symbol candidate %q: %w", candidatePath, parseErr)
+		}
+		for _, imported := range parsed.Imports {
+			importPath, unquoteErr := strconv.Unquote(imported.Path.Value)
+			if unquoteErr != nil {
+				return false, false, fmt.Errorf("parse import path in %q: %w", candidatePath, unquoteErr)
+			}
+			explicitAlias := imported.Name != nil
+			preferred := false
+			if explicitAlias {
+				alias := imported.Name.Name
+				if alias == "_" || alias == "." || alias != packageName {
+					continue
+				}
+				preferred = true
+			} else if path.Base(importPath) != packageName {
+				// The declared package name may intentionally differ from the
+				// import-path base (for example gopkg.in/yaml.v3 -> yaml).
+				// Keep it as a lower-priority candidate and confirm its actual
+				// package name through go list below.
+				explicitAlias = false
+			} else {
+				preferred = true
+			}
+			if index, duplicate := seen[importPath]; duplicate {
+				if explicitAlias {
+					candidates[index].explicitAlias = true
+				}
+				candidates[index].preferred = candidates[index].preferred || preferred
+				continue
+			}
+			seen[importPath] = len(candidates)
+			candidates = append(candidates, goImportCandidate{path: importPath, explicitAlias: explicitAlias, preferred: preferred})
+		}
+	}
+	recognized := false
+	for _, preferred := range []bool{true, false} {
+		for _, candidate := range candidates {
+			if candidate.preferred != preferred {
+				continue
+			}
+			pkg, loadErr := r.loadGoPackage(candidate.path)
+			if loadErr != nil {
+				if preferred {
+					return false, true, loadErr
+				}
+				continue
+			}
+			if !candidate.explicitAlias && pkg.Name != packageName {
+				continue
+			}
+			recognized = true
+			found, declareErr := listedPackageDeclaresGoSymbol(pkg, symbol)
+			if declareErr != nil {
+				return false, true, declareErr
+			}
+			if found {
+				return true, true, nil
+			}
+		}
+	}
+	return false, recognized, nil
+}
+
+// standardLibraryQualifiedGoSymbolExists handles valid standard-library
+// references that are documented but not otherwise used by repository Go
+// files. go list supplies the package-name mapping, so paths such as
+// encoding/json are resolved without a language- or package-specific table.
+func (r *reviewGoSymbolResolver) standardLibraryQualifiedGoSymbolExists(packageName, symbol string) (bool, bool, error) {
+	if err := r.loadStandardPackages(); err != nil {
+		return false, false, err
+	}
+	paths := r.standardPackages[packageName]
+	for _, importPath := range paths {
+		pkg := r.packages[importPath].value
+		found, err := listedPackageDeclaresGoSymbol(pkg, symbol)
+		if err != nil {
+			return false, true, err
+		}
+		if found {
+			return true, true, nil
+		}
+	}
+	return false, len(paths) > 0, nil
+}
+
+func (r *reviewGoSymbolResolver) loadStandardPackages() error {
+	if r.standardLoaded {
+		return r.standardErr
+	}
+	r.standardLoaded = true
+	cmd := exec.CommandContext(r.ctx, "go", "list", "-mod=readonly", "-json", "--", "std")
+	cmd.Dir = r.repo
+	cmd.Env = offlineGoEnvironment()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		r.standardErr = fmt.Errorf("resolve Go standard-library packages: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return r.standardErr
+	}
+	decoder := json.NewDecoder(&stdout)
+	for {
+		var pkg listedGoPackage
+		if err := decoder.Decode(&pkg); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			r.standardErr = fmt.Errorf("decode Go standard-library package metadata: %w", err)
+			return r.standardErr
+		}
+		if strings.TrimSpace(pkg.Dir) == "" || strings.TrimSpace(pkg.Name) == "" || strings.TrimSpace(pkg.ImportPath) == "" {
+			continue
+		}
+		r.packages[pkg.ImportPath] = loadedGoPackage{value: pkg}
+		r.standardPackages[pkg.Name] = append(r.standardPackages[pkg.Name], pkg.ImportPath)
+	}
+	return nil
+}
+
+func reviewGoSource(ctx context.Context, repo string, r reviewRange, candidatePath string) ([]byte, error) {
+	if !r.isWorkingTree() {
+		content, err := git(ctx, repo, "show", r.End+":"+candidatePath)
+		if err != nil {
+			return nil, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, err)
+		}
+		return []byte(content), nil
+	}
+	resolved, err := resolveWorktreePath(repo, candidatePath)
+	if err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, err)
+	}
+	return content, nil
+}
+
+func (r *reviewGoSymbolResolver) loadGoPackage(importPath string) (listedGoPackage, error) {
+	if cached, ok := r.packages[importPath]; ok {
+		return cached.value, cached.err
+	}
+	cmd := exec.CommandContext(r.ctx, "go", "list", "-mod=readonly", "-json", "--", importPath)
+	cmd.Dir = r.repo
+	cmd.Env = offlineGoEnvironment()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		err = fmt.Errorf("resolve imported Go package %q without network access: %w: %s", importPath, err, strings.TrimSpace(stderr.String()))
+		r.packages[importPath] = loadedGoPackage{err: err}
+		return listedGoPackage{}, err
+	}
+	var pkg listedGoPackage
+	if err := json.Unmarshal(stdout.Bytes(), &pkg); err != nil {
+		err = fmt.Errorf("decode imported Go package %q metadata: %w", importPath, err)
+		r.packages[importPath] = loadedGoPackage{err: err}
+		return listedGoPackage{}, err
+	}
+	if strings.TrimSpace(pkg.Dir) == "" || strings.TrimSpace(pkg.Name) == "" {
+		err = fmt.Errorf("imported Go package %q has incomplete metadata", importPath)
+		r.packages[importPath] = loadedGoPackage{err: err}
+		return listedGoPackage{}, err
+	}
+	r.packages[importPath] = loadedGoPackage{value: pkg}
+	return pkg, nil
+}
+
+func offlineGoEnvironment() []string {
+	environment := replaceEnvironmentValue(os.Environ(), "GOPROXY", "off")
+	environment = replaceEnvironmentValue(environment, "GOSUMDB", "off")
+	return replaceEnvironmentValue(environment, "GOTOOLCHAIN", "local")
+}
+
+func replaceEnvironmentValue(environment []string, key, value string) []string {
+	prefix := key + "="
+	updated := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			updated = append(updated, entry)
+		}
+	}
+	return append(updated, prefix+value)
+}
+
+func listedPackageDeclaresGoSymbol(pkg listedGoPackage, symbol string) (bool, error) {
+	files := make([]string, 0, len(pkg.GoFiles)+len(pkg.CgoFiles))
+	files = append(files, pkg.GoFiles...)
+	files = append(files, pkg.CgoFiles...)
+	for _, name := range files {
+		if filepath.Base(name) != name {
+			return false, fmt.Errorf("Go package %q returned unsafe source path %q", pkg.ImportPath, name)
+		}
+		filename := filepath.Join(pkg.Dir, name)
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			return false, fmt.Errorf("read imported Go package %q source %q: %w", pkg.ImportPath, name, err)
+		}
+		found, err := sourceDeclaresGoSymbol(filename, content, pkg.Name, symbol)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func gitQualifiedGoSymbolExists(ctx context.Context, repo, revision, packageName, symbol string) (bool, error) {

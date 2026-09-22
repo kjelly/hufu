@@ -69,8 +69,8 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "README.md"), "See the [runtime documentation](docs/architecture/runtime.md).\n")
-	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "# Runtime\n\n`RuntimeContract` is defined in [`runtime.go`](../../internal/team/runtime.go).\n")
-	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\ntype RuntimeContract struct{}\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "# Runtime\n\n`RuntimeContract` accepts `context.Context` and is defined in [`runtime.go`](../../internal/team/runtime.go).\n")
+	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\nimport \"context\"\n\ntype RuntimeContract struct{ Context context.Context }\n")
 	commit(t, repo, "mixed runtime and documentation changes", "2025-01-02T00:00:00Z")
 
 	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
@@ -498,6 +498,81 @@ func TestReviewSymbolExistsResolvesQualifiedPackageDeclaration(t *testing.T) {
 			found, err = reviewSymbolExists(t.Context(), repo, test.rangeValue, "rule.Missing")
 			if err != nil || found {
 				t.Fatalf("reviewSymbolExists(rule.Missing) = %t, %v; want false despite a use-site", found, err)
+			}
+		})
+	}
+}
+
+func TestPrepareDocumentationVerificationResolvesStandardLibrarySymbols(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "`json.Number` `context.Context` `errors.As` `errors.Is` `context.Canceled` `context.DeadlineExceeded` `context.WithTimeout` `httptest.Server`\n")
+	writeFile(t, filepath.Join(repo, "internal/runtime/runtime.go"), `package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+)
+
+var (
+	_ context.Context
+	_ = json.Number("")
+	_ = errors.As
+	_ = errors.Is
+	_ = context.Canceled
+	_ = context.DeadlineExceeded
+	_ = context.Missing
+	_ *httptest.Server
+)
+`)
+	commit(t, repo, "document standard library contracts", "2025-01-02T00:00:00Z")
+	config := fixtureConfig(repo, "out")
+	config.Routing = routingDocumentation
+
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatalf("Prepare standard-library documentation: %v", err)
+	}
+	verification, ok := result.Outputs["documentation_verification"].(documentationVerification)
+	if !ok || !verification.Passed || verification.CheckedSymbols != 8 {
+		t.Fatalf("standard-library verification = %#v, want eight resolved symbols", result.Outputs["documentation_verification"])
+	}
+	found, err := reviewSymbolExists(t.Context(), repo, reviewRange{Source: "working_tree"}, "context.Missing")
+	if err != nil || found {
+		t.Fatalf("reviewSymbolExists(context.Missing) = %t, %v; want false for an absent stdlib declaration", found, err)
+	}
+}
+
+func TestReviewSymbolExistsResolvesDependencyPackageName(t *testing.T) {
+	dependency := t.TempDir()
+	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n")
+	writeFile(t, filepath.Join(dependency, "nested", "symbol.go"), "package dep\n\ntype Symbol struct{}\n")
+
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "go.mod", fmt.Sprintf("module example.test/review\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => %s\n", filepath.ToSlash(dependency)), "add dependency", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "consumer.go", "package review\n\nimport \"example.test/dependency/nested\"\n\nvar (\n\t_ dep.Symbol\n\t_ dep.Missing\n)\n", "use dependency", "2025-01-03T00:00:00Z")
+	revision, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision = strings.TrimSpace(revision)
+
+	for _, test := range []struct {
+		name       string
+		rangeValue reviewRange
+	}{
+		{name: "revision", rangeValue: reviewRange{End: revision}},
+		{name: "working tree", rangeValue: reviewRange{Source: "working_tree"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			found, err := reviewSymbolExists(t.Context(), repo, test.rangeValue, "dep.Symbol")
+			if err != nil || !found {
+				t.Fatalf("reviewSymbolExists(dep.Symbol) = %t, %v; want true", found, err)
+			}
+			found, err = reviewSymbolExists(t.Context(), repo, test.rangeValue, "dep.Missing")
+			if err != nil || found {
+				t.Fatalf("reviewSymbolExists(dep.Missing) = %t, %v; want false for an absent dependency declaration", found, err)
 			}
 		})
 	}
