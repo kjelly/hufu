@@ -136,16 +136,16 @@ func (c *Coordinator) retrySuppressionsFromEvents() (map[string]int, bool) {
 	if c == nil || c.eventStore == nil {
 		return nil, false
 	}
-	events, err := c.eventStore.ReadEvents()
+	events, err := c.eventStore.QueryEvents(EventQuery{
+		RunID: c.executionRunID,
+		Types: []string{"retry_suppressed"},
+	})
 	if err != nil {
 		return nil, false
 	}
 	counts := make(map[string]int)
 	found := false
 	for _, event := range events {
-		if event.Type != "retry_suppressed" || (c.executionRunID != "" && event.RunID != c.executionRunID) {
-			continue
-		}
 		var payload struct {
 			ReasonCode string `json:"reason_code"`
 		}
@@ -203,23 +203,16 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem, runID string)
 
 func (c *Coordinator) failureEventsForMetrics(items []*TodoItem) []*FailureEventPayload {
 	if c != nil && c.eventStore != nil {
-		events, err := c.eventStore.ReadEvents()
+		events, err := c.eventStore.QueryEvents(EventQuery{
+			RunID: c.executionRunID,
+			Types: []string{"task_failed", "task_blocked", "task_protocol_incomplete"},
+		})
 		if err == nil {
 			failures := make([]*FailureEventPayload, 0)
 			for _, event := range events {
-				// The event store is append-only across coordinator runs. A
-				// reliability snapshot must describe this run, not historical
-				// failures from the same workspace. Leave unscoped reads intact
-				// for callers reconstructing legacy stores without an active run.
-				if c.executionRunID != "" && event.RunID != c.executionRunID {
-					continue
-				}
-				switch event.Type {
-				case "task_failed", "task_blocked", "task_protocol_incomplete":
-					failure, present := mergeFailureEventJSON(nil, event.Payload)
-					if present && failure != nil {
-						failures = append(failures, failure)
-					}
+				failure, present := mergeFailureEventJSON(nil, event.Payload)
+				if present && failure != nil {
+					failures = append(failures, failure)
 				}
 			}
 			return failures

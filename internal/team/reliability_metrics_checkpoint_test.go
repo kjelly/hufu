@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -388,6 +389,65 @@ func TestMetricsScopeFailureEventsToActiveRun(t *testing.T) {
 	}
 	if m.RetryAttemptsAvoidedByDisposition[NeedsHuman] != 1 || m.RetryAttemptsAvoidedByDisposition[ReplanRequired] != 0 || m.CancelledTasksExcludedFromRetries != 1 {
 		t.Fatalf("failure disposition metrics include another run: %#v", m)
+	}
+}
+
+func TestRetrySuppressionMetricsQueryPreservesRunScopeAndMalformedPayload(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "active-run", "metrics-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	appendSuppression := func(runID string, payload []byte) {
+		t.Helper()
+		if err := store.Append(RunEvent{RunID: runID, Type: "retry_suppressed", Actor: "coordinator", Payload: payload}); err != nil {
+			t.Fatalf("append retry suppression for %q: %v", runID, err)
+		}
+	}
+	appendSuppression("prior-run", []byte(`{"reason_code":"prior"}`))
+	appendSuppression("active-run", []byte(`{"reason_code":"active"}`))
+	appendSuppression("active-run", []byte(`[]`))
+	appendSuppression("active-run", []byte(`{}`))
+
+	c := &Coordinator{eventStore: store, executionRunID: "active-run", taskTracker: NewTaskTracker()}
+	metrics := c.Metrics()
+	if metrics.RetrySuppressions != 1 || metrics.RetrySuppressionsByReason["active"] != 1 || metrics.RetrySuppressionsByReason["prior"] != 0 {
+		t.Fatalf("active-run retry suppression metrics = %#v, want only active reason", metrics)
+	}
+
+	c.executionRunID = ""
+	metrics = c.Metrics()
+	if metrics.RetrySuppressions != 2 || metrics.RetrySuppressionsByReason["active"] != 1 || metrics.RetrySuppressionsByReason["prior"] != 1 {
+		t.Fatalf("unscoped retry suppression metrics = %#v, want both valid reasons", metrics)
+	}
+}
+
+func TestFailureMetricsQueryPreservesEmptyResultAndFallback(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "active-run", "metrics-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Append(RunEvent{RunID: "active-run", Type: "task_progress", Actor: "coordinator"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(RunEvent{RunID: "active-run", Type: "task_failed", Actor: "coordinator", Payload: []byte(`{"unexpected":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fallback := &FailureEventPayload{TaskID: "fallback", Phase: "execution", FailureClass: FailureExecution, RetryDisposition: RetryWorker}
+	items := []*TodoItem{{ID: "fallback", FailureEvent: fallback}}
+	c := &Coordinator{eventStore: store, executionRunID: "active-run"}
+	if got := c.failureEventsForMetrics(items); len(got) != 0 {
+		t.Fatalf("successful empty event query returned fallback failures: %#v", got)
+	}
+
+	stateErr := errors.New("injected metrics query failure")
+	store.stateValid = false
+	store.stateErr = stateErr
+	got := c.failureEventsForMetrics(items)
+	if len(got) != 1 || got[0] != fallback {
+		t.Fatalf("query-error fallback failures = %#v, want %#v", got, items)
 	}
 }
 
