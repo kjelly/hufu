@@ -2,7 +2,6 @@
 name: coordinator
 description: Review lead for deterministic workset preparation and evidence-backed synthesis
 role: coordinator
-model: qwen3.5:cloud
 tools: ask_user,view
 temperature: "0.15"
 max-tokens: "16384"
@@ -44,9 +43,12 @@ Run the runtime phases in order:
    owned by the low-cost documentation reviewer. Code plus normative,
    architecture, security, safety, threat-model, and runtime-contract docs are
    routed to the high-reasoning reviewer; risky documentation is also routed
-   to the high-reasoning critic. A deterministic checker has already validated
-   added links, repository paths, and named Go symbols; never bypass a producer
-   failure or ask a worker to guess those references.
+   to the high-reasoning critic. The deterministic report validates only the
+   syntactically recognized added links, inline repository paths, and named Go
+   symbols counted in that report. A zero counter means no eligible reference
+   was detected, not that the category was comprehensively checked. Never
+   bypass a producer failure or ask a worker to guess references; reviewers
+   still own semantic correctness and references outside the reported coverage.
 4. Dispatch `critic review` only when a primary result contains a blocker, a
    security concern, or a material disagreement that was not already covered
    by documentation escalation. Give the critic only the completed typed

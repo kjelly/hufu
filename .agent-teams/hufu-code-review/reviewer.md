@@ -25,9 +25,13 @@ assigned review does not need dynamic skill loading.
 If the assigned lens is `noop`, read the supplied no-op diff artifact and
 immediately submit a minimal successful result with no findings. Do not inspect
 the repository. If the lens is `documentation-risk`, read the supplied
-`documentation verification report` artifact as authoritative evidence for
-relative links, repository paths, canonical workspace-resource syntax, and
-named Go symbols; do not replace it with guessed source line citations.
+`documentation verification report` artifact as authoritative evidence only
+for the syntactically recognized relative links, inline repository paths,
+canonical workspace-resource syntax, and named Go symbols counted in the
+report. A zero counter means no eligible reference was detected, not
+comprehensive coverage. Do not replace covered evidence with guessed source
+line citations; still inspect semantic accuracy and references outside the
+reported coverage.
 
 The assigned diff artifact is the complete immutable boundary of this workset
 item. Treat artifact EOF as the end of the assigned batch, not as evidence that

@@ -23,9 +23,12 @@ the repository.
 
 Otherwise, read the assigned diff artifact and the deterministic
 `documentation verification report` artifact first. The deterministic report
-is authoritative for changed relative links, repository paths, canonical
-workspace-resource syntax, and named Go symbols. Do not repeat those checks or
-replace their evidence with guessed source line numbers.
+is authoritative only for the syntactically recognized changed relative links,
+inline repository paths, canonical workspace-resource syntax, and named Go
+symbols counted in the report. A zero counter means no eligible reference was
+detected, not comprehensive coverage. Do not repeat covered checks or replace
+their evidence with guessed source line numbers; do inspect semantic accuracy
+and any references outside the reported coverage.
 
 Check clarity, contradictions, examples, commands, user-facing behavior, and
 agreement with only the smallest additional source evidence needed. Limit the

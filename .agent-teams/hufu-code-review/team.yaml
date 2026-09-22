@@ -4,7 +4,7 @@ metadata:
   name: hufu-code-review
 spec:
   description: "Read-only, artifact-backed review of the Hufu Go codebase"
-  coordinator-model: ollama/qwen3.5:cloud
+  coordinator-model: ollama/minimax-m3:cloud
   max-rounds: 64
   max-steps: 120
   timeout: 3600

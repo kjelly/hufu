@@ -2,7 +2,6 @@
 name: critic
 description: On-demand read-only critic for high-risk findings and reviewer disagreement
 role: worker
-model: qwen3.5:cloud
 tools: view,grep,glob,ls
 temperature: "0.05"
 max-tokens: "16384"
