@@ -21,6 +21,7 @@
 - [功能特色](#功能特色)
 - [安裝與建置](#安裝與建置)
 - [快速開始](#快速開始)
+- [獨立的有界決策](#獨立的有界決策)
 - [CLI Flags 參考](#cli-flags-參考)
 - [Prompt 語法](#prompt-語法)
 - [互動模式](#互動模式)
@@ -172,6 +173,31 @@ go run ./cmd/hufu --agent-team my-team "重構 auth 模組"
 # 互動模式（不提供 prompt 時進入）
 go run ./cmd/hufu
 ```
+
+---
+
+## 獨立的有界決策
+
+`hufu decisionrt` 會明確呼叫小型、僅負責決策的 `DecisionPrimitive`；它與既有
+的 durable `DecisionEngine` 及 `hufu decision` 指令不同。此指令不會載入
+Agent 團隊、不會建立 `DecisionRecord`，也不會把選出的值自動當成 action 執行。
+
+目前 backend 只有 `rule` 與 `sidecar`。預設的 `rule` 永遠 abstain；使用
+`sidecar` 時必須明確提供 model 與 provider flags：
+
+```bash
+hufu decisionrt choice \
+  --id size-policy --version v1 --purpose size-policy@v1 \
+  --question "選擇大小。" \
+  --option small=小 --option large=大 \
+  --backend sidecar --sidecar-model qwen3:1b \
+  --provider-url http://127.0.0.1:11434/v1 --json
+```
+
+`hufu decisionrt validate`、`run` 與 `backends` 分別用於 JSON 驗證、通用
+request 與 backend diagnostics。穩定的 exit code 可區分結果：`0` 已決策、
+`2` 無效 request/usage、`3` abstained、`4` backend/runtime 技術失敗、`5`
+設定錯誤或 backend unavailable。
 
 ---
 

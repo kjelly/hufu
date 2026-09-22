@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `4e40ed0`
 > Supersedes: the undocumented flat `docs/` layout
 > Superseded-By: —
 
@@ -36,6 +36,9 @@ to re-create an abstraction that already exists in the runtime.
   compatibility.
 - [Decision-aware runtime](architecture/decision-runtime.md) — decision
   stages, evidence, deterministic aggregation, routing, and commit gates.
+- [DecisionPrimitive](architecture/decision-primitive.md) — bounded typed
+  decisions, backend contracts, strict sidecar mapping, and the standalone
+  `hufu decisionrt` CLI.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.

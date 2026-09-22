@@ -21,6 +21,7 @@
 - [Features](#features)
 - [Installation & Build](#installation--build)
 - [Quick Start](#quick-start)
+- [Standalone bounded decisions](#standalone-bounded-decisions)
 - [CLI Flags Reference](#cli-flags-reference)
 - [Prompt Syntax](#prompt-syntax)
 - [Interactive Mode](#interactive-mode)
@@ -322,6 +323,33 @@ go run ./cmd/hufu --agent-team my-team "Refactor the auth module"
 # Interactive mode (entered when no prompt is provided)
 go run ./cmd/hufu
 ```
+
+---
+
+## Standalone bounded decisions
+
+`hufu decisionrt` explicitly invokes the small, decision-only
+`DecisionPrimitive`; it is separate from the existing durable
+`DecisionEngine` and the `hufu decision` commands. It does not load an agent
+team, create a `DecisionRecord`, or execute the selected value as an action.
+
+The available backends are `rule` and `sidecar`. The default `rule` backend
+always abstains. The `sidecar` backend requires explicit model and provider
+flags:
+
+```bash
+hufu decisionrt choice \
+  --id size-policy --version v1 --purpose size-policy@v1 \
+  --question "Select a size." \
+  --option small=Small --option large=Large \
+  --backend sidecar --sidecar-model qwen3:1b \
+  --provider-url http://127.0.0.1:11434/v1 --json
+```
+
+Use `hufu decisionrt validate`, `run`, or `backends` for JSON validation,
+generic requests, and backend diagnostics. Stable exit codes distinguish the
+outcomes: `0` decided, `2` invalid request/usage, `3` abstained, `4` technical
+backend/runtime failure, and `5` configuration/backend unavailable.
 
 ---
 
