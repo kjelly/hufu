@@ -1,12 +1,37 @@
 # Hufu Per-Worker Model Runtime Override Specification
 
-> Status: in implementation — archived 2026-09-23 from local scratch space before implementation began
+> Status: implemented — archived 2026-09-23; implemented through `0fcbfaa`
 > Authority: reference
 > Target: `kjelly/hufu`
 > Baseline inspected: `main` at `9d2dedc06be743fc59616e3682e282096e3700cc` (verified against HEAD `789011523b39280609921c850fba836bb6fe2b63` on 2026-09-23, no drift)
 > Date: 2026-09-23 (revised 2026-09-23 after codebase verification pass: fixed the `run.go`→`runcmd.go` facade file, added the §4.5 orchestrator role-check fix, tightened §14/§16 dry-run scope, removed ambiguous optional items in §15.3/§18, fenced off an unrelated pre-existing retry-escalation issue in §32)
 > Intended audience: coding agent
 > Scope: CLI model override, profile integration, validation, runtime resolution, durable execution semantics, observability, documentation, regression tests
+
+## Implementation record
+
+Landed in `760b11d` (flag + parser), `4d8ed88` (§4.5 orchestrator fix),
+`b8480eb` (profile keyed merge), `768f524` (loaded-team validation and
+application), `9bfb7b1` (canonical/durable/telemetry regression tests), and
+`0fcbfaa` (docs). No existing execution-target resolver needed a change.
+Where the implementation differs from the text below, the code and tests win:
+
+- `ModelCLIOverrides.WorkerModels` is `[]WorkerModelOverride`, deduplicated by
+  normalized agent key in operator order, rather than `map[string]string`, so
+  diagnostics are deterministic.
+- §13.3 / §27.2–27.3: every worker's resolved target is part of the
+  execution-policy snapshot `ConfigurationHash`, so resuming with a *different*
+  effective worker target fails closed on snapshot drift (the same pre-existing
+  behavior as `--model`); a changed target requires `--new`. Resume must be
+  given the original run's overrides. See
+  `TestWorkerModelChangeOnResumeFailsClosedOnPolicyDrift`.
+- The flag is also registered on `hufu chat` and `hufu resume` (both already
+  expose `--model`) and is rejected together with `--resume-decision`.
+- Worker names match the loader identities (map key, `name`, file alias)
+  case-insensitively; two entries reaching one definition fail closed, and an
+  empty comma-separated entry is malformed.
+- Validation runs per loaded team, so in a multi-team prompt an entry must
+  name a worker of every selected team.
 
 ---
 
