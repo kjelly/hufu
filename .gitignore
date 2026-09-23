@@ -4,6 +4,9 @@ hufu.exe
 bin/*
 !bin/check-docs
 workspace
+# The unanchored pattern above ignores runtime workspace/ directories; the
+# managed-workspace Go packages live in internal/workspace and stay tracked.
+!internal/workspace/
 reports
 ignores/
 dist/
