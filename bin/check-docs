@@ -6,12 +6,12 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-mapfile -t active_docs < <(
+mapfile -t all_docs < <(
 	find docs -type f -name '*.md' \
-		-not -path 'docs/archive/*' \
 		-not -path 'docs/tmp/*' \
 		-print | sort
 )
+mapfile -t active_docs < <(printf '%s\n' "${all_docs[@]}" | grep -v '^docs/archive/')
 
 if ((${#active_docs[@]} == 0)); then
 	echo "check-docs: no active documentation files found" >&2
@@ -29,7 +29,7 @@ for file in "${active_docs[@]}"; do
 	done
 done
 
-# Only POSIX tools are used so every check actually runs on a stock CI runner.
+# Use Bash and the standard grep available on the stock CI runner.
 # grep exits 0 on a match, 1 on no match, and >1 on an error; an error must fail
 # the check instead of reading as "no match".
 retired_status=0
@@ -46,7 +46,7 @@ fi
 
 missing=0
 link_count=0
-for file in "${active_docs[@]}"; do
+for file in "${all_docs[@]}"; do
 	links_status=0
 	links=$(grep -ohE '[]][(][^)]*[)]' "$file") || links_status=$?
 	if ((links_status > 1)); then
@@ -80,4 +80,34 @@ if ((missing)); then
 	exit 1
 fi
 
-echo "check-docs: ${#active_docs[@]} active files and $link_count relative links are valid"
+symbol_count=0
+for file in "${all_docs[@]}"; do
+	anchors_status=0
+	anchors=$(grep -ohE '\[Go function: [A-Za-z_][A-Za-z0-9_]*\]\([^)]*\.go\)' "$file") || anchors_status=$?
+	if ((anchors_status > 1)); then
+		echo "check-docs: source anchor scan failed for $file (grep exit $anchors_status)" >&2
+		exit 2
+	fi
+	while IFS= read -r anchor; do
+		[[ -n "$anchor" ]] || continue
+		symbol=${anchor#\[Go function: }
+		symbol=${symbol%%\]*}
+		target=${anchor#*\](}
+		target=${target%)}
+		case "$target" in
+			/*) path="$target" ;;
+			*) path="$(dirname "$file")/$target" ;;
+		esac
+		if [[ ! -f "$path" ]] || ! grep -Eq "^[[:space:]]*func( \([^)]*\))?[[:space:]]+${symbol}[[:space:]]*\(" "$path"; then
+			echo "check-docs: $file references missing Go function $symbol in $target" >&2
+			missing=1
+		fi
+		symbol_count=$((symbol_count + 1))
+	done <<<"$anchors"
+done
+
+if ((missing)); then
+	exit 1
+fi
+
+echo "check-docs: ${#active_docs[@]} active files, ${#all_docs[@]} total files, $link_count relative links, and $symbol_count Go function anchors are valid"

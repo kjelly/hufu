@@ -139,3 +139,8 @@ document they cite. Do not introduce a bare `spec.md §...` reference: the
 repository has had several unrelated files with that name. Avoid machine-local
 file-URI links and validation evidence that depends on a developer's home
 directory.
+
+`bin/check-docs` checks lifecycle headers in active documents and relative
+links in active and archived documents. For an implementation claim that names
+a Go function, use a link labeled `Go function: FunctionName` to its `.go`
+file; the checker also verifies that the function is declared there.

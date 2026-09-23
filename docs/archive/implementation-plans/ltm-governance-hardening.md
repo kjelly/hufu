@@ -54,6 +54,18 @@ differs from the text below, the code and tests win:
   re-verified as a whole; the larger normative documents had sections added or
   corrected but were not re-verified end to end.
 
+The implementation can be checked at these source anchors (the Go function
+links are validated by `bin/check-docs`):
+
+| Behavior | Source |
+| --- | --- |
+| Vector threshold default and scan flags | [conflicts command](../../../cmd/hufu/context_conflicts_cmd.go), [Go function: runConflictsScan](../../../cmd/hufu/context_conflicts_cmd.go) |
+| Migrations 10 and 11 | [SQLite migration definitions](../../../internal/context/sqlite_repository.go) |
+| Optional diagnostic detail | [diagnostic type](../../../internal/memoryconflict/eligible.go) |
+| Conditional conflicting suffix and attribution | [Go function: conflictingSuffix](../../../cmd/hufu/report.go), [Go function: classifyKnowledgeState](../../../internal/team/knowledge_state.go) |
+| Model-drafted consolidation | [Go function: runContextConsolidateDraft](../../../cmd/hufu/context_consolidation_draft.go) |
+| Reasoning-effort provider key | [Go function: ReasoningEffortProviderOptions](../../../internal/agent/reasoning_options.go), [HTTP request regression test](../../../internal/agent/reasoning_options_test.go) |
+
 本文件取代原本位於本機 scratch space 的「LTM Promotion Governance Roadmap」。原 roadmap 大部分內容已由既有系統
 實作，或與 normative 文件衝突；§0 記錄逐節處置，避免之後重新提案。其餘章節都是 coding agent
 可以直接實作、可以用測試驗收的工作項目。
