@@ -647,7 +647,7 @@ type PairOptions struct {
     MaxFilePathFanout   int     // default 20
     Vector              SimilarSearcher // nil: vector source disabled
     VectorTopK          int     // default 5
-    MinVectorSimilarity float64 // default 0.5 (chromem cosine similarity)
+    MinVectorSimilarity float64 // default 0.45 (chromem cosine similarity; see §7.2 calibration)
 }
 type Pair struct{ A, B contextstore.ContextItem } // A.ID < B.ID
 type CandidateSet struct {
@@ -776,7 +776,7 @@ func Scan(ctx context.Context, repo ScanRepository, judge Judge, opts ScanOption
 hufu context conflicts scan    --workspace <ws> --project <id> --team <name>
                                [--team-search-path <csv>] [--model <model>]
                                [--top-k 5] [--max-pairs 20] [--max-items 2000]
-                               [--vector] [--vector-top-k 5] [--min-vector-similarity 0.5]
+                               [--vector] [--vector-top-k 5] [--min-vector-similarity 0.45]
                                [--retry-undetermined] [--dry-run] [--json]
 hufu context conflicts list    --workspace <ws> --project <id> --team <name> [--all] [--json]
 hufu context conflicts show    <conflict-id> --workspace <ws> --project <id> --team <name>
@@ -828,6 +828,9 @@ hufu context conflicts dismiss <conflict-id> --workspace <ws> --project <id> --t
     `var conflictVectorFactory = func(ctx context.Context, workspace string, repo contextstore.Repository, scope contextstore.Scope) (memoryconflict.SimilarSearcher, error)`，
     預設實作即上述 Open + Rebuild。
   - 沒有 `--vector` 時，`--vector-top-k` 與 `--min-vector-similarity` 不生效。
+  - 門檻校準（2026-09-23，本機 `nomic-embed-text`）：無關記憶約 0.37–0.38；「Use SQLite for
+    storage」對「Architecture migrated to PostgreSQL」為 0.487；真正矛盾的「tabs」對「four
+    spaces」為 0.767、中文正反陳述為 0.978。原訂 0.5 會漏掉代表案例，因此預設改為 0.45。
 - 寫入類子命令（scan、dismiss）開頭先 `flushGovernanceEvents`，結束前再 flush 一次；
   list/show 以 read-only 開啟，不 flush（與 promotion 一致）。
 - `list` 預設只列 derived state open；`--all` 列出所有 contradicts 判定。沒有 open 衝突時 text

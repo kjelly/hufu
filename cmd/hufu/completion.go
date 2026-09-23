@@ -347,6 +347,26 @@ export extern "hufu context promotion approve" [proposal_id: string@'nu-complete
 export extern "hufu context promotion reject" [proposal_id: string@'nu-complete hufu proposals' --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json --reason: string]
 export extern "hufu context promotion apply" [proposal_id: string@'nu-complete hufu proposals' --workspace(-w): string --project: string --team: string --team-search-path: string --policy-version: string --json]
 
+export extern "hufu context conflicts scan" [
+  --workspace(-w): string
+  --project: string
+  --team: string
+  --json
+  --team-search-path: string
+  --model: string
+  --top-k: int
+  --max-pairs: int
+  --max-items: int
+  --vector
+  --vector-top-k: int
+  --min-vector-similarity: number
+  --retry-undetermined
+  --dry-run
+]
+export extern "hufu context conflicts list" [--workspace(-w): string --project: string --team: string --json --all]
+export extern "hufu context conflicts show" [conflict_id: string --workspace(-w): string --project: string --team: string --json --show-content]
+export extern "hufu context conflicts dismiss" [conflict_id: string --workspace(-w): string --project: string --team: string --json --reason: string]
+
 export extern "hufu team create" [
   name: string
   --preset: string

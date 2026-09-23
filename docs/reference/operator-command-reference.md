@@ -79,6 +79,10 @@ hufu context learning --workspace ./workspace/dev-team --project project-id --te
 hufu context promotion review --workspace ./workspace/dev-team --project project-id --team dev-team
 ```
 
+```sh
+hufu context conflicts list --workspace ./workspace/dev-team --project project-id --team dev-team
+```
+
 ### Automation
 
 ```sh

@@ -41,6 +41,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Progress and recovery", Argv: "hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main"},
 	{Section: "Learning and publication", Argv: "hufu context learning --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Learning and publication", Argv: "hufu context promotion review --workspace ./workspace/dev-team --project project-id --team dev-team"},
+	{Section: "Learning and publication", Argv: "hufu context conflicts list --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Automation", Argv: `hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"`},
 	{Section: "Automation", Argv: `hufu run --team ops-team --unattended -- "check service health"`},
 	{Section: "Display", Argv: `hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor a long task"`},

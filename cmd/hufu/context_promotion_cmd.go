@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/promotion"
 	"github.com/kjelly/hufu/internal/sidecar"
@@ -71,11 +70,7 @@ func promotionWorkspacePath() string {
 	return getContextWorkspace()
 }
 func promotionRegistry() *team.TeamRegistry {
-	paths := team.DefaultSearchPaths()
-	if promotionSearchPath != "" {
-		paths = strings.Split(promotionSearchPath, ",")
-	}
-	return team.NewTeamRegistry(paths)
+	return teamRegistryFromSearchPath(promotionSearchPath)
 }
 func openPromotion(cmd *cobra.Command) (*contextstore.SQLiteRepository, promotion.Service, error) {
 	return openPromotionContext(cmd.Context())
@@ -328,78 +323,18 @@ func runPromotionApply(cmd *cobra.Command, args []string) error {
 }
 
 func flushPromotionEvents(ctx context.Context, repo *contextstore.SQLiteRepository) error {
-	events, err := repo.PendingPromotionEvents(ctx)
-	if err != nil {
-		return err
-	}
-	if len(events) == 0 {
-		return nil
-	}
-	store, err := team.NewEventStore(promotionWorkspacePath(), "promotion", "")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = store.Close() }()
-	for _, event := range events {
-		if err = store.Append(team.RunEvent{Type: event.EventType, Actor: "operator", IdempotencyKey: event.IdempotencyKey, Payload: event.Payload}); err != nil {
-			return err
-		}
-		if err = repo.MarkPromotionEventDelivered(ctx, event.IdempotencyKey); err != nil {
-			return err
-		}
-	}
-	return nil
+	return flushGovernanceEvents(ctx, repo, promotionWorkspacePath())
 }
 
-type sidecarTextGenerator struct {
-	s   *sidecar.Sidecar
-	ctx context.Context
-}
-
-func (g sidecarTextGenerator) GenerateText(ctx context.Context, prompt string) (string, error) {
-	if g.ctx != nil {
-		ctx = g.ctx
-	}
-	return g.s.ExecuteProfile(sidecar.WithPurpose(ctx, "promotion_draft"), prompt, sidecar.CompactorProfile)
-}
 func newPromotionGenerator(ctx context.Context, teamDir string) (promotion.DraftGenerator, func(), error) {
-	session, err := team.LoadTeam(teamDir, nil, nil, team.DefaultProviderRegistry)
+	generator, _, release, err := newMaintenanceTextGenerator(ctx, maintenanceGeneratorOptions{
+		TeamDir: teamDir, Workspace: promotionWorkspacePath(), ModelOverride: promotionModel,
+		Purpose: "promotion_draft", Profile: sidecar.CompactorProfile,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg := config.LoadConfig()
-	model := firstNonEmpty(promotionModel, session.Config.SidecarModel, session.Config.Generation.Model, cfg.SidecarModel, cfg.Model)
-	if model == "" {
-		return nil, nil, fmt.Errorf("promotion analyze requires --model or a team/config sidecar/model")
-	}
-	url := config.ResolveProviderURL(opts.providerURL, session.Config.ProviderURL, "")
-	key := config.ResolveProviderAPIKey(opts.providerAPIKey, session.Config.ProviderAPIKey)
-	if err := preflightSidecarTarget(session, cfg, model, nil); err != nil {
-		return nil, nil, fmt.Errorf("promotion analyze execution target: %w", err)
-	}
-	// Promotion analysis is a CLI model invocation, but it still needs the
-	// same repository, compiler, redaction, manifest, and event boundary as a
-	// coordinator sidecar. Bind this loaded team to the promotion workspace
-	// before constructing the coordinator so the draft lineage is replayable
-	// next to context.sqlite rather than in an ambient project workspace.
-	session.Workspace = promotionWorkspacePath()
-	if err := session.SetCompatibilityWorkspaceScope(runtimeSubjectRoot()); err != nil {
-		return nil, nil, fmt.Errorf("bind promotion workspace scope: %w", err)
-	}
-	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	handle, err := preparePreflightSidecarContext(ctx, coordinator)
-	if err != nil {
-		_ = coordinator.Close()
-		return nil, nil, err
-	}
-	closeGenerator := func() {
-		handle.Close()
-		_ = coordinator.Close()
-	}
-	return promotion.JSONDraftGenerator{Generator: sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context()}}, closeGenerator, nil
+	return promotion.JSONDraftGenerator{Generator: generator}, release, nil
 }
 
 func parsePromotionType(v string) (promotion.Type, error) {

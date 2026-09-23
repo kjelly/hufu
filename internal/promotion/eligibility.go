@@ -32,16 +32,7 @@ func EligibleSources(ctx context.Context, repo EligibilityRepository, opts Eligi
 	}
 	var candidates []eligibleItem
 	err := repo.Iterate(ctx, contextstore.RepositoryQuery{Scope: contextstore.Scope{ProjectID: opts.ProjectID, TeamID: opts.TeamID}, Visibility: contextstore.VisibilitySubtree}, func(item contextstore.ContextItem) error {
-		if item.Scope.ProjectID != opts.ProjectID || item.Scope.TeamID != opts.TeamID || item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" {
-			return nil
-		}
-		if item.Scope.SessionID != "" || item.Scope.BranchID != "" || item.Scope.TaskID != "" || item.Scope.AttemptID != "" {
-			return nil
-		}
-		if item.ExpiresAt != nil && !item.ExpiresAt.After(now) {
-			return nil
-		}
-		if item.Metadata == nil || (item.Metadata["memory_lifetime"] != "persistent" && item.Metadata["memory_tier"] != "persistent") {
+		if item.Scope.ProjectID != opts.ProjectID || item.Scope.TeamID != opts.TeamID || !contextstore.IsCurrentPersistentKnowledge(item, now) {
 			return nil
 		}
 		if utils.RedactSecrets(item.Content) != item.Content || strings.Contains(item.Content, "[REDACTED]") || strings.Contains(item.Content, "<REDACTED:") {

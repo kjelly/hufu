@@ -55,6 +55,7 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"fix_analysis":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_analysis"},
 	"explain_analysis":                  {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "analysis_unavailable"},
 	"promotion_draft":                   {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "draft_unavailable"},
+	"memory_conflict_judge":             {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "judgment_unavailable"},
 	"skill_learning":                    {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_heuristic"},
 	// Classifier is a compatibility name for legacy sidecar Execute callers.
 	// It remains explicit so the audit can drive each caller toward a narrower
