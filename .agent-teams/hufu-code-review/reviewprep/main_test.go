@@ -242,6 +242,46 @@ func TestPrepareReviewsOnlySelectedConventionalFeatureCommits(t *testing.T) {
 	}
 }
 
+func TestSelectedCommitDiffPlanUsesEmptyTreeForRootCommit(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "--initial-branch=main")
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 1\n", "feat: initial feature", "2025-01-02T00:00:00Z")
+
+	resolution, err := resolveLastNByCommitType(t.Context(), repo, "HEAD", "", 1, "feat")
+	if err != nil {
+		t.Fatalf("resolve selected feature commit: %v", err)
+	}
+	plan, err := prepareSelectedCommitDiffPlan(t.Context(), repo, resolution.Range)
+	if err != nil {
+		t.Fatalf("prepare selected commit diff plan: %v", err)
+	}
+	if len(plan.commits) != 1 || plan.commits[0].commit != resolution.Range.Commits[0] {
+		t.Fatalf("selected commit diff plan = %#v, want one entry for %q", plan.commits, resolution.Range.Commits[0])
+	}
+	emptyTree, err := gitWithInput(t.Context(), repo, nil, "hash-object", "-t", "tree", "--stdin")
+	if err != nil {
+		t.Fatalf("resolve empty tree: %v", err)
+	}
+	if plan.commits[0].parent != strings.TrimSpace(emptyTree) {
+		t.Fatalf("root commit parent = %q, want empty tree %q", plan.commits[0].parent, strings.TrimSpace(emptyTree))
+	}
+
+	paths, err := changedPaths(t.Context(), repo, resolution.Range, plan)
+	if err != nil {
+		t.Fatalf("changedPaths for root commit: %v", err)
+	}
+	if !slices.Equal(paths, []string{"internal/feature.go"}) {
+		t.Fatalf("changed paths = %#v, want the root commit's feature file", paths)
+	}
+	diff, err := reviewDiff(t.Context(), repo, resolution.Range, plan, "internal/feature.go")
+	if err != nil {
+		t.Fatalf("reviewDiff for root commit: %v", err)
+	}
+	if !strings.Contains(diff, "+const Feature = 1") {
+		t.Fatalf("root commit diff omitted feature addition: %s", diff)
+	}
+}
+
 func TestConventionalCommitTypeUsesOnlyTheSubjectHeader(t *testing.T) {
 	tests := []struct {
 		subject string
@@ -814,7 +854,7 @@ func TestResolveRangeIncludesRootCommitWhenHistoryIsExhausted(t *testing.T) {
 	if resolution.Range.CommitCount != 2 || resolution.AvailableCommitCount != 2 || !resolution.HistoryExhausted {
 		t.Fatalf("resolution = %#v, want root plus one commit and exhausted history", resolution)
 	}
-	paths, err := changedPaths(t.Context(), repo, resolution.Range)
+	paths, err := changedPaths(t.Context(), repo, resolution.Range, selectedCommitDiffPlan{})
 	if err != nil {
 		t.Fatalf("changedPaths from empty tree: %v", err)
 	}

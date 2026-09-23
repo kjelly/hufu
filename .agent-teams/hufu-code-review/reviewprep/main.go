@@ -504,7 +504,11 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	if reviewRangeValue.CommitCount == 0 && !reviewRangeValue.isWorkingTree() {
 		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no commits", compactScope(config.Scope))
 	}
-	paths, err := changedPaths(ctx, repo, reviewRangeValue)
+	diffPlan, err := prepareSelectedCommitDiffPlan(ctx, repo, reviewRangeValue)
+	if err != nil {
+		return actionResult{}, err
+	}
+	paths, err := changedPaths(ctx, repo, reviewRangeValue, diffPlan)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -512,9 +516,9 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no changed paths", compactScope(config.Scope))
 	}
 	if config.Routing == routingDocumentation {
-		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, config)
+		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, diffPlan, config)
 	}
-	batches, err := buildBatches(ctx, repo, reviewRangeValue, paths, config)
+	batches, err := buildBatches(ctx, repo, reviewRangeValue, diffPlan, paths, config)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -580,7 +584,7 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	}, Artifacts: artifacts}, nil
 }
 
-func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, config Config) (actionResult, error) {
+func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, config Config) (actionResult, error) {
 	r := resolution.Range
 	documentationPaths := make([]string, 0)
 	primaryPaths := make([]string, 0)
@@ -600,19 +604,19 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		}
 	}
 
-	verification, err := verifyDocumentationChanges(ctx, repo, r, documentationPaths)
+	verification, err := verifyDocumentationChanges(ctx, repo, r, diffPlan, documentationPaths)
 	if err != nil {
 		return actionResult{}, err
 	}
-	primaryBatches, err := buildBatches(ctx, repo, r, primaryPaths, config)
+	primaryBatches, err := buildBatches(ctx, repo, r, diffPlan, primaryPaths, config)
 	if err != nil {
 		return actionResult{}, err
 	}
-	documentationBatches, err := buildBatches(ctx, repo, r, routineDocumentationPaths, config)
+	documentationBatches, err := buildBatches(ctx, repo, r, diffPlan, routineDocumentationPaths, config)
 	if err != nil {
 		return actionResult{}, err
 	}
-	escalationBatches, err := buildBatches(ctx, repo, r, escalatedDocumentationPaths, config)
+	escalationBatches, err := buildBatches(ctx, repo, r, diffPlan, escalatedDocumentationPaths, config)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -1275,15 +1279,19 @@ func finalizeSelectedRange(ctx context.Context, repo string, commits []string, r
 	return resolution, nil
 }
 
-func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, error) {
+func changedPaths(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan) ([]string, error) {
 	var output string
 	var err error
 	if r.isSelectedCommits() {
+		selectedCommits, planErr := diffPlan.forRange(r)
+		if planErr != nil {
+			return nil, planErr
+		}
 		var selectedOutput strings.Builder
-		for _, commit := range r.Commits {
+		for _, commit := range selectedCommits {
 			current, diffErr := diffSelectedCommit(ctx, repo, commit, "--name-only", "-z")
 			if diffErr != nil {
-				return nil, fmt.Errorf("list paths changed by selected commit %q: %w", commit, diffErr)
+				return nil, fmt.Errorf("list paths changed by selected commit %q: %w", commit.commit, diffErr)
 			}
 			selectedOutput.WriteString(current)
 		}
@@ -1404,7 +1412,7 @@ func isRoutineDocumentationPath(lower string) bool {
 	return false
 }
 
-func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, paths []string) (documentationVerification, error) {
+func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string) (documentationVerification, error) {
 	verification := documentationVerification{Passed: true, CheckedFiles: append([]string(nil), paths...)}
 	seenLinks := make(map[string]struct{})
 	seenPaths := make(map[string]struct{})
@@ -1429,7 +1437,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 		if !exists {
 			continue
 		}
-		addedLines, err := addedDocumentationLines(ctx, repo, r, documentPath)
+		addedLines, err := addedDocumentationLines(ctx, repo, r, diffPlan, documentPath)
 		if err != nil {
 			return verification, err
 		}
@@ -1506,8 +1514,8 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	return verification, nil
 }
 
-func addedDocumentationLines(ctx context.Context, repo string, r reviewRange, path string) ([]string, error) {
-	diff, err := reviewDiff(ctx, repo, r, path)
+func addedDocumentationLines(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, path string) ([]string, error) {
+	diff, err := reviewDiff(ctx, repo, r, diffPlan, path)
 	if err != nil {
 		return nil, fmt.Errorf("diff documentation %q: %w", path, err)
 	}
@@ -2242,10 +2250,10 @@ func reviewTargetLabel(r reviewRange) string {
 	return r.End
 }
 
-func buildBatches(ctx context.Context, repo string, r reviewRange, paths []string, config Config) ([]*batch, error) {
+func buildBatches(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string, config Config) ([]*batch, error) {
 	var batches []*batch
 	for _, path := range paths {
-		diff, err := reviewDiff(ctx, repo, r, path)
+		diff, err := reviewDiff(ctx, repo, r, diffPlan, path)
 		if err != nil {
 			return nil, fmt.Errorf("diff %q: %w", path, err)
 		}
@@ -2268,13 +2276,17 @@ func buildBatches(ctx context.Context, repo string, r reviewRange, paths []strin
 	return batches, nil
 }
 
-func reviewDiff(ctx context.Context, repo string, r reviewRange, path string) (string, error) {
+func reviewDiff(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, path string) (string, error) {
 	if r.isSelectedCommits() {
+		selectedCommits, err := diffPlan.forRange(r)
+		if err != nil {
+			return "", err
+		}
 		var selectedDiff strings.Builder
-		for _, commit := range r.Commits {
+		for _, commit := range selectedCommits {
 			diff, err := diffSelectedCommit(ctx, repo, commit, "--", path)
 			if err != nil {
-				return "", fmt.Errorf("diff selected commit %q: %w", commit, err)
+				return "", fmt.Errorf("diff selected commit %q: %w", commit.commit, err)
 			}
 			selectedDiff.WriteString(diff)
 		}

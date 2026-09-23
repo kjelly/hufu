@@ -6,6 +6,52 @@ import (
 	"strings"
 )
 
+type selectedCommitDiff struct {
+	commit string
+	parent string
+}
+
+type selectedCommitDiffPlan struct {
+	commits []selectedCommitDiff
+}
+
+func prepareSelectedCommitDiffPlan(ctx context.Context, repo string, r reviewRange) (selectedCommitDiffPlan, error) {
+	if !r.isSelectedCommits() {
+		return selectedCommitDiffPlan{}, nil
+	}
+	if len(r.Commits) == 0 {
+		return selectedCommitDiffPlan{}, fmt.Errorf("selected commit diff plan has no commits")
+	}
+
+	plan := selectedCommitDiffPlan{commits: make([]selectedCommitDiff, 0, len(r.Commits))}
+	for _, commit := range r.Commits {
+		parent, err := firstParentOrEmptyTree(ctx, repo, commit)
+		if err != nil {
+			return selectedCommitDiffPlan{}, err
+		}
+		plan.commits = append(plan.commits, selectedCommitDiff{commit: commit, parent: parent})
+	}
+	return plan, nil
+}
+
+func (p selectedCommitDiffPlan) forRange(r reviewRange) ([]selectedCommitDiff, error) {
+	if !r.isSelectedCommits() {
+		if len(p.commits) != 0 {
+			return nil, fmt.Errorf("selected commit diff plan supplied for a non-selected range")
+		}
+		return nil, nil
+	}
+	if len(p.commits) != len(r.Commits) {
+		return nil, fmt.Errorf("selected commit diff plan has %d commits, want %d", len(p.commits), len(r.Commits))
+	}
+	for index, commit := range r.Commits {
+		if p.commits[index].commit != commit {
+			return nil, fmt.Errorf("selected commit diff plan entry %d is %q, want %q", index, p.commits[index].commit, commit)
+		}
+	}
+	return p.commits, nil
+}
+
 func resolveLastNByCommitType(ctx context.Context, repo, head, since string, count int, commitType string) (rangeResolution, error) {
 	end, err := resolveCommit(ctx, repo, head)
 	if err != nil {
@@ -109,12 +155,8 @@ func firstParentOrEmptyTree(ctx context.Context, repo, commit string) (string, e
 	return strings.TrimSpace(emptyTree), nil
 }
 
-func diffSelectedCommit(ctx context.Context, repo, commit string, options ...string) (string, error) {
-	parent, err := firstParentOrEmptyTree(ctx, repo, commit)
-	if err != nil {
-		return "", err
-	}
-	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", parent, commit}
+func diffSelectedCommit(ctx context.Context, repo string, selected selectedCommitDiff, options ...string) (string, error) {
+	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", selected.parent, selected.commit}
 	args = append(args, options...)
 	return git(ctx, repo, args...)
 }
