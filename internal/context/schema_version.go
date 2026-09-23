@@ -7,6 +7,7 @@ import "context"
 // latest version; OpenSQLiteReadOnly never migrates.
 const (
 	schemaVersionPromotionEditTracking = 10
+	schemaVersionPairJudgments         = 11
 )
 
 // latestSchemaVersion is the newest migration this build knows.

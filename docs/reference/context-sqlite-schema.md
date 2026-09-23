@@ -30,6 +30,7 @@ an existing store requires a new migration, hufu creates a timestamped
 | 8 | `context_outcome_execution_linkage` | Links outcome observations to canonical execution identities. |
 | 9 | `semantic_embedding_generations` | Adds rebuildable, generation-scoped semantic embedding projections. |
 | 10 | `promotion_generated_draft_hash` | Records each promotion proposal's generated draft hash so operator edits can be distinguished from the model draft. |
+| 11 | `context_pair_judgments` | Adds model judgments about pairs of existing persistent memories and their human review state (memory conflicts). |
 
 ## Tables
 
@@ -97,6 +98,10 @@ their 24-hour recovery window.
 ### Promotion tables
 
 `promotion_proposals` stores the scoped draft, target-relative path, target base hash, metrics snapshot, and review status. `generated_draft_hash` is the draft hash at creation and never changes on edit; it is empty for proposals created before migration 10, whose edit state is unknown. Read-only opens never migrate, so readers of a store older than migration 10 treat the column as empty. `promotion_sources` preserves each source context ID, content hash, and aggregate revision without modifying or superseding the source. `promotion_event_outbox` transactionally records content-free lifecycle events; promotion commands deliver pending rows to the hash-chained event store and then mark them delivered. Proposed or rejected drafts are not runtime context inputs.
+
+### Memory conflict table
+
+`context_pair_judgments` records one model judgment per pair of existing persistent context items in the same project, team, and agent scope: the two item IDs (bytewise ordered), their content hashes at judgment time, the verdict (`contradicts`, `compatible`, `duplicate`, `refines`, or `undetermined` for invalid judge output), the judge policy version and model, a redacted rationale of at most 512 runes, and review state. Only contradictions are `open` or `dismissed`; every other verdict is `not_applicable` and acts as a cache so a pair is not judged twice. The table stores relations and review state, never knowledge content, and has no foreign key because expired items may be deleted. Whether a conflict is currently open is derived at read time: dismissed, an outdated judge version, a superseded item (`resolved_by_supersede`), and a deleted, expired, or changed item all stop it from counting. `memory_conflict_detected` and `memory_conflict_dismissed` lifecycle events use the promotion outbox. Read-only opens of a store older than migration 11 report conflicts as unavailable.
 
 ## Indexes
 

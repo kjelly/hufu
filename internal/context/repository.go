@@ -91,6 +91,11 @@ type ReadOnlyRepository interface {
 	ListPromotions(context.Context, string, string) ([]PromotionProposal, error)
 	ListPromotionMetadataForScope(context.Context, string, string, int) ([]PromotionMetadata, error)
 	ListContextMetadataForScope(context.Context, Scope, int) ([]ContextMetadata, error)
+	// Conflict queries degrade on stores older than migration 11: listings
+	// return ErrConflictsUnavailable and item lookups report no conflicts.
+	ListConflicts(context.Context, ConflictQuery) ([]ConflictView, error)
+	GetConflict(context.Context, string, string, string) (ConflictView, error)
+	OpenConflictsForItems(context.Context, string, string, []string) (map[string][]string, error)
 	StorageDiagnostics(context.Context) (StorageDiagnostics, error)
 	Close() error
 }

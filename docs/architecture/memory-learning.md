@@ -495,6 +495,7 @@ pipeline：deterministic pre-cluster（scope、kind、tool/action signature、fi
 
 - proposal 必須列出所有 source ContextItem IDs 與 aggregate revision。
 - 原始 item/event 永不刪除；以 `derived_from/supports/contradicts/supersedes/applies_to/failed_with` edge 連結。
+- 記憶衝突（兩筆 confirmed 持久記憶互相矛盾）不使用 `contradicts` edge，而是記錄在 `context_pair_judgments`：edge 的主鍵 `(from_id, relation, to_id)` 無法記錄判定時的內容 hash、judge policy version、模型與人工審查狀態，而衝突判定是模型產生、可被人工 dismiss 的審查紀錄，不是知識圖譜關係。
 - 單一 task 不得自動升 project；跨 project/team/global scope 必須人工批准。
 - LLM 不能直接建立 confirmed item，也不能直接 supersede source。
 

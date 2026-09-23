@@ -37,11 +37,11 @@ func TestMigrationFixture_CurrentSchemaVersion(t *testing.T) {
 	if err := r.db.QueryRowContext(context.Background(), "SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion); err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 10 {
-		t.Fatalf("current latest migration version = %d, want 10 (promotion_generated_draft_hash)", maxVersion)
+	if maxVersion != 11 {
+		t.Fatalf("current latest migration version = %d, want 11 (context_pair_judgments)", maxVersion)
 	}
-	if len(migrations) != 10 || latestSchemaVersion() != 10 {
-		t.Fatalf("len(migrations) = %d, latestSchemaVersion() = %d, want 10", len(migrations), latestSchemaVersion())
+	if len(migrations) != 11 || latestSchemaVersion() != 11 {
+		t.Fatalf("len(migrations) = %d, latestSchemaVersion() = %d, want 11", len(migrations), latestSchemaVersion())
 	}
 }
 
