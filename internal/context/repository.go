@@ -90,6 +90,7 @@ type ReadOnlyRepository interface {
 	GetPromotion(context.Context, string, string, string) (PromotionProposal, error)
 	ListPromotions(context.Context, string, string) ([]PromotionProposal, error)
 	ListPromotionMetadataForScope(context.Context, string, string, int) ([]PromotionMetadata, error)
+	ListAppliedSkillPromotions(context.Context, string) ([]PromotionProposal, error)
 	ListContextMetadataForScope(context.Context, Scope, int) ([]ContextMetadata, error)
 	// Conflict queries degrade on stores older than migration 11: listings
 	// return ErrConflictsUnavailable and item lookups report no conflicts.

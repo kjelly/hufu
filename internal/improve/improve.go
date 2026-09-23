@@ -126,6 +126,12 @@ type Report struct {
 	Trend                []TrendPoint   `json:"trend"`
 	Groups               GroupedMetrics `json:"groups"`
 	Findings             []Finding      `json:"findings"`
+	// PromotedSkills is an association report for skills created by applied
+	// LTM promotions, not a causal attribution.
+	PromotedSkills []PromotedSkillUsage `json:"promoted_skills,omitempty"`
+	// PromotedSkillsUnavailable is a reason code (query_failed) when the
+	// context store exists but promoted skills could not be read.
+	PromotedSkillsUnavailable string `json:"promoted_skills_unavailable,omitempty"`
 }
 
 type agentFrontmatter struct {
@@ -314,6 +320,7 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 	if err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateGroups, err)
 	}
+	promotedSkills, promotedSkillsUnavailable := collectPromotedSkills(ctx, analytics, workspace, teamName)
 	provenance := findingProvenance{runIDs: runIDs, teamRevisions: teamRevisions}
 	report := &Report{
 		Team:                 teamName,
@@ -328,6 +335,9 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 		Trend:                trend,
 		Groups:               groups,
 		Findings:             analyze(def, metrics, provenance),
+
+		PromotedSkills:            promotedSkills,
+		PromotedSkillsUnavailable: promotedSkillsUnavailable,
 	}
 	return report, nil
 }

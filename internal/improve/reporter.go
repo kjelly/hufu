@@ -28,6 +28,7 @@ func Markdown(report *Report) string {
 	writeGroupTable(&b, "By Model", report.Groups.ByModel)
 	fmt.Fprintln(&b, "### By Skill\n\nA task associated with multiple skills appears in each matching skill group.")
 	writeGroupRows(&b, report.Groups.BySkill)
+	writePromotedSkills(&b, report.PromotedSkills)
 
 	if len(report.Findings) == 0 {
 		fmt.Fprintln(&b, "\n## Findings\n\nNo rule-triggered findings for the selected runs.")
@@ -39,6 +40,20 @@ func Markdown(report *Report) string {
 		fmt.Fprintf(&b, "- **Layer / target**: %s / %s\n- **Observed**: %s\n- **Evidence**: %s\n- **Confidence**: %s\n- **Suggestion**: %s\n- **Rule**: `%s`\n", finding.Layer, finding.Target, finding.Value, finding.Evidence, finding.Confidence, finding.Suggestion, finding.SourceRule)
 	}
 	return b.String()
+}
+
+// writePromotedSkills adds the applied-promotion skill section only when
+// there is data to show.
+func writePromotedSkills(b *strings.Builder, usage []PromotedSkillUsage) {
+	if len(usage) == 0 {
+		return
+	}
+	fmt.Fprintln(b, "\n## Promoted skills (association only)\n\nTasks that used a skill created by an applied LTM promotion, counted from the apply time. This is association, not causal attribution.")
+	fmt.Fprintln(b, "| Proposal | Skill | Applied at | Tasks since | Done | Error | Retried | Untimed |")
+	fmt.Fprintln(b, "|---|---|---|---:|---:|---:|---:|---:|")
+	for _, u := range usage {
+		fmt.Fprintf(b, "| %s | %s | %s | %d | %d | %d | %d | %d |\n", u.ProposalID, u.SkillName, u.AppliedAt, u.TasksSinceApplied, u.Done, u.Error, u.RetriedTasks, u.UntimedTasks)
+	}
 }
 
 func writeGroupTable(b *strings.Builder, heading string, groups []GroupMetric) {

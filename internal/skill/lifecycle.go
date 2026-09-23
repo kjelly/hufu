@@ -105,17 +105,21 @@ func RecordUsage(workspaceDir, skillName, agentName string) error {
 
 // PromoteDraft moves a draft from <skillsDir>/drafts/<name>/ to
 // <skillsDir>/<name>/, stripping the "draft-" prefix from the directory
-// name. Returns the new SKILL.md path.
+// name. Runtime names a skill by its frontmatter, so the frontmatter name is
+// rewritten to the promoted name first; the promoted skill must pass
+// ValidateSkillDraft. Returns the new SKILL.md path.
 func PromoteDraft(skillsDir, draftName string) (string, error) {
 	srcDir := filepath.Join(skillsDir, "drafts", draftName)
 	if _, err := os.Stat(srcDir); err != nil {
 		return "", fmt.Errorf("draft not found: %s", draftName)
 	}
-	raw, err := os.ReadFile(filepath.Join(srcDir, "SKILL.md"))
+	skillPath := filepath.Join(srcDir, "SKILL.md")
+	raw, err := os.ReadFile(skillPath)
 	if err != nil {
 		return "", fmt.Errorf("read draft: %w", err)
 	}
-	if _, err := parseSkillBytes(raw); err != nil {
+	current, err := parseSkillBytes(raw)
+	if err != nil {
 		return "", fmt.Errorf("validate draft: %w", err)
 	}
 	newName := strings.TrimPrefix(draftName, "draft-")
@@ -129,10 +133,73 @@ func PromoteDraft(skillsDir, draftName string) (string, error) {
 	if _, err := os.Stat(dstDir); err == nil {
 		return "", fmt.Errorf("destination already exists: %s", dstDir)
 	}
+	promoted := raw
+	if current.Name != newName {
+		if promoted, err = rewriteSkillName(raw, newName); err != nil {
+			return "", fmt.Errorf("rename draft skill: %w", err)
+		}
+	}
+	def, err := ValidateSkillDraft(promoted)
+	if err != nil {
+		return "", fmt.Errorf("validate draft: %w", err)
+	}
+	if def.Name != newName {
+		return "", fmt.Errorf("validate draft: frontmatter name %q does not match promoted name %q", def.Name, newName)
+	}
+	if current.Name != newName {
+		// Rewrite in place first so a failed directory rename leaves a draft
+		// whose name already matches; retrying is then still correct.
+		if err := writeFileAtomic(skillPath, promoted); err != nil {
+			return "", fmt.Errorf("rewrite draft name: %w", err)
+		}
+	}
 	if err := os.Rename(srcDir, dstDir); err != nil {
 		return "", fmt.Errorf("rename draft: %w", err)
 	}
 	return filepath.Join(dstDir, "SKILL.md"), nil
+}
+
+// rewriteSkillName replaces the first top-level "name:" line inside the YAML
+// frontmatter and leaves every other byte unchanged.
+func rewriteSkillName(raw []byte, name string) ([]byte, error) {
+	text := string(raw)
+	if !strings.HasPrefix(text, "---\n") {
+		return nil, fmt.Errorf("skill draft must start with YAML frontmatter")
+	}
+	end := strings.Index(text[4:], "\n---\n")
+	if end < 0 {
+		return nil, fmt.Errorf("skill draft has malformed frontmatter")
+	}
+	lines := strings.Split(text[4:4+end], "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "name:") {
+			lines[i] = "name: " + name
+			return []byte("---\n" + strings.Join(lines, "\n") + text[4+end:]), nil
+		}
+	}
+	return nil, fmt.Errorf("skill draft frontmatter has no name")
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	defer func() { _ = os.Remove(tempName) }()
+	if _, err = temp.Write(data); err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Chmod(tempName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tempName, path)
 }
 
 // CleanDrafts deletes draft skills matching the given options.

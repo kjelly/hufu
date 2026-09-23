@@ -97,3 +97,45 @@ func TestReadOnlyPromotionsBeforeMigration10(t *testing.T) {
 		}
 	}
 }
+
+func TestListAppliedSkillPromotionsFiltersTypeAndStatus(t *testing.T) {
+	ctx := context.Background()
+	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	event := func(key string) PromotionOutboxEvent {
+		return PromotionOutboxEvent{IdempotencyKey: key, EventType: "fixture", Payload: []byte(`{}`)}
+	}
+	create := func(name, teamID string, typ PromotionType, target string) PromotionProposal {
+		draft := "---\nname: " + name + "\ndescription: d\n---\n1. One.\n2. Two."
+		if typ != PromotionTypeSkill {
+			draft = "## Policy\n\n- Rule."
+		}
+		p := PromotionProposal{ProjectID: "p", TeamID: teamID, Type: typ, TargetPath: target, Draft: draft, DraftHash: HashPromotionContent(draft), PolicyVersion: "v1", Sources: []PromotionSourceSnapshot{{ContextItemID: name, ContentHash: "h", AggregateRevision: 1}}, Status: PromotionStatusProposed}
+		p.ID = PromotionProposalID(p)
+		if _, _, err := repo.CreatePromotion(ctx, p, event(name)); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	apply := func(p PromotionProposal) {
+		for _, to := range []PromotionStatus{PromotionStatusApproved, PromotionStatusApplied} {
+			if _, err := repo.TransitionPromotion(ctx, p.ID, "p", p.TeamID, to, "", event(p.ID+string(to))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	apply(create("applied-skill", "t", PromotionTypeSkill, "skills/applied-skill/SKILL.md"))
+	create("proposed-skill", "t", PromotionTypeSkill, "skills/proposed-skill/SKILL.md")
+	apply(create("policy", "t", PromotionTypeTeamPolicy, "coordinator.md"))
+	apply(create("other-team-skill", "other", PromotionTypeSkill, "skills/other-team-skill/SKILL.md"))
+	got, err := repo.ListAppliedSkillPromotions(ctx, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TargetPath != "skills/applied-skill/SKILL.md" || got[0].Draft != "" || got[0].AppliedAt == nil {
+		t.Fatalf("applied skill promotions = %+v", got)
+	}
+}

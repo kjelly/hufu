@@ -268,6 +268,25 @@ func (r *SQLiteRepository) ListPromotions(ctx context.Context, projectID, teamID
 	return out, nil
 }
 
+// ListAppliedSkillPromotions returns applied skill proposals of a team in
+// any project, ordered by apply time, without draft content.
+func (r *SQLiteRepository) ListAppliedSkillPromotions(ctx context.Context, teamID string) ([]PromotionProposal, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT "+r.promotionSelectColumns(false)+" FROM promotion_proposals WHERE type='skill' AND status='applied' AND team_id=? ORDER BY applied_at, id", teamID)
+	if err != nil {
+		return nil, fmt.Errorf("list applied skill promotions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PromotionProposal
+	for rows.Next() {
+		p, scanErr := scanPromotion(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan applied skill promotion: %w", scanErr)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *SQLiteRepository) ListPromotionMetadataForScope(ctx context.Context, projectID, teamID string, limit int) ([]PromotionMetadata, error) {
 	if projectID == "" || teamID == "" {
 		return nil, fmt.Errorf("promotion project and team scope are required")

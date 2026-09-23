@@ -520,6 +520,6 @@ feature 完成需同時滿足：
 MVP 穩定後再做：
 
 1. 把 auto-skill pattern 與 LTM promotion 共用同一個 `Proposal` / approve / apply pipeline。
-2. 以 applied proposal ID 回寫後續 skill/policy usage outcome，但仍透過 event → aggregate projection，不直接累加可漂移的 counter。
+2. 以 applied proposal ID 回寫後續 skill/policy usage outcome，但仍透過 event → aggregate projection，不直接累加可漂移的 counter。目前只有唯讀、只呈現相關性的報告：`hufu improve` 的 `promoted_skills` 以 skill 名稱對應已套用的 skill proposal，統計 apply 之後使用該 skill 的 task（done、error、retried、無時間戳記者另計）；不回寫 aggregate、不影響任何排序或 gate。
 3. 根據 verified outcomes 提出 deprecate/supersede proposal；仍需人工批准。
 4. 若要真正的 team-wide stable policy，另立規格新增 runtime 載入的 team policy contract，並同時覆蓋 coordinator、worker、direct-agent、resume、dry-run 與輸出 projection；不得把只寫入但不載入的 `team.md` 當完成。

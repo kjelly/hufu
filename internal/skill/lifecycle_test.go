@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,13 +78,20 @@ func TestPromoteDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(draftDir, "SKILL.md"),
-		[]byte("---\nname: draft-foo\n---\n\n# Foo"), 0o644); err != nil {
+		[]byte("---\nname: draft-foo\ndescription: Foo workflow\n---\n\n# Foo"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	newPath, err := PromoteDraft(dir, "draft-foo")
 	if err != nil {
 		t.Fatalf("PromoteDraft: %v", err)
+	}
+	promoted, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(promoted) != "---\nname: foo\ndescription: Foo workflow\n---\n\n# Foo" {
+		t.Errorf("promoted SKILL.md = %q, want the frontmatter name rewritten to foo", promoted)
 	}
 
 	want := filepath.Join(dir, "foo", "SKILL.md")
@@ -207,5 +215,86 @@ func TestCleanDrafts_UnusedOnly(t *testing.T) {
 	}
 	if len(result.Deleted) != 1 || result.Deleted[0] != "unused" {
 		t.Errorf("Deleted = %v, want [unused]", result.Deleted)
+	}
+}
+
+func writeDraft(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	draftDir := filepath.Join(dir, "drafts", name)
+	if err := os.MkdirAll(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(draftDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return draftDir
+}
+
+func TestPromoteDraftRewritesFrontmatterNameForRuntime(t *testing.T) {
+	dir := t.TempDir()
+	writeDraft(t, dir, "draft-foo", "---\nname: draft-foo\ndescription: Foo workflow\ncreated_at: 2026-09-23T00:00:00Z\n---\n\n1. Build.\n2. Test.")
+	if _, err := PromoteDraft(dir, "draft-foo"); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, def := range DiscoverSkills([]string{dir}, false) {
+		names = append(names, def.Name)
+	}
+	if len(names) != 1 || names[0] != "foo" {
+		t.Fatalf("discovered skills = %v, want [foo]", names)
+	}
+}
+
+func TestPromoteDraftKeepsBytesWhenNameMatches(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\nname: tidy-imports\ndescription: Tidy imports\n---\n\n- Run goimports."
+	writeDraft(t, dir, "tidy-imports", content)
+	newPath, err := PromoteDraft(dir, "tidy-imports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("promoted bytes changed: %q", got)
+	}
+}
+
+func TestPromoteDraftRejectsDraftWithoutDescription(t *testing.T) {
+	dir := t.TempDir()
+	draftDir := writeDraft(t, dir, "draft-bare", "---\nname: draft-bare\n---\n\n# Bare")
+	if _, err := PromoteDraft(dir, "draft-bare"); err == nil || !strings.Contains(err.Error(), "description") {
+		t.Fatalf("err = %v, want missing description", err)
+	}
+	got, err := os.ReadFile(filepath.Join(draftDir, "SKILL.md"))
+	if err != nil || string(got) != "---\nname: draft-bare\n---\n\n# Bare" {
+		t.Fatalf("rejected draft was modified or moved: %q err=%v", got, err)
+	}
+}
+
+func TestRewriteSkillName(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "rewrites first top-level name", raw: "---\nname: draft-a\ndescription: d\n---\nname: body stays", want: "---\nname: a\ndescription: d\n---\nname: body stays"},
+		{name: "ignores indented name", raw: "---\nmeta:\n  name: nested\nname: draft-a\n---\nbody", want: "---\nmeta:\n  name: nested\nname: a\n---\nbody"},
+		{name: "no name", raw: "---\ndescription: d\n---\nbody", wantErr: true},
+		{name: "no frontmatter", raw: "name: draft-a", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := rewriteSkillName([]byte(tc.raw), "a")
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && string(got) != tc.want {
+				t.Fatalf("rewrite = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

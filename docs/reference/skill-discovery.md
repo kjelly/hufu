@@ -86,6 +86,8 @@ hufu skill clean --older-than 30d --unused --apply --yes
 hufu skill clean --team my-team --older-than 30d --unused
 ```
 
+`promote` 會把 `draft-` 前綴從目錄名稱去掉，並同步改寫 frontmatter 的 `name:`（runtime 以 frontmatter name 作為技能名稱，所以 `draft-foo` promote 後會以 `foo` 載入）。promote 前以 `ValidateSkillDraft` 驗證改寫後的內容：缺少 `description` 或 body 的草稿會被拒絕，草稿保持原狀。
+
 `--team` 適用於 `list`、`review`、`promote` 與 `clean`，並使用 `--agent-team-search-path`（若有設定）或預設 team search paths。具名 team 的 `clean --unused` 會從和執行期一致的 `<base-workspace>/<team-name>/.skill-usage.json` 判斷使用狀態；`--workspace` 在此代表 base workspace。`graph` 仍以 execution workspace 的 projection 為準，使用 `--workspace` 選擇來源。
 
 如需修改草稿，直接用編輯器編輯對應的 `SKILL.md`，完成審查後再執行 `hufu skill promote`。
