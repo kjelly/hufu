@@ -52,6 +52,9 @@ spec:
         since:
           type: string
           max-length: 80
+        commit_type:
+          type: string
+          enum: [feat]
       required-properties: [kind, history, head]
       additional-properties: false
       resolver:

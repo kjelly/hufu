@@ -117,6 +117,40 @@ func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	}
 }
 
+func TestEmbeddedRuntimeExecutesFeatureCommitSelection(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 1\n", "feat: first feature", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/fix.go", "package internal\n", "fix: unrelated fix", "2025-01-03T00:00:00Z")
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 2\n", "feat(core): second feature", "2025-01-04T00:00:00Z")
+	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD", CommitType: "feat"}
+	payload, err := json.Marshal(wireConfig{Scope: &scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(actionRequest{Type: "prepare_review_workset", Payload: string(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := golangruntime.Prepare(source, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	env := append(os.Environ(), "HUFU_REPOSITORY="+repo, "HUFU_WORKSPACE="+workspace)
+	result, err := golangruntime.Execute(t.Context(), "", program, request, env, 1<<20, 16<<10)
+	if err != nil {
+		t.Fatalf("execute embedded feature reviewprep runtime: %v; stderr=%s", err, result.Stderr)
+	}
+	manifest := readManifest(t, filepath.Join(workspace, "workset", "workset-manifest.json"))
+	if manifest.Scope.Resolved.SelectedCommitCount != 1 || len(manifest.Range.Commits) != 1 || manifest.ChangedFiles != 1 || len(manifest.Items) != 1 || len(manifest.Items[0].TouchedPaths) != 1 || manifest.Items[0].TouchedPaths[0] != "internal/feature.go" {
+		t.Fatalf("embedded runtime selected wrong feature workset: %#v", manifest)
+	}
+}
+
 func TestPrepareSupportsTypedReviewScopeVariants(t *testing.T) {
 	repo := newFixtureRepo(t)
 	for index := 1; index <= 4; index++ {
@@ -154,9 +188,87 @@ func TestPrepareSupportsTypedReviewScopeVariants(t *testing.T) {
 	}
 }
 
+func TestPrepareReviewsOnlySelectedConventionalFeatureCommits(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 1\n", "feat: add first feature", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/fix.go", "package internal\n\nconst Fix = 1\n", "fix: add an unrelated fix", "2025-01-03T00:00:00Z")
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 2\n", "feat(core): add second feature", "2025-01-04T00:00:00Z")
+	secondFeature, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAndCommit(t, repo, "internal/fix.go", "package internal\n\nconst Fix = 2\n", "fix!: adjust unrelated fix", "2025-01-05T00:00:00Z")
+	writeAndCommit(t, repo, "internal/feature.go", "package internal\n\nconst Feature = 3\n", "feat(api)!: add third feature", "2025-01-06T00:00:00Z")
+	thirdFeature, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAndCommit(t, repo, "internal/chore.go", "package internal\n", "chore: add a trailing non-feature commit", "2025-01-07T00:00:00Z")
+	head, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config := fixtureConfig(repo, "out-features")
+	config.Scope = resolverScope{Kind: "last_n", Count: 2, History: "first_parent", Head: "HEAD", CommitType: "feat"}
+	config.Since = ""
+	if _, err := Prepare(t.Context(), config); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	manifest := readManifest(t, filepath.Join(repo, "out-features", "workset-manifest.json"))
+	if manifest.Scope.Requested != config.Scope || manifest.Scope.Resolved.SelectedCommitCount != 2 || manifest.Scope.Resolved.AvailableCommitCount != 3 || manifest.Scope.Resolved.HistoryExhausted {
+		t.Fatalf("filtered scope = %#v", manifest.Scope)
+	}
+	if manifest.Range.End != strings.TrimSpace(head) || !manifest.Range.isSelectedCommits() || !slices.Equal(manifest.Range.Commits, []string{strings.TrimSpace(secondFeature), strings.TrimSpace(thirdFeature)}) {
+		t.Fatalf("selected commit range = %#v", manifest.Range)
+	}
+	if manifest.ChangedFiles != 1 || len(manifest.Items) != 1 || !slices.Equal(manifest.Items[0].TouchedPaths, []string{"internal/feature.go"}) {
+		t.Fatalf("changed paths include unselected commits: %#v", manifest.Items)
+	}
+	patch, err := os.ReadFile(filepath.Join(repo, "out-features", filepath.FromSlash(manifest.Items[0].DiffPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"+const Feature = 2", "+const Feature = 3"} {
+		if !strings.Contains(string(patch), expected) {
+			t.Errorf("selected feature diff omitted %q: %s", expected, patch)
+		}
+	}
+	for _, excluded := range []string{"internal/fix.go", "internal/chore.go", "const Fix"} {
+		if strings.Contains(string(patch), excluded) {
+			t.Errorf("selected feature diff included %q: %s", excluded, patch)
+		}
+	}
+}
+
+func TestConventionalCommitTypeUsesOnlyTheSubjectHeader(t *testing.T) {
+	tests := []struct {
+		subject string
+		want    string
+	}{
+		{subject: "feat: add a feature", want: "feat"},
+		{subject: "feat(core): add a feature", want: "feat"},
+		{subject: "feat!: remove a feature", want: "feat"},
+		{subject: "feat(api)!: make a breaking change", want: "feat"},
+		{subject: "fix: the body mentions feat: but is not a feature", want: "fix"},
+		{subject: "feature: similar but distinct type", want: "feature"},
+		{subject: "feat(): empty scope is invalid", want: ""},
+		{subject: "This mentions feat: but is not a conventional header", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.subject, func(t *testing.T) {
+			if got := conventionalCommitType(test.subject); got != test.want {
+				t.Fatalf("conventionalCommitType(%q) = %q, want %q", test.subject, got, test.want)
+			}
+		})
+	}
+}
+
 func TestResolveReviewScopeInputDoesNotInferNaturalLanguage(t *testing.T) {
 	for _, prompt := range []string{
 		"Review the last 5 commits",
+		"Review the last 10 feat commits",
 		"審查最近5個的 git commit",
 		"Review the current git diff",
 		"審查目前未提交的修改",
@@ -203,6 +315,13 @@ func TestResolveReviewScopeInputRejectsInvalidExplicitScope(t *testing.T) {
 	})
 	if response.Status != "invalid" || !strings.Contains(response.Diagnostic, "requires a valid base") {
 		t.Fatalf("response = %#v", response)
+	}
+	response = resolveReviewScopeInput(runInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
+		ExplicitValue: json.RawMessage(`{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD","commit_type":"fix"}`),
+	})
+	if response.Status != "invalid" || !strings.Contains(response.Diagnostic, "commit_type") {
+		t.Fatalf("unsupported commit filter response = %#v", response)
 	}
 }
 

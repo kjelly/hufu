@@ -27,7 +27,7 @@ import (
 
 const (
 	manifestSchemaVersion = 2
-	scopeResolverVersion  = "semantic-fallback-1"
+	scopeResolverVersion  = "semantic-fallback-2"
 )
 
 const (
@@ -45,12 +45,13 @@ type actionRequest struct {
 }
 
 type resolverScope struct {
-	Kind    string `json:"kind"`
-	Count   int    `json:"count,omitempty"`
-	History string `json:"history"`
-	Head    string `json:"head"`
-	Base    string `json:"base,omitempty"`
-	Since   string `json:"since,omitempty"`
+	Kind       string `json:"kind"`
+	Count      int    `json:"count,omitempty"`
+	History    string `json:"history"`
+	Head       string `json:"head"`
+	Base       string `json:"base,omitempty"`
+	Since      string `json:"since,omitempty"`
+	CommitType string `json:"commit_type,omitempty"`
 }
 
 type runInputResolverRequest struct {
@@ -176,11 +177,12 @@ type rangeResolution struct {
 }
 
 type reviewRange struct {
-	Start       string `json:"start"`
-	End         string `json:"end"`
-	Since       string `json:"since"`
-	CommitCount int    `json:"commit_count"`
-	Source      string `json:"source,omitempty"`
+	Start       string   `json:"start"`
+	End         string   `json:"end"`
+	Since       string   `json:"since"`
+	CommitCount int      `json:"commit_count"`
+	Source      string   `json:"source,omitempty"`
+	Commits     []string `json:"commits,omitempty"`
 }
 
 type item struct {
@@ -408,20 +410,23 @@ func validateRequestedScope(scope resolverScope) error {
 		if scope.Base != "" || scope.Since != "" {
 			return errors.New("last_n review scope cannot set base or since")
 		}
+		if scope.CommitType != "" && scope.CommitType != "feat" {
+			return fmt.Errorf("last_n review scope commit_type %q is unsupported", scope.CommitType)
+		}
 	case "revision_range":
-		if scope.Count != 0 || scope.Since != "" || !validRevision(scope.Base) {
-			return errors.New("revision_range review scope requires a valid base and cannot set count or since")
+		if scope.Count != 0 || scope.Since != "" || scope.CommitType != "" || !validRevision(scope.Base) {
+			return errors.New("revision_range review scope requires a valid base and cannot set count, since, or commit_type")
 		}
 	case "since":
-		if scope.Count != 0 || scope.Base != "" {
-			return errors.New("since review scope cannot set count or base")
+		if scope.Count != 0 || scope.Base != "" || scope.CommitType != "" {
+			return errors.New("since review scope cannot set count, base, or commit_type")
 		}
 		if _, err := time.Parse(time.DateOnly, scope.Since); err != nil {
 			return errors.New("since review scope requires a valid YYYY-MM-DD date")
 		}
 	case "working_tree":
-		if scope.Count != 0 || scope.Base != "" || scope.Since != "" || scope.Head != "HEAD" {
-			return errors.New("working_tree review scope requires head HEAD and cannot set count, base, or since")
+		if scope.Count != 0 || scope.Base != "" || scope.Since != "" || scope.CommitType != "" || scope.Head != "HEAD" {
+			return errors.New("working_tree review scope requires head HEAD and cannot set count, base, since, or commit_type")
 		}
 	default:
 		return fmt.Errorf("unsupported review scope kind %q", scope.Kind)
@@ -1134,6 +1139,9 @@ func resolveRequestedRange(ctx context.Context, repo string, config Config) (ran
 	}
 	switch config.Scope.Kind {
 	case "last_n":
+		if config.Scope.CommitType != "" {
+			return resolveLastNByCommitType(ctx, repo, config.Scope.Head, config.Since, config.Scope.Count, config.Scope.CommitType)
+		}
 		return resolveLastNRange(ctx, repo, config.Scope.Head, config.Since, config.Scope.Count)
 	case "revision_range":
 		return resolveRevisionRange(ctx, repo, config.Scope)
@@ -1267,7 +1275,17 @@ func finalizeSelectedRange(ctx context.Context, repo string, commits []string, r
 func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, error) {
 	var output string
 	var err error
-	if r.isWorkingTree() {
+	if r.isSelectedCommits() {
+		var selectedOutput strings.Builder
+		for _, commit := range r.Commits {
+			current, diffErr := diffSelectedCommit(ctx, repo, commit, "--name-only", "-z")
+			if diffErr != nil {
+				return nil, fmt.Errorf("list paths changed by selected commit %q: %w", commit, diffErr)
+			}
+			selectedOutput.WriteString(current)
+		}
+		output = selectedOutput.String()
+	} else if r.isWorkingTree() {
 		output, err = git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", r.Start, "--")
 		if err == nil {
 			var untracked string
@@ -1304,6 +1322,10 @@ func changedPaths(ctx context.Context, repo string, r reviewRange) ([]string, er
 
 func (r reviewRange) isWorkingTree() bool {
 	return r.Source == "working_tree"
+}
+
+func (r reviewRange) isSelectedCommits() bool {
+	return r.Source == "selected_commits"
 }
 
 func normalizeTouchedPath(raw string) (string, error) {
@@ -2084,6 +2106,17 @@ func buildBatches(ctx context.Context, repo string, r reviewRange, paths []strin
 }
 
 func reviewDiff(ctx context.Context, repo string, r reviewRange, path string) (string, error) {
+	if r.isSelectedCommits() {
+		var selectedDiff strings.Builder
+		for _, commit := range r.Commits {
+			diff, err := diffSelectedCommit(ctx, repo, commit, "--", path)
+			if err != nil {
+				return "", fmt.Errorf("diff selected commit %q: %w", commit, err)
+			}
+			selectedDiff.WriteString(diff)
+		}
+		return selectedDiff.String(), nil
+	}
 	if !r.isWorkingTree() {
 		return git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
 	}
