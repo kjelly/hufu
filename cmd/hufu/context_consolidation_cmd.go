@@ -58,10 +58,14 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 			return iterateErr
 		}
 		clusters := builder.Clusters()
-		if contextQueryJSON {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"dry_run": true, "clusters": clusters})
+		conflicted, conflictErr := conflictedClusterIDs(cmd.Context(), repo, builder, clusters)
+		if conflictErr != nil {
+			return conflictErr
 		}
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidate dry-run: %d eligible cluster(s); use --apply-proposal --source <ids> --proposal-text <text> to persist a candidate\n", len(clusters))
+		if contextQueryJSON {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"dry_run": true, "clusters": clusters, "conflicted_ids": conflicted})
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidate dry-run: %d eligible cluster(s); use --apply-proposal --source <ids> --proposal-text <text> to persist a candidate; %d item(s) with unresolved conflicts\n", len(clusters), len(conflicted))
 		return err
 	}
 	if strings.TrimSpace(contextProposalText) == "" || strings.TrimSpace(contextProposalSources) == "" {
@@ -79,6 +83,9 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 		return err
 	}
 	if err := validateConsolidationSources(sources, contextProject, contextTeam); err != nil {
+		return err
+	}
+	if err := validateConsolidationConflicts(cmd.Context(), repo, sources); err != nil {
 		return err
 	}
 	policy := agent.DefaultMemoryLearningPolicy()
@@ -129,10 +136,11 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 
 type consolidationClusterBuilder struct {
 	groups map[string][]string
+	scopes map[string]contextstore.Scope
 }
 
 func newConsolidationClusterBuilder() *consolidationClusterBuilder {
-	return &consolidationClusterBuilder{groups: make(map[string][]string)}
+	return &consolidationClusterBuilder{groups: make(map[string][]string), scopes: make(map[string]contextstore.Scope)}
 }
 
 func (b *consolidationClusterBuilder) Add(item contextstore.ContextItem) error {
@@ -141,6 +149,7 @@ func (b *consolidationClusterBuilder) Add(item contextstore.ContextItem) error {
 	}
 	key := item.Scope.ProjectID + "\x00" + item.Scope.TeamID + "\x00" + item.Scope.AgentID + "\x00" + string(item.Kind) + "\x00" + consolidationSignature(item)
 	b.groups[key] = append(b.groups[key], item.ID)
+	b.scopes[item.ID] = item.Scope
 	return nil
 }
 
@@ -289,6 +298,9 @@ func validateConsolidationProposalCurrent(cmd *cobra.Command, repo *contextstore
 		return err
 	}
 	if err := validateConsolidationSources(sources, proposal.ProjectID, proposal.TeamID); err != nil {
+		return fmt.Errorf("proposal source validation changed: %w", err)
+	}
+	if err := validateConsolidationConflicts(cmd.Context(), repo, sources); err != nil {
 		return fmt.Errorf("proposal source validation changed: %w", err)
 	}
 	for _, source := range sources {

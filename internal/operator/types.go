@@ -157,8 +157,10 @@ type LearningView struct {
 	StalePromotions              *int64 `json:"stale_promotions"`
 	AppliedEditedPromotions      *int64 `json:"applied_edited_promotions"`
 	AppliedEditUnknownPromotions *int64 `json:"applied_edit_unknown_promotions"`
-	EmptyState                   string `json:"empty_state"`
-	UnavailableReason            string `json:"unavailable_reason"`
+	// OpenConflicts counts unresolved memory conflicts (hufu context conflicts).
+	OpenConflicts     *int64 `json:"open_conflicts"`
+	EmptyState        string `json:"empty_state"`
+	UnavailableReason string `json:"unavailable_reason"`
 }
 
 type ActionSuggestion struct {

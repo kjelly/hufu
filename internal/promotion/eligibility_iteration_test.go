@@ -34,6 +34,13 @@ func (r *iterationOrderingEligibilityRepository) ExperienceAggregate(_ context.C
 	return contextstore.ExperienceAggregate{ContextItemID: id, AppliedCount: 2, VerifiedSupportCount: 2, IndependentTaskCount: 2}, nil
 }
 
+func (r *iterationOrderingEligibilityRepository) OpenConflictsForItems(context.Context, string, string, []string) (map[string][]string, error) {
+	if r.iterating {
+		return nil, fmt.Errorf("conflict lookup while iterator is open")
+	}
+	return map[string][]string{}, nil
+}
+
 func TestEligibleSourcesClosesIteratorBeforeAggregateLookups(t *testing.T) {
 	repo := &iterationOrderingEligibilityRepository{item: contextstore.ContextItem{
 		ID: "eligible", Kind: contextstore.ContextPattern, Content: "verified reusable practice",

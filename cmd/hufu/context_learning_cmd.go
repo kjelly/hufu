@@ -107,6 +107,9 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 		learningCount(view.ApprovedPromotions), learningCount(view.AppliedPromotions),
 		learningCount(view.AppliedEditedPromotions), learningCount(view.AppliedEditUnknownPromotions),
 		learningCount(view.RejectedPromotions), learningCount(view.StalePromotions))
+	if err == nil {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Conflicts: open=%s\n", learningCount(view.OpenConflicts))
+	}
 	if err == nil && view.EmptyState != "" {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "State: %s\n", view.EmptyState)
 	}

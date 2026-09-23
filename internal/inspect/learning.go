@@ -130,6 +130,19 @@ func InspectLearning(ctx context.Context, workspace, projectID, teamID, requeste
 	// Eligibility is only known after the explicit analyze operation. Existing
 	// proposal rows are lifecycle state, not a substitute eligibility count.
 	view.EligiblePromotions = nil
+	openConflicts, conflictErr := repo.ListConflicts(ctx, contextstore.ConflictQuery{ProjectID: projectID, TeamID: teamID})
+	switch {
+	case conflictErr == nil:
+		view.OpenConflicts = new(int64(len(openConflicts)))
+	case errors.Is(conflictErr, contextstore.ErrConflictsUnavailable):
+		// A store older than migration 11 has no conflict data: unknown, not zero.
+		view.OpenConflicts = nil
+	default:
+		view.OpenConflicts = nil
+		if view.UnavailableReason == "" {
+			view.UnavailableReason = "conflict_query_failed"
+		}
+	}
 	if exposures == 0 && len(proposals) == 0 {
 		view.EmptyState = "no_recall_data"
 	} else if exposures > 0 && applied == 0 {
@@ -155,6 +168,7 @@ func setZeroLearningCounters(view *operatorpkg.LearningView) {
 	view.StalePromotions = new(zero)
 	view.AppliedEditedPromotions = new(zero)
 	view.AppliedEditUnknownPromotions = new(zero)
+	view.OpenConflicts = new(zero)
 }
 
 func learningView(ctx context.Context, workspace, projectID, teamID string) operatorpkg.LearningView {
@@ -176,6 +190,7 @@ func clearLearningCounters(view operatorpkg.LearningView) operatorpkg.LearningVi
 	view.StalePromotions = nil
 	view.AppliedEditedPromotions = nil
 	view.AppliedEditUnknownPromotions = nil
+	view.OpenConflicts = nil
 	return view
 }
 

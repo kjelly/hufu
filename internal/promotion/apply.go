@@ -102,6 +102,11 @@ func (s Service) Apply(ctx context.Context, id, project, teamID string, registry
 		applied, e := s.Repo.TransitionPromotion(ctx, p.ID, p.ProjectID, p.TeamID, StatusApplied, "", lifecycleEvent("memory_promotion_applied", p, p.DraftHash, "operator"))
 		return ApplyResult{Proposal: applied, AlreadyApplied: true}, e
 	}
+	// Checked after crash recovery so an already written target is still
+	// recorded as applied; a new write is blocked while status stays approved.
+	if err = s.validateNoOpenConflicts(ctx, p); err != nil {
+		return ApplyResult{}, s.applyFailed(ctx, p, err)
+	}
 	currentHash := ""
 	if readErr == nil {
 		currentHash = contextstore.HashPromotionContent(string(current))
@@ -193,7 +198,10 @@ func (s Service) validateEvidence(ctx context.Context, p Proposal) error {
 // canonical apply path without performing any promotion mutation. Improvement
 // handoffs use it before creating an isolated candidate snapshot.
 func (s Service) ValidateProposalEvidence(ctx context.Context, p Proposal) error {
-	return s.validateEvidence(ctx, p)
+	if err := s.validateEvidence(ctx, p); err != nil {
+		return err
+	}
+	return s.validateNoOpenConflicts(ctx, p)
 }
 
 func secureTarget(teamDir, rel string) (string, error) {

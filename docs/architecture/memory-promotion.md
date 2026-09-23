@@ -222,6 +222,7 @@ proposed|approved -> stale
 - `VerifiedSupportCount >= MemoryLearningPolicy.MinConfirmedSupport`
 - `IndependentTaskCount >= MemoryLearningPolicy.MinIndependentTasks`
 - `CausalFailureCount / max(AppliedCount, 1) <= MemoryLearningPolicy.MaxHarmRate`
+- 沒有 derived state 為 open 的記憶衝突（`hufu context conflicts`）；有衝突的來源被排除並回報 diagnostic `unresolved_conflict`，衝突查詢失敗時 analyze fail closed
 
 預設 policy 的門檻來自 `agent.DefaultMemoryLearningPolicy()`，不要在 promotion package 複製另一套常數。
 
@@ -361,6 +362,7 @@ payload 只記 schema version、proposal ID、source IDs、draft/target hash、t
 6. proposal `DraftHash` 必須與內容一致，且內容不含 secret-like material。
 7. target 現況 hash 必須等於 `TargetBaseHash`；原本不存在者現在仍須不存在。
 8. type-specific parser 必須接受套用後內容。
+9. 在 `alreadyWritten` crash-recovery 分支之後、寫入之前，每個 source 都不得有 open 記憶衝突。有衝突時 apply 回傳錯誤並記錄 `memory_promotion_apply_failed`，**status 維持 `approved`**；proposal ID 不會因 dismiss 或 supersede 改變，若轉成 `stale` 將無法恢復。衝突以 `hufu context supersede` 或 `hufu context conflicts dismiss` 解決後，直接重跑 apply 即可，不需要重新 analyze。improve handoff 的 `ValidateProposalEvidence` 套用同一檢查。
 
 寫入規則：
 

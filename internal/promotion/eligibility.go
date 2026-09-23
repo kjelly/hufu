@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,14 @@ import (
 type EligibilityRepository interface {
 	Iterate(context.Context, contextstore.RepositoryQuery, func(contextstore.ContextItem) error) error
 	ExperienceAggregate(context.Context, string, string) (contextstore.ExperienceAggregate, error)
+	// OpenConflictsForItems gates promotion: a source with an unresolved
+	// memory conflict is never promoted.
+	OpenConflictsForItems(context.Context, string, string, []string) (map[string][]string, error)
 }
+
+// DiagnosticUnresolvedConflict marks a source excluded because it has an
+// open memory conflict (hufu context conflicts).
+const DiagnosticUnresolvedConflict = "unresolved_conflict"
 
 type EligibilityOptions struct {
 	ProjectID, TeamID, PolicyVersion, AgentID string
@@ -58,10 +66,22 @@ func EligibleSources(ctx context.Context, repo EligibilityRepository, opts Eligi
 	if err != nil {
 		return nil, nil, err
 	}
+	candidateIDs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateIDs = append(candidateIDs, candidate.item.ID)
+	}
+	conflicts, err := repo.OpenConflictsForItems(ctx, opts.ProjectID, opts.TeamID, candidateIDs)
+	if err != nil {
+		return nil, diagnostics, fmt.Errorf("check memory conflicts for promotion sources: %w", err)
+	}
 
 	var result []EligibleSource
 	for _, candidate := range candidates {
 		item, types := candidate.item, candidate.types
+		if len(conflicts[item.ID]) > 0 {
+			diagnostics = append(diagnostics, Diagnostic{SourceID: item.ID, Reason: DiagnosticUnresolvedConflict})
+			continue
+		}
 		agg, e := repo.ExperienceAggregate(ctx, item.ID, opts.PolicyVersion)
 		if errors.Is(e, sql.ErrNoRows) {
 			continue

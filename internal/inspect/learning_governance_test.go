@@ -102,3 +102,60 @@ func TestInspectLearningCountsRejectedStaleAndEdited(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectLearningCountsOpenConflicts(t *testing.T) {
+	ctx := t.Context()
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "context.sqlite")
+	repo, err := contextstore.OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []contextstore.ContextItem
+	for _, id := range []string{"a", "b", "c"} {
+		item := contextstore.ContextItem{ID: id, Kind: contextstore.ContextDecision, Content: "memory " + id, Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Lifecycle: contextstore.LifecycleConfirmed, Metadata: map[string]string{"memory_lifetime": "persistent"}}
+		if err = repo.Append(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		stored, getErr := repo.Get(ctx, id)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		items = append(items, stored)
+	}
+	for _, pair := range [][2]int{{0, 1}, {0, 2}} {
+		a, b := items[pair[0]], items[pair[1]]
+		j := contextstore.PairJudgment{ProjectID: "project", TeamID: "team", ItemAID: a.ID, ItemBID: b.ID, ItemAContentHash: a.ContentHash, ItemBContentHash: b.ContentHash, Verdict: contextstore.PairVerdictContradicts, JudgePolicyVersion: contextstore.CurrentConflictJudgePolicyVersion, JudgeModel: "judge"}
+		contextstore.NormalizePairJudgment(&j)
+		if _, _, err = repo.SavePairJudgment(ctx, j, "operator", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Superseding c resolves the a/c conflict.
+	if err = repo.MarkSuperseded(ctx, []string{"c"}, "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	view := InspectLearning(ctx, workspace, "project", "team", "")
+	if value(view.OpenConflicts) != 1 {
+		t.Fatalf("open conflicts = %d, want 1 (view %#v)", value(view.OpenConflicts), view)
+	}
+
+	// A store older than migration 11 reports conflicts as unknown.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, "DROP TABLE context_pair_judgments; DELETE FROM schema_migrations WHERE version >= 11"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	old := InspectLearning(ctx, workspace, "project", "team", "")
+	if old.OpenConflicts != nil || old.Status != "available" || old.UnavailableReason != "" {
+		t.Fatalf("pre-migration view = %#v, want unknown conflicts without degrading status", old)
+	}
+}
