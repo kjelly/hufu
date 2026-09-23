@@ -1,6 +1,6 @@
 # Hufu LTM 治理補強：實作計畫
 
-> Status: in implementation — archived 2026-09-23 from local scratch space before implementation began
+> Status: implemented — archived 2026-09-23; implemented through `68451de`
 > Authority: reference
 > Priority: P1
 > Baseline: `ee72f72396ec4de8f842cdd4d0e050376a7656e4`
@@ -13,6 +13,46 @@
 > Revision: v3 — v2 納入對照 baseline 的獨立查核結果（FTS 預篩不可行、apply 衝突語意、
 > read-only 相容性、遺漏的呼叫點與測試）；v3 加入使用者確認的選用向量預篩（`--vector`）與
 > 其前置修正（Ollama embedding model 名稱）
+
+## Implementation record
+
+Landed on branch `feat/ltm-governance-hardening`:
+
+| WP | Commit |
+| --- | --- |
+| Plan archived, baseline recorded | `be6f4ca` |
+| WP-1 prompt cache tokens | `109b43f` |
+| WP-2 promotion step rule, `generated_draft_hash` (migration 10), governance counters | `59b9f33` |
+| WP-3 pair judgments (migration 11) | `1246fb2` |
+| WP-4 §7.4 Ollama model name, `SearchSimilarTo` | `8ac7371` |
+| WP-4 `hufu context conflicts` | `4039ebf` |
+| WP-5 promotion/consolidation gates, learning counter | `f5d403c` |
+| WP-5 runtime `conflicting` attribution | `19a673c` |
+| WP-6 `consolidate --draft` | `1feb324` |
+| WP-7 `skill promote` name fix, promoted-skill report | `e5c2677` |
+| Found during smoke test: reasoning effort dropped for named providers | `68451de` |
+
+WP-8 documentation updates landed with each WP. Where the implementation
+differs from the text below, the code and tests win:
+
+- `--min-vector-similarity` defaults to 0.45, not 0.5 (§7.2 calibration).
+- Text coverage lines (`hufu report`, `hufu inspect`) append `, N conflicting`
+  only when N > 0, so output without conflicts is byte-identical to baseline.
+- `hufu context consolidate` has no nushell extern in `cmd/hufu/completion.go`
+  at baseline, so none was added for `--draft`.
+- `ScanReport`/CLI diagnostics also carry an optional `detail` (the ignored
+  path for `file_path_too_common`).
+- Real-model smoke test (`qwen3.5:cloud` through the local Ollama
+  openai-compatible endpoint, `--vector` with `nomic-embed-text`): the first
+  scan returned empty judgments because the classifier profile's
+  `reasoning_effort: none` never reached the provider (options were keyed by
+  `openai-compat` while fantasy looks them up by the configured provider name).
+  After `68451de` the same scan flagged exactly the two seeded contradictions
+  (tabs vs. four spaces; SQLite vs. PostgreSQL) and judged the other candidate
+  pairs compatible.
+- `Verified-Commit` was bumped only for `knowledge-coverage.md`, which was
+  re-verified as a whole; the larger normative documents had sections added or
+  corrected but were not re-verified end to end.
 
 本文件取代原本位於本機 scratch space 的「LTM Promotion Governance Roadmap」。原 roadmap 大部分內容已由既有系統
 實作，或與 normative 文件衝突；§0 記錄逐節處置，避免之後重新提案。其餘章節都是 coding agent

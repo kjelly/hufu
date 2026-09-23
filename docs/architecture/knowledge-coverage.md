@@ -2,14 +2,15 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `777c217ef22b3ed790eb134014a1bc5fff3a38eb`
+> Verified-Commit: `68451de`
 > Supersedes: —
 > Superseded-By: —
 
 Hufu attributes deterministic knowledge state to context that actually enters
 a model prompt and persists the attribution in the context injection manifest.
-The runtime derives the state from existing authority and memory outcome
-evidence; agents and users cannot submit or override it.
+The runtime derives the state from existing authority, memory outcome
+evidence, and persisted memory conflict judgments; agents and users cannot
+submit or override it.
 
 ## Item states
 
