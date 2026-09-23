@@ -183,15 +183,16 @@ go run ./cmd/hufu
 Agent 團隊、不會建立 `DecisionRecord`，也不會把選出的值自動當成 action 執行。
 
 目前 backend 只有 `rule` 與 `sidecar`。預設的 `rule` 永遠 abstain；使用
-`sidecar` 時必須明確提供 model 與 provider flags：
+`sidecar` 時必須明確提供 `--sidecar-model`；`--provider-url` 預設為本地
+Ollama 端點（`http://127.0.0.1:11434/v1`）。若未提供
+`--provider-api-key`，Hufu 會在環境變數 `HUFU_PROVIDER_API_KEY` 有設定時使用它：
 
 ```bash
 hufu decisionrt choice \
   --id size-policy --version v1 --purpose size-policy@v1 \
   --question "選擇大小。" \
   --option small=小 --option large=大 \
-  --backend sidecar --sidecar-model qwen3:1b \
-  --provider-url http://127.0.0.1:11434/v1 --json
+  --backend sidecar --sidecar-model qwen3:1b --json
 ```
 
 `hufu decisionrt validate`、`run` 與 `backends` 分別用於 JSON 驗證、通用

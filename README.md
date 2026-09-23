@@ -334,16 +334,17 @@ go run ./cmd/hufu
 team, create a `DecisionRecord`, or execute the selected value as an action.
 
 The available backends are `rule` and `sidecar`. The default `rule` backend
-always abstains. The `sidecar` backend requires explicit model and provider
-flags:
+always abstains. The `sidecar` backend requires an explicit `--sidecar-model`;
+`--provider-url` defaults to the local Ollama endpoint
+(`http://127.0.0.1:11434/v1`). If `--provider-api-key` is omitted, Hufu uses
+`HUFU_PROVIDER_API_KEY` when set:
 
 ```bash
 hufu decisionrt choice \
   --id size-policy --version v1 --purpose size-policy@v1 \
   --question "Select a size." \
   --option small=Small --option large=Large \
-  --backend sidecar --sidecar-model qwen3:1b \
-  --provider-url http://127.0.0.1:11434/v1 --json
+  --backend sidecar --sidecar-model qwen3:1b --json
 ```
 
 Use `hufu decisionrt validate`, `run`, or `backends` for JSON validation,
