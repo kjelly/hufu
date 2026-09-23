@@ -86,6 +86,7 @@ type Registry interface {
 	ListIncompleteOperations(context.Context) ([]Operation, error)
 	CreateWorkspace(context.Context, string, string) (Workspace, error)
 	GetWorkspaceByID(context.Context, string) (Workspace, error)
+	GetWorkspaceByControlRoot(context.Context, string) (Workspace, error)
 	SetWorkspaceRequiresFreshSession(context.Context, string, bool) error
 	Close() error
 }

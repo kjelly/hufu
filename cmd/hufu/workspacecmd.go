@@ -85,6 +85,7 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceGCCommand(deps),
 		newWorkspaceDoctorCommand(deps),
 		newWorkspaceShellInitCommand(),
+		newWorkspaceVersionCommand(),
 	)
 	return command
 }

@@ -30,10 +30,14 @@ type TeamSession struct {
 	// WorkspaceLease holds the managed runtime lock for the lifetime of the
 	// coordinator. It is process-local and is never serialized.
 	WorkspaceLease io.Closer
-	Agents         map[string]*agent.AgentDef
-	MCPServers     map[string]mcp.MCPServerConfig
-	Skills         []*skill.SkillDef
-	ContractTasks  []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// WorkspaceVersion is the process-local workspace versioning binding
+	// (mode, identities, and whether the project lock is held). It is set by
+	// the command layer and is never serialized.
+	WorkspaceVersion WorkspaceVersionContext
+	Agents           map[string]*agent.AgentDef
+	MCPServers       map[string]mcp.MCPServerConfig
+	Skills           []*skill.SkillDef
+	ContractTasks    []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition

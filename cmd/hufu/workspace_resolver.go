@@ -26,6 +26,10 @@ type commandWorkspaceLease struct {
 	stateRoot          string
 	workspaceID        string
 	requiresFreshClear bool
+	// versionLock is the workspace-versioning project lock held for the
+	// coordinator lifetime in required mode; it is released before the team
+	// lock.
+	versionLock io.Closer
 }
 
 type commandWorkspaceBinding struct {
@@ -34,11 +38,18 @@ type commandWorkspaceBinding struct {
 }
 
 func (l *commandWorkspaceLease) Close() error {
-	if l == nil || l.locks == nil {
+	if l == nil {
 		return nil
 	}
-	err := l.locks.Close()
-	l.locks = nil
+	var err error
+	if l.versionLock != nil {
+		err = l.versionLock.Close()
+		l.versionLock = nil
+	}
+	if l.locks != nil {
+		err = errors.Join(err, l.locks.Close())
+		l.locks = nil
+	}
 	return err
 }
 

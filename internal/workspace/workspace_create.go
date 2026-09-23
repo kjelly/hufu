@@ -354,6 +354,17 @@ func (r *SQLiteRegistry) GetWorkspaceByID(ctx context.Context, workspaceID strin
 	return scanWorkspace(r.db.QueryRowContext(ctx, workspaceSelect+" WHERE id=?", workspaceID))
 }
 
+// GetWorkspaceByControlRoot finds the managed workspace whose control root is
+// exactly controlRoot (control_root is unique). The path is canonicalized
+// first so an explicit --workspace spelling still matches.
+func (r *SQLiteRegistry) GetWorkspaceByControlRoot(ctx context.Context, controlRoot string) (Workspace, error) {
+	canonical, err := canonicalPath(controlRoot)
+	if err != nil {
+		return Workspace{}, err
+	}
+	return scanWorkspace(r.db.QueryRowContext(ctx, workspaceSelect+" WHERE control_root=?", canonical))
+}
+
 const operationSelect = `SELECT id,kind,COALESCE(project_id,''),COALESCE(workspace_id,''),state,detail_code,started_at,finished_at FROM registry_operations`
 
 func scanOperation(row rowScanner) (Operation, error) {

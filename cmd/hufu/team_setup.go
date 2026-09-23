@@ -184,6 +184,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := applyConfiguredBackends(session, cfg); err != nil {
 		return nil, err
 	}
+	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
+		return nil, err
+	}
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	roleModels, err := resolveExecutionRoleModels(session, cfg)
 	if err != nil {

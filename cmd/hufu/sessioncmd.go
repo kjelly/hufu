@@ -29,7 +29,7 @@ Subcommands:
   fork [target] [--name <name>] Fork a new branch from a branch, label, or event ID
   checkout <target>             Switch active session branch to a branch or label
   label <target> <name>         Create a human-readable label for a checkpoint or branch
-  diff <branch-a> <branch-b>    Compare tasks, artifacts, and verification results between branches`,
+  diff <branch-a> <branch-b>    Compare tasks, artifacts, verification results, and workspace files`,
 	Args: cobra.NoArgs,
 }
 
@@ -38,23 +38,31 @@ var sessionListCmd = &cobra.Command{
 	Short: "List all session branches and labels",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws, err := requireSessionWorkspace()
+		ctx := commandContext(cmd)
+		vs, err := openVersionedSession(ctx, false, "list")
 		if err != nil {
 			return err
 		}
+		defer func() { _ = vs.Close() }()
+		ws := vs.workspace
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
 		}
-		es, _ := team.OpenEventStoreReadOnly(ws)
-		if es != nil {
-			defer func() { _ = es.Close() }()
+		branches := st.ListBranches()
+		states, err := branchWorkspaceStates(ctx, vs, branches)
+		if err != nil {
+			return err
 		}
 
 		if sessionJSON {
+			listed := make([]sessionListBranch, 0, len(branches))
+			for _, b := range branches {
+				listed = append(listed, states[b.ID])
+			}
 			data := map[string]any{
 				"active_branch": st.ActiveBranch,
-				"branches":      st.ListBranches(),
+				"branches":      listed,
 				"labels":        st.Labels,
 			}
 			return json.NewEncoder(os.Stdout).Encode(data)
@@ -63,7 +71,7 @@ var sessionListCmd = &cobra.Command{
 		fmt.Printf("Workspace: %s\n", ws)
 		fmt.Printf("Active Branch: %s\n\n", st.ActiveBranch)
 		fmt.Println("Branches:")
-		for _, b := range st.ListBranches() {
+		for _, b := range branches {
 			marker := " "
 			if b.ID == st.ActiveBranch {
 				marker = "*"
@@ -72,7 +80,7 @@ var sessionListCmd = &cobra.Command{
 			if b.ParentID != "" {
 				parentStr = fmt.Sprintf(" (forked from %s)", b.ParentID)
 			}
-			fmt.Printf(" %s %-20s %s%s\n", marker, b.Name, b.CreatedAt, parentStr)
+			fmt.Printf(" %s %-20s %s%s%s\n", marker, b.Name, b.CreatedAt, parentStr, workspaceColumn(states[b.ID]))
 		}
 
 		if len(st.Labels) > 0 {
@@ -112,104 +120,30 @@ var sessionTreeCmd = &cobra.Command{
 var sessionForkCmd = &cobra.Command{
 	Use:   "fork [fork-target]",
 	Short: "Fork a new branch from a branch, checkpoint label, or event ID",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ws, err := requireSessionWorkspace()
-		if err != nil {
-			return err
-		}
-		st, err := team.LoadSessionTree(ws)
-		if err != nil {
-			return fmt.Errorf("failed to load session tree: %w", err)
-		}
-		es, _ := team.OpenEventStore(ws)
-		if es != nil {
-			defer func() { _ = es.Close() }()
-		}
+	Long: `Fork a new branch from a branch, checkpoint label, or event ID.
 
-		target := ""
-		if len(args) > 0 {
-			target = args[0]
-		}
-
-		// Snapshot the current branch's live state before forking.
-		team.SnapshotBranchState(ws, st, st.ActiveBranch)
-
-		name := sessionForkName
-		if name == "" {
-			if target != "" {
-				name = fmt.Sprintf("fork-%s", target)
-			} else {
-				name = "fork-branch"
-			}
-		}
-
-		b, err := st.CreateBranch(name, target, es)
-		if err != nil {
-			return fmt.Errorf("failed to fork branch: %w", err)
-		}
-		if err := team.MaterializeCompactionBranch(ws, b.ParentID, b.ID, b.ForkEventID); err != nil {
-			return fmt.Errorf("failed to materialize compaction state for branch %q: %w", b.ID, err)
-		}
-
-		// Snapshot the live session into the new branch so the fork starts from
-		// the current state rather than a potentially stale parent snapshot.
-		team.SnapshotBranchState(ws, st, b.ID)
-
-		// Rebuild session.json for the new branch (its lineage = parent's
-		// up-to-fork + live state), then activate it.
-		if err := team.RebuildSessionForBranch(ws, st, es, b.ID); err != nil {
-			return fmt.Errorf("failed to rebuild session for new branch: %w", err)
-		}
-		st.ActiveBranch = b.ID
-		if err := team.SaveSessionTree(ws, st); err != nil {
-			return fmt.Errorf("failed to save session tree: %w", err)
-		}
-
-		fmt.Printf("✓ Forked new branch %q (ID: %s) from %q and checked out.\n", b.Name, b.ID, b.ParentID)
-		return nil
-	},
+With workspace versioning in required mode the fork also carries the
+workspace: forking the active branch reuses its snapshot (no files change),
+and forking an earlier branch or event first saves the live files and then
+restores the snapshot recorded at that point. --metadata-only forks only the
+session lineage (for legacy events without a workspace snapshot).`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runSessionFork,
 }
 
 var sessionCheckoutCmd = &cobra.Command{
 	Use:   "checkout <target>",
 	Short: "Switch active branch to target branch, checkpoint label, or event ID",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ws, err := requireSessionWorkspace()
-		if err != nil {
-			return err
-		}
-		st, err := team.LoadSessionTree(ws)
-		if err != nil {
-			return fmt.Errorf("failed to load session tree: %w", err)
-		}
-		es, _ := team.OpenEventStore(ws)
-		if es != nil {
-			defer func() { _ = es.Close() }()
-		}
+	Long: `Switch the active session branch.
 
-		// Snapshot current branch's live state before switching.
-		team.SnapshotBranchState(ws, st, st.ActiveBranch)
-
-		target := args[0]
-		b, err := st.CheckoutBranch(target, es)
-		if err != nil {
-			return err
-		}
-
-		// Rebuild session.json for the target branch so the next run resumes it.
-		if err := team.RebuildSessionForBranch(ws, st, es, b.ID); err != nil {
-			return fmt.Errorf("failed to rebuild session for branch %q: %w", b.ID, err)
-		}
-
-		if err := team.SaveSessionTree(ws, st); err != nil {
-			return fmt.Errorf("failed to save session tree: %w", err)
-		}
-
-		fmt.Printf("✓ Checked out branch %q (%s).\n", b.Name, b.ID)
-		return nil
-	},
+With workspace versioning in required mode the checkout also switches the
+files: the live state of the current branch is saved first, then the target
+branch's workspace snapshot is materialized. Paths the snapshots do not
+manage (ignored or unmanaged files) are never deleted. --metadata-only
+switches only the session projection, and is only accepted for legacy
+branches that have no workspace snapshot.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runSessionCheckout,
 }
 
 var sessionLabelCmd = &cobra.Command{
@@ -244,13 +178,15 @@ var sessionLabelCmd = &cobra.Command{
 
 var sessionDiffCmd = &cobra.Command{
 	Use:   "diff <branch-a> <branch-b>",
-	Short: "Compare tasks, artifacts, and verification results between two branches",
+	Short: "Compare tasks, artifacts, verification results, and workspace files between two branches",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ws, err := requireSessionWorkspace()
+		vs, err := openVersionedSession(commandContext(cmd), false, "diff")
 		if err != nil {
 			return err
 		}
+		defer func() { _ = vs.Close() }()
+		ws := vs.workspace
 		st, err := team.LoadSessionTree(ws)
 		if err != nil {
 			return fmt.Errorf("failed to load session tree: %w", err)
@@ -266,6 +202,9 @@ var sessionDiffCmd = &cobra.Command{
 		diff, err := team.DiffBranches(ws, st, es, branchA, branchB)
 		if err != nil {
 			return fmt.Errorf("diff failed: %w", err)
+		}
+		if err = attachSessionWorkspaceDiff(commandContext(cmd), vs, st, diff, branchA, branchB); err != nil {
+			return fmt.Errorf("workspace diff failed: %w", err)
 		}
 
 		if sessionJSON {
@@ -304,6 +243,8 @@ func init() {
 	sessionCmd.PersistentFlags().BoolVar(&sessionJSON, "json", false, "Write output as JSON")
 
 	sessionForkCmd.Flags().StringVar(&sessionForkName, "name", "", "Name of the new branch")
+	sessionForkCmd.Flags().BoolVar(&sessionMetadataOnly, "metadata-only", false, "Fork only the session lineage; the workspace state is unavailable")
+	sessionCheckoutCmd.Flags().BoolVar(&sessionMetadataOnly, "metadata-only", false, "Switch only the session projection (legacy branches without a workspace snapshot)")
 
 	sessionCmd.AddCommand(sessionListCmd)
 	sessionCmd.AddCommand(sessionTreeCmd)

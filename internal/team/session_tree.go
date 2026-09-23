@@ -288,36 +288,41 @@ func (st *SessionTree) CreateRootBranch(name string) (*SessionBranch, error) {
 
 // CheckoutBranch switches active branch to target (branch name/ID, label, or event ID).
 func (st *SessionTree) CheckoutBranch(target string, es *EventStore) (*SessionBranch, error) {
+	b, err := st.ResolveCheckoutBranch(target, es)
+	if err != nil {
+		return nil, err
+	}
+	st.ActiveBranch = b.ID
+	return b, nil
+}
+
+// ResolveCheckoutBranch resolves target like CheckoutBranch without changing
+// the active branch. An event ID resolves to the branch that owns it.
+func (st *SessionTree) ResolveCheckoutBranch(target string, es *EventStore) (*SessionBranch, error) {
 	branchID, eventID := st.ResolveTarget(target, es)
 	if branchID == "" && target != "" {
 		branchID = target
 	}
-
-	b := st.GetBranch(branchID)
-	if b == nil {
-		if eventID != "" && es != nil {
-			events, _ := es.ReadEvents()
-			for _, e := range events {
-				if e.ID == eventID {
-					// Events written before branch tagging (or by the current
-					// coordinator, which does not tag BranchID yet) belong to
-					// the main lineage.
-					eBranch := e.BranchID
-					if eBranch == "" {
-						eBranch = "main"
-					}
-					if targetBranch := st.GetBranch(eBranch); targetBranch != nil {
-						st.ActiveBranch = targetBranch.ID
-						return targetBranch, nil
-					}
-				}
+	if b := st.GetBranch(branchID); b != nil {
+		return b, nil
+	}
+	if eventID != "" && es != nil {
+		events, _ := es.ReadEvents()
+		for _, e := range events {
+			if e.ID != eventID {
+				continue
+			}
+			// Events written before branch tagging belong to the main lineage.
+			eBranch := e.BranchID
+			if eBranch == "" {
+				eBranch = "main"
+			}
+			if targetBranch := st.GetBranch(eBranch); targetBranch != nil {
+				return targetBranch, nil
 			}
 		}
-		return nil, fmt.Errorf("branch or target %q not found", target)
 	}
-
-	st.ActiveBranch = b.ID
-	return b, nil
+	return nil, fmt.Errorf("branch or target %q not found", target)
 }
 
 // AddLabel assigns a human-readable label to an event ID, branch, or checkpoint.
@@ -552,6 +557,11 @@ type SessionDiff struct {
 	MemoryDiffs   []MemoryDiffItem       `json:"memory_diffs,omitempty"`
 	EventCountA   int                    `json:"event_count_a"`
 	EventCountB   int                    `json:"event_count_b"`
+	// WorkspaceDiff compares the two branch heads' workspace trees when
+	// workspace versioning is active; WorkspaceDiffUnavailable says why it
+	// could not be computed (for example a legacy branch without a head).
+	WorkspaceDiff            *WorkspaceDiffSummary `json:"workspace_diff,omitempty"`
+	WorkspaceDiffUnavailable string                `json:"workspace_diff_unavailable,omitempty"`
 }
 
 // DiffBranches compares branch A and branch B using event lineage and session projections.
@@ -728,7 +738,7 @@ func (sd *SessionDiff) RenderText() string {
 	}
 	fmt.Fprintf(&b, "Events: %s (%d) | %s (%d)\n\n", sd.BranchA, sd.EventCountA, sd.BranchB, sd.EventCountB)
 
-	if len(sd.TaskDiffs) == 0 && len(sd.ArtifactDiffs) == 0 && len(sd.VerifyDiffs) == 0 && len(sd.MemoryDiffs) == 0 {
+	if len(sd.TaskDiffs) == 0 && len(sd.ArtifactDiffs) == 0 && len(sd.VerifyDiffs) == 0 && len(sd.MemoryDiffs) == 0 && sd.workspaceDiffEmpty() {
 		b.WriteString("No differences found between branches.\n")
 		return b.String()
 	}
@@ -777,6 +787,7 @@ func (sd *SessionDiff) RenderText() string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(sd.renderWorkspaceDiff())
 	return b.String()
 }
 

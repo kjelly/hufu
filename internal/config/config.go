@@ -161,6 +161,9 @@ type Config struct {
 	RawVars               interface{}               `yaml:"vars"`
 	Hooks                 map[string]string         `yaml:"hooks"`
 	Notify                notify.NotifyConfig       `yaml:"notify"`
+	// WorkspaceVersioning configures subject-root versioning for managed
+	// workspaces (docs/archive/implementation-plans/workspace-versioning.md §31).
+	WorkspaceVersioning WorkspaceVersioningConfig `yaml:"workspace-versioning"`
 	// Profiles are named bundles of CLI flag values, selectable with --profile.
 	// Each value maps a flag name to a string the flag knows how to parse, e.g.
 	//   profiles:
@@ -222,6 +225,7 @@ func (c *Config) mergeFromFile(path string) {
 		return
 	}
 	c.mergeScalarFields(&fileCfg)
+	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
 	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {
 		c.mergeNotify(fileCfg.Notify)
