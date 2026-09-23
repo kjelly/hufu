@@ -28,6 +28,11 @@ supplied by the coordinator. Re-read the cited diff and the smallest relevant
 source, caller, and test evidence. Do not broaden the review, edit files, use
 shell, or invent evidence. Confirm, downgrade, or reject the finding with a
 concrete reachable scenario and retain the evidence chain in one typed result.
+Do not downgrade findings on subtle concurrency or lifecycle invariants (such as
+Pdeathsig OS thread pinning, occurrence lease re-acquisition ordering after state
+commit, receipt hash invalidation via secondary redaction, or missing waitgroup
+drains) merely because the code superficially compiles or looks sequential; verify
+whether the concurrent or state-machine invariant is demonstrably preserved.
 A clean critic result is valid.
 
 In typed-finding mode, critique only the coordinator-assigned finding. In

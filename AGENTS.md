@@ -921,6 +921,17 @@ execution contracts that are easy to break with an apparently local change.
 - **Use canonical state transitions.** Do not mutate task status or result
   fields directly when an existing transition/API exists. Preserve checkpoint,
   task-journal, event, and status-projection updates together.
+- **Occurrence lease ordering.** Opening a task attempt lease (`setCurrentTaskAttempt`)
+  MUST occur *after* committing a state transition (`CommitTaskTransition` /
+  `commitTaskTransitionFromCurrent`), never before. Transition commits bump
+  `OccurrenceRevision` and revoke existing leases; acquiring the lease before
+  committing will cause the transition commit to immediately invalidate the new
+  lease, breaking subsequent `submit_result` calls with protocol errors.
+- **Bind verification to durable contracts.** Invariant gates, scopes, and
+  verification must evaluate the durable `TodoItem` contract, not transient
+  scheduler definitions. Result-only repairs must rehydrate the runtime-owned
+  workset scope from the durable occurrence (and clone it) to prevent evaluating
+  against an empty path set or mutating checkpointed bindings.
 - **Propagate lifecycle changes everywhere.** A new task, workflow, status, or
   lifecycle event must be traced through the event store/reducer, session
   persistence, task journal, CLI display, JSON output, reports, TUI reporter,
@@ -928,6 +939,16 @@ execution contracts that are easy to break with an apparently local change.
 - **Trace every execution path before changing coordinator behavior.** Check
   normal workers, direct agents, extra-model execution, sidecar tasks,
   runtime actions, fast-path routing, unattended mode, and crash-resume.
+- **Subprocess lifecycle and OS thread affinity.** When spawning child processes
+  with Linux `SysProcAttr.Pdeathsig`, use `internal/processutil.StartAndWait` to
+  pin the goroutine to its creating OS thread (`runtime.LockOSThread`) for both
+  `Start` and `Wait`. The Go runtime scheduler can retire or migrate OS threads,
+  which otherwise triggers `Pdeathsig` and prematurely terminates subprocesses.
+- **Drain asynchronous routines on teardown and cancellation.** All async
+  goroutines (e.g. reflexion, telemetry) must register with the coordinator's
+  lifecycle `sync.WaitGroup` and be fully drained in `Close()` before tearing down
+  event or context stores. Scheduler cancellation must drain in-progress tasks
+  without triggering downstream DAG routes.
 - **Keep tool authorization centralized.** Do not bypass policy gates,
   capability checks, denied-tool checks, or phase restrictions from a special
   execution path.
@@ -938,13 +959,36 @@ execution contracts that are easy to break with an apparently local change.
 - **Centralize recovery decisions.** Route failure classification, retry,
   repair, reconciliation, and anti-thrashing through the existing recovery
   machinery. Do not add local retry loops that can replay side effects.
+- **Fingerprint circuit breakers by stable category.** Classification of
+  repeated model failures (e.g. `submit_result` loops) must derive from stable
+  rejection categories, not raw error messages, JSON paths, or invariant IDs
+  that an LLM can tweak to evade retry budgets.
 - **Keep protocol repair side-effect free.** Repair may fix result, schema, or
   argument state, but must not silently replay a completed external or
   infrastructure mutation. Preserve the original transcript and receipt.
+- **Preserve receipt immutability across redaction.** Runtime outputs are
+  normalized, redacted, and hashed at `CanonicalizeRuntimeOutputs`. Subsequent
+  persistence sinks (session persistence, event payloads, task transitions)
+  must NOT re-apply process-level redaction policies that rewrite canonical
+  outputs when the learned-secret set grows, which would invalidate receipt hashes.
+- **Scope event idempotency keys to session branch.** Event store idempotency
+  keys must include the session branch ID (`branch_id + key`), preventing
+  independent sibling or fork branches from colliding or suppressing each
+  other's events.
 - **Do not infer success from output.** A task or run is successful only after
   its typed result, objective verifier, receipt, and the applicable evidence or
   acceptance checks pass. Otherwise report `partial`, `blocked`, or another
-  truthful non-success status.
+  truthful non-success status. Presentation layers (TUI, summaries, reports)
+  must never synthesize terminal states.
+- **Fail-closed unattended rollback.** Unattended acceptance failure must never
+  default to destructive commands (e.g. `git reset --hard`). Rollback requires an
+  explicitly configured `rollback:` command in team configuration; without it,
+  Hufu fails closed without mutating user work.
+- **Isolate static analysis for reviews.** Tools analyzing Git revisions or
+  commit ranges must execute against an isolated archive snapshot (`git archive`),
+  never against the live dirty working tree. Qualified symbols must resolve
+  across imports, dependencies, and standard library catalogs before flagging
+  missing symbols.
 - **Keep Hufu core integration-independent.** Do not hardcode Pilot paths,
   commands, inventory names, action schemas, or consumer-specific worker names
   in `internal/`. Use generic workflow and `ActionProvider` interfaces.
@@ -1174,6 +1218,25 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 61. **`--auto-team` auto-selects the best-fitting team, it does NOT fall back to default** — when no team is named (`--agent-team` / `@team` / `--default` all absent), `autoSelectTeam` (`cmd/hufu/autoteam.go`) picks the most suitable discovered team for the prompt: it builds `(name, description)` candidates (team.yaml `description`, or joined agent descriptions when absent), tries `sidecar.MatchTeam` (a one-shot LLM pick, mirroring `MatchSkills`), and falls back to `keywordBestTeam` (token-overlap scoring with stop-word filtering + `singularize` so "manual" matches "manuals"). It returns `""` when there is no signal, so the caller drops to the interactive picker rather than guessing. Building the selection sidecar is best-effort (`buildSelectionSidecar`): no resolvable model → keyword-only. Hooked in `runTeam` right before `ParsePromptWithLazyAgents`.
 62. **Structured compaction is persisted as a session-level history, not ephemeral context text** — `workspace/compaction_history.json` stores `CompactionRecord`s with `tokens_before`, `tokens_after`, and source-range metadata for each compaction cycle. `Coordinator.lastCompactionSummary` and `GetLatestCompactionSummary` enforce a 13-section format (`Goal`, `Constraints`, `Completed Tasks`, `In-progress Tasks`, `Blocked Tasks`, `Key Decisions`, `Errors and Fixes`, `Files Read`, `Files Modified`, `Artifacts Produced`, `Verification Results`, `Open Questions`, `Next Actions`) and carry the 7 invariants (original goal, latest correction, failed verification, file paths, previous decisions/results, and so on) forward. The same state is made restart-safe by persisting `conversationHistorySourceCounts` and `conversationHistorySourceOffset` in `session.json`, so subsequent compactions map source coverage correctly across process restarts.
+
+63. **Subprocess lifecycle on Linux requires OS thread pinning (`processutil.StartAndWait`)** — The Go runtime scheduler can retire or migrate the OS thread that created a subprocess via `exec.Cmd.Start`. When `SysProcAttr.Pdeathsig` is set, the Linux kernel triggers the signal if the creating OS thread terminates, killing the child process prematurely. `processutil.StartAndWait` ensures the creating goroutine calls `runtime.LockOSThread` and handles both `Start` and `Wait` on that single thread.
+
+64. **Task attempt occurrence lease MUST be opened AFTER state transition commit** — `CommitTaskTransition` increments `OccurrenceRevision` and revokes the active lease to invalidate stale workers. If `setCurrentTaskAttempt` is called before the transition commit, the commit immediately revokes the lease just opened, causing subsequent `submit_result` calls to fail with `"submit_result runtime identity is missing or invalid"`. Always commit the transition first, then re-open/acquire the occurrence lease.
+
+65. **Receipt hashing vs. secondary redaction** — `CanonicalizeRuntimeOutputs` redacts secrets and computes execution receipt hashes. Never re-redact canonical outputs during session save or event persistence; if the learned-secret set has expanded, secondary redaction would alter the output bytes and invalidate the receipt hash. Canonical outputs must be shielded from secondary redaction.
+
+66. **Event idempotency keys must include the branch ID** — Idempotency keys in the event store are scoped per session branch (`branch_id + key`). Using a global key across all branches causes independent sibling or fork branches that record the same logical transition to suppress each other's events as duplicates.
+
+67. **Circuit breakers must fingerprint by stable category, not variable error text** — If `submit_result` rejection fingerprinting includes the raw error message, JSON path, or invariant ID, an LLM can tweak its payload slightly on each attempt, evading the retry/repetition circuit breaker. Fingerprint strictly on the stable rejection category.
+
+68. **Static analysis for code review must use isolated Git archive snapshots** — Running `go list`, `go vet`, or AST analysis against the live checkout for a commit range inspects uncommitted dirty changes or subsequent commits. Always extract the reviewed revision into an isolated temporary snapshot directory (`git archive`) with `go.work` awareness and resolve qualified symbols via imports and the standard library.
+
+69. **Never reset `bytes.Buffer` while retaining `buf.Bytes()`** — `buf.Bytes()` returns a slice aliasing the buffer's internal memory. Calling `buf.Reset()` and writing new data (such as headers) will overwrite the data referenced by the slice. Always clone the byte slice before resetting the buffer.
+
+70. **Coordinator `Close()` and scheduler cancellation MUST drain in-flight goroutines** — Background async routines (e.g. reflexion, telemetry) must be tracked in a coordinator `WaitGroup` and drained before closing the event store or context SQLite database. Scheduler cancellation must drain admitted task goroutines without evaluating downstream DAG dependencies or writing stray outputs.
+
+71. **Agent auto-discovery excludes `README.md`** — Minimal agent discovery treats any `.md` file without frontmatter as a worker agent named after the filename. `README.md` is explicitly excluded to prevent phantom "README" workers from being instantiated in bundled or custom teams.
+
 
 ## Model Configuration Priority
 

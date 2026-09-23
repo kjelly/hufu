@@ -40,6 +40,24 @@ only one path is not fixed.
 - Use canonical task transition APIs. Preserve checkpoint, task-journal,
   event-store, and status-projection updates together; do not mutate status or
   result fields directly when a transition API exists.
+- Enforce occurrence lease ordering. Opening a task attempt lease
+  (`setCurrentTaskAttempt`) must occur *after* committing a state transition
+  (`CommitTaskTransition`), never before. Transition commits bump
+  `OccurrenceRevision` and revoke existing leases; acquiring before committing
+  immediately revokes the lease, causing subsequent `submit_result` calls to fail.
+- Bind verification to durable contracts. Invariant gates, scopes, and
+  verification must evaluate the durable `TodoItem` contract, not transient
+  scheduler definitions. Result-only repairs must rehydrate and clone the
+  runtime-owned workset scope from the durable occurrence.
+- Pin subprocesses to their creating OS thread. When managing child processes
+  with Linux `SysProcAttr.Pdeathsig`, use `internal/processutil.StartAndWait` to
+  lock the goroutine to the spawning OS thread (`runtime.LockOSThread`) for both
+  `Start` and `Wait`.
+- Drain asynchronous routines before teardown and cancellation. Background
+  goroutines (reflexion, telemetry) must be registered with the coordinator's
+  lifecycle `sync.WaitGroup` and drained before closing event or context stores.
+  Scheduler cancellation must drain in-progress tasks without launching dependent
+  DAG nodes.
 - Route tool authorization through the central policy gate. Do not bypass
   denied-tool, capability, phase, or unattended checks from a special path.
 - Treat closed tool sequences as literal contracts. Preflight the concrete
@@ -49,6 +67,22 @@ only one path is not fixed.
 - Route failure classification, retry, repair, reconciliation, and
   anti-thrashing through the existing recovery machinery. Never replay a
   completed side effect during protocol repair.
+- Fingerprint circuit breakers by stable category. Repeated failure detection
+  must fingerprint on stable rejection categories, not variable error strings,
+  JSON paths, or invariant IDs that models can manipulate.
+- Preserve receipt immutability across redaction. Canonical runtime outputs are
+  redacted and receipt-hashed once at `CanonicalizeRuntimeOutputs`. Downstream
+  persistence sinks must not re-apply process-level redactions that alter output
+  bytes and invalidate receipt hashes.
+- Scope event idempotency keys to session branch. Idempotency keys in the event
+  store must include the session branch ID (`branch_id + key`) to prevent
+  collision across sibling or fork branches.
+- Fail closed on unattended rollback. Acceptance failure in unattended mode must
+  never default to destructive commands (e.g. `git reset --hard`). Rollback
+  requires an explicit configured command; otherwise fail closed.
+- Isolate static analysis in Git archive snapshots. Review tools analyzing
+  specific revisions must execute against temporary archive snapshots
+  (`git archive`), never against the live dirty working tree.
 - Keep Hufu core integration-independent. Put consumer-specific commands,
   schemas, inventory, and paths behind generic workflow or `ActionProvider`
   interfaces; do not add Pilot-specific branches to `internal/`.

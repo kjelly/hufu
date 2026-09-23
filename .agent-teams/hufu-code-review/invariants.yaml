@@ -25,10 +25,14 @@ invariants:
       checkpoint, wrap-up, and UI/report projections must consume those
       canonical transitions; they must not reconstruct a competing terminal
       state. Cancellation or a terminal transition forbids new dependency
-      starts, buffered-event commits, and late results. Regression evidence:
-      cover retry, fail-fast, cancellation, timeout/process death, resume,
-      dependency routing, and projection parity; concurrency changes require
-      race-safe drain/close coverage.
+      starts, buffered-event commits, and late results. Occurrence lease
+      opening (setCurrentTaskAttempt) must occur after committing state
+      transitions, never before, so revision bumps do not revoke the active
+      lease. Async routines (reflexion, telemetry) must register with the
+      lifecycle WaitGroup and be drained before closing coordinator stores.
+      Regression evidence: cover retry, fail-fast, cancellation, timeout/process
+      death, resume, dependency routing, and projection parity; concurrency
+      changes require race-safe drain/close coverage.
     severity: error
     applies-to:
       - cmd/hufu/display.go
@@ -93,14 +97,18 @@ invariants:
       provider proxy owns transport isolation. Coordinator callers consume
       typed results and must not reparse raw provider payloads. Each backend
       has one explicit concurrency, stream, cancellation, and reap owner.
-      Cancellation forbids late results or orphaned processes. Regression evidence:
-      cover interleaved notifications, wrong/early-ended turns, oversized
-      frames, files_read shape, same-backend concurrency,
-      keep-alive isolation, interrupt, and child-process cleanup.
+      Subprocesses using Linux SysProcAttr.Pdeathsig must be spawned and
+      waited using processutil.StartAndWait (or pin their OS thread via
+      runtime.LockOSThread) so Go runtime thread retirement cannot kill child
+      processes prematurely. Cancellation forbids late results or orphaned
+      processes. Regression evidence: cover interleaved notifications,
+      wrong/early-ended turns, oversized frames, files_read shape, same-backend
+      concurrency, keep-alive isolation, interrupt, and child-process cleanup.
     severity: error
     applies-to:
       - cmd/hufu/backend_config.go
       - cmd/hufu/execution_target_preflight.go
+      - internal/processutil/
       - internal/providerproxy/
       - internal/team/codex_appserver_client.go
       - internal/team/codex_appserver_protocol.go
@@ -119,12 +127,15 @@ invariants:
       exclusions, and process cleanup. Callers must not derive authorization,
       leases, artifact scope, or checkpoint exclusions independently. Hufu
       control state is distinct from project content; parallel attempts must
-      not observe each other's deltas. Regression evidence: cover symlink
-      escape, canonicalized roots, overlapping leases, parallel attempts,
-      control-checkpoint exclusion, snapshot replay, artifact access, and
-      cancellation cleanup.
+      not observe each other's deltas. Tools analyzing Git revisions or
+      commit ranges must execute against an isolated archive snapshot
+      (git archive) rather than the live dirty worktree. Regression evidence:
+      cover symlink escape, canonicalized roots, overlapping leases, parallel
+      attempts, control-checkpoint exclusion, snapshot replay, artifact access,
+      and cancellation cleanup.
     severity: error
     applies-to:
+      - .agent-teams/hufu-code-review/reviewprep/
       - cmd/hufu/operator_traceability_test.go
       - internal/team/action_provider.go
       - internal/team/artifact_access.go
@@ -166,13 +177,17 @@ invariants:
       Canonical owner: the durable task contract and unique branch-scoped task
       occurrence/attempt own result, verification, rejection category,
       execution receipt, evidence, policy snapshot, and provenance. Model
-      prose and transient status are never authoritative. Result-only repair
-      may use only its frozen workspace delta and must not replay completed
-      side effects. Event idempotency and inspect/JSON/report attribution must
-      resolve to the same branch, occurrence, attempt, and provider.
-      Regression evidence: cover stable rejection classification, invariant
-      repair scope, contract recovery, branch replay, receipt/evidence
-      validation, journal lineage, and all user-visible projections.
+      prose and transient status are never authoritative. Canonical runtime
+      outputs are immutable once hashed at CanonicalizeRuntimeOutputs and must
+      not be re-redacted across downstream persistence sinks. Result-only
+      repair may use only its frozen workspace delta and must rehydrate
+      workset scope without replaying side effects. Event idempotency and
+      inspect/JSON/report attribution must resolve to the same branch,
+      occurrence, attempt, and provider. Circuit breakers must fingerprint by
+      stable category rather than variable payload text. Regression evidence:
+      cover stable rejection classification, invariant repair scope, contract
+      recovery, branch replay, receipt/evidence validation, journal lineage,
+      and all user-visible projections.
     severity: error
     applies-to:
       - cmd/hufu/inspectcmd.go
@@ -188,6 +203,7 @@ invariants:
       - internal/team/execution_receipt.go
       - internal/team/invariant_attestation.go
       - internal/team/invariant_completion.go
+      - internal/team/runtime_outputs.go
       - internal/team/task_result.go
       - internal/team/task_result_contract.go
 

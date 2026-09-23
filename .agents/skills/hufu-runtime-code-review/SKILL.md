@@ -46,11 +46,30 @@ shared-looking helper covers all callers.
 - Reject designs that turn a denied tool call into an aborted model round when a
   recoverable tool error is required to preserve attempt evidence.
 
+### Concurrency, subprocesses, and teardown
+
+- Require subprocesses using Linux `SysProcAttr.Pdeathsig` to use
+  `internal/processutil.StartAndWait` (or pin OS thread via `runtime.LockOSThread`)
+  so Go runtime thread retirement cannot kill child processes prematurely.
+- Check that all asynchronous goroutines (reflexion, telemetry) register with the
+  coordinator `sync.WaitGroup` and are drained before closing event or context stores.
+- Verify that scheduler cancellation drains admitted in-progress tasks without
+  triggering downstream DAG routing or workspace corruption.
+
 ### Task completion and state projections
 
 - Follow every task transition through the canonical transition API. Check the
   Todo state, checkpoint, task journal, event store, receipt, session, and
   user-facing projections together.
+- Enforce occurrence lease ordering: verify `setCurrentTaskAttempt` is called
+  *after* committing a state transition, so `OccurrenceRevision` increments do
+  not revoke the active lease.
+- Require verification gates to bind to the durable `TodoItem` contract, and
+  result-only repairs to rehydrate the runtime-owned workset scope from the
+  durable occurrence.
+- Reject UI/display layers that synthesize terminal task states (e.g. rewriting
+  pending or in-progress to done/skipped); presentations must truthfully reflect
+  the canonical task snapshot.
 - Require the same completion gate on normal completion, protocol repair, and
   resumed tasks: typed-result validation, terminal evidence, objective
   verification, and acceptance where configured.
@@ -61,16 +80,23 @@ shared-looking helper covers all callers.
 
 - Confirm that failure classification, retry, repair, reconciliation, and
   anti-thrashing use the established recovery machinery.
+- Require circuit breakers and repetition detectors to fingerprint on stable
+  rejection categories, not variable error strings or JSON paths.
 - Require receipts and failure evidence to distinguish cancellation, timeout,
   step/token budget exhaustion, protocol incompleteness, verification failure,
   and permission denial.
 - Reject automatic replay of a completed or potentially completed side effect,
   including during protocol repair or crash-resume.
+- Require unattended rollback to fail closed without an explicit configured
+  `rollback:` command.
 
 ### Persistence, artifacts, and secrets
 
 - Check backward reads, migrations, and reconstruction when a persisted type or
   serialized field changes. Preserve atomic writes and failure recovery.
+- Confirm that canonical runtime outputs are shielded from secondary redaction
+  across persistence sinks, preserving the deterministic receipt hash.
+- Confirm event idempotency keys are scoped to the session branch (`branch_id + key`).
 - Require redaction before every durable or displayed sink: subprocess output,
   transcript, audit record, receipt, session, report, event payload, and
   context store.
@@ -78,11 +104,18 @@ shared-looking helper covers all callers.
   paths, Todo IDs, or unverified references used in place of authorized
   artifact access.
 
-### Workflow contracts
+### Workflow contracts and review isolation
 
 - Require static configuration, executable availability, task references,
   phase/capability grants, and closed tool sequences to be preflighted before a
   model call or external action.
+- Verify that static code analysis for reviews executes against an isolated
+  temporary archive snapshot (`git archive`) of the target revision, never
+  against a live dirty worktree.
+- Verify that code symbol resolvers check imports, external dependencies, and
+  standard library catalogs before flagging missing symbols.
+- Verify that `bytes.Buffer.Bytes()` slices are cloned before resetting or
+  reusing the buffer.
 - Verify that phase restrictions filter both built-in and MCP tools, in both
   the model-visible set and execution-time authorization.
 - Keep Hufu core integration-neutral; require consumer-specific behavior to

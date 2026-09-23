@@ -44,14 +44,20 @@ enough budget for the final structured result.
 
 Apply the checklist selected by the lens:
 
-- `general`: correctness, regressions, API behavior, errors, concurrency, and
-  focused tests;
-- `runtime-integrity`: task/result contracts, authorization, lifecycle,
-  persistence, recovery, receipts, evidence, and projection consistency;
-- `boundary-tui`: CLI/config/provider/MCP boundaries, output projections,
-  Bubble Tea update purity, resize and interaction behavior;
+- `general`: correctness, regressions, API behavior, errors, concurrency (including
+  OS thread affinity with Linux `SysProcAttr.Pdeathsig` and cloning `bytes.Buffer.Bytes()`
+  before buffer reset/reuse), and focused tests;
+- `runtime-integrity`: task/result contracts, occurrence lease ordering (`setCurrentTaskAttempt`
+  must run *after* transition commit), durable Todo contract binding (rehydrating workset scope),
+  async routine drain before store teardown or cancellation, receipt hash stability (shielding
+  canonical outputs from secondary redaction), stable category circuit breakers, and
+  projection consistency;
+- `boundary-tui`: CLI/config/provider/MCP boundaries, output projections (no synthetic
+  terminal task states in presentation layers), Bubble Tea update purity, resize and
+  interaction behavior;
 - `security-tool`: filesystem/workspace isolation, shell and network policy,
-  credentials, MCP/tool grants, unattended operation, and fail-closed errors.
+  credentials, MCP/tool grants, unattended operation (fail-closed rollback without
+  implicit `git reset --hard`), and fail-closed errors.
 - `documentation-risk`: normative authority, architecture/runtime contracts,
   security or safety claims, implementation anchors, and projection parity.
 
