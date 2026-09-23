@@ -1,5 +1,11 @@
 # Action Providers
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `7350eb5`
+> Supersedes: —
+> Superseded-By: —
+
 Action providers are team-owned adapters for structured runtime actions. A
 team declares a provider under `action-providers` and binds a static task to
 its capability. Hufu passes the action as JSON, preserves the normal action
