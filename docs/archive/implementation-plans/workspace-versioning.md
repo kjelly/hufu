@@ -1,6 +1,6 @@
 # Hufu CAS + SQLite Snapshot DAG：Workspace Versioning / Session Fork 實作規格
 
-> Status: in implementation — archived 2026-09-23 from local scratch space before implementation began
+> Status: implemented — archived 2026-09-23; implemented through `136f55a` on `feat/workspace-versioning` (see Implementation record)
 > Authority: reference
 > Baseline: `47a7a1d842875ac5e4812b81a283ed9e81bf3f5e`
 > Branch: `feat/workspace-versioning`
@@ -18,7 +18,10 @@
 
 ## Implementation record
 
-Landed on branch `feat/workspace-versioning`; one commit per §36 phase.
+Implemented on branch `feat/workspace-versioning`, one commit per §36 phase (§44 PR order).
+The normative description of the shipped behavior is
+[workspace versioning](../../architecture/workspace-versioning.md); the schema is in
+[the workspace versions SQLite schema](../../reference/workspace-versions-sqlite-schema.md).
 
 ### Baseline test status（2026-09-23，`47a7a1d`）
 
@@ -34,6 +37,118 @@ must stay short. With `TMPDIR` under `/home/...` six `internal/team` terminal te
 `bind: invalid argument` (socket path over the 108-byte limit); with the default `/tmp` they pass.
 `go test` passes `GOTMPDIR` through to test binaries, so it cannot be used to move only the build
 artifacts. This is environmental, not a baseline regression.
+
+### Commits
+
+| Commit | Phase (§36) / PR (§44) | Content |
+| --- | --- | --- |
+| `7b3dc94` | — | Archive this plan and record the baseline test status. |
+| `3347a6d` | Phase 0 / PR-00 | `internal/fsutil` (atomic writes, `SyncDir`, non-blocking flock) and `internal/sqlmigrate` extracted with thin wrappers; `WorkspaceSnapshotter` directory-symlink `EISDIR` and FIFO-blocking fixes. |
+| `ecb3e8a` | Phase 1 / PR-01–03 | `internal/workspace/versionstore`: schema, CAS, canonical tree codec with a golden hash, inclusion policy and `.hufuignore`, capture with the stat cache, diff, `os.Root` materialize, benchmarks. |
+| `e0fa1d5` | Phase 2 / PR-04 | Branch heads with optimistic generations, operations, `subject_state`, event-first publication through `workspace_snapshot_committed`, recovery that never appends events. |
+| `7df9ef3` | Phase 3 / PR-05–07 | Project lock, managed-workspace resolution, config block, `session fork` / `checkout` / `diff` and `workspace version list/show/diff/snapshot/restore/adopt`, operation recovery. |
+| `e08473a` | Phase 3 fix | Per-OS stat files so the version store builds on darwin. |
+| `c32a999` | Phase 4 / PR-08 | Run admission, run checkpoint, deferred checkpoints, and the unauthorized-mutation marker. |
+| `680232e` | Phase 5 / PR-09 | `workspace version status`, `doctor [--repair]`, `gc [--apply]`, `downgrade`; architecture and reference docs. |
+| `6aeb2a2` | Phase 4 fix | Observe-mode warning for a non-Git subject root without `.hufuignore` (§22.1 step 7). |
+| `31efd78` | Phase 5 / PR-09 | `CaptureFromDelta` library primitive (§15.2) with `ObservedFile` / `ObservedDelta`, and the incremental-rewrite and shared-baseline benchmarks. |
+| `136f55a` | Phase 5 fix | `CaptureFromDelta` refuses a delta that edits `.hufuignore` or a `.gitignore`. |
+
+PR-10 (attempt-level checkpoints) is v1.x and was not implemented, as §44 requires.
+
+### Verification
+
+Each phase commit was verified in a separate worktree with the CI-equivalent checks:
+`go test ./... -race -short -timeout 20m`, `go vet ./...`, `golangci-lint run ./...`,
+`GOOS=darwin go build ./...` plus a darwin test compile of `./cmd/hufu`,
+`GOOS=windows go build` of the new packages, and `bin/check-docs`.
+
+| Commit | Phase | Tests (`-race -short`) | vet / lint | darwin build + test compile | windows (new packages) | docs |
+| --- | --- | --- | --- | --- | --- | --- |
+| `3347a6d` | 0 | pass (43 packages) | pass / 0 issues | pass | pass | pass |
+| `e0fa1d5` | 1–2 | 43 pass; `cmd/hufu` hit the known completion flake | pass / 0 issues | **fail** (`Stat_t.Ctim`), fixed by `e08473a` | pass | pass |
+| `e08473a` | 3 | pass (44 packages) | pass / 0 issues | pass | pass | pass |
+| `c32a999` | 4 | pass (44 packages) | pass / 0 issues | pass | pass | pass |
+| `6aeb2a2` | 4–5 | pass (44 packages) | pass / 0 issues | pass | pass | pass |
+| `136f55a` | 5 (tip) | pass (44 packages) | pass / 0 issues | pass | pass | pass |
+
+`GOOS=windows go build ./...` of the whole module already fails on the baseline
+(`internal/tools/artifact_traversal.go`); that is pre-existing and out of scope, so only the new
+packages are cross-compiled for windows.
+
+### Deviations from this plan
+
+- **Admission placement (§22.1).** `admitWorkspaceVersion` runs right after `checkRunAdmission` at
+  the four public entries (`Coordinator.Run`, direct-agent invocation, `ContinueWithPrompt`,
+  targeted recovery), not inside `beginInvocationExecutionRunWithLease` before `run_started`. A
+  failed admission is finalized like a failed `checkRunAdmission` (the run ends failed after
+  `run_started`), which reuses the existing public-invocation failure path.
+- **No `WorkspaceVersionService` interface (§25).** `WorkspaceVersionContext` travels on
+  `TeamSession.WorkspaceVersion` instead of `RuntimeServices`, and the operations are methods of
+  `WorkspaceSessionOps` (`internal/team/workspace_version_session.go`) and the coordinator hooks in
+  `internal/team/workspace_version_runtime.go`. "No-op" is `WorkspaceVersionContext.Active() ==
+  false`. The coordinator still only uses the `versionstore` API, never SQLite or CAS paths.
+- **Mode validation (§31).** An unknown `mode` is rejected when a command binds workspace
+  versioning (`configuredVersionMode` in `cmd/hufu/workspace_version_binding.go`), not at config
+  load, so commands that never touch a managed workspace are unaffected by a bad value. An
+  invalid `orphan-grace` is rejected when GC runs.
+- **Single migration (§11).** The whole schema, including `stat_cache` (planned for Phase 2), ships
+  as migration version 1 `initial_workspace_versions`, since no intermediate schema was ever
+  released. `object_index` is not implemented (§11.5, as decided).
+- **Workspace resolution (§26).** `hufu session` and `hufu workspace version` resolve the managed
+  workspace with `Registry.GetWorkspaceByControlRoot` and take the team lock with
+  `AcquireWorkspaceLocks` (`openVersionedSession`), rather than going through
+  `resolveCommandWorkspace`, because they have no team to load. An unreadable registry fails
+  closed.
+- **Locks for mutating commands (§27).** Every mutating session / version command with versioning
+  active takes the team lock and then the project lock, in observe mode as well as required mode.
+- **Mode floor on read-only commands (§11.6).** Read-only session commands (`session list`,
+  `session diff`, …) enforce the recorded mode floor too, so a config below the floor is reported
+  on first use instead of only at the next run.
+- **Restore under `recovery_required` (§20, §22.3).** The unaccepted live state is not saved as a
+  `checkout_save` head. It is captured as a forensic pending snapshot that only tells
+  materialization which paths to replace or delete, and is orphaned afterwards.
+- **Store API shape (§13).** `versionstore` exposes the concrete `*Store` rather than a
+  `VersionStore` interface, and `Capture` also returns `CaptureStats`.
+- **`CaptureFromDelta` (§13, §15).** It returns `(Snapshot, CaptureStats, error)` like `Capture`.
+  Besides the §15.2 algorithm it applies the full-capture inclusion policy to the delta's paths
+  (structural exclusions, `.hufuignore`, `git check-ignore`, nested repositories), rejects a
+  changed path below a symlinked directory, refuses a delta that edits `.hufuignore` or a
+  `.gitignore` (only a full capture can re-evaluate unchanged paths), accepts a deleted path that
+  became a directory, and leaves the stat cache untouched. `ObservedFile.Mode` and `Bytes` are
+  informational only. The §15.1 `internal/team` adapter is v1.x work and was not added.
+- **Fork operation row (§18).** `operations.from_snapshot_id` of a fork is the active branch's head
+  (what the files hold when the fork starts), which is what recovery needs to finish or undo it.
+
+### Known issues (not caused by this change)
+
+- `cmd/hufu` `TestDynamicContextAndPromotionCompletionIsSharedScopeOnlyAndReadOnly` occasionally
+  fails on a loaded machine: dynamic completion queries give up after the 150 ms
+  `completionQueryTimeout`. It failed once (Phase 2 verification), passed in the other phase
+  verifications, and passed 3/3 when rerun with `-race`.
+- The terminal broker tests need a short `TMPDIR` (see the baseline note above).
+
+### Benchmarks (§41)
+
+`go test ./internal/workspace/versionstore -run '^$' -bench . -benchtime 3x` on the development
+machine (linux, synthetic trees under `t.TempDir()`). Numbers are records only (D9), not merge gates.
+
+| Benchmark | Result |
+| --- | --- |
+| Full capture, 10k files (no stat cache) | 1.12 s |
+| Full capture, 50k files (no stat cache) | 5.31 s |
+| Admission with no changes, 100k files, stat cache | 3.20 s |
+| Admission with no changes, 100k files, no stat cache | 8.86 s |
+| Capture, 10k files / 1 changed (stat cache) | 0.32 s |
+| Capture, 50k files / 10 changed (stat cache) | 1.61 s |
+| `CaptureFromDelta`, 50k files / 10 changed | 0.13 s |
+| Merkle diff, 50k files, one local change | 1.3 ms |
+| Materialize 10k files into an empty root | 1.30 s |
+| 100 branches, each one file changed from a 1000-file baseline | 3.55 s; 4.08 MB logical, 0.70 MB CAS (dedup 5.8×, trees dominate), SQLite 384 KiB |
+
+Incremental capture never rewrites unchanged blobs: an unchanged file is either a stat-cache hit or
+re-hashed into an already existing object, and `CaptureFromDelta` writes only the trees on changed
+paths (`TestCaptureFromDeltaRewritesOnlyAffectedTrees`).
 
 ---
 
@@ -2013,6 +2128,8 @@ v2（D1）：v1 的 semantic boundary 只有 **quiescent run boundary**，也就
 
 在每個 run 開始時執行：同一個 coordinator process 可能多次呼叫 `Coordinator.Run`（`cmd/hufu/chat.go`、`run.go`、`segments.go`），每次都要 admission。呼叫點：`beginInvocationExecutionRunWithLease`（`internal/team/execution_events.go`）emit `run_started` **之前**呼叫 `AdmitRun`；`AdmitRun` 回傳 error 時不 emit `run_started`，run 以該 error 結束。
 
+> Implementation note: shipped as `admitWorkspaceVersion` right after `checkRunAdmission` at the four public entries, i.e. after `run_started`; a failed admission ends the run as failed (see the Implementation record, "Deviations").
+
 ```text
 1. resolve subject root / workspace ID（§26）；unmanaged → effective mode 視為 off
 2. config mode 低於 subject_state.mode_floor → fail（§11.6）；否則 effective mode = config mode
@@ -2575,6 +2692,8 @@ type WorkspaceVersioningConfig struct {
 ```
 
 - 未知的 `mode` 字串在 config 載入時即回錯誤；`OrphanGrace` 解析失敗同樣回錯誤。
+
+> Implementation note: shipped with `mode` validated when a command binds workspace versioning (`configuredVersionMode`) and `orphan-grace` validated when GC runs, not at config load (see the Implementation record, "Deviations").
 
 `0` 表示由 implementation default / unlimited policy 決定，避免在 config schema 中硬塞不合理通用上限。
 
