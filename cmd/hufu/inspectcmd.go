@@ -424,7 +424,7 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			outcome := data.KnowledgeCoverage.OutcomeCoverage
 			invariants := data.KnowledgeCoverage.InvariantCoverage
 			coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
-			_, err = fmt.Fprintf(writer, "Knowledge: %d known, %d assumed, %d stale; invariants: %d/%d paths covered\n", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, coveredPaths, invariants.TouchedPathCount)
+			_, err = fmt.Fprintf(writer, "Knowledge: %d known, %d assumed, %d stale%s; invariants: %d/%d paths covered\n", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, conflictingSuffix(outcome.ConflictingCount), coveredPaths, invariants.TouchedPathCount)
 		}
 		return err
 	case inspectpkg.EvidenceData:

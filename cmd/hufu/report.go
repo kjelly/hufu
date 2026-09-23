@@ -57,7 +57,16 @@ func formatKnowledgeCoverage(coverage *team.TaskKnowledgeCoverage) string {
 	outcome := coverage.OutcomeCoverage
 	invariants := coverage.InvariantCoverage
 	coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
-	return fmt.Sprintf("knowledge: %d known, %d assumed, %d stale · invariants: %d/%d paths covered", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, coveredPaths, invariants.TouchedPathCount)
+	return fmt.Sprintf("knowledge: %d known, %d assumed, %d stale%s · invariants: %d/%d paths covered", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, conflictingSuffix(outcome.ConflictingCount), coveredPaths, invariants.TouchedPathCount)
+}
+
+// conflictingSuffix reports conflicting knowledge only when present, so
+// output without memory conflicts is unchanged.
+func conflictingSuffix(count int) string {
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d conflicting", count)
 }
 
 // generateReport creates a markdown execution report for every loaded team.

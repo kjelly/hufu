@@ -18,8 +18,17 @@ evidence; agents and users cannot submit or override it.
 - `assumed`: eligible historical context without enough independent support.
 - `stale`: supported historical context whose last observation is older than
   `memory-learning.stale-after`.
-- `conflicting`: reserved for a future deterministic contradiction model; the
-  current classifier never emits it.
+- `conflicting`: shared persistent historical context with an open memory
+  conflict, meaning a persisted pair judgment from `hufu context conflicts
+  scan` whose derived state is open (see the
+  [context SQLite schema](../reference/context-sqlite-schema.md)). It takes
+  precedence over the other historical states. Given the persisted judgments
+  the classification is deterministic; the judgments themselves are produced
+  offline by an operator-run model call, never during a run. The marking only
+  changes attribution: the compiled prompt, included and omitted items,
+  ordering, and token counts are identical with or without conflicts. It is
+  still marked when the conflicting counterpart was not injected. A failed
+  conflict lookup leaves items unmarked and reports degraded observability.
 
 Examples are left unclassified. Repository invariants keep their dedicated
 severity and attestation fields instead of receiving a second knowledge-state
@@ -30,7 +39,7 @@ label. Omitted context and legacy manifests also have no inferred state.
 `TaskResult.KnowledgeCoverage` contains two traceable count sets:
 
 - outcome coverage counts included manifest items classified as known,
-  assumed, or stale;
+  assumed, stale, or conflicting (`conflicting_count`, omitted when zero);
 - invariant coverage counts touched paths, applicable catalog invariants, and
   paths with no applicable invariant.
 

@@ -135,7 +135,7 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 		}
 		ltm, scores, finalScores, aggregates = baseLTM, nil, nil, nil
 	}
-	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates}, true, nil
+	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates, SharedPersistentConflicts: c.openConflictsForItems(ctx, ltm)}, true, nil
 }
 
 func (c *Coordinator) canonicalContextBundleForRequest(ctx context.Context, request ContextRequest) (*CanonicalContextBundle, []ContextRouteDecision, bool, error) {

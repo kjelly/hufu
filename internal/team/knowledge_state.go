@@ -8,8 +8,9 @@ import (
 )
 
 // KnowledgeState is the deterministic attribution attached to an injected
-// context item. Conflicting is reserved for a future contradiction model and
-// is never produced by classifyKnowledgeState in this version.
+// context item. Conflicting marks a historical item with an open memory
+// conflict recorded by hufu context conflicts; the classification is
+// deterministic over those persisted judgments.
 type KnowledgeState string
 
 const (
@@ -30,7 +31,7 @@ func validKnowledgeState(state KnowledgeState) bool {
 
 // classifyKnowledgeState is pure. Unknown authorities and example content are
 // deliberately left unclassified instead of being assigned a guessed state.
-func classifyKnowledgeState(authority ContextAuthority, aggregate *contextstore.ExperienceAggregate, now time.Time, policy agent.MemoryLearningPolicy) (KnowledgeState, bool) {
+func classifyKnowledgeState(authority ContextAuthority, aggregate *contextstore.ExperienceAggregate, now time.Time, policy agent.MemoryLearningPolicy, conflicting bool) (KnowledgeState, bool) {
 	switch authority {
 	case ContextAuthorityNormative:
 		return KnowledgeKnown, true
@@ -39,6 +40,9 @@ func classifyKnowledgeState(authority ContextAuthority, aggregate *contextstore.
 	case ContextAuthorityHistorical:
 	default:
 		return "", false
+	}
+	if conflicting {
+		return KnowledgeConflicting, true
 	}
 	if aggregate == nil || aggregate.VerifiedSupportCount < policy.MinConfirmedSupport || aggregate.IndependentTaskCount < policy.MinIndependentTasks {
 		return KnowledgeAssumed, true
@@ -62,6 +66,9 @@ type OutcomeCoverageSignal struct {
 	KnownCount        int `json:"known_count"`
 	AssumedCount      int `json:"assumed_count"`
 	StaleCount        int `json:"stale_count"`
+	// ConflictingCount is omitted when zero so coverage JSON without
+	// conflicts keeps its existing shape.
+	ConflictingCount int `json:"conflicting_count,omitempty"`
 }
 
 type TaskKnowledgeCoverage struct {
@@ -86,6 +93,8 @@ func ComputeTaskKnowledgeCoverage(manifest *ContextInjectionManifest, catalog []
 				coverage.OutcomeCoverage.AssumedCount++
 			case KnowledgeStale:
 				coverage.OutcomeCoverage.StaleCount++
+			case KnowledgeConflicting:
+				coverage.OutcomeCoverage.ConflictingCount++
 			}
 		}
 	}

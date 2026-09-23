@@ -68,6 +68,7 @@ type OutcomeCoverageData struct {
 	KnownCount        int `json:"known_count"`
 	AssumedCount      int `json:"assumed_count"`
 	StaleCount        int `json:"stale_count"`
+	ConflictingCount  int `json:"conflicting_count,omitempty"`
 }
 
 type KnowledgeCoverageData struct {
@@ -201,6 +202,7 @@ func projectKnowledgeCoverage(coverage *team.TaskKnowledgeCoverage) *KnowledgeCo
 			KnownCount:        coverage.OutcomeCoverage.KnownCount,
 			AssumedCount:      coverage.OutcomeCoverage.AssumedCount,
 			StaleCount:        coverage.OutcomeCoverage.StaleCount,
+			ConflictingCount:  coverage.OutcomeCoverage.ConflictingCount,
 		},
 	}
 }

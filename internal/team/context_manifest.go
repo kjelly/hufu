@@ -96,7 +96,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 			manifestItem.ContentHash = item.InvariantContentHash
 			manifestItem.InvariantSeverity = item.InvariantSeverity
 		} else if included {
-			if state, ok := classifyKnowledgeState(normalizedContextAuthority(item), item.Aggregate, createdAt, policy); ok && validKnowledgeState(state) {
+			if state, ok := classifyKnowledgeState(normalizedContextAuthority(item), item.Aggregate, createdAt, policy, len(item.ConflictIDs) > 0); ok && validKnowledgeState(state) {
 				manifestItem.KnowledgeState = state
 			}
 		}

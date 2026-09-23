@@ -42,11 +42,11 @@ func TestClassifyKnowledgeState(t *testing.T) {
 			if activePolicy.PolicyVersion == "" {
 				activePolicy = policy
 			}
-			got, ok := classifyKnowledgeState(test.authority, test.aggregate, now, activePolicy)
+			got, ok := classifyKnowledgeState(test.authority, test.aggregate, now, activePolicy, false)
 			if got != test.want || ok != test.wantOK {
 				t.Fatalf("classifyKnowledgeState() = (%q, %v), want (%q, %v)", got, ok, test.want, test.wantOK)
 			}
-			gotAgain, okAgain := classifyKnowledgeState(test.authority, test.aggregate, now, activePolicy)
+			gotAgain, okAgain := classifyKnowledgeState(test.authority, test.aggregate, now, activePolicy, false)
 			if gotAgain != got || okAgain != ok {
 				t.Fatalf("classification changed for identical input: (%q, %v) then (%q, %v)", got, ok, gotAgain, okAgain)
 			}
@@ -114,7 +114,7 @@ func TestKnowledgeStateReusesRankingAggregate(t *testing.T) {
 		t.Fatalf("aggregate calls = %d, aggregate = %#v", counting.aggregateCalls, aggregates[record.ID])
 	}
 	finalScores := map[string]float64{record.ID: entries[0].FinalScore}
-	compiledItems := canonicalCompilerItemsScored([]contextstore.ContextItem{record}, PriorityRelevantLTM, "shared_persistent", false, scores, finalScores, aggregates)
+	compiledItems := canonicalCompilerItemsScored([]contextstore.ContextItem{record}, PriorityRelevantLTM, "shared_persistent", false, scores, finalScores, aggregates, nil)
 	request := validTestContextRequest()
 	manifest, err := BuildContextInjectionManifest(request, CompiledContext{IncludedItems: compiledItems}, nil, "worker", now, policy)
 	if err != nil {

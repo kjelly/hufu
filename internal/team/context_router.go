@@ -357,5 +357,6 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	route.Bundle.SharedPersistentScores = scores
 	route.Bundle.SharedPersistentFinalScores = finalScores
 	route.Bundle.SharedPersistentAggregates = aggregates
+	route.Bundle.SharedPersistentConflicts = c.openConflictsForItems(ctx, selected)
 	return route, nil
 }
