@@ -196,6 +196,11 @@ func (o *WorkspaceSessionOps) admitRun(ctx context.Context, branchID string) err
 	if err = refuseWhileRecovering(state); err != nil {
 		return err
 	}
+	if !o.Version.Required() && !versionstore.IsGitWorkTree(ctx, o.Version.SubjectRoot) && !versionstore.HasHufuignore(o.Version.SubjectRoot) {
+		// §9.2: observe mode only warns; required mode refuses in capture.
+		log.Printf("warning: workspace versioning: %s is not a Git work tree and has no %s; every file is captured",
+			o.Version.SubjectRoot, versionstore.HufuignoreFile)
+	}
 	head, _, err := o.saveLiveState(ctx, branchID, versionstore.SnapshotExternalDrift)
 	if err != nil {
 		return err

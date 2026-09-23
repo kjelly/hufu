@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,10 +165,20 @@ func TestAdmitRunRequiresHufuignoreOutsideGit(t *testing.T) {
 	if err := c.admitWorkspaceVersion(ctx); !errors.Is(err, versionstore.ErrHufuignoreRequired) {
 		t.Fatalf("required admission err = %v, want ErrHufuignoreRequired", err)
 	}
+	// The required admission recorded the floor; lower it like `downgrade`.
+	if err := f.store.Downgrade(ctx, f.subject, f.version.WorkspaceID, versionstore.ModeObserve); err != nil {
+		t.Fatal(err)
+	}
 	c.session.WorkspaceVersion.Mode = versionstore.ModeObserve
 	c.session.WorkspaceVersion.HoldsProjectLock = false
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	if err := c.admitWorkspaceVersion(ctx); err != nil {
 		t.Fatalf("observe admission must not block: %v", err)
+	}
+	if !strings.Contains(logged.String(), "has no .hufuignore") {
+		t.Fatalf("observe admission did not warn about the missing .hufuignore: %q", logged.String())
 	}
 }
 
