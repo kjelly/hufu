@@ -13,11 +13,12 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/backend/rule"
 )
 
-const decisionRTDefaultProviderURL = "http://127.0.0.1:11434/v1"
+const decisionRTDefaultProviderURL = config.DefaultProviderURL
 
 type decisionRTDeps struct {
 	registryFactory func(RegistryOptions) BackendRegistry
