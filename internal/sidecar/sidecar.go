@@ -12,8 +12,6 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openai"
-	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
@@ -81,15 +79,13 @@ var (
 // apply layers profile onto call as per-call overrides, which take
 // precedence over the sidecar agent's own (unset) construction-time
 // defaults — see fantasy.Agent.prepareCall.
-func (p Profile) apply(call *fantasy.AgentCall) {
+func (p Profile) apply(call *fantasy.AgentCall, model fantasy.LanguageModel) {
 	maxTokens := p.MaxOutputTokens
 	call.MaxOutputTokens = &maxTokens
 	temp := p.Temperature
 	call.Temperature = &temp
 	if agent.ValidReasoningEfforts[p.ReasoningEffort] {
-		call.ProviderOptions = openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
-			ReasoningEffort: new(openai.ReasoningEffort(p.ReasoningEffort)),
-		})
+		call.ProviderOptions = agent.ReasoningEffortProviderOptions(model, p.ReasoningEffort)
 	}
 }
 
@@ -393,7 +389,7 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 		invocationAgent = s.newAgent(invocationModel)
 	}
 	call := fantasy.AgentCall{Prompt: prompt}
-	profile.apply(&call)
+	profile.apply(&call, languageModel)
 	if requestPreparer != nil {
 		reserved := 0
 		if call.MaxOutputTokens != nil {

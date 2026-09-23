@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -1713,9 +1712,7 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 			effort = cfg.TeamConfig.Generation.ReasoningEffort
 		}
 		if ValidReasoningEfforts[effort] {
-			opts = append(opts, fantasy.WithProviderOptions(openaicompat.NewProviderOptions(&openaicompat.ProviderOptions{
-				ReasoningEffort: new(openai.ReasoningEffort(effort)),
-			})))
+			opts = append(opts, fantasy.WithProviderOptions(ReasoningEffortProviderOptions(lm, effort)))
 		}
 	}
 
