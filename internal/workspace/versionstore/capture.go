@@ -164,6 +164,19 @@ func (s *Store) capture(ctx context.Context, req CaptureRequest, unchangedRoot s
 }
 
 func (s *Store) planCapture(ctx context.Context, req CaptureRequest) (capturePlan, error) {
+	plan, err := newCapturePlan(ctx, s.db, req, s.now())
+	if err != nil {
+		return capturePlan{}, err
+	}
+	plan.statCache, err = s.loadStatCache(ctx, plan.subjectID)
+	if err != nil {
+		return capturePlan{}, err
+	}
+	return plan, nil
+}
+
+// newCapturePlan validates req without loading the stat cache.
+func newCapturePlan(ctx context.Context, q queryRower, req CaptureRequest, started time.Time) (capturePlan, error) {
 	if req.WorkspaceID == "" || req.BranchID == "" {
 		return capturePlan{}, fmt.Errorf("capture: workspace and branch are required")
 	}
@@ -178,22 +191,17 @@ func (s *Store) planCapture(ctx context.Context, req CaptureRequest) (capturePla
 	if err != nil {
 		return capturePlan{}, fmt.Errorf("capture: %w", err)
 	}
-	if err = requirePublishedParent(ctx, s.db, req.Parent); err != nil {
+	if err = requirePublishedParent(ctx, q, req.Parent); err != nil {
 		return capturePlan{}, fmt.Errorf("capture: %w", err)
 	}
-	plan := capturePlan{
+	return capturePlan{
 		request:   req,
 		root:      root,
 		subjectID: SubjectKey(root),
 		policy:    inclusionPolicy{excludeSubtrees: subtrees, requireHufuignore: req.RequireHufuignore},
 		limits:    req.Limits.WithDefaults(),
-		started:   s.now(),
-	}
-	plan.statCache, err = s.loadStatCache(ctx, plan.subjectID)
-	if err != nil {
-		return capturePlan{}, err
-	}
-	return plan, nil
+		started:   started,
+	}, nil
 }
 
 // captureOnce performs one full pass. errCaptureRaced asks for a retry.
@@ -473,7 +481,9 @@ func manifestDigest(leaves []leaf) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-func (s *Store) recordCapture(ctx context.Context, plan capturePlan, result captureResult) (Snapshot, error) {
+// pendingSnapshot builds the pending row for a capture whose leaves are
+// sorted by path.
+func (s *Store) pendingSnapshot(plan capturePlan, rootTreeHash string, leaves []leaf) (Snapshot, error) {
 	id, err := s.newSnapshotID()
 	if err != nil {
 		return Snapshot{}, err
@@ -481,18 +491,26 @@ func (s *Store) recordCapture(ctx context.Context, plan capturePlan, result capt
 	req := plan.request
 	snapshot := Snapshot{
 		ID: id, WorkspaceID: req.WorkspaceID, BranchID: req.BranchID, Parent: req.Parent,
-		RootTreeHash: result.rootTreeHash, ManifestDigest: manifestDigest(result.leaves),
-		FileCount: len(result.leaves), Materializable: true, Reason: req.Reason,
+		RootTreeHash: rootTreeHash, ManifestDigest: manifestDigest(leaves),
+		FileCount: len(leaves), Materializable: true, Reason: req.Reason,
 		RunID: req.RunID, TaskID: req.TaskID, Attempt: req.Attempt, AnchorEventID: req.AnchorEventID,
 		State: StatePending, CreatedAt: s.now(),
 	}
-	for _, captured := range result.leaves {
+	for _, captured := range leaves {
 		if captured.entry.Kind == EntryBlob {
 			snapshot.LogicalBytes += captured.entry.Size
 		}
 		if captured.escaping {
 			snapshot.Materializable = false
 		}
+	}
+	return snapshot, nil
+}
+
+func (s *Store) recordCapture(ctx context.Context, plan capturePlan, result captureResult) (Snapshot, error) {
+	snapshot, err := s.pendingSnapshot(plan, result.rootTreeHash, result.leaves)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		if insertErr := insertSnapshot(ctx, tx, snapshot); insertErr != nil {

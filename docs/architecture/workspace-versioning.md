@@ -132,6 +132,13 @@ native workers write the subject root concurrently:
   and a `checkpoint_deferred` marker but never blocks `run_finished`; an
   interrupted run is only marked deferred.
 
+Both use a full capture (the stat cache skips re-reading settled files). The
+incremental [Go function: CaptureFromDelta](../../internal/workspace/versionstore/capture_delta.go)
+applies an observed delta to a published parent, rewriting only the trees on
+changed paths and failing closed when a file no longer matches the
+observation. It is a library primitive reserved for attempt-level
+checkpoints; the v1 runtime never calls it.
+
 When a Codex attempt changes paths outside its writable roots, a
 `recovery_required` marker is recorded, the run checkpoint is skipped, and
 required-mode admission fails until `hufu workspace version adopt` accepts the

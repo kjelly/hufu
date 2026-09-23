@@ -42,8 +42,10 @@ type Store struct {
 	// lock (lock.go) serializes processes.
 	mu sync.Mutex
 
-	// treeReads and statCacheHits are test counters (nil in production).
+	// treeReads, treeWrites, and statCacheHits are test counters (nil in
+	// production).
 	treeReads     *atomic.Int64
+	treeWrites    *atomic.Int64
 	statCacheHits *atomic.Int64
 }
 

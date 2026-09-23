@@ -212,6 +212,9 @@ func (s *Store) putTree(ctx context.Context, tree TreeObject) (casWrite, error) 
 	if err != nil {
 		return casWrite{}, err
 	}
+	if s.treeWrites != nil {
+		s.treeWrites.Add(1)
+	}
 	written, err := s.putBytes(ctx, ObjectTree, data)
 	if err != nil {
 		return casWrite{}, err

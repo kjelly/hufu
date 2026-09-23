@@ -139,3 +139,78 @@ func BenchmarkMaterialize10000(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCaptureFromDelta is the incremental Merkle rewrite of §15.2 for
+// the same change set as BenchmarkCaptureChanged/50000files/10changed.
+func BenchmarkCaptureFromDelta(b *testing.B) {
+	const files, changed = 50000, 10
+	root := b.TempDir()
+	makeBenchTree(b, root, files)
+	store := benchStore(b)
+	parent := benchCapture(b, store, root)
+	if _, err := store.PublishSnapshot(context.Background(), parent.ID, "evt-bench", 0); err != nil {
+		b.Fatal(err)
+	}
+	req := baseRequest(root)
+	req.Parent, req.Reason = parent.ID, SnapshotManual
+	iteration := 0
+	for b.Loop() {
+		b.StopTimer()
+		iteration++
+		var delta ObservedDelta
+		for change := 0; change < changed; change++ {
+			rel := fmt.Sprintf("d%03d/f%05d.go", change, change*100)
+			content := fmt.Sprintf("changed %d\n", iteration)
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			delta.Modified = append(delta.Modified, ObservedFile{Path: rel, SHA256: sha(content)})
+		}
+		b.StartTimer()
+		if _, _, err := store.CaptureFromDelta(context.Background(), req, delta); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkBranchesShareBaseline records the storage cost of 100 branches
+// that each change one file of a shared 1000-file baseline.
+func BenchmarkBranchesShareBaseline(b *testing.B) {
+	const files, branches = 1000, 100
+	for b.Loop() {
+		b.StopTimer()
+		root := b.TempDir()
+		makeBenchTree(b, root, files)
+		store := benchStore(b)
+		b.StartTimer()
+		baseline := benchCapture(b, store, root)
+		logical := baseline.LogicalBytes
+		for branch := 0; branch < branches; branch++ {
+			rel := filepath.Join(fmt.Sprintf("d%03d", branch%10), fmt.Sprintf("f%05d.go", (branch%10)*100))
+			if err := os.WriteFile(filepath.Join(root, rel), []byte(fmt.Sprintf("branch %d\n", branch)), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			req := baseRequest(root)
+			req.BranchID = fmt.Sprintf("b%03d", branch)
+			snapshot, _, err := store.Capture(context.Background(), req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			logical += snapshot.LogicalBytes
+		}
+		b.StopTimer()
+		_, physical, err := store.StoreUsage()
+		if err != nil {
+			b.Fatal(err)
+		}
+		info, err := os.Stat(store.layout.dbPath())
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(float64(logical), "logical-bytes")
+		b.ReportMetric(float64(physical), "cas-bytes")
+		b.ReportMetric(float64(logical)/float64(physical), "dedup-ratio")
+		b.ReportMetric(float64(info.Size()), "sqlite-bytes")
+		b.StartTimer()
+	}
+}

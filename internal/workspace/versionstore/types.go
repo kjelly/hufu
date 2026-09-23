@@ -140,6 +140,28 @@ type Snapshot struct {
 	PrunedAt       time.Time
 }
 
+// ObservedFile is one added or modified path of an ObservedDelta. Callers
+// adapt their own observations to it (versionstore never imports them).
+type ObservedFile struct {
+	// Path is root-relative and forward-slash.
+	Path string
+	// SHA256 is the observed content hash; it is only checked for regular
+	// files.
+	SHA256 string
+	Bytes  int64
+	// Mode holds permission bits only: the entry type always comes from
+	// Lstat, and the recorded permissions come from the file itself.
+	Mode uint32
+}
+
+// ObservedDelta is what changed below a subject root during one observation
+// window with no other writer.
+type ObservedDelta struct {
+	Added    []ObservedFile
+	Modified []ObservedFile
+	Deleted  []string
+}
+
 // CaptureStats describes the CAS effect of one capture.
 type CaptureStats struct {
 	NewCASBytes    int64
