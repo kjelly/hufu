@@ -501,7 +501,9 @@ func RenderToolCall(toolName, args string) string {
 	return renderToolCallLimit(toolName, args, 4000)
 }
 
-// RenderToolCallExpanded keeps a bounded source for explicit expansion.
+// RenderToolCallExpanded retains more content for explicit expansion. Non-bash
+// calls are capped; bash still uses the legacy unbounded command preview.
+// TODO: Bound the bash preview and avoid rendering it twice in the TUI reporter.
 func RenderToolCallExpanded(toolName, args string) string {
 	return renderToolCallLimit(toolName, args, maxExpandedToolRunes)
 }

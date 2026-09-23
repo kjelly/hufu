@@ -161,6 +161,39 @@ func TestAskUserLongOptionsStayInViewport(t *testing.T) {
 	}
 }
 
+func TestAskUserKeepsRightEdgeOfInputAndOptionsVisible(t *testing.T) {
+	for _, width := range []int{52, 80} {
+		t.Run(fmt.Sprintf("width-%d", width), func(t *testing.T) {
+			m := New("", TeamInfo{})
+			m.width, m.height = width, 24
+			next, _ := m.Update(AskUserMsg{Question: "Answer", Type: "free_text", ReplyCh: make(chan string, 1)})
+			m = next.(Model)
+			m.ask.ti.SetValue(strings.Repeat("x", m.ask.ti.Width-4) + "TAIL")
+			view := ansi.Strip(m.askUserView())
+			if !strings.Contains(view, "TAIL") {
+				t.Fatalf("free-text input lost its right edge at width %d:\n%s", width, view)
+			}
+			if got := lipgloss.Width(view); got > width {
+				t.Fatalf("free-text dialog width = %d, terminal width = %d", got, width)
+			}
+
+			m = New("", TeamInfo{})
+			m.width, m.height = width, 24
+			label := strings.Repeat("x", max(0, askTIWidth(width)-7)) + "TAIL"
+			next, _ = m.Update(AskUserMsg{Question: "Choose", Type: "multiple_choice",
+				Options: []AskUserOption{{Label: label}}, ReplyCh: make(chan string, 1)})
+			m = next.(Model)
+			view = ansi.Strip(m.askUserView())
+			if !strings.Contains(view, "TAIL") {
+				t.Fatalf("choice label lost its right edge at width %d:\n%s", width, view)
+			}
+			if got := lipgloss.Width(view); got > width {
+				t.Fatalf("choice dialog width = %d, terminal width = %d", got, width)
+			}
+		})
+	}
+}
+
 func TestRunningQuitHintIsVisible(t *testing.T) {
 	m := New("task", TeamInfo{})
 	m.width, m.height = 80, 24

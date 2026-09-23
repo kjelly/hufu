@@ -49,6 +49,7 @@ func (s *askState) isFreeText() bool {
 
 func initAskUser(msg AskUserMsg, screenW int) (askState, tea.Cmd) {
 	ti := textinput.New()
+	ti.Prompt = "" // The dialog renders its own "> " prefix.
 	ti.Placeholder = "type your answer…"
 	ti.Width = askTIWidth(screenW)
 	st := askState{
@@ -62,7 +63,7 @@ func initAskUser(msg AskUserMsg, screenW int) (askState, tea.Cmd) {
 	return st, nil
 }
 
-// askTIWidth returns the textinput width for a given terminal width.
+// askTIWidth leaves room for the dialog prefix and the textinput cursor.
 func askTIWidth(screenW int) int {
 	dialogW := screenW - 8
 	if dialogW < 44 {
@@ -71,7 +72,7 @@ func askTIWidth(screenW int) int {
 	if dialogW > 82 {
 		dialogW = 82
 	}
-	return dialogW - 8 // innerW(dialogW-6) minus "> "(2)
+	return dialogW - 15 // box content(dialogW-12) minus "> " and cursor
 }
 
 // maybeQuitAfterAsk checks if we should quit after dismissing an ask_user dialog.
@@ -191,8 +192,8 @@ func (m Model) askUserView() string {
 	if dialogW > 82 {
 		dialogW = 82
 	}
-	innerW := dialogW - 6 // border(1) + padding(2) each side
-	contentW := max(innerW-6, 1)
+	innerW := dialogW - 6        // border(1) + padding(2) each side
+	contentW := max(innerW-6, 1) // askBox width includes its border and padding
 
 	question := wordWrap(req.Question, contentW)
 	var sb strings.Builder
@@ -224,7 +225,11 @@ func (m Model) askUserView() string {
 		sb.WriteString("\n")
 		for i, opt := range opts {
 			sel := st.cursor == i
-			label := truncateLineCells(opt.Label, innerW-8)
+			labelW := contentW - 2
+			if req.Type == "multiple_choice" {
+				labelW = contentW - 6
+			}
+			label := truncateLineCells(opt.Label, max(labelW, 1))
 			var line string
 			if req.Type == "multiple_choice" {
 				check := m.styles.askCheckOff.Render("[ ]")
@@ -246,7 +251,7 @@ func (m Model) askUserView() string {
 			sb.WriteString(line + "\n")
 		}
 		if hasCustom {
-			custom := truncateCells("Type your own answer…", innerW-4)
+			custom := truncateCells("Type your own answer…", max(contentW-2, 1))
 			if st.cursor == total-1 {
 				sb.WriteString(m.styles.askCursor.Render(">") + " " + m.styles.askActive.Render(custom) + "\n")
 			} else {
