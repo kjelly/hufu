@@ -2,6 +2,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -245,6 +246,8 @@ type reviewGoSymbolResolver struct {
 	ctx              context.Context
 	repo             string
 	rangeDef         reviewRange
+	resolutionDir    string
+	resolutionErr    error
 	packages         map[string]loadedGoPackage
 	standardPackages map[string][]string
 	standardLoaded   bool
@@ -1407,6 +1410,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})
 	symbolResolver := newReviewGoSymbolResolver(ctx, repo, r)
+	defer symbolResolver.close()
 	for _, documentPath := range paths {
 		// Archived documents are immutable historical records. Inline paths and
 		// symbols describe the repository state that the record was written
@@ -1690,7 +1694,9 @@ func gitGrepSymbol(ctx context.Context, repo, revision, symbol string) (bool, er
 }
 
 func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol string) (bool, error) {
-	return newReviewGoSymbolResolver(ctx, repo, r).exists(symbol)
+	resolver := newReviewGoSymbolResolver(ctx, repo, r)
+	defer resolver.close()
+	return resolver.exists(symbol)
 }
 
 func newReviewGoSymbolResolver(ctx context.Context, repo string, r reviewRange) *reviewGoSymbolResolver {
@@ -1788,10 +1794,10 @@ func (r *reviewGoSymbolResolver) importedQualifiedGoSymbolExists(packageName, sy
 			}
 			pkg, loadErr := r.loadGoPackage(candidate.path)
 			if loadErr != nil {
-				if preferred {
-					return false, true, loadErr
-				}
-				continue
+				// An unresolved lower-priority import may still declare the
+				// requested package name. Do not turn an incomplete lookup into
+				// a false "symbol does not exist" result.
+				return false, true, loadErr
 			}
 			if !candidate.explicitAlias && pkg.Name != packageName {
 				continue
@@ -1836,9 +1842,14 @@ func (r *reviewGoSymbolResolver) loadStandardPackages() error {
 		return r.standardErr
 	}
 	r.standardLoaded = true
+	goListDir, err := r.goListDirectory()
+	if err != nil {
+		r.standardErr = err
+		return r.standardErr
+	}
 	cmd := exec.CommandContext(r.ctx, "go", "list", "-mod=readonly", "-json", "--", "std")
-	cmd.Dir = r.repo
-	cmd.Env = offlineGoEnvironment()
+	cmd.Dir = goListDir
+	cmd.Env = r.goListEnvironment(goListDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1888,13 +1899,18 @@ func (r *reviewGoSymbolResolver) loadGoPackage(importPath string) (listedGoPacka
 	if cached, ok := r.packages[importPath]; ok {
 		return cached.value, cached.err
 	}
+	goListDir, err := r.goListDirectory()
+	if err != nil {
+		r.packages[importPath] = loadedGoPackage{err: err}
+		return listedGoPackage{}, err
+	}
 	cmd := exec.CommandContext(r.ctx, "go", "list", "-mod=readonly", "-json", "--", importPath)
-	cmd.Dir = r.repo
-	cmd.Env = offlineGoEnvironment()
+	cmd.Dir = goListDir
+	cmd.Env = r.goListEnvironment(goListDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		err = fmt.Errorf("resolve imported Go package %q without network access: %w: %s", importPath, err, strings.TrimSpace(stderr.String()))
 		r.packages[importPath] = loadedGoPackage{err: err}
@@ -1913,6 +1929,153 @@ func (r *reviewGoSymbolResolver) loadGoPackage(importPath string) (listedGoPacka
 	}
 	r.packages[importPath] = loadedGoPackage{value: pkg}
 	return pkg, nil
+}
+
+// goListDirectory returns the live worktree for worktree reviews and an
+// isolated snapshot of the reviewed revision for commit-range reviews. This
+// keeps go list and its source-file reads from observing unrelated dirty
+// changes or later commits in the caller's checkout.
+func (r *reviewGoSymbolResolver) goListDirectory() (string, error) {
+	if r.rangeDef.isWorkingTree() {
+		return r.repo, nil
+	}
+	if r.resolutionErr != nil {
+		return "", r.resolutionErr
+	}
+	if r.resolutionDir != "" {
+		return r.resolutionDir, nil
+	}
+	directory, err := os.MkdirTemp("", "hufu-reviewprep-revision-*")
+	if err != nil {
+		r.resolutionErr = fmt.Errorf("create Go symbol resolution snapshot: %w", err)
+		return "", r.resolutionErr
+	}
+	if err := archiveGitRevision(r.ctx, r.repo, r.rangeDef.End, directory); err != nil {
+		_ = os.RemoveAll(directory)
+		r.resolutionErr = err
+		return "", err
+	}
+	r.resolutionDir = directory
+	return directory, nil
+}
+
+func (r *reviewGoSymbolResolver) goListEnvironment(directory string) []string {
+	environment := offlineGoEnvironment()
+	if r.rangeDef.isWorkingTree() {
+		return environment
+	}
+	goWork := filepath.Join(directory, "go.work")
+	if _, err := os.Stat(goWork); err == nil {
+		return replaceEnvironmentValue(environment, "GOWORK", goWork)
+	}
+	return replaceEnvironmentValue(environment, "GOWORK", "off")
+}
+
+func (r *reviewGoSymbolResolver) close() {
+	if r.resolutionDir != "" {
+		_ = os.RemoveAll(r.resolutionDir)
+	}
+}
+
+func archiveGitRevision(ctx context.Context, repo, revision, destination string) error {
+	command := newGitCommand(ctx, repo, "archive", "--format=tar", revision)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open Go symbol resolution archive: %w", err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start Go symbol resolution archive for %q: %w", revision, err)
+	}
+	extractErr := extractGitArchive(stdout, destination)
+	if extractErr != nil {
+		_ = command.Process.Kill()
+	}
+	waitErr := command.Wait()
+	if extractErr != nil {
+		return fmt.Errorf("extract Go symbol resolution snapshot for %q: %w", revision, extractErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("archive Go symbol resolution revision %q: %w: %s", revision, waitErr, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func extractGitArchive(source io.Reader, destination string) error {
+	reader := tar.NewReader(source)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read archive entry: %w", err)
+		}
+		name := filepath.FromSlash(header.Name)
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			// git archive emits a pax_global_header entry that carries no file
+			// content; skip it instead of failing the snapshot extraction.
+			continue
+		}
+		cleanName := filepath.Clean(name)
+		if filepath.IsAbs(name) || cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("archive entry path %q escapes the snapshot", header.Name)
+		}
+		target := filepath.Join(destination, cleanName)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return fmt.Errorf("create archived directory %q: %w", cleanName, err)
+			}
+		case tar.TypeReg:
+			if err := writeArchivedFile(target, header, reader); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			if err := createArchivedSymlink(target, cleanName, header.Linkname); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported archive entry type %d for %q", header.Typeflag, cleanName)
+		}
+	}
+}
+
+func writeArchivedFile(target string, header *tar.Header, source io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create parent directory for archived file %q: %w", header.Name, err)
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, header.FileInfo().Mode().Perm())
+	if err != nil {
+		return fmt.Errorf("create archived file %q: %w", header.Name, err)
+	}
+	if _, err := io.Copy(file, source); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write archived file %q: %w", header.Name, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close archived file %q: %w", header.Name, err)
+	}
+	return nil
+}
+
+func createArchivedSymlink(target, name, linkname string) error {
+	linkPath := filepath.FromSlash(linkname)
+	if filepath.IsAbs(linkPath) {
+		return fmt.Errorf("archive symlink %q has absolute target %q", name, linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(name), linkPath))
+	if resolved == ".." || strings.HasPrefix(resolved, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("archive symlink %q escapes the snapshot", name)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create parent directory for archived symlink %q: %w", name, err)
+	}
+	if err := os.Symlink(linkPath, target); err != nil {
+		return fmt.Errorf("create archived symlink %q: %w", name, err)
+	}
+	return nil
 }
 
 func offlineGoEnvironment() []string {
@@ -1938,7 +2101,7 @@ func listedPackageDeclaresGoSymbol(pkg listedGoPackage, symbol string) (bool, er
 	files = append(files, pkg.CgoFiles...)
 	for _, name := range files {
 		if filepath.Base(name) != name {
-			return false, fmt.Errorf("Go package %q returned unsafe source path %q", pkg.ImportPath, name)
+			return false, fmt.Errorf("go package %q returned unsafe source path %q", pkg.ImportPath, name)
 		}
 		filename := filepath.Join(pkg.Dir, name)
 		content, err := os.ReadFile(filename)
