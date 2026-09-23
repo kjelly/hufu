@@ -145,7 +145,7 @@ max-retries: 3
 |------|------|------|------|
 | `name` | ✓ | - | Agent 名稱（唯一） |
 | `description` | ✓ | - | Agent 描述 |
-| `model` | ✗ | 團隊設定 | LLM 模型 |
+| `model` | ✗ | 團隊設定 | LLM 模型（執行期覆寫見下方） |
 | `max-tokens` | ✗ | 團隊設定 | 最大生成 token 數 |
 | `temperature` | ✗ | 團隊設定 | 生成溫度（0-1） |
 | `role` | ✗ | `worker` | Agent 角色 |
@@ -153,6 +153,19 @@ max-retries: 3
 | `skills` | ✗ | - | 適用技能列表 |
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |
 | `max-retries` | ✗ | 團隊設定 | 最大重試次數 |
+
+### 執行期模型覆寫
+
+Worker 的 `model` 是 Git 追蹤的團隊契約；操作者要換模型時不需要改這個檔案。
+執行期覆寫的優先順序（高到低）：CLI `--worker-model <agent>=<target>` >
+CLI `-m/--model` > 所選 profile 的 `worker-model` 項目 > 所選 profile 的 `model`
+> 本欄位 `model` > team `worker-model` > `hufu.yaml` `worker-model`。
+`--worker-model` 以 agent 的 `name` 或檔名（不分大小寫）指定 worker，不能指定
+coordinator/orchestrator（改用 `--coordinator-model`），也不會改變 prompt、
+`role`、`tools` 或其他權限。已 admit 的任務在 retry 時保留凍結的
+`ExecutionTarget`；每個 worker 的 target 也屬於 run 的 execution-policy
+snapshot，因此 resume 必須沿用原 run 的相同覆寫（或相同 profile），改變 target
+會因 snapshot drift 被拒絕；要換 target 請用 `--new` 開新 session。
 
 ### 系統提示詞
 

@@ -37,6 +37,16 @@ hufu team check dev-team
 hufu run --team dev-team -- "review this codebase"
 ```
 
+### Model selection
+
+```sh
+hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"
+```
+
+```sh
+hufu run --team dev-team --profile coding-balanced -- "implement feature X"
+```
+
 ### Progress and recovery
 
 ```sh
@@ -88,7 +98,7 @@ hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor
 ## Flag groups
 
 - **advanced:** `--provider-url`, `--provider-api-key`, `--profile`, `--var`, `--var-file`, `--memory`, `--template`
-- **core:** `--team`, `--agent-team`, `--model`, `--coordinator-model`, `--default`, `--workspace`, `--workspace-root`
+- **core:** `--team`, `--agent-team`, `--model`, `--worker-model`, `--coordinator-model`, `--default`, `--workspace`, `--workspace-root`
 - **display:** `--tui`, `--tui-compact`, `--display-mode`, `--theme`, `--display-preset`, `--no-color`, `--no-spinner`, `--no-summary`
 - **execution:** `--route`, `--plan`, `--auto-skills`, `--steps`, `--dry-run`, `--timeout`, `--graceful-wrap-up-timeout`, `--max-rounds`, `--input`, `--input-file`
 - **output:** `--verbose`, `--quiet`, `--output`, `--event-format`, `--report`, `--think`

@@ -393,6 +393,7 @@ backend/runtime failure, and `5` configuration/backend unavailable.
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
 | `--model` / `-m` | `-m` | `string` | `""` | Override the worker execution target only (for example `codex/gpt-5.6-luna` or `local/qwen3:8b`) |
+| `--worker-model` | — | `[]string` | `nil` | Override the execution target of specific workers as `agent=target` (repeatable or comma-separated); wins over `--model` for that worker. See [Worker Model Selection](#worker-model-selection) |
 | `--coordinator-model` / `-c` | `-c` | `string` | `""` | Override the coordinator's independent LLM target |
 | `--context-window` | — | `int` | `0` | Explicit positive model context capacity in tokens for pre-provider admission; `0` uses provider metadata or the model registry |
 | `--temperature` | — | `string` | `""` | Override sampling temperature |
@@ -421,6 +422,71 @@ backend/runtime failure, and `5` configuration/backend unavailable.
 | `--skill` | — | `[]string` | `nil` | Force-load specific skills (repeatable) |
 | `--var` | — | `[]string` | `nil` | Set template variable `key=value` (repeatable) |
 | `--var-file` | — | `[]string` | `nil` | Read template variables from a file (repeatable) |
+
+### Worker Model Selection
+
+`-m` / `--model` retargets every worker for one run; `--worker-model agent=target`
+retargets individual workers and wins over `-m` for those workers. Both take the
+same execution-target syntax (`codex/gpt-6-sol`, `ollama/qwen3.5:27b`, or a bare
+model resolved through the team's backend defaults) and go through the same
+backend, capability, and admission checks. They are runtime overlays: the
+Git-tracked `.agent-teams/<team>/*.md` and `team.yaml` are never edited.
+`hufu run`, `hufu decide`, `hufu chat`, and `hufu resume` accept the same flag.
+
+```bash
+# Change all workers temporarily
+hufu @hufu-coding -m codex/gpt-6-luna "implement feature X"
+
+# Change only the expensive roles
+hufu @hufu-coding \
+  -m codex/gpt-6-luna \
+  --worker-model coder=codex/gpt-6-sol \
+  --worker-model reviewer=codex/gpt-6-sol \
+  --worker-model final-sa=codex/gpt-6-sol \
+  "implement feature X"
+```
+
+To keep the choice without touching agent Markdown, save it as a profile in
+`~/.config/hufu/hufu.yaml`. `worker-model` is one comma-separated string:
+
+```yaml
+profiles:
+  coding-balanced:
+    model: codex/gpt-6-luna
+    worker-model: "coder=codex/gpt-6-sol,reviewer=codex/gpt-6-sol,final-sa=codex/gpt-6-sol"
+```
+
+```bash
+hufu @hufu-coding --profile coding-balanced "implement feature X"
+```
+
+Effective worker target, highest priority first:
+
+1. explicit CLI `--worker-model <agent>=<target>`
+2. explicit CLI `-m` / `--model`
+3. selected profile `worker-model` entry for the agent
+4. selected profile `model`
+5. agent Markdown frontmatter `model`
+6. team `worker-model`
+7. `hufu.yaml` `worker-model`
+8. legacy `model` fallback
+
+CLI `--worker-model` entries merge with the profile's entries by agent (the CLI
+wins for the same agent), while an explicit `-m` ignores the profile's
+`worker-model` entries. Within one source the last entry for an agent wins.
+Worker names match case-insensitively; an unknown worker fails before any model
+call (also under `--dry-run`), and the coordinator or an orchestrator cannot be
+targeted — use `--coordinator-model`. Each team is validated when it is loaded,
+so in a multi-team prompt every entry must name a worker of every selected team. Sidecar, guard, judge, plan reviewer, and
+memory models keep their dedicated flags. When overrides are active the startup
+header prints a `Worker models:` line.
+
+An admitted task keeps its frozen execution target across retries. Every worker
+target is also part of the run's frozen execution-policy snapshot, so resuming a
+session requires the same overrides (or the same profile) as the original run;
+a different worker target is rejected with `execution policy snapshot drift
+detected` instead of silently mixing targets. Start a fresh session with `--new`
+to switch targets.
 
 ### Usage Examples
 

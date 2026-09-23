@@ -181,6 +181,7 @@ Results joined and printed to stdout
 | `--default` | — | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `""` | Comma-separated extra tools to enable for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace around each entry is trimmed; empty entries are dropped. Empty = Helper's baseline read-only toolset. |
 | `--model` | — | `""` | Override default model for the active team (e.g. `ollama/qwen3:8b`); highest priority — overrides agent .md, team.yaml, and hufu.yaml |
+| `--worker-model` | — | `nil` | Repeatable/comma-separated `agent=target` execution-target override for specific workers; beats `--model` for that worker. Resolved against the loaded team by `applyCLIGenerationOverridesToAgents` (`cmd/hufu/model_overrides.go`, `worker_model_overrides.go`): unknown workers and coordinator/orchestrator targets fail before any model call. Also registered on `run`/`decide`, `chat`, and `resume`. Worker targets are part of the frozen execution-policy snapshot, so resuming needs the original run's overrides; a changed target fails with snapshot drift (use `--new`) |
 | `--context-window` | — | `0` | Explicit positive model context capacity in tokens; registered for all active models and used by pre-provider admission (`0` = require provider metadata or a known positive estimate) |
 | `--temperature` | — | `""` | Override sampling temperature (e.g. `0.2`) |
 | `--max-tokens` | — | `""` | Override max output tokens (e.g. `4096`) |
@@ -243,6 +244,8 @@ profiles:
 ```
 
 `--profile batch` applies the bundle via `applyProfile` (`cmd/hufu/main.go`). Precedence is **explicit CLI flag > profile > default**, achieved by skipping any flag with `flag.Changed == true`. An unknown profile name or a profile that names a flag the command does not define is a hard error (typos surface early). Profiles merge across `~/.config/hufu/hufu.yaml` and `./hufu.yaml` by profile name (later wins). `config.Config.Profiles` is `map[string]map[string]string`.
+
+`worker-model` is the one keyed exception (`applyProfileWorkerModels` in `cmd/hufu/profile.go`): its comma-separated value (`"coder=A,reviewer=B"`) is merged **by agent** with explicit CLI `--worker-model` entries (CLI wins per agent) instead of being skipped wholesale, and it is ignored entirely when the CLI explicitly set `--model` (captured before any profile value is applied, since `fs.Set` marks flags changed). Effective worker precedence: CLI `--worker-model` > CLI `--model` > profile `worker-model` > profile `model` > agent frontmatter > team/global `worker-model`. Worker names are validated only after the team is loaded, so a profile naming another team's workers does not break config loading.
 
 ### Unattended Operation
 
@@ -1242,7 +1245,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 When multiple sources of model configuration are present, the effective value follows this priority order (highest first):
 
-1. **CLI flags** (`--model`, `--temperature`, `--max-tokens`, `--top-p`, `--top-k`, `--sidecar-model`, `--guard-model`) — apply last, override everything below.
+1. **CLI flags** (`--worker-model`, then `--model`, `--temperature`, `--max-tokens`, `--top-p`, `--top-k`, `--sidecar-model`, `--guard-model`) — apply last, override everything below. A `--worker-model agent=target` entry beats `--model` for that one worker; neither ever applies to the coordinator/orchestrator. Profile values sit between explicit CLI flags and the agent frontmatter (see [Profiles](#profiles)).
 2. **Agent `.md` frontmatter** (`model:`, etc.) — per-agent override.
 3. **Team `team.yaml`** (`model:`, `sidecar-model:`, `guard-model:`) — per-team default.
 4. **`hufu.yaml`** global config — last-resort fallback.

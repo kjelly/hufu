@@ -32,6 +32,8 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu team create dev-team --wizard"},
 	{Section: "Quick start", Argv: "hufu team check dev-team"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
+	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},
+	{Section: "Model selection", Argv: `hufu run --team dev-team --profile coding-balanced -- "implement feature X"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Progress and recovery", Argv: `hufu explain --ai "why did the task fail?" --model local/qwen3:8b`},
@@ -45,7 +47,7 @@ var canonicalExamples = []exampleMetadata{
 }
 
 var cliFlagGroups = map[string][]string{
-	"core":       {"team", "agent-team", "model", "coordinator-model", "default", "workspace", "workspace-root"},
+	"core":       {"team", "agent-team", "model", "worker-model", "coordinator-model", "default", "workspace", "workspace-root"},
 	"execution":  {"route", "plan", "auto-skills", "steps", "dry-run", "timeout", "graceful-wrap-up-timeout", "max-rounds", "input", "input-file"},
 	"output":     {"verbose", "quiet", "output", "event-format", "report", "think"},
 	"safety":     {"rbash", "no-net", "force-mcp", "allow-path", "unattended", "auto-approve"},
