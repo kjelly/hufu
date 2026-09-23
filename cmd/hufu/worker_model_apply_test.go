@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -437,5 +438,31 @@ func TestLoadTeamDryRunRejectsInvalidWorkerModelBeforeWorkspace(t *testing.T) {
 				t.Fatalf("rejected override created workspace %q: %v", workspace, statErr)
 			}
 		})
+	}
+}
+
+// TestModelsInUseSeesEffectiveWorkerOverride pins the startup profile-warming
+// input: after an override, the stale Markdown target is no longer statically
+// reachable and must not be warmed or validated.
+func TestModelsInUseSeesEffectiveWorkerOverride(t *testing.T) {
+	session := &team.TeamSession{
+		Config: agent.TeamConfig{Name: "preview", CoordinatorModel: "ollama/coordinator"},
+		Agents: map[string]*agent.AgentDef{
+			"coordinator": {Name: "coordinator", Role: "coordinator"},
+			"coder":       {Name: "coder", Role: "worker", Generation: agent.GenerationParams{Model: "ollama/stale-markdown"}},
+			"reviewer":    {Name: "reviewer", Role: "worker", Generation: agent.GenerationParams{Model: "ollama/reviewer-own"}},
+		},
+	}
+	if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{WorkerModels: []WorkerModelOverride{{Agent: "coder", Target: "ollama/override"}}}); err != nil {
+		t.Fatal(err)
+	}
+	models := modelsInUse(session, "", "", "", "", nil)
+	for _, want := range []string{"ollama/override", "ollama/reviewer-own", "ollama/coordinator"} {
+		if !slices.Contains(models, want) {
+			t.Errorf("modelsInUse() = %q, missing %q", models, want)
+		}
+	}
+	if slices.Contains(models, "ollama/stale-markdown") {
+		t.Fatalf("modelsInUse() = %q, still includes the overridden Markdown target", models)
 	}
 }
