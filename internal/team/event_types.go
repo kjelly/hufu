@@ -83,6 +83,11 @@ const (
 	// metadata-only — canonical path, sha256, byte size — never content
 	// (runtime invariant 9).
 	EventResourceLocked EventType = "resource_locked"
+	// EventWorkspaceSnapshotCommitted is the durable commit point of one
+	// workspace version snapshot (docs/archive/implementation-plans/
+	// workspace-versioning.md §16). The payload carries only IDs, hashes, and
+	// counts, never file content.
+	EventWorkspaceSnapshotCommitted EventType = "workspace_snapshot_committed"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -110,7 +115,7 @@ func IsKnownEventType(eventType string) bool {
 		EventDecisionRoleCallStarted, EventDecisionRoleCallUnconfirmed, EventDecisionRoleCallSettled,
 		EventPrimaryDecisionBlocked, EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated,
 		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
-		EventResourceLocked:
+		EventResourceLocked, EventWorkspaceSnapshotCommitted:
 		return true
 	default:
 		return false
