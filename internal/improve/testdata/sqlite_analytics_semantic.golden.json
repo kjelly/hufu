@@ -35,6 +35,9 @@
     "total_attempts": 3,
     "retried_tasks": 1,
     "total_tokens": 49,
+    "prompt_cache_read_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cache_hit_rate": 0,
     "tool_calls": 1,
     "tool_errors": 1,
     "tokens_by_agent": {

@@ -81,6 +81,15 @@ var numericTelemetryKeys = map[string]struct{}{
 	"tokens_after":                    {},
 	"last_requested_tokens":           {},
 	"last_available_tokens":           {},
+	// Execution-event usage counters (team.ExecutionUsage). Debug bundles
+	// redact JSONL, so without these entries every usage count became
+	// "[REDACTED]" and cost analysis from a bundle was impossible.
+	"input_tokens":          {},
+	"output_tokens":         {},
+	"total_tokens":          {},
+	"progress_tokens":       {},
+	"cache_read_tokens":     {},
+	"cache_creation_tokens": {},
 	// token_count is the per-item token estimate in a memory injection
 	// manifest. It matches the secret-key regex ("token") but is numeric
 	// telemetry, not a credential; redacting it corrupts session.json and

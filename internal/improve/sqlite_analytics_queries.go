@@ -413,5 +413,15 @@ func (s *sqliteAnalyticsSession) sqlCollectExecutionMetrics(ctx context.Context)
 		metrics.TotalTokens += tokens
 	}
 
+	cacheByOrdinal, err := s.sqlPromptCacheByOrdinal(ctx)
+	if err != nil {
+		return Metrics{}, err
+	}
+	var cache promptCacheTotals
+	for _, totals := range cacheByOrdinal {
+		cache = cache.add(totals)
+	}
+	cache.apply(&metrics)
+
 	return metrics, nil
 }

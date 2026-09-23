@@ -33,6 +33,7 @@ INSERT INTO execution_events (
 	 task_id, agent, attempt, status, model, task_type, team_revision,
 	 skills_reported,
 	 duration_ms, input_tokens, output_tokens, total_tokens, progress_tokens,
+	 cache_read_tokens, cache_creation_tokens,
     outcome, stop_reason, acceptance_state, repair_attempts, phase,
     provider, failure_signature
 ) VALUES `
@@ -42,7 +43,7 @@ INSERT OR IGNORE INTO execution_event_skills (event_seq, run_id, task_id, skill)
 VALUES `
 
 const (
-	executionEventColumnCount = 26
+	executionEventColumnCount = 28
 	executionSkillColumnCount = 4
 )
 
@@ -143,6 +144,7 @@ func insertExecutionEventRow(insertEvent, insertSkill *sqliteBatchInserter, even
 		event.TaskID, event.Agent, event.Attempt, event.Status, event.Model, event.TaskType, event.TeamRevision,
 		len(event.Skills) > 0,
 		event.DurationMS, event.Usage.InputTokens, event.Usage.OutputTokens, event.Usage.TotalTokens, event.Usage.ProgressTokens,
+		event.Usage.CacheReadTokens, event.Usage.CacheCreationTokens,
 		string(event.Outcome), string(event.StopReason), string(event.AcceptanceState), event.RepairAttempts, string(event.Phase),
 		event.Provider, event.FailureSignature,
 	)

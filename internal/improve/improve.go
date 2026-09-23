@@ -47,6 +47,9 @@ type Metrics struct {
 	TotalAttempts             int            `json:"total_attempts"`
 	RetriedTasks              int            `json:"retried_tasks"`
 	TotalTokens               int            `json:"total_tokens"`
+	PromptCacheReadTokens     int            `json:"prompt_cache_read_tokens"`
+	PromptCacheCreationTokens int            `json:"prompt_cache_creation_tokens"`
+	PromptCacheHitRate        float64        `json:"prompt_cache_hit_rate"`
 	ToolCalls                 int            `json:"tool_calls"`
 	ToolErrors                int            `json:"tool_errors"`
 	TokensByAgent             map[string]int `json:"tokens_by_agent"`

@@ -73,7 +73,9 @@ type memoryGlobalMetrics struct {
 }
 
 type memoryScopeMetrics struct {
-	InputTokens       int
+	// PromptTokens is uncached input plus cache reads and writes, so the
+	// overhead ratio does not shrink its denominator when the provider cache hits.
+	PromptTokens      int
 	AssistedRetries   int
 	UnassistedRetries int
 }
@@ -114,9 +116,13 @@ FROM memory_events`
 		return memoryAnalytics{}, fmt.Errorf("query global memory metrics: %w", err)
 	}
 	const scopeQuery = `
-WITH input_by_run AS (
+WITH prompt_by_run AS (
     SELECT sr.ordinal,
-           COALESCE(SUM(CASE WHEN e.input_tokens > 0 THEN e.input_tokens ELSE 0 END), 0) AS input_tokens
+           COALESCE(SUM(
+               CASE WHEN e.input_tokens > 0 THEN e.input_tokens ELSE 0 END
+             + CASE WHEN e.cache_read_tokens > 0 THEN e.cache_read_tokens ELSE 0 END
+             + CASE WHEN e.cache_creation_tokens > 0 THEN e.cache_creation_tokens ELSE 0 END
+           ), 0) AS prompt_tokens
     FROM selected_runs sr
     LEFT JOIN execution_events e ON e.run_id = sr.run_id AND e.team <> ''
     GROUP BY sr.ordinal
@@ -140,9 +146,9 @@ WITH input_by_run AS (
     LEFT JOIN applied a ON a.run_id = rp.run_id AND a.task_id = rp.task_id
     GROUP BY sr.ordinal
 )
-SELECT sr.ordinal, COALESCE(i.input_tokens, 0), COALESCE(r.assisted, 0), COALESCE(r.unassisted, 0)
+SELECT sr.ordinal, COALESCE(i.prompt_tokens, 0), COALESCE(r.assisted, 0), COALESCE(r.unassisted, 0)
 FROM selected_runs sr
-LEFT JOIN input_by_run i ON i.ordinal = sr.ordinal
+LEFT JOIN prompt_by_run i ON i.ordinal = sr.ordinal
 LEFT JOIN retry_by_run r ON r.ordinal = sr.ordinal
 ORDER BY sr.ordinal`
 	rows, err := s.executor.QueryContext(ctx, scopeQuery)
@@ -153,11 +159,11 @@ ORDER BY sr.ordinal`
 	for rows.Next() {
 		var ordinal int
 		var scope memoryScopeMetrics
-		if err := rows.Scan(&ordinal, &scope.InputTokens, &scope.AssistedRetries, &scope.UnassistedRetries); err != nil {
+		if err := rows.Scan(&ordinal, &scope.PromptTokens, &scope.AssistedRetries, &scope.UnassistedRetries); err != nil {
 			return memoryAnalytics{}, fmt.Errorf("scan selected memory denominators: %w", err)
 		}
 		result.ByOrdinal[ordinal] = scope
-		result.Overall.InputTokens += scope.InputTokens
+		result.Overall.PromptTokens += scope.PromptTokens
 		result.Overall.AssistedRetries += scope.AssistedRetries
 		result.Overall.UnassistedRetries += scope.UnassistedRetries
 	}
@@ -186,8 +192,8 @@ func (analytics memoryAnalytics) apply(metrics *Metrics, ordinal int) error {
 		metrics.MemoryVerifiedAssistRate = float64(analytics.Global.VerifiedCount) / float64(metrics.MemoryAppliedCount)
 		metrics.MemoryHarmfulUseRate = float64(analytics.Global.HarmfulCount) / float64(metrics.MemoryAppliedCount)
 	}
-	if scope.InputTokens > 0 {
-		metrics.MemoryTokenOverhead = float64(analytics.Global.MemoryTokens) / float64(scope.InputTokens)
+	if scope.PromptTokens > 0 {
+		metrics.MemoryTokenOverhead = float64(analytics.Global.MemoryTokens) / float64(scope.PromptTokens)
 	}
 	if analytics.Global.AppliedTasks > 0 {
 		metrics.MemoryAssistedRetryRate = float64(scope.AssistedRetries) / float64(analytics.Global.AppliedTasks)

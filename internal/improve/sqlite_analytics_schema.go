@@ -38,6 +38,8 @@ CREATE TEMP TABLE execution_events (
     output_tokens         INTEGER NOT NULL DEFAULT 0,
     total_tokens          INTEGER NOT NULL DEFAULT 0,
     progress_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     outcome               TEXT NOT NULL DEFAULT '',
     stop_reason           TEXT NOT NULL DEFAULT '',
     acceptance_state      TEXT NOT NULL DEFAULT '',

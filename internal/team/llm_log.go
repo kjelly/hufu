@@ -81,6 +81,11 @@ func llmLogStreamEvent(logWrite func(string), eventType, content string) {
 func llmLogStreamFinish(logWrite func(string), finishReason fantasy.FinishReason, usage fantasy.Usage, reqBytes int) {
 	line := fmt.Sprintf("[%s] === RESPONSE finish_reason=%s tokens_in=%d tokens_out=%d",
 		time.Now().Format(time.RFC3339), finishReason, usage.InputTokens, usage.OutputTokens)
+	if usage.CacheReadTokens != 0 || usage.CacheCreationTokens != 0 {
+		// tokens_in excludes cache reads for openai-compatible providers, so
+		// log the cache split next to it only when the provider reported one.
+		line += fmt.Sprintf(" cache_read=%d cache_write=%d", usage.CacheReadTokens, usage.CacheCreationTokens)
+	}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && reqBytes > 0 {
 		// Some providers report no usage at all (observed with minimax via
 		// ollama); log the same bytes/4 estimate the token budget uses so the

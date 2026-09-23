@@ -31,6 +31,8 @@ const (
 // ExecutionUsage is the provider-reported LLM usage for a single attempt.
 // A zero value means the provider did not report usage.
 type ExecutionUsage struct {
+	// InputTokens are prompt tokens not served from the provider cache;
+	// fantasy subtracts cached tokens for openai-compatible providers.
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
@@ -46,6 +48,17 @@ type ExecutionUsage struct {
 	// Zero means "not computed for this call site" and TotalTokens is used
 	// as the fallback, matching the pre-existing behavior.
 	ProgressTokens int `json:"progress_tokens,omitempty"`
+	// CacheReadTokens and CacheCreationTokens are provider prompt-cache
+	// reads and writes. They are additive and omitted when zero, so events
+	// from providers without cache reporting keep their existing shape.
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+}
+
+// PromptTokens is every prompt token the provider processed: uncached input
+// plus cache reads plus cache writes.
+func (u ExecutionUsage) PromptTokens() int {
+	return u.InputTokens + u.CacheReadTokens + u.CacheCreationTokens
 }
 
 // ExecutionEvent records one attempt lifecycle transition. TaskID and Attempt
@@ -209,6 +222,8 @@ func usageFromSteps(steps []fantasy.StepResult) ExecutionUsage {
 	for _, step := range steps {
 		usage.InputTokens += int(step.Usage.InputTokens)
 		usage.OutputTokens += int(step.Usage.OutputTokens)
+		usage.CacheReadTokens += int(step.Usage.CacheReadTokens)
+		usage.CacheCreationTokens += int(step.Usage.CacheCreationTokens)
 		total := step.Usage.TotalTokens
 		if total == 0 {
 			// Keep reliability accounting aligned with addStepTokens: providers

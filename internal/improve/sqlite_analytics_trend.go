@@ -35,6 +35,9 @@ func (s *sqliteAnalyticsSession) sqlCollectTrend(
 	if err := s.collectTrendTokens(ctx, trend); err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}
+	if err := s.collectTrendPromptCache(ctx, trend); err != nil {
+		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
+	}
 	if err := s.collectTrendAudit(ctx, trend); err != nil {
 		return nil, newAnalyticsError(AnalyticsStageAggregateExecution, err)
 	}

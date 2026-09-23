@@ -13,7 +13,7 @@ func Markdown(report *Report) string {
 	if len(report.TeamRevisions) > 0 {
 		fmt.Fprintf(&b, "- **Team revisions**: %s\n", strings.Join(report.TeamRevisions, ", "))
 	}
-	fmt.Fprintf(&b, "\n## Metrics\n\n| Metric | Value |\n|---|---:|\n| Runs | %d |\n| Tasks | %d |\n| Done | %d |\n| Error | %d |\n| Planned | %d |\n| Attempts | %d |\n| Retried tasks | %d |\n| Total tokens | %d |\n| Tool calls | %d |\n| Tool errors | %d |\n", report.Metrics.RunCount, report.Metrics.TotalTasks, report.Metrics.Done, report.Metrics.Error, report.Metrics.Planned, report.Metrics.TotalAttempts, report.Metrics.RetriedTasks, report.Metrics.TotalTokens, report.Metrics.ToolCalls, report.Metrics.ToolErrors)
+	fmt.Fprintf(&b, "\n## Metrics\n\n| Metric | Value |\n|---|---:|\n| Runs | %d |\n| Tasks | %d |\n| Done | %d |\n| Error | %d |\n| Planned | %d |\n| Attempts | %d |\n| Retried tasks | %d |\n| Total tokens | %d |\n| Prompt cache read tokens | %d |\n| Prompt cache created tokens | %d |\n| Prompt cache hit rate | %.1f%% |\n| Tool calls | %d |\n| Tool errors | %d |\n", report.Metrics.RunCount, report.Metrics.TotalTasks, report.Metrics.Done, report.Metrics.Error, report.Metrics.Planned, report.Metrics.TotalAttempts, report.Metrics.RetriedTasks, report.Metrics.TotalTokens, report.Metrics.PromptCacheReadTokens, report.Metrics.PromptCacheCreationTokens, report.Metrics.PromptCacheHitRate*100, report.Metrics.ToolCalls, report.Metrics.ToolErrors)
 
 	fmt.Fprint(&b, "\n## Trend by Run\n\n")
 	fmt.Fprintln(&b, "| Run | Tasks | Done | Error | Retried | Tokens | Team revision |")

@@ -456,6 +456,13 @@ memory_assisted_retry_rate
 memory_unassisted_retry_rate
 ```
 
+`memory_token_overhead` 的分母是 prompt tokens：未命中 cache 的 input 加上 provider 回報的
+cache read 與 cache write（`team.ExecutionUsage.PromptTokens`）。fantasy 的 openai-compatible
+usage 對應會從 input 扣掉 cached tokens，所以只用 input 當分母會在 cache 命中時高估 overhead。
+同一份報告另有 `prompt_cache_read_tokens`、`prompt_cache_creation_tokens`、
+`prompt_cache_hit_rate`；它們與 `total_tokens` 使用相同的事件集合，與 overhead 分母的事件集合
+不同，不要合併。
+
 L3 benchmark 固定三組：positive transfer、irrelevant high-utility memory、stale/harmful memory。通過條件：
 
 - retrieved-only item 的 positive/negative weight 均為 0。
