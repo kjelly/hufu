@@ -60,6 +60,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Hybrid retrieval lineage scope](architecture/hybrid-retrieval-lineage-scope.md)
   — draft authorization design for exact, lexical, and vector retrieval; the
   current 100K workaround remains until the design is accepted.
+- [Workspace versioning](architecture/workspace-versioning.md) — content-addressed
+  snapshots of the subject root that session fork, checkout, and restore
+  switch between; modes, locks, recovery, and GC.
 - [SQLite maintenance policy](architecture/sqlite-maintenance-policy.md) —
   discovery evidence and the still-unmet authorization contract for any
   explicit maintenance operation.
@@ -83,6 +86,7 @@ to re-create an abstraction that already exists in the runtime.
   measurement entrypoint.
 - [Generated operator command reference](reference/operator-command-reference.md)
 - [Workspace command reference](reference/workspace-command-reference.md)
+- [Workspace versions SQLite schema](reference/workspace-versions-sqlite-schema.md)
 - [Operator release readiness](reference/operator-release-readiness.md)
 - [Operator requirement traceability](reference/operator-requirement-traceability.md)
 - [Operator usability evaluation](reference/operator-usability-evaluation.md)

@@ -150,6 +150,18 @@ written durable events must use `ollama`; old workspaces may still contain
    occurrence. Missing or conflicting envelope state blocks execution before
    provider or tool transport.
 
+## Effect snapshots and workspace versioning
+
+The execution world's `WorkspaceSnapshotter` observes one external-provider
+attempt: it hashes the workspace before and after the attempt so
+`ValidateExecutionWorldDelta` can reject writes outside the writable roots.
+Its snapshots live only in memory and it deliberately skips hufu bookkeeping
+directory names. It is not a version store. Durable, restorable snapshots of
+the subject root are the job of [workspace versioning](workspace-versioning.md),
+which has its own inclusion policy and only checkpoints at run boundaries; a
+rejected provider delta there becomes a `recovery_required` marker instead
+of a snapshot.
+
 ## Source of truth
 
 For implementation details, use code and tests first:

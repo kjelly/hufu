@@ -32,10 +32,16 @@ func (r WorkspaceRecoveryReport) Empty() bool {
 //     is durable, and otherwise its eventless inactive child branch is
 //     removed and the operation fails.
 func RecoverWorkspaceOperations(ctx context.Context, o *WorkspaceSessionOps) (WorkspaceRecoveryReport, error) {
-	var report WorkspaceRecoveryReport
 	if _, err := o.validate(ctx); err != nil {
-		return report, err
+		return WorkspaceRecoveryReport{}, err
 	}
+	return o.recoverAll(ctx)
+}
+
+// recoverAll is RecoverWorkspaceOperations without the mode-floor binding,
+// so doctor --repair can run it while the configured mode is below the floor.
+func (o *WorkspaceSessionOps) recoverAll(ctx context.Context) (WorkspaceRecoveryReport, error) {
+	var report WorkspaceRecoveryReport
 	events, err := o.Events.ReadEvents()
 	if err != nil {
 		return report, fmt.Errorf("read events for workspace recovery: %w", err)

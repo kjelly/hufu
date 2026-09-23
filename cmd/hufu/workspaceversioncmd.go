@@ -36,6 +36,10 @@ Note: "hufu workspace restore <trash-id>" restores a deleted team workspace;
 		newWorkspaceVersionSnapshotCommand(),
 		newWorkspaceVersionRestoreCommand(),
 		newWorkspaceVersionAdoptCommand(),
+		newWorkspaceVersionStatusCommand(),
+		newWorkspaceVersionDoctorCommand(),
+		newWorkspaceVersionGCCommand(),
+		newWorkspaceVersionDowngradeCommand(),
 	)
 	return command
 }

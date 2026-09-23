@@ -33,6 +33,20 @@ func (k EntryKind) String() string {
 	}
 }
 
+// objectKind maps an entry kind to the CAS namespace holding its object.
+func (k EntryKind) objectKind() (ObjectKind, bool) {
+	switch k {
+	case EntryBlob:
+		return ObjectBlob, true
+	case EntryTree:
+		return ObjectTree, true
+	case EntrySymlink:
+		return ObjectLink, true
+	default:
+		return "", false
+	}
+}
+
 // TreeEntry is one child of a Merkle tree node. Field values are fixed per
 // kind so that every implementation hashes the same tree identically:
 //

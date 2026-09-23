@@ -1,12 +1,14 @@
 package versionstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -75,6 +77,8 @@ type capturePlan struct {
 	limits    CaptureLimits
 	started   time.Time
 	statCache map[string]statCacheRow
+	// dryRun hashes without writing CAS objects (LiveRootTree).
+	dryRun bool
 }
 
 // CanonicalRoot resolves root to the absolute, symlink-free directory path
@@ -315,7 +319,7 @@ func (r *captureRun) captureRegular(ctx context.Context, rel, osRel string, info
 	if !opened.Mode().IsRegular() || fingerprintOf(opened) != before {
 		return leaf{}, errCaptureRaced
 	}
-	written, err := r.store.putObject(ctx, ObjectBlob, file, "", limits.MaxFileBytes)
+	written, err := r.putBlob(ctx, file, limits.MaxFileBytes)
 	if err != nil {
 		return leaf{}, fmt.Errorf("store %q: %w", rel, err)
 	}
@@ -349,7 +353,7 @@ func (r *captureRun) captureSymlink(ctx context.Context, rel, osRel string, info
 		}
 		return leaf{}, fmt.Errorf("readlink %q: %w", rel, err)
 	}
-	written, err := r.store.putBytes(ctx, ObjectLink, []byte(target))
+	written, err := r.putSmall(ctx, ObjectLink, []byte(target))
 	if err != nil {
 		return leaf{}, fmt.Errorf("store symlink %q: %w", rel, err)
 	}
@@ -450,7 +454,7 @@ func (r *captureRun) storeNode(ctx context.Context, node *treeNode) (string, err
 		}
 		tree.Entries = append(tree.Entries, TreeEntry{Name: name, Kind: EntryTree, ObjectHash: hash})
 	}
-	written, err := r.store.putTree(ctx, tree)
+	written, err := r.putTreeObject(ctx, tree)
 	if err != nil {
 		return "", err
 	}
@@ -500,4 +504,63 @@ func (s *Store) recordCapture(ctx context.Context, plan capturePlan, result capt
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// putBlob, putSmall, and putTreeObject write to the CAS, or only hash in a
+// dry run.
+func (r *captureRun) putBlob(ctx context.Context, content io.Reader, maxBytes int64) (casWrite, error) {
+	if r.plan.dryRun {
+		return hashOnly(content, maxBytes)
+	}
+	return r.store.putObject(ctx, ObjectBlob, content, "", maxBytes)
+}
+
+func (r *captureRun) putSmall(ctx context.Context, kind ObjectKind, data []byte) (casWrite, error) {
+	if r.plan.dryRun {
+		return hashOnly(bytes.NewReader(data), 0)
+	}
+	return r.store.putBytes(ctx, kind, data)
+}
+
+func (r *captureRun) putTreeObject(ctx context.Context, tree TreeObject) (casWrite, error) {
+	if r.plan.dryRun {
+		data, hash, err := EncodeTree(tree)
+		return casWrite{Hash: hash, Size: int64(len(data))}, err
+	}
+	return r.store.putTree(ctx, tree)
+}
+
+func hashOnly(content io.Reader, maxBytes int64) (casWrite, error) {
+	hasher := sha256.New()
+	counter := &limitedHashWriter{dst: hasher, limit: maxBytes}
+	if _, err := io.Copy(counter, content); err != nil {
+		return casWrite{}, err
+	}
+	return casWrite{Hash: hex.EncodeToString(hasher.Sum(nil)), Size: counter.n}, nil
+}
+
+// LiveRootTree computes the root tree hash req.Root would get from a
+// capture, without writing CAS objects, rows, or the stat cache. It works on
+// a read-only store and is how status and doctor detect live drift.
+func (s *Store) LiveRootTree(ctx context.Context, req CaptureRequest) (string, error) {
+	if req.Reason == "" {
+		req.Reason = SnapshotManual
+	}
+	plan, err := s.planCapture(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	plan.dryRun = true
+	for attempt := 1; ; attempt++ {
+		result, captureErr := s.captureOnce(ctx, plan)
+		if captureErr == nil {
+			return result.rootTreeHash, nil
+		}
+		if !errors.Is(captureErr, errCaptureRaced) {
+			return "", captureErr
+		}
+		if attempt == maxCaptureAttempts {
+			return "", fmt.Errorf("%w: %v", ErrWorkspaceUnstable, captureErr)
+		}
+	}
 }

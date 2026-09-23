@@ -32,6 +32,19 @@ func configuredVersionMode(cfg *config.Config) (versionstore.Mode, error) {
 // workspace. The returned context is inactive (Mode off) when the configured
 // mode is off; the recorded mode floor is enforced either way.
 func buildWorkspaceVersionContext(ctx context.Context, registry workspacepkg.Registry, managed workspacepkg.Workspace, cfg *config.Config) (team.WorkspaceVersionContext, error) {
+	version, err := resolveWorkspaceVersionContext(ctx, registry, managed, cfg)
+	if err != nil {
+		return team.WorkspaceVersionContext{}, err
+	}
+	if err = enforceModeFloor(ctx, version); err != nil {
+		return team.WorkspaceVersionContext{}, err
+	}
+	return version, nil
+}
+
+// resolveWorkspaceVersionContext builds the context without enforcing the
+// mode floor (maintenance commands must work below the floor).
+func resolveWorkspaceVersionContext(ctx context.Context, registry workspacepkg.Registry, managed workspacepkg.Workspace, cfg *config.Config) (team.WorkspaceVersionContext, error) {
 	mode, err := configuredVersionMode(cfg)
 	if err != nil {
 		return team.WorkspaceVersionContext{}, err
@@ -56,9 +69,6 @@ func buildWorkspaceVersionContext(ctx context.Context, registry workspacepkg.Reg
 			MaxFileBytes:    cfg.WorkspaceVersioning.Capture.MaxFileBytes,
 			MaxLogicalBytes: cfg.WorkspaceVersioning.Capture.MaxLogicalBytes,
 		}.WithDefaults(),
-	}
-	if err = enforceModeFloor(ctx, version); err != nil {
-		return team.WorkspaceVersionContext{}, err
 	}
 	return version, nil
 }
@@ -255,4 +265,48 @@ func lookupManagedWorkspace(ctx context.Context, controlRoot string) (workspacep
 		return workspacepkg.Workspace{}, nil, "", fmt.Errorf("look up managed workspace: %w", err)
 	}
 	return managed, registry, stateRoot, nil
+}
+
+// openMaintenanceSession resolves a managed workspace for status, doctor,
+// gc, and downgrade: the mode floor is not enforced and the configured mode
+// may be off. mutating takes the team and project locks.
+func openMaintenanceSession(ctx context.Context, mutating bool, operation string) (*versionedSession, error) {
+	if !versionstore.PlatformSupported() {
+		return nil, versionstore.ErrUnsupportedPlatform
+	}
+	workspace, err := requireSessionWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	managed, registry, stateRoot, err := lookupManagedWorkspace(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+	if registry == nil {
+		return nil, fmt.Errorf("%w: %s is not a managed workspace", versionstore.ErrVersionedWorkspaceUnresolved, workspace)
+	}
+	defer func() { _ = registry.Close() }()
+	version, err := resolveWorkspaceVersionContext(ctx, registry, managed, config.LoadConfig())
+	if err != nil {
+		return nil, err
+	}
+	session := &versionedSession{workspace: workspace, version: version}
+	if !mutating {
+		return session, nil
+	}
+	locks, err := workspacepkg.AcquireWorkspaceLocks(stateRoot, []string{managed.ID})
+	if err != nil {
+		if errors.Is(err, workspacepkg.ErrBusy) {
+			return nil, fmt.Errorf("%w: a run of team %s is active", versionstore.ErrVersionOperationInProgress, managed.TeamName)
+		}
+		return nil, err
+	}
+	session.closers = append(session.closers, locks)
+	lock, err := versionstore.TryLockProject(version.StateDir, versionstore.LockOwner{WorkspaceID: managed.ID, Operation: operation})
+	if err != nil {
+		return nil, errors.Join(err, session.Close())
+	}
+	session.closers = append(session.closers, lock)
+	session.version.HoldsProjectLock = true
+	return session, nil
 }
