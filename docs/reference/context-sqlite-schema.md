@@ -120,7 +120,11 @@ their 24-hour recovery window.
 
 Run `hufu context rebuild --workspace <workspace>` to rebuild FTS5, or add
 `--vector --project <project>` to rebuild the disposable vector index from
-confirmed current SQLite items. Use `hufu context query`, `list`, `show`,
+confirmed current SQLite items. The vector index (`<workspace>/context-vectors`)
+embeds through Ollama with the configured `embedding-model`; a leading
+`ollama/` provider prefix, as in the default `ollama/nomic-embed-text:latest`,
+is removed before calling the Ollama embeddings API, while the index keeps the
+configured string as its identity. Use `hufu context query`, `list`, `show`,
 `candidates`, `history`, `confirm`, `reject`, and `supersede` for lifecycle
 inspection and explicit maintenance. To upgrade an old chromem store, first
 run `hufu context migrate-memory --workspace <workspace> --project <project>

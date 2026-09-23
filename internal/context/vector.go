@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/philippgille/chromem-go"
+
+	"github.com/kjelly/hufu/internal/config"
 )
 
 const contextVectorCollection = "context_items"
@@ -53,8 +55,11 @@ func NewVectorStore(path, model string, embed chromem.EmbeddingFunc) (*VectorSto
 	return &VectorStore{db: db, collection: collection, model: model, embed: embed, modelPath: modelPath}, nil
 }
 
+// OpenOllamaVectorStore keeps model (for example "ollama/nomic-embed-text")
+// as the index identity so existing indexes are not reset, but sends the
+// unprefixed name to Ollama.
 func OpenOllamaVectorStore(workspace, model, ollamaURL string) (*VectorStore, error) {
-	return NewVectorStore(filepath.Join(workspace, "context-vectors"), model, chromem.NewEmbeddingFuncOllama(model, ollamaURL))
+	return NewVectorStore(filepath.Join(workspace, "context-vectors"), model, chromem.NewEmbeddingFuncOllama(config.OllamaEmbeddingModelName(model), ollamaURL))
 }
 
 func (s *VectorStore) Rebuild(ctx context.Context, repo Repository, scope Scope) error {
@@ -124,8 +129,48 @@ func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]Se
 	if err != nil {
 		return nil, err
 	}
+	return s.hydrateVectorResults(ctx, results, req, "")
+}
+
+// ErrVectorItemNotIndexed reports that an item has no stored embedding.
+var ErrVectorItemNotIndexed = errors.New("context item is not in the vector index")
+
+// SearchSimilarTo returns items similar to an already indexed item using its
+// stored embedding, so it makes no embedding call. The source item is
+// excluded. Results are hydrated and authorized exactly like SearchVector.
+func (s *VectorStore) SearchSimilarTo(ctx context.Context, itemID string, req SearchRequest) ([]SearchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.repo == nil {
+		return nil, errors.New("vector store has no canonical repository; rebuild before searching")
+	}
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	doc, err := s.collection.GetByID(ctx, itemID)
+	if err != nil || len(doc.Embedding) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrVectorItemNotIndexed, itemID)
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	results, err := s.collection.QueryEmbedding(ctx, doc.Embedding, min(limit+1, count), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateVectorResults(ctx, results, req, itemID)
+}
+
+// hydrateVectorResults loads each hit from SQLite and applies the canonical
+// authorization predicates; exclude drops one ID (the query item itself).
+func (s *VectorStore) hydrateVectorResults(ctx context.Context, results []chromem.Result, req SearchRequest, exclude string) ([]SearchResult, error) {
 	out := make([]SearchResult, 0, len(results))
 	for _, result := range results {
+		if result.ID == exclude {
+			continue
+		}
 		item, err := s.repo.Get(ctx, result.ID)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue // A stale rebuildable index must never surface a deleted canonical item.
