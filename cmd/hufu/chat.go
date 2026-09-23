@@ -52,6 +52,7 @@ func init() {
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")
 	f.StringVar(&opts.modelOverride, "model", "", "Override worker execution target (e.g. local-model or codex/model)")
+	f.StringSliceVar(&opts.workerModelOverrides, "worker-model", nil, "Override the execution target of specific worker(s) as agent=target; repeatable")
 	f.StringVarP(&opts.coordinatorModelOverride, "coordinator-model", "c", "", "Override coordinator LLM target")
 	f.IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens (0 = use team/provider metadata)")
 	f.StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory")

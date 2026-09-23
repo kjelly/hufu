@@ -22,6 +22,10 @@ type runOptions struct {
 	guardModelOverride        string
 	judgeModelOverride        string
 	planReviewerModelOverride string
+	// workerModelOverrides holds --worker-model agent=target entries. The
+	// profile merge in applyNamedProfile may replace it with the keyed union
+	// of profile and explicit CLI entries before team loading reads it.
+	workerModelOverrides []string
 
 	// Team selection / discovery
 	agentTeamName       string

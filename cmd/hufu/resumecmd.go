@@ -153,6 +153,7 @@ func init() {
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")
 	f.StringVar(&opts.modelOverride, "model", "", "Override worker execution target for the resumed team")
+	f.StringSliceVar(&opts.workerModelOverrides, "worker-model", nil, "Override the execution target of specific worker(s) for newly admitted tasks as agent=target; repeatable")
 	f.StringVarP(&opts.coordinatorModelOverride, "coordinator-model", "c", "", "Override coordinator LLM target for the resumed team")
 	f.IntVar(&opts.contextWindowOverride, "context-window", 0, "Override model context window in tokens")
 	f.Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")

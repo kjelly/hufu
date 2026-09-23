@@ -26,6 +26,7 @@ type canonicalRunOptions struct {
 	unattended, plan, autoSkills, report, steps, tui      bool
 	rbash, direnv, noJournal, autoApprove, think          bool
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
+	workerModels                                          []string
 	timeout, verifyTimeout, maxDuration, maxTotalTokens   int64
 	gracefulWrapUpTimeout                                 time.Duration
 	maxRounds, maxConcurrent, maxSteps, contextWindow     int
@@ -111,6 +112,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.StringVar(&options.providerURL, "provider-url", "", "Provider API base URL")
 	flags.StringVar(&options.providerAPIKey, "provider-api-key", "", "Provider API key")
 	flags.StringVarP(&options.model, "model", "m", "", "Override the worker execution target")
+	flags.StringSliceVar(&options.workerModels, "worker-model", nil, "Override the execution target of specific worker(s) as agent=target; repeatable")
 	flags.StringVarP(&options.coordinatorModel, "coordinator-model", "c", "", "Override the coordinator LLM target")
 	flags.IntVar(&options.contextWindow, "context-window", 0, "Override model context window in tokens")
 	flags.StringVar(&options.temperature, "temperature", "", "Override sampling temperature")
@@ -226,6 +228,7 @@ func resolveCanonicalRunOptionsForIntent(command *cobra.Command, options *canoni
 	resolved.providerURL = options.providerURL
 	resolved.providerAPIKey = options.providerAPIKey
 	resolved.modelOverride = options.model
+	resolved.workerModelOverrides = slices.Clone(options.workerModels)
 	resolved.coordinatorModelOverride = options.coordinatorModel
 	resolved.contextWindowOverride = options.contextWindow
 	resolved.temperatureOverride = options.temperature
@@ -299,7 +302,7 @@ func resolvePrimaryDecisionFlags(command *cobra.Command, options *canonicalRunOp
 		if !strings.HasPrefix(resume, "ldr_") || len(resume) != 36 {
 			return "", fmt.Errorf("--resume-decision requires a logical run id")
 		}
-		for _, flag := range []string{"primary-decision-profile", "rigor", "model", "coordinator-model", "sidecar-model", "guard-model", "judge-model", "plan-reviewer-model", "temperature", "max-tokens", "top-p", "top-k", "reasoning-effort", "context-window", "decision-profile", "input", "input-file", "var", "var-file", "new", "temp", "max-duration", "max-total-tokens", "auto-team", "dry-run", "route", "skill", "auto-skills", "plan", "report", "allow-path", "helper-tools"} {
+		for _, flag := range []string{"primary-decision-profile", "rigor", "model", "worker-model", "coordinator-model", "sidecar-model", "guard-model", "judge-model", "plan-reviewer-model", "temperature", "max-tokens", "top-p", "top-k", "reasoning-effort", "context-window", "decision-profile", "input", "input-file", "var", "var-file", "new", "temp", "max-duration", "max-total-tokens", "auto-team", "dry-run", "route", "skill", "auto-skills", "plan", "report", "allow-path", "helper-tools"} {
 			if command.Flags().Changed(flag) || command.InheritedFlags().Changed(flag) {
 				return "", fmt.Errorf("--resume-decision cannot be combined with --%s", flag)
 			}
