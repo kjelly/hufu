@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# CDPATH makes cd print the resolved directory, which would corrupt repo_root.
+repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 mapfile -t active_docs < <(
@@ -28,16 +29,32 @@ for file in "${active_docs[@]}"; do
 	done
 done
 
-if rg -n --glob '*.md' \
+# Only POSIX tools are used so every check actually runs on a stock CI runner.
+# grep exits 0 on a match, 1 on no match, and >1 on an error; an error must fail
+# the check instead of reading as "no match".
+retired_status=0
+grep -nE \
 	'file:///|docs/hufu-(future-improvement-roadmap|generic-workset-evidence-plan|coding-team-spec|runtime-composability-spec|external-coding-agent-runtime-spec|incomplete-run-reliability-plan|model-metadata-runtime-introspection-spec|outcome-driven-memory-hf-mem4-implementation-spec|ltm-promotion-spec|decision-aware-runtime-spec|per-worker-memory-implementation-plan|canonical-memory-hf-mem3-implementation-plan|strict-verification-workflow-improvement|ssh-tool-usage)\.md' \
-	"${active_docs[@]}"; then
+	"${active_docs[@]}" || retired_status=$?
+if ((retired_status == 0)); then
 	echo "check-docs: active documentation contains a machine-local or retired path" >&2
 	exit 1
+elif ((retired_status != 1)); then
+	echo "check-docs: retired-path scan failed (grep exit $retired_status)" >&2
+	exit 2
 fi
 
 missing=0
+link_count=0
 for file in "${active_docs[@]}"; do
+	links_status=0
+	links=$(grep -ohE '[]][(][^)]*[)]' "$file") || links_status=$?
+	if ((links_status > 1)); then
+		echo "check-docs: link scan failed for $file (grep exit $links_status)" >&2
+		exit 2
+	fi
 	while IFS= read -r raw; do
+		[[ -n "$raw" ]] || continue
 		target=${raw#\](}
 		target=${target%)}
 		target=${target%%\#*}
@@ -51,15 +68,16 @@ for file in "${active_docs[@]}"; do
 			/*) path="$target" ;;
 			*) path="$(dirname "$file")/$target" ;;
 		esac
+		link_count=$((link_count + 1))
 		if [[ ! -e "$path" ]]; then
 			echo "check-docs: $file links to missing path $target" >&2
 			missing=1
 		fi
-	done < <(rg -o --no-filename '\]\([^)]*\)' "$file" || true)
+	done <<<"$links"
 done
 
 if ((missing)); then
 	exit 1
 fi
 
-echo "check-docs: ${#active_docs[@]} active files and relative links are valid"
+echo "check-docs: ${#active_docs[@]} active files and $link_count relative links are valid"
