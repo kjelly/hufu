@@ -198,6 +198,13 @@ func TestCaptureFromDeltaFailsClosed(t *testing.T) {
 		{name: "invalid entry name", wantText: "contains a separator or NUL", mutate: func(t *testing.T, root string) ObservedDelta {
 			return ObservedDelta{Added: []ObservedFile{{Path: "bad\x00name"}}}
 		}},
+		{name: "hufuignore edit", wantText: "changes the inclusion policy", mutate: func(t *testing.T, root string) ObservedDelta {
+			writeFiles(t, root, map[string]string{HufuignoreFile: "*.go\n"})
+			return ObservedDelta{Added: []ObservedFile{observe(t, root, HufuignoreFile)}}
+		}},
+		{name: "nested gitignore deletion", wantText: "changes the inclusion policy", mutate: func(t *testing.T, root string) ObservedDelta {
+			return ObservedDelta{Deleted: []string{"src/.gitignore"}}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

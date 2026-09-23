@@ -28,7 +28,8 @@ import (
 // longer hash to the observed SHA-256, a deleted path that exists again, or a
 // changed path that is gone fails with ErrWorkspaceChangedAfterObservation
 // instead of capturing later bytes. Paths the inclusion policy excludes are
-// skipped, as a full capture would. The stat cache is left untouched.
+// skipped, as a full capture would; a delta that edits .hufuignore or a
+// .gitignore is refused. The stat cache is left untouched.
 func (s *Store) CaptureFromDelta(ctx context.Context, req CaptureRequest, delta ObservedDelta) (Snapshot, CaptureStats, error) {
 	if err := s.requireWritable(); err != nil {
 		return Snapshot{}, CaptureStats{}, err
@@ -45,6 +46,9 @@ func (s *Store) CaptureFromDelta(ctx context.Context, req CaptureRequest, delta 
 		return Snapshot{}, CaptureStats{}, err
 	}
 	changed := append(append([]ObservedFile(nil), delta.Added...), delta.Modified...)
+	if err = rejectPolicyChanges(changed, delta.Deleted); err != nil {
+		return Snapshot{}, CaptureStats{}, err
+	}
 	filter, err := newDeltaFilter(ctx, plan, changed)
 	if err != nil {
 		return Snapshot{}, CaptureStats{}, err
@@ -166,6 +170,22 @@ func (r *captureRun) requireRealParents(rel string, checked map[string]bool) err
 			return fmt.Errorf("%w: %q lies below %q, which is not a directory", ErrWorkspaceChangedAfterObservation, rel, dir)
 		}
 		checked[dir] = true
+	}
+	return nil
+}
+
+// rejectPolicyChanges fails a delta that edits an ignore file: the unchanged
+// paths it would include or exclude are not in the delta, so only a full
+// capture can apply the new policy.
+func rejectPolicyChanges(changed []ObservedFile, deleted []string) error {
+	paths := append([]string(nil), deleted...)
+	for _, observed := range changed {
+		paths = append(paths, observed.Path)
+	}
+	for _, rel := range paths {
+		if rel == HufuignoreFile || path.Base(rel) == ".gitignore" {
+			return fmt.Errorf("capture from delta: %q changes the inclusion policy; use a full capture", rel)
+		}
 	}
 	return nil
 }
