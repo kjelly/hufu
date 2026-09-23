@@ -94,9 +94,13 @@ func InspectLearning(ctx context.Context, workspace, projectID, teamID, requeste
 		view.ProposedPromotions = nil
 		view.ApprovedPromotions = nil
 		view.AppliedPromotions = nil
+		view.RejectedPromotions = nil
+		view.StalePromotions = nil
+		view.AppliedEditedPromotions = nil
+		view.AppliedEditUnknownPromotions = nil
 		return view
 	}
-	var proposed, approved, published int64
+	var proposed, approved, published, rejectedProposals, stale, edited, editUnknown int64
 	for _, proposal := range proposals {
 		switch proposal.Status {
 		case contextstore.PromotionStatusProposed:
@@ -105,11 +109,24 @@ func InspectLearning(ctx context.Context, workspace, projectID, teamID, requeste
 			approved++
 		case contextstore.PromotionStatusApplied:
 			published++
+			if wasEdited, known := proposal.DraftEdited(); !known {
+				editUnknown++
+			} else if wasEdited {
+				edited++
+			}
+		case contextstore.PromotionStatusRejected:
+			rejectedProposals++
+		case contextstore.PromotionStatusStale:
+			stale++
 		}
 	}
 	view.ProposedPromotions = new(proposed)
 	view.ApprovedPromotions = new(approved)
 	view.AppliedPromotions = new(published)
+	view.RejectedPromotions = new(rejectedProposals)
+	view.StalePromotions = new(stale)
+	view.AppliedEditedPromotions = new(edited)
+	view.AppliedEditUnknownPromotions = new(editUnknown)
 	// Eligibility is only known after the explicit analyze operation. Existing
 	// proposal rows are lifecycle state, not a substitute eligibility count.
 	view.EligiblePromotions = nil
@@ -134,6 +151,10 @@ func setZeroLearningCounters(view *operatorpkg.LearningView) {
 	view.ProposedPromotions = new(zero)
 	view.ApprovedPromotions = new(zero)
 	view.AppliedPromotions = new(zero)
+	view.RejectedPromotions = new(zero)
+	view.StalePromotions = new(zero)
+	view.AppliedEditedPromotions = new(zero)
+	view.AppliedEditUnknownPromotions = new(zero)
 }
 
 func learningView(ctx context.Context, workspace, projectID, teamID string) operatorpkg.LearningView {
@@ -151,6 +172,10 @@ func clearLearningCounters(view operatorpkg.LearningView) operatorpkg.LearningVi
 	view.ProposedPromotions = nil
 	view.ApprovedPromotions = nil
 	view.AppliedPromotions = nil
+	view.RejectedPromotions = nil
+	view.StalePromotions = nil
+	view.AppliedEditedPromotions = nil
+	view.AppliedEditUnknownPromotions = nil
 	return view
 }
 

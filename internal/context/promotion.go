@@ -67,6 +67,32 @@ type PromotionProposal struct {
 	CreatedAt       time.Time                 `json:"created_at"`
 	UpdatedAt       time.Time                 `json:"updated_at"`
 	AppliedAt       *time.Time                `json:"applied_at,omitempty"`
+	// GeneratedDraftHash is the DraftHash at creation. Edits never change it.
+	// It is empty for proposals created before migration 10.
+	GeneratedDraftHash string `json:"generated_draft_hash,omitempty"`
+}
+
+// DraftEdited reports whether the reviewed draft differs from the generated
+// one. known is false for proposals created before migration 10.
+func (p PromotionProposal) DraftEdited() (edited, known bool) {
+	if p.GeneratedDraftHash == "" {
+		return false, false
+	}
+	return p.DraftHash != p.GeneratedDraftHash, true
+}
+
+// promotionSelectColumns lists the scanPromotion columns. A read-only open of
+// a store older than migration 10 reads an empty generated draft hash.
+func (r *SQLiteRepository) promotionSelectColumns(includeDraft bool) string {
+	draft := "draft"
+	if !includeDraft {
+		draft = "'' AS draft"
+	}
+	generated := "generated_draft_hash"
+	if !r.schemaAtLeast(schemaVersionPromotionEditTracking) {
+		generated = "'' AS generated_draft_hash"
+	}
+	return "id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash," + draft + ",draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at," + generated
 }
 
 type PromotionOutboxEvent struct {
@@ -117,7 +143,7 @@ func (r *SQLiteRepository) CreatePromotion(ctx context.Context, p PromotionPropo
 		if err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO promotion_proposals(id,project_id,team_id,type,agent_id,target_path,target_base_hash,draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`, p.ID, p.ProjectID, p.TeamID, p.Type, nilIfEmpty(p.AgentID), p.TargetPath, p.TargetBaseHash, p.Draft, p.DraftHash, p.PolicyVersion, p.Status, string(metrics), p.RejectionReason, p.CreatedAt.UnixMilli(), p.UpdatedAt.UnixMilli())
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO promotion_proposals(id,project_id,team_id,type,agent_id,target_path,target_base_hash,draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at,generated_draft_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)`, p.ID, p.ProjectID, p.TeamID, p.Type, nilIfEmpty(p.AgentID), p.TargetPath, p.TargetBaseHash, p.Draft, p.DraftHash, p.PolicyVersion, p.Status, string(metrics), p.RejectionReason, p.CreatedAt.UnixMilli(), p.UpdatedAt.UnixMilli(), p.DraftHash)
 		if err != nil {
 			return err
 		}
@@ -201,7 +227,7 @@ func normalizePromotionProposal(p *PromotionProposal) error {
 }
 
 func (r *SQLiteRepository) GetPromotion(ctx context.Context, id, projectID, teamID string) (PromotionProposal, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash,draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at FROM promotion_proposals WHERE id=? AND project_id=? AND team_id=?`, id, projectID, teamID)
+	row := r.db.QueryRowContext(ctx, "SELECT "+r.promotionSelectColumns(true)+" FROM promotion_proposals WHERE id=? AND project_id=? AND team_id=?", id, projectID, teamID)
 	p, err := scanPromotion(row)
 	if err != nil {
 		return p, err
@@ -213,7 +239,7 @@ func (r *SQLiteRepository) GetPromotion(ctx context.Context, id, projectID, team
 func (r *SQLiteRepository) ListPromotions(ctx context.Context, projectID, teamID string) ([]PromotionProposal, error) {
 	// Lists are content-free by contract. Draft content is available only from
 	// an explicit, scoped GetPromotion detail action.
-	rows, err := r.db.QueryContext(ctx, `SELECT id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash,'' AS draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at FROM promotion_proposals WHERE project_id=? AND team_id=? ORDER BY created_at DESC,id`, projectID, teamID)
+	rows, err := r.db.QueryContext(ctx, "SELECT "+r.promotionSelectColumns(false)+" FROM promotion_proposals WHERE project_id=? AND team_id=? ORDER BY created_at DESC,id", projectID, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +296,7 @@ func scanPromotion(row interface{ Scan(...any) error }) (PromotionProposal, erro
 	var metrics string
 	var created, updated int64
 	var applied sql.NullInt64
-	err := row.Scan(&p.ID, &p.ProjectID, &p.TeamID, &p.Type, &p.AgentID, &p.TargetPath, &p.TargetBaseHash, &p.Draft, &p.DraftHash, &p.PolicyVersion, &p.Status, &metrics, &p.RejectionReason, &created, &updated, &applied)
+	err := row.Scan(&p.ID, &p.ProjectID, &p.TeamID, &p.Type, &p.AgentID, &p.TargetPath, &p.TargetBaseHash, &p.Draft, &p.DraftHash, &p.PolicyVersion, &p.Status, &metrics, &p.RejectionReason, &created, &updated, &applied, &p.GeneratedDraftHash)
 	if err != nil {
 		return p, err
 	}
@@ -335,7 +361,7 @@ func (r *SQLiteRepository) mutatePromotion(ctx context.Context, id, projectID, t
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		p, err := scanPromotion(tx.QueryRowContext(ctx, `SELECT id,project_id,team_id,type,COALESCE(agent_id,''),target_path,target_base_hash,draft,draft_hash,policy_version,status,metrics_json,rejection_reason,created_at,updated_at,applied_at FROM promotion_proposals WHERE id=? AND project_id=? AND team_id=?`, id, projectID, teamID))
+		p, err := scanPromotion(tx.QueryRowContext(ctx, "SELECT "+r.promotionSelectColumns(true)+" FROM promotion_proposals WHERE id=? AND project_id=? AND team_id=?", id, projectID, teamID))
 		if err != nil {
 			return err
 		}

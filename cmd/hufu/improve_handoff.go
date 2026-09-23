@@ -212,7 +212,7 @@ func runImproveHandoffPrepare(cmd *cobra.Command, args []string) error {
 	if skillName == "" || proposal.TargetPath != promotion.TargetPathForSkill(skillName) {
 		return fmt.Errorf("skill promotion target must be skills/<name>/SKILL.md")
 	}
-	if err := promotion.ValidateDraft(promotion.TypeSkill, proposal.Draft, skillName, skillDraftStepsForHandoff(proposal.Draft)); err != nil {
+	if err := promotion.ValidateDraft(promotion.TypeSkill, proposal.Draft, skillName); err != nil {
 		return fmt.Errorf("validate skill promotion draft: %w", err)
 	}
 	if err := samePromotionSources(handoff, proposal); err != nil {
@@ -1114,17 +1114,6 @@ func skillNameFromSkillTarget(target string) string {
 		return ""
 	}
 	return parts[1]
-}
-
-func skillDraftStepsForHandoff(draft string) []string {
-	var steps []string
-	for _, line := range strings.Split(draft, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "1. ") || strings.HasPrefix(line, "2. ") {
-			steps = append(steps, line)
-		}
-	}
-	return steps
 }
 
 func digestRevision(value any) string {

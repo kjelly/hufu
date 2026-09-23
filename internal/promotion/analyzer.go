@@ -81,7 +81,7 @@ func (a *Analyzer) Analyze(ctx context.Context, opts AnalyzeOptions) (AnalyzeRes
 		if err != nil {
 			return result, err
 		}
-		if err = ValidateDraft(draft.Type, draft.Draft, draft.SkillName, draft.Steps); err != nil {
+		if err = ValidateDraft(draft.Type, draft.Draft, draft.SkillName); err != nil {
 			return result, fmt.Errorf("validate proposal for %s: %w", source.Item.ID, err)
 		}
 		baseHash, err := targetBaseHash(opts.TeamDir, targetPath)

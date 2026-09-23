@@ -36,7 +36,7 @@ func (g JSONDraftGenerator) Generate(ctx context.Context, req DraftRequest) (Dra
 		return DraftResult{}, fmt.Errorf("semantic draft generator is not configured")
 	}
 	b, _ := json.Marshal(req)
-	prompt := `Create one reviewable Hufu LTM promotion draft. Return ONLY one JSON object with exactly these fields: type, agent_id, skill_name, draft, steps. Type must be one of allowed_types. For skill, draft must be a complete SKILL.md with YAML frontmatter and at least two concrete verifiable steps. For policies, draft is Markdown body only and must not contain YAML frontmatter. Do not invent evidence or include credentials. Input: ` + string(b)
+	prompt := `Create one reviewable Hufu LTM promotion draft. Return ONLY one JSON object with exactly these fields: type, agent_id, skill_name, draft, steps. Type must be one of allowed_types. For skill, draft must be a complete SKILL.md with YAML frontmatter whose body lists at least two concrete verifiable steps as Markdown list items (for example "1. ..." or "- ..."). For policies, draft is Markdown body only and must not contain YAML frontmatter. Do not invent evidence or include credentials. Input: ` + string(b)
 	raw, err := g.Generator.GenerateText(ctx, prompt)
 	if err != nil {
 		return DraftResult{}, err

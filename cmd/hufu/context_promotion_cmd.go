@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -145,8 +148,10 @@ func runPromotionAnalyze(cmd *cobra.Command, _ []string) error {
 		if promotionJSON {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "eligible": []any{}, "diagnostics": result.Diagnostics, "proposals": []any{}, "message": "No suitable LTM entries found for promotion."})
 		}
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), "No suitable LTM entries found for promotion.")
-		return err
+		if _, err = fmt.Fprintln(cmd.OutOrStdout(), "No suitable LTM entries found for promotion."); err != nil {
+			return err
+		}
+		return writePromotionDiagnostics(cmd.OutOrStdout(), result.Diagnostics)
 	}
 	views := make([]promotionProposalView, 0, len(result.Proposals))
 	for _, p := range result.Proposals {
@@ -161,10 +166,28 @@ func runPromotionAnalyze(cmd *cobra.Command, _ []string) error {
 				return err
 			}
 		}
-		return nil
+		return writePromotionDiagnostics(cmd.OutOrStdout(), result.Diagnostics)
 	}
 	for _, p := range views {
 		if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", p.ID, p.Type, p.Status, p.TargetPath); err != nil {
+			return err
+		}
+	}
+	return writePromotionDiagnostics(cmd.OutOrStdout(), result.Diagnostics)
+}
+
+// writePromotionDiagnostics prints one "diagnostic\t<source-id>\t<reason>"
+// line per excluded source, sorted, after the regular analyze output.
+func writePromotionDiagnostics(w io.Writer, diagnostics []promotion.Diagnostic) error {
+	sorted := append([]promotion.Diagnostic(nil), diagnostics...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].SourceID != sorted[j].SourceID {
+			return sorted[i].SourceID < sorted[j].SourceID
+		}
+		return sorted[i].Reason < sorted[j].Reason
+	})
+	for _, d := range sorted {
+		if _, err := fmt.Fprintf(w, "diagnostic\t%s\t%s\n", d.SourceID, d.Reason); err != nil {
 			return err
 		}
 	}
@@ -188,7 +211,7 @@ func runPromotionList(cmd *cobra.Command, _ []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "proposals": views})
 	}
 	for _, p := range views {
-		if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", p.ID, p.Type, p.Status, p.TargetPath); err != nil {
+		if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\tdraft_edited=%s\n", p.ID, p.Type, p.Status, p.TargetPath, p.draftEditedLabel()); err != nil {
 			return err
 		}
 	}
@@ -223,7 +246,7 @@ func runPromotionShow(cmd *cobra.Command, args []string) error {
 	if promotionJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "proposal": view})
 	}
-	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\nstatus: %s\ntype: %s\ntarget: %s\n", view.ID, view.Status, view.Type, view.TargetPath); err != nil {
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\nstatus: %s\ntype: %s\ntarget: %s\ndraft_edited: %s\n", view.ID, view.Status, view.Type, view.TargetPath, view.draftEditedLabel()); err != nil {
 		return err
 	}
 	if promotionShowContent {
@@ -431,10 +454,23 @@ type promotionProposalView struct {
 	RejectionReason string                     `json:"rejection_reason,omitempty"`
 	Draft           string                     `json:"draft,omitempty"`
 	SourceSummaries []sourceSummary            `json:"source_summaries,omitempty"`
+	// DraftEdited is null for proposals created before edit tracking existed.
+	DraftEdited *bool `json:"draft_edited"`
+}
+
+// draftEditedLabel renders DraftEdited for text output.
+func (v promotionProposalView) draftEditedLabel() string {
+	if v.DraftEdited == nil {
+		return "unknown"
+	}
+	return strconv.FormatBool(*v.DraftEdited)
 }
 
 func newPromotionView(p promotion.Proposal, content bool) promotionProposalView {
 	v := promotionProposalView{ID: p.ID, ProjectID: p.ProjectID, TeamID: p.TeamID, Type: p.Type, AgentID: p.AgentID, TargetPath: p.TargetPath, TargetBaseHash: p.TargetBaseHash, DraftHash: p.DraftHash, PolicyVersion: p.PolicyVersion, Sources: p.Sources, Metrics: p.Metrics, Status: p.Status, RejectionReason: p.RejectionReason}
+	if edited, known := p.DraftEdited(); known {
+		v.DraftEdited = &edited
+	}
 	if content {
 		v.Draft = utils.RedactSecrets(p.Draft)
 	}

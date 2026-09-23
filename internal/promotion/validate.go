@@ -10,9 +10,36 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-var skillNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+var (
+	skillNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	draftStepRE = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+\S`)
+)
 
-func ValidateDraft(typ Type, draft, skillName string, steps []string) error {
+// DraftSteps returns the list-item lines of a skill draft body. The YAML
+// frontmatter is excluded, so frontmatter lists never count as steps, and an
+// unparsable draft has no steps. Policies have no step requirement and
+// return nil. Every promotion stage (analyze, edit, apply, improve handoff
+// and experiments) counts steps with this one rule.
+func DraftSteps(typ Type, draft string) []string {
+	if typ != TypeSkill {
+		return nil
+	}
+	def, err := skill.ValidateSkillDraft([]byte(draft))
+	if err != nil {
+		return nil
+	}
+	var steps []string
+	for _, line := range strings.Split(def.Content, "\n") {
+		if draftStepRE.MatchString(line) {
+			steps = append(steps, strings.TrimSpace(line))
+		}
+	}
+	return steps
+}
+
+// ValidateDraft validates a promotion draft. Skills must be a complete
+// SKILL.md whose body has at least two list-item steps (DraftSteps).
+func ValidateDraft(typ Type, draft, skillName string) error {
 	if strings.TrimSpace(draft) == "" {
 		return fmt.Errorf("promotion draft is empty")
 	}
@@ -21,12 +48,12 @@ func ValidateDraft(typ Type, draft, skillName string, steps []string) error {
 	}
 	switch typ {
 	case TypeSkill:
-		if len(steps) < 2 {
-			return fmt.Errorf("skill proposal requires at least two verifiable steps")
-		}
 		def, err := skill.ValidateSkillDraft([]byte(draft))
 		if err != nil {
 			return err
+		}
+		if len(DraftSteps(typ, draft)) < 2 {
+			return fmt.Errorf("skill proposal requires at least two verifiable steps in the draft body")
 		}
 		if skillName == "" {
 			skillName = def.Name

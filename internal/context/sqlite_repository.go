@@ -41,6 +41,9 @@ var migrations = []migrationDef{
 	// opaque idempotency keys and remains safe for already-created databases.
 	{8, "context_outcome_execution_linkage", `ALTER TABLE context_outcome_observations ADD COLUMN request_id TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN manifest_fingerprint TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN run_id TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN task_id TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0; ALTER TABLE context_outcome_observations ADD COLUMN model_execution_id TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN acceptance_outcome TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN judge_outcome TEXT NOT NULL DEFAULT ''; ALTER TABLE context_outcome_observations ADD COLUMN skeptic_outcome TEXT NOT NULL DEFAULT ''; CREATE INDEX idx_context_outcome_execution ON context_outcome_observations(run_id,task_id,attempt,model_execution_id,manifest_fingerprint);`},
 	{9, "semantic_embedding_generations", `CREATE TABLE context_embedding_generations (generation_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, model_id TEXT NOT NULL, model_revision TEXT NOT NULL, model_hash TEXT NOT NULL, dimensions INTEGER NOT NULL, table_hash TEXT NOT NULL, tokenizer_hash TEXT NOT NULL, source_revision INTEGER NOT NULL, state TEXT NOT NULL CHECK (state IN ('building','active','superseded','failed')), expected_count INTEGER NOT NULL, row_count INTEGER NOT NULL DEFAULT 0, content_digest TEXT NOT NULL, created_at INTEGER NOT NULL, activated_at INTEGER); CREATE UNIQUE INDEX idx_context_embedding_generations_active ON context_embedding_generations(project_id, model_id, model_revision) WHERE state = 'active'; CREATE TABLE context_embeddings (generation_id TEXT NOT NULL, item_id TEXT NOT NULL, content_hash TEXT NOT NULL, dimensions INTEGER NOT NULL, vector BLOB NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (generation_id, item_id), FOREIGN KEY (generation_id) REFERENCES context_embedding_generations(generation_id) ON DELETE CASCADE, FOREIGN KEY (item_id) REFERENCES context_items(id) ON DELETE CASCADE); CREATE INDEX idx_context_embeddings_item ON context_embeddings(item_id);`},
+	// Records the generated draft hash so an operator edit can be told apart
+	// from the model draft; rows created before this migration stay unknown.
+	{10, "promotion_generated_draft_hash", `ALTER TABLE promotion_proposals ADD COLUMN generated_draft_hash TEXT NOT NULL DEFAULT '';`},
 }
 
 func migrationChecksum(sql string) string {
@@ -52,6 +55,9 @@ type SQLiteRepository struct {
 	db          *sql.DB
 	path        string
 	busyRetries atomic.Int64
+	// schemaVersion is the newest applied migration: always the latest for a
+	// writable open, and the store's recorded version for a read-only open.
+	schemaVersion int
 }
 
 func OpenSQLite(path string) (*SQLiteRepository, error) {
@@ -72,6 +78,7 @@ func OpenSQLite(path string) (*SQLiteRepository, error) {
 		db.Close()
 		return nil, err
 	}
+	r.schemaVersion = latestSchemaVersion()
 	return r, nil
 }
 
@@ -116,7 +123,9 @@ func OpenSQLiteReadOnly(path string) (ReadOnlyRepository, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("open read-only context database: %w", err)
 	}
-	return &SQLiteRepository{db: db, path: path}, nil
+	r := &SQLiteRepository{db: db, path: path}
+	r.schemaVersion = readAppliedSchemaVersion(context.Background(), r)
+	return r, nil
 }
 
 func (r *SQLiteRepository) Close() error { return r.db.Close() }

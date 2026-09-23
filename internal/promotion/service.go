@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/utils"
@@ -27,7 +26,7 @@ func (s Service) Edit(ctx context.Context, id, project, team, file string) (Prop
 	if err != nil {
 		return p, err
 	}
-	if err = ValidateDraft(p.Type, string(b), skillNameForPath(p.TargetPath), policySteps(string(b))); err != nil {
+	if err = ValidateDraft(p.Type, string(b), skillNameForPath(p.TargetPath)); err != nil {
 		return p, err
 	}
 	hash := contextstore.HashPromotionContent(string(b))
@@ -77,16 +76,4 @@ func skillNameForPath(path string) string {
 		}
 	}
 	return base
-}
-
-// Edited skill drafts no longer carry generator metadata, so require two list steps in the body.
-func policySteps(draft string) []string {
-	var steps []string
-	for _, line := range strings.Split(draft, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "1. ") || strings.HasPrefix(line, "2. ") {
-			steps = append(steps, line)
-		}
-	}
-	return steps
 }

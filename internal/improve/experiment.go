@@ -215,7 +215,7 @@ func CreateSkillCandidateSnapshot(workspace, id, baselineID, skillName, draft st
 	if err := validateArtifactID(id); err != nil {
 		return TeamSnapshot{}, "", err
 	}
-	if err := promotion.ValidateDraft(promotion.TypeSkill, draft, skillName, skillDraftSteps(draft)); err != nil {
+	if err := promotion.ValidateDraft(promotion.TypeSkill, draft, skillName); err != nil {
 		return TeamSnapshot{}, "", err
 	}
 	baseline, baselineDir, err := LoadBaselineSnapshot(workspace, baselineID)
@@ -251,17 +251,6 @@ func CreateSkillCandidateSnapshot(workspace, id, baselineID, skillName, draft st
 		return TeamSnapshot{}, "", err
 	}
 	return snapshot, dir, nil
-}
-
-func skillDraftSteps(draft string) []string {
-	var steps []string
-	for _, line := range strings.Split(draft, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "1. ") || strings.HasPrefix(line, "2. ") {
-			steps = append(steps, line)
-		}
-	}
-	return steps
 }
 
 func newSkillPatch(skillName, draft string) string {

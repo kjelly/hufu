@@ -35,6 +35,10 @@ func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
 	snapshot.Learning.ProposedPromotions = clonePointer(snapshot.Learning.ProposedPromotions)
 	snapshot.Learning.ApprovedPromotions = clonePointer(snapshot.Learning.ApprovedPromotions)
 	snapshot.Learning.AppliedPromotions = clonePointer(snapshot.Learning.AppliedPromotions)
+	snapshot.Learning.RejectedPromotions = clonePointer(snapshot.Learning.RejectedPromotions)
+	snapshot.Learning.StalePromotions = clonePointer(snapshot.Learning.StalePromotions)
+	snapshot.Learning.AppliedEditedPromotions = clonePointer(snapshot.Learning.AppliedEditedPromotions)
+	snapshot.Learning.AppliedEditUnknownPromotions = clonePointer(snapshot.Learning.AppliedEditUnknownPromotions)
 	snapshot.Activity.RawTaskStates = cloneSorted(snapshot.Activity.RawTaskStates)
 	snapshot.Activity.RawReasonCodes = cloneSorted(snapshot.Activity.RawReasonCodes)
 	snapshot.Integrity.ReasonCodes = cloneSorted(snapshot.Integrity.ReasonCodes)
@@ -169,6 +173,10 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 		{name: "proposed_promotions", value: snapshot.Learning.ProposedPromotions},
 		{name: "approved_not_applied", value: snapshot.Learning.ApprovedPromotions},
 		{name: "applied_promotions", value: snapshot.Learning.AppliedPromotions},
+		{name: "rejected_promotions", value: snapshot.Learning.RejectedPromotions},
+		{name: "stale_promotions", value: snapshot.Learning.StalePromotions},
+		{name: "applied_edited_promotions", value: snapshot.Learning.AppliedEditedPromotions},
+		{name: "applied_edit_unknown_promotions", value: snapshot.Learning.AppliedEditUnknownPromotions},
 	}
 	for _, counter := range counters {
 		if counter.value != nil && *counter.value < 0 {

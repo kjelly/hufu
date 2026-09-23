@@ -67,7 +67,7 @@ hufu context promotion apply <proposal-id>
 所有子命令共同接受：
 
 ```text
---workspace <path>       # context.sqlite / event_store.jsonl 所在 workspace
+--workspace <path>       # context.sqlite / logs/event_store.jsonl 所在 workspace
 --project <id>           # 必填，canonical context project scope
 --team <name>            # 必填，同時用於 context scope 與 TeamRegistry resolve
 --team-search-path <csv> # 可選；預設沿用 team.DefaultSearchPaths()
@@ -234,7 +234,7 @@ proposed|approved -> stale
 - `skill`：kind 只接受 `pattern`、`convention`、`instruction`，且 semantic 結果必須包含至少兩個可驗證步驟。
 - `progress`、`summary`、`open_question`、raw `tool_call`、raw `tool_result` 一律不 promotion。
 
-若同一來源可成為多種類型，semantic generator 必須回傳排序後的建議；MVP 只為最高順位建立 proposal，避免一次 evidence 產生互相重疊的規則。
+若同一來源可成為多種類型，semantic generator 只回傳一個 type（`DraftResult.Type`），且必須屬於該來源允許的類型；每個來源最多建立一個 proposal，避免一次 evidence 產生互相重疊的規則。
 
 ### 5.3 不再使用虛構 composite confidence
 
@@ -294,6 +294,10 @@ Policy proposal 的 `Draft` 只包含要加入 agent body 的 Markdown，不包�
 
 `edit --draft-file` 只更新 proposal draft 與 `DraftHash`，status 必須仍為 `proposed`。讀入後先做 secret redaction check 與 type-specific validation。
 
+Skill draft 的步驟只以 draft body（frontmatter 之後）的 Markdown list item 計算（`promotion.DraftSteps`：`-`、`*`、`+`、`1.`、`1)` 開頭且後面有內容的行），至少兩個。analyze、edit、apply、improve handoff 與 experiment 共用同一個 `promotion.ValidateDraft`；模型 JSON 的 `steps` 欄位不作為驗證依據，所以通過 analyze 的 draft 不會因步驟規則在 apply 失敗。
+
+每個 proposal 在建立時記錄 `generated_draft_hash`，edit 不改它；`draft_edited`（list/show JSON 與 text）表示目前 draft 是否不同於生成時的 draft，migration 10 之前建立的 proposal 為未知（JSON `null`、text `unknown`）。`hufu context learning` 另外回報 rejected、stale、applied 且被修改過、applied 但修改狀態未知的 proposal 數量。
+
 ## 7. Persistence、evidence 與 audit
 
 ### 7.1 SQLite schema
@@ -305,7 +309,8 @@ promotion_proposals
   id, project_id, team_id, type, agent_id, target_path,
   target_base_hash, draft, draft_hash, policy_version,
   status, metrics_json, rejection_reason,
-  created_at, updated_at, applied_at
+  created_at, updated_at, applied_at,
+  generated_draft_hash   # migration 10；edit 不改；舊資料列為空
 
 promotion_sources
   proposal_id, context_item_id, content_hash, aggregate_revision
@@ -330,7 +335,7 @@ repository 提供 create/get/list/update-status/update-draft，所有狀態更�
 
 ### 7.3 Audit event
 
-不要新增 `workspace/logs/memory_promotion.jsonl` 作第二個 truth source。沿用 `<workspace>/event_store.jsonl` 的 hash-chain event store，新增 content-free events：
+不要新增 `workspace/logs/memory_promotion.jsonl` 作第二個 truth source。沿用 `<workspace>/logs/event_store.jsonl` 的 hash-chain event store，新增 content-free events：
 
 ```text
 memory_promotion_proposed
@@ -342,7 +347,7 @@ memory_promotion_stale
 memory_promotion_apply_failed
 ```
 
-payload 只記 schema version、proposal ID、source IDs、draft/target hash、target 相對路徑、policy version 與 actor；不得記 raw memory、draft 全文、provider key 或 command output。每次 lifecycle transaction 同時新增 deterministic outbox row；CLI commit 後把事件送進 event store。送出失敗時 command 回傳非零且保留 outbox，下一次任何 promotion command 先安全重送，避免 SQLite 與 audit log 之間出現永久缺口。
+payload 只記 schema version、proposal ID、source IDs、draft/target hash、target 相對路徑、policy version 與 actor；不得記 raw memory、draft 全文、provider key 或 command output。每次 lifecycle transaction 同時新增 deterministic outbox row；CLI commit 後把事件送進 event store。送出失敗時 command 回傳非零且保留 outbox，下一次任何寫入類 promotion command（analyze、edit、approve、reject、apply）先安全重送，避免 SQLite 與 audit log 之間出現永久缺口。`list`、`show` 以 read-only 開啟，不重送。
 
 ## 8. Apply contract
 

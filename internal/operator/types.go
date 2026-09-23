@@ -151,8 +151,14 @@ type LearningView struct {
 	ProposedPromotions *int64 `json:"proposed_promotions"`
 	ApprovedPromotions *int64 `json:"approved_not_applied"`
 	AppliedPromotions  *int64 `json:"applied_promotions"`
-	EmptyState         string `json:"empty_state"`
-	UnavailableReason  string `json:"unavailable_reason"`
+	// Governance counters: rejected and stale proposals, and applied
+	// proposals whose draft was (or may have been) edited before apply.
+	RejectedPromotions           *int64 `json:"rejected_promotions"`
+	StalePromotions              *int64 `json:"stale_promotions"`
+	AppliedEditedPromotions      *int64 `json:"applied_edited_promotions"`
+	AppliedEditUnknownPromotions *int64 `json:"applied_edit_unknown_promotions"`
+	EmptyState                   string `json:"empty_state"`
+	UnavailableReason            string `json:"unavailable_reason"`
 }
 
 type ActionSuggestion struct {

@@ -29,6 +29,7 @@ an existing store requires a new migration, hufu creates a timestamped
 | 7 | `typed_context_activation_outcomes` | Adds typed activation dimensions and outcome observations. |
 | 8 | `context_outcome_execution_linkage` | Links outcome observations to canonical execution identities. |
 | 9 | `semantic_embedding_generations` | Adds rebuildable, generation-scoped semantic embedding projections. |
+| 10 | `promotion_generated_draft_hash` | Records each promotion proposal's generated draft hash so operator edits can be distinguished from the model draft. |
 
 ## Tables
 
@@ -95,7 +96,7 @@ their 24-hour recovery window.
 
 ### Promotion tables
 
-`promotion_proposals` stores the scoped draft, target-relative path, target base hash, metrics snapshot, and review status. `promotion_sources` preserves each source context ID, content hash, and aggregate revision without modifying or superseding the source. `promotion_event_outbox` transactionally records content-free lifecycle events; promotion commands deliver pending rows to the hash-chained event store and then mark them delivered. Proposed or rejected drafts are not runtime context inputs.
+`promotion_proposals` stores the scoped draft, target-relative path, target base hash, metrics snapshot, and review status. `generated_draft_hash` is the draft hash at creation and never changes on edit; it is empty for proposals created before migration 10, whose edit state is unknown. Read-only opens never migrate, so readers of a store older than migration 10 treat the column as empty. `promotion_sources` preserves each source context ID, content hash, and aggregate revision without modifying or superseding the source. `promotion_event_outbox` transactionally records content-free lifecycle events; promotion commands deliver pending rows to the hash-chained event store and then mark them delivered. Proposed or rejected drafts are not runtime context inputs.
 
 ## Indexes
 

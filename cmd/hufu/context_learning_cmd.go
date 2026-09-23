@@ -100,11 +100,13 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Learning: %s (%s)\n", view.Status, view.UnavailableReason)
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Learning: requested=%s effective=%s policy=%s\nRecall: exposed=%s consulted=%s\nUsage: applied=%s rejected=%s\nOutcome: verified=%s causal_failures=%s\nPromotion: eligible=unknown proposed=%s approved-not-applied=%s applied=%s\n",
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Learning: requested=%s effective=%s policy=%s\nRecall: exposed=%s consulted=%s\nUsage: applied=%s rejected=%s\nOutcome: verified=%s causal_failures=%s\nPromotion: eligible=unknown proposed=%s approved-not-applied=%s applied=%s (edited=%s edit-unknown=%s) rejected=%s stale=%s\n",
 		view.RequestedMode, view.EffectiveMode, view.PolicyVersion,
 		learningCount(view.Exposures), learningCount(view.Consulted), learningCount(view.Applied), learningCount(view.Rejected),
 		learningCount(view.VerifiedSupport), learningCount(view.CausalFailures), learningCount(view.ProposedPromotions),
-		learningCount(view.ApprovedPromotions), learningCount(view.AppliedPromotions))
+		learningCount(view.ApprovedPromotions), learningCount(view.AppliedPromotions),
+		learningCount(view.AppliedEditedPromotions), learningCount(view.AppliedEditUnknownPromotions),
+		learningCount(view.RejectedPromotions), learningCount(view.StalePromotions))
 	if err == nil && view.EmptyState != "" {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "State: %s\n", view.EmptyState)
 	}

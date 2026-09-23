@@ -356,8 +356,8 @@ func TestMigrationEightToNineCreatesBackupAndPreservesCanonicalData(t *testing.T
 	if err = repository.db.QueryRowContext(t.Context(), "SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 9 {
-		t.Fatalf("schema version = %d, want 9", version)
+	if version != latestSchemaVersion() {
+		t.Fatalf("schema version = %d, want %d", version, latestSchemaVersion())
 	}
 }
 

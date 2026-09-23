@@ -86,7 +86,7 @@ func (s Service) Apply(ctx context.Context, id, project, teamID string, registry
 	if contextstore.HashPromotionContent(p.Draft) != p.DraftHash || utils.RedactSecrets(p.Draft) != p.Draft {
 		return ApplyResult{}, s.applyFailed(ctx, p, fmt.Errorf("draft hash mismatch or secret-like material"))
 	}
-	if err = ValidateDraft(p.Type, p.Draft, skillNameForPath(p.TargetPath), policySteps(p.Draft)); err != nil {
+	if err = ValidateDraft(p.Type, p.Draft, skillNameForPath(p.TargetPath)); err != nil {
 		return ApplyResult{}, s.applyFailed(ctx, p, err)
 	}
 	current, readErr := os.ReadFile(target)
