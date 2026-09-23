@@ -3,14 +3,14 @@
 > Status: Historical — implemented
 > Authority: reference
 > Verified-Commit: `5ee0246`
-> Supersedes: `docs/tmp/now/spec.md`
+> Supersedes: —
 > Superseded-By: —
 > Completed: 2026-09-22
 
 基準提交：`6b865ed99a4e0167f92ec8aadcca1b90c9fab763`
 實作範圍：`internal/team` 內部程式碼與測試
 
-> 本文件原先位於 `docs/tmp/now/` scratch space；實作完成後依文件生命週期移至 `docs/archive/implementation-plans/`。程式碼與測試才是 runtime 交付物。
+> 本文件原先位於未納入版本控制的 `docs/tmp/now/` scratch space；實作完成後依文件生命週期移至 `docs/archive/implementation-plans/`。程式碼與測試才是 runtime 交付物。
 
 ## 1. 目標
 
