@@ -151,18 +151,10 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 	// Apply CLI model overrides as the highest-priority model config layer.
-	cliModelOverrides := currentModelOverrides()
-	applyCLIModelOverrides(&session.Config, cliModelOverrides)
-	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
-	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
-	applyCLITuningOverrides(session, currentTuningOverrides())
-	if err := applyCLICompactionOverrides(session); err != nil {
+	cliModelOverrides, err := applyCLIRuntimeOverrides(session)
+	if err != nil {
 		return nil, err
 	}
-	if opts.goalMode != "" {
-		session.Config.GoalMode = opts.goalMode
-	}
-	applyCLIGenerationOverridesToAgents(session, cliModelOverrides)
 
 	execProfile, err := team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
 	if err != nil {
@@ -186,7 +178,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 	team.RegisterProviderSecretsGlobally(session, resolvedProviderAPIKey)
 
-	displayTeamHeader(session)
+	displayTeamHeader(session, cliModelOverrides.WorkerModels)
 
 	cfg := config.LoadConfig()
 	if err := applyConfiguredBackends(session, cfg); err != nil {
@@ -340,6 +332,31 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		sessionData: sessionData,
 		notifier:    notifierInst,
 	}, nil
+}
+
+// applyCLIRuntimeOverrides applies every CLI (and profile-supplied) runtime
+// overlay to a freshly loaded session. It runs before execution-profile
+// resolution, target preflight, the --dry-run short-circuit, and any workspace
+// side effect, so an invalid override fails before anything is touched.
+func applyCLIRuntimeOverrides(session *team.TeamSession) (ModelCLIOverrides, error) {
+	cliModelOverrides, err := currentModelOverrides()
+	if err != nil {
+		return ModelCLIOverrides{}, err
+	}
+	applyCLIModelOverrides(&session.Config, cliModelOverrides)
+	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
+	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())
+	applyCLITuningOverrides(session, currentTuningOverrides())
+	if err := applyCLICompactionOverrides(session); err != nil {
+		return ModelCLIOverrides{}, err
+	}
+	if opts.goalMode != "" {
+		session.Config.GoalMode = opts.goalMode
+	}
+	if err := applyCLIGenerationOverridesToAgents(session, cliModelOverrides); err != nil {
+		return ModelCLIOverrides{}, err
+	}
+	return cliModelOverrides, nil
 }
 
 func ensureSessionWorkspaceScope(session *team.TeamSession) error {

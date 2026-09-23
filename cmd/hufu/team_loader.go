@@ -209,9 +209,10 @@ func resumeOrStartSession(session *team.TeamSession) (*team.SessionData, error) 
 }
 
 // displayTeamHeader prints the team name and a comma-separated list of
-// agents with their roles. Used by both loaders before continuing
-// with MCP / memory / coordinator setup.
-func displayTeamHeader(session *team.TeamSession) {
+// agents with their roles, plus the effective --worker-model overrides when
+// any were supplied. Used by both loaders before continuing with MCP /
+// memory / coordinator setup.
+func displayTeamHeader(session *team.TeamSession, workerModels []WorkerModelOverride) {
 	stderrLog("%s %s\n", boldStyle.Render("Team:"), session.Config.Name)
 	stderrLog("%s ", boldStyle.Render("Agents:"))
 	var agentDisplayNames []string
@@ -220,6 +221,9 @@ func displayTeamHeader(session *team.TeamSession) {
 		agentDisplayNames = append(agentDisplayNames, fmt.Sprintf("%s (%s)", agentStyle.Render(def.Name), dimStyle.Render(roleLabel)))
 	}
 	stderrLog("%s\n", strings.Join(agentDisplayNames, ", "))
+	if len(workerModels) > 0 {
+		stderrLog("%s %s\n", boldStyle.Render("Worker models:"), strings.Join(workerModelDisplayEntries(session, workerModels), ", "))
+	}
 }
 
 // buildMCPManager creates an MCPToolManager if the session has MCP

@@ -118,14 +118,16 @@ func TestApplyCLIGenerationOverridesToAgents_ForcesCLIOverrides(t *testing.T) {
 		},
 	}
 
-	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{
+	if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{
 		Model:           "cli-model",
 		Temperature:     "0.2",
 		MaxTokens:       "4096",
 		TopP:            "0.9",
 		TopK:            "40",
 		ReasoningEffort: "high",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for k, def := range session.Agents {
 		if k == "coordinator" {
@@ -182,7 +184,9 @@ func TestApplyCLIGenerationOverridesToAgents_NoCLIFlagsDoesNotClobber(t *testing
 		},
 	}
 
-	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{})
+	if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{}); err != nil {
+		t.Fatal(err)
+	}
 
 	reviewer := session.Agents["reviewer"]
 	if reviewer.Generation.Model != "agent-own-model" {
@@ -201,7 +205,9 @@ func TestApplyCLIGenerationOverridesToAgents_ProviderURLDoesNotClobberAgentOwn(t
 		},
 	}
 
-	applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{})
+	if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{}); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := session.Agents["helper"].ProviderURL; got != "http://agent-own:11434/v1" {
 		t.Errorf("ProviderURL = %q, want unchanged %q", got, "http://agent-own:11434/v1")
@@ -209,8 +215,10 @@ func TestApplyCLIGenerationOverridesToAgents_ProviderURLDoesNotClobberAgentOwn(t
 }
 
 func TestApplyCLIGenerationOverridesToAgents_NilSafe(t *testing.T) {
-	// Should not panic.
-	applyCLIGenerationOverridesToAgents(nil, ModelCLIOverrides{})
+	// Should not panic, even with worker entries that cannot be resolved.
+	if err := applyCLIGenerationOverridesToAgents(nil, ModelCLIOverrides{WorkerModels: []WorkerModelOverride{{Agent: "coder", Target: "A"}}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestApplyCLIModelOverrides_ModelDoesNotFanOutToSidecarOrGuard(t *testing.T) {
@@ -268,7 +276,9 @@ func TestApplyCLIGenerationOverridesToAgents_ModelSkipsCoordinatorRoles(t *testi
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			session := &team.TeamSession{Agents: map[string]*agent.AgentDef{"agent": tt.def}}
-			applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{Model: "cli-model"})
+			if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{Model: "cli-model"}); err != nil {
+				t.Fatal(err)
+			}
 			if got := tt.def.Generation.Model; got != tt.wantModel {
 				t.Fatalf("Generation.Model = %q, want %q", got, tt.wantModel)
 			}

@@ -22,6 +22,10 @@ type ModelCLIOverrides struct {
 	GuardModel        string
 	JudgeModel        string
 	PlanReviewerModel string
+	// WorkerModels holds parsed --worker-model entries (already merged with
+	// the selected profile and deduplicated by agent). They are resolved
+	// against the loaded team by applyCLIGenerationOverridesToAgents.
+	WorkerModels []WorkerModelOverride
 }
 
 // applyCLIModelOverrides mutates cfg in place to apply non-empty CLI
@@ -84,10 +88,16 @@ func isCoordinatorRole(role string) bool {
 
 // currentModelOverrides returns the live CLI flag values as a
 // ModelCLIOverrides struct. Flags that were not set on the command line
-// stay empty, signalling "no override" to applyCLIModelOverrides.
-func currentModelOverrides() ModelCLIOverrides {
+// stay empty, signalling "no override" to applyCLIModelOverrides. Malformed
+// --worker-model entries are reported rather than dropped.
+func currentModelOverrides() (ModelCLIOverrides, error) {
+	workerModels, err := parseWorkerModelOverrides(opts.workerModelOverrides)
+	if err != nil {
+		return ModelCLIOverrides{}, err
+	}
 	return ModelCLIOverrides{
 		Model:             opts.modelOverride,
+		WorkerModels:      workerModels,
 		CoordinatorModel:  opts.coordinatorModelOverride,
 		ContextWindow:     opts.contextWindowOverride,
 		Temperature:       opts.temperatureOverride,
@@ -99,7 +109,7 @@ func currentModelOverrides() ModelCLIOverrides {
 		GuardModel:        opts.guardModelOverride,
 		JudgeModel:        opts.judgeModelOverride,
 		PlanReviewerModel: opts.planReviewerModelOverride,
-	}
+	}, nil
 }
 
 // applyCLIGenerationOverridesToAgents forces CLI-supplied generation flags
@@ -115,15 +125,26 @@ func currentModelOverrides() ModelCLIOverrides {
 //
 // ProviderURL has no CLI override in this flow, so it only fills in the
 // team-level value when the agent hasn't set its own.
-func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides ModelCLIOverrides) {
+//
+// A --worker-model entry is more specific than --model and wins for its
+// worker. Only the execution target changes: prompts, roles, tools, and the
+// coordinator's own target are never touched. Invalid worker entries fail
+// before any agent is modified.
+func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides ModelCLIOverrides) error {
 	if session == nil {
-		return
+		return nil
+	}
+	workerTargets, err := resolveWorkerModelTargets(session, overrides.WorkerModels)
+	if err != nil {
+		return err
 	}
 	for _, def := range session.Agents {
 		if def == nil {
 			continue
 		}
-		if overrides.Model != "" && !isCoordinatorRole(def.Role) && !strings.EqualFold(def.Name, "coordinator") {
+		if target, ok := workerTargets[def]; ok {
+			def.Generation.Model = target
+		} else if overrides.Model != "" && !isCoordinatorRole(def.Role) && !strings.EqualFold(def.Name, "coordinator") {
 			def.Generation.Model = overrides.Model
 		}
 		if overrides.Temperature != "" {
@@ -145,4 +166,5 @@ func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides Mo
 			def.ProviderURL = session.Config.ProviderURL
 		}
 	}
+	return nil
 }
