@@ -252,3 +252,26 @@ func TestApplyCLIModelOverrides_NoModelNoFallback(t *testing.T) {
 		t.Errorf("GuardModel = %q, want empty", cfg.GuardModel)
 	}
 }
+
+func TestApplyCLIGenerationOverridesToAgents_ModelSkipsCoordinatorRoles(t *testing.T) {
+	tests := []struct {
+		name      string
+		def       *agent.AgentDef
+		wantModel string
+	}{
+		{name: "worker receives global model", def: &agent.AgentDef{Name: "coder", Role: "worker", Generation: agent.GenerationParams{Model: "own"}}, wantModel: "cli-model"},
+		{name: "coordinator role keeps own model", def: &agent.AgentDef{Name: "lead", Role: "coordinator", Generation: agent.GenerationParams{Model: "own"}}, wantModel: "own"},
+		{name: "orchestrator role keeps own model", def: &agent.AgentDef{Name: "lead", Role: "orchestrator", Generation: agent.GenerationParams{Model: "own"}}, wantModel: "own"},
+		{name: "orchestrator role matches case-insensitively", def: &agent.AgentDef{Name: "lead", Role: " Orchestrator ", Generation: agent.GenerationParams{Model: "own"}}, wantModel: "own"},
+		{name: "coordinator name keeps own model", def: &agent.AgentDef{Name: "coordinator", Generation: agent.GenerationParams{Model: "own"}}, wantModel: "own"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &team.TeamSession{Agents: map[string]*agent.AgentDef{"agent": tt.def}}
+			applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{Model: "cli-model"})
+			if got := tt.def.Generation.Model; got != tt.wantModel {
+				t.Fatalf("Generation.Model = %q, want %q", got, tt.wantModel)
+			}
+		})
+	}
+}

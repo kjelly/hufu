@@ -95,7 +95,7 @@ func preflightExecutionTargets(session *team.TeamSession, cfg *config.Config, ro
 	// and executable availability before any workspace or lifecycle side
 	// effects can begin.
 	for name, def := range session.Agents {
-		if def == nil || strings.EqualFold(strings.TrimSpace(def.Role), "coordinator") {
+		if def == nil || isCoordinatorRole(def.Role) {
 			continue
 		}
 		model := strings.TrimSpace(def.Generation.Model)

@@ -524,3 +524,35 @@ func TestPreflightRestoredEventLineageRejectsAmbiguousLegacyQualifiedModel(t *te
 		t.Fatalf("ambiguous crash-window preflight created session checkpoint: %v", err)
 	}
 }
+
+func TestPreflightExecutionTargetsSkipsCoordinatorRoleAgentTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    string
+		wantErr bool
+	}{
+		{name: "worker target is validated", role: "worker", wantErr: true},
+		{name: "coordinator target is owned by coordinator-model", role: "coordinator"},
+		{name: "orchestrator target is owned by coordinator-model", role: "orchestrator"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &team.TeamSession{Agents: map[string]*agent.AgentDef{
+				"lead": {Name: "lead", Role: tt.role, Generation: agent.GenerationParams{Model: "missing-backend/model"}},
+			}}
+			err := preflightExecutionTargets(session, &config.Config{}, team.RoleModels{}, func(string) (string, error) {
+				t.Fatal("preflight must not look up executables for an unknown backend")
+				return "", nil
+			})
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), `unknown execution backend "missing-backend"`) {
+					t.Fatalf("preflightExecutionTargets() error = %v, want unknown backend", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("preflightExecutionTargets() error = %v, want coordinator-role agent skipped", err)
+			}
+		})
+	}
+}

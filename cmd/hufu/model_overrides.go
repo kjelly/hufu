@@ -73,6 +73,15 @@ func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) 
 	}
 }
 
+// isCoordinatorRole reports whether role names the team coordinator. Worker
+// execution-target overrides never apply to such an agent: its target is owned
+// by --coordinator-model. The role set matches Coordinator.resolveAgentModel,
+// which treats coordinator and orchestrator as equivalent.
+func isCoordinatorRole(role string) bool {
+	role = strings.TrimSpace(role)
+	return strings.EqualFold(role, "coordinator") || strings.EqualFold(role, "orchestrator")
+}
+
 // currentModelOverrides returns the live CLI flag values as a
 // ModelCLIOverrides struct. Flags that were not set on the command line
 // stay empty, signalling "no override" to applyCLIModelOverrides.
@@ -114,7 +123,7 @@ func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides Mo
 		if def == nil {
 			continue
 		}
-		if overrides.Model != "" && !strings.EqualFold(def.Role, "coordinator") && !strings.EqualFold(def.Name, "coordinator") {
+		if overrides.Model != "" && !isCoordinatorRole(def.Role) && !strings.EqualFold(def.Name, "coordinator") {
 			def.Generation.Model = overrides.Model
 		}
 		if overrides.Temperature != "" {
