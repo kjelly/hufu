@@ -35,6 +35,7 @@ Note: "hufu workspace restore <trash-id>" restores a deleted team workspace;
 		newWorkspaceVersionDiffCommand(),
 		newWorkspaceVersionSnapshotCommand(),
 		newWorkspaceVersionRestoreCommand(),
+		newWorkspaceVersionAdoptCommand(),
 	)
 	return command
 }
@@ -263,6 +264,31 @@ are left alone.`,
 					return writeJSON(map[string]any{"snapshot": viewSnapshot(node, true), "files_written": result.FilesWritten, "files_deleted": result.FilesDeleted})
 				}
 				fmt.Printf("✓ Restored %s as %s (%d written, %d deleted).\n", args[0], node.ID, result.FilesWritten, result.FilesDeleted)
+				return nil
+			})
+		},
+	}
+}
+
+func newWorkspaceVersionAdoptCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "adopt",
+		Short: "Accept the current project files after a recovery-required stop",
+		Long: `After an external provider changed files outside its authorized roots,
+runs stop with a recovery-required marker. "adopt" records the current files
+as the active branch's new head and clears the marker; "restore <head>"
+undoes the change instead.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withWorkspaceOps(commandContext(cmd), "adopt", false, func(ops *team.WorkspaceSessionOps) error {
+				snapshot, err := ops.Adopt(commandContext(cmd))
+				if err != nil {
+					return err
+				}
+				if sessionJSON {
+					return writeJSON(viewSnapshot(snapshot, true))
+				}
+				fmt.Printf("✓ Adopted the current files as %s on branch %s.\n", snapshot.ID, snapshot.BranchID)
 				return nil
 			})
 		},

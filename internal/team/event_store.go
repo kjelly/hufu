@@ -100,6 +100,13 @@ func (es *EventStore) SetBranchID(branchID string) {
 	es.branchID = branchID
 }
 
+// BranchID returns the branch that unstamped appends are bound to.
+func (es *EventStore) BranchID() string {
+	es.lock()
+	defer es.release()
+	return es.branchID
+}
+
 // SetInvocationID binds subsequent events to their top-level CLI invocation.
 // Historical writers that do not set it remain valid and omit the field.
 func (es *EventStore) SetInvocationID(invocationID string) {

@@ -200,7 +200,7 @@ func TestBindRunWorkspaceVersioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	newSession := func() *team.TeamSession {
-		return &team.TeamSession{WorkspaceLease: &commandWorkspaceLease{stateRoot: stateRoot, workspaceID: managed.ID}}
+		return &team.TeamSession{Workspace: f.control, WorkspaceLease: &commandWorkspaceLease{stateRoot: stateRoot, workspaceID: managed.ID}}
 	}
 	cfg := &config.Config{}
 	cfg.WorkspaceVersioning.Mode = "required"
@@ -224,5 +224,43 @@ func TestBindRunWorkspaceVersioning(t *testing.T) {
 	cfg.WorkspaceVersioning.Mode = "sometimes"
 	if err = bindRunWorkspaceVersioning(context.Background(), newSession(), cfg); err == nil {
 		t.Fatal("an unknown mode was accepted")
+	}
+}
+
+// TestCLIWorkspaceVersionAdopt covers the §22.3 operator path: adopt clears
+// the recovery marker and records the current files as the new head.
+func TestCLIWorkspaceVersionAdopt(t *testing.T) {
+	f := newVersionedCLIFixture(t)
+	f.write(t, "A.txt", "main")
+	if _, err := runCLI(t, "workspace", "version", "snapshot", "--workspace", f.control); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := runCLI(t, "workspace", "version", "adopt", "--workspace", f.control); err == nil || !strings.Contains(err.Error(), "nothing to adopt") {
+		t.Fatalf("adopt without a marker: err = %v", err)
+	}
+	store, err := versionstore.Open(context.Background(), versionstore.Options{StateDir: f.state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, _ := versionstore.CanonicalRoot(f.subject)
+	if err = store.UpdateSubjectState(context.Background(), subject, func(state *versionstore.SubjectState) {
+		state.RecoveryRequired, state.RecoveryCode = true, "unauthorized_mutation"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	f.write(t, "A.txt", "changed by a provider")
+	if _, err = runCLI(t, "session", "fork", "--name", "exp", "--workspace", f.control); err == nil || !strings.Contains(err.Error(), "requires operator recovery") {
+		t.Fatalf("fork during recovery: err = %v", err)
+	}
+	out, err := runCLI(t, "workspace", "version", "adopt", "--workspace", f.control, "--json")
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if !strings.Contains(out, `"reason":"adopt"`) {
+		t.Fatalf("adopt output = %s", out)
+	}
+	if _, err = runCLI(t, "session", "fork", "--name", "exp", "--workspace", f.control); err != nil {
+		t.Fatalf("fork after adopt: %v", err)
 	}
 }

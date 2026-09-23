@@ -856,6 +856,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace diff: %w", diffErr)))
 		}
 		if err := ValidateExecutionWorldDelta(prepared, frozenDelta); err != nil {
+			p.coordinator.markWorkspaceUnauthorizedMutation(context.Background(), request, frozenDelta, err)
 			transcript.record("repair: workspace violation before repair: %v", err)
 			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
 			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, err))
@@ -887,13 +888,16 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	result.Output = boundedCodexFailureEvidence(turnResult.RawFinalOutput)
 
 	stopProcess()
-	result, err = finalizeCodexTurn(context.Background(), request, world, prepared, turnResult, result, transcript)
+	onViolation := func(delta WorkspaceDelta, violation error) {
+		p.coordinator.markWorkspaceUnauthorizedMutation(context.Background(), request, delta, violation)
+	}
+	result, err = finalizeCodexTurn(context.Background(), request, world, prepared, turnResult, result, transcript, onViolation)
 	return p.finishCodexAttempt(transcript, artifactWorkspace, request, result, err)
 }
 
 func finalizeCodexTurn(
 	ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld,
-	turnResult CodexTurnResult, result AttemptResult, transcript *codexTranscript,
+	turnResult CodexTurnResult, result AttemptResult, transcript *codexTranscript, onViolation func(WorkspaceDelta, error),
 ) (AttemptResult, error) {
 	final, snapErr := world.Snapshot(ctx, prepared)
 	if snapErr != nil {
@@ -909,6 +913,7 @@ func finalizeCodexTurn(
 	}
 	result.WorkspaceDelta = wdelta
 	if err := ValidateExecutionWorldDelta(prepared, wdelta); err != nil {
+		onViolation(wdelta, err)
 		transcript.record("workspace violation: %v", err)
 		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
 		return result, codexFail(CodexFailureWorkspaceViolation, err)

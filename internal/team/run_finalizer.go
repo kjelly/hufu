@@ -89,6 +89,7 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 	}
 	result = candidate
 	c.drainAsyncTasks()
+	c.checkpointWorkspaceVersion(ctx, result)
 	result.Acceptance = acceptance
 	observationCtx, cancelObservations := terminalExperienceFinalizationContext(ctx)
 	if err := c.recordContextAcceptanceObservations(observationCtx, acceptance); err != nil {
@@ -667,6 +668,9 @@ func (c *Coordinator) EmergencyFinalizeRun(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// An interrupted run is never checkpointed; the next admission records
+	// its files as external drift.
+	c.deferWorkspaceCheckpoint(ctx, errors.New("run interrupted"))
 	result := c.terminalCandidate()
 	if result == nil {
 		result = c.LastRunResult()

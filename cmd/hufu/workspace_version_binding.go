@@ -127,8 +127,38 @@ func bindRunWorkspaceVersioning(ctx context.Context, session *team.TeamSession, 
 		}
 		lease.versionLock = lock
 		version.HoldsProjectLock = true
+		if err = recoverRunWorkspace(ctx, session.Workspace, version); err != nil {
+			lease.versionLock = nil
+			return errors.Join(err, lock.Close())
+		}
 	}
 	session.WorkspaceVersion = version
+	return nil
+}
+
+// recoverRunWorkspace finishes interrupted workspace operations before the
+// coordinator loads the session tree, so a forward-completed checkout can
+// never leave the coordinator on a stale active branch (§19.2).
+func recoverRunWorkspace(ctx context.Context, control string, version team.WorkspaceVersionContext) error {
+	st, es, err := openSessionStores(control)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = es.Close() }()
+	store, err := version.OpenStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	ops := &team.WorkspaceSessionOps{Version: version, Workspace: control, Tree: st, Events: es, Store: store}
+	report, err := team.RecoverWorkspaceOperations(ctx, ops)
+	if err != nil {
+		return fmt.Errorf("workspace recovery: %w", err)
+	}
+	if !report.Empty() {
+		stderrLog("workspace recovery: %d snapshot(s) settled, %d operation(s) completed, %d failed\n",
+			len(report.Snapshots), len(report.Completed), len(report.Failed))
+	}
 	return nil
 }
 
