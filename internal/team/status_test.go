@@ -118,3 +118,24 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusToolResultRedactsSecretsBeyondCollapsedPreview(t *testing.T) {
+	const secret = "status-result-credential-123456789"
+	raw := strings.Repeat("x", 4100) + "\napi_token=" + secret + "\nvisible tail"
+	var reported StatusEvent
+	c := &Coordinator{reportStatus: func(event StatusEvent) { reported = event }}
+	c.report(c.newEvent("tool_result").withToolResult("view", raw))
+
+	if reported.Type != "tool_result" || reported.ToolName != "view" {
+		t.Fatalf("reported unexpected event: type=%q tool=%q", reported.Type, reported.ToolName)
+	}
+	if strings.Contains(reported.ToolResult, secret) {
+		t.Fatal("status event exposed a credential beyond the collapsed preview")
+	}
+	if !strings.Contains(reported.ToolResult, "api_token=[REDACTED]") || !strings.Contains(reported.ToolResult, "visible tail") {
+		t.Fatal("status event did not preserve non-secret result context")
+	}
+	if !strings.Contains(raw, secret) {
+		t.Fatal("status projection modified the original tool result")
+	}
+}

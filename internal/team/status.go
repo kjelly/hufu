@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // ErrTasksUnresolved marks a completed coordinator response that still has
@@ -82,7 +83,9 @@ func (e StatusEvent) withTool(name, args string) StatusEvent {
 
 func (e StatusEvent) withToolResult(name, result string) StatusEvent {
 	e.ToolName = name
-	e.ToolResult = result
+	// Status events are diagnostic projections. Keep the raw result in the
+	// execution path, but do not expose credentials to display reporters.
+	e.ToolResult = utils.RedactSecrets(result)
 	return e
 }
 
