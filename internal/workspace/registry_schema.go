@@ -2,24 +2,17 @@ package workspace
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"fmt"
 	"time"
+
+	"github.com/kjelly/hufu/internal/sqlmigrate"
 )
 
-type registryMigration struct {
-	version int
-	name    string
-	sql     string
-}
-
-var registryMigrations = []registryMigration{
+var registryMigrations = []sqlmigrate.Migration{
 	{
-		version: 1,
-		name:    "initial_workspace_registry",
-		sql: `CREATE TABLE projects (
+		Version: 1,
+		Name:    "initial_workspace_registry",
+		SQL: `CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL,
     alias TEXT UNIQUE,
@@ -76,119 +69,10 @@ CREATE INDEX idx_operations_state ON registry_operations(state, started_at);`,
 	},
 }
 
-func registryMigrationChecksum(statement string) string {
-	sum := sha256.Sum256([]byte(statement))
-	return hex.EncodeToString(sum[:])
-}
-
 func migrateRegistry(ctx context.Context, db *sql.DB, now func() time.Time) error {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-version INTEGER PRIMARY KEY,
-name TEXT NOT NULL,
-applied_at INTEGER NOT NULL,
-checksum TEXT NOT NULL
-)`); err != nil {
-		return fmt.Errorf("create migration registry: %w", err)
-	}
-
-	applied := make(map[int]string)
-	rows, err := db.QueryContext(ctx, "SELECT version, name, checksum FROM schema_migrations ORDER BY version")
-	if err != nil {
-		return fmt.Errorf("read registry migrations: %w", err)
-	}
-	for rows.Next() {
-		var version int
-		var name, checksum string
-		if err = rows.Scan(&version, &name, &checksum); err != nil {
-			return fmt.Errorf("scan registry migration: %w", err)
-		}
-		migration, ok := registryMigrationByVersion(version)
-		if !ok || migration.name != name {
-			return fmt.Errorf("unknown or renamed registry migration version %d (%s)", version, name)
-		}
-		applied[version] = checksum
-	}
-	if err = rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read registry migrations: %w", err)
-	}
-	if err = rows.Close(); err != nil {
-		return fmt.Errorf("close registry migrations query: %w", err)
-	}
-
-	for _, migration := range registryMigrations {
-		checksum := registryMigrationChecksum(migration.sql)
-		if existing, ok := applied[migration.version]; ok {
-			if existing != checksum {
-				return fmt.Errorf("registry migration checksum mismatch for version %d (%s)", migration.version, migration.name)
-			}
-			continue
-		}
-		if err = applyRegistryMigration(ctx, db, migration, checksum, now); err != nil {
-			if verifyErr := verifyRegistryMigrations(ctx, db); verifyErr == nil {
-				continue
-			}
-			return err
-		}
-	}
-	return verifyRegistryMigrations(ctx, db)
-}
-
-func registryMigrationByVersion(version int) (registryMigration, bool) {
-	for _, migration := range registryMigrations {
-		if migration.version == version {
-			return migration, true
-		}
-	}
-	return registryMigration{}, false
+	return sqlmigrate.Apply(ctx, db, "registry", registryMigrations, now)
 }
 
 func verifyRegistryMigrations(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, "SELECT version, name, checksum FROM schema_migrations ORDER BY version")
-	if err != nil {
-		return fmt.Errorf("verify registry migrations: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	known := make(map[int]registryMigration, len(registryMigrations))
-	for _, migration := range registryMigrations {
-		known[migration.version] = migration
-	}
-	seen := 0
-	for rows.Next() {
-		var version int
-		var name, checksum string
-		if err = rows.Scan(&version, &name, &checksum); err != nil {
-			return fmt.Errorf("verify registry migration row: %w", err)
-		}
-		migration, ok := known[version]
-		if !ok || migration.name != name || registryMigrationChecksum(migration.sql) != checksum {
-			return fmt.Errorf("registry migration checksum mismatch for version %d (%s)", version, name)
-		}
-		seen++
-	}
-	if err = rows.Err(); err != nil {
-		return fmt.Errorf("verify registry migrations: %w", err)
-	}
-	if seen != len(registryMigrations) {
-		return fmt.Errorf("registry schema is incomplete: found %d of %d migrations", seen, len(registryMigrations))
-	}
-	return nil
-}
-
-func applyRegistryMigration(ctx context.Context, db *sql.DB, migration registryMigration, checksum string, now func() time.Time) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin registry migration %d: %w", migration.version, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, migration.sql); err != nil {
-		return fmt.Errorf("apply registry migration %d (%s): %w", migration.version, migration.name, err)
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version,name,applied_at,checksum) VALUES(?,?,?,?)", migration.version, migration.name, now().UnixMilli(), checksum); err != nil {
-		return fmt.Errorf("record registry migration %d: %w", migration.version, err)
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit registry migration %d: %w", migration.version, err)
-	}
-	return nil
+	return sqlmigrate.Verify(ctx, db, "registry", registryMigrations)
 }

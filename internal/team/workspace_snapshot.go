@@ -248,6 +248,17 @@ func escapingSymlinkState(rel, resolvedTarget string) WorkspaceFileState {
 	return WorkspaceFileState{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: 0, Mode: uint32(fs.ModeSymlink)}
 }
 
+// specialFileState represents a FIFO, socket, or device. Opening one could
+// block forever (a FIFO without a writer) or have side effects, so its
+// content is never read; a placeholder identity derived only from its type
+// still lets Diff detect it appearing, disappearing, or changing type.
+func specialFileState(rel string, mode fs.FileMode) WorkspaceFileState {
+	h := sha256.New()
+	h.Write([]byte("workspace-snapshot:special-file:"))
+	h.Write([]byte(mode.Type().String()))
+	return WorkspaceFileState{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: 0, Mode: uint32(mode.Type() | mode.Perm())}
+}
+
 // workspaceInternalDirs are skipped by the directory walk: they are Hufu's
 // own bookkeeping, never a provider's or worker's deliverable, and walking
 // them wastes the file-count budget on churn this attempt did not produce.
@@ -333,6 +344,31 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int, ignore
 				files[rel] = escapingSymlinkState(rel, resolved)
 				return nil
 			}
+			target, statErr := os.Stat(resolved)
+			if statErr != nil {
+				return fmt.Errorf("stat symlink target %q: %w", rel, statErr)
+			}
+			if target.IsDir() {
+				// Same as the Git-assisted path: the directory's contents are
+				// observed through their real paths; reading the directory
+				// itself as a file would fail the whole snapshot with EISDIR.
+				return nil
+			}
+			if !target.Mode().IsRegular() {
+				count++
+				if count > maxFiles {
+					return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
+				}
+				files[rel] = specialFileState(rel, target.Mode())
+				return nil
+			}
+		} else if !d.Type().IsRegular() {
+			count++
+			if count > maxFiles {
+				return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
+			}
+			files[rel] = specialFileState(rel, d.Type())
+			return nil
 		}
 		count++
 		if count > maxFiles {
@@ -391,6 +427,10 @@ func hashCandidateFiles(root string, candidates []string, maxFiles int, ignored 
 			}
 		}
 		if info.IsDir() {
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			files[rel] = specialFileState(rel, info.Mode())
 			continue
 		}
 		sum, size, err := hashFileContents(full)
