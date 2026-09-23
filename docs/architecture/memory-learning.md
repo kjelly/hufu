@@ -491,6 +491,13 @@ hufu context consolidation reject <proposal-id>
 
 pipeline：deterministic pre-cluster（scope、kind、tool/action signature、file evidence、semantic similarity）→ LLM proposal（只產候選文字）→ source coverage／contradiction／authority／secret／scope widening／benchmark validation → candidate `ContextItem`。
 
+LLM proposal 步驟由 `hufu context consolidate --apply-proposal --source <ids> --draft --team <name> [--model <m>] [--team-search-path <csv>]` 提供，與人工的 `--proposal-text` 互斥：
+
+- 模型呼叫前先完成全部來源檢查（current confirmed、scope、experience support、記憶衝突 gate），來源內容合計超過 16000 runes 時拒絕並要求改用 `--proposal-text`。
+- 同一組來源已有 `proposed` proposal 時直接回傳該 proposal，不呼叫模型。
+- 模型只能回傳 strict JSON（`text`、`covered_source_ids`）；text 最多 2000 runes、不得含 secret、不得只是某一筆來源的原文，且 `covered_source_ids` 必須等於來源集合。任何失敗都不落庫。
+- 通過後走與人工文字相同的持久化路徑；candidate metadata 與 `memory_consolidation_proposed` payload 以 `proposal_origin`（`operator`／`model`）區分，模型路徑另記 `draft_model`。approve 仍需人工執行。
+
 規則：
 
 - proposal 必須列出所有 source ContextItem IDs 與 aggregate revision。

@@ -80,3 +80,22 @@ func (r *SQLiteRepository) UpdateConsolidationProposal(ctx context.Context, id, 
 }
 
 var _ ConsolidationRepository = (*SQLiteRepository)(nil)
+
+// FindProposedConsolidation returns the earliest (created_at, id) proposal
+// still in proposed status whose sorted source IDs equal sortedSourceIDs, so
+// drafting the same sources again reuses the pending proposal.
+func (r *SQLiteRepository) FindProposedConsolidation(ctx context.Context, projectID, teamID string, sortedSourceIDs []string) (ConsolidationProposal, bool, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM consolidation_proposals WHERE project_id=? AND COALESCE(team_id,'')=? AND status='proposed' AND source_ids_json=? ORDER BY created_at, id LIMIT 1`, projectID, teamID, mustJSON(sortedSourceIDs)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ConsolidationProposal{}, false, nil
+	}
+	if err != nil {
+		return ConsolidationProposal{}, false, fmt.Errorf("find pending consolidation proposal: %w", err)
+	}
+	proposal, err := r.GetConsolidationProposal(ctx, id)
+	if err != nil {
+		return ConsolidationProposal{}, false, fmt.Errorf("load pending consolidation proposal %s: %w", id, err)
+	}
+	return proposal, true, nil
+}
