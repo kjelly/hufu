@@ -82,27 +82,6 @@ func (m Model) renderPromptWidget(w int) string {
 	return m.styles.promptBox.Width(innerW).Render(content.String())
 }
 
-func (m Model) promptWidgetHeight() int {
-	if m.prompt == "" {
-		return 3
-	}
-	innerW := m.width - 4
-	if innerW < 4 {
-		innerW = 4
-	}
-	labelRunes := len([]rune("Task  "))
-	textW := innerW - labelRunes
-	if textW < 1 {
-		textW = 1
-	}
-	wrapped := wrapCells(m.prompt, textW, 5)
-	lines := len(wrapped.Lines)
-	if lines == 0 {
-		return 3
-	}
-	return lines + 2 // +2 for border top+bottom
-}
-
 const maxResultLines = 8
 const maxFeedLines = 6
 const maxTaskLogLines = 5000
@@ -134,6 +113,9 @@ func (m Model) countFeedLines() int {
 
 // renderStatusArea renders the status bar or result box.
 func (m Model) renderStatusArea(w int) string {
+	if m.quitHint && !m.finished {
+		return truncateLineCells("Press Esc for quit options, or Ctrl+C to finish active tasks.", max(w, 1))
+	}
 	if m.finished && m.result != "" {
 		innerW := w - 4 // border(1) + padding(1) each side
 		if innerW < 4 {
@@ -249,38 +231,18 @@ func (m Model) columnsView() string {
 	if w < 9 {
 		return ""
 	}
-	summary := m.renderSummaryStrip(w)
+	layout := m.dashboardLayout()
+	summary := layout.summary
 	if w < 60 {
 		warning := m.styles.infoBox.Render("Terminal too narrow\n\nResize to at least 60 columns to view task status.")
 		return summary + "\n" + lipgloss.Place(w, max(m.height-lipgloss.Height(summary)-1, 1), lipgloss.Center, lipgloss.Center, warning)
 	}
 
-	widget := m.renderPromptWidget(w)
-	progress := m.renderProgressBar(w)
-	statusArea := m.renderStatusArea(w)
-	activityFeed := m.renderActivityFeed(w)
-	statusH := m.statusAreaHeight()
-	promptH := m.promptWidgetHeight()
-	feedH := m.countFeedLines()
-	summaryH := lipgloss.Height(summary)
-
-	// promptH + blank + statusH + blank + feedH + blank + blank + footer
-	// feedH already includes the separator: 0 when empty, feedH+1 when non-empty.
-	feedTotal := 0
-	if feedH > 0 {
-		feedTotal = feedH + 1
-	}
-	progressH := 0
-	if progress != "" {
-		progressH = 1
-	}
-	bodyH := m.height - summaryH - 1 - promptH - 1 - progressH - statusH - 1 - feedTotal - 2
-	if bodyH < 2 {
-		bodyH = 2
-	}
+	widget, progress, statusArea := layout.prompt, layout.progress, layout.status
+	activityFeed, feedH, bodyH := layout.feed, layout.feedH, layout.bodyH
 
 	if m.isCompact() {
-		return m.compactColumnsView(widget, progress, statusArea, activityFeed, bodyH, feedH)
+		return m.compactColumnsView(layout)
 	}
 
 	// Five │ dividers, so each of six columns = (w-5)/6.
@@ -309,7 +271,7 @@ func (m Model) isCompact() bool {
 	return m.forceCompact || (m.width >= 60 && m.width < 100)
 }
 
-func (m Model) compactColumnsView(widget, progress, statusArea, activityFeed string, bodyH, feedH int) string {
+func (m Model) compactColumnsView(layout dashboardLayout) string {
 	groups := []struct {
 		title string
 		cols  []int
@@ -322,17 +284,17 @@ func (m Model) compactColumnsView(widget, progress, statusArea, activityFeed str
 	div := m.styles.dim.Render("│")
 	columns := make([]string, 0, len(groups))
 	for _, group := range groups {
-		columns = append(columns, m.renderCompactCol(group.title, group.cols, colW, bodyH))
+		columns = append(columns, m.renderCompactCol(group.title, group.cols, colW, layout.bodyH))
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, columns[0], div, columns[1], div, columns[2])
-	prefix := m.renderSummaryStrip(m.width) + "\n" + widget + "\n"
-	if progress != "" {
-		prefix += progress + "\n"
+	prefix := layout.summary + "\n" + layout.prompt + "\n"
+	if layout.progress != "" {
+		prefix += layout.progress + "\n"
 	}
-	if feedH > 0 {
-		return prefix + statusArea + "\n" + activityFeed + "\n" + body + "\n\n" + m.footer()
+	if layout.feedH > 0 {
+		return prefix + layout.status + "\n" + layout.feed + "\n" + body + "\n\n" + m.footer()
 	}
-	return prefix + statusArea + "\n" + body + "\n\n" + m.footer()
+	return prefix + layout.status + "\n" + body + "\n\n" + m.footer()
 }
 
 func (m Model) renderSummaryStrip(width int) string {
@@ -455,7 +417,12 @@ func (m Model) renderCompactCol(title string, cols []int, width, height int) str
 			selectedID = selected[m.row].ID
 		}
 	}
-	for _, item := range items {
+	group := compactGroupForCol(cols[0])
+	start := m.compactScrollOff[group]
+	if start > len(items) {
+		start = len(items)
+	}
+	for _, item := range items[start:] {
 		if usedLines >= height {
 			break
 		}
@@ -485,6 +452,7 @@ func (m *Model) trimTaskLogs(todoID string) {
 	}
 	dropped := len(lines) - maxTaskLogLines
 	m.logs[todoID] = lines[dropped:]
+	m.trimExpandedLogs(todoID, dropped)
 	if m.detailID == todoID {
 		m.cursorLine = max(0, m.cursorLine-dropped)
 		m.visualStart = max(0, m.visualStart-dropped)
@@ -653,6 +621,10 @@ func (m Model) sourceTag(source string) string {
 }
 
 func (m *Model) scrollCursorIntoView() {
+	if m.isCompact() {
+		m.scrollCompactCursorIntoView()
+		return
+	}
 	off := &m.scrollOff[m.col]
 	items := m.colItems(m.col)
 	if len(items) == 0 {
@@ -744,20 +716,7 @@ func (m *Model) clampScroll() {
 }
 
 func (m Model) colBodyHeight() int {
-	feedH := m.countFeedLines()
-	feedTotal := 0
-	if feedH > 0 {
-		feedTotal = feedH + 1
-	}
-	progressH := 0
-	if m.renderProgressBar(m.width) != "" {
-		progressH = 1
-	}
-	h := m.height - m.promptWidgetHeight() - 1 - progressH - m.statusAreaHeight() - 1 - feedTotal - 2
-	if h < 2 {
-		return 2
-	}
-	return h
+	return m.dashboardLayout().bodyH
 }
 
 func (m Model) taskIconStyle(s team.TaskStatus) (string, lipgloss.Style) {

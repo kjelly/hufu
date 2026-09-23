@@ -24,7 +24,7 @@ func testModel(items []*team.TodoItem, height int) Model {
 	m := Model{
 		tasks:     items,
 		height:    height,
-		width:     80,
+		width:     120,
 		col:       0,
 		row:       0,
 		scrollOff: [6]int{},
@@ -115,7 +115,7 @@ func TestScrollCursorIntoView_JumpToBottom(t *testing.T) {
 	col := m.colItems(m.col)
 	colW := 0
 	if m.width >= 9 {
-		colW = (m.width - 4) / 5
+		colW = (m.width - 5) / 6
 	}
 	lineCount := 2
 	found := false
@@ -206,15 +206,7 @@ func TestScrollCursorIntoView_MultiLinePromptMatchesColBodyHeight(t *testing.T) 
 	m.scrollCursorIntoView()
 
 	bodyH := m.colBodyHeight()
-	progressH := 0
-	if m.renderProgressBar(m.width) != "" {
-		progressH = 1
-	}
-	feedTotal := 0
-	if feedH := m.countFeedLines(); feedH > 0 {
-		feedTotal = feedH + 1
-	}
-	renderBodyH := m.height - m.promptWidgetHeight() - 1 - progressH - m.statusAreaHeight() - 1 - feedTotal - 2
+	renderBodyH := m.height - m.dashboardLayout().bodyY - 2
 	if renderBodyH < 2 {
 		renderBodyH = 2
 	}

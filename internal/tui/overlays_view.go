@@ -18,6 +18,18 @@ func (m Model) footer() string {
 		return m.styles.footer.Render("read-only view · q/esc close · Enter detail · / search · T theme")
 	}
 	if m.inDetail {
+		if m.copyNotice != "" {
+			return truncateLineCells(m.copyNotice, m.width)
+		}
+		if m.detailSearchQuery != "" {
+			matches := 0
+			for _, line := range m.logs[m.detailID] {
+				if strings.Contains(strings.ToLower(line), strings.ToLower(m.detailSearchQuery)) {
+					matches++
+				}
+			}
+			return m.styles.footer.Render(truncateLineCells(fmt.Sprintf("/%s · %d matches · n/N next/prev · / search · esc back", m.detailSearchQuery, matches), m.width))
+		}
 		if m.inVisual {
 			start := min(m.visualStart, m.visualEnd)
 			end := max(m.visualStart, m.visualEnd)
@@ -28,7 +40,7 @@ func (m Model) footer() string {
 				m.styles.bold.Render("v/esc") + m.styles.footer.Render(" cancel · ") +
 				m.styles.bold.Render("j/k") + m.styles.footer.Render(" extend")
 		}
-		return m.styles.footer.Render("J/K/ctrl+d/u ↑↓ scroll · t attach PTY · v visual · T theme · esc back")
+		return m.styles.footer.Render("/ search log · n/N matches · o expand/collapse · ↑↓ scroll · t attach PTY · v visual · esc back")
 	}
 	if m.inInfo {
 		return m.styles.footer.Render("i/esc close · ↑↓ scroll")
@@ -48,41 +60,35 @@ func (m Model) footer() string {
 		}
 		return m.styles.footer.Render("g/G top/bot · J/K/ctrl+d/u scroll · / search · r report · i info · ↑↓ j/k · enter detail · q quit")
 	}
-	return m.styles.footer.Render("owner view · esc quit options · ctrl+c finish tasks/force · / search · i info · L learning/evidence · c prompt · T theme · ? help · enter detail")
+	return m.styles.footer.Render("owner view · esc quit options · ctrl+c finish tasks/force · / search · z layout · i info · L learning/evidence · c prompt · T theme · ? help · enter detail")
 }
 
 func (m Model) helpView() string {
 	box := m.styles.infoBox.Render(`hufu TUI — keyboard reference
-
 Columns (dashboard)
   h / l  ←/→        switch column
-  tab               cycle through all 6 columns
+  tab / shift+tab   cycle forward / backward
   j / k  ↑/↓        move cursor in column
   g / G             first / last item
-  ctrl+d / ctrl+u   half-page down / up
   enter             open detail view for the focused task
-
-Search
-  /                 open search dialog
-  n / N             next / previous match
-
+  / · n / N         task search · next / previous match
 Actions
   c                 inject prompt / chat
   i                 show team info panel
   a                 full-screen activity log
-  M                 memory (STM/LTM) view
-  L                 evidence/context/learning/promotion panel
+  M / L             memory / evidence panel
   m                 toggle mouse support
-  T                 cycle auto/light/dark/mono theme
-  r                 generate report (only when finished)
-  ?  or  F1         this help screen
+  z                 toggle compact/expanded dashboard header
+  T / r             cycle theme / report when finished
+  ? / F1            this help screen
   q                 close a finished or read-only view
   esc               return / owner quit options
   ctrl+c            owner: request wrap-up (1st) / force quit (2nd)
-
 Detail view
-  j/k ↑/↓           scroll one line
-  g / G             top / bottom
+  /                 search this task's log
+  n / N             next / previous log match
+  o                 expand / collapse bounded tool output
+  j/k ↑/↓ · g/G     scroll · top / bottom
   v                 enter VISUAL mode
   y                 yank selection to clipboard (VISUAL only)
   t                 attach to the task PTY (Ctrl-] returns control)

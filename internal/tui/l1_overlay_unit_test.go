@@ -521,17 +521,17 @@ func TestWrapUpMsg(t *testing.T) {
 	}
 }
 
-// ── L1: copySuccessMsg ────────────────────────────────────────────────────
+// ── L1: copyRequestMsg ────────────────────────────────────────────────────
 
-func TestCopySuccessMsg(t *testing.T) {
+func TestCopyRequestMsg(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(copySuccessMsg{Lines: 5})
+	m2, _ := m.Update(copyRequestMsg{Lines: 5, Sent: true})
 	model := m2.(Model)
-	if !strings.Contains(model.statusText, "5") {
-		t.Errorf("expected statusText to contain '5', got %q", model.statusText)
+	if !strings.Contains(model.statusText, "5") || strings.Contains(model.statusText, "Copied") {
+		t.Errorf("status must report a request, not confirmed clipboard success: %q", model.statusText)
 	}
 }
 

@@ -1753,7 +1753,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				return
 			}
 			tt.stop(event.TodoID)
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs), Model: event.Model})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolCall(event.ToolName, event.ToolArgs),
+				FullLine: tuipkg.RenderToolCallExpanded(event.ToolName, event.ToolArgs), Model: event.Model})
 			argsPreview := strings.TrimSpace(strings.ReplaceAll(event.ToolArgs, "\n", " "))
 			toolLabel := toolStyle.Render("⟹ " + event.ToolName)
 			agentLabel := agentStyle.Render(event.Agent)
@@ -1763,7 +1764,8 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 			if event.TodoID == "" {
 				return
 			}
-			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult), Model: event.Model})
+			p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: tuipkg.RenderToolResult(event.ToolName, event.ToolResult),
+				FullLine: tuipkg.RenderToolResultExpanded(event.ToolName, event.ToolResult), Model: event.Model})
 			agentLabel := agentStyle.Render(event.Agent)
 			p.Send(tuipkg.StatusBarMsg{Text: agentLabel + "  " + doneStyle.Render("✓ "+event.ToolName)})
 			label := agentStyle.Render(event.Agent)

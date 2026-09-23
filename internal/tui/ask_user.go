@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -31,11 +32,13 @@ type AskUserMsg struct {
 // ── State (embedded in Model) ─────────────────────────────────────────────────
 
 type askState struct {
-	req      *AskUserMsg
-	ti       textinput.Model
-	cursor   int
-	selected []bool // toggled entries for multiple_choice
-	freeMode bool   // switched to free-text within a choice dialog
+	req          *AskUserMsg
+	ti           textinput.Model
+	cursor       int
+	selected     []bool // toggled entries for multiple_choice
+	freeMode     bool   // switched to free-text within a choice dialog
+	viewOffset   int
+	manualScroll bool
 }
 
 func (s *askState) isFreeText() bool {
@@ -87,6 +90,12 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if st.isFreeText() {
 		switch msg.String() {
+		case "esc":
+			if st.freeMode {
+				st.freeMode = false
+				st.ti.Blur()
+				return m, nil
+			}
 		case "enter":
 			st.req.ReplyCh <- marshalAskResp(nil, strings.TrimSpace(st.ti.Value()))
 			m.inAskUser = false
@@ -118,10 +127,18 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if st.cursor > 0 {
 			st.cursor--
 		}
+		st.manualScroll = false
 	case "down", "j", "tab":
 		if st.cursor < total-1 {
 			st.cursor++
 		}
+		st.manualScroll = false
+	case "pgup", "ctrl+u":
+		st.viewOffset = max(st.viewOffset-max(m.height/2, 1), 0)
+		st.manualScroll = true
+	case "pgdown", "ctrl+d":
+		st.viewOffset += max(m.height/2, 1)
+		st.manualScroll = true
 	case " ":
 		if req.Type == "multiple_choice" && st.cursor < len(opts) {
 			st.selected[st.cursor] = !st.selected[st.cursor]
@@ -175,23 +192,27 @@ func (m Model) askUserView() string {
 		dialogW = 82
 	}
 	innerW := dialogW - 6 // border(1) + padding(2) each side
+	contentW := max(innerW-6, 1)
 
+	question := wordWrap(req.Question, contentW)
 	var sb strings.Builder
-	sb.WriteString(m.styles.askQuestion.Render(wordWrap(req.Question, innerW)))
+	sb.WriteString(m.styles.askQuestion.Render(question))
 	sb.WriteString("\n")
+	hint := "enter submit · ctrl+c cancel"
 
 	if st.isFreeText() {
 		sb.WriteString("\n")
 		sb.WriteString(m.styles.askActive.Render("> "))
 		sb.WriteString(st.ti.View())
-		sb.WriteString("\n\n")
-		sb.WriteString(m.styles.askHint.Render("enter  submit  ctrl+c cancel"))
+		sb.WriteString("\n")
+		if st.freeMode {
+			hint = "enter submit · esc back · ctrl+c cancel"
+		}
 	} else if len(req.Options) == 0 && !req.AllowAny && req.Type != "mixed" {
 		sb.WriteString("\n")
 		sb.WriteString(m.styles.askActive.Render("> "))
 		sb.WriteString(st.ti.View())
-		sb.WriteString("\n\n")
-		sb.WriteString(m.styles.askHint.Render("enter submit  ctrl+c cancel"))
+		sb.WriteString("\n")
 	} else {
 		opts := req.Options
 		hasCustom := req.AllowAny || req.Type == "mixed"
@@ -233,15 +254,31 @@ func (m Model) askUserView() string {
 			}
 		}
 
-		sb.WriteString("\n")
-		hint := "↑↓/tab navigate  enter select  ctrl+c cancel"
+		hint = "↑↓/tab navigate · enter select · ctrl+c cancel"
 		if req.Type == "multiple_choice" {
-			hint = "↑↓/tab navigate  space toggle  enter confirm  ctrl+c cancel"
+			hint = "↑↓ move · space toggle · enter confirm · ^C cancel"
 		}
-		sb.WriteString(m.styles.askHint.Render(hint))
 	}
-
-	box := m.styles.askBox.Width(innerW).Render(sb.String())
+	content := strings.TrimRight(sb.String(), "\n")
+	contentLines := strings.Count(content, "\n") + 1
+	viewHeight := max(min(m.height-6, contentLines), 1)
+	offset := st.viewOffset
+	if !st.manualScroll {
+		target := strings.Count(question, "\n") + 2 + st.cursor
+		if st.isFreeText() {
+			target = contentLines - 1
+		}
+		if target >= offset+viewHeight {
+			offset = target - viewHeight + 1
+		} else if target < offset {
+			offset = target
+		}
+	}
+	lines := strings.Split(content, "\n")
+	offset = max(0, min(offset, max(len(lines)-viewHeight, 0)))
+	vp := viewport.New(contentW, viewHeight)
+	vp.SetContent(strings.Join(lines[offset:min(offset+viewHeight, len(lines))], "\n"))
+	box := m.styles.askBox.Width(innerW).Render(vp.View() + "\n" + m.styles.askHint.Render(truncateLineCells(hint, contentW)))
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 

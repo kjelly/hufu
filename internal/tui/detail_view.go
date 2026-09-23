@@ -23,6 +23,9 @@ func (m Model) detailView() string {
 		return header
 	}
 	footer := m.footer()
+	if m.detailSearchActive {
+		footer = m.detailSearchInput.View() + "  enter search · esc cancel"
+	}
 	return header + "\n" + m.vp.View() + "\n" + footer
 }
 
@@ -198,7 +201,16 @@ func (m Model) buildDetailContent() string {
 		if i > 0 {
 			result.WriteString("\n")
 		}
-		wrapped := wrapText(m.styleLogEntry(entry), width-2) // leave space for indicator
+		if i == m.expandedLogIndex {
+			if full, ok := m.fullLogs[m.detailID][i]; ok {
+				entry = full
+			}
+		}
+		styled := m.styleLogEntry(entry)
+		if m.detailSearchQuery != "" && strings.Contains(strings.ToLower(entry), strings.ToLower(m.detailSearchQuery)) {
+			styled = m.styles.visual.Render(styled)
+		}
+		wrapped := wrapText(styled, width-2) // leave space for indicator
 		if i == m.cursorLine {
 			result.WriteString(m.styles.cursor.Render("› ") + wrapped)
 		} else {
@@ -427,12 +439,12 @@ func (m Model) mapRenderedLineToLogIndex(renderedLine int, width int) int {
 func copyToClipboard(text string) tea.Cmd {
 	return func() tea.Msg {
 		if text == "" {
-			return copySuccessMsg{Lines: 0}
+			return copyRequestMsg{}
 		}
 		osc52 := "\x1b]52;c;" + encodeOSC52(text) + "\x1b\\"
-		fmt.Fprint(os.Stderr, osc52)
+		_, err := fmt.Fprint(os.Stderr, osc52)
 		lines := strings.Count(text, "\n") + 1
-		return copySuccessMsg{Lines: lines}
+		return copyRequestMsg{Lines: lines, Sent: err == nil}
 	}
 }
 
@@ -486,6 +498,15 @@ func RenderStep(stepNumber int) string {
 
 // RenderToolCall returns a formatted tool-call log line.
 func RenderToolCall(toolName, args string) string {
+	return renderToolCallLimit(toolName, args, 4000)
+}
+
+// RenderToolCallExpanded keeps a bounded source for explicit expansion.
+func RenderToolCallExpanded(toolName, args string) string {
+	return renderToolCallLimit(toolName, args, maxExpandedToolRunes)
+}
+
+func renderToolCallLimit(toolName, args string, limit int) string {
 	if toolName == "bash" {
 		args = strings.TrimSpace(args)
 		lines := strings.Split(args, "\n")
@@ -495,20 +516,32 @@ func RenderToolCall(toolName, args string) string {
 		}
 		return "⟹ " + toolName + "\n" + strings.Join(indented, "\n")
 	}
-	if len(args) > 4000 {
+	if len(args) > limit {
 		r := []rune(args)
-		if len(r) > 4000 {
-			args = string(r[:4000]) + "…"
+		if len(r) > limit {
+			args = string(r[:limit]) + "… [output limit reached]"
 		}
 	}
 	return "⟹ " + toolName + "\n  " + args
 }
 
 func RenderToolResult(toolName, result string) string {
-	if len(result) > 4000 {
+	return renderToolResultLimit(toolName, result, 4000)
+}
+
+// RenderToolResultExpanded retains more content without allowing an unbounded
+// terminal log entry to grow in memory.
+func RenderToolResultExpanded(toolName, result string) string {
+	return renderToolResultLimit(toolName, result, maxExpandedToolRunes)
+}
+
+const maxExpandedToolRunes = 16000
+
+func renderToolResultLimit(toolName, result string, limit int) string {
+	if len(result) > limit {
 		r := []rune(result)
-		if len(r) > 4000 {
-			result = string(r[:4000]) + "…"
+		if len(r) > limit {
+			result = string(r[:limit]) + "… [output limit reached]"
 		}
 	}
 	return "✓ " + toolName + "\n  " + result

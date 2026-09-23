@@ -14,6 +14,14 @@ import (
 //
 //nolint:gocyclo // Splitting the keymap would obscure conflicts and precedence.
 func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() != "q" {
+		m.quitHint = false
+	}
+	if m.isCompact() {
+		if next, handled := m.updateCompactNavigation(msg.String()); handled {
+			return next, nil
+		}
+	}
 	col := m.colItems(m.col)
 	switch msg.String() {
 	case "ctrl+c":
@@ -35,6 +43,13 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.finished || !m.owner {
 			return m, tea.Quit
 		}
+		m.quitHint = true
+		return m, nil
+	case "z":
+		m.dashboardCollapsed = !m.isDashboardCollapsed()
+		m.dashboardHeaderToggled = true
+		m.scrollCursorIntoView()
+		return m, nil
 	case "r":
 		return m.handleReportKey()
 	case "c":
@@ -147,6 +162,11 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.row = 0
 		m.scrollOff[m.col] = 0
 		return m, nil
+	case "shift+tab", "backtab":
+		m.col = (m.col + 5) % 6
+		m.row = 0
+		m.scrollOff[m.col] = 0
+		return m, nil
 	case "right", "l":
 		if m.col < 5 {
 			m.col++
@@ -165,6 +185,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.row < len(col) {
 			m.detailID = col[m.row].ID
+			m.expandedLogIndex = -1
 			delete(m.unread, m.detailID)
 			m.inDetail = true
 			contentLines := len(m.logs[m.detailID])
@@ -200,6 +221,42 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) updateCompactNavigation(key string) (Model, bool) {
+	group := compactGroupForCol(m.col)
+	items := m.compactItems(group)
+	index := m.compactSelectedIndex(group)
+	switch key {
+	case "left", "h":
+		group = max(group-1, 0)
+		index = 0
+	case "right", "l":
+		group = min(group+1, 2)
+		index = 0
+	case "tab":
+		group = (group + 1) % 3
+		index = 0
+	case "shift+tab", "backtab":
+		group = (group + 2) % 3
+		index = 0
+	case "up", "k":
+		index = max(index-1, 0)
+	case "down", "j":
+		index = min(index+1, len(items)-1)
+	case "g":
+		index = 0
+	case "G":
+		index = len(items) - 1
+	case "ctrl+d", "J":
+		index = min(index+max(m.colBodyHeight()/4, 1), len(items)-1)
+	case "ctrl+u", "K":
+		index = max(index-max(m.colBodyHeight()/4, 1), 0)
+	default:
+		return m, false
+	}
+	m.selectCompactItem(group, index)
+	return m, true
 }
 
 func (m Model) updateResult(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -8,13 +8,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+//nolint:gocyclo // Keep the detail keymap in one switch so navigation precedence stays visible.
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.copyNotice = ""
+	if m.detailSearchActive {
+		return m.updateDetailSearch(msg)
+	}
 	if m.inVisual {
 		return m.updateVisual(msg)
 	}
 	switch msg.String() {
 	case "esc", "backspace":
 		m.inDetail = false
+		m.detailSearchQuery = ""
 		m.inVisual = false
 		m.visualStart = 0
 		m.visualEnd = 0
@@ -38,6 +44,24 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterVisual()
 	case "t":
 		return m.attachTerminal()
+	case "o":
+		if _, ok := m.fullLogs[m.detailID][m.cursorLine]; ok {
+			if m.expandedLogIndex == m.cursorLine {
+				m.expandedLogIndex = -1
+			} else {
+				m.expandedLogIndex = m.cursorLine
+			}
+			if m.vpReady {
+				m.vp.SetContent(m.buildDetailContent())
+				m.followCursor()
+			}
+		}
+		return m, nil
+	case "/":
+		m.detailSearchActive = true
+		m.detailSearchInput.SetValue(m.detailSearchQuery)
+		m.detailSearchInput.Focus()
+		return m, m.detailSearchInput.Cursor.BlinkCmd()
 	case "j", "down":
 		contentLines := len(m.logs[m.detailID])
 		if contentLines > 0 && m.cursorLine < contentLines-1 {
@@ -105,19 +129,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "n":
-		if len(m.searchResults) > 0 {
-			m.searchIdx = (m.searchIdx + 1) % len(m.searchResults)
-			m.jumpToSearchMatch()
-			m.inDetail = false
-		}
-		return m, nil
+		return m.jumpToDetailMatch(1)
 	case "N":
-		if len(m.searchResults) > 0 {
-			m.searchIdx = (m.searchIdx - 1 + len(m.searchResults)) % len(m.searchResults)
-			m.jumpToSearchMatch()
-			m.inDetail = false
-		}
-		return m, nil
+		return m.jumpToDetailMatch(-1)
 	case "M":
 		m.inDetail = false
 		m.inMemory = true
@@ -134,6 +148,57 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) updateDetailSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.detailSearchQuery = strings.TrimSpace(m.detailSearchInput.Value())
+		m.detailSearchActive = false
+		m.detailSearchInput.Blur()
+		if m.vpReady {
+			m.vp.SetContent(m.buildDetailContent())
+		}
+		if m.detailSearchQuery != "" {
+			return m.jumpToDetailMatch(1)
+		}
+		return m, nil
+	case "esc":
+		m.detailSearchActive = false
+		m.detailSearchInput.Blur()
+		return m, nil
+	case "ctrl+c":
+		m.detailSearchActive = false
+		m.detailSearchInput.Blur()
+		return m.handleCtrlC()
+	}
+	var cmd tea.Cmd
+	m.detailSearchInput, cmd = m.detailSearchInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) jumpToDetailMatch(direction int) (tea.Model, tea.Cmd) {
+	if m.detailSearchQuery == "" {
+		return m, nil
+	}
+	lines := m.logs[m.detailID]
+	if len(lines) == 0 {
+		return m, nil
+	}
+	query := strings.ToLower(m.detailSearchQuery)
+	for step := 1; step <= len(lines); step++ {
+		idx := (m.cursorLine + direction*step + len(lines)*2) % len(lines)
+		if strings.Contains(strings.ToLower(lines[idx]), query) {
+			m.cursorLine = idx
+			m.followCursor()
+			if m.vpReady {
+				m.vp.SetContent(m.buildDetailContent())
+			}
+			return m, nil
+		}
+	}
+	m.statusText = "No matches in task log"
+	return m, nil
 }
 
 func (m Model) attachTerminal() (tea.Model, tea.Cmd) {

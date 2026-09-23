@@ -22,9 +22,10 @@ import (
 type TasksUpdatedMsg struct{ Items []*team.TodoItem }
 
 type TaskLogMsg struct {
-	TodoID string
-	Line   string
-	Model  string
+	TodoID   string
+	Line     string
+	FullLine string
+	Model    string
 }
 
 type CoordItemMsg struct{ Item *team.TodoItem }
@@ -124,7 +125,10 @@ type AskUserCancelMsg struct{}
 type detailRefreshMsg struct{}
 type spinnerTickMsg struct{}
 
-type copySuccessMsg struct{ Lines int }
+type copyRequestMsg struct {
+	Lines int
+	Sent  bool
+}
 
 var defaultSpinnerEnabled = true
 var defaultCompactMode bool
@@ -140,19 +144,27 @@ func SetCompactMode(enabled bool) { defaultCompactMode = enabled }
 type Model struct {
 	prompt    string
 	tasks     []*team.TodoItem
-	logs      map[string][]string // todoID → rendered log lines
+	logs      map[string][]string       // todoID → rendered log lines
+	fullLogs  map[string]map[int]string // todoID → log index → bounded expanded line
 	coordItem *team.TodoItem
 
 	col int // 0=pending 1=planned 2=in_progress 3=done 4=skip 5=error
 	row int // cursor within focused column
 
-	scrollOff [6]int // scroll offset per column (index of first visible item)
+	scrollOff              [6]int // scroll offset per column (index of first visible item)
+	compactScrollOff       [3]int
+	dashboardHeaderToggled bool
+	dashboardCollapsed     bool
 
-	inDetail bool
-	detailID string
-	vp       viewport.Model
-	vpReady  bool
-	inResult bool
+	inDetail           bool
+	detailID           string
+	detailSearchInput  textinput.Model
+	detailSearchActive bool
+	detailSearchQuery  string
+	expandedLogIndex   int
+	vp                 viewport.Model
+	vpReady            bool
+	inResult           bool
 
 	inMemory      bool
 	memoryVP      viewport.Model
@@ -170,6 +182,8 @@ type Model struct {
 	IsChat                   bool
 	runResult                *team.RunResult
 	statusText               string // current status shown in the status bar
+	copyNotice               string
+	quitHint                 bool
 	spinnerFrame             int
 	spinnerEnabled           bool
 	forceCompact             bool
@@ -263,34 +277,42 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 	si.Prompt = "/"
 	si.Placeholder = "Search tasks..."
 	si.CharLimit = 200
+	dsi := textinput.New()
+	dsi.Prompt = "/"
+	dsi.Placeholder = "Search task log..."
+	dsi.CharLimit = 200
 	if options.DisplayPreset == DisplayEpaper {
 		_ = ti.Cursor.SetMode(cursor.CursorStatic)
 		_ = si.Cursor.SetMode(cursor.CursorStatic)
+		_ = dsi.Cursor.SetMode(cursor.CursorStatic)
 	}
 
 	m := Model{
-		prompt:         prompt,
-		logs:           make(map[string][]string),
-		terminals:      make(map[string]string),
-		unread:         make(map[string]int),
-		promptInput:    ti,
-		searchInput:    si,
-		PromptInjectCh: make(chan string, 16),
-		WrapUpCh:       make(chan struct{}, 2),
-		ReportCh:       make(chan struct{}, 1),
-		teamInfo:       teamInfo,
-		IsChat:         teamInfo.IsChat,
-		spinnerEnabled: options.Spinner && os.Getenv("NO_SPINNER") == "",
-		forceCompact:   options.Compact,
-		themeMode:      options.Theme,
-		effectiveTheme: effectiveTheme(options.Theme),
-		displayPreset:  options.DisplayPreset,
-		noColor:        options.NoColor,
-		owner:          options.Owner,
-		themeContext:   options.Context,
-		themeDetector:  options.ThemeDetector,
-		themePoll:      options.ThemePoll,
-		styles:         newStyleSet(options.Theme, options.NoColor),
+		prompt:            prompt,
+		logs:              make(map[string][]string),
+		fullLogs:          make(map[string]map[int]string),
+		expandedLogIndex:  -1,
+		terminals:         make(map[string]string),
+		unread:            make(map[string]int),
+		promptInput:       ti,
+		searchInput:       si,
+		detailSearchInput: dsi,
+		PromptInjectCh:    make(chan string, 16),
+		WrapUpCh:          make(chan struct{}, 2),
+		ReportCh:          make(chan struct{}, 1),
+		teamInfo:          teamInfo,
+		IsChat:            teamInfo.IsChat,
+		spinnerEnabled:    options.Spinner && os.Getenv("NO_SPINNER") == "",
+		forceCompact:      options.Compact,
+		themeMode:         options.Theme,
+		effectiveTheme:    effectiveTheme(options.Theme),
+		displayPreset:     options.DisplayPreset,
+		noColor:           options.NoColor,
+		owner:             options.Owner,
+		themeContext:      options.Context,
+		themeDetector:     options.ThemeDetector,
+		themePoll:         options.ThemePoll,
+		styles:            newStyleSet(options.Theme, options.NoColor),
 	}
 
 	if m.IsChat && prompt == "" {
@@ -328,6 +350,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.detailSearchInput.Width = max(msg.Width-30, 10)
 		if m.inAskUser {
 			m.ask.ti.Width = askTIWidth(msg.Width)
 		}
@@ -409,8 +432,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TaskLogMsg:
 		line := sanitizeTerminalText(msg.Line)
+		fullLine := sanitizeTerminalText(msg.FullLine)
 		if msg.Model != "" {
-			line = "[" + sanitizeTerminalText(msg.Model) + "] " + line
+			label := "[" + sanitizeTerminalText(msg.Model) + "] "
+			line = label + line
+			if fullLine != "" {
+				fullLine = label + fullLine
+			}
+		}
+		if fullLine != "" && fullLine != line {
+			m.storeExpandedLog(msg.TodoID, len(m.logs[msg.TodoID]), fullLine)
 		}
 		m.logs[msg.TodoID] = append(m.logs[msg.TodoID], line)
 		m.trimTaskLogs(msg.TodoID)
@@ -432,16 +463,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case detailRefreshMsg:
 		m.detailRefreshScheduled = false
 		if m.inDetail && m.vpReady {
-			m.vp.SetContent(m.buildDetailContent())
+			previousLine := m.cursorLine
 			contentLines := len(m.logs[m.detailID])
-			if contentLines > 0 {
+			if contentLines > 0 && m.detailSearchQuery == "" && previousLine >= contentLines-2 {
 				m.cursorLine = contentLines - 1
 				m.followCursor()
 			}
+			m.vp.SetContent(m.buildDetailContent())
 		}
 		return m, nil
-	case copySuccessMsg:
-		m.statusText = m.styles.done.Render(fmt.Sprintf("✓ Copied %d lines to clipboard", msg.Lines))
+	case copyRequestMsg:
+		if msg.Sent {
+			m.statusText = m.styles.dim.Render(fmt.Sprintf("Sent OSC 52 copy request for %d lines; terminal support is unconfirmed", msg.Lines))
+		} else {
+			m.statusText = m.styles.errorIcon.Render("Could not send clipboard request")
+		}
+		m.copyNotice = m.statusText
 
 	case CoordItemMsg:
 		m.coordItem = msg.Item
@@ -611,79 +648,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.mouseEnabled {
 			return m, nil
 		}
-		if m.isCompact() {
-			// Compact columns merge task states, so six-column hit testing is invalid.
-			return m, nil
-		}
-		// Click on a task to select it or enter detail view
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			statusH := m.statusAreaHeight()
-			promptH := m.promptWidgetHeight()
-			feedH := m.countFeedLines()
-			feedTotal := 0
-			if feedH > 0 {
-				feedTotal = feedH + 1
-			}
-			bodyH := m.colBodyHeight()
-			colW := 0
-			if m.width >= 9 {
-				colW = (m.width - 5) / 6
-			}
-
-			// Header takes 2 lines (title + blank)
-			// Subtract: widget + blank + status + blank + [feed + blank if present]
-			clickY := msg.Y - promptH - 1 - statusH - 1 - feedTotal
-			clickX := msg.X
-			if clickY < 2 || clickY >= bodyH+2 {
+			item, col, row := m.dashboardItemAt(msg.X, msg.Y)
+			if item == nil {
 				return m, nil
 			}
-			clickY -= 2 // skip header
-
-			// Determine which column was clicked (6 columns, 5 dividers)
-			clickedCol := -1
-			xOffset := 0
-			for c := 0; c < 6; c++ {
-				colEnd := xOffset + colW
-				if c == 5 {
-					colEnd = m.width // last column takes remaining width
-				}
-				if clickX >= xOffset && clickX < colEnd {
-					clickedCol = c
-					break
-				}
-				xOffset = colEnd + 1 // +1 for divider
-			}
-			if clickedCol < 0 || clickedCol != m.col {
-				return m, nil
-			}
-
-			// Determine which item was clicked
-			items := m.colItems(clickedCol)
-			start := m.scrollOff[clickedCol]
-			lineCount := 2
-			for i := start; i < len(items); i++ {
-				itemLines := len(m.itemLines(items[i], false, false, colW))
-				if itemLines == 0 {
-					itemLines = 2
-				}
-				if clickY >= lineCount && clickY < lineCount+itemLines+1 {
-					// Clicked on item i — enter detail view
-					m.detailID = items[i].ID
-					m.inDetail = true
-					if m.vpReady {
-						m.vp.SetContent(m.buildDetailContent())
-						m.vp.GotoTop()
-					}
-					if !m.mouseEnabled {
-						m.mouseEnabled = true
-						return m, enableMouseCmd()
-					}
-					return m, nil
-				}
-				lineCount += itemLines
-				if i < len(items)-1 {
-					lineCount++ // blank line between items
-				}
+			m.col, m.row = col, row
+			m.detailID = item.ID
+			m.expandedLogIndex = -1
+			delete(m.unread, item.ID)
+			m.inDetail = true
+			m.cursorLine = max(len(m.logs[item.ID])-1, 0)
+			if m.vpReady {
+				m.vp.SetContent(m.buildDetailContent())
+				m.vp.GotoBottom()
 			}
 			return m, nil
 		}
@@ -745,6 +723,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.inAskUser && m.ask.isFreeText() {
 		var cmd tea.Cmd
 		m.ask.ti, cmd = m.ask.ti.Update(msg)
+		return m, cmd
+	}
+
+	// Forward non-key messages to the search input textinput when active.
+	if m.inDetail && m.detailSearchActive {
+		var cmd tea.Cmd
+		m.detailSearchInput, cmd = m.detailSearchInput.Update(msg)
 		return m, cmd
 	}
 
