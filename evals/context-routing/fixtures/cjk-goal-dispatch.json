@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"worker\", \"goal\": \"向使用者打招呼\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"已打招呼。\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"你好!任務完成。\"}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

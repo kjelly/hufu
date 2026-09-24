@@ -1,0 +1,18 @@
+version: 1
+name: context-routing
+team: ./team
+mode: deterministic
+cases:
+  # Context routing runs a lexical (FTS5) lookup on the prompt and task text
+  # before the coordinator and each worker start. A prompt and goal written
+  # entirely in CJK have no ASCII FTS terms; the lookup must return no
+  # matches instead of an FTS syntax error that fails the run.
+  - id: cjk-goal-dispatch
+    prompt: "向使用者打招呼"
+    provider-fixture: fixtures/cjk-goal-dispatch.json
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done

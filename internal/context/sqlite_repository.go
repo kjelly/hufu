@@ -1267,11 +1267,17 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	if limit <= 0 {
 		limit = 20
 	}
+	match := ftsQuery(req.Query)
+	if match == "" {
+		// Nothing FTS can match (for example a CJK-only or punctuation-only
+		// query). MATCH '' is an FTS5 syntax error, not an empty result.
+		return nil, nil
+	}
 	columns := "c." + strings.ReplaceAll(itemColumns, ",", ",c.")
 	// Reuse the same scope predicate as Query so lexical retrieval can never
 	// surface another team/session/agent/task's context (it previously only
 	// filtered by project_id).
-	args := []any{ftsQuery(req.Query)}
+	args := []any{match}
 	where := append([]string{}, scopeAuthorize("c.", req.Scope, req.Visibility, &args)...)
 	now := time.Now().UnixMilli()
 	where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
@@ -1350,11 +1356,23 @@ func (r *SQLiteRepository) RebuildLexical(ctx context.Context) error {
 
 // ftsQuery turns operational identifiers (paths, commands, punctuation) into
 // plain FTS tokens so an exact-matchable path cannot make the lexical stage
-// fail with an FTS syntax error.
+// fail with an FTS syntax error. The uppercase FTS5 operators (AND, OR, NOT,
+// NEAR) are dropped rather than searched for: in task text they carry no
+// retrieval signal, and as required terms they would suppress real matches.
+// Every remaining term is quoted. The result is empty when the query has no
+// ASCII word characters.
 func ftsQuery(query string) string {
-	terms := strings.FieldsFunc(query, func(r rune) bool {
+	fields := strings.FieldsFunc(query, func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_'
 	})
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		switch field {
+		case "AND", "OR", "NOT", "NEAR":
+			continue
+		}
+		terms = append(terms, `"`+field+`"`)
+	}
 	return strings.Join(terms, " ")
 }
 
