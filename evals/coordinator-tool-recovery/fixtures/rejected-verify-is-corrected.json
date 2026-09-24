@@ -32,6 +32,9 @@
         "name": "finish",
         "arguments": "{\"response\": \"Hello! Task complete.\"}"
       }
+    },
+    {
+      "content": "(run ends here)"
     }
   ]
 }
