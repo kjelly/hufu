@@ -1,0 +1,4 @@
+name: eval-policy-repair-exhaustion
+description: Coordinator whose delegation allowlist excludes one defined worker, for the policy-repair-exhaustion eval suite
+delegation:
+  allowed-workers: [worker]

@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"outsider\",\"goal\":\"Say hello to the user.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"outsider\",\"goal\":\"Say hello to the user politely.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"outsider\",\"goal\":\"Say hello to the user one more time.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"outsider\", \"goal\": \"Say hello to the user a final time.\"}]}"
+      }
+    }
+  ]
+}

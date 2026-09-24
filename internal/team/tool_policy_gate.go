@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -400,7 +401,14 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 			}
 			detail += err.Error()
 		}
-		return fantasy.ToolResponse{}, fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, t.Info().Name, detail)
+		failure := fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, t.Info().Name, detail)
+		if errors.Is(err, errCoordinatorPolicyRepairExhausted) {
+			// Keep the exhaustion sentinel alongside the tool-failure one:
+			// attemptWrapUpRecovery finalizes an exhausted repair with the
+			// LLM-free summary, and only recognizes it through errors.Is.
+			failure = fmt.Errorf("%w (%w)", failure, errCoordinatorPolicyRepairExhausted)
+		}
+		return fantasy.ToolResponse{}, failure
 	}
 	if err != nil || response.IsError {
 		if sequence.allowsExpectedExitCode(reservedSlot, t.Info().Name, response.Content) {
