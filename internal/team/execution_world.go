@@ -39,6 +39,9 @@ type ExecutionWorldSpec struct {
 	RunID   string
 	TaskID  string
 	Attempt int
+	// OccurrenceAttempt is the occurrence-level attempt number (Retries+1),
+	// recorded by worlds that persist an owner marker.
+	OccurrenceAttempt int
 
 	Root string
 	CWD  string
@@ -91,6 +94,9 @@ type PreparedExecutionWorld struct {
 	// exported or serialized: the lease only protects the live shared working
 	// tree while this prepared attempt is active.
 	releaseLease func()
+
+	// isolated is the process-local state of an isolated-copy world.
+	isolated *isolatedWorldState
 }
 
 // sideEffectExecutionRoots implements the side-effect → world-projection
