@@ -132,6 +132,7 @@ var portableProviderTaskFields = []string{
 	"sidecar",
 	"context_files",
 	"depends_on",
+	"on_failure",
 	"pipeline",
 	"verify",
 	"verify_mode",
@@ -169,7 +170,10 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			return response, nil
 		}
 		if t.coordinator.terminalUnresolvedRun() {
-			return terminalUnresolvedWorkerResponse(t.coordinator), nil
+			return terminalUnresolvedWorkerResponse(t.coordinator), markCoordinatorFatal(errors.New("terminal unresolved worker outcome"))
+		}
+		if errors.Is(err, errCoordinatorFatal) {
+			return renderRunAgentsToolResponse(result, err), err
 		}
 		return renderRunAgentsToolResponse(result, err), nil
 	}
@@ -404,7 +408,8 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if t.coordinator.noProgressStopPending() {
 		existing := t.coordinator.LastRunResult()
 		if existing == nil {
-			return fantasy.NewTextErrorResponse("no-progress budget exhausted; partial run result is not available"), nil
+			const detail = "no-progress budget exhausted; partial run result is not available"
+			return fantasy.NewTextErrorResponse(detail), markCoordinatorFatal(errors.New(detail))
 		}
 		// The no-progress disposition is decided before this finish side effect.
 		// Finish still gets a fresh acceptance/artifact observation so a second

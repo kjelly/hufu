@@ -231,6 +231,16 @@ func generateCompactExample(raw any) any {
 	}
 }
 
+// coordinatorToolDecodesUndeclaredArguments reports whether a coordinator
+// tool's own decoder, not its model-visible schema, owns undeclared argument
+// keys. The agent tool's provider schema is a deliberately small projection
+// (portableProviderTaskProperties): decodeModelTaskDefs accepts or rejects the
+// full task vocabulary, including fields the coordinator prompt documents but
+// the projection omits (for example verify_spec).
+func coordinatorToolDecodesUndeclaredArguments(name string) bool {
+	return name == "agent"
+}
+
 func validateToolArguments(input string, info fantasy.ToolInfo) *toolArgumentSchemaError {
 	decoder := json.NewDecoder(bytes.NewBufferString(input))
 	decoder.UseNumber()
@@ -247,7 +257,37 @@ func validateToolArguments(input string, info fantasy.ToolInfo) *toolArgumentSch
 		"required":             info.Required,
 		"additionalProperties": false,
 	}
+	if coordinatorToolDecodesUndeclaredArguments(info.Name) {
+		top = withoutClosedObjects(top).(map[string]any)
+	}
 	return validateSchemaValue(value, top, "$")
+}
+
+// withoutClosedObjects returns a copy of schema with every
+// additionalProperties:false constraint removed, so declared properties keep
+// their type, enum, and required checks while undeclared keys pass through.
+func withoutClosedObjects(schema any) any {
+	switch node := schema.(type) {
+	case map[string]any:
+		copied := make(map[string]any, len(node))
+		for key, value := range node {
+			if key == "additionalProperties" {
+				if closed, ok := value.(bool); ok && !closed {
+					continue
+				}
+			}
+			copied[key] = withoutClosedObjects(value)
+		}
+		return copied
+	case []any:
+		copied := make([]any, len(node))
+		for i, value := range node {
+			copied[i] = withoutClosedObjects(value)
+		}
+		return copied
+	default:
+		return schema
+	}
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

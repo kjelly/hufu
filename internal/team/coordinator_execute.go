@@ -87,7 +87,7 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
 	if err := c.AdmitExecutionPolicy(); err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	var err error
 	// Bind once before expansion so a static contract can contribute its
@@ -150,13 +150,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	if err := c.ValidateResourceLocks(ctx); err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	if c.IsWrapUp() && !c.acceptanceRecovery.Load() {
 		c.report(c.newEvent("step").withMessage("Wrap-up: refusing to start new tasks"))
@@ -515,13 +515,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				if advancedPhase && c.sessionData != nil {
 					c.sessionData.DelegationPhase = DelegationPhaseInitialPending
 				}
-				return "", projectionErr
+				return "", markCoordinatorFatal(projectionErr)
 			}
 			if _, err := c.admitTaskOccurrence(ctx, projection, ids[i], 1); err != nil {
 				if advancedPhase && c.sessionData != nil {
 					c.sessionData.DelegationPhase = DelegationPhaseInitialPending
 				}
-				return "", err
+				return "", markCoordinatorFatal(err)
 			}
 		}
 	}
@@ -530,14 +530,14 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if advancedPhase && len(todoItems) == 0 && c.sessionData != nil {
 			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
 		}
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	for i, item := range todoItems {
 		if duplicateIndices[i] {
 			continue
 		}
 		if err := c.recordResourceClaimsResolved(ctx, item); err != nil {
-			return "", err
+			return "", markCoordinatorFatal(err)
 		}
 	}
 	// No-progress budget (§8.1, WP-12): ordinary newly created tasks are one
@@ -571,7 +571,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			}
 		}
 		if err := c.CommitTaskRemoval(ctx, removeIDs...); err != nil {
-			return "", err
+			return "", markCoordinatorFatal(err)
 		}
 	}
 
@@ -606,11 +606,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// closed if the callback changed any executable semantics.
 	schedulerTasks, err := c.reconstructSchedulerTaskDefs(tasks, todoItems, duplicateIndices)
 	if err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	scheduler, err := newDAGScheduler(c, schedulerTasks, todoItems, envelopes, duplicateIndices)
 	if err != nil {
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	results, err := scheduler.run(ctx)
 	if err != nil {
@@ -628,7 +628,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			}
 			c.saveCheckpoint()
 		}
-		return "", err
+		return "", markCoordinatorFatal(err)
 	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		if err := c.phaseWorkflow.observe(c.taskTracker.TodoList().Items()); err != nil {
@@ -694,7 +694,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	// force wrap-up turn, refuse further blind delegation); second threshold
 	// → stop the run with a partial outcome and continuation record.
 	if stopped, stopReason := c.enforceNoProgressBudget(); stopped {
-		return "", fmt.Errorf("%s: call finish immediately with your best summary of work completed so far", stopReason)
+		// The no-progress stop forbids another coordinator turn.
+		return "", markCoordinatorFatal(fmt.Errorf("%s: call finish immediately with your best summary of work completed so far", stopReason))
 	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)

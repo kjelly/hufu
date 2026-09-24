@@ -3,16 +3,19 @@ name: policy-repair-exhaustion
 team: ./team
 mode: deterministic
 cases:
-  # The first call is caught by the coordinator's argument-schema repair
-  # (the agent enum only lists "worker"); the next three are rejected by the
-  # delegation allowlist and exhaust the coordinator policy-repair budget
-  # (maxCoordinatorPolicyRepairs = 2). The run must end with the runtime's
+  # The worker succeeds, then the coordinator redispatches it three times.
+  # Each redispatch is schema-valid but violates no-redispatch-after-success,
+  # so the policy repair budget (maxCoordinatorPolicyRepairs = 2) is spent and
+  # the third violation exhausts it. The run must end with the runtime's
   # LLM-free partial summary, not as a coordinator tool failure, and no model
   # turn may follow the exhausting call (the scripted provider has no step
   # left to answer one).
-  - id: allowlist-violations-exhaust-repair
+  - id: redispatch-violations-exhaust-repair
     prompt: "Say hello to the user."
-    provider-fixture: fixtures/allowlist-violations-exhaust-repair.json
+    provider-fixture: fixtures/redispatch-violations-exhaust-repair.json
     expect:
       run-outcome: unverified
-      task-count: 0
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done

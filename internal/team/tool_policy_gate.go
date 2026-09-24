@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -370,45 +369,13 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	} else if outcome.Action != CheckpointContinue {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("%s; this dispatch has stopped", outcome.Detail)), checkpointControlError{outcome: outcome}
 	}
-	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && (err != nil || response.IsError) {
-		// A rejected delegation is deliberately returned as an error response so
-		// the model sees the violation.  The coordinator owns the pending bit;
-		// preserve this one runtime-issued recovery path instead of turning it
-		// back into a terminal transport error before the stream can consume it.
-		if t.Info().Name == "agent" && t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() && err == nil {
-			return response, nil
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
+		// This is the coordinator's only stream boundary: Fantasy discards the
+		// OnToolResult callback's return value for locally executed tools.
+		if err != nil || response.IsError {
+			return t.coordinator.coordinatorToolFailureResult(t.Info().Name, call.Input, response, err)
 		}
-		if isReadOnlyToolCall(t.Info().Name, call.Input) {
-			// A failed observation has no side effect and its error is useful
-			// evidence to the coordinator (for example, view was given a
-			// directory and should be followed by ls). Let the model correct that
-			// bounded mistake. Delegation, finish, writes, policy denials, and any
-			// unknown tool remain hard coordinator boundaries below.
-			if err != nil {
-				detail := strings.TrimSpace(response.Content)
-				if detail != "" {
-					detail += ": "
-				}
-				detail += err.Error()
-				return fantasy.NewTextErrorResponse(detail), nil
-			}
-			return response, nil
-		}
-		detail := strings.TrimSpace(response.Content)
-		if err != nil {
-			if detail != "" {
-				detail += ": "
-			}
-			detail += err.Error()
-		}
-		failure := fmt.Errorf("%w: tool %q failed: %s", errCoordinatorToolFailure, t.Info().Name, detail)
-		if errors.Is(err, errCoordinatorPolicyRepairExhausted) {
-			// Keep the exhaustion sentinel alongside the tool-failure one:
-			// attemptWrapUpRecovery finalizes an exhausted repair with the
-			// LLM-free summary, and only recognizes it through errors.Is.
-			failure = fmt.Errorf("%w (%w)", failure, errCoordinatorPolicyRepairExhausted)
-		}
-		return fantasy.ToolResponse{}, failure
+		t.coordinator.noteCoordinatorToolSuccess()
 	}
 	if err != nil || response.IsError {
 		if sequence.allowsExpectedExitCode(reservedSlot, t.Info().Name, response.Content) {

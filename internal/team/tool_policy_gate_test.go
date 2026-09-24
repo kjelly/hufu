@@ -552,17 +552,17 @@ func TestPolicyGateInitialCoordinatorToolGetsOneCorrection(t *testing.T) {
 	}
 }
 
-func TestPolicyGateCoordinatorDispatchErrorResponseIsTerminal(t *testing.T) {
+func TestPolicyGateCoordinatorDispatchErrorResponseIsRecoverable(t *testing.T) {
 	c := gateTestCoordinator()
 	c.taskTracker = NewTaskTracker()
-	inner := &recordingTool{name: "agent", resp: fantasy.NewTextErrorResponse("first delegation must contain exactly the configured initial batch")}
+	inner := &recordingTool{name: "agent", resp: fantasy.NewTextErrorResponse("verifier contract error: verify (verifier_not_asserting)")}
 	gated := c.gatePolicyTools([]fantasy.AgentTool{inner})[0]
 	ctx := tools.SetToolsAllowed(context.Background(), []string{"agent"})
 	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
 
-	_, err := gated.Run(ctx, fantasy.ToolCall{ID: "invalid-initial-batch", Name: "agent"})
-	if !errors.Is(err, errCoordinatorToolFailure) {
-		t.Fatalf("tool error = %v, want terminal coordinator tool failure", err)
+	response, err := gated.Run(ctx, fantasy.ToolCall{ID: "bad-verify", Name: "agent"})
+	if err != nil || !response.IsError || !strings.Contains(response.Content, "verifier_not_asserting") {
+		t.Fatalf("dispatch error = response=%#v err=%v, want the error returned to the model", response, err)
 	}
 	if !inner.ran {
 		t.Fatal("inner tool should have run before its rejected delegation response")

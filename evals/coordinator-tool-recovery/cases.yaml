@@ -1,0 +1,20 @@
+version: 1
+name: coordinator-tool-recovery
+team: ./team
+mode: deterministic
+cases:
+  # A coordinator tool error response is feedback the model can act on. The
+  # first call (team_info) moves the stream past step 0, so the rejected
+  # dispatch below runs on a later step. Its verify command fails the
+  # contract preflight (verifier_not_asserting); the coordinator must see
+  # that error and continue with a corrected dispatch instead of the run
+  # ending as a coordinator tool failure.
+  - id: rejected-verify-is-corrected
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/rejected-verify-is-corrected.json
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done

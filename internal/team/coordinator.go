@@ -457,8 +457,11 @@ type Coordinator struct {
 	coordinatorPolicyRepairsAttempt   atomic.Int32
 	coordinatorPolicyRepairsSuccess   atomic.Int32
 	coordinatorPolicyRepairPending    atomic.Bool
-	coordinatorPolicyRepairExhausted  atomic.Bool
-	contextRequestSeq                 atomic.Uint64
+	// coordinatorToolErrorStreak counts consecutive coordinator tool error
+	// responses; see maxConsecutiveCoordinatorToolErrors.
+	coordinatorToolErrorStreak       atomic.Int32
+	coordinatorPolicyRepairExhausted atomic.Bool
+	contextRequestSeq                atomic.Uint64
 	// executionAttemptSeq identifies coordinator model-stream invocations
 	// within one public execution run. It is deliberately separate from task
 	// retry attempts and from context-request telemetry sequencing.
@@ -1999,6 +2002,10 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 			"type":        "array",
 			"items":       map[string]any{"type": "integer"},
 			"description": "0-based indices of tasks in this call's tasks array that must complete before this task starts. Example: [{agent:\"researcher\",goal:\"find X\"},{agent:\"coder\",goal:\"implement X\",depends_on:[0]}] — the coder waits for the researcher to finish.",
+		},
+		"on_failure": map[string]any{
+			"type":        "integer",
+			"description": "0-based index of an earlier task in this call's tasks array to reset and rerun when this task fails; this task and everything that depends on the reset task rerun afterwards, bounded by max_retries (default 1).",
 		},
 		"pipeline": map[string]any{
 			"type":        "boolean",

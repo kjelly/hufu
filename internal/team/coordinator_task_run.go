@@ -4362,14 +4362,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			if repeatedProtocolErr != nil {
 				return repeatedProtocolErr
 			}
-			// A worker can use a tool error as evidence and still produce a
-			// typed result for its bounded task. A coordinator normally cannot
-			// continue after a direct tool error: delegation, completion, writes,
-			// and unknown tools could leave cross-task state incomplete. A failed
-			// read-only observation is the deliberately narrow exception. It has
-			// no side effect and the model receives the error result, so it can
-			// select the correct observation tool (for example ls after view was
-			// given a directory) without restarting an otherwise successful run.
+			// Fantasy discards this callback's return value for locally executed
+			// tools, so in a live stream the coordinator's boundary is the policy
+			// gate (coordinatorToolFailureResult), which returns error responses
+			// to the model and stops only on Go errors or a bounded error streak.
+			// This check only takes effect for agents that honor the callback.
 			if todoID == CoordTodoID && isErrResult {
 				trimmedResult := strings.TrimSpace(resultPreview)
 				if strings.Contains(trimmedResult, coordinatorPolicyRepairExhaustedPrefix) {

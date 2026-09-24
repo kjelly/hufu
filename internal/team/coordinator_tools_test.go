@@ -164,9 +164,11 @@ func TestTerminalUnresolvedWorkerResponseStopsCoordinatorToolTurn(t *testing.T) 
 		t.Fatalf("terminal run result = %#v, want nonzero unresolved outcome", result)
 	}
 
-	// The policy gate turns an error response from a coordinator tool into the
-	// hard stream boundary used by a live orchestrator.
-	gated := coord.gatePolicyTools([]fantasy.AgentTool{&recordingTool{name: "agent", resp: response}})[0]
+	// runAgentsTool.Run returns the terminal response with a fatal Go error;
+	// the policy gate turns that into the hard stream boundary used by a live
+	// orchestrator.
+	fatal := &failingCoordinatorTool{recordingTool: recordingTool{name: "agent", resp: response}, err: markCoordinatorFatal(errors.New("terminal unresolved worker outcome"))}
+	gated := coord.gatePolicyTools([]fantasy.AgentTool{fatal})[0]
 	ctx := context.WithValue(context.Background(), todoIDKey{}, CoordTodoID)
 	_, err := gated.Run(ctx, fantasy.ToolCall{Name: "agent"})
 	if !errors.Is(err, errCoordinatorToolFailure) {

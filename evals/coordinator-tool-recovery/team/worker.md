@@ -1,6 +1,6 @@
 ---
-name: outsider
-description: A defined worker that the delegation allowlist forbids
+name: worker
+description: Executes one delegated task for the coordinator-tool-recovery fixture team
 role: worker
 tools: view
 model: eval-harness-model
