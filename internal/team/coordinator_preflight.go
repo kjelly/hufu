@@ -97,6 +97,20 @@ func (p *coordinatorRequestPreflight) configuration() (string, []fantasy.AgentTo
 	return p.fullSystem, append([]fantasy.AgentTool(nil), p.fullTools...)
 }
 
+// bindTools replaces the preflight's tool set with the exact tools the
+// coordinator agent was built with. The preflight is constructed before
+// createGatedAgent wraps the raw orchestrator tools in the policy gate and
+// protocol-repair boundary; returning the raw set from prepare would let
+// every later step bypass both.
+func (p *coordinatorRequestPreflight) bindTools(tools []fantasy.AgentTool) {
+	if p == nil || len(tools) == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.fullTools = append([]fantasy.AgentTool(nil), tools...)
+	p.mu.Unlock()
+}
+
 func (p *coordinatorRequestPreflight) windowValue() int {
 	if p == nil {
 		return 0

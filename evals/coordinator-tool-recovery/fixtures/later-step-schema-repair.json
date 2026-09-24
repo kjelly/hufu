@@ -1,0 +1,37 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "team_info",
+        "arguments": "{\"action\": \"list_agents\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"ghost\", \"goal\": \"Say hello to the user.\"}]}"
+      }
+    },
+    {
+      "match": {
+        "contains": "arguments are invalid at $.tasks[0].agent"
+      },
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"worker\", \"goal\": \"Say hello to the user.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"Said hello.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"Hello! Task complete.\"}"
+      }
+    }
+  ]
+}

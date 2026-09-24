@@ -18,3 +18,18 @@ cases:
       tasks:
         - agent: worker
           status: done
+  # The schema-repair wrapper and policy gate must stay in front of the
+  # coordinator's tools on every step, not only the first. The unknown agent
+  # name on a later step must be answered by the argument-schema repair
+  # prompt, which the next scripted step matches on; if later steps bypassed
+  # the wrapper, the dispatch would reach the agent resolver instead and the
+  # matching step would never be consumed.
+  - id: later-step-schema-repair
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/later-step-schema-repair.json
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done

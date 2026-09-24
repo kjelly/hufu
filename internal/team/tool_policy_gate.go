@@ -549,6 +549,12 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 		// arguments are rejected before authorization, sequence state, or the
 		// underlying tool can observe the call.
 		gated = c.wrapWithProtocolRepair(gated)
+		if preflight := coordinatorRequestPreflightFromContext(ctx); preflight != nil {
+			// The preflight was built from the raw orchestrator tools. It must
+			// hand the gated set back on later steps, or every step after the
+			// first would bypass the policy gate and schema repair.
+			preflight.bindTools(gated)
+		}
 	}
 	return agent.CreateAgent(ctx, provider, cfg, gated)
 }
