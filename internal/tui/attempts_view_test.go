@@ -25,8 +25,8 @@ func attemptDetailModel(t *testing.T, attempts []OperatorAttemptDetail) (Model, 
 
 func TestAttemptsRenderAsPlainTextInEpaper(t *testing.T) {
 	m, item := attemptDetailModel(t, []OperatorAttemptDetail{
-		{TaskID: "7", Attempt: 1, Target: "ollama/qwen3", Workspace: "isolated", Activity: "terminal", Duration: 4 * time.Second, Tokens: 120, TokensKnown: true, FailureClass: "workspace_conflict"},
-		{TaskID: "7", Attempt: 2, Target: "openai/gpt-5", Workspace: "isolated", Activity: "running", Duration: 42 * time.Second, Fallbacks: 1},
+		{TaskID: "7", Attempt: 1, Target: "ollama/qwen3", Workspace: "isolated", Activity: "terminal", Status: "failed", Duration: 4 * time.Second, Tokens: 120, TokensKnown: true, FailureClass: "workspace_conflict"},
+		{TaskID: "7", Attempt: 2, Target: "openai/gpt-5", Workspace: "isolated", Activity: "running", Status: "in_progress", Duration: 42 * time.Second, Fallbacks: 1},
 		{TaskID: "8", Attempt: 1, Target: "other-task", Activity: "running"},
 	})
 	header := m.renderDetailHeader(item)
@@ -35,8 +35,8 @@ func TestAttemptsRenderAsPlainTextInEpaper(t *testing.T) {
 	}
 	for _, want := range []string{
 		"─── Attempts ───",
-		"#1 · ollama/qwen3 · isolated · terminal · 4s · 120 tokens · fallbacks 0 · last failure workspace_conflict",
-		"#2 · openai/gpt-5 · isolated · running · 42s · tokens unknown · fallbacks 1",
+		"#1 · ollama/qwen3 · isolated · terminal · failed · 4s · 120 tokens · fallbacks 0 · last failure workspace_conflict",
+		"#2 · openai/gpt-5 · isolated · running · in_progress · 42s · tokens unknown · fallbacks 1",
 	} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("header missing %q:\n%s", want, header)

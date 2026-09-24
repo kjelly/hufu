@@ -229,8 +229,9 @@ func (c *Coordinator) attemptExecutionTarget(taskID string) (execution.Execution
 	return target, ok
 }
 
-// accumulateExecutionFallbackMetrics counts this run's fallbacks from their
-// durable events, so the counters survive a coordinator restart.
+// accumulateExecutionFallbackMetrics counts the execution-route fallbacks of
+// this run from their durable events. Each invocation starts a new run ID, so
+// fallbacks from an earlier run are not counted.
 func (c *Coordinator) accumulateExecutionFallbackMetrics(metrics *RunMetrics) {
 	if c == nil || c.eventStore == nil || metrics == nil {
 		return

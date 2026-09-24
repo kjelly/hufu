@@ -56,6 +56,9 @@ func (m Model) renderAttemptLines(taskID string) []string {
 			sanitizeTerminalText(textOrUnknown(attempt.Target)),
 			sanitizeTerminalText(textOrUnknown(attempt.Workspace)),
 			sanitizeTerminalText(textOrUnknown(attempt.Activity)),
+			// An earlier attempt's activity is always "terminal"; its status
+			// tells whether it finished or failed.
+			sanitizeTerminalText(textOrUnknown(attempt.Status)),
 			duration, tokens,
 			fmt.Sprintf("fallbacks %d", attempt.Fallbacks),
 		}

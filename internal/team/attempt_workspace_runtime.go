@@ -282,8 +282,9 @@ func (c *Coordinator) attemptWorldDirFor(worldID string) string {
 	return filepath.Join(attemptWorldsDir(c.session.Scope.ControlRoot), worldID)
 }
 
-// accumulateAttemptWorldMetrics counts this run's attempt-world lifecycle
-// from its durable events, so the counters survive a coordinator restart.
+// accumulateAttemptWorldMetrics counts the attempt-world lifecycle of this
+// run from its durable events. Each invocation starts a new run ID, so worlds
+// from an earlier run are not counted.
 func (c *Coordinator) accumulateAttemptWorldMetrics(metrics *RunMetrics) {
 	if c == nil || c.eventStore == nil || metrics == nil {
 		return

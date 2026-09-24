@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -258,10 +259,10 @@ func (b *attemptBuilder) finish(todo *team.TodoItem, latest bool, now time.Time)
 	}
 	view.TaskStatus = string(status)
 	view.AttemptWorldState = b.worldState
-	view.WorkspaceMode = "shared"
+	view.WorkspaceMode = string(agent.WorkerWorkspaceShared)
 	if todo != nil {
-		if todo.WorkerWorkspace != nil && string(todo.WorkerWorkspace.EffectiveMode) == "isolated" {
-			view.WorkspaceMode = "isolated"
+		if todo.WorkerWorkspace != nil && todo.WorkerWorkspace.EffectiveMode == agent.WorkerWorkspaceIsolated {
+			view.WorkspaceMode = string(agent.WorkerWorkspaceIsolated)
 		}
 		if todo.ExecutionRoute != nil {
 			view.RouteName = todo.ExecutionRoute.Name

@@ -70,6 +70,9 @@ spec:
         side_effect: none
         timeout: 10
 
+  # No agent selects codex by default. This configures the codex backend for
+  # `--worker-model <agent>=codex/<model>` runs; the built-in defaults would
+  # not pass HOME through inherit-env.
   subagent-providers:
     codex:
       type: codex-app-server
