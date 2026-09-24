@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
@@ -44,6 +45,14 @@ type TeamSession struct {
 	// occurrences carry only a ResultContractRef.
 	ResultContracts      map[string]*CompiledResultContract
 	AgentResultContracts map[string]ResultContractRef
+	// ExecutionRouteConfigs are hufu.yaml's execution routes, supplied by the
+	// host before the coordinator is built. ExecutionRoutes holds the
+	// compiled routes the team binds, by name, and AgentExecutionRoutes binds
+	// each worker (by lower-case agent name) to one. None is persisted;
+	// admitted occurrences carry an ExecutionRouteBinding.
+	ExecutionRouteConfigs map[string]config.ExecutionRouteConfig
+	ExecutionRoutes       map[string]*ExecutionRouteDefinition
+	AgentExecutionRoutes  map[string]string
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition
@@ -91,6 +100,7 @@ type agentFrontmatter struct {
 	Memory           rawWorkerMemoryPolicy             `yaml:"memory"`
 	ResultContract   *agent.ResultContractSpec         `yaml:"result-contract"`
 	WorkerWorkspace  *agent.WorkerWorkspaceSpec        `yaml:"worker-workspace"`
+	ExecutionRoute   string                            `yaml:"execution-route"`
 }
 
 // teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
@@ -528,9 +538,10 @@ func inferAgentNameFromFilename(path string) (string, error) {
 }
 
 // resultContractFrontmatterKey detects the top-level frontmatter keys whose
-// silent loss would weaken enforcement (a result contract, an isolated
-// worker workspace), so a parse failure there is an error, not a fallback.
-var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^(result-contract|worker-workspace)[ \t]*:`)
+// silent loss would weaken enforcement or change the worker's target (a
+// result contract, an isolated worker workspace, an execution route), so a
+// parse failure there is an error, not a fallback.
+var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^(result-contract|worker-workspace|execution-route)[ \t]*:`)
 
 func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
@@ -650,6 +661,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		MemoryID:         fm.MemoryID,
 		ResultContract:   fm.ResultContract.Clone(),
 		WorkerWorkspace:  fm.WorkerWorkspace.Clone(),
+		ExecutionRoute:   strings.TrimSpace(fm.ExecutionRoute),
 	}
 	if fm.Memory.isSet() {
 		def.Memory = resolveWorkerMemoryPolicy(fm.Memory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
@@ -1006,6 +1018,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
 	cfg.WorkerWorkspace = yc.WorkerWorkspace.Clone()
+	cfg.ExecutionRoute = strings.TrimSpace(yc.ExecutionRoute)
 	cfg.MemoryLearning, err = resolveMemoryLearningPolicy(yc.MemoryLearning)
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid memory-learning config: %w", err)
@@ -1596,6 +1609,9 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, err
 	}
 	if err := validateTeamWorkerWorkspaces(session); err != nil {
+		return nil, err
+	}
+	if err := validateExecutionRouteReferences(session); err != nil {
 		return nil, err
 	}
 

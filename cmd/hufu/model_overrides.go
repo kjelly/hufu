@@ -142,10 +142,14 @@ func applyCLIGenerationOverridesToAgents(session *team.TeamSession, overrides Mo
 		if def == nil {
 			continue
 		}
+		// A CLI target makes the worker single-target: it replaces the
+		// worker's execution route, which then implies no fallback.
 		if target, ok := workerTargets[def]; ok {
 			def.Generation.Model = target
+			def.ExecutionRoute = ""
 		} else if overrides.Model != "" && !isCoordinatorRole(def.Role) && !strings.EqualFold(def.Name, "coordinator") {
 			def.Generation.Model = overrides.Model
+			def.ExecutionRoute = ""
 		}
 		if overrides.Temperature != "" {
 			def.Generation.Temperature = overrides.Temperature

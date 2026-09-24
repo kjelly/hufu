@@ -161,6 +161,10 @@ type Config struct {
 	RawVars               interface{}               `yaml:"vars"`
 	Hooks                 map[string]string         `yaml:"hooks"`
 	Notify                notify.NotifyConfig       `yaml:"notify"`
+	// ExecutionRoutes are named, ordered worker target lists that team.yaml
+	// and agent frontmatter reference with execution-route. A file's routes
+	// replace the earlier file's routes as a whole, like model-list.
+	ExecutionRoutes map[string]ExecutionRouteConfig `yaml:"execution-routes"`
 	// WorkspaceVersioning configures subject-root versioning for managed
 	// workspaces (docs/archive/implementation-plans/workspace-versioning.md §31).
 	WorkspaceVersioning WorkspaceVersioningConfig `yaml:"workspace-versioning"`
@@ -283,6 +287,9 @@ func (c *Config) mergeScalarFields(fileCfg *Config) {
 	}
 	if len(fileCfg.ModelList) > 0 {
 		c.ModelList = fileCfg.ModelList
+	}
+	if len(fileCfg.ExecutionRoutes) > 0 {
+		c.ExecutionRoutes = fileCfg.ExecutionRoutes
 	}
 	if fileCfg.MaxConcurrent > 0 {
 		c.MaxConcurrent = fileCfg.MaxConcurrent

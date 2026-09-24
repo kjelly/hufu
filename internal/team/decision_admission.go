@@ -309,6 +309,11 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if err := c.validateExtraModelExecutionTopology(task); err != nil {
 		return task, err
 	}
+	route, err := c.admittedExecutionRoute(task, def)
+	if err != nil {
+		return task, err
+	}
+	task.ExecutionRoute = route
 	workspacePolicy, err := c.admittedWorkerWorkspace(task, def)
 	if err != nil {
 		return task, err

@@ -42,8 +42,11 @@ type ExecutionPolicySnapshot struct {
 	RunInputPolicyHash string                           `json:"run_input_policy_hash,omitempty"`
 	// ResultContracts pins every bound result contract schema. It is omitted
 	// when a team declares none, so their ConfigurationHash is unchanged.
-	ResultContracts   []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
-	ConfigurationHash string                                  `json:"configuration_hash"`
+	ResultContracts []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
+	// ExecutionRoutes pins every worker's bound execution route by digest.
+	// It is omitted when no worker binds a route.
+	ExecutionRoutes   []ExecutionRoutePolicySnapshot `json:"execution_routes,omitempty"`
+	ConfigurationHash string                         `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -193,6 +196,11 @@ func (c *Coordinator) executionPolicyModelInputs() []executionPolicyModelInput {
 		for _, model := range def.ExtraModels {
 			add(model, backendHint)
 		}
+		if route := c.executionRouteFor(def); route != nil {
+			for _, candidate := range route.Candidates {
+				add(candidate.String(), "")
+			}
+		}
 	}
 
 	for _, model := range c.modelList {
@@ -257,6 +265,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	}
 	if version == executionPolicySnapshotVersion {
 		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
+		snapshot.ExecutionRoutes = executionPolicyExecutionRoutes(c.session)
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,
@@ -524,6 +533,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
+	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
 		clone.ExecutionWorlds[i] = snapshot.ExecutionWorlds[i]

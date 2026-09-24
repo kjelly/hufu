@@ -1320,6 +1320,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		SubagentProvider:   it.SubagentProvider,
 		ResultContract:     it.ResultContract.clone(),
 		WorkerWorkspace:    it.WorkerWorkspace.clone(),
+		ExecutionRoute:     it.ExecutionRoute.clone(),
 	}
 }
 

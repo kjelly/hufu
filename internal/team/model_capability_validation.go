@@ -115,6 +115,13 @@ func (c *Coordinator) modelCapabilityCandidates() []modelCapabilityCandidate {
 		for _, extra := range def.ExtraModels {
 			add(def, extra)
 		}
+		// Every route candidate can run the worker, so each must meet its
+		// requirements: a known incompatibility fails, unknown warns.
+		if route := c.executionRouteFor(def); route != nil {
+			for _, candidate := range route.Candidates {
+				add(def, candidate.String())
+			}
+		}
 		if def.Generation.Model == "" {
 			add(def, c.session.Config.Generation.Model)
 		}

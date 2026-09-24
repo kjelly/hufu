@@ -698,6 +698,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot"`
 			ResultContract           *ResultContractRef                `json:"result_contract"`
 			WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace"`
+			ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -807,6 +808,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot),
 				ResultContract:                payload.ResultContract.clone(),
 				WorkerWorkspace:               payload.WorkerWorkspace.clone(),
+				ExecutionRoute:                payload.ExecutionRoute.clone(),
 				FailureEvent:                  failureEvent,
 				SubagentProvider:              payload.SubagentProvider,
 				ProviderBinding:               cloneProviderBinding(payload.ProviderBinding),
@@ -1044,6 +1046,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.WorkerWorkspace != nil {
 			item.WorkerWorkspace = payload.WorkerWorkspace.clone()
+		}
+		if payload.ExecutionRoute != nil {
+			item.ExecutionRoute = payload.ExecutionRoute.clone()
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult

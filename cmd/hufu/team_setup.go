@@ -133,6 +133,16 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 			for _, extra := range def.ExtraModels {
 				add(extra)
 			}
+			if route, ok := session.ExecutionRouteConfigs[def.ExecutionRoute]; ok {
+				for _, candidate := range route.Candidates {
+					add(candidate)
+				}
+			}
+		}
+	}
+	if route, ok := session.ExecutionRouteConfigs[session.Config.ExecutionRoute]; ok {
+		for _, candidate := range route.Candidates {
+			add(candidate)
 		}
 	}
 	for _, entry := range modelList {
@@ -184,6 +194,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := applyConfiguredBackends(session, cfg); err != nil {
 		return nil, err
 	}
+	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
 	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
 		return nil, err
 	}

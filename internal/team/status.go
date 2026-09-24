@@ -384,6 +384,7 @@ type TodoItem struct {
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
+	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
 	// RuntimeOccurrence and PrimaryAdmission are runtime-owned. Model-facing
 	// TaskDef/TodoSpec inputs never populate them.
 	RuntimeOccurrence    *RuntimeOccurrenceMetaV1    `json:"runtime_occurrence,omitempty"`
@@ -518,6 +519,7 @@ type TodoSpec struct {
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
 	WorkerWorkspace          *WorkerWorkspacePolicy
+	ExecutionRoute           *ExecutionRouteBinding
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -600,6 +602,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
+		ExecutionRoute:                item.ExecutionRoute.clone(),
 		MaxRetries:                    item.MaxRetries,
 		OnFailure:                     item.OnFailure,
 		OnFailureClasses:              append([]TaskFailureClass(nil), item.OnFailureClasses...),
@@ -1335,6 +1338,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
+		ExecutionRoute:                item.ExecutionRoute.clone(),
 		VerifyResult:                  verifyResult,
 		RuntimeError:                  runtimeErr,
 		ExecutionReceipt:              execReceipt,
@@ -1513,6 +1517,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(src.ResourceScopeSnapshot)
 	dst.ResultContract = src.ResultContract.clone()
 	dst.WorkerWorkspace = src.WorkerWorkspace.clone()
+	dst.ExecutionRoute = src.ExecutionRoute.clone()
 	dst.MaxRetries = src.MaxRetries
 	dst.OnFailure = src.OnFailure
 	dst.Escalate = src.Escalate

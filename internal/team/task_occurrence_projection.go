@@ -90,6 +90,7 @@ type TaskOccurrenceProjection struct {
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
 	WorkerWorkspace          *WorkerWorkspacePolicy
+	ExecutionRoute           *ExecutionRouteBinding
 	RuntimeOccurrence        *RuntimeOccurrenceMetaV1
 	PrimaryAdmission         *PrimaryOccurrenceAdmission
 }
@@ -134,6 +135,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:           item.ResultContract.clone(),
 		WorkerWorkspace:          item.WorkerWorkspace.clone(),
+		ExecutionRoute:           item.ExecutionRoute.clone(),
 		RuntimeOccurrence:        cloneRuntimeOccurrenceMeta(item.RuntimeOccurrence),
 		PrimaryAdmission:         clonePrimaryOccurrenceAdmission(item.PrimaryAdmission),
 		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
@@ -196,6 +198,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		SubagentProvider:   task.SubagentProvider,
 		ResultContract:     task.ResultContract.clone(),
 		WorkerWorkspace:    task.WorkerWorkspace.clone(),
+		ExecutionRoute:     task.ExecutionRoute.clone(),
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

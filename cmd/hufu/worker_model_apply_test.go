@@ -466,3 +466,33 @@ func TestModelsInUseSeesEffectiveWorkerOverride(t *testing.T) {
 		t.Fatalf("modelsInUse() = %q, still includes the overridden Markdown target", models)
 	}
 }
+
+// TestCLITargetOverridesReplaceExecutionRoutes pins D14: a -m or
+// --worker-model target makes the worker single-target. Its execution route
+// is dropped, so it can never fall back to another candidate.
+func TestCLITargetOverridesReplaceExecutionRoutes(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides ModelCLIOverrides
+		wantRoute map[string]string
+	}{
+		{name: "no override keeps routes", overrides: ModelCLIOverrides{}, wantRoute: map[string]string{"coder": "coding", "reviewer": "review"}},
+		{name: "global model drops every worker route", overrides: ModelCLIOverrides{Model: "ollama/a"}, wantRoute: map[string]string{"coder": "", "reviewer": ""}},
+		{name: "worker model drops only that worker's route", overrides: ModelCLIOverrides{WorkerModels: []WorkerModelOverride{{Agent: "coder", Target: "ollama/b"}}}, wantRoute: map[string]string{"coder": "", "reviewer": "review"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := newWorkerModelTestSession("coder", "reviewer")
+			session.Agents["coder"].ExecutionRoute, session.Agents["coder"].Generation.Model = "coding", ""
+			session.Agents["reviewer"].ExecutionRoute, session.Agents["reviewer"].Generation.Model = "review", ""
+			if err := applyCLIGenerationOverridesToAgents(session, tt.overrides); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range tt.wantRoute {
+				if got := session.Agents[name].ExecutionRoute; got != want {
+					t.Errorf("%s execution route = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}

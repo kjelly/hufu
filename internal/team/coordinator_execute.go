@@ -363,6 +363,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			ExecutionTopology:             cloneExecutionTopology(t.ExecutionTopology),
 			ResultContract:                t.ResultContract.clone(),
 			WorkerWorkspace:               t.WorkerWorkspace.clone(),
+			ExecutionRoute:                t.ExecutionRoute.clone(),
 			Sidecar:                       t.Sidecar,
 			Summarize:                     t.Summarize,
 			OutputMode:                    t.OutputMode,

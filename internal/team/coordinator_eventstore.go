@@ -1594,6 +1594,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.WorkerWorkspace != nil {
 		payload["worker_workspace"] = item.WorkerWorkspace.clone()
 	}
+	if item.ExecutionRoute != nil {
+		payload["execution_route"] = item.ExecutionRoute.clone()
+	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
 	}

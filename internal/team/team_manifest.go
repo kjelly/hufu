@@ -202,6 +202,7 @@ type teamManifestSpecFields struct {
 	Reliability      rawReliabilityConfig       `yaml:"reliability,omitempty"`
 	WorkerMemory     rawWorkerMemoryPolicy      `yaml:"worker-memory,omitempty"`
 	WorkerWorkspace  *agent.WorkerWorkspaceSpec `yaml:"worker-workspace,omitempty"`
+	ExecutionRoute   string                     `yaml:"execution-route,omitempty"`
 	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
 	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
 	Tasks            []TaskDef                  `yaml:"tasks,omitempty"`

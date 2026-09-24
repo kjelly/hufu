@@ -399,6 +399,12 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 		c.session.Config.CoordinatorModel != "" {
 		return c.session.Config.CoordinatorModel
 	}
+	// A route-bound worker's primary target is its route's first candidate.
+	// Binding already applied the precedence: an agent with its own model, or
+	// one a CLI override targets, is never route-bound.
+	if route := c.executionRouteFor(def); route != nil {
+		return route.Candidates[0].String()
+	}
 	if def != nil && def.Generation.Model != "" {
 		return def.Generation.Model
 	}

@@ -127,6 +127,9 @@ type TaskDef struct {
 	// ResultContract is the compiled contract identity bound at admission.
 	// It is runtime-owned and frozen into the TodoItem.
 	ResultContract *ResultContractRef `json:"-" yaml:"-"`
+	// ExecutionRoute is the execution route frozen at admission for a
+	// route-bound worker. It is runtime-owned and never coordinator JSON.
+	ExecutionRoute *ExecutionRouteBinding `json:"-" yaml:"-"`
 	// WorkerWorkspace is the worker-workspace policy frozen at admission.
 	// It is runtime-owned and never coordinator JSON.
 	WorkerWorkspace *WorkerWorkspacePolicy `json:"-" yaml:"-"`
@@ -1541,6 +1544,10 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	}
 	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	c.sharedMemorySvc = NewSharedMemoryService(repo)
+	// Routes are bound before the policy snapshot, which pins them.
+	if err := c.bindExecutionRoutes(); err != nil {
+		return nil, err
+	}
 	executionPolicy, err := newExecutionPolicyState(c)
 	if err != nil {
 		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
@@ -2173,7 +2180,7 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 	}
 	if hasModelList {
 		props["model"] = map[string]any{"type": "string", "description": "Model ID from Available Models to use for this task. Select the model whose strengths best match this task. If empty, the default team model will be used."}
-		props["escalate"] = map[string]any{"type": "boolean", "description": "If true, each retry after a failure re-runs this task on the next stronger model in Available Models (ordered weakest→strongest). Start cheap tasks on a fast model with escalate:true so only failures pay for a stronger model. Not applicable to agents with extra-models."}
+		props["escalate"] = map[string]any{"type": "boolean", "description": "If true, each retry after a failure re-runs this task on the next stronger model in Available Models (ordered weakest→strongest). Start cheap tasks on a fast model with escalate:true so only failures pay for a stronger model. Not applicable to agents with extra-models or to agents bound to an execution route with several candidates, whose route already defines their fallback."}
 	}
 	if !allowContextFiles {
 		delete(props, "context_files")

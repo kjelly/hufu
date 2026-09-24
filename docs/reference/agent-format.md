@@ -79,7 +79,9 @@ type TeamConfig struct {
 | `ProviderURL` | - | 預設 Provider URL |
 
 team.yaml 的 `worker-workspace` 是所有 worker 的預設值，agent frontmatter 可以
-覆寫（見下方「Worker workspace」）；coordinator 不會套用。
+覆寫（見下方「Worker workspace」）；coordinator 不會套用。team.yaml 的
+`execution-route` 是沒有自己 `model` 與 route 的 worker 的預設 route（見下方
+「Execution route」）。
 
 ## Provider URL 優先順序
 
@@ -158,6 +160,7 @@ max-retries: 3
 | `max-retries` | ✗ | 團隊設定 | 最大重試次數 |
 | `result-contract` | ✗ | - | 結果合約：`schema`（相對於團隊目錄的 JSON Schema 檔）與 `require-structured`（見下方） |
 | `worker-workspace` | ✗ | team 設定，否則 `shared` | worker 的寫入位置：`mode: shared`，或 `mode: isolated` 搭配 `integrate: on-verified`（見下方） |
+| `execution-route` | ✗ | team 設定 | 引用 hufu.yaml `execution-routes` 中的 route 名稱；不能與 `model` 同時設定（見下方） |
 
 ### 執行期模型覆寫
 
@@ -199,6 +202,40 @@ agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交�
 - 不能與 `extra-models` 同時使用，也不能用在可能被 decision runtime 綁定為
   角色的 agent。
 - `hufu team explain` 會列出每個 agent 綁定的 contract ID 與 hash。
+
+### Execution route（execution-route）
+
+route 定義在 hufu.yaml，team.yaml 與 agent frontmatter 只引用名稱：
+
+```yaml
+# hufu.yaml
+execution-routes:
+  coding:
+    candidates:
+      - ollama/qwen3:32b
+```
+
+```yaml
+# agent frontmatter（或 team.yaml 的 worker 預設）
+execution-route: coding
+```
+
+- route 名稱為小寫英文、數字與 `-`，以字母開頭。每個 candidate 都必須寫出
+  backend（例如 `ollama/qwen3:32b`；`local/...` 會轉成 `ollama/...`），而且
+  backend 必須是 language-model backend，不能是 Codex 這類 agent backend。
+- 每個 worker 的優先順序：CLI `--worker-model`、CLI `-m`（兩者都會讓該 worker
+  變成單一 target，忽略 route）> agent 的 `execution-route` > agent 的 `model` >
+  team 的 `execution-route` > team 的 `worker-model` 或 `model`。coordinator 與
+  sidecar、guard、judge、plan-reviewer 不使用 route。
+- task 在 admission 時凍結 route 的名稱、digest 與 candidates，第一個 candidate
+  就是 task 的 execution target。route 也會納入 execution policy snapshot：
+  修改 hufu.yaml 的 route 後 resume 會 fail closed，要用 `--new`。
+- 綁定 route 的 worker 不會套用 model-list 的複雜度選擇；每個 candidate 都要通過
+  agent `requires` 的 model capability 檢查（已知不相容會報錯，unknown 只警告）。
+- 目前只支援單一 candidate 的 route。多 candidate route 需要 `fallback-on`，
+  也不能與 `extra-models`、team 的 `escalate-on-retry` 或可能被 decision runtime
+  綁定為角色的 agent 同時使用；這些檢查都通過之後，載入仍會以
+  `execution_route_fallback_unsupported` 失敗，直到 fallback 推出。
 
 ### Worker workspace（worker-workspace）
 

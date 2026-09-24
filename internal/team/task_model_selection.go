@@ -107,6 +107,11 @@ func (c *Coordinator) selectTaskModel(task TaskDef, defs ...*agent.AgentDef) str
 	if task.Model != "" || len(c.modelList) == 0 {
 		return task.Model
 	}
+	// A route is the worker's routing policy; complexity-based selection
+	// never replaces its candidates.
+	if len(defs) > 0 && c.executionRouteFor(defs[0]) != nil {
+		return task.Model
+	}
 	profile := taskComplexityProfile(task)
 	contextChars := 0
 	if len(defs) > 0 && defs[0] != nil {

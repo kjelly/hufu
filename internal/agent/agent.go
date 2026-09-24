@@ -181,6 +181,9 @@ type AgentDef struct {
 	// WorkerWorkspace overrides the team's worker-workspace default for this
 	// agent.
 	WorkerWorkspace *WorkerWorkspaceSpec
+	// ExecutionRoute names the hufu.yaml execution route that supplies this
+	// worker's ordered targets. It cannot be combined with Generation.Model.
+	ExecutionRoute string
 }
 
 // ContractRequirements describes prerequisites for a team or worker without
@@ -394,7 +397,10 @@ type TeamConfig struct {
 	// WorkerWorkspace is the team-level default worker-workspace; an agent's
 	// own setting overrides it. Nil means shared.
 	WorkerWorkspace *WorkerWorkspaceSpec
-	MemoryLearning  MemoryLearningPolicy
+	// ExecutionRoute is the team-level default execution route for workers
+	// that set neither their own route nor their own model.
+	ExecutionRoute string
+	MemoryLearning MemoryLearningPolicy
 	// Compaction controls coordinator history retention and deterministic
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.
