@@ -44,6 +44,9 @@ func resolveDecisionRoleBindingPlan(
 		if def == nil {
 			return nil, fmt.Errorf("%s role routing: resolved worker %q is not a configured agent", roleName, candidate.AgentID)
 		}
+		if err := decisionRoleResultContractIneligibility(roleName, def); err != nil {
+			return nil, err
+		}
 		model := strings.TrimSpace(c.resolveAgentModel(def, ""))
 		if model == "" {
 			return nil, fmt.Errorf("%s role routing: resolved worker %q has no configured model", roleName, candidate.AgentID)

@@ -120,6 +120,13 @@ type TaskDef struct {
 	// admission alongside the legacy model/provider fields during migration.
 	ResolvedExecutionTarget execution.ExecutionTarget   `json:"-" yaml:"-"`
 	ExecutionTopology       []execution.ExecutionTarget `json:"-" yaml:"-"`
+	// ResultContractSpec is authored only on a static team.yaml contract
+	// task. It is configuration-only (never coordinator JSON) and overrides
+	// the agent's default result contract for that contract ID.
+	ResultContractSpec *agent.ResultContractSpec `json:"-" yaml:"result-contract,omitempty"`
+	// ResultContract is the compiled contract identity bound at admission.
+	// It is runtime-owned and frozen into the TodoItem.
+	ResultContract *ResultContractRef `json:"-" yaml:"-"`
 	// executionModelOverride is set only by the bounded non-durable
 	// extra-model leaf path. It is intentionally not serialized or accepted
 	// from coordinator/task input; the leaf receives an explicit single-model

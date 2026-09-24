@@ -38,6 +38,12 @@ type TeamSession struct {
 	MCPServers       map[string]mcp.MCPServerConfig
 	Skills           []*skill.SkillDef
 	ContractTasks    []TaskDef // Optional static task contracts used by preflight tooling and policy binding.
+	// ResultContracts holds the compiled result contract schemas, keyed by
+	// contract ID, and AgentResultContracts binds each worker (by lower-case
+	// agent name) to its default contract. Neither is persisted; admitted
+	// occurrences carry only a ResultContractRef.
+	ResultContracts      map[string]*CompiledResultContract
+	AgentResultContracts map[string]ResultContractRef
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition
@@ -83,6 +89,7 @@ type agentFrontmatter struct {
 	ToolRecovery     map[string]agent.ToolRecoveryDecl `yaml:"tool-recovery"`
 	MemoryID         string                            `yaml:"memory-id"`
 	Memory           rawWorkerMemoryPolicy             `yaml:"memory"`
+	ResultContract   *agent.ResultContractSpec         `yaml:"result-contract"`
 }
 
 // teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
@@ -519,6 +526,10 @@ func inferAgentNameFromFilename(path string) (string, error) {
 	return base, nil
 }
 
+// resultContractFrontmatterKey detects a top-level result-contract key in
+// agent frontmatter.
+var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^result-contract[ \t]*:`)
+
 func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
 
@@ -539,6 +550,11 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 			return nil, fmt.Errorf("agent file %s has malformed frontmatter (missing closing '---')", path)
 		}
 		if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
+			// The lenient fallback cannot represent a result contract, and
+			// silently dropping one would disable its enforcement.
+			if resultContractFrontmatterKey.MatchString(rest[:idx]) {
+				return nil, fmt.Errorf("agent file %s: %w", path, err)
+			}
 			fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
 			fm = agentFrontmatterFromSimple(yamlutil.ParseSimpleYAML(rest[:idx]))
 		}
@@ -630,6 +646,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		ReconcileTool:    fm.ReconcileTool,
 		ToolRecovery:     fm.ToolRecovery,
 		MemoryID:         fm.MemoryID,
+		ResultContract:   fm.ResultContract.Clone(),
 	}
 	if fm.Memory.isSet() {
 		def.Memory = resolveWorkerMemoryPolicy(fm.Memory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
@@ -1569,6 +1586,12 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	// override, normalize memory-id (fallback to agent name), and detect
 	// duplicate memory-ids within the same team.
 	if err := resolveAndValidateWorkerMemory(session); err != nil {
+		return nil, err
+	}
+	if err := compileTeamResultContracts(session); err != nil {
+		return nil, err
+	}
+	if err := requireResultContractEnforcement(session); err != nil {
 		return nil, err
 	}
 

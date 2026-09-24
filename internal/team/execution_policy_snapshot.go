@@ -40,7 +40,10 @@ type ExecutionPolicySnapshot struct {
 	ExecutionWorlds    []ExecutionWorldPolicySnapshot   `json:"execution_worlds"`
 	RunInputSchemaHash string                           `json:"run_input_schema_hash,omitempty"`
 	RunInputPolicyHash string                           `json:"run_input_policy_hash,omitempty"`
-	ConfigurationHash  string                           `json:"configuration_hash"`
+	// ResultContracts pins every bound result contract schema. It is omitted
+	// when a team declares none, so their ConfigurationHash is unchanged.
+	ResultContracts   []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
+	ConfigurationHash string                                  `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -251,6 +254,9 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			return nil, err
 		}
 		snapshot.RunInputPolicyHash = policyHash
+	}
+	if version == executionPolicySnapshotVersion {
+		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,
@@ -517,6 +523,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone := *snapshot
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
+	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
 		clone.ExecutionWorlds[i] = snapshot.ExecutionWorlds[i]

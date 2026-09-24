@@ -185,6 +185,38 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 // committed by ExecuteTasks; they are not provider-authored task fields.
 // Inspecting the raw task objects before decoding into TaskDef prevents a
 // provider from smuggling those runtime-owned fields into Todo creation.
+// modelTaskRuntimeOwnedFields are task keys a coordinator payload may never
+// provide. TaskDef marks most of them json:"-", which a lenient decode would
+// silently drop; rejecting them explicitly tells the coordinator its request
+// was not honored instead of quietly running without it.
+var modelTaskRuntimeOwnedFields = []string{
+	"workset_binding", "workset_receipt",
+	"result_contract", "result-contract", "structured_payload",
+}
+
+// modelExecutionRuntimeOwnedFields are execution-contract keys reserved for
+// configuration-owned result contracts.
+var modelExecutionRuntimeOwnedFields = []string{"result", "result_contract", "result-contract"}
+
+func rejectModelExecutionRuntimeOwnedFields(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		// A non-object execution value is reported by the TaskDef decode.
+		return nil
+	}
+	for key := range fields {
+		for _, field := range modelExecutionRuntimeOwnedFields {
+			if strings.EqualFold(key, field) {
+				return fmt.Errorf("execution cannot provide configuration-owned %s", field)
+			}
+		}
+	}
+	return nil
+}
+
 func decodeModelTaskDefs(data []byte) ([]TaskDef, error) {
 	var envelope struct {
 		Tasks []json.RawMessage `json:"tasks"`
@@ -199,10 +231,18 @@ func decodeModelTaskDefs(data []byte) ([]TaskDef, error) {
 			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
 		}
 		for key := range fields {
-			for _, field := range []string{"workset_binding", "workset_receipt"} {
+			for _, field := range modelTaskRuntimeOwnedFields {
 				if strings.EqualFold(key, field) {
 					return nil, fmt.Errorf("tasks[%d] cannot provide runtime-owned %s", index, field)
 				}
+			}
+		}
+		for key, value := range fields {
+			if !strings.EqualFold(key, "execution") {
+				continue
+			}
+			if err := rejectModelExecutionRuntimeOwnedFields(value); err != nil {
+				return nil, fmt.Errorf("tasks[%d]: %w", index, err)
 			}
 		}
 		var task TaskDef
@@ -1027,6 +1067,7 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 			ExecutionTarget: occurrence.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
 			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
 			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
+			ResultContract: occurrence.ResultContract.clone(),
 		}
 		if err := t.coordinator.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &batch[i]); err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil

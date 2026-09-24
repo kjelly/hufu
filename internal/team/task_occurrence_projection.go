@@ -88,6 +88,7 @@ type TaskOccurrenceProjection struct {
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
+	ResultContract           *ResultContractRef
 	RuntimeOccurrence        *RuntimeOccurrenceMetaV1
 	PrimaryAdmission         *PrimaryOccurrenceAdmission
 }
@@ -130,6 +131,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
+		ResultContract:           item.ResultContract.clone(),
 		RuntimeOccurrence:        cloneRuntimeOccurrenceMeta(item.RuntimeOccurrence),
 		PrimaryAdmission:         clonePrimaryOccurrenceAdmission(item.PrimaryAdmission),
 		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
@@ -190,6 +192,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		DecisionArtifacts: append([]ArtifactRef(nil), task.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(task.DecisionBaseRates),
 		DecisionProvenance: cloneEvidenceProvenance(task.DecisionProvenance),
 		SubagentProvider:   task.SubagentProvider,
+		ResultContract:     task.ResultContract.clone(),
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

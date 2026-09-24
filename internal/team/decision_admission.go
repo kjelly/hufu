@@ -284,6 +284,7 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if c != nil {
 		task.SideEffect, task.Recovery, task.ReconcileTool = c.PolicyEngine().ResolveRecoveryPolicy(def, task)
 	}
+	task.ResultContract = c.admittedResultContract(task, def)
 	legacyProvider := strings.TrimSpace(task.SubagentProvider)
 	if legacyProvider == "" && def != nil {
 		legacyProvider = strings.TrimSpace(def.SubagentProvider)

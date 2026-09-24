@@ -489,6 +489,19 @@ func discoverJSONSecrets(value any, key string) {
 	}
 }
 
+// IsRedactedJSONKey reports whether RedactJSON replaces the value stored
+// under key regardless of the value's content. Numeric telemetry keys such
+// as max_tokens keep numeric values and are not reported. Callers that must
+// keep a JSON document byte-stable across event redaction use it to reject
+// such keys up front.
+func IsRedactedJSONKey(key string) bool {
+	if key == "" || !secretKeyNameRe.MatchString(key) {
+		return false
+	}
+	_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
+	return !telemetry
+}
+
 func redactJSONValue(value any, key string) any {
 	if key != "" && secretKeyNameRe.MatchString(key) {
 		if safeSecretMetadataValue(key, value) {

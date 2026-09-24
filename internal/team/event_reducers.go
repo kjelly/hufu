@@ -696,6 +696,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 
 			DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization"`
 			ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot"`
+			ResultContract           *ResultContractRef                `json:"result_contract"`
 		}
 		_ = json.Unmarshal(e.Payload, &payload)
 
@@ -803,6 +804,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				WorksetReceipt:                cloneWorksetReceipt(payload.WorksetReceipt),
 				DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(payload.DynamicToolAuthorization),
 				ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot),
+				ResultContract:                payload.ResultContract.clone(),
 				FailureEvent:                  failureEvent,
 				SubagentProvider:              payload.SubagentProvider,
 				ProviderBinding:               cloneProviderBinding(payload.ProviderBinding),
@@ -1034,6 +1036,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.ResourceScopeSnapshot != nil {
 			item.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot)
+		}
+		if payload.ResultContract != nil {
+			item.ResultContract = payload.ResultContract.clone()
 		}
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult

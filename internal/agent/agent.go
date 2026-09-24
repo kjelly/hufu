@@ -174,6 +174,10 @@ type AgentDef struct {
 	// "codex"). Empty defers to the team default, then "hufu-local"
 	// (docs/architecture/execution-runtime.md).
 	SubagentProvider string
+	// ResultContract is the default result contract for tasks delegated to
+	// this agent. A static contract task may override it; a coordinator
+	// payload never can.
+	ResultContract *ResultContractSpec
 }
 
 // ContractRequirements describes prerequisites for a team or worker without

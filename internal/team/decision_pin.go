@@ -51,5 +51,8 @@ func resolvePinnedCandidate(ctx context.Context, c *Coordinator, roleName string
 	if pinnedDef == nil {
 		return "", nil, false, fmt.Errorf("%s role routing: pinned agent %q is not a configured agent", roleName, pinned)
 	}
+	if err := decisionRoleResultContractIneligibility(roleName, pinnedDef); err != nil {
+		return "", nil, false, err
+	}
 	return pinned, pinnedDef, true, nil
 }

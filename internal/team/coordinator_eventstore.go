@@ -1588,6 +1588,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.ResourceScopeSnapshot != nil {
 		payload["resource_scope_snapshot"] = cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot)
 	}
+	if item.ResultContract != nil {
+		payload["result_contract"] = item.ResultContract.clone()
+	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
 	}

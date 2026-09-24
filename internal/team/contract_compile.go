@@ -95,6 +95,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
+		bound[i].ResultContract = contract.ResultContract.clone()
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
@@ -167,6 +168,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
 		applyStaticVerificationContract(&bound[i], contract)
 		applyStaticDecisionEvidenceContract(&bound[i], contract)
+		bound[i].ResultContract = contract.ResultContract.clone()
 		bound[i].ID = contractID
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
@@ -313,7 +315,8 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		DecisionBaseRates     []BaseRateEvidence        `json:"decision_base_rates,omitempty"`
 		DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
 		DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil}
+		ResultContract        *resultContractSpec       `json:"result_contract,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
 		payload.InvariantVerification = declared.InvariantVerification
@@ -323,6 +326,7 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		payload.DecisionBaseRates = cloneBaseRateEvidence(declared.DecisionBaseRates)
 		payload.DecisionAssumptions = cloneDecisionAssumptions(declared.DecisionAssumptions)
 		payload.DecisionProvenance = cloneEvidenceProvenance(declared.DecisionProvenance)
+		payload.ResultContract = declared.ResultContractSpec.Clone()
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

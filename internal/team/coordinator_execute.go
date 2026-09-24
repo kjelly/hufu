@@ -361,6 +361,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			ModelTopology:                 cloneModelTopology(t.ModelTopology),
 			ExecutionTarget:               t.ResolvedExecutionTarget,
 			ExecutionTopology:             cloneExecutionTopology(t.ExecutionTopology),
+			ResultContract:                t.ResultContract.clone(),
 			Sidecar:                       t.Sidecar,
 			Summarize:                     t.Summarize,
 			OutputMode:                    t.OutputMode,
