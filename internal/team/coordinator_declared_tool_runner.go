@@ -75,6 +75,7 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 			BlockedPaths:                 r.c.artifactScopePathCandidates(artifactScope),
 			FailClosedForUnsupported:     item.WorksetBinding != nil,
 			DenyUnsupportedDeclaredTools: item.WorksetBinding == nil,
+			DeclaredShellTools:           declaredShellTools(agentDef),
 		})
 	}
 	if len(agentDef.Guard) > 0 {

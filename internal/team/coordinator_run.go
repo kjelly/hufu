@@ -106,6 +106,7 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 		BlockedPaths:                 c.artifactScopePathCandidates(artifactScope),
 		DenyUnsupportedDeclaredTools: true,
 		FailClosedForUnsupported:     false,
+		DeclaredShellTools:           declaredShellTools(agentDef),
 	})
 	taskCtx = c.withEffectiveToolsAllowed(taskCtx, agentDef, authorizedToolNames)
 	return taskCtx, cancel, roundCancel, nil

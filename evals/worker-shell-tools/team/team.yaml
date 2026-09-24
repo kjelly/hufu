@@ -1,0 +1,2 @@
+name: eval-worker-shell-tools
+description: Coordinator plus a worker that declares bash and one that inherits every tool, for the worker-shell-tools eval suite

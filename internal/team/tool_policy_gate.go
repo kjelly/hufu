@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -110,6 +111,27 @@ func artifactScopeUnsupportedTool(name string) bool {
 	}
 }
 
+// declaredShellTools returns the shell-class tools that def's tool grant names
+// explicitly. An empty or "all" grant declares none: it inherits every tool
+// rather than choosing shell access.
+func declaredShellTools(def *agent.AgentDef) []string {
+	if def == nil {
+		return nil
+	}
+	grant := strings.TrimSpace(def.Tools)
+	if grant == "" || strings.EqualFold(grant, "all") {
+		return nil
+	}
+	var declared []string
+	for _, field := range strings.Split(grant, ",") {
+		name := strings.ToLower(strings.TrimSpace(field))
+		if artifactScopeUnsupportedTool(name) && !slices.Contains(declared, name) {
+			declared = append(declared, name)
+		}
+	}
+	return declared
+}
+
 func artifactScopeToolTrusted(inner fantasy.AgentTool) bool {
 	if tools.IsTrustedArtifactPathTool(inner) {
 		return true
@@ -139,8 +161,8 @@ func artifactScopeToolDenial(ctx context.Context, name string, inner fantasy.Age
 		return ""
 	}
 	if policy.DenyUnsupportedDeclaredTools {
-		if artifactScopeUnsupportedTool(name) {
-			return fmt.Sprintf("tool %q is unavailable for an unbound task because it does not implement centralized artifact-path enforcement; use built-in tools or artifact_ref-aware tools", name)
+		if artifactScopeUnsupportedTool(name) && !slices.Contains(policy.DeclaredShellTools, strings.ToLower(strings.TrimSpace(name))) {
+			return fmt.Sprintf("tool %q is unavailable for an unbound task because it does not implement centralized artifact-path enforcement and the agent does not declare it in tools:; declare it explicitly or use built-in tools or artifact_ref-aware tools", name)
 		}
 		// Unbound workers keep their ordinary built-in capabilities. Those tools
 		// receive the blocked backing roots through the shared tool context;

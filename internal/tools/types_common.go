@@ -127,6 +127,11 @@ type ArtifactPathPolicy struct {
 	// not participate in the artifact-path policy while preserving the normal
 	// built-in tool surface for unbound workers.
 	DenyUnsupportedDeclaredTools bool
+	// DeclaredShellTools lists the shell-class built-ins (bash, sudo, ssh,
+	// lua, ...) that the agent's own tool grant names explicitly. An unbound
+	// task may run these even though they cannot enforce BlockedPaths; an
+	// agent that only inherits them from an all-tools grant may not.
+	DeclaredShellTools []string
 }
 
 type ToolConfig struct {

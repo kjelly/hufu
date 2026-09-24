@@ -1,0 +1,28 @@
+version: 1
+name: worker-shell-tools
+team: ./team
+mode: deterministic
+cases:
+  # An unbound worker whose tools: names bash explicitly may run it. The
+  # worker's next step matches on the successful exit, so a denial
+  # would leave that step unconsumed.
+  - id: declared-bash-runs
+    prompt: "Print shell-ok with echo."
+    provider-fixture: fixtures/declared-bash-runs.json
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: declared
+          status: done
+  # A worker that only inherits bash from an all-tools grant stays denied:
+  # the artifact scope blocks shell tools the agent did not choose, and the
+  # denial tells the author how to grant it.
+  - id: inherited-bash-is-denied
+    prompt: "Print shell-ok with echo."
+    provider-fixture: fixtures/inherited-bash-is-denied.json
+    expect:
+      task-count: 1
+      tasks:
+        - agent: inherited
+          status: blocked

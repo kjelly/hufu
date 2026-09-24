@@ -106,7 +106,10 @@ func TestCoordinatorDeclaredToolRunnerDeniesUnboundLua(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: "lua"}
+	// An all-tools grant only inherits lua; it does not choose shell access, so
+	// the unbound artifact scope still denies it. An agent that names lua in
+	// tools: explicitly may run it (TestArtifactScopeShellToolsFollowTheAgentGrant).
+	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: ""}
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: root,

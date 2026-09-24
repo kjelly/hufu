@@ -1127,6 +1127,7 @@ retryLoop:
 					BlockedPaths:                 c.artifactScopePathCandidates(attemptArtifactScope),
 					FailClosedForUnsupported:     c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil,
 					DenyUnsupportedDeclaredTools: c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding == nil,
+					DeclaredShellTools:           declaredShellTools(agentDef),
 				})
 			}
 
