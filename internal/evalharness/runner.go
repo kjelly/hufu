@@ -112,6 +112,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		return EvalCaseResult{}, err
 	}
 
+	plan := c.PlanMode
 	coordinator, err := team.NewCoordinator(
 		session,
 		server.URL+"/v1", "eval-harness-key",
@@ -122,8 +123,10 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		// decision profile needs a judge model configured or the decision
 		// engine fails closed with "decision_budget_insufficient" before
 		// ever reaching the scripted provider. Harmless for every other
-		// case -- the "off" profile never calls RunJudge.
-		team.RoleModels{Judge: evalModelDriverName},
+		// case -- the "off" profile never calls RunJudge. The plan reviewer
+		// likewise resolves to the scripted model, as the CLI falls back to
+		// the coordinator model when none is configured.
+		team.RoleModels{Judge: evalModelDriverName, PlanReviewer: evalModelDriverName},
 		1,     // maxConcurrent
 		false, // verbose
 		false, // think
@@ -136,7 +139,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		true,  // noNet: eval workers may not use network-capable tools
 		false, // forceMCP
 		nil,   // forcedSkillNames
-		false, // planMode
+		plan,  // planMode: plan-first delegation, as `hufu --plan`
 		false, // autoSkillsMode
 	)
 	if err != nil {

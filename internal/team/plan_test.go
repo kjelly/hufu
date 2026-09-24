@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -106,6 +107,11 @@ func TestPlanReviewerUsesConfiguredModel(t *testing.T) {
 	}
 	if pr.modelID != "custom-reviewer-model" {
 		t.Errorf("expected modelID to be custom-reviewer-model, got %q", pr.modelID)
+	}
+	// The review stream is authorized for the reviewer's own tools, not the
+	// caller's allowlist (under --plan the coordinator surface omits them).
+	if got, want := strings.Join(pr.toolNames, ","), "approve_plan,reject_plan"; got != want {
+		t.Errorf("reviewer tool allowlist = %q, want %q", got, want)
 	}
 }
 

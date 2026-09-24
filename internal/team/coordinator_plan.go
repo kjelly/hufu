@@ -61,6 +61,12 @@ type planReviewer struct {
 	providerBoundInvocationContext providerBoundInvocationContext
 	initialized                    bool
 	todoID                         string
+	// toolNames is the reviewer's own runtime tool allowlist. The review runs
+	// inside the caller's context, which carries the coordinator's (or a
+	// worker's) allowlist; under --plan the coordinator surface omits the plan
+	// tools, so inheriting it denies approve_plan and every plan-first task
+	// fails.
+	toolNames []string
 }
 
 func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*planReviewer, error) {
@@ -106,6 +112,7 @@ func (c *Coordinator) getPlanReviewer(ctx context.Context, todoID string) (*plan
 	}
 	pr.requestDescriptor = c.newContextWindowRequestDescriptorWithContext(ctx, modelID, &agent.AgentDef{Name: "plan-reviewer", Role: "plan_reviewer", System: planReviewerSystemPrompt, Generation: agent.GenerationParams{Model: modelID}}, reviewerTools, "plan-reviewer", "plan-reviewer")
 	pr.agent = ag
+	pr.toolNames = agentToolNames(reviewerTools)
 	pr.initialized = true
 	return pr, nil
 }
@@ -114,6 +121,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	ctx = withProviderBoundInvocationContext(ctx, pr.providerBoundInvocationContext)
 	ctx = withContextWindowRequestDescriptor(ctx, pr.requestDescriptor)
+	ctx = tools.SetToolsAllowed(ctx, pr.toolNames)
 	c := pr.coordinator
 	c.pendingPlansMu.Lock()
 	entry := c.pendingPlans[pr.todoID]

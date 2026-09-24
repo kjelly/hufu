@@ -35,6 +35,10 @@ type CaseFixture struct {
 	// team.yaml decision.default-profile (or the built-in "off" default)
 	// applies unmodified.
 	DecisionProfileOverride string `yaml:"decision-profile-override,omitempty"`
+	// PlanMode runs the case as `hufu --plan`: every delegated task is
+	// plan-first, so the worker submits a plan and the plan reviewer must
+	// approve it before the task executes.
+	PlanMode bool `yaml:"plan-mode,omitempty"`
 	// SeedExecutionPolicySnapshot materializes the coordinator's current,
 	// dynamic execution policy into a seeded session and its event journal
 	// before restore. This models a checkpoint produced by a prior run against

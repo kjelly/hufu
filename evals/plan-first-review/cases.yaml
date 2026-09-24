@@ -1,0 +1,20 @@
+version: 1
+name: plan-first-review
+team: ./team
+mode: deterministic
+cases:
+  # `hufu --plan` makes every task plan-first. The worker submits a plan, the
+  # plan reviewer approves it with its own approve_plan tool, and the worker
+  # then executes. The reviewer runs inside the coordinator's context, whose
+  # plan-mode tool surface omits the plan tools, so it must be authorized for
+  # its own tools rather than the coordinator's.
+  - id: reviewer-approves-plan
+    prompt: "Say hello to the user."
+    provider-fixture: fixtures/reviewer-approves-plan.json
+    plan-mode: true
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
