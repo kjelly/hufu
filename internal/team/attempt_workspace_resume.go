@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -26,6 +27,7 @@ type attemptWorldRecord struct {
 	TaskID            string
 	RunID             string
 	BranchID          string
+	PreparedEventID   string
 	Attempt           int
 	OccurrenceAttempt int
 	BaselineDigest    string
@@ -80,7 +82,7 @@ func attemptWorldRecordsFromEvents(events []RunEvent) map[string]*attemptWorldRe
 			records[payload.WorldID] = record
 		}
 		if state == attemptWorldStatePrepared {
-			record.TaskID, record.RunID, record.BranchID = event.TaskID, event.RunID, event.BranchID
+			record.TaskID, record.RunID, record.BranchID, record.PreparedEventID = event.TaskID, event.RunID, event.BranchID, event.ID
 			record.Attempt, record.OccurrenceAttempt = payload.Attempt, payload.OccurrenceAttempt
 			record.BaselineDigest, record.order = payload.BaselineDigest, i
 		}
@@ -135,7 +137,9 @@ func (c *Coordinator) reopenIsolatedRepairWorld(ctx context.Context, item *TodoI
 	if owner.TaskID != item.ID {
 		return nil, nil
 	}
-	return &isolatedAttempt{world: world, prepared: prepared, taskID: item.ID, attempt: latest.Attempt}, nil
+	a := &isolatedAttempt{world: world, prepared: prepared, taskID: item.ID, attempt: latest.Attempt}
+	liveAttemptWorlds.Store(filepath.Clean(a.worldDir()), struct{}{})
+	return a, nil
 }
 
 // withoutIsolatedAttempt clears an execution-root binding from ctx, so a

@@ -139,6 +139,12 @@ changed paths and failing closed when a file no longer matches the
 observation. It is a library primitive reserved for attempt-level
 checkpoints; the v1 runtime never calls it.
 
+An isolated worker's attempt world (see
+[execution runtime](execution-runtime.md#isolated-worker-workspaces)) is not a
+version snapshot. Applying its changes is an ordinary write to the subject
+root during the run, so the run checkpoint captures it like any other worker
+write. v1 does not add attempt-level checkpoints for isolated attempts.
+
 When a Codex attempt changes paths outside its writable roots, a
 `recovery_required` marker is recorded, the run checkpoint is skipped, and
 required-mode admission fails until `hufu workspace version adopt` accepts the

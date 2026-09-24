@@ -52,6 +52,7 @@ func (c *Coordinator) Metrics() RunMetrics {
 		metrics.RetrySuppressionsByReason = persisted
 		metrics.RetrySuppressions = sumRetrySuppressions(persisted)
 	}
+	c.accumulateAttemptWorldMetrics(&metrics)
 	// No-progress budget configured limits (§8.1, WP-12). 0 = disabled.
 	rc := c.reliabilityConfig()
 	metrics.MaxTokensWithoutProgress = int64(rc.MaxTokensWithoutProgress)

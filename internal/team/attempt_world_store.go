@@ -87,6 +87,26 @@ func writeAttemptWorldDelta(worldDir string, delta *AttemptWorkspaceDelta) error
 	return nil
 }
 
+// readAttemptWorldDelta loads the delta an apply started with. The delta must
+// still hash to the digest recorded in attempt_workspace_apply_started.
+func readAttemptWorldDelta(worldDir, wantDigest string) (*AttemptWorkspaceDelta, error) {
+	data, err := os.ReadFile(filepath.Join(worldDir, attemptWorldDeltaFile))
+	if err != nil {
+		return nil, fmt.Errorf("read world delta: %w", err)
+	}
+	var delta AttemptWorkspaceDelta
+	if err := json.Unmarshal(data, &delta); err != nil {
+		return nil, fmt.Errorf("decode world delta: %w", err)
+	}
+	if delta.Digest != attemptWorkspaceChangesDigest(delta.Changes) || (wantDigest != "" && delta.Digest != wantDigest) {
+		return nil, errors.New("world delta does not match the digest recorded when its apply started")
+	}
+	if err := validateAttemptWorkspaceDelta(&delta); err != nil {
+		return nil, err
+	}
+	return &delta, nil
+}
+
 // Load reopens a world a previous process prepared. The owner marker must
 // name the directory and the recorded baseline must match its digest (and
 // wantBaselineDigest, the digest attempt_workspace_prepared recorded, when

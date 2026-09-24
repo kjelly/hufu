@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
 
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -38,6 +39,15 @@ type isolatedAttempt struct {
 	taskID   string
 	attempt  int
 	state    isolatedAttemptState
+}
+
+// liveAttemptWorlds holds the world directories attempts in this process are
+// using, so recovery at a later entry point never removes a live world.
+var liveAttemptWorlds sync.Map
+
+func isLiveAttemptWorld(worldDir string) bool {
+	_, live := liveAttemptWorlds.Load(filepath.Clean(worldDir))
+	return live
 }
 
 func (a *isolatedAttempt) worldID() string  { return a.prepared.ID }
@@ -85,14 +95,13 @@ func (c *Coordinator) prepareIsolatedAttempt(ctx context.Context, task TaskDef, 
 		return nil, fmt.Errorf("prepare isolated attempt world: %w", err)
 	}
 	a := &isolatedAttempt{world: world, prepared: prepared, taskID: todoID, attempt: attempt}
+	liveAttemptWorlds.Store(filepath.Clean(a.worldDir()), struct{}{})
 	state := prepared.isolated
 	if err := c.appendAttemptWorldEvent(ctx, EventAttemptWorkspacePrepared, a, map[string]any{
 		"world_id": a.worldID(), "task_id": todoID, "occurrence_attempt": occurrenceAttempt, "attempt": attempt,
 		"baseline_digest": state.baseline.digest(), "file_count": state.fileCount, "bytes": state.byteCount,
 	}); err != nil {
-		if releaseErr := world.Release(ctx, prepared); releaseErr != nil {
-			log.Printf("warning: release unrecorded attempt world %s: %v", a.worldID(), releaseErr)
-		}
+		c.removeAttemptWorld(a)
 		return nil, fmt.Errorf("record isolated attempt world: %w", err)
 	}
 	return a, nil
@@ -231,14 +240,17 @@ func (c *Coordinator) closeIsolatedAttempt(ctx context.Context, a *isolatedAttem
 		c.removeAttemptWorld(a)
 	case isolatedAttemptApplied:
 		a.state = isolatedAttemptClosed
+		liveAttemptWorlds.Delete(filepath.Clean(a.worldDir()))
 		log.Printf("warning: attempt world %s was applied but task %s did not complete; keeping it for recovery", a.worldID(), a.taskID)
 	case isolatedAttemptRetained:
 		a.state = isolatedAttemptClosed
+		liveAttemptWorlds.Delete(filepath.Clean(a.worldDir()))
 		log.Printf("warning: keeping attempt world %s for task %s at %s", a.worldID(), a.taskID, a.worldDir())
 	}
 }
 
 func (c *Coordinator) removeAttemptWorld(a *isolatedAttempt) {
+	defer liveAttemptWorlds.Delete(filepath.Clean(a.worldDir()))
 	if err := a.world.Release(context.Background(), a.prepared); err != nil {
 		log.Printf("warning: remove attempt world %s: %v", a.worldID(), err)
 	}
@@ -268,4 +280,29 @@ func (c *Coordinator) appendAttemptWorldEvent(ctx context.Context, eventType Eve
 // attemptWorldDirFor is the directory of worldID under the control root.
 func (c *Coordinator) attemptWorldDirFor(worldID string) string {
 	return filepath.Join(attemptWorldsDir(c.session.Scope.ControlRoot), worldID)
+}
+
+// accumulateAttemptWorldMetrics counts this run's attempt-world lifecycle
+// from its durable events, so the counters survive a coordinator restart.
+func (c *Coordinator) accumulateAttemptWorldMetrics(metrics *RunMetrics) {
+	if c == nil || c.eventStore == nil || metrics == nil {
+		return
+	}
+	events, err := c.eventStore.QueryEvents(EventQuery{
+		RunID: c.executionRunID,
+		Types: []string{string(EventAttemptWorkspacePrepared), string(EventAttemptWorkspaceApplyConflicted), string(EventAttemptWorkspaceOrphanRemoved)},
+	})
+	if err != nil {
+		return
+	}
+	for _, event := range events {
+		switch EventType(event.Type) {
+		case EventAttemptWorkspacePrepared:
+			metrics.IsolatedAttemptsTotal++
+		case EventAttemptWorkspaceApplyConflicted:
+			metrics.AttemptWorkspaceConflictsTotal++
+		case EventAttemptWorkspaceOrphanRemoved:
+			metrics.AttemptWorldsOrphanRemoved++
+		}
+	}
 }

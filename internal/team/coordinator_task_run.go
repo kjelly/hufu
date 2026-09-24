@@ -855,7 +855,9 @@ retryLoop:
 			isolated = nil
 			prepared, prepareErr := c.prepareIsolatedAttempt(parentCtx, task, todoID, attempt)
 			if prepareErr != nil {
+				// An isolated task never falls back to the shared project.
 				closeTranscript()
+				c.PersistFailureWithClassAndStatus(agentName, taskDesc, todoID, c.FailureDetail(prepareErr, "error"), NeedsHuman, FailureEnvironment, TaskBlocked)
 				return "", prepareErr
 			}
 			isolated = prepared

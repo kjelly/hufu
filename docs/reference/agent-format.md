@@ -78,6 +78,9 @@ type TeamConfig struct {
 | `SkillsExclude` | - | 排除的技能列表 |
 | `ProviderURL` | - | 預設 Provider URL |
 
+team.yaml 的 `worker-workspace` 是所有 worker 的預設值，agent frontmatter 可以
+覆寫（見下方「Worker workspace」）；coordinator 不會套用。
+
 ## Provider URL 優先順序
 
 ```
@@ -154,6 +157,7 @@ max-retries: 3
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |
 | `max-retries` | ✗ | 團隊設定 | 最大重試次數 |
 | `result-contract` | ✗ | - | 結果合約：`schema`（相對於團隊目錄的 JSON Schema 檔）與 `require-structured`（見下方） |
+| `worker-workspace` | ✗ | team 設定，否則 `shared` | worker 的寫入位置：`mode: shared`，或 `mode: isolated` 搭配 `integrate: on-verified`（見下方） |
 
 ### 執行期模型覆寫
 
@@ -195,6 +199,35 @@ agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交�
 - 不能與 `extra-models` 同時使用，也不能用在可能被 decision runtime 綁定為
   角色的 agent。
 - `hufu team explain` 會列出每個 agent 綁定的 contract ID 與 hash。
+
+### Worker workspace（worker-workspace）
+
+```yaml
+worker-workspace:
+  mode: isolated
+  integrate: on-verified
+```
+
+`isolated` 讓 worker 的每個寫入 attempt 在 control root 底下的一份專案副本
+（attempt world）中執行，project（subject root）在 attempt 成功之前完全不變。
+verification 在副本中執行；verification 與其他完成檢查都通過後，變更會在
+`TaskDone` 之前逐 path 檢查前置條件後套用回 project，所以下游 task 看得到。
+若 project 中同一個 path 已經被其他工作改掉，這次套用不寫入任何東西
+（`workspace_conflict`），worker 會在目前的 project 上重試。失敗的 attempt 的
+副本直接丟棄。完整語意見 [execution runtime](../architecture/execution-runtime.md#isolated-worker-workspaces)。
+
+- 只有 `side-effect: workspace_write` 的 task 會 isolated；唯讀 task 照常在
+  project 中執行。
+- 需要 managed workspace（control root 與 project 不重疊）。
+- 不能與 `extra-models`、external agent backend（例如 Codex）、MCP tools、
+  phase workflow、`tools: all`，以及 `sudo`、`scp`、`lua`、`golang`、terminal
+  系列 tool 同時使用；team 載入時就會拒絕（`workspace_isolation_unsupported`）。
+- 帶 structured steps 或 action 的 task，以及 `request_agent` 的 sub-agent，
+  都不能 isolated。
+- 無法建立副本時（巢狀 repository 或 submodule、特殊檔案、指向 project 外的
+  symlink），task 會被 block，不會退回 shared 模式。
+- bash 以絕對路徑寫入 project 無法被阻擋，這不是安全沙箱。
+- 鍵名採嚴格解析，拼錯的鍵會直接報錯，不會靜默退回 shared。
 
 ### 系統提示詞
 

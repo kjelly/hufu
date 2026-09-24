@@ -550,6 +550,27 @@ func TestIsolatedProtocolRepairAppliesTheRepairedAttempt(t *testing.T) {
 // still on disk.
 func (f *isolatedTeamFixture) crashedProtocolIncompleteTask(t *testing.T, goal string) (*TodoItem, *isolatedAttempt) {
 	t.Helper()
+	item, world := f.startedIsolatedTask(t, goal)
+	if err := writeWorldFile(world.prepared.Root, "resumed.txt", "unapplied work\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.commitTaskTransitionFromCurrent(context.Background(), item.ID, TaskProtocolIncomplete, "protocol incomplete: missing required result", "worker wrote resumed.txt", map[string]any{"protocol_checkpoint": true}); err != nil {
+		t.Fatal(err)
+	}
+	simulateRestart(world)
+	return f.c.todoItemByID(item.ID), world
+}
+
+// simulateRestart forgets that this process is using a world, as a new
+// process would.
+func simulateRestart(a *isolatedAttempt) {
+	liveAttemptWorlds.Delete(filepath.Clean(a.worldDir()))
+}
+
+// startedIsolatedTask admits an isolated task through the durable admission
+// boundary and starts its first attempt in a new world.
+func (f *isolatedTeamFixture) startedIsolatedTask(t *testing.T, goal string) (*TodoItem, *isolatedAttempt) {
+	t.Helper()
 	ctx := context.Background()
 	c := f.c
 	if err := c.ensureExecutionPolicySnapshot(); err != nil {
@@ -594,12 +615,6 @@ func (f *isolatedTeamFixture) crashedProtocolIncompleteTask(t *testing.T, goal s
 	world, err := c.prepareIsolatedAttempt(ctx, taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID, 1)
 	if err != nil || world == nil {
 		t.Fatalf("prepare world = %v, %v", world, err)
-	}
-	if err := writeWorldFile(world.prepared.Root, "resumed.txt", "unapplied work\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskProtocolIncomplete, "protocol incomplete: missing required result", "worker wrote resumed.txt", map[string]any{"protocol_checkpoint": true}); err != nil {
-		t.Fatal(err)
 	}
 	return c.todoItemByID(item.ID), world
 }

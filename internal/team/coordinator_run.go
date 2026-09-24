@@ -399,6 +399,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
 	}
+	if err := c.reconcileAttemptWorlds(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
 	if originalCancellation == nil {
 		if err := c.startSemanticRunInputBoundary(ctx); err != nil {
 			c.finalizePublicInvocationFailure(err)
@@ -2272,6 +2276,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	// Replay the persistent task journal (crash-safe complement to the
 	// session.json checkpoint) and start appending to it for this run.
 	c.initTaskJournal()
+	// Settle isolated attempt worlds before any resume decision: a task
+	// whose verified changes were already applied must complete, not re-run.
+	if err := c.reconcileAttemptWorlds(ctx); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	// Restore the no-progress continuation baseline before re-driving any
 	// interrupted workers. Their resumed LLM usage must accumulate on top of
 	// the persisted counters, not be overwritten by a later restore.
@@ -2394,6 +2404,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", err
 	}
 	if err := c.resolveRunInputsForInvocation(ctx, additionalPrompt); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
+	if err := c.reconcileAttemptWorlds(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}

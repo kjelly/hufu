@@ -87,6 +87,97 @@ perform atomic writes with identity rechecks. Tools without a proven path
 scope—including shell, terminal, custom, and MCP operations—remain
 conservatively scoped.
 
+## Isolated worker workspaces
+
+A worker agent (or a team default) can set `worker-workspace: {mode: isolated,
+integrate: on-verified}`. The terms below are distinct:
+
+- the **subject root** is the source project the team works on;
+- the **control root** is Hufu's own directory for the project (session
+  workspace, runtime workspace, and state); it never overlaps the subject
+  root when isolation is enabled;
+- an **attempt world** is a private copy of the subject root under
+  `<control root>/attempt-worlds/<world id>/root`, and it is the attempt's
+  **execution root**: the root its tools and verification resolve against;
+- the **runtime workspace** (`<control root>/runtime`) and **workspace version
+  snapshots** are unrelated to attempt worlds, and the user's **Git working
+  tree** and `.git` are never written.
+
+Admission freezes the policy on the occurrence. Only a `workspace_write`
+task of an LLM-backend worker runs isolated; a read-only task of the same
+agent runs shared. Team load rejects isolated agents that combine the mode
+with extra-models, an external agent backend, MCP tools, a phase workflow,
+`tools: all`, or the sudo, scp, lua, golang, or terminal tools, and task
+admission rejects structured steps, actions, fan-out, and a non-managed
+workspace. `request_agent` refuses isolated sub-agents, which it would run
+inline in the subject root. An isolated setting is never silently downgraded:
+a world that cannot be prepared (a nested repository, a special file, a
+symlink out of the project) blocks the task as an environment failure.
+
+Each dispatch attempt gets a new world with a random ID. Preparation copies
+the managed files—including uncommitted and untracked ones, excluding ignored
+files and `.git`—under a shared integration lock, and records a kind-aware
+baseline manifest. The attempt's file tools resolve paths in the world and
+refuse writes into the subject root or another world; shells start in the
+world with `GIT_CEILING_DIRECTORIES` set. Verification runs in the world,
+while verification fingerprints stay on the subject root so repeated-failure
+detection keeps working. The subject root is not changed while the attempt
+runs.
+
+After verification and every other completion check pass, and before
+`TaskDone`, the attempt's delta (new paths the project ignores are dropped)
+is applied to the subject root under the exclusive integration lock. Every
+path's precondition is checked before anything is written: the current state
+must equal the attempt's baseline, or already equal its final state. Any
+other state is a `workspace_conflict`: nothing is written, the world is
+deleted, and the worker retries from the current subject root within its
+retry budget. Writes use temp files and renames that never follow symlinks,
+deletions run last, and the result is verified. An apply that fails part-way
+is retried once and otherwise blocks the task (`workspace_apply_incomplete`,
+`needs_human`) with the world kept. Because the apply precedes `TaskDone`,
+downstream tasks see the changes. A failed attempt's world is discarded, so
+its writes never reach the subject root or the next attempt.
+
+Isolated writers hold a whole-root **read** claim (resource scope snapshot
+version 2), so they run alongside each other and alongside readers, while
+shared writers still hold the exclusive claim.
+
+The lifecycle is durable: `attempt_workspace_prepared`,
+`attempt_workspace_apply_started` (carrying the verified result,
+verification, receipt, and coordinator output the task completes with),
+`attempt_workspace_apply_conflicted`, `attempt_workspace_applied`,
+`attempt_workspace_discarded`, and `attempt_workspace_orphan_removed`. The
+world state is derived from the session's global events, not from a
+branch-filtered view.
+
+Every public entry point that can dispatch a worker (`Run`, direct agent,
+targeted retry and reconcile, `ContinueWithPrompt`) reconciles attempt worlds
+after the task journal is initialized and before any dispatch or resume
+decision, whatever the execution profile:
+
+- a world that was **applying** is applied again (the apply is re-entrant)
+  and its task completes from the recorded evidence; if the apply cannot be
+  proven, the task is blocked and the world kept;
+- a world that was **applied** while its task is not done completes the task
+  without re-running the worker or repeating verification (worker memory
+  ingestion, STM, and reflexion are skipped);
+- the latest **prepared** world of a `protocol_incomplete` task is kept for
+  its result-only repair, which applies it before `TaskDone`; if that world
+  is gone, the task is re-dispatched instead of completing from its repair
+  provenance;
+- any other world of the current branch is deleted, but a world that is
+  applying, or applied while its task is not done, never is;
+- a world of another session branch is only reported, and a directory
+  without a valid owner marker is left alone.
+
+Known limits of v1: a shell can still write the subject root through an
+absolute path (bash has no path scope); a concurrent read-only task can
+observe a multi-file apply half-way; and another Hufu process on the same
+subject root is protected only by the per-path preconditions. If a crash
+leaves the subject root mid-apply, the next admission records it as an
+`external_drift` workspace version snapshot before recovery completes the
+apply, exactly as for any interrupted run.
+
 ## Stable dynamic MCP tool surface
 
 `ResolvedWorkerTools` distinguishes the provider surface (`Tools` / `Names`)
@@ -167,6 +258,10 @@ of a snapshot.
 For implementation details, use code and tests first:
 
 - [`target.go`](../../internal/execution/target.go) — parsing and canonicalization;
+- [`attempt_workspace_runtime.go`](../../internal/team/attempt_workspace_runtime.go),
+  [`attempt_workspace_apply.go`](../../internal/team/attempt_workspace_apply.go), and
+  [`attempt_workspace_recovery.go`](../../internal/team/attempt_workspace_recovery.go)
+  — isolated attempt worlds, their apply, and their crash recovery;
 - [`execution_registry.go`](../../internal/team/execution_registry.go) — target
   resolution and backend registration;
 - [`execution_target_replay.go`](../../internal/team/execution_target_replay.go)

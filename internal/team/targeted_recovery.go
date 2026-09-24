@@ -92,6 +92,10 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 	c.reconcileTaskStatusProjection()
 	c.initTaskJournal()
 	c.ResumeContinuationCheckpoint()
+	if err := c.reconcileAttemptWorlds(invocationCtx); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
+	}
 
 	item := c.todoItemByID(taskID)
 	if item == nil {

@@ -695,6 +695,12 @@ type RunMetrics struct {
 	RetrySuppressionsByReason map[string]int           `json:"retry_suppressions_by_reason,omitempty"`
 	FailuresByClass           map[TaskFailureClass]int `json:"failures_by_class,omitempty"`
 	FailuresByPhase           map[string]int           `json:"failures_by_phase,omitempty"`
+	// IsolatedAttemptsTotal counts attempts that ran in an isolated attempt
+	// world, AttemptWorkspaceConflictsTotal their applies refused by a
+	// conflict, and AttemptWorldsOrphanRemoved the worlds recovery deleted.
+	IsolatedAttemptsTotal          int `json:"isolated_attempts_total,omitempty"`
+	AttemptWorkspaceConflictsTotal int `json:"attempt_workspace_conflicts_total,omitempty"`
+	AttemptWorldsOrphanRemoved     int `json:"attempt_worlds_orphan_removed,omitempty"`
 	// StructuredResultValidationFailures counts structured payloads rejected
 	// by their result contract in this run.
 	StructuredResultValidationFailures int                         `json:"structured_result_validation_failures,omitempty"`
