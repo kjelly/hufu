@@ -190,20 +190,21 @@ type teamManifestSpecFields struct {
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
-	MCPServers       map[string]interface{}  `yaml:"mcp-servers,omitempty"`
-	Unattended       bool                    `yaml:"unattended,omitempty"`
-	AutoApprove      bool                    `yaml:"auto-approve,omitempty"`
-	MaxWallClock     int64                   `yaml:"max-duration,omitempty"`
-	MaxTotalTokens   int64                   `yaml:"max-total-tokens,omitempty"`
-	Acceptance       interface{}             `yaml:"acceptance,omitempty"`
-	Rollback         string                  `yaml:"rollback,omitempty"`
-	ExecutionProfile string                  `yaml:"execution-profile,omitempty"`
-	GoalMode         string                  `yaml:"goal-mode,omitempty"`
-	Reliability      rawReliabilityConfig    `yaml:"reliability,omitempty"`
-	WorkerMemory     rawWorkerMemoryPolicy   `yaml:"worker-memory,omitempty"`
-	MemoryLearning   rawMemoryLearningPolicy `yaml:"memory-learning,omitempty"`
-	Compaction       rawCompactionPolicy     `yaml:"compaction,omitempty"`
-	Tasks            []TaskDef               `yaml:"tasks,omitempty"`
+	MCPServers       map[string]interface{}     `yaml:"mcp-servers,omitempty"`
+	Unattended       bool                       `yaml:"unattended,omitempty"`
+	AutoApprove      bool                       `yaml:"auto-approve,omitempty"`
+	MaxWallClock     int64                      `yaml:"max-duration,omitempty"`
+	MaxTotalTokens   int64                      `yaml:"max-total-tokens,omitempty"`
+	Acceptance       interface{}                `yaml:"acceptance,omitempty"`
+	Rollback         string                     `yaml:"rollback,omitempty"`
+	ExecutionProfile string                     `yaml:"execution-profile,omitempty"`
+	GoalMode         string                     `yaml:"goal-mode,omitempty"`
+	Reliability      rawReliabilityConfig       `yaml:"reliability,omitempty"`
+	WorkerMemory     rawWorkerMemoryPolicy      `yaml:"worker-memory,omitempty"`
+	WorkerWorkspace  *agent.WorkerWorkspaceSpec `yaml:"worker-workspace,omitempty"`
+	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
+	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
+	Tasks            []TaskDef                  `yaml:"tasks,omitempty"`
 }
 
 // manifestEnvelope is a minimal, non-strict probe used only to detect

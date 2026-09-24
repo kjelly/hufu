@@ -383,6 +383,7 @@ type TodoItem struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	// RuntimeOccurrence and PrimaryAdmission are runtime-owned. Model-facing
 	// TaskDef/TodoSpec inputs never populate them.
 	RuntimeOccurrence    *RuntimeOccurrenceMetaV1    `json:"runtime_occurrence,omitempty"`
@@ -516,6 +517,7 @@ type TodoSpec struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
+	WorkerWorkspace          *WorkerWorkspacePolicy
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -597,6 +599,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		MaxRetries:                    item.MaxRetries,
 		OnFailure:                     item.OnFailure,
 		OnFailureClasses:              append([]TaskFailureClass(nil), item.OnFailureClasses...),
@@ -1331,6 +1334,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		VerifyResult:                  verifyResult,
 		RuntimeError:                  runtimeErr,
 		ExecutionReceipt:              execReceipt,
@@ -1508,6 +1512,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicToolAuthorization)
 	dst.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(src.ResourceScopeSnapshot)
 	dst.ResultContract = src.ResultContract.clone()
+	dst.WorkerWorkspace = src.WorkerWorkspace.clone()
 	dst.MaxRetries = src.MaxRetries
 	dst.OnFailure = src.OnFailure
 	dst.Escalate = src.Escalate

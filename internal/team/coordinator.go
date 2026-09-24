@@ -127,6 +127,9 @@ type TaskDef struct {
 	// ResultContract is the compiled contract identity bound at admission.
 	// It is runtime-owned and frozen into the TodoItem.
 	ResultContract *ResultContractRef `json:"-" yaml:"-"`
+	// WorkerWorkspace is the worker-workspace policy frozen at admission.
+	// It is runtime-owned and never coordinator JSON.
+	WorkerWorkspace *WorkerWorkspacePolicy `json:"-" yaml:"-"`
 	// executionModelOverride is set only by the bounded non-durable
 	// extra-model leaf path. It is intentionally not serialized or accepted
 	// from coordinator/task input; the leaf receives an explicit single-model

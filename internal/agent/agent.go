@@ -178,6 +178,9 @@ type AgentDef struct {
 	// this agent. A static contract task may override it; a coordinator
 	// payload never can.
 	ResultContract *ResultContractSpec
+	// WorkerWorkspace overrides the team's worker-workspace default for this
+	// agent.
+	WorkerWorkspace *WorkerWorkspaceSpec
 }
 
 // ContractRequirements describes prerequisites for a team or worker without
@@ -387,8 +390,11 @@ type TeamConfig struct {
 	Reliability ReliabilityConfig
 	// WorkerMemory is the team-level default worker memory policy. Individual
 	// agents can override it via their frontmatter `memory:` block.
-	WorkerMemory   WorkerMemoryPolicy
-	MemoryLearning MemoryLearningPolicy
+	WorkerMemory WorkerMemoryPolicy
+	// WorkerWorkspace is the team-level default worker-workspace; an agent's
+	// own setting overrides it. Nil means shared.
+	WorkerWorkspace *WorkerWorkspaceSpec
+	MemoryLearning  MemoryLearningPolicy
 	// Compaction controls coordinator history retention and deterministic
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.

@@ -90,6 +90,7 @@ type agentFrontmatter struct {
 	MemoryID         string                            `yaml:"memory-id"`
 	Memory           rawWorkerMemoryPolicy             `yaml:"memory"`
 	ResultContract   *agent.ResultContractSpec         `yaml:"result-contract"`
+	WorkerWorkspace  *agent.WorkerWorkspaceSpec        `yaml:"worker-workspace"`
 }
 
 // teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
@@ -526,9 +527,10 @@ func inferAgentNameFromFilename(path string) (string, error) {
 	return base, nil
 }
 
-// resultContractFrontmatterKey detects a top-level result-contract key in
-// agent frontmatter.
-var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^result-contract[ \t]*:`)
+// resultContractFrontmatterKey detects the top-level frontmatter keys whose
+// silent loss would weaken enforcement (a result contract, an isolated
+// worker workspace), so a parse failure there is an error, not a fallback.
+var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^(result-contract|worker-workspace)[ \t]*:`)
 
 func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
@@ -647,6 +649,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		ToolRecovery:     fm.ToolRecovery,
 		MemoryID:         fm.MemoryID,
 		ResultContract:   fm.ResultContract.Clone(),
+		WorkerWorkspace:  fm.WorkerWorkspace.Clone(),
 	}
 	if fm.Memory.isSet() {
 		def.Memory = resolveWorkerMemoryPolicy(fm.Memory, rawWorkerMemoryPolicy{}, agent.DefaultWorkerMemoryPolicy())
@@ -1002,6 +1005,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	} else {
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
+	cfg.WorkerWorkspace = yc.WorkerWorkspace.Clone()
 	cfg.MemoryLearning, err = resolveMemoryLearningPolicy(yc.MemoryLearning)
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid memory-learning config: %w", err)
@@ -1589,6 +1593,12 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, err
 	}
 	if err := compileTeamResultContracts(session); err != nil {
+		return nil, err
+	}
+	if err := validateTeamWorkerWorkspaces(session); err != nil {
+		return nil, err
+	}
+	if err := requireWorkerWorkspaceIsolationAvailable(session); err != nil {
 		return nil, err
 	}
 

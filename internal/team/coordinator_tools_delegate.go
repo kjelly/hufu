@@ -188,6 +188,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	subSpec.ExecutionTarget = subTask.ResolvedExecutionTarget
 	subSpec.ExecutionTopology = cloneExecutionTopology(subTask.ExecutionTopology)
 	subSpec.ResultContract = subTask.ResultContract.clone()
+	subSpec.WorkerWorkspace = subTask.WorkerWorkspace.clone()
 	subSpec.SideEffect, subSpec.Recovery, subSpec.ReconcileTool = subTask.SideEffect, subTask.Recovery, subTask.ReconcileTool
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, subTask, subAgentDef, &subSpec); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil

@@ -298,6 +298,11 @@ func (c *Coordinator) prepareNewTaskExecutionEnvelopes(ctx context.Context, task
 			if err != nil {
 				return nil, err
 			}
+			if prospective.WorkerWorkspace.isolated() {
+				if err := isolatedResolvedToolsUnsupported(tools); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if freezeScopes {
 			snapshot, err := c.resolveNewTaskResourceScope(tasks[i], prospective, tools)

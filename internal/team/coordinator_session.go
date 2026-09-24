@@ -1319,6 +1319,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		DecisionProvenance: cloneEvidenceProvenance(it.DecisionProvenance),
 		SubagentProvider:   it.SubagentProvider,
 		ResultContract:     it.ResultContract.clone(),
+		WorkerWorkspace:    it.WorkerWorkspace.clone(),
 	}
 }
 

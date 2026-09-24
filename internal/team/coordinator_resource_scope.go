@@ -15,6 +15,14 @@ import (
 
 const taskResourceScopeSnapshotVersion = 1
 
+// taskResourceScopeIsolatedSnapshotVersion marks a snapshot of a writer
+// running in an isolated attempt world; resourceScopeIsolationCopy is its
+// Isolation value.
+const (
+	taskResourceScopeIsolatedSnapshotVersion = 2
+	resourceScopeIsolationCopy               = "isolated-copy"
+)
+
 const (
 	resourceScopeSourceAuthored        = "authored"
 	resourceScopeSourceAuthoredWorkset = "authored+workset"
@@ -48,7 +56,11 @@ type TaskResourceScopeSnapshot struct {
 	BoundedReadScope  bool            `json:"bounded_read_scope,omitempty"`
 	BoundedWriteScope bool            `json:"bounded_write_scope,omitempty"`
 	Source            string          `json:"source"`
-	Digest            string          `json:"digest"`
+	// Isolation names the attempt world a writing task runs in. Only an
+	// isolated snapshot (version 2) carries it, so the digest of every
+	// other snapshot is unchanged.
+	Isolation string `json:"isolation,omitempty"`
+	Digest    string `json:"digest"`
 }
 
 func cloneTaskResourceScopeSnapshot(src *TaskResourceScopeSnapshot) *TaskResourceScopeSnapshot {
@@ -88,6 +100,9 @@ func taskResourceScopeDigest(snapshot *TaskResourceScopeSnapshot) string {
 	writeDigestRecord(hasher, "source", snapshot.Source)
 	writeDigestRecord(hasher, "bounded_read_scope", strconv.FormatBool(snapshot.BoundedReadScope))
 	writeDigestRecord(hasher, "bounded_write_scope", strconv.FormatBool(snapshot.BoundedWriteScope))
+	if snapshot.Isolation != "" {
+		writeDigestRecord(hasher, "isolation", snapshot.Isolation)
+	}
 	for _, claim := range snapshot.Claims {
 		writeDigestRecord(hasher, "claim", claim.Resource, string(claim.Mode))
 	}
@@ -107,8 +122,11 @@ func validateTaskResourceScopeSnapshot(snapshot *TaskResourceScopeSnapshot, side
 	invalid := func(format string, args ...any) error {
 		return fmt.Errorf("resource_snapshot_invalid: "+format, args...)
 	}
-	if snapshot.Version != taskResourceScopeSnapshotVersion {
-		return invalid("unsupported version %d", snapshot.Version)
+	switch {
+	case snapshot.Version == taskResourceScopeSnapshotVersion && snapshot.Isolation == "":
+	case snapshot.Version == taskResourceScopeIsolatedSnapshotVersion && snapshot.Isolation == resourceScopeIsolationCopy:
+	default:
+		return invalid("unsupported version %d with isolation %q", snapshot.Version, snapshot.Isolation)
 	}
 	switch snapshot.Source {
 	case resourceScopeSourceAuthored, resourceScopeSourceAuthoredWorkset, resourceScopeSourceRuntimeFallback:
@@ -162,7 +180,9 @@ func validateTaskResourceScopeSnapshot(snapshot *TaskResourceScopeSnapshot, side
 	}
 	if !snapshot.BoundedReadScope {
 		mode := ResourceExclusive
-		if sideEffect == "" || sideEffect == SideEffectNone {
+		// A read-only task, or a writer confined to its own attempt world,
+		// only reads the canonical project while it runs.
+		if sideEffect == "" || sideEffect == SideEffectNone || snapshot.Isolation == resourceScopeIsolationCopy {
 			mode = ResourceRead
 		}
 		root, _ := NewWorkspacePathResourceClaim(".", mode)
@@ -208,6 +228,9 @@ func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, 
 	if effect == "" {
 		effect = SideEffectNone
 	}
+	if todo.WorkerWorkspace.isolated() {
+		return isolatedTaskResourceScope(claims, effect)
+	}
 	if (effect == SideEffectNone || effect == SideEffectWorkspaceWrite) && todo.WorksetBinding != nil && len(todo.WorksetBinding.TouchedPaths) > 0 {
 		eligible, eligibilityErr := c.taskScopeEligible(task, resolvedTools)
 		if eligibilityErr != nil {
@@ -236,6 +259,31 @@ func wholeRootTaskResourceScope(claims []ResourceClaim, effect SideEffectClass) 
 	snapshot := &TaskResourceScopeSnapshot{
 		Version: taskResourceScopeSnapshotVersion, Claims: claims,
 		Source: resourceScopeSourceRuntimeFallback,
+	}
+	snapshot.Digest = taskResourceScopeDigest(snapshot)
+	if err := validateTaskResourceScopeSnapshot(snapshot, effect); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+// isolatedTaskResourceScope is the scope of a writer confined to its own
+// attempt world: a whole-root read claim, so isolated writers run
+// concurrently with each other and with readers, while shared writers (which
+// hold an exclusive whole-root claim) still exclude them. No bounded workset
+// scope is derived: its write path bypasses the attempt world's write rule.
+func isolatedTaskResourceScope(claims []ResourceClaim, effect SideEffectClass) (*TaskResourceScopeSnapshot, error) {
+	root, err := NewWorkspacePathResourceClaim(".", ResourceRead)
+	if err != nil {
+		return nil, err
+	}
+	claims, err = normalizeResourceClaims(append(claims, root))
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &TaskResourceScopeSnapshot{
+		Version: taskResourceScopeIsolatedSnapshotVersion, Claims: claims,
+		Source: resourceScopeSourceRuntimeFallback, Isolation: resourceScopeIsolationCopy,
 	}
 	snapshot.Digest = taskResourceScopeDigest(snapshot)
 	if err := validateTaskResourceScopeSnapshot(snapshot, effect); err != nil {
