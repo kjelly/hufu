@@ -38,6 +38,9 @@ type ModelCLIOverrides struct {
 func applyCLIModelOverrides(cfg *agent.TeamConfig, overrides ModelCLIOverrides) {
 	if overrides.Model != "" {
 		cfg.WorkerModel = overrides.Model
+		// --model replaces the route for every worker, so the team route is
+		// no longer the worker default either.
+		cfg.ExecutionRoute = ""
 	}
 	if overrides.CoordinatorModel != "" {
 		cfg.CoordinatorModel = overrides.CoordinatorModel

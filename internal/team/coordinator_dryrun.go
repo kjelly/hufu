@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/execution"
 )
@@ -29,7 +30,6 @@ type DryRunResult struct {
 	UserPrompt           string
 	TeamName             string
 	Model                string
-	SidecarModel         string
 	WorkerTarget         string
 	CoordinatorTarget    string
 	SidecarTarget        string
@@ -47,22 +47,65 @@ type DryRunResult struct {
 	Error                string
 	SubjectRoot          string
 	WorkspaceWouldCreate bool
+	// WorkerRoute and WorkerRouteCandidates describe the team execution
+	// route, the worker default when the team sets one.
+	WorkerRoute           string
+	WorkerRouteCandidates []string
+}
+
+// DryRunCoordinatorParams is the resolved configuration a preview needs to
+// freeze the same execution policy a real run would admit.
+type DryRunCoordinatorParams struct {
+	Session               *TeamSession
+	Profile               ExecutionProfile
+	DefaultProviderURL    string
+	DefaultProviderAPIKey string
+	ModelList             []config.ModelEntry
+	RoleModels            RoleModels
+	MaxConcurrent         int
+	NoNet                 bool
 }
 
 // NewDryRunCoordinator creates the read-only coordinator projection used by
-// CLI previews. It intentionally does not initialize providers, SQLite,
+// CLI previews. It builds the in-memory provider and execution registries and
+// freezes the execution policy, because run input resolvers execute under that
+// policy. It intentionally does not open provider transports, SQLite,
 // journals, terminals, audit logs, or workspace directories.
-func NewDryRunCoordinator(session *TeamSession, profile ExecutionProfile) (*Coordinator, error) {
+func NewDryRunCoordinator(params DryRunCoordinatorParams) (*Coordinator, error) {
+	session := params.Session
 	if session == nil {
 		return nil, fmt.Errorf("dry-run coordinator requires a team session")
 	}
-	c := &Coordinator{
-		session:      session,
-		skills:       session.Skills,
-		taskTracker:  NewTaskTracker(),
-		reportStatus: func(StatusEvent) {},
+	pm, err := agent.NewProviderManager(params.DefaultProviderURL, params.DefaultProviderAPIKey, session.Config.Providers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}
-	c.SetExecutionProfile(profile)
+	c := &Coordinator{
+		providerManager:   pm,
+		session:           session,
+		skills:            session.Skills,
+		taskTracker:       NewTaskTracker(),
+		reportStatus:      func(StatusEvent) {},
+		projectDir:        session.Scope.SubjectRoot,
+		modelList:         params.ModelList,
+		sidecarModel:      params.RoleModels.Sidecar,
+		guardModel:        params.RoleModels.Guard,
+		judgeModel:        params.RoleModels.Judge,
+		planReviewerModel: params.RoleModels.PlanReviewer,
+		maxConcurrent:     params.MaxConcurrent,
+		noNet:             params.NoNet,
+	}
+	c.executionRegistry = newExecutionRegistryFor(c)
+	c.SetExecutionProfile(params.Profile)
+	// Routes are bound before the policy snapshot, which pins them.
+	if err := c.bindExecutionRoutes(); err != nil {
+		return nil, err
+	}
+	executionPolicy, err := newExecutionPolicyState(c)
+	if err != nil {
+		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
+	}
+	c.executionPolicy = executionPolicy
 	return c, nil
 }
 
@@ -87,12 +130,22 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	if c.session != nil {
 		result.SubjectRoot = c.session.Scope.SubjectRoot
 		result.WorkspaceWouldCreate = c.session.Scope.Managed && c.session.Scope.ProjectID == ""
-		result.WorkerTarget = canonicalDryRunTarget(c.session.Config.WorkerModel, c.session.Config.DefaultLLMBackend)
-		result.CoordinatorTarget = canonicalDryRunTarget(c.session.Config.CoordinatorModel, c.session.Config.DefaultLLMBackend)
-		result.SidecarTarget = canonicalDryRunTarget(c.session.Config.SidecarModel, c.session.Config.DefaultLLMBackend)
-		result.GuardTarget = canonicalDryRunTarget(c.session.Config.GuardModel, c.session.Config.DefaultLLMBackend)
-		result.JudgeTarget = canonicalDryRunTarget(c.session.Config.JudgeModel, c.session.Config.DefaultLLMBackend)
-		result.PlanReviewerTarget = canonicalDryRunTarget(c.session.Config.PlanReviewerModel, c.session.Config.DefaultLLMBackend)
+		backend := c.session.Config.DefaultLLMBackend
+		result.WorkerTarget = canonicalDryRunTarget(c.session.Config.WorkerModel, backend)
+		if route := c.session.ExecutionRoutes[c.session.Config.ExecutionRoute]; c.session.Config.ExecutionRoute != "" && route != nil {
+			result.WorkerRoute = route.Name
+			for _, candidate := range route.Candidates {
+				result.WorkerRouteCandidates = append(result.WorkerRouteCandidates, candidate.String())
+			}
+		}
+		result.CoordinatorTarget = canonicalDryRunTarget(c.session.Config.CoordinatorModel, backend)
+		// Auxiliary roles show the resolved role models (team > hufu.yaml,
+		// guard/judge falling back to sidecar) a real run would use. A
+		// coordinator built without them shows the raw team configuration.
+		result.SidecarTarget = canonicalDryRunTarget(firstNonEmpty(c.sidecarModel, c.session.Config.SidecarModel), backend)
+		result.GuardTarget = canonicalDryRunTarget(firstNonEmpty(c.guardModel, c.session.Config.GuardModel), backend)
+		result.JudgeTarget = canonicalDryRunTarget(firstNonEmpty(c.judgeModel, c.session.Config.JudgeModel), backend)
+		result.PlanReviewerTarget = canonicalDryRunTarget(firstNonEmpty(c.planReviewerModel, c.session.Config.PlanReviewerModel), backend)
 	}
 	if orchDef != nil {
 		result.Model = c.resolveAgentModel(orchDef, "")
@@ -100,14 +153,6 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 
 	if c.session != nil {
 		result.ContractFindings = LintTeamContracts(c.session)
-		if c.session.Config.SidecarModel != "" {
-			result.SidecarModel = c.session.Config.SidecarModel
-		}
-		if result.SidecarModel == "" {
-			if resolved := config.LoadConfig(); resolved != nil {
-				result.SidecarModel = resolved.ResolveSidecarModel(c.session.Config.SidecarModel)
-			}
-		}
 	}
 
 	// Skill matching: keyword-only, no LLM, no sidecar.

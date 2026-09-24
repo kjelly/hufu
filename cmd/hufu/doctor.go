@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -23,7 +24,7 @@ var doctorCmd = &cobra.Command{
 	Long: `Run preflight checks before invoking an agent team:
 
   - the LLM provider is reachable and which models it exposes
-  - the resolved default / sidecar / guard models
+  - the resolved role models and the flag or hufu.yaml that sets each
   - the workspace directory is writable
   - how many agent teams are discoverable
   - team requirements and delegation/tool policies do not conflict
@@ -73,15 +74,21 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 2. Resolved roles. CLI flag > hufu.yaml. (Team/agent overrides apply later
-	// at run time and can't be resolved without a target team.)
+	// 2. Resolved roles. CLI flag > hufu.yaml, using the same hierarchy as a
+	// run. (Team/agent overrides apply later at run time and can't be
+	// resolved without a target team; `--dry-run` shows those.)
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Resolved models (hufu.yaml + flags; team/agent may override):"))
-	defModel := firstNonEmpty(opts.modelOverride, cfg.Model)
-	sidecar := firstNonEmpty(opts.sidecarModelOverride, cfg.SidecarModel, defModel)
-	guard := firstNonEmpty(opts.guardModelOverride, cfg.GuardModel, sidecar)
-	printRole(os.Stderr, "default", defModel, models, &ok)
-	printRole(os.Stderr, "sidecar", sidecar, models, nil)
-	printRole(os.Stderr, "guard", guard, models, nil)
+	overrides, err := currentModelOverrides()
+	if err != nil {
+		return err
+	}
+	for _, role := range resolveRoleModelSources(agent.TeamConfig{}, "team.yaml", cfg, overrides) {
+		var failPtr *bool
+		if role.Role == "Worker" || role.Role == "Coordinator" {
+			failPtr = &ok
+		}
+		printRole(os.Stderr, role, models, failPtr)
+	}
 
 	// 3. Workspace writability.
 	ws := getWorkspace()
@@ -256,20 +263,23 @@ func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]s
 // printRole prints a resolved model role and, when the model list is known,
 // warns if the model is not among the available ones. failPtr (when non-nil)
 // is set to false to mark the overall run as failed.
-func printRole(w *os.File, role, model string, available []string, failPtr *bool) {
+func printRole(w *os.File, role roleModelSource, available []string, failPtr *bool) {
+	label := strings.ToLower(role.Role) + ":"
+	model := role.Target
 	if model == "" {
-		_, _ = fmt.Fprintf(w, "  %-9s %s\n", role+":", dimStyle.Render("(not set — must be supplied via --model, team.yaml, or agent .md)"))
+		_, _ = fmt.Fprintf(w, "  %-14s %s\n", label, dimStyle.Render("(not set by flags or hufu.yaml; team.yaml or agent .md may set it)"))
 		return
 	}
+	source := dimStyle.Render("(" + role.Source + ")")
 	bare := providerModelName(model)
 	if len(available) > 0 && !modelAvailable(bare, available) {
-		_, _ = fmt.Fprintf(w, "  %-9s %s  %s\n", role+":", model, errStyle.Render("⚠ not in provider's model list"))
+		_, _ = fmt.Fprintf(w, "  %-14s %s  %s  %s\n", label, model, source, errStyle.Render("⚠ not in provider's model list"))
 		if failPtr != nil {
 			*failPtr = false
 		}
 		return
 	}
-	_, _ = fmt.Fprintf(w, "  %-9s %s\n", role+":", model)
+	_, _ = fmt.Fprintf(w, "  %-14s %s  %s\n", label, model, source)
 }
 
 func modelAvailable(bare string, available []string) bool {

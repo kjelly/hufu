@@ -78,7 +78,7 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 		}
 		return decisionOutputProcessResult(output)
 	}
-	renderDryRun(result)
+	renderDryRun(result, tc.roleSources)
 	generateRequestedReports(loadedTeams, "(dry-run — no tasks executed)")
 	return nil
 }

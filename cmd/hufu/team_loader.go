@@ -277,10 +277,19 @@ func buildMemoryStore(resolvedProviderURL string) *memory.MemoryStore {
 
 // resolveAndCheckModel resolves the independent worker/coordinator targets.
 // Legacy model remains a compatibility fallback, but is not overwritten.
+//
+// A team execution-route is the team's worker default: it binds every worker
+// without its own model, so a hufu.yaml worker target would be an unused
+// default that still gets preflighted, warmed, and pinned. The worker target
+// then stays empty unless team.yaml or --model sets it explicitly.
 func resolveAndCheckModel(session *team.TeamSession, cfg *config.Config) error {
-	session.Config.WorkerModel = cfg.ResolveWorkerModel(session.Config.WorkerModel, session.Config.Generation.Model)
-	if session.Config.WorkerModel == "" {
-		return fmt.Errorf("no worker execution target specified for team %q\n  Set --model <target>, add 'worker-model:' to the team's team.yaml, or add 'worker-model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", session.Config.Name)
+	// The route itself is validated by preflight and route binding.
+	routeIsWorkerDefault := session.Config.WorkerModel == "" && session.Config.ExecutionRoute != ""
+	if !routeIsWorkerDefault {
+		session.Config.WorkerModel = cfg.ResolveWorkerModel(session.Config.WorkerModel, session.Config.Generation.Model)
+	}
+	if !routeIsWorkerDefault && session.Config.WorkerModel == "" {
+		return fmt.Errorf("no worker execution target specified for team %q\n  Set --model <target>, add 'worker-model:' or 'execution-route:' to the team's team.yaml, or add 'worker-model:' to ~/.config/hufu/hufu.yaml\n  Run 'hufu doctor' to see which model is currently resolved", session.Config.Name)
 	}
 	explicitCoordinatorTarget := session.Config.CoordinatorModel != "" || cfg.CoordinatorModel != ""
 	coordinatorTarget := cfg.ResolveCoordinatorModel(session.Config.CoordinatorModel, session.Config.Generation.Model)
@@ -366,10 +375,10 @@ func resolveRestrictedPath(session *team.TeamSession, cfg *config.Config) string
 	return resolved
 }
 
-// displayResolvedConfig prints the resolved skill/model/sidecar/guard/
-// max-concurrent and execution profile settings for the user. Called after the coordinator
-// is created.
-func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel string, resolvedMaxConcurrent int, execProfile team.ExecutionProfile) {
+// displayResolvedConfig prints the resolved skill/model/role/max-concurrent
+// and execution profile settings for the user, naming the configuration layer
+// behind each role model. Called after the coordinator is created.
+func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config.ModelEntry, roleSources []roleModelSource, resolvedMaxConcurrent int, execProfile team.ExecutionProfile) {
 	if execProfile.Name != "" {
 		stderrLog("%s %s (v%d)\n", boldStyle.Render("Profile:"), execProfile.Name, execProfile.SchemaVersion)
 	}
@@ -387,17 +396,10 @@ func displayResolvedConfig(session *team.TeamSession, resolvedModelList []config
 		}
 		stderrLog("%s %s\n", boldStyle.Render("Models:"), strings.Join(modelIDs, ", "))
 	}
-	if resolvedSidecarModel != "" {
-		stderrLog("%s %s\n", boldStyle.Render("Sidecar:"), resolvedSidecarModel)
-	}
-	if resolvedGuardModel != "" {
-		stderrLog("%s %s\n", boldStyle.Render("Guard:"), resolvedGuardModel)
-	}
-	if resolvedJudgeModel != "" {
-		stderrLog("%s %s\n", boldStyle.Render("Judge:"), resolvedJudgeModel)
-	}
-	if resolvedPlanReviewerModel != "" {
-		stderrLog("%s %s\n", boldStyle.Render("Plan Reviewer:"), resolvedPlanReviewerModel)
+	for _, role := range roleSources {
+		if value := role.Display(); value != "" {
+			stderrLog("%s %s  %s\n", boldStyle.Render(role.Role+":"), value, dimStyle.Render("("+role.Source+")"))
+		}
 	}
 	if resolvedMaxConcurrent != 8 {
 		stderrLog("%s %d\n", boldStyle.Render("Max concurrent:"), resolvedMaxConcurrent)

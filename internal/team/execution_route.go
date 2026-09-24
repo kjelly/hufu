@@ -91,6 +91,20 @@ func (s *TeamSession) executionRouteFor(def *agent.AgentDef) *ExecutionRouteDefi
 	return s.ExecutionRoutes[name]
 }
 
+// teamRouteTarget returns the first candidate of the team-level execution
+// route: the worker default for a worker the team did not bind, such as one
+// resolved by name at dispatch time. It is "" when the team has no route.
+func (s *TeamSession) teamRouteTarget() string {
+	if s == nil || s.Config.ExecutionRoute == "" {
+		return ""
+	}
+	route := s.ExecutionRoutes[s.Config.ExecutionRoute]
+	if route == nil || len(route.Candidates) == 0 {
+		return ""
+	}
+	return route.Candidates[0].String()
+}
+
 // ExecutionRoutePolicySnapshot pins one worker's bound route in the
 // execution policy snapshot.
 type ExecutionRoutePolicySnapshot struct {

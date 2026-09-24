@@ -2115,7 +2115,13 @@ func waitWithTimeoutAndFinalize(finished chan struct{}, emergencyFinalize func()
 	}
 }
 
-func renderDryRun(result *team.DryRunResult) {
+func renderDryRun(result *team.DryRunResult, roleSources []roleModelSource) {
+	fmt.Fprint(os.Stderr, formatDryRun(result, roleSources))
+}
+
+// formatDryRun renders the preview; roleSources, when known, name the
+// configuration layer behind each role target.
+func formatDryRun(result *team.DryRunResult, roleSources []roleModelSource) string {
 	var b strings.Builder
 	width := previewTerminalWidth(80)
 
@@ -2139,23 +2145,29 @@ func renderDryRun(result *team.DryRunResult) {
 		)
 	}
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Model:"), result.Model)
+	workerTarget := result.WorkerTarget
+	if result.WorkerRoute != "" {
+		workerTarget = "route " + result.WorkerRoute + " → " + strings.Join(result.WorkerRouteCandidates, ", ")
+	}
 	for _, target := range []struct {
 		role   string
 		target string
 	}{
-		{"Worker", result.WorkerTarget},
+		{"Worker", workerTarget},
 		{"Coordinator", result.CoordinatorTarget},
 		{"Sidecar", result.SidecarTarget},
 		{"Guard", result.GuardTarget},
 		{"Judge", result.JudgeTarget},
 		{"Plan reviewer", result.PlanReviewerTarget},
 	} {
-		if target.target != "" {
-			fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render(target.role+":"), target.target)
+		if target.target == "" {
+			continue
 		}
-	}
-	if result.SidecarModel != "" {
-		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Sidecar:"), result.SidecarModel)
+		fmt.Fprintf(&b, "  %s %s", boldStyle.Render(target.role+":"), target.target)
+		if source := roleSourceFor(roleSources, target.role); source != "" {
+			fmt.Fprintf(&b, "  %s", dimStyle.Render("("+source+")"))
+		}
+		b.WriteString("\n")
 	}
 	if result.UserPrompt != "" {
 		promptLines := wrapPreviewLines(result.UserPrompt, max(width-10, 20), 6)
@@ -2264,6 +2276,5 @@ func renderDryRun(result *team.DryRunResult) {
 	b.WriteString("\n")
 	b.WriteString(headerStyle.Render("─── DRY RUN COMPLETE (no tasks were executed) ───"))
 	b.WriteString("\n")
-
-	fmt.Fprint(os.Stderr, b.String())
+	return b.String()
 }

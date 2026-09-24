@@ -163,3 +163,41 @@ func snapshotFiles(t *testing.T, root string) map[string]string {
 	}
 	return result
 }
+
+func TestTeamCheckTreatsTeamRouteAsWorkerTarget(t *testing.T) {
+	session := &team.TeamSession{Config: agent.TeamConfig{ExecutionRoute: "review", CoordinatorModel: "ollama/coordinator"}}
+	tests := []struct {
+		name        string
+		routes      map[string]config.ExecutionRouteConfig
+		wantStatus  string
+		wantMessage string
+		wantTargets []resolvedRoleTarget
+	}{
+		{
+			name:        "defined route",
+			routes:      map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/a", "ollama/b"}}},
+			wantStatus:  "passed",
+			wantMessage: "worker requested/effective target: route review → ollama/a, ollama/b",
+			wantTargets: []resolvedRoleTarget{{role: "worker", target: "ollama/a", required: true}, {role: "worker_fallback_2", target: "ollama/b"}},
+		},
+		{
+			name:        "undefined route",
+			wantStatus:  "failed",
+			wantMessage: "worker requested/effective target: not configured",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{ExecutionRoutes: tt.routes}
+			worker := roleTargetCheckItems(session, cfg, team.RoleModels{})[0]
+			if worker.ID != "static.role.worker" || worker.Status != tt.wantStatus || worker.Message != tt.wantMessage {
+				t.Fatalf("worker check = %+v, want status %q message %q", worker, tt.wantStatus, tt.wantMessage)
+			}
+			targets := resolvedRoleTargets(session, cfg, team.RoleModels{})
+			workers := targets[:len(targets)-5] // coordinator + four auxiliary roles follow
+			if !reflect.DeepEqual(workers, tt.wantTargets) && (len(workers) != 0 || len(tt.wantTargets) != 0) {
+				t.Fatalf("worker targets = %+v, want %+v", workers, tt.wantTargets)
+			}
+		})
+	}
+}

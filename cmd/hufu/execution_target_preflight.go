@@ -89,27 +89,32 @@ func preflightExecutionTargets(session *team.TeamSession, cfg *config.Config, ro
 		{role: "judge", raw: roles.Judge, llm: true},
 		{role: "plan reviewer", raw: roles.PlanReviewer, llm: true},
 	}
-	// Agent-local generation models and extra-model fan-out leaves are also
-	// statically selectable execution targets. They are not necessarily equal
-	// to the resolved team worker target, so validate their backend namespace
-	// and executable availability before any workspace or lifecycle side
-	// effects can begin.
+	// Agent-local generation models, route candidates, and extra-model fan-out
+	// leaves are also statically selectable execution targets. They are not
+	// necessarily equal to the resolved team worker target, so validate their
+	// backend namespace and executable availability before any workspace or
+	// lifecycle side effects can begin.
+	routes := executionRouteConfigs(session, cfg)
 	for name, def := range session.Agents {
 		if def == nil || isCoordinatorRole(def.Role) {
 			continue
-		}
-		model := strings.TrimSpace(def.Generation.Model)
-		if model == "" {
-			model = strings.TrimSpace(session.Config.WorkerModel)
-		}
-		if model == "" {
-			model = strings.TrimSpace(session.Config.Generation.Model)
 		}
 		legacyProvider := strings.TrimSpace(def.SubagentProvider)
 		if legacyProvider == "" {
 			legacyProvider = strings.TrimSpace(session.Config.SubagentProviderDefault)
 		}
-		if model != "" {
+		// A route-bound worker runs only on its route's candidates, which
+		// must be language-model targets; the team worker target never
+		// applies to it.
+		if routeName := boundExecutionRoute(session, def); routeName != "" {
+			route, ok := routes[routeName]
+			if !ok {
+				return fmt.Errorf("agent %s: execution route %q is not defined in hufu.yaml execution-routes", name, routeName)
+			}
+			for index, candidate := range route.Candidates {
+				targets = append(targets, preflightExecutionTarget{role: fmt.Sprintf("agent %s route %s candidate %d", name, routeName, index+1), raw: candidate, llm: true})
+			}
+		} else if model := firstNonEmpty(strings.TrimSpace(def.Generation.Model), strings.TrimSpace(session.Config.WorkerModel), strings.TrimSpace(session.Config.Generation.Model)); model != "" {
 			targets = append(targets, preflightExecutionTarget{role: fmt.Sprintf("agent %s", name), raw: model, legacyProvider: legacyProvider})
 		}
 		for index, model := range def.ExtraModels {

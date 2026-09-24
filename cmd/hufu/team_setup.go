@@ -30,6 +30,8 @@ type teamContext struct {
 	coordinator *team.Coordinator
 	sessionData *team.SessionData
 	notifier    *notify.Notifier
+	// roleSources names the configuration layer behind each role model.
+	roleSources []roleModelSource
 }
 
 func (tc *teamContext) Close() error {
@@ -199,6 +201,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
+	// Provenance must be read before resolution overwrites the team's
+	// worker/coordinator fields with their resolved values.
+	roleSources := resolveRoleModelSources(session.Config, teamSourceLabel(session), cfg, cliModelOverrides)
 	roleModels, err := resolveExecutionRoleModels(session, cfg)
 	if err != nil {
 		return nil, err
@@ -228,12 +233,21 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if messages := contractErrorMessages(effectiveContractFindings); len(messages) > 0 {
 		return nil, fmt.Errorf("effective team contract validation failed: %s", strings.Join(messages, "; "))
 	}
+	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
+	if resolvedMaxConcurrent <= 0 {
+		resolvedMaxConcurrent = 8
+	}
 	if opts.dryRun {
-		coordinator, err := team.NewDryRunCoordinator(session, execProfile)
+		coordinator, err := team.NewDryRunCoordinator(team.DryRunCoordinatorParams{
+			Session: session, Profile: execProfile,
+			DefaultProviderURL: resolvedProviderURL, DefaultProviderAPIKey: resolvedProviderAPIKey,
+			ModelList: resolvedModelList, RoleModels: roleModels,
+			MaxConcurrent: resolvedMaxConcurrent, NoNet: resolvedNoNet,
+		})
 		if err != nil {
 			return nil, err
 		}
-		return &teamContext{teamName: teamName, session: session, coordinator: coordinator}, nil
+		return &teamContext{teamName: teamName, session: session, coordinator: coordinator, roleSources: roleSources}, nil
 	}
 	// Read the durable checkpoint before any lifecycle mutation. A resumed
 	// occurrence owns its frozen canonical target, so a changed CLI/config
@@ -249,10 +263,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 	memStore := buildMemoryStore(resolvedProviderURL)
 
-	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
-	if resolvedMaxConcurrent <= 0 {
-		resolvedMaxConcurrent = 8
-	}
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
 
 	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
@@ -336,7 +346,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, errors.Join(err, coordinator.Close())
 	}
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
-	displayResolvedConfig(session, resolvedModelList, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedMaxConcurrent, execProfile)
+	displayResolvedConfig(session, resolvedModelList, roleSources, resolvedMaxConcurrent, execProfile)
 	notifierInst := buildNotifier(cfg, session)
 
 	return &teamContext{
@@ -345,6 +355,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		coordinator: coordinator,
 		sessionData: sessionData,
 		notifier:    notifierInst,
+		roleSources: roleSources,
 	}, nil
 }
 

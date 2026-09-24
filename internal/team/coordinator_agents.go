@@ -381,13 +381,23 @@ func (c *Coordinator) resolveCurrentAgentModel(agentName string) string {
 	if err == nil && agentDef != nil {
 		return c.resolveAgentModel(agentDef, "")
 	}
-	if c != nil && c.session != nil {
-		if c.session.Config.WorkerModel != "" {
-			return c.session.Config.WorkerModel
-		}
-		return c.session.Config.Generation.Model
+	return c.defaultWorkerModel()
+}
+
+// defaultWorkerModel is the target for a worker with no model or route of its
+// own: the team route's first candidate, then the team worker target, then the
+// legacy team model.
+func (c *Coordinator) defaultWorkerModel() string {
+	if c == nil || c.session == nil {
+		return ""
 	}
-	return ""
+	if target := c.session.teamRouteTarget(); target != "" {
+		return target
+	}
+	if c.session.Config.WorkerModel != "" {
+		return c.session.Config.WorkerModel
+	}
+	return c.session.Config.Generation.Model
 }
 
 func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel string) string {
@@ -408,13 +418,7 @@ func (c *Coordinator) resolveAgentModel(def *agent.AgentDef, overrideModel strin
 	if def != nil && def.Generation.Model != "" {
 		return def.Generation.Model
 	}
-	if c != nil && c.session != nil {
-		if c.session.Config.WorkerModel != "" {
-			return c.session.Config.WorkerModel
-		}
-		return c.session.Config.Generation.Model
-	}
-	return ""
+	return c.defaultWorkerModel()
 }
 
 // resolveAgentMaxOutputTokens returns the max-output-tokens Hufu will

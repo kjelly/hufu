@@ -168,6 +168,9 @@ type Config struct {
 	// WorkspaceVersioning configures subject-root versioning for managed
 	// workspaces (docs/archive/implementation-plans/workspace-versioning.md §31).
 	WorkspaceVersioning WorkspaceVersioningConfig `yaml:"workspace-versioning"`
+	// sources records which file last supplied each model-related key, so
+	// callers can show where an effective value came from.
+	sources map[string]string
 	// Profiles are named bundles of CLI flag values, selectable with --profile.
 	// Each value maps a flag name to a string the flag knows how to parse, e.g.
 	//   profiles:
@@ -229,6 +232,7 @@ func (c *Config) mergeFromFile(path string) {
 		return
 	}
 	c.mergeScalarFields(&fileCfg)
+	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
 	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {
@@ -300,6 +304,34 @@ func (c *Config) mergeScalarFields(fileCfg *Config) {
 	c.NoNet = c.NoNet || fileCfg.NoNet
 	c.ForceMCP = c.ForceMCP || fileCfg.ForceMCP
 	c.ProjectContext = c.ProjectContext || fileCfg.ProjectContext
+}
+
+// recordSources remembers path as the origin of every model-related key the
+// file sets. Later files overwrite earlier entries, matching the merge.
+func (c *Config) recordSources(fileCfg *Config, path string) {
+	for key, set := range map[string]bool{
+		"model": fileCfg.Model != "", "worker-model": fileCfg.WorkerModel != "",
+		"coordinator-model": fileCfg.CoordinatorModel != "", "sidecar-model": fileCfg.SidecarModel != "",
+		"guard-model": fileCfg.GuardModel != "", "judge-model": fileCfg.JudgeModel != "",
+		"plan-reviewer-model": fileCfg.PlanReviewerModel != "", "execution-routes": len(fileCfg.ExecutionRoutes) > 0,
+	} {
+		if !set {
+			continue
+		}
+		if c.sources == nil {
+			c.sources = make(map[string]string)
+		}
+		c.sources[key] = path
+	}
+}
+
+// Source returns the file that supplied key (a hufu.yaml key such as
+// "sidecar-model"), or "" when no loaded file set it.
+func (c *Config) Source(key string) string {
+	if c == nil {
+		return ""
+	}
+	return c.sources[key]
 }
 
 func (c *Config) mergeHooks(hooks map[string]string) {

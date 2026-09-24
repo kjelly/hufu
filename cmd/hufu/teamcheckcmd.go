@@ -148,7 +148,7 @@ func runTeamCheck(command *cobra.Command, name string, options *teamCheckOptions
 	if roleErr != nil {
 		document.Checks = append(document.Checks, TeamCheckItem{ID: "static.role_targets", Category: "static", Status: "failed", Required: true, ReasonCode: "role_target_invalid", Message: roleErr.Error()})
 	} else {
-		document.Checks = append(document.Checks, roleTargetCheckItems(session, roles)...)
+		document.Checks = append(document.Checks, roleTargetCheckItems(session, cfg, roles)...)
 		if err := validateDoctorExecutionTargets(session, cfg, nil); err != nil {
 			document.Checks = append(document.Checks, TeamCheckItem{ID: "static.execution_preflight", Category: "static", Status: "failed", Required: true, ReasonCode: "execution_target_invalid", Message: err.Error()})
 		} else {
@@ -206,7 +206,7 @@ func onlineTeamCheckItems(parent context.Context, session *team.TeamSession, cfg
 	if roleErr != nil {
 		return items
 	}
-	for _, role := range resolvedRoleTargets(session, roles) {
+	for _, role := range resolvedRoleTargets(session, cfg, roles) {
 		selector, err := execution.ParseExecutionSelector(role.target)
 		if err != nil || selector.Model == "" {
 			continue
@@ -233,7 +233,7 @@ func onlineTeamCheckItems(parent context.Context, session *team.TeamSession, cfg
 
 func onlineProviderTargets(session *team.TeamSession, cfg *config.Config, roles team.RoleModels) []onlineProviderTarget {
 	required := map[string]bool{}
-	for _, role := range resolvedRoleTargets(session, roles) {
+	for _, role := range resolvedRoleTargets(session, cfg, roles) {
 		selector, err := execution.ParseExecutionSelector(role.target)
 		if err != nil {
 			continue
@@ -274,20 +274,40 @@ type resolvedRoleTarget struct {
 	required     bool
 }
 
-func resolvedRoleTargets(session *team.TeamSession, roles team.RoleModels) []resolvedRoleTarget {
-	return []resolvedRoleTarget{
-		{role: "worker", target: session.Config.WorkerModel, required: true},
-		{role: "coordinator", target: session.Config.CoordinatorModel, required: true},
-		{role: "sidecar", target: roles.Sidecar},
-		{role: "guard", target: roles.Guard},
-		{role: "judge", target: roles.Judge},
-		{role: "plan_reviewer", target: roles.PlanReviewer},
+// resolvedRoleTargets lists each role's effective targets. A team execution
+// route is the worker default, so its candidates stand in for the worker
+// target: the first is required, later fallbacks are not.
+func resolvedRoleTargets(session *team.TeamSession, cfg *config.Config, roles team.RoleModels) []resolvedRoleTarget {
+	workers := []resolvedRoleTarget{{role: "worker", target: session.Config.WorkerModel, required: true}}
+	if routeName := session.Config.ExecutionRoute; routeName != "" {
+		workers = nil
+		for index, candidate := range executionRouteConfigs(session, cfg)[routeName].Candidates {
+			role := "worker"
+			if index > 0 {
+				role = fmt.Sprintf("worker_fallback_%d", index+1)
+			}
+			workers = append(workers, resolvedRoleTarget{role: role, target: candidate, required: index == 0})
+		}
 	}
+	return append(workers,
+		resolvedRoleTarget{role: "coordinator", target: session.Config.CoordinatorModel, required: true},
+		resolvedRoleTarget{role: "sidecar", target: roles.Sidecar},
+		resolvedRoleTarget{role: "guard", target: roles.Guard},
+		resolvedRoleTarget{role: "judge", target: roles.Judge},
+		resolvedRoleTarget{role: "plan_reviewer", target: roles.PlanReviewer},
+	)
 }
 
-func roleTargetCheckItems(session *team.TeamSession, roles team.RoleModels) []TeamCheckItem {
+func roleTargetCheckItems(session *team.TeamSession, cfg *config.Config, roles team.RoleModels) []TeamCheckItem {
+	worker := session.Config.WorkerModel
+	if routeName := session.Config.ExecutionRoute; routeName != "" {
+		worker = ""
+		if candidates := executionRouteConfigs(session, cfg)[routeName].Candidates; len(candidates) > 0 {
+			worker = roleModelSource{Route: routeName, Candidates: candidates}.Display()
+		}
+	}
 	values := []struct{ role, target string }{
-		{"worker", session.Config.WorkerModel}, {"coordinator", session.Config.CoordinatorModel},
+		{"worker", worker}, {"coordinator", session.Config.CoordinatorModel},
 		{"sidecar", roles.Sidecar}, {"guard", roles.Guard}, {"judge", roles.Judge}, {"plan_reviewer", roles.PlanReviewer},
 	}
 	items := make([]TeamCheckItem, 0, len(values))
