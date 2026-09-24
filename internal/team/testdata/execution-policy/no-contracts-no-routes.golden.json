@@ -1,0 +1,110 @@
+{
+  "version": 4,
+  "team_max_concurrent": 4,
+  "default_llm_backend": "ollama",
+  "backends": [
+    {
+      "backend": "codex",
+      "kind": "agent",
+      "max_concurrent": 1,
+      "identity_hash": "200e098a19435224c915ab0f23336c032c2c38a77711c5a7d66a967cf314159e"
+    },
+    {
+      "backend": "ollama",
+      "kind": "llm",
+      "provider_key": "local",
+      "max_concurrent": 2,
+      "identity_hash": "d665af4b6aa25fe014707f915e382a0074689c0520ac7137fb34d53a3b4bd843"
+    },
+    {
+      "backend": "remote",
+      "kind": "llm",
+      "provider_key": "remote",
+      "max_concurrent": 3,
+      "identity_hash": "e3de1d7182d9a3b80c40408ffc835db9d51cbba2108856a6d0b410bc15109290"
+    }
+  ],
+  "model_routes": [
+    {
+      "model": "codex-bare-model",
+      "backend": "codex"
+    },
+    {
+      "model": "ollama/extra-model",
+      "backend": "ollama",
+      "provider_key": "local"
+    },
+    {
+      "model": "ollama/judge-model",
+      "backend": "ollama",
+      "provider_key": "local"
+    },
+    {
+      "model": "remote/agent-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/config-guard-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/coordinator-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/guard-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/plan-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/sidecar-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/team-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    },
+    {
+      "model": "remote/worker-model",
+      "backend": "remote",
+      "provider_key": "remote"
+    }
+  ],
+  "execution_worlds": [
+    {
+      "backend": "codex",
+      "execution_world": "local-sandbox",
+      "project_root_hash": "\u003cproject-root-hash\u003e",
+      "coordinator_network_disabled": false,
+      "agent_network_policies": [
+        {
+          "agent": "codex-worker",
+          "network_disabled": false
+        }
+      ],
+      "inherit_env": [
+        {
+          "name": "CODEX_HOME",
+          "present": true,
+          "value_hash": "f7b2e5c13352dfc62ac00cbefc42375c86eb0479ae4d8d5c851237e4a28070d7"
+        },
+        {
+          "name": "HOME",
+          "present": true,
+          "value_hash": "e1135e595d74e7dd6bdeb4cacf43142b357cbab81deb52a6963eb9376c43e0af"
+        }
+      ]
+    }
+  ],
+  "configuration_hash": "\u003cconfiguration-hash\u003e"
+}

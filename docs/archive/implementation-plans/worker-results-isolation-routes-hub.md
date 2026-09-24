@@ -13,6 +13,14 @@
 
 本文件中所有 `file:line` 引用都已在 `eaa77f1` 核實。實作時行號可能漂移，請以函式名稱與型別名稱為準。
 
+## Implementation record
+
+每個階段各自一個 commit（commit message 內文標有對應的 HF-OMP 編號）。
+
+| Phase | 狀態 | 與本文件的偏差 |
+|---|---|---|
+| HF-OMP-000 | done | 無。escalate 系列行為已由 `escalation_test.go` 覆蓋，未另外新增重複的測試。 |
+
 ---
 
 ## 0. 決策紀錄與 v2 修訂摘要

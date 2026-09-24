@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -283,5 +284,32 @@ func TestApplyCLIGenerationOverridesToAgents_ModelSkipsCoordinatorRoles(t *testi
 				t.Fatalf("Generation.Model = %q, want %q", got, tt.wantModel)
 			}
 		})
+	}
+}
+
+// HF-OMP-000 characterization: -m replaces each worker's primary model but
+// keeps its extra-models, so the admitted fan-out topology is
+// [override, extras...] rather than a single target. Execution routes only
+// define -m as a single candidate for route-bound agents (plan D14).
+func TestApplyCLIGenerationOverridesToAgents_ModelKeepsExtraModels(t *testing.T) {
+	session := &team.TeamSession{
+		Agents: map[string]*agent.AgentDef{
+			"worker": {
+				Name:        "worker",
+				Role:        "worker",
+				Generation:  agent.GenerationParams{Model: "ollama/agent-model"},
+				ExtraModels: []string{"ollama/extra-a", "ollama/extra-b"},
+			},
+		},
+	}
+	if err := applyCLIGenerationOverridesToAgents(session, ModelCLIOverrides{Model: "ollama/cli-model"}); err != nil {
+		t.Fatal(err)
+	}
+	worker := session.Agents["worker"]
+	if worker.Generation.Model != "ollama/cli-model" {
+		t.Fatalf("worker model = %q, want the -m override", worker.Generation.Model)
+	}
+	if want := []string{"ollama/extra-a", "ollama/extra-b"}; !slices.Equal(worker.ExtraModels, want) {
+		t.Fatalf("worker extra-models = %q, want %q unchanged by -m", worker.ExtraModels, want)
 	}
 }
