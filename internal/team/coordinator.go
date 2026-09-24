@@ -612,6 +612,10 @@ type Coordinator struct {
 	// scheduler and backend semaphores consume this immutable state instead of
 	// reading live team/provider configuration.
 	executionPolicy *executionPolicyState
+	// attemptExecutionTargets maps an in-flight task to the target its
+	// current attempt runs on (a route fallback may differ from the frozen
+	// primary). It feeds telemetry only.
+	attemptExecutionTargets sync.Map
 	// providerSemState holds a lazily-created concurrency-limiting channel per
 	// canonical effective provider key, sized from ProviderManager's execution
 	// policy. It is shared with isolated extra-model clones.

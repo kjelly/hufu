@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // HufuLocalSubagentProvider adapts the existing Fantasy agent runtime. It is
@@ -74,7 +75,10 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if !canonical.Task.ResolvedExecutionTarget.IsZero() {
 		expectedModelID = p.coordinator.executionModelIDForTarget(canonical.Task.ResolvedExecutionTarget, expectedModelID)
 	}
-	if strings.TrimSpace(expectedModelID) != "" && strings.TrimSpace(request.ModelID) != strings.TrimSpace(expectedModelID) {
+	// A route-bound occurrence may run any of its frozen candidates; every
+	// other occurrence runs exactly its canonical model.
+	if strings.TrimSpace(expectedModelID) != "" && strings.TrimSpace(request.ModelID) != strings.TrimSpace(expectedModelID) &&
+		!p.coordinator.routeCandidateAllowed(canonical.Task.ExecutionRoute, execution.ExecutionTarget{}, strings.TrimSpace(request.ModelID)) {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt model assertion does not match canonical model %q for Todo %q", expectedModelID, request.TaskID)
 	}
 	if !workerAgentResolutionAssertionMatches(request.Agent, canonical.Agent) {
@@ -118,7 +122,8 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	// registry using the request's model for legacy compatibility.
 	var provider *agent.OpenAICompatibleProvider
 	if !request.ExecutionTarget.IsZero() {
-		if !canonical.Task.ResolvedExecutionTarget.IsZero() && request.ExecutionTarget != canonical.Task.ResolvedExecutionTarget {
+		if !canonical.Task.ResolvedExecutionTarget.IsZero() && request.ExecutionTarget != canonical.Task.ResolvedExecutionTarget &&
+			!p.coordinator.routeCandidateAllowed(canonical.Task.ExecutionRoute, request.ExecutionTarget, "") {
 			return AttemptResult{}, fmt.Errorf("hufu-local attempt execution target does not match canonical target for Todo %q", request.TaskID)
 		}
 		gatedBackend, target, targetErr := p.coordinator.gatedAgentBackendForTarget(request.ExecutionTarget)

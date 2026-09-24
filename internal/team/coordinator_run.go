@@ -520,7 +520,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// requirement (docs/architecture/execution-runtime.md).
 	// An isolated worker workspace needs executeTask's attempt world; the
 	// inline direct path below always runs in the canonical project.
-	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTask.WorkerWorkspace.isolated() {
+	// A multi-candidate execution route needs executeTask's fallback loop.
+	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTask.WorkerWorkspace.isolated() ||
+		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr
 	}

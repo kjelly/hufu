@@ -1776,6 +1776,14 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 		usage := *receipt.Usage
 		copyR.Usage = &usage
 	}
+	if receipt.CandidateIndex != nil {
+		index := *receipt.CandidateIndex
+		copyR.CandidateIndex = &index
+	}
+	if receipt.FallbackFrom != nil {
+		from := *receipt.FallbackFrom
+		copyR.FallbackFrom = &from
+	}
 	if receipt.SubmittedResult != nil {
 		copyR.SubmittedResult = cloneTaskResult(receipt.SubmittedResult)
 	}

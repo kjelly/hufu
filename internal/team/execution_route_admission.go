@@ -103,26 +103,9 @@ func (c *Coordinator) bindExecutionRoutes() error {
 	if multiCandidate && session.Config.EscalateOnRetry {
 		return fmt.Errorf("%s: escalate-on-retry cannot be combined with a multi-candidate execution route", executionRouteConflictCode)
 	}
-	// Interim gate: until fallback lands, a route may only have one target.
-	// Every other check above runs first, so a later fallback build fails
-	// on the same configurations this one does.
-	for _, name := range sortedKeys(bindings) {
-		if route := compiled[bindings[name]]; len(route.Candidates) > 1 {
-			return fmt.Errorf("%s: agent %q is bound to execution route %q, which has %d candidates; this build runs only single-candidate routes", executionRouteFallbackUnsupportedCode, name, route.Name, len(route.Candidates))
-		}
-	}
 	session.ExecutionRoutes = compiled
 	session.AgentExecutionRoutes = bindings
 	return nil
-}
-
-func sortedKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 func (c *Coordinator) compileExecutionRoute(name string, routes map[string]config.ExecutionRouteConfig) (*ExecutionRouteDefinition, error) {

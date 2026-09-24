@@ -855,6 +855,12 @@ requirements:
 
 本規格第一階段不強制加入 YAML schema，但 ModelProfile 必須為此做好結構準備。
 
+綁定 execution route 的 worker，route 中的每一個 candidate 都可能執行它，因此
+startup 的 capability 檢查會對每個 candidate 各做一次：已知不相容（例如
+`requires.model.tools` 而 candidate 的 profile 為 `no`）一律報錯，不會把該
+candidate 靜默過濾掉；unknown 只發出警告。`selectCapabilityAwareModel` 不會套用
+在綁定 route 的 worker 上，route 的順序就是它唯一的選擇依據。
+
 ---
 
 ## 18. Startup Flow

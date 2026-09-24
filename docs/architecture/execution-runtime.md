@@ -16,7 +16,7 @@ the scheduler's canonical identity.
 ExecutionSelector
         │ resolve once
         ▼
-ExecutionTarget + ExecutionTopology
+ExecutionTarget + ExecutionTopology (+ ExecutionCandidates for a route)
         │ frozen before task_created
         ▼
 ExecutionRegistry
@@ -31,10 +31,13 @@ AttemptRequest → AttemptResult → receipt / verification / lifecycle events
 - `ExecutionSelector` is untrusted user or configuration input. A bare model
   is not durable identity until a configured default LLM backend resolves it.
 - `ExecutionTarget` is the durable pair `{backend, model}`. A task occurrence
-  freezes its target and ordered topology before dispatch.
+  freezes its target and ordered topology before dispatch. A worker bound to
+  an execution route also freezes the route's ordered candidates
+  (`ExecutionCandidates`, carried in the occurrence's `execution_route`);
+  candidate 0 is the `ExecutionTarget`, and the topology stays `[primary]`.
 - `ExecutionRegistry` is the only worker-backend registry. It validates the
-  target, rejects unknown backends, and prevents a scheduler-side fallback to
-  a different provider.
+  target, rejects unknown backends, and prevents undeclared scheduler-side
+  fallback: the only fallback is the deterministic route policy below.
 - `ExecutionBackend` owns transport-specific execution. Hufu retains task
   lifecycle, tool authorization, verification, receipts, recovery, and final
   outcome ownership.
@@ -219,9 +222,11 @@ written durable events must use `ollama`; old workspaces may still contain
 
 1. Resolve and validate the target before `task_created`; a missing backend or
    target is an admission failure.
-2. Dispatch resolves only the frozen target. It never reconstructs a target
-   from a current model flag, live provider configuration, or a coordinator's
-   prose.
+2. Dispatch resolves only a frozen target: the occurrence's
+   `ExecutionTarget`, or, for a route-bound occurrence, the entry of its frozen
+   `ExecutionCandidates` selected by the deterministic fallback policy. It
+   never reconstructs a target from a current model flag, live provider
+   configuration, or a coordinator's prose.
 3. Resume migration uses durable backend/provider binding first, then matching
    historical model-profile evidence. Live configuration is not migration
    evidence. Ambiguous legacy identity fails closed.
@@ -240,6 +245,51 @@ written durable events must use `ollama`; old workspaces may still contain
    logical digests, resource scope, and resource digest resolved for its
    occurrence. Missing or conflicting envelope state blocks execution before
    provider or tool transport.
+
+## Execution routes and fallback
+
+`hufu.yaml` `execution-routes` names ordered lists of 1–4 backend-qualified
+LLM targets; team.yaml and agent frontmatter reference a route by name. A
+`-m` or `--worker-model` target makes the worker single-target and drops its
+route. Admission freezes the route's name, digest, candidates, and
+`fallback-on` on the occurrence, and the execution policy snapshot pins the
+digest, so a changed route fails resume closed. A multi-candidate route cannot
+be combined with extra-models, escalate, escalate-on-retry, or a decision-role
+agent, and a coordinator cannot pick another model for such an agent.
+
+A route-bound attempt that fails with a provider error may fall back to the
+next candidate. The failure is classified structurally
+(`ClassifyProviderError`): HTTP 429 is `rate_limited`; 500/502/503/504, a
+refused or reset connection, DNS, and TLS failures are `provider_unavailable`;
+404 (or a documented "model not found" body) is `model_unavailable`; a
+transport timeout is `transport_timeout`; 401/403 (`auth_failed`) and context
+overflow (`context_length_exceeded`) never fall back. A fallback happens only
+when every check holds, in order:
+
+1. the class is in the route's `fallback-on`, and the attempt's own context
+   was neither timed out nor cancelled (task timeouts, verification,
+   semantic, and policy failures are never provider failures);
+2. a next candidate exists (at most `len(candidates)-1` fallbacks per
+   dispatch);
+3. nothing the attempt did would be repeated: its effective side effect is
+   `none`; or it ran in an unapplied isolated world; or, for a shared
+   `workspace_write`, every tool call the policy gate let through was
+   read-only; or, for any other side effect, no call ran at all. The gate
+   records each authorized call before the tool runs, because a failed model
+   step drops its messages; without that record a fallback is denied;
+4. the run's wall-clock and token budgets are not exhausted;
+5. no cancellation was requested.
+
+A fallback is the attempt loop's next round on the next candidate, recorded
+by `execution_fallback_decided` before it starts. It does not consume the
+retry budget, and it starts the candidate from scratch: no retry statistics,
+reflection, or retry context. Backend selection, the backend semaphore, the
+provider-bound context profile, and the provider model ID all follow the
+candidate. A normal retry, a DAG retry, and a resumed dispatch always start on
+the primary. The occurrence's frozen `ExecutionTarget` never changes: each
+receipt records the target it ran on, its `candidate_index`, and on a fallback
+attempt `fallback_from` and `fallback_failure_class`; an attempt whose
+provider failure did not fall back records `fallback_denied_reason`.
 
 ## Effect snapshots and workspace versioning
 
@@ -262,6 +312,10 @@ For implementation details, use code and tests first:
   [`attempt_workspace_apply.go`](../../internal/team/attempt_workspace_apply.go), and
   [`attempt_workspace_recovery.go`](../../internal/team/attempt_workspace_recovery.go)
   — isolated attempt worlds, their apply, and their crash recovery;
+- [`execution_route_admission.go`](../../internal/team/execution_route_admission.go),
+  [`execution_fallback.go`](../../internal/team/execution_fallback.go), and
+  [`provider_failure.go`](../../internal/team/provider_failure.go) — route
+  binding, deterministic fallback, and provider failure classes;
 - [`execution_registry.go`](../../internal/team/execution_registry.go) — target
   resolution and backend registration;
 - [`execution_target_replay.go`](../../internal/team/execution_target_replay.go)

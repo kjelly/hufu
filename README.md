@@ -627,7 +627,31 @@ model-list:
     provider: ollama
 ```
 
-### 4. Verify Deliverables with Shell Commands
+### 4. Deterministic Fallback with Execution Routes
+
+Give workers an ordered list of targets and let a provider outage move an
+attempt to the next one instead of failing the task:
+
+```yaml
+# hufu.yaml
+execution-routes:
+  coding:
+    candidates:
+      - ollama/qwen3:32b
+      - openai/gpt-5.6-luna
+    fallback-on: [rate_limited, provider_unavailable, model_unavailable]
+```
+
+```yaml
+# team.yaml (default for workers), or an agent's frontmatter
+execution-route: coding
+```
+
+A fallback happens only for the listed provider failures, and only when the
+failed attempt left no side effect a new attempt would repeat. See
+`docs/architecture/execution-runtime.md`.
+
+### 5. Verify Deliverables with Shell Commands
 
 Ensure tasks produce actual artifacts, not just claims:
 
@@ -636,7 +660,7 @@ Ensure tasks produce actual artifacts, not just claims:
 go run ./cmd/hufu --agent-team dev-team \
   "Implement the login feature. Set a verify command 'go test ./tests/login/...' to ensure it works."
 ```
-### 5. Reflexion for Blind Retries
+### 6. Reflexion for Blind Retries
 
 Even without a sidecar, retries get structured hints:
 
@@ -646,7 +670,7 @@ go run ./cmd/hufu --agent-team dev-team "Implement complex feature"
 # If it fails, reflexion classifies: timeout / missing file / permission error
 ```
 
-### 6. Memory-Augmented Development
+### 7. Memory-Augmented Development
 
 Persist learnings across sessions:
 
@@ -658,7 +682,7 @@ go run ./cmd/hufu --memory "Refactor the API layer"
 go run ./cmd/hufu --memory "How did we handle auth errors previously?"
 ```
 
-### 7. Unattended Batch Processing
+### 8. Unattended Batch Processing
 
 Run jobs with no human watching:
 
@@ -674,7 +698,7 @@ go run ./cmd/hufu \
   "Process all pending pull requests"
 ```
 
-### 8. Plan-First for Complex Features
+### 9. Plan-First for Complex Features
 
 Require agents to submit plans before acting:
 
@@ -683,7 +707,7 @@ Require agents to submit plans before acting:
 go run ./cmd/hufu --plan "Implement a distributed caching layer"
 ```
 
-### 9. Dry Run for Safe Exploration
+### 10. Dry Run for Safe Exploration
 
 Preview what would happen without executing:
 
@@ -692,7 +716,7 @@ Preview what would happen without executing:
 go run ./cmd/hufu --dry-run --agent-team dev-team "Refactor the auth module"
 ```
 
-### 10. Guardrails for Code Quality
+### 11. Guardrails for Code Quality
 
 Add output guardrails per agent:
 
@@ -706,7 +730,7 @@ guard:
 ---
 ```
 
-### 11. TUI for Real-Time Monitoring
+### 12. TUI for Real-Time Monitoring
 
 Watch tasks progress in real-time:
 

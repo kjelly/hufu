@@ -630,7 +630,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// Plan-first agents carry a submitPlanTool the escalated replacement would
 	// lose, so escalation only applies to the normal execution path.
 	escalate := taskEscalationEnabled(task, &c.session.Config, len(c.modelList)) &&
-		(!task.PlanFirst || task.PlanID != "")
+		(!task.PlanFirst || task.PlanID != "") && task.ExecutionRoute == nil
 	// lastFingerprint tracks the previous attempt's failure fingerprint
 	// so DecideRecovery can detect repeated failures via normalised digest
 	// comparison (§6.1) rather than raw err.Error() equality.
@@ -664,9 +664,17 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// apply is discarded on every exit; the canonical project is untouched.
 	var isolated *isolatedAttempt
 	defer func() { c.closeIsolatedAttempt(parentCtx, isolated, "task_exit") }()
+	// fallback is this dispatch's position in the occurrence's execution
+	// route. A fallback attempt runs on the next candidate and does not use
+	// the retry budget, so the loop bound grows with every fallback taken.
+	fallback := newExecutionFallbackState(task.ExecutionRoute)
+	defer c.clearAttemptExecutionTarget(todoID)
 retryLoop:
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts+fallback.used; attempt++ {
 		attemptsMade = attempt
+		// A fallback attempt starts the new candidate from scratch, like a
+		// first attempt: no retry statistics, reflection, or retry context.
+		fallbackRound := fallback.beginAttempt(attempt)
 		c.setCurrentTaskAttempt(todoID, attempt)
 		attemptIdentity, attemptIdentityOK := c.activeTaskResultOccurrence(todoID)
 		if attemptIdentityOK {
@@ -728,7 +736,7 @@ retryLoop:
 				// resolve is not misclassified as a verification failure.
 				ResolveFindings: environmentFindingsFromVerifyResult(verifyResult),
 			})
-			if !IsCancelledClass(class) {
+			if !IsCancelledClass(class) && !fallbackRound {
 				c.recordRetry(class)
 			}
 			// Retain the prior attempt's verification evidence on its
@@ -755,7 +763,7 @@ retryLoop:
 		}
 		trigger := ContextTriggerTaskDispatch
 		var failureContext *ContextFailure
-		if attempt > 1 {
+		if attempt > 1 && !fallbackRound {
 			trigger = ContextTriggerRetry
 			failureContext = &ContextFailure{Class: lastClass, ErrorClass: string(lastClass), EvidenceRefs: []string{lastTranscriptRef}, ToolName: lastToolCall, ToolInputHash: hashContentKey(utils.RedactSecrets(lastToolInput)), ExitCode: lastExitCode}
 			if lastErr != nil {
@@ -768,6 +776,9 @@ retryLoop:
 				return "", err
 			}
 			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
+			if fallbackRound {
+				detail = fmt.Sprintf("fallback to %s", fallback.target(task.ResolvedExecutionTarget))
+			}
 			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", attemptStartMetadata(attempt)); err != nil {
 				closeTranscript()
 				return "", fmt.Errorf("mark retry task started: %w", err)
@@ -790,8 +801,19 @@ retryLoop:
 			}
 			c.reconcileTaskStatusProjection()
 			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
-			if frozenModel, frozen := c.frozenTaskOccurrenceModel(todoID); frozen {
+			if !fallbackRound {
+				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d/%d — continuing from previous progress", attempt, maxAttempts)))
+			}
+			if fallbackRound {
+				// The one exception to the frozen-model reset below: a
+				// fallback runs on the route candidate it moved to.
+				resolvedModel = c.executionModelIDForTarget(fallback.target(task.ResolvedExecutionTarget), resolvedModel)
+				protocolFallbackModel = ""
+			} else if task.ExecutionRoute != nil {
+				// A normal retry of a route-bound task runs on the primary.
+				resolvedModel = c.executionModelIDForTarget(task.ResolvedExecutionTarget, resolvedModel)
+				protocolFallbackModel = ""
+			} else if frozenModel, frozen := c.frozenTaskOccurrenceModel(todoID); frozen {
 				// Retry escalation and protocol capability fallback are model
 				// selection, not a new admission. A frozen occurrence must stay
 				// on its persisted model; a changed model needs a new occurrence.
@@ -817,6 +839,10 @@ retryLoop:
 		// surface again at the attempt boundary instead of carrying a stale
 		// provider/logical digest from the task-level preflight. The occurrence's
 		// frozen dynamic authorization remains the ceiling for every rebind.
+		// attemptTarget is the target this attempt runs on: the frozen primary,
+		// or the route candidate a fallback moved to.
+		attemptTarget := fallback.target(task.ResolvedExecutionTarget)
+		c.setAttemptExecutionTarget(todoID, attemptTarget)
 		attemptTools, resolveToolsErr := c.resolveAttemptWorkerTools(parentCtx, task, todoID, agentDef)
 		if resolveToolsErr != nil {
 			closeTranscript()
@@ -834,7 +860,7 @@ retryLoop:
 			return "", fmt.Errorf("task %q has no admitted execution target", todoID)
 		}
 		if requiresProviderContext {
-			backend, backendErr := c.ExecutionRegistry().ResolveBackend(task.ResolvedExecutionTarget.Backend)
+			backend, backendErr := c.ExecutionRegistry().ResolveBackend(attemptTarget.Backend)
 			if backendErr != nil {
 				return "", backendErr
 			}
@@ -879,7 +905,7 @@ retryLoop:
 		workerInput.ModelContext = invocation.ModelContext
 		attemptInput := workerInput
 		attemptInput.Request = request
-		if attempt > 1 && lastErr != nil {
+		if attempt > 1 && lastErr != nil && !fallbackRound {
 			if len(lastPolicyDeniedDispositions) > 0 {
 				attemptInput.FailureContext = buildPolicyDeniedRetryContext(lastPolicyDeniedDispositions)
 			} else {
@@ -1001,6 +1027,11 @@ retryLoop:
 		// should ask it to finalize what it has or to change its approach.
 		stepBudget := c.stepBudget(agentDef, agent.DefaultMaxSteps)
 		dynamicInvocations := newDynamicInvocationAccumulator(stepBudget)
+		// executedCalls records every tool call the gate let through, and
+		// attemptContextErr the attempt's own context error; together they
+		// decide whether a provider failure may fall back.
+		executedCalls := &executedToolCallRecorder{}
+		var attemptContextErr error
 		func() {
 			// Coordinator request shaping is scoped to the coordinator stream. A
 			// worker must derive its context without that state so its own final
@@ -1009,6 +1040,7 @@ retryLoop:
 			defer cancel()
 			taskCtx, roundCancel := context.WithCancel(taskCtx)
 			defer roundCancel()
+			defer func() { attemptContextErr = taskCtx.Err() }()
 			c.registerTerminalRound(todoID, roundCancel)
 			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
@@ -1022,6 +1054,7 @@ retryLoop:
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
 			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
+			taskCtx = withExecutedToolCallRecorder(taskCtx, executedCalls)
 			taskCtx = context.WithValue(taskCtx, llmUsageReceiptExpectedKey{}, true)
 			// The run-level budget is only observed at coordinator boundaries.
 			// Give every worker attempt its own live guard so one TUI/debugging
@@ -1129,7 +1162,7 @@ retryLoop:
 				// retry, and resume attempts resolve it through the unified registry;
 				// a zero target is a broken admission invariant, never permission to
 				// re-select a provider from legacy fields.
-				target := task.ResolvedExecutionTarget
+				target := attemptTarget
 				if target.IsZero() {
 					err = fmt.Errorf("task %q has no admitted execution target", todoID)
 					return
@@ -1252,7 +1285,7 @@ retryLoop:
 			TaskID:            todoID,
 			Attempt:           attempt,
 			OccurrenceAttempt: c.taskAttempt(todoID),
-			ExecutionTarget:   receiptExecutionTarget(task.ResolvedExecutionTarget),
+			ExecutionTarget:   receiptExecutionTarget(attemptTarget),
 			Usage:             receiptUsage(usageWithProgressTokens(steps, attemptTokens)),
 			ModelExecutionID:  contextManifest.ModelExecutionID,
 			StartedAt:         attemptStarted,
@@ -1272,7 +1305,7 @@ retryLoop:
 			// Backend is frozen at task admission. SetExecutionReceipt repeats
 			// this derivation from the durable Todo as the single persistence
 			// boundary for direct, extra-model, and terminal receipt paths.
-			Backend: execution.CanonicalTargetBackendName(task.ResolvedExecutionTarget.Backend),
+			Backend: execution.CanonicalTargetBackendName(attemptTarget.Backend),
 			// Keep the provider-era value available to in-memory compatibility
 			// consumers. ExecutionReceipt.MarshalJSON suppresses it whenever the
 			// canonical Backend is present, so new durable receipts never
@@ -1282,6 +1315,11 @@ retryLoop:
 			ProviderTranscriptRef: attemptProviderTranscriptRef,
 		}
 		receipt.ToolInvocations, receipt.ToolInvocationsTruncated = dynamicInvocations.snapshot()
+		receipt.CandidateIndex = fallback.candidateIndex()
+		if fallbackRound {
+			from := fallback.from
+			receipt.FallbackFrom, receipt.FallbackFailureClass = &from, fallback.failureClass
+		}
 		if durable := c.todoItemByID(todoID); durable != nil && durable.BackendBinding != nil {
 			receipt.ProviderSessionID = durable.BackendBinding.SessionID
 			receipt.ExecutionWorldID = durable.BackendBinding.ExecutionWorldID
@@ -1916,6 +1954,36 @@ retryLoop:
 		// retry copies the project afresh. A retained world stays for review.
 		c.closeIsolatedAttempt(parentCtx, isolated, string(currentClass))
 		isolated = nil
+		// A provider failure on a route-bound task may move the next attempt
+		// to the route's next candidate (§ deterministic fallback). The
+		// fallback attempt does not count against the retry budget.
+		providerClass, fellBack, fallbackDenied := fallback.decide(executionFallbackInput{
+			Err: err, AttemptContextErr: attemptContextErr, ParentContextErr: parentCtx.Err(),
+			SideEffect: resolvedSideEffect, Isolated: task.WorkerWorkspace.isolated(),
+			Recorder: executedCalls, BudgetExceeded: budgetExceededNow(c),
+		})
+		if fellBack {
+			if recordErr := c.recordExecutionFallback(parentCtx, todoID, agentName, attempt, fallback); recordErr != nil {
+				closeTranscript()
+				return "", recordErr
+			}
+			lastErr = err
+			conversationHistory = nil
+			closeTranscript()
+			continue
+		}
+		// retryAttempt counts only the attempts that used the retry budget:
+		// fallback attempts are outside it.
+		retryAttempt := attempt - fallback.used
+		if fallbackDenied != "" {
+			receipt.FallbackDeniedReason = fallbackDenied
+			if providerClass != "" {
+				receipt.FallbackDeniedReason += ": " + string(providerClass)
+			}
+			if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+				_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+			}
+		}
 
 		// Compute the current attempt's failure fingerprint for §6.1
 		// anti-thrashing repeat detection. The fingerprint uses the
@@ -1936,7 +2004,7 @@ retryLoop:
 			FailureClass:        currentClass,
 			SideEffect:          task.SideEffect,
 			RecoveryPolicy:      resolvedPolicy,
-			Attempt:             attempt,
+			Attempt:             retryAttempt,
 			MaxRetries:          maxAttempts,
 			EvidenceComplete:    computeEvidenceComplete(task, transcriptRef, steps, output),
 			FailureFingerprint:  currentFingerprint,
@@ -1977,7 +2045,7 @@ retryLoop:
 		// that the centralized side-effect policy blocks.
 		repairDecision := c.RepairController().Decide(RepairRequest{
 			Task:            task,
-			Attempt:         attempt,
+			Attempt:         retryAttempt,
 			MaxAttempts:     maxAttempts,
 			BudgetExhausted: parentCtx.Err() != nil,
 		})
@@ -1994,9 +2062,9 @@ retryLoop:
 			// normal task recovery policy is manual because the evidence proves
 			// no mutating tool ran.
 			protocolCapabilityRetryUsed = true
-			maxAttempts = max(maxAttempts, attempt+1)
+			maxAttempts = max(maxAttempts, retryAttempt+1)
 			conversationHistory = nil
-			if !frozenOccurrenceModel {
+			if !frozenOccurrenceModel && task.ExecutionRoute == nil {
 				if next := nextStrongerModel(c.modelList, resolvedModel); next != "" {
 					if _, _, providerErr := c.gatedAgentBackendForModel(next); providerErr == nil {
 						protocolFallbackModel = next
@@ -2118,10 +2186,10 @@ retryLoop:
 			// itself (reviewer P2).
 			prevErr := lastErr
 			lastErr = err
-			if isUnfixableVerifyFailure(err) && attempt < maxAttempts {
+			if isUnfixableVerifyFailure(err) && retryAttempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d hit a verify command that cannot be fixed by retrying (wrong exit-code polarity)", attempt)).withTodoID(todoID))
 				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("verify command has unfixable wrong polarity after %d attempt(s): %w", attempt, err), "error"), ReplanRequired, currentClass, output)
-			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && attempt < maxAttempts {
+			} else if prevErr != nil && sameFailure(prevErr.Error(), err.Error()) && retryAttempt < maxAttempts {
 				c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("stopping retries: attempt %d repeated the same failure", attempt)).withTodoID(todoID))
 				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(fmt.Errorf("repeated failure after %d attempts: %w", attempt, err), "error"), ReplanRequired, currentClass, output)
 			} else {

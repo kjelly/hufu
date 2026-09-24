@@ -115,7 +115,7 @@ func TestBindExecutionRoutes(t *testing.T) {
 		{name: "unknown team route", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", Generation: agent.GenerationParams{Model: "ollama/x"}}}, team: agent.TeamConfig{ExecutionRoute: "nope"}, err: "not defined"},
 		{name: "multi-candidate with extra-models", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", ExecutionRoute: "multi", ExtraModels: []string{"ollama/c"}}}, err: executionRouteConflictCode},
 		{name: "multi-candidate with escalate-on-retry", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", ExecutionRoute: "multi"}}, team: agent.TeamConfig{EscalateOnRetry: true}, err: executionRouteConflictCode},
-		{name: "multi-candidate is gated until fallback lands", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", ExecutionRoute: "multi"}}, err: executionRouteFallbackUnsupportedCode},
+		{name: "multi-candidate route binds", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", ExecutionRoute: "multi"}}, want: map[string]string{"coder": "multi"}},
 		{name: "single-candidate route allows extra-models and escalate-on-retry", agents: map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", ExecutionRoute: "coding", ExtraModels: []string{"ollama/c"}}}, team: agent.TeamConfig{EscalateOnRetry: true}, want: map[string]string{"coder": "coding"}},
 	}
 	for _, tt := range tests {

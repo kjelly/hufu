@@ -723,6 +723,11 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	if item := c.todoItemByID(taskID); item != nil {
 		target = item.ExecutionTarget
 	}
+	// A route fallback runs an attempt on another candidate than the frozen
+	// primary; report the target the attempt actually used.
+	if attemptTarget, ok := c.attemptExecutionTarget(taskID); ok {
+		target = attemptTarget
+	}
 
 	if item := c.todoItemByID(taskID); item != nil {
 		if !target.IsZero() {

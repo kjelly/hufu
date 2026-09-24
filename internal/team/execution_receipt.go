@@ -178,6 +178,15 @@ type ExecutionReceipt struct {
 	ResultPayloadSHA256      string                `json:"result_payload_sha256,omitempty"`
 	ResultValidation         ResultValidationState `json:"result_validation,omitempty"`
 	ResultValidationFailures int                   `json:"result_validation_failures,omitempty"`
+	// CandidateIndex is the execution-route candidate this attempt ran on,
+	// for a route-bound occurrence. FallbackFrom and FallbackFailureClass
+	// name the target and provider failure this attempt fell back from.
+	// FallbackDeniedReason records why a provider failure of this attempt
+	// did not fall back. None carries a credential.
+	CandidateIndex       *int                       `json:"candidate_index,omitempty"`
+	FallbackFrom         *execution.ExecutionTarget `json:"fallback_from,omitempty"`
+	FallbackFailureClass ProviderFailureClass       `json:"fallback_failure_class,omitempty"`
+	FallbackDeniedReason string                     `json:"fallback_denied_reason,omitempty"`
 	// ModelExecutionID is the stable isolated-worker identity. It keeps
 	// concurrent extra-model receipts distinct even though they share a Todo.
 	ModelExecutionID string               `json:"model_execution_id,omitempty"`

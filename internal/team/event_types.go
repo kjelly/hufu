@@ -99,6 +99,9 @@ const (
 	EventAttemptWorkspaceApplied         EventType = "attempt_workspace_applied"
 	EventAttemptWorkspaceDiscarded       EventType = "attempt_workspace_discarded"
 	EventAttemptWorkspaceOrphanRemoved   EventType = "attempt_workspace_orphan_removed"
+	// EventExecutionFallbackDecided records that a route-bound attempt's
+	// provider failure moves the next attempt to the route's next candidate.
+	EventExecutionFallbackDecided EventType = "execution_fallback_decided"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -128,7 +131,8 @@ func IsKnownEventType(eventType string) bool {
 		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
 		EventResourceLocked, EventWorkspaceSnapshotCommitted,
 		EventAttemptWorkspacePrepared, EventAttemptWorkspaceApplyStarted, EventAttemptWorkspaceApplyConflicted,
-		EventAttemptWorkspaceApplied, EventAttemptWorkspaceDiscarded, EventAttemptWorkspaceOrphanRemoved:
+		EventAttemptWorkspaceApplied, EventAttemptWorkspaceDiscarded, EventAttemptWorkspaceOrphanRemoved,
+		EventExecutionFallbackDecided:
 		return true
 	default:
 		return false

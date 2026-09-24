@@ -213,6 +213,11 @@ execution-routes:
   coding:
     candidates:
       - ollama/qwen3:32b
+      - openai/gpt-5.6-luna
+    fallback-on: [rate_limited, provider_unavailable, model_unavailable]
+  review:
+    candidates:
+      - openai/gpt-5.6-terra
 ```
 
 ```yaml
@@ -232,10 +237,14 @@ execution-route: coding
   修改 hufu.yaml 的 route 後 resume 會 fail closed，要用 `--new`。
 - 綁定 route 的 worker 不會套用 model-list 的複雜度選擇；每個 candidate 都要通過
   agent `requires` 的 model capability 檢查（已知不相容會報錯，unknown 只警告）。
-- 目前只支援單一 candidate 的 route。多 candidate route 需要 `fallback-on`，
-  也不能與 `extra-models`、team 的 `escalate-on-retry` 或可能被 decision runtime
-  綁定為角色的 agent 同時使用；這些檢查都通過之後，載入仍會以
-  `execution_route_fallback_unsupported` 失敗，直到 fallback 推出。
+- 多 candidate 的 route 必須設定 `fallback-on`，值只能是 `rate_limited`、
+  `provider_unavailable`、`model_unavailable`、`transport_timeout`。attempt 因
+  這些 provider 錯誤失敗、而且沒有留下會被重複的副作用時，下一個 attempt 會改用
+  下一個 candidate（不占用 `max-retries`）；一般 retry 仍從第一個 candidate
+  開始。完整規則見 [execution runtime](../architecture/execution-runtime.md#execution-routes-and-fallback)。
+- 多 candidate 的 route 不能與 `extra-models`、`escalate`、team 的
+  `escalate-on-retry`，或可能被 decision runtime 綁定為角色的 agent 同時使用；
+  coordinator 也不能替這種 agent 指定其他 model。
 
 ### Worker workspace（worker-workspace）
 

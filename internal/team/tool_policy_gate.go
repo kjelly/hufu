@@ -357,6 +357,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		return fantasy.NewTextErrorResponse(denial), nil
 	}
 
+	recordExecutedToolCall(ctx, t.Info().Name, call.Input)
 	response, err := t.inner.Run(ctx, call)
 
 	// A checkpoint is evaluated after the call completes. Its non-continue

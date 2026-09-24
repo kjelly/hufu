@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	executionRouteInvalidCode             = "execution_route_invalid"
-	executionRouteConflictCode            = "execution_route_conflict"
-	executionRouteFallbackUnsupportedCode = "execution_route_fallback_unsupported"
+	executionRouteInvalidCode  = "execution_route_invalid"
+	executionRouteConflictCode = "execution_route_conflict"
 	// executionRouteMaxCandidates bounds a route's ordered targets.
 	executionRouteMaxCandidates = 4
 )
