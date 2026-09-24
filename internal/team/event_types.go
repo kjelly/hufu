@@ -88,6 +88,17 @@ const (
 	// workspace-versioning.md §16). The payload carries only IDs, hashes, and
 	// counts, never file content.
 	EventWorkspaceSnapshotCommitted EventType = "workspace_snapshot_committed"
+	// Attempt-world lifecycle (isolated worker workspaces). Payloads carry
+	// world IDs, digests, counts, and paths; never file content. The
+	// apply_started payload also carries the verified result the task
+	// completes with, so a crash after the apply can finish the task
+	// without re-running the worker.
+	EventAttemptWorkspacePrepared        EventType = "attempt_workspace_prepared"
+	EventAttemptWorkspaceApplyStarted    EventType = "attempt_workspace_apply_started"
+	EventAttemptWorkspaceApplyConflicted EventType = "attempt_workspace_apply_conflicted"
+	EventAttemptWorkspaceApplied         EventType = "attempt_workspace_applied"
+	EventAttemptWorkspaceDiscarded       EventType = "attempt_workspace_discarded"
+	EventAttemptWorkspaceOrphanRemoved   EventType = "attempt_workspace_orphan_removed"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -115,7 +126,9 @@ func IsKnownEventType(eventType string) bool {
 		EventDecisionRoleCallStarted, EventDecisionRoleCallUnconfirmed, EventDecisionRoleCallSettled,
 		EventPrimaryDecisionBlocked, EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated,
 		EventExecutionCompatibilityMigrated, EventExecutionPolicySnapshotMigrated, EventExecutionCompatibilityObserved,
-		EventResourceLocked, EventWorkspaceSnapshotCommitted:
+		EventResourceLocked, EventWorkspaceSnapshotCommitted,
+		EventAttemptWorkspacePrepared, EventAttemptWorkspaceApplyStarted, EventAttemptWorkspaceApplyConflicted,
+		EventAttemptWorkspaceApplied, EventAttemptWorkspaceDiscarded, EventAttemptWorkspaceOrphanRemoved:
 		return true
 	default:
 		return false

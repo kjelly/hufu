@@ -601,7 +601,7 @@ func contractFinding(field, code, message string) ContractFinding {
 var knownTaskFailureClasses = []TaskFailureClass{
 	FailureContract, FailureEnvironment, FailureExecution, FailureProtocol,
 	FailureVerify, FailurePolicy, FailureTimeout, FailureCancelled,
-	FailureSemanticRejection,
+	FailureSemanticRejection, FailureWorkspaceConflict,
 }
 
 func validateOnFailureClasses(field string, classes []TaskFailureClass) []ContractFinding {

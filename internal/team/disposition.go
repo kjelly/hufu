@@ -285,6 +285,10 @@ func classBasedDisposition(in RecoveryDecisionInput) (RetryDisposition, string) 
 		// may retry the worker; if the verifier itself is broken, the class
 		// would be FailureContract (caught above).
 		return RetryWorker, "verification failure"
+	case FailureWorkspaceConflict:
+		// An isolated attempt's changes collided with a newer canonical state
+		// and nothing was applied. A fresh attempt copies the current project.
+		return RetryWorker, "isolated workspace conflict; retrying from the current project"
 	case FailureCancelled:
 		// Handled before the retry budget; retained for exhaustive enum
 		// coverage when this helper is called independently.

@@ -126,6 +126,10 @@ func (w *IsolatedCopyExecutionWorld) Prepare(ctx context.Context, spec Execution
 		_ = os.RemoveAll(worldDir)
 		return nil, err
 	}
+	if err := writeAttemptWorldBaseline(worldDir, set.GitMode, baseline); err != nil {
+		_ = os.RemoveAll(worldDir)
+		return nil, fmt.Errorf("%s: %w", workspaceIsolationUnavailableCode, err)
+	}
 
 	cwd := worldRoot
 	if requested := strings.TrimSpace(spec.CWD); requested != "" {

@@ -1598,9 +1598,6 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if err := validateTeamWorkerWorkspaces(session); err != nil {
 		return nil, err
 	}
-	if err := requireWorkerWorkspaceIsolationAvailable(session); err != nil {
-		return nil, err
-	}
 
 	// Inject built-in vars AFTER agents loaded (AGENT_COUNT, AGENT_NAMES)
 	workerNames := make([]string, 0)

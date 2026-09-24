@@ -513,7 +513,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// verification, and finalization byte-for-byte identical to the
 	// coordinated case, not merely similar, which is the actual parity
 	// requirement (docs/architecture/execution-runtime.md).
-	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil {
+	// An isolated worker workspace needs executeTask's attempt world; the
+	// inline direct path below always runs in the canonical project.
+	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTask.WorkerWorkspace.isolated() {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr
 	}

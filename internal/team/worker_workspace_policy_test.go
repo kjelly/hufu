@@ -103,14 +103,25 @@ func TestValidateTeamWorkerWorkspacesRejectsUnsupportedAgents(t *testing.T) {
 	}
 }
 
-func TestLoadTeamRefusesIsolatedWorkspacesUntilAttemptsRunInWorlds(t *testing.T) {
+func TestLoadTeamBindsIsolatedWorkerWorkspaces(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: isolated-team\nworker-workspace:\n  mode: isolated\n  integrate: on-verified\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	writeAgentFile(t, dir, "coder.md", "name: coder\ntools: view,write,edit,bash", "Code.")
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if !workerWorkspaceSpecFor(session, session.Agents["coder"]).Isolated() {
+		t.Fatal("the team's isolated worker-workspace default did not reach the coder")
+	}
+	writeAgentFile(t, dir, "sudoer.md", "name: sudoer\ntools: view,sudo", "Escalate.")
 	if _, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry); err == nil || !strings.Contains(err.Error(), workspaceIsolationUnsupportedCode) {
-		t.Fatalf("LoadTeam error = %v, want %s", err, workspaceIsolationUnsupportedCode)
+		t.Fatalf("LoadTeam error = %v, want %s for an isolated sudo agent", err, workspaceIsolationUnsupportedCode)
+	}
+	if err := os.Remove(filepath.Join(dir, "sudoer.md")); err != nil {
+		t.Fatal(err)
 	}
 	writeAgentFile(t, dir, "bad.md", "name: bad\nworker-workspace:\n  mode: isolated\n  integrate: on-verified\n  typo: true", "Bad.")
 	if _, err := parseAgentFile(filepath.Join(dir, "bad.md"), nil); err == nil {

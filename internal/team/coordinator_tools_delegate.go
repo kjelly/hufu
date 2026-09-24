@@ -183,6 +183,11 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err := c.validateExtraModelExecutionTopology(subTask); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("unsafe extra-model execution topology: %v", err)), nil
 	}
+	if subTask.WorkerWorkspace.isolated() {
+		// request_agent runs the sub-agent inline in the canonical project;
+		// it has no attempt world to confine an isolated agent's writes to.
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("%s: agent %q uses an isolated worker workspace, which request_agent cannot provide; dispatch it as a task instead", workspaceIsolationUnsupportedCode, selected)), nil
+	}
 	subSpec.Agent, subSpec.Model = subTask.Agent, subTask.Model
 	subSpec.ModelTopology = cloneModelTopology(subTask.ModelTopology)
 	subSpec.ExecutionTarget = subTask.ResolvedExecutionTarget

@@ -162,21 +162,6 @@ func (c *Coordinator) requireIsolatedWorkspaceScope() error {
 	return nil
 }
 
-// requireWorkerWorkspaceIsolationAvailable refuses a team that configures
-// isolated workspaces while attempts are not yet run in isolated worlds, so
-// an isolated setting is never silently ignored.
-func requireWorkerWorkspaceIsolationAvailable(session *TeamSession) error {
-	if session == nil {
-		return nil
-	}
-	for _, def := range uniqueSessionAgentDefs(session) {
-		if workerWorkspaceSpecFor(session, def).Isolated() {
-			return fmt.Errorf("%s: agent %q configures an isolated worker workspace, which this build does not run yet", workspaceIsolationUnsupportedCode, def.Name)
-		}
-	}
-	return nil
-}
-
 // isolatedResolvedToolsUnsupported checks an isolated task's resolved tool
 // surface, which can include tools the agent file does not name (team MCP
 // servers, profile grants).

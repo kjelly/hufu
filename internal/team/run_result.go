@@ -889,6 +889,10 @@ const (
 	FailurePolicy      TaskFailureClass = "policy"
 	FailureTimeout     TaskFailureClass = "timeout"
 	FailureCancelled   TaskFailureClass = "cancelled"
+	// FailureWorkspaceConflict is an isolated attempt whose verified changes
+	// could not be applied because the canonical project changed underneath
+	// it. Nothing was written; a new attempt starts from the current project.
+	FailureWorkspaceConflict TaskFailureClass = "workspace_conflict"
 	// FailureSemanticRejection is Hufu's own canonicalized class for a
 	// complete, honest worker self-report of non-success (a submit_result
 	// call with status: failed) — as opposed to the raw class Hufu's

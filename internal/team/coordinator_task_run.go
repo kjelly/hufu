@@ -537,7 +537,12 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 	verificationCriteria := ""
 	if task.Verify != "" && (!task.PlanFirst || task.PlanID != "") {
-		verificationCriteria = completionVerificationInstructions(task.Verify, c.projectDir)
+		runsFrom := c.projectDir
+		if task.WorkerWorkspace.isolated() {
+			// Each attempt of an isolated task has its own project copy.
+			runsFrom = "the project root (your current working directory)"
+		}
+		verificationCriteria = completionVerificationInstructions(task.Verify, runsFrom)
 	}
 	// The result protocol is enforced for every non-sidecar task, so it has to
 	// be stated. A worker that ends its turn with prose fails the contract, and
@@ -654,6 +659,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// structured dispositions separate from ordinary failure evidence so the
 	// one permitted retry receives deterministic correction instructions.
 	var lastPolicyDeniedDispositions []ToolExecutionDisposition
+	// isolated is the current attempt's private project copy for a task
+	// with an isolated worker workspace. A world that never reached its
+	// apply is discarded on every exit; the canonical project is untouched.
+	var isolated *isolatedAttempt
+	defer func() { c.closeIsolatedAttempt(parentCtx, isolated, "task_exit") }()
 retryLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptsMade = attempt
@@ -838,6 +848,19 @@ retryLoop:
 				return "", fmt.Errorf("resolve worker provider context: %w", bindErr)
 			}
 		}
+		// A terminal resume re-enters the same attempt number and keeps its
+		// world; every new attempt copies the current canonical project.
+		if isolated == nil || isolated.attempt != attempt {
+			c.closeIsolatedAttempt(parentCtx, isolated, "superseded")
+			isolated = nil
+			prepared, prepareErr := c.prepareIsolatedAttempt(parentCtx, task, todoID, attempt)
+			if prepareErr != nil {
+				closeTranscript()
+				return "", prepareErr
+			}
+			isolated = prepared
+		}
+		attemptCtx = c.withIsolatedAttempt(attemptCtx, isolated)
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
 		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt, task.Goal)
 		if scopeErr != nil {
@@ -1776,7 +1799,7 @@ retryLoop:
 					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(vMsg).withTodoID(todoID))
 				}
 				if err == nil {
-					verification, verr := c.verifyTaskDeliverableWithSpecAndResult(parentCtx, agentDef, task, steps, typedRes)
+					verification, verr := c.verifyTaskDeliverableWithSpecAndResult(c.withIsolatedAttempt(parentCtx, isolated), agentDef, task, steps, typedRes)
 					if verification != nil {
 						c.noteObjectiveVerifierResult(todoID, verr == nil && isVerifySuccess(verification))
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -1809,6 +1832,17 @@ retryLoop:
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("terminal evidence rejected completion: %v", terminalErr)).withTodoID(todoID))
 				}
 			}
+			// integrate: on-verified. Every check above passed, so apply the
+			// isolated attempt's changes before TaskDone makes the task's
+			// output visible to downstream work.
+			if err == nil && isolated != nil {
+				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
+					receipt.HandoffState = ResultHandoffSubmitted
+				}
+				err = c.integrateIsolatedAttempt(parentCtx, isolated, isolatedApplyEvidence{
+					TypedResult: typedRes, VerifyResult: verifyResultForTodo(c, todoID), Receipt: &receipt, CoordinatorOutput: coordinatorOutput,
+				})
+			}
 			if err == nil {
 				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					receipt.HandoffState = ResultHandoffSubmitted
@@ -1824,6 +1858,8 @@ retryLoop:
 					closeTranscript()
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
+				c.releaseIsolatedAttempt(isolated)
+				isolated = nil
 				c.recordTerminalTypedTaskResult(todoID)
 				c.reconcileTaskStatusProjection()
 				for _, item := range c.taskTracker.TodoList().Items() {
@@ -1874,6 +1910,10 @@ retryLoop:
 			ExitCodeSource:  ExitCodeSourceVerify,
 			ResolveFindings: environmentFindingsFromVerifyResult(verifyResult),
 		})
+		// The failed attempt's world never reached the canonical project; a
+		// retry copies the project afresh. A retained world stays for review.
+		c.closeIsolatedAttempt(parentCtx, isolated, string(currentClass))
+		isolated = nil
 
 		// Compute the current attempt's failure fingerprint for §6.1
 		// anti-thrashing repeat detection. The fingerprint uses the
@@ -1971,6 +2011,10 @@ retryLoop:
 			disposition = NeedsHuman
 			reason = "capability or permission is unavailable"
 		}
+		if isAttemptWorkspaceApplyIncomplete(err) {
+			disposition = NeedsHuman
+			reason = "isolated attempt changes were not fully applied; the attempt world is kept for review"
+		}
 		// Make a deliberately avoided worker replay distinct from another
 		// failed worker attempt in the event timeline and run metrics. Repair
 		// tasks defer repeated-fingerprint reporting to persistFailure, where
@@ -2030,7 +2074,11 @@ retryLoop:
 			// the failure and stop — retrying is unsafe.
 			lastErr = err
 			c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-			c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass, output)
+			if isAttemptWorkspaceApplyIncomplete(err) {
+				c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass, TaskBlocked, output)
+			} else {
+				c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, "error"), NeedsHuman, currentClass, output)
+			}
 			closeTranscript()
 			break retryLoop
 
@@ -2805,6 +2853,17 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	if c == nil || item == nil {
 		return "", fmt.Errorf("protocol repair requires a task checkpoint")
 	}
+	// An isolated attempt's changes exist only in its world. Without that
+	// world the task cannot complete from its repair, whatever the repair
+	// provenance says; it is re-dispatched instead.
+	if item.WorkerWorkspace.isolated() {
+		boundCtx, repairWorld, redispatched, handled, err := c.resumeIsolatedProtocolRepair(parentCtx, task, item)
+		if handled {
+			return redispatched, err
+		}
+		parentCtx = boundCtx
+		defer func() { c.closeIsolatedAttempt(parentCtx, repairWorld, "protocol_repair_exit") }()
+	}
 	output := item.Output
 	if strings.TrimSpace(output) == "" {
 		err := errors.New("protocol-incomplete checkpoint has no worker output for result-only repair")
@@ -3128,6 +3187,9 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
 		return "", completionErr
 	}
+	if handled, redispatched, err := c.applyIsolatedProtocolRepair(ctx, item, task, agentName, result, output); handled {
+		return redispatched, err
+	}
 	summary := strings.TrimSpace(result.Summary)
 	if summary == "" {
 		summary = "protocol result-only repair succeeded"
@@ -3141,6 +3203,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 	if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskDone, summary, output, nil); err != nil {
 		return "", err
 	}
+	c.releaseIsolatedAttempt(isolatedAttemptFromContext(ctx))
 	c.recordTerminalTypedTaskResult(item.ID)
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -5349,6 +5412,8 @@ func buildRetryContextWithSubmittedResult(class TaskFailureClass, lastErr error,
 		b.WriteString("The execution failed. Change your approach, fix the error, and produce a working deliverable.\n")
 	case FailurePolicy:
 		b.WriteString("A policy guard blocked the operation. Adjust the approach to comply with the guard rules.\n")
+	case FailureWorkspaceConflict:
+		b.WriteString("Your changes were not applied: the project files you changed were modified by other work first. This attempt starts from the current project; redo the change on top of it.\n")
 	default:
 		b.WriteString("Change your approach based on the error above.\n")
 	}
