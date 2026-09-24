@@ -219,7 +219,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	defer disarmDecision()
 
-	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskInProgress, "", "", nil); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	c.setCurrentTaskAttempt(subTodoID, 1)

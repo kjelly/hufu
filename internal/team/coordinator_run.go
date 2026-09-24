@@ -558,7 +558,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, resolvedName, 1, "in_progress", directModel, 0, ExecutionUsage{})
-	if err := c.CommitTaskTransition(ctx, todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
+	if err := c.CommitTaskTransition(ctx, todoID, TaskPending, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return nil, fmt.Errorf("mark direct task started: %w", err)
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -780,7 +780,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directArtifactScope, _ := artifactAccessScopeFromContext(taskCtx)
 	directReceipt := ExecutionReceipt{
 		RunID: runID, TaskID: todoID, Attempt: 1, StartedAt: attemptStarted,
-		FinishedAt: time.Now(), ProducerID: resolvedName,
+		OccurrenceAttempt: c.taskAttempt(todoID),
+		ExecutionTarget:   receiptExecutionTarget(directTask.ResolvedExecutionTarget),
+		Usage:             receiptUsage(usageFromSteps(steps)),
+		FinishedAt:        time.Now(), ProducerID: resolvedName,
 		ModelExecutionID: contextManifest.ModelExecutionID,
 		ArtifactScope:    cloneArtifactAccessScope(directArtifactScope),
 		Semantic:         cloneSemanticRetrievalIdentity(contextManifest.Semantic),

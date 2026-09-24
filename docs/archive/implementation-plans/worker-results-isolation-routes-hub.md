@@ -20,6 +20,7 @@
 | Phase | 狀態 | 與本文件的偏差 |
 |---|---|---|
 | HF-OMP-000 | done | 無。escalate 系列行為已由 `escalation_test.go` 覆蓋，未另外新增重複的測試。 |
+| HF-OMP-001 | done | ① `RequiresGroundedResult`：`15dbf47`（2026-08-27）已刻意改為 unified repair protocol（grounded task 也走 result-only repair，但必須自己呼叫 `submit_result`），過時的是 `execution_contract.go` 的欄位註解，而不是程式碼。因此改為：修正註解，並讓 free-text promotion（`promoteValidatedReadOnlyHandoff`）對 grounded task 一律不升級；不改 repair 流程，也不影響既有的 `TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead`。② execution-events shadow（`execution_events.go`）仍從 Todo 的 target 推導 backend：在 fallback 出現之前，attempt target 一定等於 Todo target，所以移到 HF-OMP-008 一起處理。③ `dispatch_attempt` 除了計畫列出的兩處之外，也加在其他真正開始單次 attempt 的地方：structured action、sidecar、direct agent、fan-out parent、delegated sub-task。④ receipt 的 `Usage` 使用 `usageWithProgressTokens`，與 legacy log 的數值一致。 |
 
 ---
 

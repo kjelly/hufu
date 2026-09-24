@@ -102,12 +102,13 @@ type ExecutionContract struct {
 	Kind                 ExecutionKind `json:"kind,omitempty" yaml:"kind,omitempty"`
 	RequiresResult       bool          `json:"requires_result,omitempty" yaml:"requires-result,omitempty"`
 	RequiresVerification bool          `json:"requires_verification,omitempty" yaml:"requires-verification,omitempty"`
-	// RequiresGroundedResult tightens RequiresResult: a submit_result obtained
-	// through tool-free protocol repair, or promoted from free text, is never
-	// accepted as this task's completion, because neither path re-reads the
-	// evidence the worker was assigned. When the worker itself omits
-	// submit_result, the task is instead retried fresh (subject to the
-	// team's normal retry policy) rather than finished from a guess.
+	// RequiresGroundedResult tightens RequiresResult: the task completes only
+	// from a typed submit_result, never from free text. A worker that omits
+	// submit_result still gets the shared result-only repair turn, where it
+	// must call submit_result itself; free-text promotion is disabled, and an
+	// unrepaired omission fails through the normal retry policy. External
+	// provider proposals are additionally held to their observed workspace
+	// delta (see ExternalResultCanonicalizer).
 	RequiresGroundedResult bool  `json:"requires_grounded_result,omitempty" yaml:"requires-grounded-result,omitempty"`
 	AllowsReplay           *bool `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
 	ForbidArtifacts        bool  `json:"forbid_artifacts,omitempty" yaml:"forbid-artifacts,omitempty"`

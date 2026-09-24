@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // RepairFailureReason classifies why a protocol repair attempt failed (§7).
@@ -152,10 +154,22 @@ type ExecutionReceipt struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	// OccurrenceAttempt is the occurrence-level attempt number (Retries+1),
+	// the same value lifecycle event payloads carry as "attempt". Attempt is
+	// the in-dispatch counter, which restarts at 1 for every dispatch.
+	OccurrenceAttempt int `json:"occurrence_attempt,omitempty"`
 	// Backend is the canonical execution backend admitted for this attempt.
 	// SubagentProvider remains a read-compatible legacy field only while the
 	// execution-identity sunset is in progress.
 	Backend string `json:"backend,omitempty"`
+	// ExecutionTarget is the target this attempt actually ran on. When it is
+	// set, Backend is derived from it instead of from the Todo's frozen
+	// primary target, so an attempt that ran on another admitted candidate
+	// is recorded under its own backend.
+	ExecutionTarget execution.ExecutionTarget `json:"execution_target,omitzero"`
+	// Usage is the attempt's token usage. It is nil for receipts written
+	// before usage was recorded, which consumers must show as unknown.
+	Usage *ExecutionUsage `json:"usage,omitempty"`
 	// ModelExecutionID is the stable isolated-worker identity. It keeps
 	// concurrent extra-model receipts distinct even though they share a Todo.
 	ModelExecutionID string               `json:"model_execution_id,omitempty"`
@@ -220,6 +234,26 @@ func (receipt ExecutionReceipt) Succeeded() bool {
 // Backend is populated from the Todo's admitted ExecutionTarget at the single
 // receipt persistence boundary (TodoList.SetExecutionReceipt), rather than
 // being inferred from mutable task-definition configuration.
+// receiptExecutionTarget canonicalizes the target an attempt ran on for a
+// receipt. A zero target (legacy or target-less attempts) stays zero so the
+// receipt keeps deriving its backend from the Todo.
+func receiptExecutionTarget(target execution.ExecutionTarget) execution.ExecutionTarget {
+	if target.IsZero() {
+		return execution.ExecutionTarget{}
+	}
+	target.Backend = execution.CanonicalTargetBackendName(target.Backend)
+	return target
+}
+
+// receiptUsage returns nil for an attempt that reported no token usage, so
+// consumers can tell "no usage recorded" from a real zero-token attempt.
+func receiptUsage(usage ExecutionUsage) *ExecutionUsage {
+	if usage == (ExecutionUsage{}) {
+		return nil
+	}
+	return &usage
+}
+
 func (receipt ExecutionReceipt) MarshalJSON() ([]byte, error) {
 	if err := normalizeExecutionReceiptSemantic(&receipt); err != nil {
 		return nil, err

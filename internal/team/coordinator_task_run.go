@@ -430,7 +430,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if item := c.todoItemByID(todoID); item != nil && item.Status == TaskPlanned {
 		expectedStatus = TaskPlanned
 	}
-	if err := c.CommitTaskTransition(parentCtx, todoID, expectedStatus, TaskInProgress, "", "", nil); err != nil {
+	if err := c.CommitTaskTransition(parentCtx, todoID, expectedStatus, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
 	}
 	var activeOccurrence submitResultRuntimeIdentity
@@ -758,7 +758,7 @@ retryLoop:
 				return "", err
 			}
 			detail := fmt.Sprintf("attempt %d/%d", attempt, maxAttempts)
-			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", nil); err != nil {
+			if err := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskInProgress, detail, "", attemptStartMetadata(attempt)); err != nil {
 				closeTranscript()
 				return "", fmt.Errorf("mark retry task started: %w", err)
 			}
@@ -1222,18 +1222,21 @@ retryLoop:
 			}
 		}
 		receipt := ExecutionReceipt{
-			RunID:            runID,
-			TaskID:           todoID,
-			Attempt:          attempt,
-			ModelExecutionID: contextManifest.ModelExecutionID,
-			StartedAt:        attemptStarted,
-			FinishedAt:       time.Now(),
-			ProducerID:       agentName,
-			ArtifactScope:    cloneArtifactAccessScope(attemptArtifactScope),
-			TranscriptRef:    transcriptRef,
-			Semantic:         cloneSemanticRetrievalIdentity(contextManifest.Semantic),
-			MemoryManifest:   cloneMemoryInjectionManifest(attemptManifest),
-			ContextManifest:  cloneContextInjectionManifest(&contextManifest),
+			RunID:             runID,
+			TaskID:            todoID,
+			Attempt:           attempt,
+			OccurrenceAttempt: c.taskAttempt(todoID),
+			ExecutionTarget:   receiptExecutionTarget(task.ResolvedExecutionTarget),
+			Usage:             receiptUsage(usageWithProgressTokens(steps, attemptTokens)),
+			ModelExecutionID:  contextManifest.ModelExecutionID,
+			StartedAt:         attemptStarted,
+			FinishedAt:        time.Now(),
+			ProducerID:        agentName,
+			ArtifactScope:     cloneArtifactAccessScope(attemptArtifactScope),
+			TranscriptRef:     transcriptRef,
+			Semantic:          cloneSemanticRetrievalIdentity(contextManifest.Semantic),
+			MemoryManifest:    cloneMemoryInjectionManifest(attemptManifest),
+			ContextManifest:   cloneContextInjectionManifest(&contextManifest),
 			StepBudget: &StepBudgetUsage{
 				Used:      len(steps),
 				Limit:     stepBudget,
@@ -2205,6 +2208,12 @@ func (c *Coordinator) effectiveWorkerMaxAttempts(agentDef *agent.AgentDef) int {
 // complete. validateTaskOutput enforces the task-declared scope/evidence
 // contract, including literal review range, batch, and required sections.
 func promoteValidatedReadOnlyHandoff(task TaskDef, todoID, agentName, output string) *TaskResult {
+	// A grounded task must be completed by a typed submit_result, either the
+	// worker's own or one made in the result-only repair turn. Prose is never
+	// grounded evidence, however well it validates.
+	if task.Execution.RequiresGroundedResult {
+		return nil
+	}
 	if strings.TrimSpace(output) == "" || validateTaskOutput(task, output) != nil {
 		return nil
 	}
@@ -2323,7 +2332,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("clear structured action error: %w", err)
 	}
-	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "executing structured action", "", nil); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "executing structured action", "", attemptStartMetadata(attempt)); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
@@ -3295,7 +3304,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	attemptStarted := time.Now()
 	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
 
-	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "", "", nil); err != nil {
+	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return "", fmt.Errorf("mark sidecar task started: %w", err)
 	}
 	c.reconcileTaskStatusProjection()

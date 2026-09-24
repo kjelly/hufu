@@ -58,7 +58,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		if item.Status == TaskPlanned {
 			expected = TaskPlanned
 		}
-		if err := c.CommitTaskTransition(parentCtx, todoID, expected, TaskInProgress, "", "", nil); err != nil {
+		if err := c.CommitTaskTransition(parentCtx, todoID, expected, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 			return "", fmt.Errorf("mark fanout task started: %w", err)
 		}
 		c.setCurrentTaskAttempt(todoID, c.taskAttempt(todoID))

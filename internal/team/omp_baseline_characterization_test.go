@@ -10,12 +10,14 @@ package team
 // in the same commit that changes the behavior.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
@@ -155,21 +157,110 @@ func TestOMPCharacterizePolicySnapshotGolden(t *testing.T) {
 	}
 }
 
-// The Todo's frozen target overwrites any receipt-supplied Backend. A
-// fallback attempt would therefore be recorded under the primary backend.
-// Flipped by HF-OMP-001, which adds ExecutionReceipt.ExecutionTarget.
-func TestOMPCharacterizeReceiptBackendComesFromTodoTarget(t *testing.T) {
-	list := NewTaskTracker().TodoList()
-	item := list.AddBatch([]TodoSpec{{
-		Agent: "worker", Desc: "receipt backend",
-		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "primary"},
-	}})[0]
-	if err := list.SetExecutionReceipt(item.ID, &ExecutionReceipt{RunID: "run-1", TaskID: item.ID, Attempt: 1, Backend: "openai"}); err != nil {
+// A receipt without its own target takes the Todo's frozen backend; a
+// receipt that records the target its attempt ran on keeps that backend
+// (HF-OMP-001), so a fallback attempt is not recorded under the primary.
+func TestOMPReceiptBackendFollowsAttemptTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		receipt ExecutionReceipt
+		want    string
+	}{
+		{name: "legacy receipt derives the Todo backend", receipt: ExecutionReceipt{Backend: "openai"}, want: "ollama"},
+		{name: "attempt target wins", receipt: ExecutionReceipt{ExecutionTarget: execution.ExecutionTarget{Backend: "openai", Model: "candidate"}}, want: "openai"},
+		{name: "attempt target backend is canonicalized", receipt: ExecutionReceipt{ExecutionTarget: execution.ExecutionTarget{Backend: "local", Model: "candidate"}}, want: "ollama"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			list := NewTaskTracker().TodoList()
+			item := list.AddBatch([]TodoSpec{{
+				Agent: "worker", Desc: "receipt backend",
+				ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "primary"},
+			}})[0]
+			receipt := tt.receipt
+			receipt.RunID, receipt.TaskID, receipt.Attempt = "run-1", item.ID, 1
+			if err := list.SetExecutionReceipt(item.ID, &receipt); err != nil {
+				t.Fatal(err)
+			}
+			got := list.Items()[0].ExecutionReceipt
+			if got == nil || got.Backend != tt.want {
+				t.Fatalf("receipt backend = %#v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOMPReceiptUsageAndTargetHelpers(t *testing.T) {
+	if got := receiptUsage(ExecutionUsage{}); got != nil {
+		t.Fatalf("receiptUsage(zero) = %#v, want nil (unknown)", got)
+	}
+	if got := receiptUsage(ExecutionUsage{InputTokens: 3, TotalTokens: 5}); got == nil || got.TotalTokens != 5 {
+		t.Fatalf("receiptUsage = %#v, want the recorded usage", got)
+	}
+	if got := receiptExecutionTarget(execution.ExecutionTarget{}); !got.IsZero() {
+		t.Fatalf("receiptExecutionTarget(zero) = %#v, want zero", got)
+	}
+	receipt := ExecutionReceipt{RunID: "run-1", TaskID: "1", Attempt: 2, OccurrenceAttempt: 3,
+		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "m"}, Usage: &ExecutionUsage{TotalTokens: 7}}
+	clone := cloneExecutionReceipt(&receipt)
+	clone.Usage.TotalTokens = 99
+	if receipt.Usage.TotalTokens != 7 {
+		t.Fatal("cloneExecutionReceipt shares the Usage pointer")
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := list.Items()[0].ExecutionReceipt
-	if got == nil || got.Backend != "ollama" {
-		t.Fatalf("receipt backend = %#v, want the Todo's frozen backend ollama", got)
+	var decoded ExecutionReceipt
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.OccurrenceAttempt != 3 || decoded.ExecutionTarget != receipt.ExecutionTarget || decoded.Usage == nil || decoded.Usage.TotalTokens != 7 {
+		t.Fatalf("receipt round trip = %#v", decoded)
+	}
+	legacy, err := json.Marshal(ExecutionReceipt{RunID: "run-1", TaskID: "1", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"occurrence_attempt", "execution_target", "usage"} {
+		if strings.Contains(string(legacy), key) {
+			t.Fatalf("receipt without the new fields serialized %q: %s", key, legacy)
+		}
+	}
+}
+
+// Only in_progress commits that begin an attempt carry dispatch_attempt; a
+// same-status re-commit also emits task_started but does not start an
+// attempt (HF-OMP-001).
+func TestOMPTaskStartedMarksOnlyAttemptStarts(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "attempt starts"}})[0]
+	journal := &uniqueRecordingJournal{}
+	c.SetEventJournal(journal)
+	if err := c.CommitTaskTransition(t.Context(), item.ID, TaskPending, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.commitTaskTransitionFromCurrent(t.Context(), item.ID, TaskInProgress, "resumed after child", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.commitTaskTransitionFromCurrent(t.Context(), item.ID, TaskInProgress, "attempt 2/2", "", attemptStartMetadata(2)); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{float64(1), nil, float64(2)}
+	if len(journal.events) != len(want) {
+		t.Fatalf("events = %d, want %d", len(journal.events), len(want))
+	}
+	for i, event := range journal.events {
+		if event.Type != string(EventTaskStarted) {
+			t.Fatalf("event %d type = %q, want task_started", i, event.Type)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload[taskStartedDispatchAttemptKey]; got != want[i] {
+			t.Fatalf("event %d dispatch_attempt = %v, want %v", i, got, want[i])
+		}
 	}
 }
 
@@ -206,22 +297,39 @@ func TestOMPCharacterizeDispatchIDIsProcessLocal(t *testing.T) {
 	}
 }
 
-// Free-text promotion does not consult RequiresGroundedResult today, so a
-// grounded task could complete from prose. Flipped by HF-OMP-001.
-func TestOMPCharacterizeGroundedTaskFreeTextPromotion(t *testing.T) {
-	task := TaskDef{Agent: "worker", Goal: "review", Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: true}}
-	promoted := promoteValidatedReadOnlyHandoff(task, "1", "worker", "## Review\nThe module looks correct.")
-	if promoted == nil || promoted.Source != "promoted_free_text" {
-		t.Fatalf("promoted = %#v, want the current ungated promotion", promoted)
+// A grounded task never completes from prose: free-text promotion is off for
+// it, while an ordinary read-only task can still be promoted (HF-OMP-001).
+func TestOMPGroundedTaskIsNeverPromotedFromFreeText(t *testing.T) {
+	output := "## Review\nThe module looks correct."
+	tests := []struct {
+		name     string
+		grounded bool
+		promoted bool
+	}{
+		{name: "grounded task", grounded: true, promoted: false},
+		{name: "ordinary task", grounded: false, promoted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := TaskDef{Agent: "worker", Goal: "review", Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: tt.grounded}}
+			promoted := promoteValidatedReadOnlyHandoff(task, "1", "worker", output)
+			if (promoted != nil) != tt.promoted {
+				t.Fatalf("promoted = %#v, want promoted=%v", promoted, tt.promoted)
+			}
+		})
 	}
 }
 
-// Status tool-argument projections are not redacted today, and the TUI
-// previews them. Flipped by HF-OMP-001.
-func TestOMPCharacterizeStatusToolArgsAreNotRedacted(t *testing.T) {
+// Status tool-argument projections are redacted and bounded before any
+// reporter (including the TUI status bar preview) sees them (HF-OMP-001).
+func TestOMPStatusToolArgsAreRedactedAndBounded(t *testing.T) {
 	event := StatusEvent{}.withTool("bash", `{"command":"curl -H 'Authorization: Bearer sk-live-123456'"}`)
-	if !strings.Contains(event.ToolArgs, "sk-live-123456") {
-		t.Fatalf("ToolArgs = %q, want the current unredacted projection", event.ToolArgs)
+	if strings.Contains(event.ToolArgs, "sk-live-123456") {
+		t.Fatalf("ToolArgs = %q, want the bearer token redacted", event.ToolArgs)
+	}
+	long := StatusEvent{}.withTool("write", strings.Repeat("界", statusToolArgsMaxRunes*2))
+	if runes := []rune(long.ToolArgs); len(runes) > statusToolArgsMaxRunes+len("...") {
+		t.Fatalf("ToolArgs has %d runes, want at most %d plus the ellipsis", len(runes), statusToolArgsMaxRunes)
 	}
 }
 
@@ -236,5 +344,38 @@ func TestOMPCharacterizeFreeTextSourcesAreOverwritten(t *testing.T) {
 	promoted := promoteValidatedReadOnlyHandoff(TaskDef{Agent: "worker"}, "1", "worker", "## Review\nDone.")
 	if promoted == nil || promoted.Source != "promoted_free_text" || isSubmittedResultSource(promoted.Source) {
 		t.Fatalf("promoted source = %#v, want promoted_free_text outside the submitted sources", promoted)
+	}
+}
+
+// A worker attempt's durable receipt records its occurrence attempt and the
+// target it ran on (HF-OMP-001).
+func TestOMPWorkerReceiptRecordsAttemptIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "receipt-identity", Timeout: 30, MaxRetries: 0},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime:    time.Now(),
+		taskTracker:    NewTaskTracker(),
+		reportStatus:   func(StatusEvent) {},
+		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
+		executionRunID: "run-receipt-identity",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect"}})[0]
+	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(item.ID, &TaskResult{
+			TaskID: item.ID, Agent: "worker", Status: TaskResultStatusSuccess, Source: "submitted", Summary: "inspected",
+		})
+	}}
+	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "inspect", Recovery: RecoveryRetry}, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	receipt := c.taskTracker.TodoList().Items()[0].ExecutionReceipt
+	if receipt == nil || receipt.Attempt != 1 || receipt.OccurrenceAttempt != 1 {
+		t.Fatalf("receipt attempt identity = %#v, want attempt 1 of occurrence attempt 1", receipt)
 	}
 }

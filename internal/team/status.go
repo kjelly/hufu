@@ -75,9 +75,15 @@ func (e StatusEvent) withStep(step int) StatusEvent {
 	return e
 }
 
+// statusToolArgsMaxRunes bounds the tool-argument preview carried by a status
+// event. Display reporters only need a bounded label, never a full payload.
+const statusToolArgsMaxRunes = 2048
+
 func (e StatusEvent) withTool(name, args string) StatusEvent {
 	e.ToolName = name
-	e.ToolArgs = args
+	// Like tool results, arguments are a diagnostic projection shown by the
+	// TUI status bar; redact credentials before any reporter can see them.
+	e.ToolArgs = utils.TruncateRunes(utils.RedactSecrets(args), statusToolArgsMaxRunes)
 	return e
 }
 
@@ -1647,9 +1653,13 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				// The Todo owns the frozen execution identity. Every current
 				// execution path persists receipts through this method, so derive
 				// the durable backend here instead of trusting a mutable task
-				// definition or a provider-era receipt field. A target-less Todo is
-				// historical/coordinator compatibility state and remains readable.
-				if !ti.ExecutionTarget.IsZero() {
+				// definition or a provider-era receipt field. A receipt that
+				// records the target its attempt actually ran on is derived from
+				// that target instead. A target-less Todo is historical/
+				// coordinator compatibility state and remains readable.
+				if !copyR.ExecutionTarget.IsZero() {
+					copyR.Backend = execution.CanonicalTargetBackendName(copyR.ExecutionTarget.Backend)
+				} else if !ti.ExecutionTarget.IsZero() {
 					copyR.Backend = execution.CanonicalTargetBackendName(ti.ExecutionTarget.Backend)
 				}
 				if ti.MaterializedActionPayloadHash != "" {
@@ -1746,6 +1756,10 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	if receipt.StepBudget != nil {
 		stepBudget := *receipt.StepBudget
 		copyR.StepBudget = &stepBudget
+	}
+	if receipt.Usage != nil {
+		usage := *receipt.Usage
+		copyR.Usage = &usage
 	}
 	if receipt.SubmittedResult != nil {
 		copyR.SubmittedResult = cloneTaskResult(receipt.SubmittedResult)
