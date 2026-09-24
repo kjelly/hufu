@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // This file implements the deterministic DAG-level portion of spec.md §17's
@@ -44,12 +46,24 @@ import (
 
 func hufuCodingWorkflowFixture(t *testing.T) (*dagScheduler, []*TodoItem) {
 	t.Helper()
+	// newCoordinator always installs a runtime workflow, even for a team with
+	// no workflow.phases (hufu-coding is one): it is non-nil but disabled.
+	// Build the fixture the same way so the DAG repair path sees exactly the
+	// production phaseWorkflow instead of a nil one.
+	workflow, err := newRuntimeWorkflow(&TeamSession{Config: agent.TeamConfig{Name: "hufu-coding"}})
+	if err != nil {
+		t.Fatalf("newRuntimeWorkflow: %v", err)
+	}
+	if workflow.Enabled() {
+		t.Fatal("hufu-coding declares no workflow.phases; its runtime workflow must be disabled")
+	}
 	coord := &Coordinator{
 		taskTracker:   NewTaskTracker(),
 		reportStatus:  func(StatusEvent) {},
 		sessionData:   NewSession(),
 		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
 		maxConcurrent: 1,
+		phaseWorkflow: workflow,
 	}
 	classes := []TaskFailureClass{FailureVerify, FailureSemanticRejection}
 	tasks := []TaskDef{

@@ -304,14 +304,22 @@ func (w *runtimeWorkflow) repairRetryLimit(taskMaxRetries int) int {
 // signature. Validation failures remain permanent; an on-failure loop may
 // repair a provider, tool, or environment failure only within this bound.
 func (w *runtimeWorkflow) permitRepairRetry(task TaskDef, err error) bool {
-	if !w.Enabled() || err == nil {
-		return false
-	}
-	if w.policies.FailFast {
+	if err == nil {
 		return false
 	}
 	var validation ActionValidationError
 	if errors.As(err, &validation) {
+		return false
+	}
+	if !w.Enabled() {
+		// A team without workflow.phases has no failure-signature retry policy
+		// to apply: the scheduler's per-task max_retries check, which already
+		// ran before this call, is its only DAG-loop bound. The coordinator
+		// always installs a (disabled) workflow for such teams, so refusing
+		// here silently disabled every on_failure loop they declare.
+		return true
+	}
+	if w.policies.FailFast {
 		return false
 	}
 	limit := w.repairRetryLimit(task.MaxRetries)
