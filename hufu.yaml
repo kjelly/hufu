@@ -3,3 +3,15 @@ profiles:
     agent-team: hufu-code-review
     unattended: "true"
     input: 'review.scope={"kind":"last_n","count":1,"history":"first_parent","head":"HEAD"}'
+
+# Ordered worker targets referenced by `execution-route:` in team.yaml or
+# agent frontmatter. On a listed provider failure (and only when the failed
+# attempt left no side effect to repeat) the next attempt moves to the next
+# candidate; a -m/--model or --worker-model override replaces the route.
+execution-routes:
+  review:
+    candidates:
+      - ollama/glm-5.3-flash:cloud
+      - ollama/minimax-m2.7:cloud
+      - ollama/deepseek-v4.1-flash:cloud
+    fallback-on: [rate_limited, provider_unavailable, model_unavailable, transport_timeout]

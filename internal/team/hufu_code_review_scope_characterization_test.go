@@ -112,28 +112,26 @@ func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testi
 	}
 }
 
-func TestHufuCodeReviewUsesNativeLowCostDocumentationReviewer(t *testing.T) {
+// TestHufuCodeReviewWorkersShareTheReviewRoute pins the team's execution
+// targets: every worker inherits the team's hufu.yaml `review` execution
+// route (ordered Ollama cloud candidates with provider fallback), so none
+// sets its own model or an agent backend, which a route cannot use.
+func TestHufuCodeReviewWorkersShareTheReviewRoute(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
-	documentationReviewer := session.Agents["documentation-reviewer"]
-	if documentationReviewer == nil {
-		t.Fatal("hufu-code-review documentation-reviewer is missing")
+	if session.Config.ExecutionRoute != "review" {
+		t.Fatalf("team execution route = %q, want review", session.Config.ExecutionRoute)
 	}
-	if documentationReviewer.Generation.Model != "minimax-m2.7:cloud" {
-		t.Fatalf("documentation reviewer model = %q, want minimax-m2.7:cloud", documentationReviewer.Generation.Model)
+	for _, name := range []string{"reviewer", "critic", "documentation-reviewer"} {
+		worker := session.Agents[name]
+		if worker == nil {
+			t.Fatalf("hufu-code-review %s is missing", name)
+		}
+		if worker.Generation.Model != "" || worker.ExecutionRoute != "" || worker.SubagentProvider != "" {
+			t.Fatalf("worker %q = model %q route %q provider %q, want the inherited team route", name, worker.Generation.Model, worker.ExecutionRoute, worker.SubagentProvider)
+		}
 	}
-	if documentationReviewer.Generation.ReasoningEffort != "low" {
-		t.Fatalf("documentation reviewer reasoning effort = %q, want low", documentationReviewer.Generation.ReasoningEffort)
-	}
-	if documentationReviewer.SubagentProvider != "" {
-		t.Fatalf("documentation reviewer subagent provider = %q, want native default", documentationReviewer.SubagentProvider)
-	}
-	reviewer := session.Agents["reviewer"]
-	if reviewer == nil || reviewer.SubagentProvider != "codex" || reviewer.Generation.Model != "gpt-5.6-sol" {
-		t.Fatalf("high-reasoning reviewer execution target = %#v, want codex/gpt-5.6-sol", reviewer)
-	}
-	critic := session.Agents["critic"]
-	if critic == nil || critic.Generation.Model != "" {
-		t.Fatalf("high-reasoning critic execution target = %#v, want inherited model", critic)
+	if effort := session.Agents["documentation-reviewer"].Generation.ReasoningEffort; effort != "low" {
+		t.Fatalf("documentation reviewer reasoning effort = %q, want low", effort)
 	}
 	coordinator := session.Agents["coordinator"]
 	if coordinator == nil || coordinator.Generation.Model != "" {

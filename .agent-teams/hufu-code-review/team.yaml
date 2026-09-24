@@ -5,6 +5,10 @@ metadata:
 spec:
   description: "Read-only, artifact-backed review of the Hufu Go codebase"
   coordinator-model: ollama/minimax-m3:cloud
+  # Every worker runs on the hufu.yaml `review` route and falls back to its
+  # next candidate on a provider outage. Workers must not set their own
+  # model; -m/--model or --worker-model replace the route for a run.
+  execution-route: review
   max-rounds: 64
   max-steps: 120
   timeout: 3600

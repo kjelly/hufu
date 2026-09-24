@@ -2,8 +2,6 @@
 name: reviewer
 description: Read-only reviewer for every bounded workset item across runtime, CLI, TUI, and security lenses
 role: worker
-subagent-provider: codex
-model: gpt-5.6-sol
 tools: view,grep,glob,ls
 temperature: "0.15"
 max-tokens: "32768"

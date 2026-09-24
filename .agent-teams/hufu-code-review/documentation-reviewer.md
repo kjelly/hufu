@@ -2,7 +2,6 @@
 name: documentation-reviewer
 description: Low-cost read-only reviewer for routine README, tutorial, guide, and release-note changes
 role: worker
-model: minimax-m2.7:cloud
 tools: view,grep,glob,ls
 temperature: "0.15"
 max-tokens: "16384"
