@@ -128,6 +128,10 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 		parts = append(parts, m.styles.dim.Render("─── Subtasks ───"))
 		parts = append(parts, subtaskLines)
 	}
+	if attempts := m.renderAttemptLines(item.ID); len(attempts) > 0 {
+		parts = append(parts, m.styles.dim.Render("─── Attempts ───"))
+		parts = append(parts, attempts...)
+	}
 
 	parts = append(parts, sep)
 	return strings.Join(parts, "\n")

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -75,4 +76,31 @@ func formatFallbacksByClass(byClass map[team.ProviderFailureClass]int) string {
 		parts = append(parts, fmt.Sprintf("%s: %d", class, byClass[team.ProviderFailureClass(class)]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// writeWorkerAttemptReport renders the Workers section from the canonical
+// attempt projection, the same one `hufu status --workers` and the TUI show.
+func writeWorkerAttemptReport(b *strings.Builder, hub *inspectpkg.WorkerAttempts) {
+	if hub == nil || len(hub.Attempts) == 0 {
+		return
+	}
+	summary := hub.Summary
+	b.WriteString("### Workers\n\n")
+	fmt.Fprintf(b, "- **Attempts:** %d (isolated: %d, workspace conflicts: %d, orphan worlds removed: %d)\n",
+		summary.Attempts, summary.IsolatedAttemptsTotal, summary.AttemptWorkspaceConflictsTotal, summary.AttemptWorldsOrphanRemoved)
+	fmt.Fprintf(b, "- **Structured result validation failures:** %d\n\n", summary.StructuredResultValidationFailures)
+	b.WriteString("| Task | Agent | Attempt | Status | Activity | Target | Workspace | Duration | Tokens | Fallbacks | Failure |\n")
+	b.WriteString("|------|-------|---------|--------|----------|--------|-----------|----------|--------|-----------|---------|\n")
+	for _, attempt := range hub.Attempts {
+		tokens := "unknown"
+		if attempt.Usage != nil {
+			tokens = fmt.Sprint(attempt.Usage.TotalTokens)
+		}
+		fmt.Fprintf(b, "| %s | %s | %d | %s | %s | %s | %s | %s | %s | %d | %s |\n",
+			reportTableValue(attempt.TaskID, 40), reportTableValue(valueOrUnknown(attempt.Agent), 64), attempt.Attempt,
+			reportTableValue(valueOrUnknown(attempt.TaskStatus), 32), reportTableValue(attempt.Activity, 32),
+			reportTableValue(valueOrUnknown(attempt.ExecutionTarget), 120), reportTableValue(attempt.WorkspaceMode, 16),
+			workerAttemptAge(attempt), tokens, attempt.FallbackCount, reportTableValue(valueOr(attempt.FailureClass, "—"), 64))
+	}
+	b.WriteString("\n")
 }

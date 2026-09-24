@@ -1,9 +1,11 @@
 package inspect
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -436,4 +438,36 @@ func SummarizeWorkerAttempts(views []WorkerAttemptView, metrics *team.RunMetrics
 		summary.WorkerFallbacksByClass[string(class)] = count
 	}
 	return summary
+}
+
+// WorkerAttempts is the hub's data: the projected attempts and the summary.
+type WorkerAttempts struct {
+	Attempts []WorkerAttemptView `json:"attempts"`
+	Summary  WorkerHubSummary    `json:"summary"`
+}
+
+// LoadWorkerAttempts reads the active branch lineage of a workspace and
+// projects its worker attempts, with todos replayed from the same events.
+// It is read-only. A workspace without events has no attempts.
+func LoadWorkerAttempts(ctx context.Context, workspace string, metrics *team.RunMetrics, now time.Time) (WorkerAttempts, error) {
+	lineage, err := LoadLineage(ctx, InspectQuery{Workspace: workspace})
+	if err != nil {
+		return WorkerAttempts{}, err
+	}
+	events := make([]team.RunEvent, 0, len(lineage.Events))
+	for _, indexed := range lineage.Events {
+		events = append(events, indexed.Event)
+	}
+	todos, err := team.ReplayTodoList(events)
+	if err != nil {
+		return WorkerAttempts{}, fmt.Errorf("%w: replay worker tasks: %v", ErrIntegrity, err)
+	}
+	return ProjectWorkerHub(todos, lineage.Events, metrics, now), nil
+}
+
+// ProjectWorkerHub is the single projection every hub surface (CLI, TUI,
+// report) renders: the attempts and their summary.
+func ProjectWorkerHub(todos []*team.TodoItem, events []IndexedEvent, metrics *team.RunMetrics, now time.Time) WorkerAttempts {
+	attempts := ProjectWorkerAttempts(todos, events, now)
+	return WorkerAttempts{Attempts: attempts, Summary: SummarizeWorkerAttempts(attempts, metrics)}
 }

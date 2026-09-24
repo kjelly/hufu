@@ -38,6 +38,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Progress and recovery", Argv: `hufu explain --ai "why did the task fail?" --model local/qwen3:8b`},
 	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu status --workers --verbose --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main"},
 	{Section: "Learning and publication", Argv: "hufu context learning --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Learning and publication", Argv: "hufu context promotion review --workspace ./workspace/dev-team --project project-id --team dev-team"},

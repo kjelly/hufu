@@ -1362,6 +1362,9 @@ func loadTUIOperatorDetails(ctx context.Context, workspace string, snapshot oper
 			}
 		}
 	}
+	if hub, err := inspectpkg.LoadWorkerAttempts(ctx, workspace, nil, time.Now()); err == nil {
+		details.Attempts = tuiAttemptDetails(hub.Attempts)
+	}
 	if snapshot.Scope.ProjectID == "" || snapshot.Scope.TeamName == "" {
 		return details
 	}

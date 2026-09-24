@@ -1108,6 +1108,32 @@ Next: 以 inspect overview 檢查該 workspace，或選擇正確的 exact path�
 - spinner 只代表有可觀察的 activity，不代表 provider healthy；斷線明示 unknown/stale。
 - 僅等待沒有新文字時，要顯示最近 durable progress 與 deadline/budget；不可杜撰 ETA。
 
+### 11.3.1 Worker attempts（worker hub）
+
+worker hub 是 canonical runtime state 的唯讀投影（`internal/inspect/workers.go`
+的 `ProjectWorkerAttempts`），不是 scheduler，也不是第二份 task database。
+CLI、TUI 與 report 都呈現同一個 projection：
+
+- `hufu status --workers` 列出目前 branch 的每一個 worker attempt：task、agent、
+  attempt、狀態、activity、實際執行的 target、workspace mode（shared／isolated）
+  與經過時間；`--verbose` 另外顯示 route、candidate index、retry 與 fallback 次數、
+  usage、result contract 與 validation、failure class、attempt world 與 receipt
+  identity；`--json` 只有在帶 `--workers` 時才加上 `"workers"`。
+- TUI 的 task detail 在 header 顯示最近 5 個 attempt 的 target、workspace、
+  activity、時間、tokens、fallback 次數與最近一次失敗；資料隨既有的 operator
+  details 更新送達，不新增 ticker 或 polling。所有狀態都以文字表達，在電子紙
+  preset 下同樣可讀，不依賴 spinner 或顏色。
+- `--report` 的 Task Summary 之後有 Workers 一節，包含 attempt 表與 isolation、
+  structured result validation 的計數；綁定 execution route 的 task 另有
+  Execution Routes 一節。
+
+attempt 的開始是帶 `dispatch_attempt` 的 `task_started` 事件，key 由該事件的
+durable ID 推導，所以 crash 之後重新 dispatch 會是新的 attempt。activity 只從
+lifecycle 推導（queued、running、verifying、result_repair、integrating、
+fallback、terminal、unknown）；沒有資料來源時顯示 unknown，不做推測。projection
+只包含 ID、enum、target 與計數，不包含 output、prompt、tool 的 args 與 result、
+或 transcript。
+
 ### 11.4 Live owner、passive viewer、quit 必須分清
 
 | TUI 模式 | 允許行為 |

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -19,6 +20,8 @@ var (
 	statusWorkspace string
 	statusTeam      string
 	statusJSON      bool
+	statusWorkers   bool
+	statusVerbose   bool
 )
 
 var statusCmd = &cobra.Command{
@@ -43,12 +46,16 @@ type workspaceStatus struct {
 	Error        int    `json:"error"`
 	Skipped      int    `json:"skipped"`
 	Pending      int    `json:"pending"`
+	// Workers is present only with --workers.
+	Workers *inspectpkg.WorkerAttempts `json:"workers,omitempty"`
 }
 
 func init() {
 	statusCmd.Flags().StringVarP(&statusWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	statusCmd.Flags().StringVar(&statusTeam, "team", "", "Team name when the project has multiple active managed workspaces")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Write machine-readable JSON to stdout")
+	statusCmd.Flags().BoolVar(&statusWorkers, "workers", false, "Show every worker attempt of the active branch")
+	statusCmd.Flags().BoolVar(&statusVerbose, "verbose", false, "With --workers, show each attempt's route, usage, result contract, failure, world, and identity")
 }
 
 func runStatus(command *cobra.Command, _ []string) error {
@@ -78,6 +85,20 @@ func runStatus(command *cobra.Command, _ []string) error {
 	if err := attachCanonicalWorkspaceStatus(command.Context(), ws, &status); err != nil {
 		return err
 	}
+	if statusWorkers {
+		var metrics *team.RunMetrics
+		if data.RunResult != nil {
+			metrics = &data.RunResult.Metrics
+		}
+		hub, err := inspectpkg.LoadWorkerAttempts(command.Context(), ws, metrics, time.Now())
+		if err != nil && !errors.Is(err, inspectpkg.ErrNotFound) {
+			return fmt.Errorf("load worker attempts: %w", err)
+		}
+		if hub.Attempts == nil {
+			hub.Attempts = []inspectpkg.WorkerAttemptView{}
+		}
+		status.Workers = &hub
+	}
 	if statusJSON {
 		return json.NewEncoder(command.OutOrStdout()).Encode(status)
 	}
@@ -90,6 +111,9 @@ func runStatus(command *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Updated:    %s\n", status.UpdatedAt)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Rounds:     %d\n", status.Rounds)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Tasks:      %d done · %d error · %d skipped · %d pending (%d total)\n", status.Done, status.Error, status.Skipped, status.Pending, status.Total)
+	if status.Workers != nil {
+		writeWorkerAttempts(command.OutOrStdout(), *status.Workers, statusVerbose)
+	}
 	return nil
 }
 

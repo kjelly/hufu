@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/auditverify"
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
@@ -142,6 +143,9 @@ type reportData struct {
 	HistoricalTodoCount   int
 	ModelProfiles         []modelprofile.TelemetryProjection
 	ReviewScope           *reviewScopeReport
+	// Workers is the canonical worker attempt projection of the active
+	// branch; nil when it could not be loaded.
+	Workers *inspectpkg.WorkerAttempts
 
 	// AuditResult is the independent audit re-verification of this run
 	// (spec.md §38), computed by calling auditverify.VerifyWorkspaceRun --
@@ -287,6 +291,15 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	}
 	if d.EvidenceIdentity == "" {
 		d.EvidenceIdentity = "unavailable"
+	}
+	if tc.session != nil {
+		var metrics *team.RunMetrics
+		if d.RunResult != nil {
+			metrics = &d.RunResult.Metrics
+		}
+		if hub, err := inspectpkg.LoadWorkerAttempts(context.Background(), tc.session.Workspace, metrics, time.Now()); err == nil {
+			d.Workers = &hub
+		}
 	}
 	if tc.session != nil && d.SourceRunID != "run-unavailable" {
 		if profiles, err := team.LoadModelProfileTelemetry(tc.session.Workspace, d.SourceRunID); err == nil {
@@ -954,6 +967,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			runMetrics = &data.RunResult.Metrics
 		}
 		writeExecutionRouteReport(&b, data.Todos, runMetrics)
+		writeWorkerAttemptReport(&b, data.Workers)
 		for _, item := range data.Todos {
 			if item == nil || item.TypedResult == nil {
 				continue

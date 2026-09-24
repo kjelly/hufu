@@ -66,6 +66,10 @@ hufu session status --workspace ./workspace/dev-team --team dev-team
 ```
 
 ```sh
+hufu status --workers --verbose --workspace ./workspace/dev-team
+```
+
+```sh
 hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main
 ```
 

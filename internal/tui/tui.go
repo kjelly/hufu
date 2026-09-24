@@ -104,6 +104,9 @@ type OperatorDetailsMsg struct {
 	PromotionStatus  string
 	PromotionTotal   int
 	PromotionLimited bool
+	// Attempts are the worker attempts of the active branch, projected by
+	// the host from canonical events. Nil means unavailable.
+	Attempts []OperatorAttemptDetail
 }
 
 type SSHSessionsMsg struct{ Count int }
@@ -206,6 +209,7 @@ type Model struct {
 	operatorPromotionStatus  string
 	operatorPromotionTotal   int
 	operatorPromotionLimited bool
+	operatorAttempts         []OperatorAttemptDetail
 	hasOperatorSummary       bool
 	unread                   map[string]int
 	result                   string // final coordinator answer shown when finished
@@ -531,6 +535,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operatorPromotionStatus = msg.PromotionStatus
 		m.operatorPromotionTotal = msg.PromotionTotal
 		m.operatorPromotionLimited = msg.PromotionLimited
+		m.operatorAttempts = slices.Clone(msg.Attempts)
 		if m.inOperator && m.operatorReady {
 			offset := m.operatorVP.YOffset
 			m.operatorVP.SetContent(m.buildOperatorContent())
