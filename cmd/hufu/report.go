@@ -949,6 +949,11 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("\n")
 		writeTaskResourceScopeReport(&b, data.Todos)
 		writeSemanticRetrievalReport(&b, data.Todos)
+		var runMetrics *team.RunMetrics
+		if data.RunResult != nil {
+			runMetrics = &data.RunResult.Metrics
+		}
+		writeExecutionRouteReport(&b, data.Todos, runMetrics)
 		for _, item := range data.Todos {
 			if item == nil || item.TypedResult == nil {
 				continue

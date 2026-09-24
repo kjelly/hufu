@@ -180,6 +180,7 @@ func TestAdmittedExecutionRoute(t *testing.T) {
 		{name: "another model conflicts with a multi-candidate route", session: session(primary, other), task: TaskDef{ResolvedExecutionTarget: other}, err: executionRouteConflictCode},
 		{name: "another model on a single-candidate route admits a plain target", session: session(primary), task: TaskDef{ResolvedExecutionTarget: other}},
 		{name: "escalate on a single-candidate route is allowed", session: session(primary), task: TaskDef{ResolvedExecutionTarget: primary, Escalate: true}, bound: true},
+		{name: "a sidecar task never binds a route", session: session(primary, other), task: TaskDef{ResolvedExecutionTarget: primary, Sidecar: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -520,5 +521,52 @@ func TestChangedExecutionRouteFailsResumeClosed(t *testing.T) {
 	same := start(testRoutes)
 	if err := same.checkRunAdmission(); err != nil {
 		t.Fatalf("resume with unchanged routes: %v", err)
+	}
+}
+
+// flakyPrimaryAgent fails its model call with a rate limit on the primary
+// model and submits a result on any other.
+type flakyPrimaryAgent struct {
+	c       *Coordinator
+	primary string
+	models  []string
+}
+
+func (a *flakyPrimaryAgent) Generate(ctx context.Context, _ fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	return a.run(ctx)
+}
+
+func (a *flakyPrimaryAgent) Stream(ctx context.Context, _ fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+	return a.run(ctx)
+}
+
+func (a *flakyPrimaryAgent) run(ctx context.Context) (*fantasy.AgentResult, error) {
+	model, _ := ctx.Value(modelKey{}).(string)
+	a.models = append(a.models, model)
+	if model == a.primary {
+		return nil, &fantasy.ProviderError{StatusCode: 429, Message: "rate limited"}
+	}
+	return routeSubmittingAgent{c: a.c}.run(ctx)
+}
+
+func TestDirectAgentFallsBackOnItsRoute(t *testing.T) {
+	routes := map[string]config.ExecutionRouteConfig{
+		"coding": testRoutes["coding"],
+		"review": {Candidates: []string{"ollama/review-primary", "ollama/review-fallback"}, FallbackOn: []string{"rate_limited"}},
+	}
+	c := loadRouteTeam(t, t.TempDir(), routes)
+	c.contextRepo = nil
+	agentOverride := &flakyPrimaryAgent{c: c, primary: "review-primary"}
+	c.workerAgentOverride = agentOverride
+	if _, err := c.RunDirectAgent(context.Background(), "reviewer", "review with fallback"); err != nil {
+		t.Fatalf("RunDirectAgent: %v (models %v)", err, agentOverride.models)
+	}
+	if !slices.Equal(agentOverride.models, []string{"review-primary", "review-fallback"}) {
+		t.Fatalf("direct attempts ran models %v, want primary then fallback", agentOverride.models)
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.Agent == "reviewer" && item.Status != TaskDone {
+			t.Fatalf("direct reviewer status = %s (%s)", item.Status, item.Detail)
+		}
 	}
 }

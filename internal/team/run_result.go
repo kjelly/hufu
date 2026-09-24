@@ -701,6 +701,10 @@ type RunMetrics struct {
 	IsolatedAttemptsTotal          int `json:"isolated_attempts_total,omitempty"`
 	AttemptWorkspaceConflictsTotal int `json:"attempt_workspace_conflicts_total,omitempty"`
 	AttemptWorldsOrphanRemoved     int `json:"attempt_worlds_orphan_removed,omitempty"`
+	// WorkerFallbacksTotal counts execution-route fallbacks in this run, and
+	// WorkerFallbacksByClass the provider failure class each fell back from.
+	WorkerFallbacksTotal   int                          `json:"worker_fallbacks_total,omitempty"`
+	WorkerFallbacksByClass map[ProviderFailureClass]int `json:"worker_fallbacks_by_class,omitempty"`
 	// StructuredResultValidationFailures counts structured payloads rejected
 	// by their result contract in this run.
 	StructuredResultValidationFailures int                         `json:"structured_result_validation_failures,omitempty"`

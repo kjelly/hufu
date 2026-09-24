@@ -1960,7 +1960,7 @@ retryLoop:
 		providerClass, fellBack, fallbackDenied := fallback.decide(executionFallbackInput{
 			Err: err, AttemptContextErr: attemptContextErr, ParentContextErr: parentCtx.Err(),
 			SideEffect: resolvedSideEffect, Isolated: task.WorkerWorkspace.isolated(),
-			Recorder: executedCalls, BudgetExceeded: budgetExceededNow(c),
+			Recorder: executedCalls, BudgetExceeded: budgetExceededNow(c), ResultRepair: receipt.RepairProvenance != nil,
 		})
 		if fellBack {
 			if recordErr := c.recordExecutionFallback(parentCtx, todoID, agentName, attempt, fallback); recordErr != nil {

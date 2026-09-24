@@ -88,6 +88,9 @@ type executionFallbackInput struct {
 	// exists, which never allows a fallback past a side effect.
 	Recorder       *executedToolCallRecorder
 	BudgetExceeded bool
+	// ResultRepair means the worker's model call finished and the attempt
+	// went through result-only repair; a repair failure never falls back.
+	ResultRepair bool
 }
 
 // decide classifies an attempt's failure and decides whether the next
@@ -95,7 +98,7 @@ type executionFallbackInput struct {
 // class ("" when the failure is not a provider failure), whether to fall
 // back, and, when a provider failure did not fall back, why.
 func (s *executionFallbackState) decide(in executionFallbackInput) (ProviderFailureClass, bool, string) {
-	if s.route == nil || len(s.route.Candidates) < 2 || in.Err == nil || in.AttemptContextErr != nil {
+	if s.route == nil || len(s.route.Candidates) < 2 || in.Err == nil || in.AttemptContextErr != nil || in.ResultRepair {
 		return "", false, ""
 	}
 	if in.ParentContextErr != nil {
@@ -224,4 +227,29 @@ func (c *Coordinator) attemptExecutionTarget(taskID string) (execution.Execution
 	}
 	target, ok := value.(execution.ExecutionTarget)
 	return target, ok
+}
+
+// accumulateExecutionFallbackMetrics counts this run's fallbacks from their
+// durable events, so the counters survive a coordinator restart.
+func (c *Coordinator) accumulateExecutionFallbackMetrics(metrics *RunMetrics) {
+	if c == nil || c.eventStore == nil || metrics == nil {
+		return
+	}
+	events, err := c.eventStore.QueryEvents(EventQuery{RunID: c.executionRunID, Types: []string{string(EventExecutionFallbackDecided)}})
+	if err != nil {
+		return
+	}
+	for _, event := range events {
+		var payload struct {
+			FailureClass ProviderFailureClass `json:"failure_class"`
+		}
+		if json.Unmarshal(event.Payload, &payload) != nil {
+			continue
+		}
+		metrics.WorkerFallbacksTotal++
+		if metrics.WorkerFallbacksByClass == nil {
+			metrics.WorkerFallbacksByClass = make(map[ProviderFailureClass]int)
+		}
+		metrics.WorkerFallbacksByClass[payload.FailureClass]++
+	}
 }

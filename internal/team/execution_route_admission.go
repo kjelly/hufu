@@ -191,6 +191,10 @@ func providerFailureClassList(classes []ProviderFailureClass) string {
 // A single-candidate route behaves like the agent's own model, so an
 // explicit per-task model simply admits a plain target.
 func (c *Coordinator) admittedExecutionRoute(task TaskDef, def *agent.AgentDef) (*ExecutionRouteBinding, error) {
+	// A sidecar task runs on the sidecar model, never on a worker's route.
+	if task.Sidecar {
+		return nil, nil
+	}
 	route := c.executionRouteFor(def)
 	if route == nil || task.ResolvedExecutionTarget.IsZero() {
 		return nil, nil

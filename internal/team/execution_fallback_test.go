@@ -402,8 +402,12 @@ func TestProviderFailureFallsBackToTheNextCandidate(t *testing.T) {
 			}
 			// max-retries is 0: the fallback ran outside the retry budget and
 			// recorded no retry.
-			if retries := f.c.Metrics().RetriesByFailureClass; len(retries) != 0 {
-				t.Fatalf("a fallback was counted as a retry: %v", retries)
+			metrics := f.c.Metrics()
+			if len(metrics.RetriesByFailureClass) != 0 {
+				t.Fatalf("a fallback was counted as a retry: %v", metrics.RetriesByFailureClass)
+			}
+			if metrics.WorkerFallbacksTotal != 1 || metrics.WorkerFallbacksByClass[tt.wantClass] != 1 {
+				t.Fatalf("fallback metrics = %d %v, want 1 %s", metrics.WorkerFallbacksTotal, metrics.WorkerFallbacksByClass, tt.wantClass)
 			}
 		})
 	}
@@ -489,8 +493,33 @@ func TestFallbackAcrossBackendsUsesTheCandidateBackend(t *testing.T) {
 	t.Cleanup(primaryServer.Close)
 	t.Cleanup(remoteServer.Close)
 	f := newFallbackFixture(t, map[string]string{"ollama": primaryServer.URL, "remote": remoteServer.URL}, []string{"ollama/fb-primary", "remote/fb-remote"}, allFallbackClasses, SideEffectNone)
+	logger, err := newExecutionEventLogger(f.c.session.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.c.executionEvents = logger
+	t.Cleanup(logger.close)
 	if err := f.run(t); err != nil {
 		t.Fatalf("executeTask: %v", err)
+	}
+	// The execution-event shadow reports the target each attempt ran on.
+	shadow, err := os.ReadFile(filepath.Join(f.c.session.Workspace, logsDir, executionEventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetsByAttempt := map[int]map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(shadow)), "\n") {
+		var event ExecutionEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if targetsByAttempt[event.Attempt] == nil {
+			targetsByAttempt[event.Attempt] = map[string]bool{}
+		}
+		targetsByAttempt[event.Attempt][event.ExecutionTarget+" "+event.Backend] = true
+	}
+	if !targetsByAttempt[1]["ollama/fb-primary ollama"] || !targetsByAttempt[2]["remote/fb-remote remote"] || len(targetsByAttempt[2]) != 1 {
+		t.Fatalf("execution-event targets by attempt = %v", targetsByAttempt)
 	}
 	if seen := remote.seen(); len(seen) != 1 || seen[0] != "fb-remote" {
 		t.Fatalf("remote backend models = %v, want the candidate's model", seen)
@@ -534,5 +563,29 @@ func TestHufuLocalAttemptRejectsATargetOutsideTheRoute(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match canonical") {
 		t.Fatalf("RunAttempt error = %v, want a rejected target outside the route", err)
+	}
+}
+
+func TestProviderFailureFallsBackInUnattendedMode(t *testing.T) {
+	backend := &fallbackTestServer{failures: map[string]int{"fb-primary": http.StatusTooManyRequests}}
+	server := newIPv4TestServer(t, backend)
+	t.Cleanup(server.Close)
+	f := newFallbackFixture(t, map[string]string{"ollama": server.URL}, []string{"ollama/fb-primary", "ollama/fb-fallback"}, allFallbackClasses, SideEffectWorkspaceWrite)
+	f.c.unattended = true
+	if err := f.run(t); err != nil {
+		t.Fatalf("executeTask: %v", err)
+	}
+	if seen := backend.seen(); !slices.Equal(seen, []string{"fb-primary", "fb-fallback"}) {
+		t.Fatalf("models = %v", seen)
+	}
+}
+
+func TestResultRepairNeverFallsBack(t *testing.T) {
+	route := &ExecutionRouteBinding{Name: "coding", FallbackOn: allFallbackClasses, Candidates: []execution.ExecutionTarget{{Backend: "ollama", Model: "a"}, {Backend: "ollama", Model: "b"}}}
+	state := newExecutionFallbackState(route)
+	state.beginAttempt(1)
+	repairErr := fmt.Errorf("protocol repair preparation failed: %w", &fantasy.ProviderError{StatusCode: http.StatusTooManyRequests})
+	if _, fellBack, denied := state.decide(executionFallbackInput{Err: repairErr, SideEffect: SideEffectNone, ResultRepair: true}); fellBack || denied != "" {
+		t.Fatalf("result-only repair failure decided fallback=%v denied=%q", fellBack, denied)
 	}
 }
