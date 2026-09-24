@@ -128,7 +128,7 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 	if envReplacer != nil {
 		env = envReplacer(env)
 	}
-	cmd.Env = env
+	cmd.Env = executionRootShellEnv(ctx, env)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -198,7 +198,7 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 	}
 	filtered = append(filtered, "PATH="+pathVal)
 	filtered = append(filtered, "SHELL="+bashPath)
-	cmd.Env = utils.SanitizeSubprocessEnv(filtered)
+	cmd.Env = executionRootShellEnv(ctx, utils.SanitizeSubprocessEnv(filtered))
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

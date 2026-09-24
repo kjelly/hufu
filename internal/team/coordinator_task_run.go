@@ -4707,6 +4707,7 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 		shell = c.session.Config.Shell
 	}
 	workDir := c.verificationWorkDir()
+	runDir := c.verificationWorkDirFor(parentCtx)
 	timeout := c.verifyTaskTimeout()
 	verifyCtx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
@@ -4724,7 +4725,9 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 		}
 		return verification, verifyErr
 	}
-	return ExecuteVerificationSpecWithStepsAndTaskResult(verifyCtx, shell, workDir, normalizedSpec, steps, taskResult)
+	verification, verifyErr := ExecuteVerificationSpecWithStepsAndTaskResult(verifyCtx, shell, runDir, normalizedSpec, steps, taskResult)
+	c.canonicalVerificationFingerprint(normalizedSpec, verification, runDir)
+	return verification, verifyErr
 }
 
 // verifyTaskDeliverable runs the task's optional verify command and returns a
@@ -4747,7 +4750,7 @@ func (c *Coordinator) verifyTaskDeliverableWithMode(ctx context.Context, agentDe
 	} else if c != nil && c.session != nil && c.session.Config.Shell != "" {
 		shell = c.session.Config.Shell
 	}
-	workDir := c.verificationWorkDir()
+	runDir := c.verificationWorkDirFor(ctx)
 	spec := VerificationSpec{
 		Type:    VerifyCommandExit,
 		Mode:    mode,
@@ -4756,7 +4759,9 @@ func (c *Coordinator) verifyTaskDeliverableWithMode(ctx context.Context, agentDe
 	timeout := c.verifyTaskTimeout()
 	verifyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return ExecuteVerificationSpec(verifyCtx, shell, workDir, spec)
+	verification, err := ExecuteVerificationSpec(verifyCtx, shell, runDir, spec)
+	c.canonicalVerificationFingerprint(spec, verification, runDir)
+	return verification, err
 }
 
 func (c *Coordinator) verificationWorkDir() string {

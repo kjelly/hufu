@@ -28,6 +28,12 @@ func newScopedFileAccess(cfg ToolConfig, path string, write bool) (*scopedFileAc
 	if cfg.TaskPathScope == nil {
 		return nil, nil
 	}
+	// A bounded workset scope is never derived for an isolated attempt, and
+	// this path bypasses the execution root write rule, so refuse the
+	// combination rather than guess which root the scope refers to.
+	if cfg.ExecutionRoot != "" {
+		return nil, fmt.Errorf("a bounded task path scope cannot be combined with an isolated execution root")
+	}
 	scope := cfg.TaskPathScope
 	bounded := scope.ReadBounded
 	allowed := scope.ReadPaths

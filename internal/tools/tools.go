@@ -514,6 +514,9 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 	if _, ok := ctx.Value(ArtifactPathPolicyKey).(ArtifactPathPolicy); ok {
 		needMerge = true
 	}
+	if _, ok := executionRootFromContext(ctx); ok {
+		needMerge = true
+	}
 	if !needMerge {
 		return cfg
 	}
@@ -532,6 +535,7 @@ func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
 		copyPolicy.BlockedPaths = append([]string(nil), policy.BlockedPaths...)
 		merged.ArtifactPathPolicy = &copyPolicy
 	}
+	applyExecutionRoot(&merged, ctx)
 	return merged
 }
 
@@ -1216,7 +1220,14 @@ func resolveAndValidateWritePathWithConsent(path string, cfg ToolConfig) (string
 	if len(writeCfg.AllowedPaths) == 0 {
 		writeCfg.AllowedPaths = cfg.AllowedPaths
 	}
-	return resolveAndValidatePathWithConsent(path, writeCfg)
+	resolved, err := resolveAndValidatePathWithConsent(path, writeCfg)
+	if err != nil {
+		return "", err
+	}
+	if err := checkExecutionRootWrite(resolved, cfg); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func formatPathConsentDenied(path, suggestion string) error {

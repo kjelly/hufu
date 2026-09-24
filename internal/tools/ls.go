@@ -52,7 +52,7 @@ func NewLsTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeLs(ctx, call, cfg.WorkDir, cfg)
+			return executeLs(ctx, call, executionWorkDir(ctx, cfg), cfg)
 		},
 	}
 }

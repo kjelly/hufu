@@ -46,7 +46,7 @@ func NewGlobTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeGlob(ctx, call, cfg.WorkDir, cfg)
+			return executeGlob(ctx, call, executionWorkDir(ctx, cfg), cfg)
 		},
 	}
 }

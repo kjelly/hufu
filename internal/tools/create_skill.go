@@ -67,11 +67,13 @@ func NewCreateSkillTool(opts ...ToolOption) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
-			if cfg.WorkDir == "" {
+			// The skill is a project file: an isolated attempt creates it in
+			// its own project root, where it becomes part of the attempt delta.
+			if effCfg.WorkDir == "" {
 				return fantasy.NewTextErrorResponse("workspace not configured"), nil
 			}
 
-			baseDir := filepath.Clean(filepath.Join(cfg.WorkDir, "skills"))
+			baseDir := filepath.Clean(filepath.Join(effCfg.WorkDir, "skills"))
 			skillsDir := filepath.Join(baseDir, args.Name)
 			if skillsDir != baseDir && !strings.HasPrefix(skillsDir, baseDir+string(filepath.Separator)) {
 				return fantasy.NewTextErrorResponse("invalid name: resolves outside the skills directory"), nil

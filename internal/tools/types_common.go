@@ -147,4 +147,8 @@ type ToolConfig struct {
 	ArtifactPathPolicy *ArtifactPathPolicy
 	TaskPathScope      *AgentTaskPathScope
 	TaskPathScopeError error
+	// ExecutionRoot and DeniedWriteRoots come from AgentExecutionRootKey;
+	// see applyExecutionRoot.
+	ExecutionRoot    string
+	DeniedWriteRoots []string
 }

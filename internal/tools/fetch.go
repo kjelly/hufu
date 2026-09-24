@@ -49,7 +49,7 @@ func NewFetchTool(opts ...ToolOption) fantasy.AgentTool {
 			Parallel: true,
 		},
 		handler: func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return executeFetch(ctx, call, cfg.WorkDir)
+			return executeFetch(ctx, call, executionWorkDir(ctx, cfg))
 		},
 	}
 }

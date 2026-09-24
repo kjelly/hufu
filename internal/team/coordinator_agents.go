@@ -361,7 +361,7 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	wsPath := c.session.Workspace
 	sharedPath := filepath.Join(wsPath, sharedDir)
 	b.WriteString("## Environment & Rules\n\n")
-	fmt.Fprintf(&b, "- Project root (CWD): %s | Control workspace: %s | Shared: %s | Time: %s\n", c.projectDir, wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Project root (CWD): %s | Control workspace: %s | Shared: %s | Time: %s\n", c.attemptProjectRoot(ctx), wsPath, sharedPath, c.sessionTime.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- Modify deliverables under the project root only when the task authorizes it and the active tool policy permits it.\n")
 	fmt.Fprintf(&b, "- Put drafts, logs, notes, and other non-deliverable intermediates in the control workspace: %s\n", wsPath)
 	fmt.Fprintf(&b, "- Use %s for inter-agent handoff.\n\n", sharedPath)
