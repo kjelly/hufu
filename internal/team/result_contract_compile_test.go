@@ -197,15 +197,19 @@ func TestCompileTeamResultContractsRejectsUnsupportedCombinations(t *testing.T) 
 	}
 }
 
-func TestLoadTeamRefusesResultContractsUntilPayloadsAreValidated(t *testing.T) {
+func TestLoadTeamBindsResultContracts(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: contract-team\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	writeAgentFile(t, dir, "worker.md", "name: worker\nresult-contract:\n  schema: schemas/review.json\n  require-structured: true", "You are a worker.")
 	writeResultContractSchema(t, dir, "schemas/review.json", reviewResultSchema)
-	if _, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry); err == nil || !strings.Contains(err.Error(), resultContractUnsupportedCode) {
-		t.Fatalf("LoadTeam error = %v, want %s", err, resultContractUnsupportedCode)
+	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if ref, ok := session.AgentResultContracts["worker"]; !ok || ref.ID != "schemas/review.json" || !ref.RequireStructured {
+		t.Fatalf("worker result contract = %#v (present=%v)", ref, ok)
 	}
 
 	plain := t.TempDir()
@@ -369,5 +373,22 @@ func TestDecisionRoleBindingRejectsResultContractAgent(t *testing.T) {
 	}
 	if err := decisionRoleResultContractIneligibility("judge", &agent.AgentDef{Name: "judge"}); err != nil {
 		t.Fatalf("an ordinary agent was rejected: %v", err)
+	}
+}
+
+func TestCompileTeamExposesAgentResultContract(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: explain-team\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeAgentFile(t, dir, "reviewer.md", "name: reviewer\nresult-contract:\n  schema: schemas/review.json", "Review.")
+	writeResultContractSchema(t, dir, "schemas/review.json", reviewResultSchema)
+	spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer, ok := spec.Agents["reviewer"]
+	if !ok || reviewer.ResultContract == nil || reviewer.ResultContract.ID != "schemas/review.json" || reviewer.ResultContract.RequireStructured {
+		t.Fatalf("effective reviewer = %#v (present=%v)", reviewer, ok)
 	}
 }

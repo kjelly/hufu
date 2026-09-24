@@ -1144,6 +1144,7 @@ retryLoop:
 							BackendBinding:              backendBinding,
 							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
 							invariantRepairInstructions: invariantRepairPrompt,
+							resultContractSchema:        c.attemptResultContractSchema(task),
 							timing:                      timing,
 						})
 					}()
@@ -1264,6 +1265,7 @@ retryLoop:
 			zero := 0
 			receipt.ExitCode = &zero
 		}
+		c.applyResultContractReceipt(todoID, c.GetTaskResult(todoID), &receipt)
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
 		}
@@ -1689,6 +1691,7 @@ retryLoop:
 								err = withFailureClassOverride(errors.New("model did not honour the submit_result tool contract after a read-only attempt"), FailureExecution)
 								receipt.RepairProvenance.Error = err.Error()
 							}
+							c.applyResultContractReceipt(todoID, typedRes, &receipt)
 							if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 								_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
 							}
@@ -2212,6 +2215,10 @@ func promoteValidatedReadOnlyHandoff(task TaskDef, todoID, agentName, output str
 	// worker's own or one made in the result-only repair turn. Prose is never
 	// grounded evidence, however well it validates.
 	if task.Execution.RequiresGroundedResult {
+		return nil
+	}
+	// Free text can never carry a validated structured payload.
+	if task.ResultContract != nil && task.ResultContract.RequireStructured {
 		return nil
 	}
 	if strings.TrimSpace(output) == "" || validateTaskOutput(task, output) != nil {
@@ -4847,7 +4854,12 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 			backendKind = backend.Kind()
 		}
 	}
-	return resultProtocolInstructionsForBackendKind(task, granted, backendKind)
+	instructions := resultProtocolInstructionsForBackendKind(task, granted, backendKind)
+	if instructions == "" || task.ResultContract == nil {
+		return instructions
+	}
+	compiled, _ := c.compiledResultContract(task.ResultContract)
+	return instructions + resultContractPromptSection(task.ResultContract, compiled, taskUsesExternalResultProtocol(task, backendKind))
 }
 
 func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]bool, backendKind execution.BackendKind) string {

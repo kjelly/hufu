@@ -49,6 +49,10 @@ type AttemptRequest struct {
 	// worker manifest. External result-only repair may reuse it but cannot
 	// choose IDs, policy text, hashes, or severities itself.
 	invariantRepairInstructions string
+	// resultContractSchema is the loaded schema for Task.ResultContract,
+	// resolved by the coordinator. A nil schema for a bound contract fails
+	// canonicalization as drift.
+	resultContractSchema *CompiledResultContract
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.

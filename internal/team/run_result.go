@@ -690,27 +690,30 @@ type AcceptanceContractRevision struct {
 
 // RunMetrics is a queryable snapshot of reliability counters for a run.
 type RunMetrics struct {
-	RetriesByFailureClass             map[TaskFailureClass]int    `json:"retries_by_failure_class,omitempty"`
-	RetrySuppressions                 int                         `json:"retry_suppressions,omitempty"`
-	RetrySuppressionsByReason         map[string]int              `json:"retry_suppressions_by_reason,omitempty"`
-	FailuresByClass                   map[TaskFailureClass]int    `json:"failures_by_class,omitempty"`
-	FailuresByPhase                   map[string]int              `json:"failures_by_phase,omitempty"`
-	RetryAttemptsAvoidedByDisposition map[RetryDisposition]int    `json:"retry_attempts_avoided_by_disposition,omitempty"`
-	Compactions                       int                         `json:"compactions"`
-	RepeatedFailureFingerprints       int                         `json:"repeated_failure_fingerprints,omitempty"`
-	SystemicFingerprintsEscalated     int                         `json:"systemic_fingerprints_escalated,omitempty"`
-	RecoveryStrategyChanges           int                         `json:"recovery_strategy_changes,omitempty"`
-	LastRecoveryStrategies            map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
-	DiagnosticTasksSinceProgress      int                         `json:"diagnostic_tasks_since_progress,omitempty"`
-	RepairAttemptsByCriterion         map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
-	AntiThrashingWarnings             int                         `json:"anti_thrashing_warnings,omitempty"`
-	AcceptanceCriteriaPassed          int                         `json:"acceptance_criteria_passed,omitempty"`
-	TasksByCriterion                  map[string]int              `json:"tasks_by_criterion,omitempty"`
-	ProtocolRepairsAttempted          int                         `json:"protocol_repairs_attempted,omitempty"`
-	ProtocolRepairsSucceeded          int                         `json:"protocol_repairs_succeeded,omitempty"`
-	CoordinatorPolicyRepairsAttempted int                         `json:"coordinator_policy_repairs_attempted,omitempty"`
-	CoordinatorPolicyRepairsSucceeded int                         `json:"coordinator_policy_repairs_succeeded,omitempty"`
-	ProtocolRepairFailuresByReason    map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
+	RetriesByFailureClass     map[TaskFailureClass]int `json:"retries_by_failure_class,omitempty"`
+	RetrySuppressions         int                      `json:"retry_suppressions,omitempty"`
+	RetrySuppressionsByReason map[string]int           `json:"retry_suppressions_by_reason,omitempty"`
+	FailuresByClass           map[TaskFailureClass]int `json:"failures_by_class,omitempty"`
+	FailuresByPhase           map[string]int           `json:"failures_by_phase,omitempty"`
+	// StructuredResultValidationFailures counts structured payloads rejected
+	// by their result contract in this run.
+	StructuredResultValidationFailures int                         `json:"structured_result_validation_failures,omitempty"`
+	RetryAttemptsAvoidedByDisposition  map[RetryDisposition]int    `json:"retry_attempts_avoided_by_disposition,omitempty"`
+	Compactions                        int                         `json:"compactions"`
+	RepeatedFailureFingerprints        int                         `json:"repeated_failure_fingerprints,omitempty"`
+	SystemicFingerprintsEscalated      int                         `json:"systemic_fingerprints_escalated,omitempty"`
+	RecoveryStrategyChanges            int                         `json:"recovery_strategy_changes,omitempty"`
+	LastRecoveryStrategies             map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
+	DiagnosticTasksSinceProgress       int                         `json:"diagnostic_tasks_since_progress,omitempty"`
+	RepairAttemptsByCriterion          map[string]int              `json:"repair_attempts_by_criterion,omitempty"`
+	AntiThrashingWarnings              int                         `json:"anti_thrashing_warnings,omitempty"`
+	AcceptanceCriteriaPassed           int                         `json:"acceptance_criteria_passed,omitempty"`
+	TasksByCriterion                   map[string]int              `json:"tasks_by_criterion,omitempty"`
+	ProtocolRepairsAttempted           int                         `json:"protocol_repairs_attempted,omitempty"`
+	ProtocolRepairsSucceeded           int                         `json:"protocol_repairs_succeeded,omitempty"`
+	CoordinatorPolicyRepairsAttempted  int                         `json:"coordinator_policy_repairs_attempted,omitempty"`
+	CoordinatorPolicyRepairsSucceeded  int                         `json:"coordinator_policy_repairs_succeeded,omitempty"`
+	ProtocolRepairFailuresByReason     map[RepairFailureReason]int `json:"protocol_repair_failures_by_reason,omitempty"`
 	// StepBudgetExhaustions counts attempts cut off by the step budget. They also
 	// appear as protocol failures (the worker omitted its result), so this
 	// counter is what separates "tasks needed more tool calls" from "the model

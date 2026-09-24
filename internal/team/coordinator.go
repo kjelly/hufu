@@ -533,13 +533,17 @@ type Coordinator struct {
 	providerBoundaryAbort func() error
 	skillUsage            map[string]*skillUsageState
 	skillUsageMu          sync.Mutex
-	delegatedTasks        map[string]int
-	delegatedTasksMu      sync.Mutex
-	taskCache             TaskCache
-	evidenceService       EvidenceService
-	cachePolicy           CachePolicy
-	cachePolicyMu         sync.RWMutex
-	executionProfile      ExecutionProfile
+	// resultValidationFailures counts structured payloads rejected since each
+	// Todo's previous receipt.
+	resultValidationMu       sync.Mutex
+	resultValidationFailures map[string]int
+	delegatedTasks           map[string]int
+	delegatedTasksMu         sync.Mutex
+	taskCache                TaskCache
+	evidenceService          EvidenceService
+	cachePolicy              CachePolicy
+	cachePolicyMu            sync.RWMutex
+	executionProfile         ExecutionProfile
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
 	modelExecutionID       string

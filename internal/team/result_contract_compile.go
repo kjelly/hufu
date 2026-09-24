@@ -422,22 +422,3 @@ func decisionRoleResultContractIneligibility(roleName string, def *agent.AgentDe
 	}
 	return nil
 }
-
-// requireResultContractEnforcement refuses a team that declares result
-// contracts while this build does not yet validate structured payloads, so
-// a declared contract can never be silently ignored.
-func requireResultContractEnforcement(session *TeamSession) error {
-	if session == nil || (len(session.AgentResultContracts) == 0 && !sessionHasStaticResultContract(session)) {
-		return nil
-	}
-	return fmt.Errorf("%s: result contracts are declared but structured payload validation is not available in this build", resultContractUnsupportedCode)
-}
-
-func sessionHasStaticResultContract(session *TeamSession) bool {
-	for _, task := range session.ContractTasks {
-		if task.ResultContract != nil {
-			return true
-		}
-	}
-	return false
-}

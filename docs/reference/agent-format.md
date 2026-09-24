@@ -153,6 +153,7 @@ max-retries: 3
 | `skills` | ✗ | - | 適用技能列表 |
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |
 | `max-retries` | ✗ | 團隊設定 | 最大重試次數 |
+| `result-contract` | ✗ | - | 結果合約：`schema`（相對於團隊目錄的 JSON Schema 檔）與 `require-structured`（見下方） |
 
 ### 執行期模型覆寫
 
@@ -166,6 +167,34 @@ coordinator/orchestrator（改用 `--coordinator-model`），也不會改變 pro
 `ExecutionTarget`；每個 worker 的 target 也屬於 run 的 execution-policy
 snapshot，因此 resume 必須沿用原 run 的相同覆寫（或相同 profile），改變 target
 會因 snapshot drift 被拒絕；要換 target 請用 `--new` 開新 session。
+
+### 結果合約（result-contract）
+
+```yaml
+result-contract:
+  schema: schemas/code-review-v1.json   # 相對於團隊目錄
+  require-structured: true
+```
+
+宣告後，worker 以 `submit_result` 的 `structured_payload` 欄位（external
+agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交符合 schema
+的 payload。runtime 會驗證並計算雜湊，驗證通過的 payload 會以
+`structured_payload` 保存在 typed result，並附在交給 coordinator 與下游 task 的
+結果中。team.yaml 的 static contract task 也可以宣告 `result-contract`，它會覆寫
+該 contract 的 agent 預設值；coordinator 的 task payload 不能設定或覆寫它。
+
+- schema 必須是自給自足的 Draft 2020-12：不允許 `$id`，`$ref` 只能指向同一份
+  文件的 fragment（`#...`），`$schema` 只能出現在根節點。
+- 屬性名稱若會被 durable event 的 secret redaction 改寫（例如含 `token`、
+  `secret`、`api_key`），team 載入時會被拒絕；payload 的值若含 credential，
+  提交時也會被拒絕。
+- `require-structured: true` 時，缺少或不合法的 payload 都不能完成 task，
+  free-text promotion 也不會套用；worker 可以在 result-only repair turn 補交。
+- 修改 schema 會改變 execution policy snapshot，resume 時 fail closed；
+  要使用新 schema 請用 `--new`。
+- 不能與 `extra-models` 同時使用，也不能用在可能被 decision runtime 綁定為
+  角色的 agent。
+- `hufu team explain` 會列出每個 agent 綁定的 contract ID 與 hash。
 
 ### 系統提示詞
 

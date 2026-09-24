@@ -44,6 +44,10 @@ type WorkerResultProposal struct {
 	Facts                map[string]any              `json:"facts,omitempty"`
 	Confidence           float64                     `json:"confidence,omitempty"`
 	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
+	// StructuredPayloadJSON carries a result contract payload as a JSON
+	// string, the only shape OpenAI strict structured output can express for
+	// an arbitrary schema. It must be null for a task without a contract.
+	StructuredPayloadJSON *string `json:"structured_payload_json,omitempty"`
 }
 
 // ProposedFile names one file the provider believes it produced or relied on.
@@ -242,6 +246,10 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	if err != nil {
 		return nil, err
 	}
+	structuredPayload, err := canonicalExternalStructuredPayload(request, proposal)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize external result: %w", err)
+	}
 
 	return &TaskResult{
 		TaskID:  request.TaskID,
@@ -260,6 +268,8 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 		OpenQuestions: boundedOpenQuestions(proposal.OpenQuestions),
 		Facts:         boundedFacts(proposal.Facts),
 		Confidence:    proposal.Confidence,
+
+		StructuredPayload: structuredPayload,
 
 		// Evidence, ReceiptIDs and Verification remain unset here: they are
 		// populated only later by Hufu-owned receipt/verification logic (§19).

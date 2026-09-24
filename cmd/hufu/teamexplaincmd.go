@@ -84,6 +84,8 @@ type explainAgent struct {
 	Role       internalteam.ResolvedValue[string] `json:"role" yaml:"role"`
 	Tools      internalteam.ResolvedValue[string] `json:"tools" yaml:"tools"`
 	SideEffect internalteam.ResolvedValue[string] `json:"side_effect,omitempty" yaml:"side_effect,omitempty"`
+	// ResultContract is the agent's bound result contract.
+	ResultContract *internalteam.ResultContractRef `json:"result_contract,omitempty" yaml:"result_contract,omitempty"`
 }
 
 // explainOutput is the --format yaml/json shape. It intentionally excludes
@@ -142,11 +144,12 @@ func dedupedExplainAgents(spec *internalteam.EffectiveTeamSpec) []explainAgent {
 		}
 		seen[a.Name.Value] = true
 		agents = append(agents, explainAgent{
-			Key:        key,
-			Name:       a.Name,
-			Role:       a.Role,
-			Tools:      a.Tools,
-			SideEffect: a.SideEffect,
+			Key:            key,
+			Name:           a.Name,
+			Role:           a.Role,
+			Tools:          a.Tools,
+			SideEffect:     a.SideEffect,
+			ResultContract: a.ResultContract,
 		})
 	}
 	return agents
@@ -276,6 +279,9 @@ func renderTeamExplainText(spec *internalteam.EffectiveTeamSpec) string {
 		fmt.Fprintf(&b, "      source: %s\n", explainSourceDetail(a.Tools))
 		if a.SideEffect.Value != "" {
 			writeResolvedLine(&b, "    ", "side effect", a.SideEffect.Value, a.SideEffect.Source, a.SideEffect.Detail)
+		}
+		if contract := a.ResultContract; contract != nil {
+			fmt.Fprintf(&b, "    result contract: %s (sha256 %s, require-structured: %t)\n", contract.ID, contract.SchemaSHA256, contract.RequireStructured)
 		}
 	}
 

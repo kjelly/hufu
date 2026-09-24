@@ -130,6 +130,7 @@ Results joined and printed to stdout
 | **Skeptic** | Challenges a single result before acceptance via adversarial verification |
 | **Escalation on Retry** | Automatically escalates to next stronger model when `escalate-on-retry` is enabled |
 | **DAG Scheduling** | `OnFailure` creates loops back to earlier tasks; `Verify` runs non-LLM deliverable checks |
+| **Result Contracts** | `result-contract:` (agent frontmatter or a static contract task) binds a Draft 2020-12 JSON Schema; the runtime validates and hashes the worker's `structured_payload` and pins the schema in the execution policy snapshot. See `docs/reference/agent-format.md` |
 | **Reflexion** | Structured failure hints inform retries; deterministic local fallback when no sidecar |
 | **Task Journal** | Durable per-task results persisted to `workspace/logs/task_journal.jsonl` |
 | **Sidecar** | Lightweight LLM for skill matching (`sidecarModel`), guard review (`guardModel`), judge, skeptic, and plan review |

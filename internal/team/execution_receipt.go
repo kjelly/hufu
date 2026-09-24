@@ -170,6 +170,14 @@ type ExecutionReceipt struct {
 	// Usage is the attempt's token usage. It is nil for receipts written
 	// before usage was recorded, which consumers must show as unknown.
 	Usage *ExecutionUsage `json:"usage,omitempty"`
+	// ResultContract* record the attempt's result contract outcome. They
+	// are metadata for projections; the payload value itself is part of the
+	// typed result.
+	ResultContractID         string                `json:"result_contract_id,omitempty"`
+	ResultContractSHA256     string                `json:"result_contract_sha256,omitempty"`
+	ResultPayloadSHA256      string                `json:"result_payload_sha256,omitempty"`
+	ResultValidation         ResultValidationState `json:"result_validation,omitempty"`
+	ResultValidationFailures int                   `json:"result_validation_failures,omitempty"`
 	// ModelExecutionID is the stable isolated-worker identity. It keeps
 	// concurrent extra-model receipts distinct even though they share a Todo.
 	ModelExecutionID string               `json:"model_execution_id,omitempty"`

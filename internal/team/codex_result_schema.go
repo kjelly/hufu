@@ -83,6 +83,7 @@ func codexWorkerResultProposalSchema() map[string]any {
 		"required": []string{
 			"status", "summary", "details", "proposed_files", "files_read", "findings",
 			"risks", "open_questions", "facts", "confidence", "invariant_assessments",
+			"structured_payload_json",
 		},
 		"properties": map[string]any{
 			"status": map[string]any{
@@ -106,6 +107,10 @@ func codexWorkerResultProposalSchema() map[string]any {
 			"facts":                 facts,
 			"confidence":            map[string]any{"type": nullable("number"), "minimum": 0, "maximum": 1},
 			"invariant_assessments": invariantAssessments,
+			// A result contract's payload is an arbitrary JSON Schema, which
+			// strict mode cannot express, so it travels as a JSON string that
+			// Hufu decodes and validates at canonicalization.
+			"structured_payload_json": map[string]any{"type": nullable("string")},
 		},
 	}
 }

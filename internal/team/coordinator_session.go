@@ -1318,6 +1318,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		DecisionArtifacts: append([]ArtifactRef(nil), it.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(it.DecisionBaseRates),
 		DecisionProvenance: cloneEvidenceProvenance(it.DecisionProvenance),
 		SubagentProvider:   it.SubagentProvider,
+		ResultContract:     it.ResultContract.clone(),
 	}
 }
 

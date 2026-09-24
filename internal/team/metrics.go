@@ -181,6 +181,7 @@ func accumulateTodoMetrics(metrics *RunMetrics, items []*TodoItem, runID string)
 		accumulateStepBudgetMetrics(metrics, item)
 		for _, receipt := range item.ExecutionReceipts {
 			accumulateProtocolRepairMetrics(metrics, receipt, runID)
+			accumulateResultContractMetrics(metrics, receipt, runID)
 		}
 		metrics.ReplayAttempts += item.Retries
 		if item.RecoveryState != "" && item.RecoveryState != RecoveryStateNotStarted {

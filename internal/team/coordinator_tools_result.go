@@ -48,6 +48,9 @@ type SubmitResultInput struct {
 	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
 	Facts                map[string]any              `json:"facts,omitempty"`
 	Confidence           float64                     `json:"confidence"`
+	// StructuredPayload is validated against the task's result contract by
+	// the runtime; it never becomes part of the TaskResult unvalidated.
+	StructuredPayload json.RawMessage `json:"structured_payload,omitempty"`
 }
 
 func (input SubmitResultInput) taskResult() TaskResult {
@@ -142,7 +145,7 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 	if item == nil {
 		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
 	}
-	return taskResultSubmissionContractForTask(TaskDef{
+	contract := taskResultSubmissionContractForTask(TaskDef{
 		ID:                    item.ID,
 		InvariantVerification: item.InvariantVerification,
 		Verify:                item.Verify,
@@ -150,6 +153,14 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 		VerifySpec:            item.VerifySpec,
 		Execution:             item.Execution,
 	})
+	if item.ResultContract != nil {
+		// A drifted contract still advertises the property; the submission
+		// itself is then rejected by structuredPayloadForSubmission.
+		compiled, _ := t.coordinator.compiledResultContract(item.ResultContract)
+		contract.ResultContract = item.ResultContract.clone()
+		contract.resultPayloadSchema = providerVisibleResultPayloadSchema(*item.ResultContract, compiled)
+	}
+	return contract
 }
 
 func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInfo {
@@ -387,6 +398,12 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 	if contract.InvariantVerification != "" && !slices.Contains(info.Required, "invariant_assessments") {
 		info.Required = append(info.Required, "invariant_assessments")
 	}
+	if contract.ResultContract != nil {
+		info.Parameters["structured_payload"] = contract.resultPayloadSchema
+		if contract.ResultContract.RequireStructured && !slices.Contains(info.Required, "structured_payload") {
+			info.Required = append(info.Required, "structured_payload")
+		}
+	}
 	for _, field := range contract.RequiredFields {
 		if _, ok := info.Parameters[field]; !ok || slices.Contains(info.Required, field) {
 			continue
@@ -427,6 +444,15 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	if contract.InvariantVerification == "" && input.InvariantAssessments != nil {
 		return fantasy.NewTextErrorResponse("submit_result contract violation: ordinary task must omit invariant_assessments or submit null"), nil
+	}
+	if t.coordinator != nil {
+		payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload)
+		if rejection != "" {
+			return fantasy.NewTextErrorResponse(rejection), nil
+		}
+		res.StructuredPayload = payload
+	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
+		return fantasy.NewTextErrorResponse("structured_payload is not accepted for this task because it has no result contract; omit the field"), nil
 	}
 
 	var identity submitResultRuntimeIdentity

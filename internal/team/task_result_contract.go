@@ -24,6 +24,10 @@ type taskResultSubmissionContract struct {
 	AllowEvidence                  bool
 	AllowArtifacts                 bool
 	InvariantVerification          InvariantVerificationMode
+	// ResultContract, when set, adds the structured_payload property;
+	// resultPayloadSchema is its provider-visible schema.
+	ResultContract      *ResultContractRef
+	resultPayloadSchema map[string]any
 }
 
 func taskResultSubmissionContractForTask(task TaskDef) taskResultSubmissionContract {

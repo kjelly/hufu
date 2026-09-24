@@ -62,6 +62,9 @@ type EffectiveAgentSpec struct {
 	Role       ResolvedValue[string]
 	Tools      ResolvedValue[string]
 	SideEffect ResolvedValue[string]
+	// ResultContract is the agent's compiled default result contract, if it
+	// declares one.
+	ResultContract *ResultContractRef
 }
 
 // DecisionProfileProjection is the stable, provider-free inspection view of
@@ -401,6 +404,9 @@ func newEffectiveTeamSpec(absDir string, session *TeamSession) (*EffectiveTeamSp
 		}
 		if hasNonEmptyKey(agentRaw, "side_effect") {
 			agentSpec.SideEffect = ResolvedValue[string]{Value: def.SideEffect, Source: SourceAgent, Detail: "explicit frontmatter"}
+		}
+		if ref, ok := session.AgentResultContracts[strings.ToLower(def.Name)]; ok {
+			agentSpec.ResultContract = ref.clone()
 		}
 
 		spec.Agents[key] = agentSpec

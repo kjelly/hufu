@@ -325,6 +325,10 @@ type TaskResult struct {
 	// isSubmittedResultSource below is the single place that decides which
 	// of these count as a genuine structured handoff.
 	Source string `json:"source"`
+	// StructuredPayload is the result-contract payload. It is runtime-owned:
+	// only validateStructuredResultPayload produces it, from the worker's
+	// structured_payload value.
+	StructuredPayload *ResultPayload `json:"structured_payload,omitempty"`
 }
 
 // isSubmittedResultSource reports whether source represents a genuine,
@@ -410,6 +414,9 @@ func (tr *TaskResult) FormatForContext() string {
 	}
 	if tr.Details != "" {
 		sb.WriteString("Detailed Deliverable:\n" + tr.Details + "\n")
+	}
+	if tr.StructuredPayload != nil {
+		sb.WriteString(tr.StructuredPayload.formatForContext())
 	}
 	if tr.Source != "" {
 		fmt.Fprintf(&sb, "Result Source: %s (confidence: %.2f)\n", tr.Source, tr.Confidence)

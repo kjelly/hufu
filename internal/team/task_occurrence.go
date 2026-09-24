@@ -59,6 +59,7 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 		}
 	}
 	copyResult.Artifacts = append([]ArtifactRef(nil), result.Artifacts...)
+	copyResult.StructuredPayload = result.StructuredPayload.clone()
 	copyResult.Evidence = append([]EvidenceRef(nil), result.Evidence...)
 	copyResult.FilesRead = append([]FileRef(nil), result.FilesRead...)
 	copyResult.FilesModified = append([]FileRef(nil), result.FilesModified...)
