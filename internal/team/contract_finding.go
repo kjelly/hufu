@@ -83,6 +83,22 @@ const (
 	FindingWorksetScopeAssertion   = "workset_scope_assertion_missing"
 	FindingLegacyFanOutDeprecated  = "legacy_fanout_deprecated"
 	FindingDecisionEvidenceInvalid = "decision_evidence_invalid"
+	// Action catalog codes. See docs/reference/action-providers.md.
+	FindingActionCatalogIDInvalid               = "action_catalog_id_invalid"
+	FindingActionCatalogEntryInvalid            = "action_catalog_entry_invalid"
+	FindingActionCatalogSideEffectUnsupported   = "action_catalog_side_effect_unsupported"
+	FindingActionCatalogRecoveryInvalid         = "action_catalog_recovery_invalid"
+	FindingActionCatalogRecoveryRequired        = "action_catalog_recovery_required"
+	FindingActionCatalogInputSchemaInvalid      = "action_catalog_input_schema_invalid"
+	FindingActionCatalogOutputSchemaInvalid     = "action_catalog_output_schema_invalid"
+	FindingActionCatalogAgentUnknown            = "action_catalog_agent_unknown"
+	FindingActionCatalogAgentUnreachable        = "action_catalog_agent_unreachable"
+	FindingActionCatalogAgentUnsupported        = "action_catalog_agent_unsupported"
+	FindingActionCatalogAccessInvalid           = "action_catalog_access_invalid"
+	FindingActionCatalogProposerUnreachable     = "action_catalog_proposer_unreachable"
+	FindingActionCatalogInvocationInvalid       = "action_catalog_invocation_invalid"
+	FindingActionCatalogPhaseUnreachable        = "action_catalog_phase_unreachable"
+	FindingActionCatalogToolSequenceUnsupported = "action_catalog_tool_sequence_unsupported"
 	// FindingUnsupportedSchemaVersion reports a readable manifest envelope
 	// whose apiVersion is not supported by this build.
 	FindingUnsupportedSchemaVersion = "unsupported_schema_version"

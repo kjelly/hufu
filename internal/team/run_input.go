@@ -606,17 +606,7 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 	if session == nil {
 		return "", errors.New("run input policy requires a team session")
 	}
-	type providerIdentity struct {
-		Capability string   `json:"capability"`
-		Provider   string   `json:"provider,omitempty"`
-		Runtime    string   `json:"runtime,omitempty"`
-		Source     string   `json:"source,omitempty"`
-		Mode       string   `json:"mode,omitempty"`
-		Command    []string `json:"command,omitempty"`
-		Dir        string   `json:"dir,omitempty"`
-		Timeout    int64    `json:"timeout,omitzero"`
-	}
-	providers := make([]providerIdentity, 0)
+	providers := make([]actionProviderIdentity, 0)
 	seen := make(map[string]struct{})
 	for _, definition := range session.RunInputDefinitions {
 		if definition.Resolver == nil {
@@ -626,19 +616,12 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 		if _, ok := seen[capability]; ok {
 			continue
 		}
-		provider, ok := configuredActionProvider(session.Config.ActionProviders, capability)
+		identity, ok := configuredActionProviderIdentity(session, capability)
 		if !ok {
 			return "", fmt.Errorf("run input resolver capability %q has no action provider", capability)
 		}
 		seen[capability] = struct{}{}
-		providerName := ""
-		if session.ProviderRegistry != nil {
-			providerName = session.ProviderRegistry.ProviderName(capability)
-		}
-		providers = append(providers, providerIdentity{
-			Capability: capability, Provider: providerName, Runtime: provider.Runtime, Source: provider.Source, Mode: provider.Mode,
-			Command: slices.Clone(provider.Command), Dir: provider.Dir, Timeout: provider.Timeout,
-		})
+		providers = append(providers, identity)
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Capability < providers[j].Capability })
 	definitions := cloneRunInputDefinitions(session.RunInputDefinitions)
@@ -650,9 +633,9 @@ func executionRunInputPolicyHash(session *TeamSession) (string, error) {
 		}
 	}
 	encoded, err := json.Marshal(struct {
-		Definitions []RunInputDefinition `json:"definitions"`
-		Providers   []providerIdentity   `json:"providers,omitempty"`
-		Actions     []any                `json:"actions,omitempty"`
+		Definitions []RunInputDefinition     `json:"definitions"`
+		Providers   []actionProviderIdentity `json:"providers,omitempty"`
+		Actions     []any                    `json:"actions,omitempty"`
 	}{definitions, providers, actions})
 	if err != nil {
 		return "", fmt.Errorf("encode run input policy: %w", err)

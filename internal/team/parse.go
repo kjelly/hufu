@@ -63,6 +63,10 @@ type TeamSession struct {
 	// persistent session data so a resumed workflow rebinds only to providers
 	// explicitly registered by the current host process.
 	ProviderRegistry *ProviderRegistry
+	// ActionCatalog is the action catalog frozen at load time; nil when the
+	// team declares none. actionCatalogFindings holds its structural findings.
+	ActionCatalog         *ActionCatalogSnapshot
+	actionCatalogFindings []ContractFinding
 }
 
 type agentFrontmatter struct {
@@ -1589,12 +1593,18 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if len(session.Agents) == 0 {
 		return nil, fmt.Errorf("no valid agent .md files found in %s", absDir)
 	}
+	if err := attachActionCatalog(session, absDir, vars); err != nil {
+		return nil, err
+	}
 	if err := validateRuntimeWorkflowTeam(session, effectiveRegistry); err != nil {
 		return nil, err
 	}
 	loadFindings := append(ValidateTeamTaskContracts(session), ValidateTeamPolicyContracts(session)...)
 	if mode == TeamCompileLint {
 		*diagnostics = append(*diagnostics, loadFindings...)
+		if err := pruneInvalidActionCatalogEntries(session, loadFindings); err != nil {
+			return nil, err
+		}
 	} else if messages := sortedContractFindingMessages(loadFindings); len(messages) > 0 {
 		return nil, fmt.Errorf("team contract validation failed: %s", strings.Join(messages, "; "))
 	}

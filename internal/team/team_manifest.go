@@ -169,22 +169,25 @@ type teamManifestSpecFields struct {
 	Inputs               map[string]runInputDefinitionYAML `yaml:"inputs,omitempty"`
 	// WorkerContextSize is a token budget, not a character count; the YAML
 	// key is kept as-is for backward compatibility.
-	WorkerContextSize       int                                     `yaml:"worker-context-size,omitempty"`
-	ToolsAllowed            interface{}                             `yaml:"tools,omitempty"` // tools.allowed/tools.denied in YAML - string or []string
-	Requirements            agent.ContractRequirements              `yaml:"requires,omitempty"`
-	Delegation              rawDelegationPolicy                     `yaml:"delegation,omitempty"`
-	Preflight               []agent.CapabilityRequirement           `yaml:"preflight,omitempty"`
-	RequiredResources       []agent.RequiredResourceSpec            `yaml:"required-resources,omitempty"`
-	Workflow                agent.WorkflowConfig                    `yaml:"workflow,omitempty"`
-	Policies                agent.WorkflowPolicies                  `yaml:"policies,omitempty"`
-	Capabilities            agent.CapabilityConfig                  `yaml:"capabilities,omitempty"`
-	Verification            agent.VerificationConfig                `yaml:"verification,omitempty"`
-	Retry                   agent.RetryConfig                       `yaml:"retry,omitempty"`
-	Decision                DecisionAuthoringConfig                 `yaml:"decision,omitempty"`
-	Request                 RequestAuthoringConfig                  `yaml:"request,omitempty"`
-	CapabilityRegistry      map[string][]agent.DeclaredCapability   `yaml:"capability-registry,omitempty"`
-	RoutingPolicy           agent.RoutingPolicyConfig               `yaml:"routing-policy,omitempty"`
-	ActionProviders         map[string]agent.ActionProviderConfig   `yaml:"action-providers,omitempty"`
+	WorkerContextSize  int                                   `yaml:"worker-context-size,omitempty"`
+	ToolsAllowed       interface{}                           `yaml:"tools,omitempty"` // tools.allowed/tools.denied in YAML - string or []string
+	Requirements       agent.ContractRequirements            `yaml:"requires,omitempty"`
+	Delegation         rawDelegationPolicy                   `yaml:"delegation,omitempty"`
+	Preflight          []agent.CapabilityRequirement         `yaml:"preflight,omitempty"`
+	RequiredResources  []agent.RequiredResourceSpec          `yaml:"required-resources,omitempty"`
+	Workflow           agent.WorkflowConfig                  `yaml:"workflow,omitempty"`
+	Policies           agent.WorkflowPolicies                `yaml:"policies,omitempty"`
+	Capabilities       agent.CapabilityConfig                `yaml:"capabilities,omitempty"`
+	Verification       agent.VerificationConfig              `yaml:"verification,omitempty"`
+	Retry              agent.RetryConfig                     `yaml:"retry,omitempty"`
+	Decision           DecisionAuthoringConfig               `yaml:"decision,omitempty"`
+	Request            RequestAuthoringConfig                `yaml:"request,omitempty"`
+	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry,omitempty"`
+	RoutingPolicy      agent.RoutingPolicyConfig             `yaml:"routing-policy,omitempty"`
+	ActionProviders    map[string]agent.ActionProviderConfig `yaml:"action-providers,omitempty"`
+	// ActionCatalog stays opaque here so strict decode only checks the
+	// top-level key; loadActionCatalog decodes each entry into a finding.
+	ActionCatalog           map[string]yaml.Node                    `yaml:"action-catalog,omitempty"`
 	SubagentProviderDefault string                                  `yaml:"subagent-provider-default,omitempty"`
 	SubagentProviders       map[string]agent.SubagentProviderConfig `yaml:"subagent-providers,omitempty"`
 	// Kept as an opaque map here because MCP server loading is owned by the

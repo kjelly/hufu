@@ -1308,7 +1308,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   動態 team,worker task 帶 `on_failure` 與 `on-failure-classes: [verification, semantic_rejection]`,
   驗證失敗後 `on_failure` 目標被重設,最多 `max_retries` 次。另加 enabled workflow 的回歸測試確認 FailFast/limit 行為不變。
 
-**WP-0.5 文件修正(E-05、E-06)** — ✅ 已完成(另補 command provider `dir` 相對 process cwd 的說明,E-23)
+**WP-0.5 文件修正(E-05、E-06)** — ✅ 已完成,commit `c09b3b7`(另補 command provider `dir` 相對 process cwd 的說明,E-23)
 
 - `docs/reference/action-providers.md`:
   - 「Binding a provider to a task」範例改成可載入的完整範例(含 `side_effect: none`、`when-goal-contains`、
@@ -1333,7 +1333,14 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   照舊通過。
 - 不在範圍:repair pending 期間呼叫不允許的工具在第 3 次得到 exhausted prompt 後 stream 仍繼續(E-24,記錄)。
 
-### WP-1 Catalog 設定、驗證、snapshot、CLI
+### WP-1 Catalog 設定、驗證、snapshot、CLI — ✅ 已完成
+
+實作紀錄:load-time schema 規則放在 `action_catalog_schema.go`,provider 身分 helper 放在 `action_provider_identity.go`
+(`executionRunInputPolicyHash` 改用它,輸出 bytes 不變)。workflow 必須以 prepare 開始(`normalizeWorkflowPhases`),
+所以 `none` entry 永遠有可派工 phase,`action_catalog_phase_unreachable` 實際只會對「workspace_write 但無 EXECUTE」觸發。
+重名(兩種拼法指向同一 agent)與 propose ⊄ discover 在結構段檢查。Run setup 重檢為 exported
+`ValidateActionCatalogProposers`,由 `cmd/hufu/team_setup.go` 的 `freezeStartupExecutionPolicy` 呼叫。
+
 
 - 新檔 `action_catalog.go`(型別、正規化、hash、限制常數、clone)、`action_catalog_validate.go`(§6 findings)、
   `action_catalog_value.go`(§8)。

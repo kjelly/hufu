@@ -57,6 +57,7 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 	}
 	findings = append(findings, validateRequirements("requires", session.Config.Requirements)...)
 	findings = append(findings, validateWorksetAndActionContracts(session)...)
+	findings = append(findings, validateActionCatalog(session)...)
 
 	workers := reachableWorkers(session)
 	for _, def := range workers {

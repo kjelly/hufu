@@ -45,8 +45,11 @@ type ExecutionPolicySnapshot struct {
 	ResultContracts []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
 	// ExecutionRoutes pins every worker's bound execution route by digest.
 	// It is omitted when no worker binds a route.
-	ExecutionRoutes   []ExecutionRoutePolicySnapshot `json:"execution_routes,omitempty"`
-	ConfigurationHash string                         `json:"configuration_hash"`
+	ExecutionRoutes []ExecutionRoutePolicySnapshot `json:"execution_routes,omitempty"`
+	// ActionCatalogHash pins the team's action catalog, including each entry's
+	// provider identity. It is omitted when a team declares no catalog.
+	ActionCatalogHash string `json:"action_catalog_hash,omitempty"`
+	ConfigurationHash string `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -266,6 +269,9 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	if version == executionPolicySnapshotVersion {
 		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
 		snapshot.ExecutionRoutes = executionPolicyExecutionRoutes(c.session)
+		if c.session.ActionCatalog != nil {
+			snapshot.ActionCatalogHash = c.session.ActionCatalog.Hash
+		}
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,

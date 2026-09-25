@@ -318,8 +318,8 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetFreshSession(startsFresh)
 	coordinator.SetSessionData(sessionData)
-	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
-		return nil, errors.Join(fmt.Errorf("freeze execution policy before provider preflight: %w", err), coordinator.Close())
+	if err := freezeStartupExecutionPolicy(coordinator); err != nil {
+		return nil, errors.Join(err, coordinator.Close())
 	}
 	if err := completeManagedFreshSession(ctx, session); err != nil {
 		return nil, errors.Join(fmt.Errorf("complete rebound workspace fresh-session checkpoint: %w", err), coordinator.Close())
@@ -768,4 +768,17 @@ func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {
 		return result[i].Name < result[j].Name
 	})
 	return result
+}
+
+// freezeStartupExecutionPolicy persists the execution policy and repeats the
+// action catalog proposer check against resolved worker targets. Both run
+// before any provider preflight.
+func freezeStartupExecutionPolicy(coordinator *team.Coordinator) error {
+	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
+		return fmt.Errorf("freeze execution policy before provider preflight: %w", err)
+	}
+	if err := coordinator.ValidateActionCatalogProposers(); err != nil {
+		return fmt.Errorf("validate action catalog proposers: %w", err)
+	}
+	return nil
 }
