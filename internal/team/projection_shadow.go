@@ -306,6 +306,7 @@ func normalizeContextManifests(manifests []ContextInjectionManifest) []ContextIn
 	for i := range manifests {
 		normalized[i] = *cloneContextInjectionManifest(&manifests[i])
 	}
+	sortContextInjectionManifests(normalized)
 	return normalized
 }
 

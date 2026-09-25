@@ -285,13 +285,21 @@ func mergeContextInjectionManifests(existing, incoming []ContextInjectionManifes
 	for _, manifest := range incoming {
 		appendOrReplace(manifest)
 	}
-	sort.SliceStable(merged, func(i, j int) bool {
-		if merged[i].Attempt != merged[j].Attempt {
-			return merged[i].Attempt < merged[j].Attempt
-		}
-		return merged[i].RequestID < merged[j].RequestID
-	})
+	sortContextInjectionManifests(merged)
 	return merged
+}
+
+// sortContextInjectionManifests puts manifests in their canonical order:
+// by attempt, then request ID. Event replay merges manifests in this order,
+// while the live projection appends them as they are written, so every
+// comparison of the two must sort first.
+func sortContextInjectionManifests(manifests []ContextInjectionManifest) {
+	sort.SliceStable(manifests, func(i, j int) bool {
+		if manifests[i].Attempt != manifests[j].Attempt {
+			return manifests[i].Attempt < manifests[j].Attempt
+		}
+		return manifests[i].RequestID < manifests[j].RequestID
+	})
 }
 
 // persistContextManifest checkpoints the content-free attribution boundary
