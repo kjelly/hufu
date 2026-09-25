@@ -1455,7 +1455,7 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - §14.1 `entry.Hash` 與 binding 不符(或 entry 不存在)→ `team_action_catalog_drift`,provider Execute 次數 = 0。
   - `ProposalIDs` 為空 slice 的 binding 經 round-trip 後 `compareTaskDefWithTodoOccurrence` 仍通過。
 
-### WP-6 派工編譯(§11.3、§12、§13) — ✅ 已完成
+### WP-6 派工編譯(§11.3、§12、§13) — ✅ 已完成,commit `7f6ff96`
 
 實作紀錄:全部新邏輯在 `team_action_dispatch.go`(含共用的 `policyViolationResponse`)。另加拒絕碼 `team_action_task_invalid`
 (允許欄位型別錯誤、重複 key、`catalog_action` 內未知欄位)。§12.3 的 entry 層判斷(#2/#3/#6/#7/#11/#12)是
@@ -1495,7 +1495,11 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
     workflow 模式 schema 仍 < 12000 bytes;32-entry catalog < 16000 bytes;33 個以上省略 enum;無 catalog 時 schema 與
     baseline 相同;initial batch pending 時沒有 `catalog_action`。
 
-### WP-7 Workflow team(§16、§11.3 enum 聯集)
+### WP-7 Workflow team(§16、§11.3 enum 聯集) — ✅ 已完成
+
+實作紀錄:`validateCatalogTaskLocked`、`catalogWorkflowAgents`、`unionAgentEnum` 在 `runtime_workflow_actions.go`;
+`runtime_workflow.go` 只加呼叫與「本批含一般 task 才要求派齊 static contract」的旗標。
+
 
 - `runtime_workflow.go` `validateTasks` catalog 分支(邏輯放新檔,大檔只加呼叫);`Info()` agent enum 聯集;
   `action_catalog_phase_unreachable` 已在 WP-1。

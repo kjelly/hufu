@@ -1,7 +1,9 @@
 package team
 
 import (
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -54,4 +56,51 @@ func runtimeActionEventPhase(w *runtimeWorkflow) string {
 		return ""
 	}
 	return string(w.State())
+}
+
+// validateCatalogTaskLocked admits a catalog task into the current phase:
+// every entry in EXECUTE, only side-effect-free entries in PREPARE. Catalog
+// tasks are not phase contracts, so the phase agent, static contract, and
+// dispatch-once checks do not apply. The caller holds w.mu.
+func (w *runtimeWorkflow) validateCatalogTaskLocked(task TaskDef) error {
+	if task.Phase != w.state {
+		return fmt.Errorf("workflow phase %s only accepts %s tasks; catalog action %q is bound to %s", w.state, w.state, task.CatalogAction.ActionID, task.Phase)
+	}
+	if w.state == PhaseExecute || w.state == PhasePrepare && task.SideEffect == SideEffectNone {
+		return nil
+	}
+	return fmt.Errorf("catalog action %q (%s) cannot run in workflow phase %s", task.CatalogAction.ActionID, task.SideEffect, w.state)
+}
+
+// catalogWorkflowAgents returns the executing agents of the catalog entries
+// the current phase may dispatch, for the agent tool's agent enum.
+func (c *Coordinator) catalogWorkflowAgents() []string {
+	if c == nil || c.session == nil || c.session.ActionCatalog == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+		return nil
+	}
+	var agents []string
+	for _, entry := range c.session.ActionCatalog.Entries {
+		if _, ok := c.catalogDispatchPhase(entry); ok && !slices.Contains(agents, entry.Agent) {
+			agents = append(agents, entry.Agent)
+		}
+	}
+	return agents
+}
+
+// unionAgentEnum adds names to the enum of an agent schema property,
+// keeping it sorted and unique.
+func unionAgentEnum(property any, names []string) {
+	agentProperty, ok := property.(map[string]any)
+	if !ok || len(names) == 0 {
+		return
+	}
+	current, _ := agentProperty["enum"].([]string)
+	merged := slices.Clone(current)
+	for _, name := range names {
+		if !slices.Contains(merged, name) {
+			merged = append(merged, name)
+		}
+	}
+	slices.Sort(merged)
+	agentProperty["enum"] = merged
 }

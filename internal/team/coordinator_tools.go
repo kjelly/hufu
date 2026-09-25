@@ -43,6 +43,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	}
 	if catalogAction := t.coordinator.catalogActionSchemaProperty(); catalogAction != nil {
 		taskProperties["catalog_action"] = catalogAction
+		unionAgentEnum(taskProperties["agent"], t.coordinator.catalogWorkflowAgents())
 	}
 	taskSchema := map[string]any{
 		"type":                 "object",

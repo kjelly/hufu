@@ -495,7 +495,15 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 	expectedContracts := w.phaseContracts[w.state]
 	optionalContracts := w.phaseOptionalContracts[w.state]
 	providedContracts := make(map[string]bool, len(tasks))
+	ordinary := false
 	for _, task := range tasks {
+		if task.CatalogAction != nil {
+			if err := w.validateCatalogTaskLocked(task); err != nil {
+				return err
+			}
+			continue
+		}
+		ordinary = true
 		if task.Phase != w.state {
 			return fmt.Errorf("workflow phase %s only accepts %s tasks; task for agent %q is bound to %s", w.state, w.state, task.Agent, task.Phase)
 		}
@@ -514,7 +522,7 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 		providedContracts[task.ContractID] = true
 	}
 	for contractID := range expectedContracts {
-		if !providedContracts[contractID] && w.results[w.state].Status != PhaseStatusSuccess {
+		if ordinary && !providedContracts[contractID] && w.results[w.state].Status != PhaseStatusSuccess {
 			return fmt.Errorf("workflow phase %s must dispatch static contract %q", w.state, contractID)
 		}
 	}
