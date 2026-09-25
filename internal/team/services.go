@@ -776,6 +776,9 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: protocol tool name %q collides with a concrete handler", reserved.name)
 		}
 	}
+	if err := r.c.teamActionToolCollision(concrete); err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
+	}
 	concrete = removeToolNames(concrete, submitResultToolName, "submit_plan")
 	if static.ResultRequired {
 		concrete = append(concrete, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
@@ -783,6 +786,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if static.PlanRequired {
 		concrete = append(concrete, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
 	}
+	concrete = append(concrete, r.c.workerTeamActionTools(ctx, def, static.Names, req)...)
 	concrete = filterConcreteToolsByNames(concrete, static.Names)
 	concrete, dynamicTargets, err := projectDynamicToolGateway(r.c, concrete, baseTools, r.c.managerMCPDescriptors(), dynamicAuthorization, mode, static.EffectiveSequence)
 	if err != nil {

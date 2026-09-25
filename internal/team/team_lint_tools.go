@@ -23,6 +23,9 @@ func lintOfflineTools(session *TeamSession, sources *TeamSourceIndex, policy Eff
 	}
 	knownBase := append(tools.BuiltinToolNames(false, false), offlineRuntimeToolNames...)
 	knownRegistry := append(slices.Clone(knownBase), offlineProtocolToolNames...)
+	if session.ActionCatalog != nil {
+		knownRegistry = append(knownRegistry, teamActionToolNames...)
+	}
 	var findings []TeamLintFinding
 	for _, def := range authoredAgentDefinitions(session, sources) {
 		known := append(slices.Clone(knownBase), localMCPToolNames(def)...)

@@ -356,6 +356,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+	ctx = withDirectAgentInvocation(ctx)
 	originalCancellation := invocationContextError(ctx)
 	executionParent := ctx
 	if originalCancellation != nil {
@@ -1173,6 +1174,9 @@ var coordinatorCoreToolNames = map[string]bool{
 	"approve_plan":   true,
 	"modify_plan":    true,
 	"reject_plan":    true,
+	// Added only when the team declares an action catalog.
+	teamActionListToolName: true,
+	teamActionGetToolName:  true,
 }
 
 // coordinatorAllowedToolNames is retained for policy tests and static
@@ -1198,6 +1202,7 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 			&finishTool{coordinator: c},
 			&loadSkillTool{coordinator: c},
 		}
+		orchTools = append(orchTools, c.coordinatorTeamActionTools()...)
 		for _, t := range c.coreTools {
 			name := t.Info().Name
 			if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
@@ -1218,6 +1223,7 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 		&rejectPlanTool{coordinator: c},
 		&loadSkillTool{coordinator: c},
 	}
+	orchTools = append(orchTools, c.coordinatorTeamActionTools()...)
 	for _, t := range c.coreTools {
 		name := t.Info().Name
 		if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
@@ -1287,6 +1293,9 @@ var coordinatorInitialReadOnlyTools = map[string]bool{
 	"glob":      true,
 	"ls":        true,
 	"team_info": true,
+
+	teamActionListToolName: true,
+	teamActionGetToolName:  true,
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {

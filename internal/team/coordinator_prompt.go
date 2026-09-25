@@ -104,6 +104,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
 	c.appendRuntimeWorkflowPrompt(&b)
+	c.appendActionCatalogPrompt(&b)
 	c.appendCanonicalRunInputsPrompt(&b)
 
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")

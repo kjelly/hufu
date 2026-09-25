@@ -33,7 +33,8 @@
 - **實作 baseline(2026-09-25,branch `feat/team-action-catalog` 起點 `42ffd53`)**:`go build ./...`、`go vet ./...` 通過;
   `go test ./...` 只有 `TestCoordinatorFinalizeTaskTerminalResourcesClosesLeakAfterAcceptedTerminalResult` 在第一次全套件
   執行時失敗一次(terminal cleanup 在負載下偶發),單獨 `-count=10`、`-race -count=40` 與之後的全套件重跑都通過,
-  視為既存 flake,與本功能無關。
+  視為既存 flake,與本功能無關。WP-3 全套件執行時 `TestCoordinatorTransferTerminalRejectsUnsafeRequests` 也偶發失敗一次
+  (同為 terminal session 測試),單獨 `-race -count=30` 與全套件重跑都通過。
 
 ### 0.1 v1 → v2 主要變更
 
@@ -1374,7 +1375,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   - CLI text/json 輸出(不含 provider command/source)。
   - `hufu team migrate` 對含 catalog 的 team round-trip 不遺失、不含空值。
 
-### WP-2 動態 team 的 action runtime(§15) — ✅ 已完成
+### WP-2 動態 team 的 action runtime(§15) — ✅ 已完成,commit `a2a4748`
 
 實作紀錄:`ActionsEnabled`、`runtimeWorkspace`、`enableCatalogActions` 與 `runtimeActionEventPhase` 放在新檔
 `runtime_workflow_actions.go`。有 event store 時 `executeTask` 會從 durable Todo 重建 TaskDef(`CatalogAction` 要到 WP-5 才進
@@ -1396,7 +1397,14 @@ TodoItem),所以 WP-2 測試直接呼叫 `executeRuntimeAction`(precedent `wp03_
   - Workflow team 既有 action 測試全數照舊。
   - 動態 team 無 catalog 時,worker tool-call 仍不發 action_* 事件。
 
-### WP-3 唯讀工具(§9.1-9.6、§11.1-11.2)
+### WP-3 唯讀工具(§9.1-9.6、§11.1-11.2) — ✅ 已完成
+
+實作紀錄:worker 工具在 `team_action_tools.go`,coordinator 工具與 prompt 在 `team_action_coordinator_tools.go`。
+Direct agent 以 `RunDirectAgent` 開頭設定的 context 標記排除;extra-model leaf 與缺 Todo 時不建構 handler。
+Coordinator 版 `dispatchable_now`/`blocked_reason` 留給 WP-6(與 §12.3 共用判斷函式),此階段不輸出。Lint 只在 team 有
+catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它只服務 `requires.tools`,且沒有 session 可判斷 catalog)。
+可選的 `dynamic_tool_authorization.go` 排序未做。
+
 
 - 新檔 `team_action_tools.go`:worker 版 list/get、coordinator 版 list/get。此階段 coordinator 版的
   proposal 欄位回空陣列、`invocations_used` 回 0;WP-4 接上 proposal,WP-6 接上次數計算。

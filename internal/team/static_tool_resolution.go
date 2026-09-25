@@ -118,6 +118,14 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 		result.Names = append(result.Names, "submit_plan")
 		result.Tools["submit_plan"] = ToolAvailable
 	}
+	if !result.ResultOnly && !input.Task.Sidecar {
+		for _, name := range staticTeamActionToolNames(input.Session, input.Agent) {
+			if !denied[name] {
+				result.Names = append(result.Names, name)
+				result.Tools[name] = ToolAvailable
+			}
+		}
+	}
 	result.Names = dedupeToolNames(result.Names)
 	result.EffectiveSequence = slices.Clone(input.Task.Execution.ToolSequence)
 	if result.ResultOnly {
