@@ -680,10 +680,12 @@ type Coordinator struct {
 	occurrenceControllers   map[string]*taskOccurrenceController
 	stepReceipts            *ExecutionStepReceiptRegistry
 	taskAttempts            map[string]int
-	taskAttemptsMu          sync.RWMutex
-	toolPolicyVerdicts      map[string]string
-	toolPolicyVerdictsMu    sync.Mutex
-	structuredStepRunner    StructuredStepRunner
+	// actionProposals is the session's action catalog proposal index.
+	actionProposals      teamActionProposalIndex
+	taskAttemptsMu       sync.RWMutex
+	toolPolicyVerdicts   map[string]string
+	toolPolicyVerdictsMu sync.Mutex
+	structuredStepRunner StructuredStepRunner
 
 	// executionEvents is initialized for each top-level Run/Continue call and
 	// receives attempt-level telemetry for `hufu improve`.

@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -31,13 +32,6 @@ type teamActionProposalView struct {
 	Rationale       string                  `json:"rationale"`
 	ExpectedOutcome string                  `json:"expected_outcome,omitempty"`
 	EvidenceRefs    []TeamActionEvidenceRef `json:"evidence_refs,omitempty"`
-}
-
-// TeamActionEvidenceRef is an artifact a proposal cites as evidence.
-type TeamActionEvidenceRef struct {
-	ID             string `json:"id"`
-	SHA256         string `json:"sha256"`
-	ProducerTaskID string `json:"producer_task_id"`
 }
 
 type coordinatorTeamActionSummary struct {
@@ -82,15 +76,40 @@ func (c *Coordinator) coordinatorTeamActionSummary(entry ActionCatalogEntry) coo
 // Invocation accounting is added with catalog dispatch.
 func (c *Coordinator) teamActionInvocationsUsed(string) int { return 0 }
 
-// teamActionProposalCounts counts an action's recorded proposals. Proposals
-// are added with team_action_propose.
-func (c *Coordinator) teamActionProposalCounts(string) teamActionProposalCounts {
-	return teamActionProposalCounts{}
+// teamActionProposalCounts counts an action's recorded proposals by
+// assessment.
+func (c *Coordinator) teamActionProposalCounts(actionID string) teamActionProposalCounts {
+	var counts teamActionProposalCounts
+	for _, proposal := range c.proposalsForAction(actionID) {
+		switch proposal.Assessment {
+		case "recommended":
+			counts.Recommended++
+		case "candidate":
+			counts.Candidate++
+		case "defer":
+			counts.Defer++
+		case "reject":
+			counts.Reject++
+		}
+	}
+	return counts
 }
 
 // teamActionProposalViews returns an action's newest proposals first.
-func (c *Coordinator) teamActionProposalViews(string) []teamActionProposalView {
-	return []teamActionProposalView{}
+func (c *Coordinator) teamActionProposalViews(actionID string) []teamActionProposalView {
+	views := make([]teamActionProposalView, 0)
+	for _, proposal := range c.proposalsForAction(actionID) {
+		var arguments any
+		if err := json.Unmarshal(proposal.Arguments, &arguments); err != nil {
+			arguments = nil
+		}
+		views = append(views, teamActionProposalView{
+			ProposalID: proposal.ProposalID, Agent: proposal.Agent, TaskID: proposal.TaskID, Assessment: proposal.Assessment,
+			Arguments: arguments, ArgumentsHash: proposal.ArgumentsHash, EntryHash: proposal.EntryHash, Rationale: proposal.Rationale,
+			ExpectedOutcome: proposal.ExpectedOutcome, EvidenceRefs: proposal.EvidenceRefs,
+		})
+	}
+	return views
 }
 
 type coordinatorTeamActionListTool struct{ coordinator *Coordinator }

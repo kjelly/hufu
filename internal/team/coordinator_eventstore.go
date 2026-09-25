@@ -150,12 +150,15 @@ func (c *Coordinator) initEventStore() {
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
 	c.resetContextWindowTelemetrySummary()
+	c.resetTeamActionProposals()
 	// Hydrate the active branch during every normal startup. Pending terminal
 	// reconciliation is a recovery concern and must not also replay telemetry.
 	if events, readErr := es.ReadEvents(); readErr != nil {
 		c.markSessionRecovery("event-store telemetry hydration read failed: " + utils.RedactSecrets(readErr.Error()))
 	} else {
-		c.hydrateContextWindowTelemetry(FilterEventsForBranch(events, st, activeBranch))
+		branchEvents := FilterEventsForBranch(events, st, activeBranch)
+		c.hydrateContextWindowTelemetry(branchEvents)
+		c.rebuildTeamActionProposals(branchEvents)
 	}
 	// Reconcile and validate the canonical event binding before publishing any
 	// restored history to the coordinator/provider path.

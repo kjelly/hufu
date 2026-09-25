@@ -252,7 +252,9 @@ func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName, to
 	if discipline == nil {
 		return ""
 	}
-	if isReadOnlyToolCall(toolName, toolInput) {
+	// A proposal records a recommendation and commits nothing, but it is not
+	// a read-only call for retry and fallback purposes.
+	if isReadOnlyToolCall(toolName, toolInput) || normalizedToolName(toolName) == teamActionProposeToolName {
 		return ""
 	}
 	tool := normalizedToolName(toolName)

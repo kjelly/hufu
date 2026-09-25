@@ -25,19 +25,27 @@ const (
 )
 
 // staticTeamActionToolNames returns the catalog protocol tools def may use:
-// list and get for any entry it can discover. It depends only on the session
-// and the agent, so offline lint resolves the same surface as runtime.
+// list and get for any entry it can discover, and propose for any entry it
+// can propose. It depends only on the session and the agent, so offline lint
+// resolves the same surface as runtime.
 func staticTeamActionToolNames(session *TeamSession, def *agent.AgentDef) []string {
 	if session == nil || session.ActionCatalog == nil || def == nil {
 		return nil
 	}
 	name := normalizedName(def.Name)
+	discover, propose := false, false
 	for _, entry := range session.ActionCatalog.Entries {
-		if slices.Contains(entry.Discover, name) {
-			return []string{teamActionListToolName, teamActionGetToolName}
-		}
+		discover = discover || slices.Contains(entry.Discover, name)
+		propose = propose || slices.Contains(entry.Propose, name)
 	}
-	return nil
+	var names []string
+	if discover {
+		names = append(names, teamActionListToolName, teamActionGetToolName)
+	}
+	if propose {
+		names = append(names, teamActionProposeToolName)
+	}
+	return names
 }
 
 // discoverableEntries returns the entries agentName may discover, by ID.
@@ -85,6 +93,9 @@ func (c *Coordinator) workerTeamActionTools(ctx context.Context, def *agent.Agen
 	}
 	if slices.Contains(names, teamActionGetToolName) {
 		built = append(built, &teamActionGetTool{coordinator: c, todoID: req.TodoID, agent: agentName})
+	}
+	if slices.Contains(names, teamActionProposeToolName) {
+		built = append(built, &teamActionProposeTool{coordinator: c, todoID: req.TodoID, agent: agentName})
 	}
 	return built
 }

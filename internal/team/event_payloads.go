@@ -108,6 +108,8 @@ func ValidateEventPayload(event RunEvent) error {
 		}
 	case EventRunFinished:
 		return validateRunFinishedEventPayload(event)
+	case EventTeamActionProposed:
+		return validateTeamActionProposedPayload(event)
 	case EventRunInputsResolved:
 		var snapshot RunInputSnapshot
 		decoder := json.NewDecoder(bytes.NewReader(event.Payload))

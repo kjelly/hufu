@@ -102,6 +102,9 @@ const (
 	// EventExecutionFallbackDecided records that a route-bound attempt's
 	// provider failure moves the next attempt to the route's next candidate.
 	EventExecutionFallbackDecided EventType = "execution_fallback_decided"
+	// EventTeamActionProposed records a worker's typed recommendation that the
+	// coordinator run one catalog action with specific arguments.
+	EventTeamActionProposed EventType = "team_action_proposed"
 )
 
 func (e EventType) String() string { return string(e) }
@@ -132,7 +135,7 @@ func IsKnownEventType(eventType string) bool {
 		EventResourceLocked, EventWorkspaceSnapshotCommitted,
 		EventAttemptWorkspacePrepared, EventAttemptWorkspaceApplyStarted, EventAttemptWorkspaceApplyConflicted,
 		EventAttemptWorkspaceApplied, EventAttemptWorkspaceDiscarded, EventAttemptWorkspaceOrphanRemoved,
-		EventExecutionFallbackDecided:
+		EventExecutionFallbackDecided, EventTeamActionProposed:
 		return true
 	default:
 		return false

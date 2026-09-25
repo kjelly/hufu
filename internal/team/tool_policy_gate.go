@@ -422,7 +422,7 @@ func readOnlyToolMutation(name, input string) bool {
 			return false
 		}
 	}
-	if (tools.IsReadOnlyObservationTool(name) && name != "bash") || name == "submit_result" || name == "submit_plan" || name == "finish" {
+	if (tools.IsReadOnlyObservationTool(name) && name != "bash") || name == "submit_result" || name == "submit_plan" || name == "finish" || name == teamActionProposeToolName {
 		return false
 	}
 	return true

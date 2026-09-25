@@ -1397,7 +1397,7 @@ TodoItem),所以 WP-2 測試直接呼叫 `executeRuntimeAction`(precedent `wp03_
   - Workflow team 既有 action 測試全數照舊。
   - 動態 team 無 catalog 時,worker tool-call 仍不發 action_* 事件。
 
-### WP-3 唯讀工具(§9.1-9.6、§11.1-11.2) — ✅ 已完成
+### WP-3 唯讀工具(§9.1-9.6、§11.1-11.2) — ✅ 已完成,commit `9e7e5eb`
 
 實作紀錄:worker 工具在 `team_action_tools.go`,coordinator 工具與 prompt 在 `team_action_coordinator_tools.go`。
 Direct agent 以 `RunDirectAgent` 開頭設定的 context 標記排除;extra-model leaf 與缺 Todo 時不建構 handler。
@@ -1418,7 +1418,12 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - 無 catalog 時 worker/coordinator 工具面與 baseline 相同(S12);`TestBuildOrchestratorToolsAreRuntimeAllowed` 通過。
   - Lint:`tools:` 或 prompt 提到這些名稱不報 `declared_tool_missing`/`prompt_unknown_tool`。
 
-### WP-4 Proposal(§9.7、§10)
+### WP-4 Proposal(§9.7、§10) — ✅ 已完成
+
+實作紀錄:全部在新檔 `team_action_proposal.go`(`EventTeamActionProposed` 常數放 `event_types.go`)。Append 失敗回
+`team_action_proposal_append_failed`,另有 `team_action_request_invalid`(未知欄位、assessment 或空 rationale)。
+`durableBranchID` 在沒有 `eventStore` 時回空字串(D17),所以只有自訂 journal 的 coordinator 會得到 `team_action_journal_required`。
+
 
 - 新檔 `team_action_proposal.go`:propose 工具、payload、append、index、重建;`c.durableBranchID()` helper(D17)在此 WP 建立
   (WP-6 的 invocation ID 也使用它)。
