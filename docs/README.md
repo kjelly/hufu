@@ -69,6 +69,10 @@ to re-create an abstraction that already exists in the runtime.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.
+- [Team action catalog](architecture/team-action-catalog.md) — draft
+  implementation plan for configuration-owned actions that workers propose and
+  the coordinator dispatches; code and tests remain authoritative for
+  implementation status.
 
 ### Guides and references
 
