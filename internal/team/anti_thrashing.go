@@ -344,9 +344,29 @@ func (s *AntiThrashingState) blocksTask(task TaskDef, item *TodoItem) bool {
 	// including future un-fingerprinted candidate tasks whose
 	// (component, operation) prefix matches. Refs:
 	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
-	if s.blockReasonSystemic(task, item) {
-		return true
+	return s.blockReasonSystemic(task, item) || s.blocksTaskByLimits(task, item)
+}
+
+// dispatchBlock reports whether dispatch of task is blocked and with which
+// disposition. A block that comes only from an escalated systemic scope
+// carries that scope's class-derived disposition (§6.2); any other limit
+// needs a human.
+func (s *AntiThrashingState) dispatchBlock(task TaskDef, item *TodoItem) (bool, RetryDisposition) {
+	if !s.HardBlocked {
+		return false, ""
 	}
+	if s.blocksTaskByLimits(task, item) {
+		return true, NeedsHuman
+	}
+	if s.blockReasonSystemic(task, item) {
+		return true, s.systemicBlockDisposition(task, item)
+	}
+	return false, ""
+}
+
+// blocksTaskByLimits applies every anti-thrashing block except the systemic
+// scope: blocked fingerprints, criteria, and task-kind scopes.
+func (s *AntiThrashingState) blocksTaskByLimits(task TaskDef, item *TodoItem) bool {
 	if item != nil {
 		for _, fp := range item.FailureFingerprints {
 			if fp.CriterionID != "" && !taskAdvancesCriterion(task, fp.CriterionID) {
@@ -526,7 +546,7 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 				s.RepairsByCriterion[criterion] += repairAttempts
 			}
 		}
-		for _, fp := range item.FailureFingerprints {
+		for _, fp := range countedFailureFingerprints(item) {
 			if fp.Digest == "" {
 				continue
 			}
@@ -595,7 +615,7 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 		if item == nil {
 			continue
 		}
-		for _, fp := range item.FailureFingerprints {
+		for _, fp := range countedFailureFingerprints(item) {
 			if fp.Digest == "" {
 				continue
 			}
@@ -624,6 +644,30 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 	// systemic_scope.go). Refs:
 	// docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 	s.applySystemicThreshold(limits)
+}
+
+// countedFailureFingerprints returns the failures of item that still count
+// toward anti-thrashing limits. A task that is not bound to an acceptance
+// criterion and that failed and then succeeded on a later attempt recovered:
+// its failures stay in its history but no longer count, so only tasks that
+// are still failing drive the same-fingerprint and systemic limits. Failure
+// evidence tied to an acceptance criterion keeps counting after the task
+// completes, because the criterion can still be failing; criterion progress
+// (resetAfterCriterionProgress) is what clears it.
+func countedFailureFingerprints(item *TodoItem) []FailureFingerprint {
+	if item == nil {
+		return nil
+	}
+	if item.Status != TaskDone || len(item.Advances) > 0 {
+		return item.FailureFingerprints
+	}
+	counted := make([]FailureFingerprint, 0, len(item.FailureFingerprints))
+	for _, fp := range item.FailureFingerprints {
+		if strings.TrimSpace(fp.CriterionID) != "" {
+			counted = append(counted, fp)
+		}
+	}
+	return counted
 }
 
 func (s *AntiThrashingState) recordDiagnostic(item *TodoItem) bool {

@@ -287,12 +287,8 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if s.resourceConflict(i) {
 			continue
 		}
-		if s.coord.antiThrashingBlocksTask(t, s.todoItems[i]) {
-			s.states[i] = TaskBlocked
-			if item := s.todoItems[i]; item != nil {
-				detail := "anti-thrashing limit reached for this task's scope; strategy change or human review required"
-				s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
-			}
+		if blocked, disposition := s.coord.antiThrashingDispatchBlock(t, s.todoItems[i]); blocked {
+			s.blockDispatch(i, disposition)
 			continue
 		}
 		teamSlot, acquired := tryAcquireSem(s.sem)
@@ -374,6 +370,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if res.err == nil {
 		s.results[idx] = res
 		s.states[idx] = TaskDone
+		s.coord.forgetRecoveredFailures(res.todoID)
 		// A worker can complete successfully while making no progress toward
 		// its referenced criteria. Re-evaluate cached/sidecar completions here
 		// as well as in executeTask, then route a still-failed criterion to a
@@ -1118,4 +1115,27 @@ func detectTaskCycle(tasks []TaskDef) bool {
 		}
 	}
 	return false
+}
+
+// blockDispatch records a task that anti-thrashing stopped before dispatch.
+// A replan_required block (an escalated systemic scope whose class allows
+// replanning) fails the task without forcing wrap-up, so the coordinator
+// receives the reason and can change approach; any other block needs a human
+// and stops the run as before. The coordinator sees the reason in either case.
+func (s *dagScheduler) blockDispatch(i int, disposition RetryDisposition) {
+	detail := "anti-thrashing limit reached for this task's scope; strategy change or human review required"
+	status := TaskBlocked
+	if disposition == ReplanRequired {
+		detail = "systemic defect escalated for this task's scope (replan_required); dispatch a different approach or agent instead of repeating this task"
+		status = TaskError
+	} else {
+		disposition = NeedsHuman
+	}
+	s.states[i] = status
+	item := s.todoItems[i]
+	if item == nil {
+		return
+	}
+	s.coord.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, disposition, FailurePolicy, status)
+	s.results[i] = agentTaskResult{idx: i, agentName: s.tasks[i].Agent, todoID: item.ID, task: s.taskDesc(i), err: fmt.Errorf("%s", detail)}
 }

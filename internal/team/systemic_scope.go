@@ -69,10 +69,11 @@ func (s *AntiThrashingState) systemicTaskCount(scopeKey string) int {
 // 派工). Returns true only on the threshold-crossing call that first
 // escalates this scope.
 //
-// The escalation is irreversible for the run: once a systemic defect is
-// declared, dispatch to that scope is blocked even if one of the
-// contributing tasks later makes criterion progress (a systemic defect
-// is a property of the system, not of a single criterion). Refs:
+// Criterion progress does not lift an escalation (a systemic defect is a
+// property of the system, not of a single criterion). A contributing task
+// that later succeeds does: it no longer counts as failing, and the next
+// rebuild withdraws the escalation if fewer than MaxSystemicFailureTasks
+// failing tasks remain. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func (s *AntiThrashingState) recordSystemic(item *TodoItem, fp FailureFingerprint, limits ReliabilityConfig) bool {
 	if limits.MaxSystemicFailureTasks <= 0 {
@@ -208,4 +209,32 @@ func (s *AntiThrashingState) applySystemicThreshold(limits ReliabilityConfig) {
 			s.HardBlocked = true
 		}
 	}
+}
+
+// systemicBlockDisposition returns the disposition for a dispatch blocked by
+// escalated systemic scopes: needs_human when any matching scope's class
+// needs a human, otherwise replan_required, so the coordinator can change
+// approach instead of ending the run.
+func (s *AntiThrashingState) systemicBlockDisposition(task TaskDef, item *TodoItem) RetryDisposition {
+	component, operation := strings.TrimSpace(task.Agent), stableOperation(item)
+	fingerprinted := make(map[string]bool)
+	if item != nil {
+		for _, fp := range item.FailureFingerprints {
+			fingerprinted[systemicScopeKey(fp)] = true
+		}
+	}
+	disposition := ReplanRequired
+	for key := range s.BlockedSystemicScopes {
+		parts := strings.SplitN(key, "\x00", 4)
+		if len(parts) < 3 {
+			return NeedsHuman
+		}
+		if !fingerprinted[key] && (parts[0] != component || parts[1] != operation) {
+			continue
+		}
+		if SystemicDispositionForClass(TaskFailureClass(parts[2])) == string(NeedsHuman) {
+			return NeedsHuman
+		}
+	}
+	return disposition
 }

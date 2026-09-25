@@ -558,6 +558,26 @@ func (c *Coordinator) antiThrashingBlocksTask(task TaskDef, item *TodoItem) bool
 	return c.antiThrashing.blocksTask(task, item)
 }
 
+// antiThrashingDispatchBlock reports whether the scheduler must not dispatch
+// task, and the disposition to record for it.
+func (c *Coordinator) antiThrashingDispatchBlock(task TaskDef, item *TodoItem) (bool, RetryDisposition) {
+	if c == nil {
+		return false, ""
+	}
+	c.metricsMu.RLock()
+	defer c.metricsMu.RUnlock()
+	return c.antiThrashing.dispatchBlock(task, item)
+}
+
+// forgetRecoveredFailures rebuilds anti-thrashing state after a task that had
+// failed completes successfully, so its earlier criterion-free failures stop
+// counting toward the same-fingerprint and systemic limits.
+func (c *Coordinator) forgetRecoveredFailures(todoID string) {
+	if item := c.todoItemByID(todoID); item != nil && item.Status == TaskDone && len(item.FailureFingerprints) > 0 {
+		c.rebuildAntiThrashingState()
+	}
+}
+
 func (c *Coordinator) rebuildAntiThrashingState() {
 	if c == nil || c.taskTracker == nil {
 		return

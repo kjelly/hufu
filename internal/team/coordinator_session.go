@@ -1195,6 +1195,8 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			c.emitEvent("recovery_decision", "coordinator", it.ID, map[string]interface{}{"policy": string(pol), "decision": "unknown_policy_blocked"})
 		}
 	}
+	// A resumed task that completed no longer counts as failing.
+	c.rebuildAntiThrashingState()
 	return count, firstErr
 }
 
