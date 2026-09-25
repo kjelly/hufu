@@ -1157,7 +1157,7 @@ retryLoop:
 			}))
 
 			if c.workerAgentOverride != nil {
-				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing)
+				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing, c.planSubmissionStop(task, todoID)...)
 			} else {
 				// The durable target was admitted before task_created. All normal,
 				// retry, and resume attempts resolve it through the unified registry;
@@ -4665,9 +4665,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// (new transcript, redo every tool call) that protocol failure would
 	// otherwise require. Gated on RequiresResult: a task that is happy with a
 	// plain-text answer ending a turn with no tool call is simply done, not
-	// stalled, and must never be nudged.
+	// stalled, and must never be nudged. Neither is a planning worker that has
+	// submitted its plan: the nudge would have it execute before review.
 	requiresResult, _ := ctx.Value(taskRequiresResultKey{}).(bool)
-	if err == nil && result != nil && todoID != "" && requiresResult && c.GetTaskResult(todoID) == nil && stalledWithoutToolCall(result.Steps) {
+	if err == nil && result != nil && todoID != "" && requiresResult && c.GetTaskResult(todoID) == nil && !c.planSubmittedFor(todoID) && stalledWithoutToolCall(result.Steps) {
 		// A worker that already exhausted its step budget is handled by the
 		// existing wrap-up/finalization path (PrepareStep's stepBudgetCheckpoint
 		// above); nudging here would just add steps beyond the budget it was

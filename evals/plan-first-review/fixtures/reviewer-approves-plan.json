@@ -13,12 +13,6 @@
       }
     },
     {
-      "content": "Plan submitted; waiting for review."
-    },
-    {
-      "content": "The plan is awaiting review; nothing else to do yet."
-    },
-    {
       "tool_call": {
         "name": "approve_plan",
         "arguments": "{\"todo_id\": \"1\"}"

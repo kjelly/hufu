@@ -68,6 +68,32 @@ func (t *submitPlanTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	return fantasy.NewTextResponse("Plan submitted. Await coordinator review."), nil
 }
 
+// planSubmittedFor reports whether the worker for todoID has submitted a plan
+// that is still waiting for review. An approved plan executes under the
+// "approved" (or "modified") status, so this is true only for the planning
+// phase that just ended.
+func (c *Coordinator) planSubmittedFor(todoID string) bool {
+	if c == nil || todoID == "" {
+		return false
+	}
+	c.pendingPlansMu.Lock()
+	defer c.pendingPlansMu.Unlock()
+	entry := c.pendingPlans[todoID]
+	return entry != nil && entry.Status == "submitted"
+}
+
+// planSubmissionStop ends a planning-phase worker stream as soon as its plan
+// is submitted. The planning worker holds its full tool set, so any step it
+// takes after submit_plan executes work before the plan has been reviewed.
+func (c *Coordinator) planSubmissionStop(task TaskDef, todoID string) []fantasy.StopCondition {
+	if !task.PlanFirst || task.PlanID != "" {
+		return nil
+	}
+	return []fantasy.StopCondition{func([]fantasy.StepResult) bool {
+		return c.planSubmittedFor(todoID)
+	}}
+}
+
 type approvePlanTool struct {
 	coordinator *Coordinator
 }

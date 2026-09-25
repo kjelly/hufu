@@ -7,7 +7,9 @@ cases:
   # plan reviewer approves it with its own approve_plan tool, and the worker
   # then executes. The reviewer runs inside the coordinator's context, whose
   # plan-mode tool surface omits the plan tools, so it must be authorized for
-  # its own tools rather than the coordinator's.
+  # its own tools rather than the coordinator's. The worker's planning stream
+  # ends at submit_plan: a worker that kept going would consume the reviewer's
+  # approve_plan step, and in a real run it executed its task before review.
   - id: reviewer-approves-plan
     prompt: "Say hello to the user."
     provider-fixture: fixtures/reviewer-approves-plan.json

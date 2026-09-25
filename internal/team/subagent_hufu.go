@@ -165,7 +165,7 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 		timing = &taskTiming{}
 		timing.reset()
 	}
-	output, steps, runErr := p.coordinator.runAgentWithStatusAndHistory(ctx, ag, canonical.Agent.Name, request.Prompt, request.History, timing)
+	output, steps, runErr := p.coordinator.runAgentWithStatusAndHistory(ctx, ag, canonical.Agent.Name, request.Prompt, request.History, timing, p.coordinator.planSubmissionStop(request.Task, request.TaskID)...)
 	result := AttemptResult{Output: output, StepsUsed: len(steps), steps: steps, agent: ag}
 	if typed := p.coordinator.GetTaskResult(request.TaskID); typed != nil {
 		copy := *typed
