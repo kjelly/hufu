@@ -538,6 +538,16 @@ func (c *Coordinator) unfinishedPlanDependency(todoID string) (string, TaskStatu
 	return "", "", false
 }
 
+// skippedPlanReason reports whether a reviewed plan's todo ended skipped,
+// which is how a rejection terminalizes it, and the recorded reason.
+func (c *Coordinator) skippedPlanReason(todoID string) (string, bool) {
+	item := c.todoItemByID(todoID)
+	if item == nil || item.Status != TaskSkipped {
+		return "", false
+	}
+	return TaskDetailDisplayText(item), true
+}
+
 // reviewSubmittedPlan runs the plan reviewer for one submitted plan, letting
 // the worker re-plan after each rejection, and executes the approved plan.
 func (c *Coordinator) reviewSubmittedPlan(ctx context.Context, r *agentTaskResult) {
@@ -561,6 +571,13 @@ func (c *Coordinator) reviewSubmittedPlan(ctx context.Context, r *agentTaskResul
 		}
 		if approved {
 			r.planText = ""
+			// review reports a plan whose entry is gone as approved, and a
+			// reviewer or user rejection removes the entry after skipping
+			// the task, so the durable status decides what was reviewed.
+			if reason, skipped := c.skippedPlanReason(r.todoID); skipped {
+				r.err = fmt.Errorf("plan rejected, task skipped: %s", reason)
+				return
+			}
 			r.output = output
 			return
 		}

@@ -33,3 +33,15 @@ cases:
           status: done
         - agent: user
           status: done
+  # A plan the reviewer rejects skips its task. The coordinator's batch result
+  # must report that as an error rather than a success: the finish step only
+  # matches the rejection text, so a success result leaves it unconsumed.
+  - id: rejected-plan-reports-an-error
+    prompt: "Check the input."
+    provider-fixture: fixtures/rejected-plan-reports-an-error.json
+    plan-mode: true
+    expect:
+      task-count: 1
+      tasks:
+        - agent: checker
+          status: skipped
