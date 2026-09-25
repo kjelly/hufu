@@ -639,48 +639,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	}
 
 	if c.forcePlanFirst {
-		for i := range results {
-			r := &results[i]
-			if r.planText == "" {
-				continue
-			}
-			for reviewCycle := 0; reviewCycle <= planReviewerMaxReviews+1; reviewCycle++ {
-				pr, err := c.getPlanReviewer(ctx, r.todoID)
-				if err != nil {
-					r.planText = ""
-					r.err = fmt.Errorf("plan reviewer failed: %w", err)
-					break
-				}
-				output, approved, execErr, err := pr.review(ctx, r.planText)
-				if err != nil {
-					r.planText = ""
-					r.err = fmt.Errorf("plan reviewer failed: %w", err)
-					break
-				}
-				if execErr != nil {
-					r.planText = ""
-					r.err = execErr
-					break
-				}
-				if approved {
-					r.planText = ""
-					r.output = output
-					break
-				}
-				c.pendingPlansMu.Lock()
-				entry := c.pendingPlans[r.todoID]
-				if entry != nil {
-					r.planText = entry.PlanText
-				} else {
-					r.planText = ""
-				}
-				c.pendingPlansMu.Unlock()
-				if r.planText == "" {
-					r.err = fmt.Errorf("plan rejected but no new plan submitted")
-					break
-				}
-			}
-		}
+		c.reviewSubmittedPlans(ctx, results)
 	}
 
 	c.checkpointSTM()

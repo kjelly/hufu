@@ -484,3 +484,97 @@ func flattenStatusEntry(s string, maxRunes int) string {
 	}
 	return s
 }
+
+// reviewSubmittedPlans reviews and executes the plans a --plan batch
+// submitted. Every task in the batch only plans while the DAG runs, so the
+// scheduler admits a dependent as soon as its dependency has planned; the
+// dependency order is enforced here instead. A plan is reviewed only once
+// every task it depends on has executed to completion, and a plan whose
+// dependency ended unfinished is never executed, just as the scheduler never
+// launches a dependent of a failed task.
+func (c *Coordinator) reviewSubmittedPlans(ctx context.Context, results []agentTaskResult) {
+	reviewed := make([]bool, len(results))
+	for progressed := true; progressed; {
+		progressed = false
+		for i := range results {
+			if reviewed[i] || results[i].planText == "" {
+				continue
+			}
+			if _, _, waiting := c.unfinishedPlanDependency(results[i].todoID); waiting {
+				continue
+			}
+			c.reviewSubmittedPlan(ctx, &results[i])
+			reviewed[i] = true
+			progressed = true
+		}
+	}
+	for i := range results {
+		r := &results[i]
+		if reviewed[i] || r.planText == "" {
+			continue
+		}
+		depID, status, _ := c.unfinishedPlanDependency(r.todoID)
+		r.planText = ""
+		r.err = fmt.Errorf("plan not executed: dependency task %s did not complete (status %q)", depID, status)
+	}
+}
+
+// unfinishedPlanDependency returns the first task todoID depends on that has
+// not completed, with its status.
+func (c *Coordinator) unfinishedPlanDependency(todoID string) (string, TaskStatus, bool) {
+	item := c.todoItemByID(todoID)
+	if item == nil {
+		return "", "", false
+	}
+	for _, depID := range item.DependsOn {
+		dep := c.todoItemByID(depID)
+		if dep == nil {
+			return depID, "", true
+		}
+		if dep.Status != TaskDone {
+			return depID, dep.Status, true
+		}
+	}
+	return "", "", false
+}
+
+// reviewSubmittedPlan runs the plan reviewer for one submitted plan, letting
+// the worker re-plan after each rejection, and executes the approved plan.
+func (c *Coordinator) reviewSubmittedPlan(ctx context.Context, r *agentTaskResult) {
+	for reviewCycle := 0; reviewCycle <= planReviewerMaxReviews+1; reviewCycle++ {
+		pr, err := c.getPlanReviewer(ctx, r.todoID)
+		if err != nil {
+			r.planText = ""
+			r.err = fmt.Errorf("plan reviewer failed: %w", err)
+			return
+		}
+		output, approved, execErr, err := pr.review(ctx, r.planText)
+		if err != nil {
+			r.planText = ""
+			r.err = fmt.Errorf("plan reviewer failed: %w", err)
+			return
+		}
+		if execErr != nil {
+			r.planText = ""
+			r.err = execErr
+			return
+		}
+		if approved {
+			r.planText = ""
+			r.output = output
+			return
+		}
+		c.pendingPlansMu.Lock()
+		entry := c.pendingPlans[r.todoID]
+		if entry != nil {
+			r.planText = entry.PlanText
+		} else {
+			r.planText = ""
+		}
+		c.pendingPlansMu.Unlock()
+		if r.planText == "" {
+			r.err = fmt.Errorf("plan rejected but no new plan submitted")
+			return
+		}
+	}
+}

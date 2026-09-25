@@ -1,0 +1,55 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"checker\", \"goal\": \"Check the input.\"}, {\"agent\": \"user\", \"goal\": \"Use the checked input.\", \"depends_on\": [0]}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_plan",
+        "arguments": "{\"plan\": \"1. Check the input.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_plan",
+        "arguments": "{\"plan\": \"1. Use the checked input.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "approve_plan",
+        "arguments": "{\"todo_id\": \"1\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"The input is present.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "approve_plan",
+        "arguments": "{\"todo_id\": \"2\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"Used the input.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"Checked and used the input.\", \"acknowledge_failed_tasks\": false}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

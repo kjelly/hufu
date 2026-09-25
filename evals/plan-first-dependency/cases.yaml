@@ -1,0 +1,35 @@
+version: 1
+name: plan-first-dependency
+team: ./team
+mode: deterministic
+cases:
+  # Under --plan both tasks only plan while the DAG runs, so the dependent
+  # plans as soon as its dependency has planned. When the dependency's
+  # approved plan then fails, the dependent's plan must not be reviewed or
+  # executed: the next scripted step is the coordinator's finish, which a
+  # reviewer running for the dependent would consume instead.
+  - id: dependent-plan-waits-for-dependency
+    prompt: "Check the input, then use it."
+    provider-fixture: fixtures/dependent-plan-waits-for-dependency.json
+    plan-mode: true
+    expect:
+      task-count: 2
+      tasks:
+        - agent: checker
+          status: error
+        - agent: user
+          status: planned
+  # When the dependency's approved plan succeeds, the dependent's plan is
+  # reviewed and executed after it.
+  - id: dependent-plan-runs-after-dependency
+    prompt: "Check the input, then use it."
+    provider-fixture: fixtures/dependent-plan-runs-after-dependency.json
+    plan-mode: true
+    expect:
+      run-outcome: unverified
+      task-count: 2
+      tasks:
+        - agent: checker
+          status: done
+        - agent: user
+          status: done
