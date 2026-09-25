@@ -1281,14 +1281,14 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 - 既有 `TestRuntimeWorkflowRetriesProviderFailureBySignatureAndRestoresIt`、
   `TestRuntimeWorkflowRetryPoliciesKeepSignaturesAndPermanentFailuresDistinct` 必須照舊通過。
 
-**WP-0.2 `inspect trace` 顯示 action 狀態(E-03)** — ✅ 已完成
+**WP-0.2 `inspect trace` 顯示 action 狀態(E-03)** — ✅ 已完成,commit `05a2d3a`
 
 - `internal/inspect/trace.go` `eventStatusAndReason`:metadata struct 加 `ActionStatus string \`json:"action_status"\``;
   status 與 outcome 都空時使用 `boundedCode(metadata.ActionStatus)`。
 - 測試:`internal/inspect/trace_test.go`(`TestEventStatusAndReasonProjectsRunCancellationCause` 旁)加
   `team.LifecycleEventPayload{ActionStatus: "failure"}` case。
 
-**WP-0.3 輸出 canonicalize 提前(E-04)**
+**WP-0.3 輸出 canonicalize 提前(E-04)** — ✅ 已完成(helper 在 `runtime_action_outputs.go`,含 `failRuntimeAction`)
 
 - `executeRuntimeAction`:把 `CanonicalizeRuntimeOutputs` 區塊(約 2508-2515)移到 `decodeActionResult`(約 2482-2489)
   之後、artifact ingestion(2490)之前;`output = actionResultDisplay(...)`(2507)保留在 ingestion 之後。
