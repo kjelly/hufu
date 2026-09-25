@@ -2686,6 +2686,7 @@ type runtimeActionReceipt struct {
 	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	catalogActionReceiptFields
 }
 
 func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, actionID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
@@ -2725,6 +2726,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 				}
 				return utils.TruncateString(utils.RedactSecrets(actionErr.Error()), 1000)
 			}(),
+			catalogActionReceiptFields: catalogReceiptFields(task),
 		}, actionID)
 		if err != nil {
 			failureSignature = "runtime_action_receipt_failed: " + utils.TruncateString(utils.RedactSecrets(err.Error()), 300)
@@ -2752,6 +2754,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 			}
 			return ""
 		}(),
+		CatalogRuntimeFields: catalogRuntimeFields(task.CatalogAction),
 	})
 }
 

@@ -57,6 +57,7 @@ func catalogActionTask(binding *CatalogActionBinding) TaskDef {
 func addCatalogActionTodo(c *Coordinator, task TaskDef) (TaskDef, *TodoItem) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: task.Agent, Desc: task.Goal, Action: task.Action, SideEffect: task.SideEffect, Recovery: task.Recovery,
+		CatalogAction: task.CatalogAction.clone(),
 	}})[0]
 	return task, item
 }

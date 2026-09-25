@@ -157,6 +157,7 @@ type LifecycleEventPayload struct {
 	MaterializedActionPayloadHash string                       `json:"materialized_action_payload_hash,omitempty"`
 	BoundInputs                   map[string]string            `json:"bound_inputs,omitempty"`
 	RuntimeOutputsHash            string                       `json:"runtime_outputs_hash,omitempty"`
+	CatalogRuntimeFields
 }
 
 type executionEventLogger struct {

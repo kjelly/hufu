@@ -1495,7 +1495,7 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
     workflow 模式 schema 仍 < 12000 bytes;32-entry catalog < 16000 bytes;33 個以上省略 enum;無 catalog 時 schema 與
     baseline 相同;initial batch pending 時沒有 `catalog_action`。
 
-### WP-7 Workflow team(§16、§11.3 enum 聯集) — ✅ 已完成
+### WP-7 Workflow team(§16、§11.3 enum 聯集) — ✅ 已完成,commit `39afa35`
 
 實作紀錄:`validateCatalogTaskLocked`、`catalogWorkflowAgents`、`unionAgentEnum` 在 `runtime_workflow_actions.go`;
 `runtime_workflow.go` 只加呼叫與「本批含一般 task 才要求派齊 static contract」的旗標。
@@ -1510,7 +1510,12 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - Catalog task 失敗不讓 phase 失敗;phase 仍在 static contract 成功後推進。
   - `TestRuntimeWorkflowRequiresEveryStaticContractAndRestoresCheckpoint` 照舊通過。
 
-### WP-8 輸出驗證與 receipt(§17)
+### WP-8 輸出驗證與 receipt(§17) — ✅ 已完成
+
+實作紀錄:三個結構共用內嵌的 `CatalogRuntimeFields`(全部 omitempty);runtime receipt 另內嵌 `catalogActionReceiptFields`
+(加 `ProposalIDs`、`SideEffect`,只對 catalog task 填值)。輸出驗證在 `canonicalizeRuntimeActionOutputs` 內,所以仍在 artifact
+ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
+
 
 - 新檔 helper;`executeRuntimeAction` 只加呼叫。
 - 測試:

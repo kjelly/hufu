@@ -72,3 +72,58 @@ func catalogInvocationID(task TaskDef) string {
 	}
 	return task.CatalogAction.InvocationID
 }
+
+// CatalogRuntimeFields identifies the catalog action behind an action
+// receipt, lifecycle event, or execution receipt. Every field is omitted for
+// an action that is not a catalog task, so those records keep their shape.
+type CatalogRuntimeFields struct {
+	CatalogActionID     string `json:"catalog_action_id,omitempty"`
+	CatalogEntryHash    string `json:"catalog_entry_hash,omitempty"`
+	ArgumentsHash       string `json:"arguments_hash,omitempty"`
+	CatalogInvocationID string `json:"catalog_invocation_id,omitempty"`
+}
+
+func catalogRuntimeFields(binding *CatalogActionBinding) CatalogRuntimeFields {
+	if binding == nil {
+		return CatalogRuntimeFields{}
+	}
+	return CatalogRuntimeFields{
+		CatalogActionID: binding.ActionID, CatalogEntryHash: binding.EntryHash,
+		ArgumentsHash: binding.ArgumentsHash, CatalogInvocationID: binding.InvocationID,
+	}
+}
+
+// catalogActionReceiptFields are the runtime action receipt's catalog fields:
+// the shared identity plus linked proposals and the declared side effect.
+type catalogActionReceiptFields struct {
+	CatalogRuntimeFields
+	ProposalIDs []string        `json:"proposal_ids,omitempty"`
+	SideEffect  SideEffectClass `json:"side_effect,omitempty"`
+}
+
+func catalogReceiptFields(task TaskDef) catalogActionReceiptFields {
+	if task.CatalogAction == nil {
+		return catalogActionReceiptFields{}
+	}
+	return catalogActionReceiptFields{
+		CatalogRuntimeFields: catalogRuntimeFields(task.CatalogAction),
+		ProposalIDs:          slices.Clone(task.CatalogAction.ProposalIDs), SideEffect: task.SideEffect,
+	}
+}
+
+// validateCatalogActionOutputs checks a catalog action's canonical outputs
+// against its entry's output schema. The provider has already run, so a
+// mismatch is a validation error: the task fails and is not retried.
+func (c *Coordinator) validateCatalogActionOutputs(task TaskDef, outputs map[string]any) error {
+	if task.CatalogAction == nil || task.Action == nil || c == nil || c.session == nil {
+		return nil
+	}
+	entry, ok := c.session.ActionCatalog.Lookup(task.CatalogAction.ActionID)
+	if !ok || entry.OutputSchema == nil {
+		return nil
+	}
+	if err := validateCatalogOutputs(*entry.OutputSchema, outputs); err != nil {
+		return ActionValidationError{Capability: normalizeCapability(task.Action.Capability), Cause: fmt.Errorf("team_action_output_invalid: %w", err)}
+	}
+	return nil
+}

@@ -62,6 +62,7 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 		receipt.RunInputSnapshotHash = item.RunInputSnapshotHash
 		receipt.MaterializedActionPayloadHash = item.MaterializedActionPayloadHash
 		receipt.BoundInputs = cloneStringMap(item.BoundInputs)
+		receipt.CatalogRuntimeFields = catalogRuntimeFields(item.CatalogAction)
 		if item.TypedResult != nil {
 			receipt.RuntimeOutputsHash = item.TypedResult.RuntimeOutputsHash
 		}

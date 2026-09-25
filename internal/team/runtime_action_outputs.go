@@ -23,5 +23,8 @@ func (c *Coordinator) canonicalizeRuntimeActionOutputs(task TaskDef, todoID, act
 	if err != nil {
 		return nil, "", fmt.Errorf("canonicalize structured action outputs: %w", c.failRuntimeAction(task, todoID, actionID, startedAt, err))
 	}
+	if err := c.validateCatalogActionOutputs(task, outputs); err != nil {
+		return nil, "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
+	}
 	return outputs, hash, nil
 }
