@@ -166,7 +166,7 @@ func TestDynamicToolGatewayInvocationReceiptAndUTF8Truncation(t *testing.T) {
 	gateway := newDynamicToolGateway(c, executor, []DynamicToolTarget{target})
 	accumulator := newDynamicInvocationAccumulator(1)
 	evidence := new(toolCallEvidence)
-	transcript, err := newTaskTranscriptForAttempt(t.TempDir(), todoID, "run", 1)
+	transcript, err := newTaskTranscriptForAttempt(t.TempDir(), todoID, "run", 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}

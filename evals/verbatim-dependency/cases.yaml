@@ -1,0 +1,20 @@
+version: 1
+name: verbatim-dependency
+team: ./team
+mode: deterministic
+cases:
+  # A verbatim task attaches its tool transcript to its typed result. The
+  # dependent task's artifact scope validates every producer artifact at
+  # dispatch, so a transcript without its producer agent would block the
+  # dependent before its worker starts.
+  - id: dependent-of-verbatim-task-runs
+    prompt: "Print shell-ok with echo, then confirm it."
+    provider-fixture: fixtures/dependent-of-verbatim-task-runs.json
+    expect:
+      run-outcome: unverified
+      task-count: 2
+      tasks:
+        - agent: producer
+          status: done
+        - agent: consumer
+          status: done

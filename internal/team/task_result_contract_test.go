@@ -162,7 +162,7 @@ func TestVerbatimTranscriptAssertionsRemainForLateFinalization(t *testing.T) {
 		t.Fatalf("submit boundary falsely rejected transcript-owned assertion: %v", err)
 	}
 	workspace := t.TempDir()
-	transcript, err := newTaskTranscriptForAttempt(workspace, "task-1", "run-1", 1)
+	transcript, err := newTaskTranscriptForAttempt(workspace, "task-1", "run-1", 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}

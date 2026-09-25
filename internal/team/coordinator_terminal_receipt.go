@@ -22,7 +22,7 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 	if strings.TrimSpace(producer) == "" {
 		producer = "coordinator"
 	}
-	transcript, err := newTaskTranscriptForAttempt(c.session.Workspace, todoID, runID, attempt)
+	transcript, err := newTaskTranscriptForAttempt(c.session.Workspace, todoID, runID, attempt, producer)
 	if err != nil {
 		return fmt.Errorf("create coordinator task transcript: %w", err)
 	}

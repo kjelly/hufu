@@ -1,0 +1,40 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"producer\", \"goal\": \"Print shell-ok with echo.\", \"output_mode\": \"verbatim\"}, {\"agent\": \"consumer\", \"goal\": \"Confirm the producer printed shell-ok.\", \"depends_on\": [0]}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "bash",
+        "arguments": "{\"command\": \"echo shell-ok\"}"
+      }
+    },
+    {
+      "match": {
+        "contains": "Exit code: 0"
+      },
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"Ran the command.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"Confirmed the output.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"Done.\", \"acknowledge_failed_tasks\": false}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

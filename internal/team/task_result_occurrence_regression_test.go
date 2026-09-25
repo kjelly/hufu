@@ -63,7 +63,7 @@ func TestGetTaskResultDeepIsolationPreservesCanonicalAndProjections(t *testing.T
 
 func newTranscriptForOccurrenceTest(t *testing.T, c *Coordinator, item *TodoItem, attempt int) *taskTranscript {
 	t.Helper()
-	transcript, err := newTaskTranscriptForAttempt(c.session.Workspace, item.ID, c.executionRunID, attempt)
+	transcript, err := newTaskTranscriptForAttempt(c.session.Workspace, item.ID, c.executionRunID, attempt, "")
 	if err != nil {
 		t.Fatal(err)
 	}

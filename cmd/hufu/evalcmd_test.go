@@ -23,8 +23,8 @@ func TestEvalListDefaultsToRepositoryEvalRoot(t *testing.T) {
 		t.Fatalf("runEvalList: %v", err)
 	}
 	lines := strings.Fields(output.String())
-	if len(lines) != 18 {
-		t.Fatalf("listed %d cases, want 18: %s", len(lines), output.String())
+	if len(lines) != 19 {
+		t.Fatalf("listed %d cases, want 19: %s", len(lines), output.String())
 	}
 	if !strings.Contains(output.String(), "core-lifecycle/single-task-unverified") {
 		t.Fatalf("default eval listing omitted core lifecycle case: %s", output.String())

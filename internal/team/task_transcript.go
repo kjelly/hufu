@@ -62,6 +62,7 @@ type taskTranscript struct {
 	todoID          string
 	runID           string
 	attempt         int
+	agent           string
 	f               *os.File
 	toolResults     int
 	assistantOutput bool
@@ -154,14 +155,16 @@ func readTranscriptTail(path string, limit int64) ([]byte, error) {
 }
 
 func newTaskTranscript(workspace, todoID, runID string) (*taskTranscript, error) {
-	return newTaskTranscriptForAttempt(workspace, todoID, runID, 0)
+	return newTaskTranscriptForAttempt(workspace, todoID, runID, 0, "")
 }
 
 // newTaskTranscriptForAttempt creates a distinct runner-owned transcript for
 // one execution attempt. Attempt transcripts are never truncated by retries
 // or by repair; the receipt can therefore identify the exact original
-// execution that produced its evidence.
-func newTaskTranscriptForAttempt(workspace, todoID, runID string, attempt int) (*taskTranscript, error) {
+// execution that produced its evidence. agent is the producer recorded on the
+// transcript artifact: a dependent task only accepts an upstream artifact
+// whose agent matches the producer's typed result.
+func newTaskTranscriptForAttempt(workspace, todoID, runID string, attempt int, agent string) (*taskTranscript, error) {
 	if workspace == "" {
 		return nil, fmt.Errorf("create task transcript: empty workspace")
 	}
@@ -185,7 +188,7 @@ func newTaskTranscriptForAttempt(workspace, todoID, runID string, attempt int) (
 	if err != nil {
 		return nil, fmt.Errorf("create task transcript: %w", err)
 	}
-	return &taskTranscript{path: path, workspace: workspace, todoID: todoID, runID: runID, attempt: attempt, f: f}, nil
+	return &taskTranscript{path: path, workspace: workspace, todoID: todoID, runID: runID, attempt: attempt, agent: strings.TrimSpace(agent), f: f}, nil
 }
 
 // RecordAssistantOutput preserves the original worker's final response in
@@ -297,6 +300,7 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 		SourcePath:  t.path,
 		RunID:       t.runID,
 		TaskID:      t.todoID,
+		Agent:       t.agent,
 		Attempt:     t.attempt,
 	})
 	if err != nil {

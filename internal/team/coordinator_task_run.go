@@ -701,7 +701,7 @@ retryLoop:
 			// need the same runner-owned evidence: their provider may omit
 			// submit_result, but its prose must not become accepted completion
 			// without an auditable record of the inspection that produced it.
-			transcript, err = newTaskTranscriptForAttempt(c.session.Workspace, todoID, c.executionRunID, attempt)
+			transcript, err = newTaskTranscriptForAttempt(c.session.Workspace, todoID, c.executionRunID, attempt, agentName)
 			if err != nil {
 				return "", err
 			}
