@@ -1,0 +1,77 @@
+version: 1
+name: team-action-catalog
+team: ./team
+mode: deterministic
+cases:
+  # A worker inspects an action and recommends it; the coordinator inspects
+  # the proposal and dispatches the action through the agent tool.
+  - id: dynamic-readonly-dispatch
+    prompt: "Investigate the api service and collect a bundle if needed."
+    provider-fixture: fixtures/dynamic-readonly-dispatch.json
+    expect:
+      task-count: 2
+      tasks:
+        - agent: investigator
+          status: done
+        - agent: investigator
+          status: done
+          side-effect: none
+      durable-events:
+        counts:
+          - type: team_action_proposed
+            count: 1
+          - type: action_completed
+            count: 1
+        matches:
+          - type: team_action_proposed
+            fields:
+              payload.action_id: collect-bundle
+              payload.assessment: recommended
+          - type: task_created
+            occurrence: 2
+            fields:
+              payload.catalog_action.action_id: collect-bundle
+
+  # The entry requires a recommended proposal; a direct dispatch is rejected
+  # with a recoverable response and creates no task.
+  - id: require-proposal-missing
+    prompt: "Collect a bundle for the api service."
+    provider-fixture: fixtures/require-proposal-missing.json
+    expect:
+      task-count: 0
+      durable-events:
+        counts:
+          - type: task_created
+            count: 0
+
+  # max-invocations defaults to 1, so a second dispatch in the session is
+  # rejected.
+  - id: invocation-budget-exceeded
+    prompt: "Collect two quick bundles."
+    provider-fixture: fixtures/invocation-budget-exceeded.json
+    expect:
+      task-count: 1
+      tasks:
+        - agent: investigator
+          status: done
+      durable-events:
+        counts:
+          - type: action_completed
+            count: 1
+
+  # The provider's outputs break the entry's output schema: the task fails
+  # once and is not retried.
+  - id: output-schema-invalid
+    prompt: "Collect a bundle with the broken action."
+    provider-fixture: fixtures/output-schema-invalid.json
+    expect:
+      task-count: 1
+      tasks:
+        - agent: investigator
+          status: error
+      durable-events:
+        counts:
+          - type: action_failed
+            count: 1
+          - type: action_completed
+            count: 0

@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"investigator\", \"goal\": \"Collect the api bundle.\", \"catalog_action\": {\"id\": \"collect-bundle\", \"arguments\": {\"service\": \"api\"}}}]}"
+      }
+    },
+    {
+      "match": {
+        "contains": "team_action_proposal_required"
+      },
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"The action needs a proposal first.\", \"acknowledge_failed_tasks\": false}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

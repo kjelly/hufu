@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"investigator\", \"goal\": \"Collect the api bundle.\", \"catalog_action\": {\"id\": \"quick-bundle\", \"arguments\": {\"service\": \"api\"}}}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"investigator\", \"goal\": \"Collect the db bundle.\", \"catalog_action\": {\"id\": \"quick-bundle\", \"arguments\": {\"service\": \"db\"}}}]}"
+      }
+    },
+    {
+      "match": {
+        "contains": "team_action_invocation_budget_exceeded"
+      },
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"The second bundle exceeded the budget.\", \"acknowledge_failed_tasks\": false}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

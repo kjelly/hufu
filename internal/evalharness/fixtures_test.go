@@ -58,8 +58,8 @@ func TestDiscoverSuiteFixturesFromEvalRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverSuiteFixtures: %v", err)
 	}
-	if len(paths) != 17 {
-		t.Fatalf("len(paths) = %d, want 17 suite fixtures: %v", len(paths), paths)
+	if len(paths) != 19 {
+		t.Fatalf("len(paths) = %d, want 19 suite fixtures: %v", len(paths), paths)
 	}
 	for _, path := range paths {
 		if filepath.Base(path) != "cases.yaml" {

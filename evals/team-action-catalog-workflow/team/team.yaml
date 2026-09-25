@@ -1,0 +1,47 @@
+name: eval-team-action-catalog-workflow
+description: Workflow team that runs a predefined check in EXECUTE before its static contract
+workflow:
+  phases: [prepare, execute, verify]
+policies:
+  allow_phase_skip: true
+delegation:
+  bind-task-goal-contracts: true
+
+action-providers:
+  release-checks:
+    command: [/bin/sh, -c, 'cat >/dev/null; printf ''{"outputs":{"summary":"window open"}}''']
+
+action-catalog:
+  check-window:
+    description: Report whether the release window is open.
+    capability: release-checks
+    type: check_window
+    agent: executor
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        environment:
+          type: string
+          enum: [staging, production]
+      required-properties: [environment]
+      additional-properties: false
+    access:
+      discover: [executor]
+
+tasks:
+  - id: prepare-release
+    agent: preparer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+  - id: apply-release
+    agent: executor
+    phase: execute
+    when-goal-contains: apply
+    side_effect: none
+  - id: verify-release
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none

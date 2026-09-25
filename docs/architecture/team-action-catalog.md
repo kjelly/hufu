@@ -1533,7 +1533,7 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
 - 更新 `docs/architecture/unified-observability-inspector.md` §6.2(308-316)與 `docs/guides/inspect.md` 對應段落。
 - 測試:`internal/inspect/run_test.go:106` pattern、`cmd/hufu/inspectcmd_test.go:199` pattern;report 在無 catalog task 時輸出不變。
 
-### WP-10 文件 — ✅ 已完成
+### WP-10 文件 — ✅ 已完成,commit `388ece0`
 
 實作紀錄:範例 team 在 `internal/team/testdata/docs-action-catalog-dynamic`、`docs-action-catalog-workflow`,
 由 `TestActionCatalogDocExamplesLoad` 載入;文件內的 YAML 與 testdata 相同。
@@ -1558,7 +1558,13 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
   - `require-proposal: true` 需要至少一個有效提案者:不被 `tools-denied` 拒絕、在 allowed-workers 內、不使用 Codex 等外部
     agent backend(D20)。
 
-### WP-11 E2E 與 eval
+### WP-11 E2E 與 eval — ✅ 已完成
+
+實作紀錄:Suite A 另加 `quick-bundle` entry(不需 proposal、max 1)給 budget case;Suite B 的 workflow 為
+`[prepare, execute, verify]` + `allow_phase_skip`。EXECUTE 期間 tool call 也發 action_* 事件(E-11),所以 Suite B 以第 2 個
+`action_completed` 的 `catalog_action_id` 斷言 catalog action。Resume 整合測試在 `team_action_resume_test.go`(同一 coordinator 以
+durable events 重建 TodoList 後呼叫 `ResumeInterruptedTasks`,涵蓋 pending/started × retry/manual)。eval 計數測試改為 19 suites / 26 cases。
+
 
 Eval harness 每個 suite 只有一個 team(`internal/evalharness/types.go:12-17`、`runner.go:90`),所以分成兩個 suite,
 結構複製 `evals/core-lifecycle/`。Provider 一律用 inline command,避免 `dir` 相對於 cwd 的問題(E-23)。

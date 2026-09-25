@@ -1,0 +1,58 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"investigator\", \"goal\": \"Investigate the api service.\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "team_action_get",
+        "arguments": "{\"action\": \"collect-bundle\"}"
+      }
+    },
+    {
+      "match": {
+        "contains": "hufu-run-input-schema/v1"
+      },
+      "tool_call": {
+        "name": "team_action_propose",
+        "arguments": "{\"action\": \"collect-bundle\", \"arguments\": {\"service\": \"api\"}, \"assessment\": \"recommended\", \"rationale\": \"The api service latency needs a diagnostics bundle.\"}"
+      }
+    },
+    {
+      "match": {
+        "contains": "tap_"
+      },
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\": \"success\", \"summary\": \"Recommended collecting a bundle for api.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "team_action_get",
+        "arguments": "{\"action\": \"collect-bundle\"}"
+      }
+    },
+    {
+      "match": {
+        "contains": "proposal_counts"
+      },
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\": [{\"agent\": \"investigator\", \"goal\": \"Collect the api bundle.\", \"catalog_action\": {\"id\": \"collect-bundle\", \"arguments\": {\"service\": \"api\"}}}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"Collected the api bundle.\", \"acknowledge_failed_tasks\": false}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

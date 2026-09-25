@@ -1,0 +1,71 @@
+name: eval-team-action-catalog
+description: Dynamic team whose worker proposes predefined actions and whose coordinator dispatches them
+action-providers:
+  diag-ok:
+    command: [/bin/sh, -c, 'cat >/dev/null; printf ''{"outputs":{"summary":"ok"}}''']
+  diag-bad:
+    command: [/bin/sh, -c, 'cat >/dev/null; printf ''{"outputs":{"unexpected":1}}''']
+
+action-catalog:
+  collect-bundle:
+    description: Collect a diagnostics bundle for one service.
+    capability: diag-ok
+    type: collect
+    agent: investigator
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    output-schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required-properties: [summary]
+    access:
+      discover: [investigator]
+      propose: [investigator]
+    invocation:
+      require-proposal: true
+
+  quick-bundle:
+    description: Collect a quick diagnostics bundle without a proposal.
+    capability: diag-ok
+    type: quick
+    agent: investigator
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    access:
+      discover: [investigator]
+
+  broken-bundle:
+    description: A diagnostics action whose provider breaks its output schema.
+    capability: diag-bad
+    type: broken
+    agent: investigator
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    output-schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required-properties: [summary]
+    access:
+      discover: [investigator]

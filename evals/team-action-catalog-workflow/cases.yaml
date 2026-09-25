@@ -1,0 +1,36 @@
+version: 1
+name: team-action-catalog-workflow
+team: ./team
+mode: deterministic
+cases:
+  # In EXECUTE the coordinator dispatches a catalog action on its own, then
+  # the static execute and verify contracts still advance the workflow.
+  - id: workflow-execute-dispatch
+    prompt: "Release to staging after checking the window."
+    provider-fixture: fixtures/workflow-execute-dispatch.json
+    expect:
+      task-count: 4
+      tasks:
+        - agent: preparer
+          status: done
+        - agent: executor
+          status: done
+        - agent: executor
+          status: done
+        - agent: verifier
+          status: done
+      # Tool calls during EXECUTE also emit action_* events: the first
+      # action_completed is the coordinator's agent call that dispatched the
+      # catalog task, the second is the catalog action itself.
+      durable-events:
+        matches:
+          - type: action_completed
+            occurrence: 2
+            fields:
+              payload.catalog_action_id: check-window
+              payload.phase: EXECUTE
+          - type: task_created
+            occurrence: 2
+            fields:
+              payload.catalog_action.action_id: check-window
+              payload.phase: EXECUTE
