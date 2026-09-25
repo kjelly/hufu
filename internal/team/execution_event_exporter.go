@@ -119,25 +119,63 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 
 // projectedExecutionEvents is the legacy-compatible lifecycle projection.
 // The event store deliberately records every durable state transition, while
-// the legacy execution logger records one lifecycle event per task status and
-// attempt. Collapse duplicate durable transitions before exporting/comparing;
-// keep retries distinct through their projected attempt number.
+// the legacy execution logger records one lifecycle event each time a task
+// enters a status within an attempt. Collapse a task's repeated durable
+// transitions into the status it is already in, but keep a status the task
+// re-enters after another one (an approved --plan task starting again after
+// planned). Attempts follow the in-dispatch counter the attempt-starting
+// task_started event carries, which is the number the legacy logger records;
+// logs without that counter fall back to the task's retry count.
 func projectedExecutionEvents(events []RunEvent) []ExecutionEvent {
+	type taskLifecycle struct {
+		dispatchAttempt int
+		status          string
+		attempt         int
+	}
 	projected := make([]ExecutionEvent, 0, len(events))
-	seen := make(map[string]struct{})
+	lifecycles := make(map[string]*taskLifecycle)
 	for _, event := range events {
 		mapped, ok := ExecutionEventFromRunEvent(event)
 		if !ok {
 			continue
 		}
-		key := strings.Join([]string{mapped.RunID, mapped.TaskID, mapped.Status, fmt.Sprintf("%d", mapped.Attempt)}, "\x00")
-		if _, duplicate := seen[key]; duplicate {
+		key := mapped.RunID + "\x00" + mapped.TaskID
+		lifecycle := lifecycles[key]
+		if lifecycle == nil {
+			lifecycle = &taskLifecycle{}
+			lifecycles[key] = lifecycle
+		}
+		if attempt := eventDispatchAttempt(event); attempt > 0 {
+			lifecycle.dispatchAttempt = attempt
+		}
+		if lifecycle.dispatchAttempt > 0 {
+			mapped.Attempt = lifecycle.dispatchAttempt
+		}
+		if mapped.Status == lifecycle.status && mapped.Attempt == lifecycle.attempt {
 			continue
 		}
-		seen[key] = struct{}{}
+		lifecycle.status, lifecycle.attempt = mapped.Status, mapped.Attempt
 		projected = append(projected, mapped)
 	}
 	return projected
+}
+
+// eventDispatchAttempt returns the in-dispatch attempt counter that an
+// attempt-starting task_started event carries (see attemptStartMetadata), or
+// 0 for any other event.
+func eventDispatchAttempt(event RunEvent) int {
+	if event.Type != string(EventTaskStarted) {
+		return 0
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(event.Payload, &payload) != nil {
+		return 0
+	}
+	var attempt int
+	if json.Unmarshal(payload[taskStartedDispatchAttemptKey], &attempt) != nil {
+		return 0
+	}
+	return attempt
 }
 
 // ReadExecutionEvents reads execution events from a JSONL file.

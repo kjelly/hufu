@@ -1832,6 +1832,7 @@ retryLoop:
 				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskVerifying, "running objective verification", "", nil); statusErr != nil {
 					err = fmt.Errorf("enter verifying state: %w", statusErr)
 				} else {
+					c.recordExecutionEvent(todoID, agentName, attempt, "verifying", resolvedModel, time.Since(attemptStarted), ExecutionUsage{})
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					vMsg := task.Verify
 					if vMsg == "" && task.VerifySpec != nil {
@@ -3487,6 +3488,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			return "", err
 		}
+		c.recordExecutionEvent(todoID, task.Agent, 1, "verifying", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		vMsg := task.Verify
 		if vMsg == "" && task.VerifySpec != nil {
 			vMsg = string(task.VerifySpec.Type)

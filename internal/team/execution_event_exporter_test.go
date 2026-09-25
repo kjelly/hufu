@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,80 @@ func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing
 	}
 	if projected[1].Attempt != 1 || projected[3].Attempt != 2 || projected[4].Attempt != 2 {
 		t.Fatalf("retry attempts = %#v, want first attempt 1 and retry attempt 2", projected)
+	}
+}
+
+// The legacy logger numbers attempts with the in-dispatch counter that the
+// attempt-starting task_started event carries as dispatch_attempt, and records
+// a status again when the task re-enters it after another status. The
+// projection must do the same, or parity reports a mismatch for every retry
+// and every approved --plan execution.
+func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
+	ev := func(eventType, taskID, payload string) RunEvent {
+		return RunEvent{Type: eventType, RunID: "run-1", TaskID: taskID, Actor: "worker", Payload: []byte(payload)}
+	}
+	cases := []struct {
+		name   string
+		events []RunEvent
+		want   []string
+	}{
+		{
+			name: "approved plan re-enters in_progress on the same attempt",
+			events: []RunEvent{
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskPlanned), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskPlanned), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskVerifying), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskVerifying), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskCompleted), "1", `{"id":"1","retries":0}`),
+			},
+			want: []string{"in_progress/1/1", "planned/1/1", "in_progress/1/1", "verifying/1/1", "done/1/1"},
+		},
+		{
+			name: "in-dispatch retry takes the dispatch attempt number",
+			events: []RunEvent{
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskFailed), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":2}`),
+				ev(string(EventTaskProtocolIncomplete), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskBlocked), "1", `{"id":"1","retries":0}`),
+			},
+			want: []string{"in_progress/1/1", "error/1/1", "in_progress/1/2", "error/1/2"},
+		},
+		{
+			name: "a new occurrence restarts the dispatch counter",
+			events: []RunEvent{
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskFailed), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":1,"dispatch_attempt":1}`),
+				ev(string(EventTaskCompleted), "1", `{"id":"1","retries":1}`),
+			},
+			want: []string{"in_progress/1/1", "error/1/1", "in_progress/1/1", "done/1/1"},
+		},
+		{
+			name: "interleaved tasks collapse duplicates per task",
+			events: []RunEvent{
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskStarted), "2", `{"id":"2","retries":0,"dispatch_attempt":1}`),
+				ev(string(EventTaskStarted), "1", `{"id":"1","retries":0}`),
+				ev(string(EventTaskPlanned), "2", `{"id":"2","retries":0}`),
+				ev(string(EventTaskPlanned), "1", `{"id":"1","retries":0}`),
+			},
+			want: []string{"in_progress/1/1", "in_progress/2/1", "planned/2/1", "planned/1/1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, projected := range projectedExecutionEvents(tc.events) {
+				got = append(got, fmt.Sprintf("%s/%s/%d", projected.Status, projected.TaskID, projected.Attempt))
+			}
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("projected = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
