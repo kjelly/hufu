@@ -7,6 +7,9 @@ temperature: "0.15"
 max-tokens: "32768"
 reasoning-effort: high
 max-steps: 120
+# Large workset items routinely need close to an hour on the review route;
+# 5400s leaves headroom above the team-wide 3600s default.
+timeout: 5400
 side_effect: none
 recovery: retry
 max-retries: 1
