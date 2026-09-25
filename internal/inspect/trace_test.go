@@ -107,6 +107,29 @@ func TestTraceSupplementalEntriesKeepZeroEventOrdinal(t *testing.T) {
 	}
 }
 
+func TestEventStatusAndReasonProjectsActionLifecycleStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload team.LifecycleEventPayload
+		want    string
+	}{
+		{name: "failed action", payload: team.LifecycleEventPayload{ActionStatus: "failure"}, want: "failure"},
+		{name: "completed action", payload: team.LifecycleEventPayload{ActionStatus: "success"}, want: "success"},
+		{name: "run outcome wins", payload: team.LifecycleEventPayload{Outcome: "completed", ActionStatus: "failure"}, want: "completed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status, _ := eventStatusAndReason(payload); status != tt.want {
+				t.Fatalf("action trace status = %q, want %q", status, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventStatusAndReasonProjectsRunCancellationCause(t *testing.T) {
 	payload, err := json.Marshal(team.RunCancellationRequestedPayload{
 		Status: "cancellation_requested", ReasonCode: string(team.RunCancellationGracefulTimeout),

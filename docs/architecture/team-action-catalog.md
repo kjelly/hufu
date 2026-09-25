@@ -1271,7 +1271,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 
 ### WP-0 既存問題修正(可獨立,先做)
 
-**WP-0.1 `permitActionRetry` 尊重 replay 安全(E-01)** — ✅ 已完成
+**WP-0.1 `permitActionRetry` 尊重 replay 安全(E-01)** — ✅ 已完成,commit `3e37b3b`
 
 - `runtime_workflow.go` `permitActionRetry`:在 `task.Action == nil` 檢查之後、任何 `retryState` 寫入之前加
   `if !CanAutomaticallyReplay(task) { return false }`(`execution_contract.go:714-724`)。
@@ -1281,7 +1281,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 - 既有 `TestRuntimeWorkflowRetriesProviderFailureBySignatureAndRestoresIt`、
   `TestRuntimeWorkflowRetryPoliciesKeepSignaturesAndPermanentFailuresDistinct` 必須照舊通過。
 
-**WP-0.2 `inspect trace` 顯示 action 狀態(E-03)**
+**WP-0.2 `inspect trace` 顯示 action 狀態(E-03)** — ✅ 已完成
 
 - `internal/inspect/trace.go` `eventStatusAndReason`:metadata struct 加 `ActionStatus string \`json:"action_status"\``;
   status 與 outcome 都空時使用 `boundedCode(metadata.ActionStatus)`。

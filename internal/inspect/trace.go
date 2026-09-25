@@ -151,10 +151,11 @@ func eventTraceEntry(indexed IndexedEvent) TraceEntry {
 
 func eventStatusAndReason(payload json.RawMessage) (string, string) {
 	var metadata struct {
-		Status      string `json:"status"`
-		Outcome     string `json:"outcome"`
-		ReasonCode  string `json:"reason_code"`
-		FailureType string `json:"failure_type"`
+		Status       string `json:"status"`
+		Outcome      string `json:"outcome"`
+		ActionStatus string `json:"action_status"`
+		ReasonCode   string `json:"reason_code"`
+		FailureType  string `json:"failure_type"`
 	}
 	if len(payload) == 0 || json.Unmarshal(payload, &metadata) != nil {
 		return "", ""
@@ -162,6 +163,10 @@ func eventStatusAndReason(payload json.RawMessage) (string, string) {
 	status := boundedCode(metadata.Status)
 	if status == "" {
 		status = boundedCode(metadata.Outcome)
+	}
+	if status == "" {
+		// action_* lifecycle events carry their state in action_status.
+		status = boundedCode(metadata.ActionStatus)
 	}
 	reason := boundedCode(metadata.ReasonCode)
 	if reason == "" {
