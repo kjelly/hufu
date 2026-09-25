@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `7350eb5`
+> Verified-Commit: `85b00fe`
 > Supersedes: —
 > Superseded-By: —
 
@@ -31,6 +31,11 @@ action-providers:
 
 `command` is argv, not shell text. `dir` and `timeout` are optional; `timeout`
 is expressed in seconds. Existing command providers remain supported.
+
+`dir` and any relative path in `command` are resolved against the Hufu
+process working directory, not the team directory. When `dir` is empty the
+adapter runs in that working directory. Use absolute paths when a team can be
+run from more than one directory.
 
 ### Embedded Go provider
 
@@ -153,7 +158,7 @@ Hufu adds invocation identity to the adapter environment when available:
 | `HUFU_RUN_ID` | Coordinator run ID |
 | `HUFU_TASK_ID` | Todo/task ID |
 | `HUFU_ATTEMPT` | Current task attempt |
-| `HUFU_ACTION_INVOCATION_ID` | Action invocation ID |
+| `HUFU_ACTION_INVOCATION_ID` | Action invocation ID. It changes on every attempt, so it is not an idempotency key |
 
 The adapter should use the supplied action workspace for transient outputs.
 Declared artifacts are copied into Hufu's workspace and receive verified
@@ -161,12 +166,24 @@ provenance after execution.
 
 ## Binding a provider to a task
 
-The capability is referenced by a static task contract. The task should assign
-the action to the appropriate runtime phase and define objective verification:
+The capability is referenced by a static task contract in a workflow team.
+The workflow owns phase dispatch, so the team must bind task goals to
+contracts, list the capability as required, give every phase a static
+contract with `when-goal-contains`, and, when verification is required,
+declare an objective check in the verify phase. An action outside the execute
+phase must be `side_effect: none`:
 
 ```yaml
+name: review-team
+description: Prepares a review workset with an action provider, then reviews it
 workflow:
   phases: [prepare, audit, execute, verify]
+capabilities:
+  required: [prepare-workset]
+verification:
+  required: true
+delegation:
+  bind-task-goal-contracts: true
 
 action-providers:
   prepare-workset:
@@ -179,11 +196,39 @@ tasks:
   - id: prepare-workset
     agent: reviewer
     phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
     action:
       capability: prepare-workset
       type: prepare
       payload: '{"scope":{"kind":"last_n","count":10}}'
+
+  - id: audit-workset
+    agent: reviewer
+    phase: audit
+    when-goal-contains: audit
+    side_effect: none
+
+  - id: review-workset
+    agent: reviewer
+    phase: execute
+    when-goal-contains: review
+    side_effect: none
+
+  - id: verify-review
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none
+    verify-spec:
+      type: command_exit
+      command: test -s review.md
 ```
+
+This example is kept loadable: the same team, with minimal `reviewer.md`,
+`verifier.md`, and Go adapter, lives in
+[internal/team/testdata/docs-action-provider-example](../../internal/team/testdata/docs-action-provider-example/team.yaml)
+and `TestActionProvidersDocExampleLoads` loads it. Update both together.
 
 Keep mutation in the adapter. Prepare, audit, and verify agents should receive
 only the tools required for their attestation or verification work. Configure

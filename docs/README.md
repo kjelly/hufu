@@ -84,6 +84,8 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator troubleshooting and recovery](guides/operator-troubleshooting.md)
 - [Operator experience preview and fallback](guides/operator-experience-preview.md)
 - [SSH tool](guides/ssh-tool.md)
+- [Action providers](reference/action-providers.md) — team-owned command and
+  embedded Go adapters for structured runtime actions.
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability

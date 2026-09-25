@@ -1,0 +1,52 @@
+# Keep in sync with the "Binding a provider to a task" example in
+# docs/reference/action-providers.md; TestActionProvidersDocExampleLoads
+# loads this team.
+name: review-team
+description: Prepares a review workset with an action provider, then reviews it
+workflow:
+  phases: [prepare, audit, execute, verify]
+capabilities:
+  required: [prepare-workset]
+verification:
+  required: true
+delegation:
+  bind-task-goal-contracts: true
+
+action-providers:
+  prepare-workset:
+    runtime: golang
+    source: ./actions/prepare-workset
+    mode: trusted-static
+    timeout: 300
+
+tasks:
+  - id: prepare-workset
+    agent: reviewer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+    action:
+      capability: prepare-workset
+      type: prepare
+      payload: '{"scope":{"kind":"last_n","count":10}}'
+
+  - id: audit-workset
+    agent: reviewer
+    phase: audit
+    when-goal-contains: audit
+    side_effect: none
+
+  - id: review-workset
+    agent: reviewer
+    phase: execute
+    when-goal-contains: review
+    side_effect: none
+
+  - id: verify-review
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none
+    verify-spec:
+      type: command_exit
+      command: test -s review.md

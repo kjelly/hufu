@@ -1770,6 +1770,22 @@ side_effect ∈ RequiredForSideEffects
 → emit commit_gate_blocked（含缺少的具體前提 reason code）
 ```
 
+不經 fantasy 工具邊界的執行路徑——static runtime action 與 structured step——
+不會經過 `authorizeToolInvocation`，改由
+[Go function: commitGateActionDenial](../../internal/team/decision_discipline.go)
+在 provider 或 step 程序啟動前評估同一個 commit gate：
+
+- static action：在
+  [Go function: executeRuntimeAction](../../internal/team/coordinator_task_run.go)
+  中、`action_started` 事件與任何 provider 工作之前評估。gate 名稱為
+  `capability:type`（[Go function: runtimeActionGateName](../../internal/team/coordinator_task_run.go)；
+  沒有 type 時只用 capability）。被擋時發 `action_failed`，provider 不啟動。
+- structured step：只有 `effect: mutate` 的 step 經過 gate
+  （[Go function: structuredStepCommitGate](../../internal/team/coordinator_structured_execution.go)），
+  gate 名稱為 step 的 tool；produce／validate step 不受閘控。
+- 兩者都沒有逐次呼叫的唯讀分類器；gate 是否適用仍由任務的 side-effect class
+  決定，被擋時同樣 emit `commit_gate_blocked`。
+
 `recovery-policy = reconcile` 不得被迫宣稱擁有假的 rollback 能力。
 接受 rollback **或** reconcile，依既有 recovery model 決定。
 

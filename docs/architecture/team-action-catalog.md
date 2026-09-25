@@ -1288,7 +1288,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 - 測試:`internal/inspect/trace_test.go`(`TestEventStatusAndReasonProjectsRunCancellationCause` 旁)加
   `team.LifecycleEventPayload{ActionStatus: "failure"}` case。
 
-**WP-0.3 輸出 canonicalize 提前(E-04)** — ✅ 已完成(helper 在 `runtime_action_outputs.go`,含 `failRuntimeAction`)
+**WP-0.3 輸出 canonicalize 提前(E-04)** — ✅ 已完成,commit `85b00fe`(helper 在 `runtime_action_outputs.go`,含 `failRuntimeAction`)
 
 - `executeRuntimeAction`:把 `CanonicalizeRuntimeOutputs` 區塊(約 2508-2515)移到 `decodeActionResult`(約 2482-2489)
   之後、artifact ingestion(2490)之前;`output = actionResultDisplay(...)`(2507)保留在 ingestion 之後。
@@ -1308,7 +1308,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   動態 team,worker task 帶 `on_failure` 與 `on-failure-classes: [verification, semantic_rejection]`,
   驗證失敗後 `on_failure` 目標被重設,最多 `max_retries` 次。另加 enabled workflow 的回歸測試確認 FailFast/limit 行為不變。
 
-**WP-0.5 文件修正(E-05、E-06)**
+**WP-0.5 文件修正(E-05、E-06)** — ✅ 已完成(另補 command provider `dir` 相對 process cwd 的說明,E-23)
 
 - `docs/reference/action-providers.md`:
   - 「Binding a provider to a task」範例改成可載入的完整範例(含 `side_effect: none`、`when-goal-contains`、
