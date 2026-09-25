@@ -30,6 +30,10 @@
   `execution_events.go` 814)只允許加入「呼叫新檔案函式」或「結構欄位」等級的最小掛勾,
   每個檔案淨增加不超過約 25 行。
 - 錯誤一律以 `fmt.Errorf("doing X: %w", err)` 包裝;測試一律 table-driven。
+- **實作 baseline(2026-09-25,branch `feat/team-action-catalog` 起點 `42ffd53`)**:`go build ./...`、`go vet ./...` 通過;
+  `go test ./...` 只有 `TestCoordinatorFinalizeTaskTerminalResourcesClosesLeakAfterAcceptedTerminalResult` 在第一次全套件
+  執行時失敗一次(terminal cleanup 在負載下偶發),單獨 `-count=10`、`-race -count=40` 與之後的全套件重跑都通過,
+  視為既存 flake,與本功能無關。
 
 ### 0.1 v1 → v2 主要變更
 
@@ -1267,7 +1271,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 
 ### WP-0 既存問題修正(可獨立,先做)
 
-**WP-0.1 `permitActionRetry` 尊重 replay 安全(E-01)**
+**WP-0.1 `permitActionRetry` 尊重 replay 安全(E-01)** — ✅ 已完成
 
 - `runtime_workflow.go` `permitActionRetry`:在 `task.Action == nil` 檢查之後、任何 `retryState` 寫入之前加
   `if !CanAutomaticallyReplay(task) { return false }`(`execution_contract.go:714-724`)。

@@ -214,6 +214,12 @@ func (w *runtimeWorkflow) permitActionRetry(task TaskDef, err error) bool {
 	if w == nil || !w.Enabled() || task.Action == nil || err == nil {
 		return false
 	}
+	// A retry re-executes the provider, so it needs the same replay safety as
+	// any other automatic re-execution. Checking before RecordFailure keeps a
+	// non-replayable action from consuming the signature budget.
+	if !CanAutomaticallyReplay(task) {
+		return false
+	}
 	if w.policies.FailFast {
 		return false
 	}
