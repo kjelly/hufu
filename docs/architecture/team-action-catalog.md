@@ -1418,7 +1418,7 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - 無 catalog 時 worker/coordinator 工具面與 baseline 相同(S12);`TestBuildOrchestratorToolsAreRuntimeAllowed` 通過。
   - Lint:`tools:` 或 prompt 提到這些名稱不報 `declared_tool_missing`/`prompt_unknown_tool`。
 
-### WP-4 Proposal(§9.7、§10) — ✅ 已完成
+### WP-4 Proposal(§9.7、§10) — ✅ 已完成,commit `b686eb9`
 
 實作紀錄:全部在新檔 `team_action_proposal.go`(`EventTeamActionProposed` 常數放 `event_types.go`)。Append 失敗回
 `team_action_proposal_append_failed`,另有 `team_action_request_invalid`(未知欄位、assessment 或空 rationale)。
@@ -1436,7 +1436,12 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - 多個 worker 對同一 action 留不同 assessment,coordinator get 依新到舊列出。
   - 事件 payload strict 驗證拒絕未知欄位。
 
-### WP-5 Durable binding plumbing(§14)
+### WP-5 Durable binding plumbing(§14) — ✅ 已完成
+
+實作紀錄:§14.1 的檢查為 `validateCatalogActionIntegrity`(`team_action_binding.go`),放在動態 team 檢查之後、workspace 配置之前,
+另外比對 action 的 capability/type 是否等於 entry。有 binding 但 team 沒有 catalog 時回 `team_action_catalog_drift`。
+`task_journal.go` 的 journal 只寫不讀,所以只在 result record 攜帶 binding。
+
 
 - §14 表格 #2-#17 全部,以及 §14 的 `ProposalIDs` nil 正規化與 §14.1 檢查。#1 的 `CatalogAction` 欄位與 binding 型別
   已在 WP-2 建立;`CatalogInvocation` 欄位與型別、以及它在 `cloneTaskDef` 的 deep copy 屬於 WP-6。

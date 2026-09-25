@@ -171,6 +171,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		SubagentProvider                                                     string
 		DynamicToolAuthorization                                             *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 		ResourceScopeSnapshot                                                *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
+		CatalogAction                                                        *CatalogActionBinding             `json:"catalog_action,omitempty"`
 	}{
 		ID: task.ID, PlanTaskID: task.PlanTaskID, Phase: string(task.Phase), Agent: task.Agent, Desc: task.Desc, Goal: task.Goal, Constraints: task.Constraints, Model: task.Model, Source: task.Source, PlanFirst: task.PlanFirst, ModelTopology: task.ModelTopology,
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
@@ -184,6 +185,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		SubagentProvider:         task.SubagentProvider,
 		DynamicToolAuthorization: task.DynamicToolAuthorization,
 		ResourceScopeSnapshot:    task.ResourceScopeSnapshot,
+		CatalogAction:            task.CatalogAction,
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

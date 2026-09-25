@@ -84,6 +84,7 @@ func todoSpecForTestTask(task TaskDef) TodoSpec {
 		RunInputSnapshotHash:          task.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash,
 		BoundInputs:                   cloneStringMap(task.BoundInputs),
+		CatalogAction:                 task.CatalogAction.clone(),
 		ContractID:                    task.ContractID,
 		ContractHash:                  task.ContractHash,
 		ContractRevision:              task.ContractRevision,

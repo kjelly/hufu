@@ -91,6 +91,7 @@ type TaskOccurrenceProjection struct {
 	ResultContract           *ResultContractRef
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
+	CatalogAction            *CatalogActionBinding
 	RuntimeOccurrence        *RuntimeOccurrenceMetaV1
 	PrimaryAdmission         *PrimaryOccurrenceAdmission
 }
@@ -136,6 +137,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		ResultContract:           item.ResultContract.clone(),
 		WorkerWorkspace:          item.WorkerWorkspace.clone(),
 		ExecutionRoute:           item.ExecutionRoute.clone(),
+		CatalogAction:            item.CatalogAction.clone(),
 		RuntimeOccurrence:        cloneRuntimeOccurrenceMeta(item.RuntimeOccurrence),
 		PrimaryAdmission:         clonePrimaryOccurrenceAdmission(item.PrimaryAdmission),
 		MaxRetries:               item.MaxRetries, OnFailureClasses: append([]TaskFailureClass(nil), item.OnFailureClasses...), SideEffect: item.SideEffect, Recovery: item.Recovery,
@@ -199,6 +201,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		ResultContract:     task.ResultContract.clone(),
 		WorkerWorkspace:    task.WorkerWorkspace.clone(),
 		ExecutionRoute:     task.ExecutionRoute.clone(),
+		CatalogAction:      task.CatalogAction.clone(),
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

@@ -1600,6 +1600,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.ExecutionRoute != nil {
 		payload["execution_route"] = item.ExecutionRoute.clone()
 	}
+	if item.CatalogAction != nil {
+		payload["catalog_action"] = item.CatalogAction.clone()
+	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
 	}

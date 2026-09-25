@@ -395,6 +395,7 @@ type canonicalTaskShadow struct {
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
+	CatalogAction            *CatalogActionBinding             `json:"catalog_action,omitempty"`
 }
 
 func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
@@ -468,6 +469,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ResultContract:                item.ResultContract.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
+		CatalogAction:                 item.CatalogAction.clone(),
 		ExecutionReceipts:             toCanonicalReceipts(item.ExecutionReceipts, item.ExecutionReceipt),
 		FailureEvent:                  RedactedFailureEvent(item.FailureEvent),
 		FailureFingerprints:           normalizeFingerprints(item.FailureFingerprints),

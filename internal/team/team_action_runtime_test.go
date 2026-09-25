@@ -115,10 +115,11 @@ func TestDynamicTeamRejectsNonCatalogActions(t *testing.T) {
 		name        string
 		withCatalog bool
 		binding     *CatalogActionBinding
+		want        string
 	}{
-		{name: "static action in a catalog team", withCatalog: true},
-		{name: "static action without a catalog"},
-		{name: "catalog binding without a catalog", binding: &CatalogActionBinding{ActionID: "collect", InvocationID: "tai_test"}},
+		{name: "static action in a catalog team", withCatalog: true, want: "action invocation requires an enabled runtime workflow"},
+		{name: "static action without a catalog", want: "action invocation requires an enabled runtime workflow"},
+		{name: "catalog binding without a catalog", binding: &CatalogActionBinding{ActionID: "collect", InvocationID: "tai_test"}, want: "team_action_catalog_drift"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -126,8 +127,8 @@ func TestDynamicTeamRejectsNonCatalogActions(t *testing.T) {
 			c, events := newDynamicCatalogCoordinator(t, dynamicCatalogSession(t, provider, tt.withCatalog))
 			task, item := addCatalogActionTodo(c, catalogActionTask(tt.binding))
 			_, err := c.executeRuntimeAction(context.Background(), task, item.ID)
-			if err == nil || !strings.Contains(err.Error(), "action invocation requires an enabled runtime workflow") {
-				t.Fatalf("executeRuntimeAction error = %v, want the workflow requirement", err)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("executeRuntimeAction error = %v, want %q", err, tt.want)
 			}
 			if provider.executed != 0 {
 				t.Fatalf("provider executions = %d, want 0", provider.executed)

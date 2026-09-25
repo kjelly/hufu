@@ -2433,6 +2433,9 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if !c.phaseWorkflow.Enabled() && task.CatalogAction == nil {
 		return "", fmt.Errorf("action invocation requires an enabled runtime workflow")
 	}
+	if err := c.validateCatalogActionIntegrity(task); err != nil {
+		return "", err
+	}
 	startedAt := time.Now().UTC()
 	actionID, actionRoot, err := c.allocateRuntimeActionWorkspace(todoID, startedAt)
 	if err != nil {
@@ -2470,7 +2473,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	actionEnv := ActionEnvironment{
 		Workspace: actionRoot, Repository: c.projectDir, RunID: coordinatorRuntimeRunID(c),
-		TaskID: todoID, Attempt: attempt, ActionInvocationID: actionID,
+		TaskID: todoID, Attempt: attempt, ActionInvocationID: actionID, CatalogInvocationID: catalogInvocationID(task),
 	}
 	if c.session != nil {
 		actionEnv.TeamName = c.session.Config.Name

@@ -330,6 +330,9 @@ type ActionEnvironment struct {
 	TaskID             string
 	Attempt            int
 	ActionInvocationID string
+	// CatalogInvocationID is stable across attempts and resumes of one
+	// catalog task, so a provider can use it as an idempotency key.
+	CatalogInvocationID string
 }
 
 // WithActionEnvironment attaches ActionEnvironment to a context.
@@ -530,6 +533,9 @@ func actionCommandEnvironment(ctx context.Context) []string {
 	}
 	if actionEnv.ActionInvocationID != "" {
 		env = append(env, "HUFU_ACTION_INVOCATION_ID="+actionEnv.ActionInvocationID)
+	}
+	if actionEnv.CatalogInvocationID != "" {
+		env = append(env, "HUFU_CATALOG_INVOCATION_ID="+actionEnv.CatalogInvocationID)
 	}
 	return env
 }

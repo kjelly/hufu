@@ -1321,6 +1321,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		ResultContract:     it.ResultContract.clone(),
 		WorkerWorkspace:    it.WorkerWorkspace.clone(),
 		ExecutionRoute:     it.ExecutionRoute.clone(),
+		CatalogAction:      it.CatalogAction.clone(),
 	}
 }
 

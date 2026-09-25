@@ -385,6 +385,7 @@ type TodoItem struct {
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
+	CatalogAction            *CatalogActionBinding             `json:"catalog_action,omitempty"`
 	// RuntimeOccurrence and PrimaryAdmission are runtime-owned. Model-facing
 	// TaskDef/TodoSpec inputs never populate them.
 	RuntimeOccurrence    *RuntimeOccurrenceMetaV1    `json:"runtime_occurrence,omitempty"`
@@ -520,6 +521,7 @@ type TodoSpec struct {
 	ResultContract           *ResultContractRef
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
+	CatalogAction            *CatalogActionBinding
 }
 
 // todoItemFromSpec builds a pending TodoItem from a spec and an explicit ID.
@@ -603,6 +605,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		ResultContract:                item.ResultContract.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
+		CatalogAction:                 item.CatalogAction.clone(),
 		MaxRetries:                    item.MaxRetries,
 		OnFailure:                     item.OnFailure,
 		OnFailureClasses:              append([]TaskFailureClass(nil), item.OnFailureClasses...),
@@ -1339,6 +1342,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ResultContract:                item.ResultContract.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
+		CatalogAction:                 item.CatalogAction.clone(),
 		VerifyResult:                  verifyResult,
 		RuntimeError:                  runtimeErr,
 		ExecutionReceipt:              execReceipt,
@@ -1518,6 +1522,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.ResultContract = src.ResultContract.clone()
 	dst.WorkerWorkspace = src.WorkerWorkspace.clone()
 	dst.ExecutionRoute = src.ExecutionRoute.clone()
+	dst.CatalogAction = src.CatalogAction.clone()
 	dst.MaxRetries = src.MaxRetries
 	dst.OnFailure = src.OnFailure
 	dst.Escalate = src.Escalate

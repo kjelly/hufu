@@ -295,6 +295,7 @@ func cloneTaskDef(td TaskDef) TaskDef {
 	}
 	clone.VerifySpec = cloneVerificationSpecPtr(td.VerifySpec)
 	clone.RecoveryHypothesis = cloneRecoveryHypothesis(td.RecoveryHypothesis)
+	clone.CatalogAction = td.CatalogAction.clone()
 	return clone
 }
 
