@@ -1,7 +1,6 @@
 package team
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -89,6 +88,9 @@ type EventStore struct {
 	cachedEvents    []RunEvent
 	syncFile        func() error
 	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
+	// validatedSize is the byte length of the log prefix the published
+	// chain head, cache, and idempotency index were derived from.
+	validatedSize int64
 }
 
 // SetBranchID binds the store to a session branch: subsequent events appended
@@ -348,13 +350,11 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		return RunEvent{}, err
 	}
 
-	state, err := es.scanFile(appendFile)
-	if err != nil {
-		return failClosed(fmt.Errorf("rescan event store before append: %w", err))
-	}
 	// The scan and publication are inside the interprocess lock so the
 	// idempotency index and chain head include every independent writer event.
-	es.publishState(state, appendFile, false)
+	if err := es.publishAppendedState(appendFile); err != nil {
+		return failClosed(fmt.Errorf("rescan event store before append: %w", err))
+	}
 
 	// A failed Sync leaves durability uncertain: the event may nevertheless be
 	// visible after reopen. Treat a persisted idempotency key as success so a
@@ -458,6 +458,7 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	es.sequence++
 	es.lastEventID = event.ID
 	es.lastHash = event.Hash
+	es.validatedSize += int64(len(line))
 	if event.IdempotencyKey != "" {
 		identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
 		es.idempotencyKeys[identity] = cloneRunEvent(event)
@@ -534,86 +535,13 @@ func (es *EventStore) rescan() error {
 	return nil
 }
 
-type eventStoreState struct {
-	lastEventID     string
-	lastHash        string
-	sequence        int
-	runID           string
-	sessionID       string
-	events          []RunEvent
-	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
-}
-
-// scanFile is the one strict durable scanner. It never mutates EventStore;
-// callers publish its complete state only after the entire file validates.
-func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
-	es.scanCount++
-	state := eventStoreState{
-		runID:           es.runID,
-		sessionID:       es.sessionID,
-		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
-	}
-	if f == nil {
-		return eventStoreState{}, fmt.Errorf("event store file is unavailable")
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return eventStoreState{}, fmt.Errorf("seek event store: %w", err)
-	}
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var chainVerifier eventchain.Verifier
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var event RunEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			return eventStoreState{}, fmt.Errorf("decode event %d: %w", state.sequence+1, err)
-		}
-		if err := chainVerifier.Verify(eventchain.Entry{
-			ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
-			Payload: event.Payload, PreviousHash: event.PreviousHash, Hash: event.Hash,
-		}); err != nil {
-			return eventStoreState{}, err
-		}
-		state.events = append(state.events, cloneRunEvent(event))
-		state.lastEventID = event.ID
-		state.lastHash = event.Hash
-		if event.IdempotencyKey != "" {
-			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
-			if existing, exists := state.idempotencyKeys[identity]; exists && (isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(existing.Type)) {
-				equivalent, compareErr := decisionIdempotencyEquivalent(existing, event)
-				if compareErr != nil {
-					return eventStoreState{}, fmt.Errorf("compare event %d decision idempotency payload: %w", state.sequence, compareErr)
-				}
-				if !equivalent {
-					return eventStoreState{}, fmt.Errorf("%w: branch %q key %q", ErrDecisionIdempotencyConflict, identity.branchID, identity.key)
-				}
-			}
-			state.idempotencyKeys[identity] = cloneRunEvent(event)
-		}
-		state.sequence++
-		if state.runID == "" && event.RunID != "" {
-			state.runID = event.RunID
-		}
-		if state.sessionID == "" && event.SessionID != "" {
-			state.sessionID = event.SessionID
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return eventStoreState{}, fmt.Errorf("scan event store: %w", err)
-	}
-	return state, nil
-}
-
 func (es *EventStore) publishState(state eventStoreState, f *os.File, refreshSync bool) {
 	es.lastEventID = state.lastEventID
 	es.lastHash = state.lastHash
 	es.sequence = state.sequence
 	es.runID = state.runID
 	es.sessionID = state.sessionID
+	es.validatedSize = state.size
 	es.cachedEvents = state.events
 	es.idempotencyKeys = state.idempotencyKeys
 	es.f = f
@@ -637,6 +565,7 @@ func (es *EventStore) invalidateState(err error) {
 	es.lastEventID = ""
 	es.lastHash = ""
 	es.sequence = 0
+	es.validatedSize = 0
 	es.cachedEvents = nil
 	es.idempotencyKeys = nil
 	es.stateErr = err

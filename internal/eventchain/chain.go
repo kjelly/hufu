@@ -58,6 +58,13 @@ func (v *Verifier) Verify(entry Entry) error {
 	return nil
 }
 
+// ResumeVerifier returns a verifier positioned after sequence verified
+// entries, the last of which had previousID and previousHash, so a caller
+// that already verified a prefix verifies only the entries that follow it.
+func ResumeVerifier(sequence int, previousID, previousHash string) Verifier {
+	return Verifier{sequence: sequence, previousID: previousID, previousHash: previousHash}
+}
+
 // Sequence returns the number of successfully verified entries.
 func (v *Verifier) Sequence() int {
 	return v.sequence

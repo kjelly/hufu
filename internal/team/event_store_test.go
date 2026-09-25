@@ -533,8 +533,10 @@ func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
 	if err := store.Append(RunEvent{Type: "task_progress", Actor: "worker", Payload: []byte(`{"status":"original"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if store.scanCount != 2 {
-		t.Fatalf("initial scans = %d, want 2", store.scanCount)
+	// Opening scans the log once; an append scans only what other writers
+	// added after it, and nothing else wrote here.
+	if store.scanCount != 1 {
+		t.Fatalf("initial scans = %d, want 1", store.scanCount)
 	}
 
 	first, err := store.ReadEvents()
@@ -545,7 +547,7 @@ func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
 		t.Fatalf("cached event count = %d, want 1", len(first))
 	}
 	first[0].Payload[0] = 'X'
-	if store.scanCount != 2 {
+	if store.scanCount != 1 {
 		t.Fatalf("ReadEvents triggered a rescan: %d scans", store.scanCount)
 	}
 	if store.cacheHitCount != 1 {
