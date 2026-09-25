@@ -1422,6 +1422,8 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
 實作紀錄:全部在新檔 `team_action_proposal.go`(`EventTeamActionProposed` 常數放 `event_types.go`)。Append 失敗回
 `team_action_proposal_append_failed`,另有 `team_action_request_invalid`(未知欄位、assessment 或空 rationale)。
 `durableBranchID` 在沒有 `eventStore` 時回空字串(D17),所以只有自訂 journal 的 coordinator 會得到 `team_action_journal_required`。
+後續修正:§9.7 #6 的 256 筆上限原本在 index 鎖外、去重之前檢查,並行時可超過上限,滿額後重試也拿不到 `duplicate: true`;
+改為在 `recordTeamActionProposal` 的同一把鎖內,依序做去重、上限檢查、append。
 
 
 - 新檔 `team_action_proposal.go`:propose 工具、payload、append、index、重建;`c.durableBranchID()` helper(D17)在此 WP 建立

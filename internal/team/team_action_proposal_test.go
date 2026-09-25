@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"charm.land/fantasy"
@@ -160,6 +161,80 @@ func TestTeamActionProposeEnforcesTheSessionLimit(t *testing.T) {
 	f.c.actionProposals.mu.Unlock()
 	if content, isError := f.propose(t, "runtime-engineer", validProposal); !isError || !strings.HasPrefix(content, teamActionProposalLimitExceeded) {
 		t.Fatalf("propose over the limit = %q", content)
+	}
+}
+
+// fillProposalIndex adds synthetic proposals until the index holds total.
+func fillProposalIndex(c *Coordinator, total int) {
+	c.actionProposals.mu.Lock()
+	defer c.actionProposals.mu.Unlock()
+	for i := len(c.actionProposals.proposals); i < total; i++ {
+		c.actionProposals.addLocked(TeamActionProposal{IdempotencyKey: fmt.Sprintf("filler-%d", i)})
+	}
+}
+
+func TestTeamActionProposeRetryIsRecognizedWhenTheSessionIsFull(t *testing.T) {
+	f := newProposalFixture(t)
+	content, isError := f.propose(t, "runtime-engineer", validProposal)
+	var first map[string]any
+	if isError || json.Unmarshal([]byte(content), &first) != nil {
+		t.Fatalf("first propose = %s", content)
+	}
+	fillProposalIndex(f.c, maxProposalsPerSession)
+	content, isError = f.propose(t, "runtime-engineer", validProposal)
+	var retry map[string]any
+	if isError || json.Unmarshal([]byte(content), &retry) != nil || retry["duplicate"] != true || retry["proposal_id"] != first["proposal_id"] {
+		t.Fatalf("retry in a full session = %s, want duplicate: true", content)
+	}
+	if content, isError = f.propose(t, "runtime-engineer", strings.Replace(validProposal, `"api"`, `"db"`, 1)); !isError || !strings.HasPrefix(content, teamActionProposalLimitExceeded) {
+		t.Fatalf("new proposal in a full session = %q, want %s", content, teamActionProposalLimitExceeded)
+	}
+}
+
+func TestConcurrentProposalsCannotExceedTheSessionLimit(t *testing.T) {
+	f := newProposalFixture(t)
+	fillProposalIndex(f.c, maxProposalsPerSession-1)
+	item := f.items["runtime-engineer"]
+	ctx := occurrenceTestContext(f.c, item.ID, 1)
+	ctx = context.WithValue(ctx, todoIDKey{}, item.ID)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, "runtime-engineer")
+	tool := &teamActionProposeTool{coordinator: f.c, todoID: item.ID, agent: "runtime-engineer"}
+	const workers = 8
+	responses := make(chan fantasy.ToolResponse, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			input := strings.Replace(validProposal, `"api"`, fmt.Sprintf(`"svc-%d"`, i), 1)
+			response, err := tool.Run(ctx, fantasy.ToolCall{Name: teamActionProposeToolName, Input: input})
+			if err != nil {
+				response = fantasy.NewTextErrorResponse(err.Error())
+			}
+			responses <- response
+		}(i)
+	}
+	wg.Wait()
+	close(responses)
+	recorded, limited := 0, 0
+	for response := range responses {
+		switch {
+		case !response.IsError:
+			recorded++
+		case strings.HasPrefix(response.Content, teamActionProposalLimitExceeded):
+			limited++
+		default:
+			t.Fatalf("unexpected response %q", response.Content)
+		}
+	}
+	if recorded != 1 || limited != workers-1 {
+		t.Fatalf("recorded %d and limited %d proposals, want 1 and %d", recorded, limited, workers-1)
+	}
+	if got := f.c.proposalCount(); got != maxProposalsPerSession {
+		t.Fatalf("index holds %d proposals, want %d", got, maxProposalsPerSession)
+	}
+	if got := len(f.proposalEvents(t)); got != 1 {
+		t.Fatalf("durable proposal events = %d, want 1", got)
 	}
 }
 

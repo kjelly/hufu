@@ -304,9 +304,6 @@ func (t *teamActionProposeTool) proposalPayload(ctx context.Context, entry Actio
 	if err != nil {
 		return fail(teamActionEvidenceInvalid, err.Error())
 	}
-	if t.coordinator.proposalCount() >= maxProposalsPerSession {
-		return fail(teamActionProposalLimitExceeded, fmt.Sprintf("this session already has %d proposals", maxProposalsPerSession))
-	}
 	return TeamActionProposedPayload{
 		SchemaVersion: teamActionProposalSchemaVersion, Status: "proposed", ActionID: entry.ID, EntryHash: entry.Hash,
 		CatalogHash: t.coordinator.session.ActionCatalog.Hash, Agent: t.agent, OccurrenceRevision: identity.OccurrenceRevision,
@@ -337,9 +334,11 @@ func (c *Coordinator) proposalEvidence(ctx context.Context, ids []string) ([]Tea
 }
 
 // recordTeamActionProposal appends a new proposal or recognizes a retried one.
-// Looking up, appending, and indexing happen under one lock so concurrent
-// workers cannot append the same key twice. It reports whether the proposal
-// was already recorded, or a tool error response.
+// Looking up, checking the session limit, appending, and indexing happen under
+// one lock, so concurrent workers can neither append the same key twice nor
+// exceed the limit, and a retry of a recorded proposal is still recognized
+// once the session is full. It reports whether the proposal was already
+// recorded, or a tool error response.
 func (c *Coordinator) recordTeamActionProposal(ctx context.Context, todoID, agentName string, attempt int, key string, payload TeamActionProposedPayload) (bool, *fantasy.ToolResponse) {
 	c.actionProposals.mu.Lock()
 	defer c.actionProposals.mu.Unlock()
@@ -348,6 +347,10 @@ func (c *Coordinator) recordTeamActionProposal(ctx context.Context, todoID, agen
 			return true, nil
 		}
 		response := teamActionErrorResponse(teamActionProposalConflict, "this task already recorded a different proposal for these arguments in this attempt")
+		return false, &response
+	}
+	if len(c.actionProposals.proposals) >= maxProposalsPerSession {
+		response := teamActionErrorResponse(teamActionProposalLimitExceeded, fmt.Sprintf("this session already has %d proposals", maxProposalsPerSession))
 		return false, &response
 	}
 	raw, err := json.Marshal(payload)
