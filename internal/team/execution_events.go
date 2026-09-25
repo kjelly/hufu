@@ -163,6 +163,8 @@ type LifecycleEventPayload struct {
 type executionEventLogger struct {
 	mu sync.Mutex
 	f  *os.File
+	// attempts holds the last attempt logged for each task in this run.
+	attempts map[string]int
 }
 
 func newExecutionEventLogger(workspace string) (*executionEventLogger, error) {
@@ -187,8 +189,21 @@ func (l *executionEventLogger) append(event ExecutionEvent) error {
 	if l.f == nil {
 		return nil
 	}
+	if event.TaskID != "" {
+		if l.attempts == nil {
+			l.attempts = make(map[string]int)
+		}
+		l.attempts[event.TaskID] = event.Attempt
+	}
 	_, err = l.f.Write(append(data, '\n'))
 	return err
+}
+
+// lastAttempt returns the attempt last logged for taskID, or 0.
+func (l *executionEventLogger) lastAttempt(taskID string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attempts[taskID]
 }
 
 func (l *executionEventLogger) close() {
@@ -778,6 +793,24 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 		ArtifactRefs:     artifactRefs,
 		FailureSignature: failureSignature,
 	})
+}
+
+// recordSkippedExecutionEvent logs a skipped task on the legacy stream, which
+// the exporter projects from task_skipped. A task already logged in this run
+// keeps its last attempt, as the export keeps the attempt its last dispatch
+// started; a task never logged takes the transition's attempt.
+func (c *Coordinator) recordSkippedExecutionEvent(item *TodoItem) {
+	c.executionEventsMu.RLock()
+	logger := c.executionEvents
+	c.executionEventsMu.RUnlock()
+	if logger == nil || item == nil {
+		return
+	}
+	attempt := logger.lastAttempt(item.ID)
+	if attempt < 1 {
+		attempt = item.Retries + 1
+	}
+	c.recordExecutionEvent(item.ID, item.Agent, attempt, string(TaskSkipped), "", 0, ExecutionUsage{})
 }
 
 // teamDefinitionRevision hashes only team configuration and agent definition

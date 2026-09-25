@@ -867,6 +867,11 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("apply task transition after durable append: %w", err)
 	}
 	c.revokeTaskOccurrence(taskID)
+	// Execution sites log the other statuses themselves; a skip has no
+	// execution site, so the transition owner logs it.
+	if projected.Status == TaskSkipped {
+		c.recordSkippedExecutionEvent(&projected)
+	}
 	if planLifecycleChanged {
 		if err := c.taskTracker.TodoList().SetPlanLifecycle(taskID, projected.PlanFirst, projected.PlanID); err != nil {
 			return fmt.Errorf("apply task plan lifecycle after durable append: %w", err)

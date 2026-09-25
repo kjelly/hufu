@@ -301,3 +301,63 @@ func TestExecutionEvents_ProductionBeginAndFinalizeParity(t *testing.T) {
 		t.Fatalf("shadow file not found: %v", err)
 	}
 }
+
+// TestSkippedTasksKeepExecutionEventParity pins the legacy stream to the
+// export for tasks that end skipped: the export projects task_skipped, so the
+// legacy logger must record the skip too, at the attempt the export reports.
+func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
+	tests := []struct {
+		name    string
+		attempt int // 0 leaves the task pending until it is skipped
+	}{
+		{name: "pending task skipped at finish"},
+		{name: "rejected plan skipped after its first attempt", attempt: 1},
+		{name: "rejected plan skipped after a later attempt", attempt: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			c := &Coordinator{
+				session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test-team"}},
+				sessionData: NewSession(),
+				taskTracker: NewTaskTracker(),
+			}
+			closer := c.beginExecutionRun()
+			c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task"}})
+			ctx := context.Background()
+			if tt.attempt > 0 {
+				c.recordExecutionEvent("1", "worker", tt.attempt, "in_progress", "model-1", 0, ExecutionUsage{})
+				if err := c.CommitTaskTransition(ctx, "1", TaskPending, TaskInProgress, "", "", attemptStartMetadata(tt.attempt)); err != nil {
+					t.Fatal(err)
+				}
+				c.recordExecutionEvent("1", "worker", tt.attempt, "planned", "model-1", 0, ExecutionUsage{})
+				if err := c.CommitTaskTransition(ctx, "1", TaskInProgress, TaskPlanned, "", "", nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.commitTaskTransitionFromCurrent(ctx, "1", TaskSkipped, "plan rejected", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			c.SetLastRunResult(&RunResult{Outcome: RunOutcomePartial})
+			closer()
+
+			if failures := c.dualWriteFailures.Load(); failures != 0 {
+				t.Fatalf("dual-write failures = %d, want 0", failures)
+			}
+			legacy, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, executionEventsFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var skipped []ExecutionEvent
+			for _, event := range legacy {
+				if event.Status == string(TaskSkipped) {
+					skipped = append(skipped, event)
+				}
+			}
+			wantAttempt := max(tt.attempt, 1)
+			if len(skipped) != 1 || skipped[0].TaskID != "1" || skipped[0].Attempt != wantAttempt {
+				t.Fatalf("legacy skipped events = %#v, want one for task 1 at attempt %d", skipped, wantAttempt)
+			}
+		})
+	}
+}
