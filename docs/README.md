@@ -69,10 +69,6 @@ to re-create an abstraction that already exists in the runtime.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.
-- [Team action catalog](architecture/team-action-catalog.md) — draft
-  implementation plan for configuration-owned actions that workers propose and
-  the coordinator dispatches; code and tests remain authoritative for
-  implementation status.
 
 ### Guides and references
 
@@ -117,7 +113,8 @@ to re-create an abstraction that already exists in the runtime.
 - `archive/implementation-plans/` contains plans whose implementation has
   landed or whose remaining work is tracked elsewhere, including the
   [SQLite optimization implementation record](archive/implementation-plans/hufu-sqlite-optimization-plan.md)
-  and the [managed workspace registry implementation record](archive/implementation-plans/hufu-workspace-registry-improvement-plan.md).
+  and the [managed workspace registry implementation record](archive/implementation-plans/hufu-workspace-registry-improvement-plan.md),
+  and the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

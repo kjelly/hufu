@@ -74,7 +74,11 @@ const validProposal = `{"action":"collect-debug-bundle","arguments":{"service":"
 
 func TestTeamActionProposeRecordsDurableProposal(t *testing.T) {
 	f := newProposalFixture(t)
+	todosBefore := len(f.c.taskTracker.TodoList().Items())
 	content, isError := f.propose(t, "runtime-engineer", validProposal)
+	if got := len(f.c.taskTracker.TodoList().Items()); got != todosBefore {
+		t.Fatalf("a proposal changed the task list: %d todos, want %d", got, todosBefore)
+	}
 	var first map[string]any
 	if isError || json.Unmarshal([]byte(content), &first) != nil || first["status"] != "recorded" || first["duplicate"] != false ||
 		!strings.HasPrefix(first["proposal_id"].(string), "tap_") {

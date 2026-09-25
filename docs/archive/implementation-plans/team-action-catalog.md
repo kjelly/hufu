@@ -1,9 +1,9 @@
 # Hufu Team Action Catalog 實作規格(v2)
 
-> Status: draft(Ready for implementation;實作中,完成後移到 `docs/archive/implementation-plans/`)
-> Authority: normative(實作計畫;完成後 canonical 文件為 `docs/reference/action-providers.md`)
-> Verified-Commit: `42ffd53`
-> Superseded-By: —
+> Status: implemented — archived 2026-09-25; implemented through `872f7e4` on branch `feat/team-action-catalog`
+> Authority: reference(實作紀錄;canonical 文件為 `docs/reference/action-providers.md` 的 Action catalog 章節)
+> Verified-Commit: `872f7e4`
+> Superseded-By: `docs/reference/action-providers.md`
 > Target: `kjelly/hufu` main
 > Baseline: `cb2ee2b`(本文所有 `file:line` 以此 commit 為準;行號會漂移,以函式名稱為主)
 > Date: 2026-09-24
@@ -16,9 +16,8 @@
 
 ## 0. 文件狀態與閱讀方式
 
-- 本文件是實作計畫(2026-09-25 從 gitignored 的 `docs/tmp/` 移入)。**程式碼註解不得引用本檔**;對外引用一律指向
-  WP-10 更新後的 `docs/reference/action-providers.md`(`docs/README.md` 的 Document header 段要求註解引用 canonical 路徑)。
-  全部 WP 完成後,本檔移到 `docs/archive/implementation-plans/team-action-catalog.md`。
+- 本文件是已完成的實作計畫(2026-09-25 從 gitignored 的 `docs/tmp/` 移入,全部 WP 完成後封存於此)。**程式碼註解不得引用本檔**;
+  對外引用一律指向 `docs/reference/action-providers.md`(`docs/README.md` 的 Document header 段要求註解引用 canonical 路徑)。
 - 本文件只保留 **coding agent 可以直接完成** 的工作。需要產品決策的項目已由使用者在 §1 決定;
   仍待決策的議題列在 §27(延後),不屬於本規格的交付範圍。
 - 實作順序:§24 的 WP 必須依序完成(WP-0 可獨立先做)。每個 WP 一個 commit,
@@ -1558,7 +1557,7 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
   - `require-proposal: true` 需要至少一個有效提案者:不被 `tools-denied` 拒絕、在 allowed-workers 內、不使用 Codex 等外部
     agent backend(D20)。
 
-### WP-11 E2E 與 eval — ✅ 已完成
+### WP-11 E2E 與 eval — ✅ 已完成,commit `872f7e4`
 
 實作紀錄:Suite A 另加 `quick-bundle` entry(不需 proposal、max 1)給 budget case;Suite B 的 workflow 為
 `[prepare, execute, verify]` + `allow_phase_skip`。EXECUTE 期間 tool call 也發 action_* 事件(E-11),所以 Suite B 以第 2 個
@@ -1621,19 +1620,17 @@ Eval harness 每個 suite 只有一個 team(`internal/evalharness/types.go:12-17
 
 ## 26. Definition of Done
 
-- [ ] WP-0 ~ WP-11 全部完成,§24 各 WP 標記 commit hash。
-- [ ] §21 S1~S19 每條都有對應測試並通過。
-- [ ] 沒有 `action-catalog` 的 team:schema、工具面、policy snapshot hash、事件、digest、compat fixtures 與 baseline 相同。
-- [ ] 動態 team 與 workflow team 都能端到端執行 catalog action(eval case 1、5)。
-- [ ] Model 無法設定 capability/type/side_effect/recovery/decision_profile/phase。
-- [ ] Proposal durable、typed、resume 後可重建。
-- [ ] Catalog 變更後 resume fail closed。
-- [ ] `go build ./...`、`go vet ./...`、`go test ./...`、`go test -race ./internal/team/...`、`golangci-lint run` 通過。
-- [ ] `evals/team-action-catalog`(4 個 case)與 `evals/team-action-catalog-workflow`(1 個 case)通過。
-- [ ] 新增檔案皆 < 800 行;既有超大檔案淨增加符合 §0 限制。
-- [ ] `docs/reference/action-providers.md` 為 catalog 的 canonical 文件,程式碼註解只引用它。
-
----
+- [x] WP-0 ~ WP-11 全部完成,§24 各 WP 標記 commit hash。
+- [x] §21 S1~S19 每條都有對應測試並通過。
+- [x] 沒有 `action-catalog` 的 team:schema、工具面、policy snapshot hash、事件、digest、compat fixtures 與 baseline 相同。
+- [x] 動態 team 與 workflow team 都能端到端執行 catalog action(eval case 1、5)。
+- [x] Model 無法設定 capability/type/side_effect/recovery/decision_profile/phase。
+- [x] Proposal durable、typed、resume 後可重建。
+- [x] Catalog 變更後 resume fail closed。
+- [x] `go build ./...`、`go vet ./...`、`go test ./...`、`go test -race ./internal/team/...`(用 CI 的 `-short -timeout 20m`,833 秒)、`golangci-lint run` 通過。
+- [x] `evals/team-action-catalog`(4 個 case)與 `evals/team-action-catalog-workflow`(1 個 case)通過。
+- [x] 新增檔案皆 < 800 行;既有超大檔案淨增加符合 §0 限制(`runtime_workflow.go` +27、`coordinator_tools.go` +24,其餘更少)。
+- [x] `docs/reference/action-providers.md` 為 catalog 的 canonical 文件,程式碼註解只引用它。
 
 ## 27. 延後項目(v2+,需另行產品決策)
 

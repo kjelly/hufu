@@ -183,6 +183,34 @@ func TestCompileCatalogActionTasksRejections(t *testing.T) {
 	}
 }
 
+func TestRequireProposalNeedsARecommendedProposal(t *testing.T) {
+	c, _ := dispatchTestCoordinator(t, "", nil)
+	entry, _ := c.session.ActionCatalog.Lookup("restart-service")
+	argumentsHash := runInputHash([]byte(`{"service":"api"}`))
+	request := []TaskDef{catalogRequest("runtime-engineer", "restart-service", `{"service":"api"}`)}
+	for i, assessment := range []string{"candidate", "defer", "reject"} {
+		c.actionProposals.mu.Lock()
+		c.actionProposals.addLocked(TeamActionProposal{
+			TeamActionProposedPayload: TeamActionProposedPayload{ProposalID: fmt.Sprintf("tap_%d", i), ActionID: entry.ID, EntryHash: entry.Hash, ArgumentsHash: argumentsHash, Assessment: assessment},
+			IdempotencyKey:            fmt.Sprintf("key-%d", i),
+		})
+		c.actionProposals.mu.Unlock()
+		var dispatchErr *teamActionDispatchError
+		if _, err := c.compileCatalogActionTasks(request); !errors.As(err, &dispatchErr) || dispatchErr.Code != teamActionProposalRequired {
+			t.Fatalf("with %s proposals, compile error = %v, want %s", assessment, err, teamActionProposalRequired)
+		}
+	}
+	c.actionProposals.mu.Lock()
+	c.actionProposals.addLocked(TeamActionProposal{
+		TeamActionProposedPayload: TeamActionProposedPayload{ProposalID: "tap_other", ActionID: entry.ID, EntryHash: entry.Hash, ArgumentsHash: runInputHash([]byte(`{"service":"db"}`)), Assessment: "recommended"},
+		IdempotencyKey:            "key-other",
+	})
+	c.actionProposals.mu.Unlock()
+	if _, err := c.compileCatalogActionTasks(request); err == nil {
+		t.Fatal("a recommendation for different arguments authorized this dispatch")
+	}
+}
+
 func TestCompileCatalogActionTaskComesFromTheCatalog(t *testing.T) {
 	c, _ := dispatchTestCoordinator(t, "", nil)
 	entry, _ := c.session.ActionCatalog.Lookup("restart-service")
