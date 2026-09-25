@@ -100,6 +100,9 @@ type TaskDef struct {
 	// coordinator from choosing a provider, action type, or payload at runtime.
 	Action              *Action              `json:"-" yaml:"action,omitempty"`
 	ActionInputBindings []ActionInputBinding `json:"-" yaml:"-"`
+	// CatalogAction is set only by the runtime when it compiles a coordinator
+	// catalog_action request; see docs/reference/action-providers.md.
+	CatalogAction *CatalogActionBinding `json:"-" yaml:"-"`
 	// The following action-binding fields are runtime-owned occurrence
 	// identity. They are populated from a frozen RunInputSnapshot and omitted
 	// from coordinator/config decoding.

@@ -19,8 +19,12 @@ import (
 // agent-team template. Coordinator prose may request work, but it cannot move
 // this state machine or select a worker from another phase.
 type runtimeWorkflow struct {
-	mu                     sync.RWMutex
-	enabled                bool
+	mu      sync.RWMutex
+	enabled bool
+	// actionsEnabled lets a team without phases run catalog actions. It opens
+	// only the action runtime (provider registry, runtime workspace, receipts,
+	// and action events); phase dispatch stays disabled.
+	actionsEnabled         bool
 	team                   string
 	phases                 []Phase
 	state                  Phase
@@ -50,6 +54,11 @@ type runtimeWorkflow struct {
 func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 	w := &runtimeWorkflow{state: PhaseInit, results: make(map[Phase]PhaseResult), retryState: NewRetryState()}
 	if session == nil || len(session.Config.Workflow.Phases) == 0 {
+		if session != nil && session.ActionCatalog != nil && len(session.ActionCatalog.Entries) > 0 {
+			if err := w.enableCatalogActions(session); err != nil {
+				return nil, err
+			}
+		}
 		return w, nil
 	}
 	phases, err := normalizeWorkflowPhases(session.Config.Workflow.Phases)
@@ -132,7 +141,7 @@ func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action)
 }
 
 func (w *runtimeWorkflow) executeActionValueForTask(ctx context.Context, action Action, sideEffect string) (interface{}, error) {
-	if !w.Enabled() {
+	if !w.ActionsEnabled() {
 		return "", fmt.Errorf("structured actions require an enabled runtime workflow")
 	}
 	w.mu.RLock()
@@ -140,7 +149,7 @@ func (w *runtimeWorkflow) executeActionValueForTask(ctx context.Context, action 
 	registry := w.registry
 	w.mu.RUnlock()
 	prepareReadOnly := phase == PhasePrepare && strings.EqualFold(strings.TrimSpace(sideEffect), "none")
-	if phase != PhaseExecute && !prepareReadOnly {
+	if w.Enabled() && phase != PhaseExecute && !prepareReadOnly {
 		return "", fmt.Errorf("structured action %q is only allowed during execute phase or side-effect-free prepare", action.Type)
 	}
 	capability := normalizeCapability(action.Capability)
@@ -211,7 +220,7 @@ func (w *runtimeWorkflow) providerName(capability string) string {
 // handles only ActionProvider execution: generic worker retries retain their
 // established DAG and recovery policies.
 func (w *runtimeWorkflow) permitActionRetry(task TaskDef, err error) bool {
-	if w == nil || !w.Enabled() || task.Action == nil || err == nil {
+	if w == nil || !w.ActionsEnabled() || task.Action == nil || err == nil {
 		return false
 	}
 	// A retry re-executes the provider, so it needs the same replay safety as
@@ -263,6 +272,9 @@ func (w *runtimeWorkflow) actionExecutionError(task TaskDef, err error) Executio
 	if w != nil {
 		w.mu.RLock()
 		phase = w.state
+		if !w.enabled {
+			phase = ""
+		}
 		w.mu.RUnlock()
 	}
 	category := CategoryProviderFailure

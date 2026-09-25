@@ -1333,7 +1333,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   照舊通過。
 - 不在範圍:repair pending 期間呼叫不允許的工具在第 3 次得到 exhausted prompt 後 stream 仍繼續(E-24,記錄)。
 
-### WP-1 Catalog 設定、驗證、snapshot、CLI — ✅ 已完成
+### WP-1 Catalog 設定、驗證、snapshot、CLI — ✅ 已完成,commit `8ceb97c`
 
 實作紀錄:load-time schema 規則放在 `action_catalog_schema.go`,provider 身分 helper 放在 `action_provider_identity.go`
 (`executionRunInputPolicyHash` 改用它,輸出 bytes 不變)。workflow 必須以 prepare 開始(`normalizeWorkflowPhases`),
@@ -1374,7 +1374,12 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
   - CLI text/json 輸出(不含 provider command/source)。
   - `hufu team migrate` 對含 catalog 的 team round-trip 不遺失、不含空值。
 
-### WP-2 動態 team 的 action runtime(§15)
+### WP-2 動態 team 的 action runtime(§15) — ✅ 已完成
+
+實作紀錄:`ActionsEnabled`、`runtimeWorkspace`、`enableCatalogActions` 與 `runtimeActionEventPhase` 放在新檔
+`runtime_workflow_actions.go`。有 event store 時 `executeTask` 會從 durable Todo 重建 TaskDef(`CatalogAction` 要到 WP-5 才進
+TodoItem),所以 WP-2 測試直接呼叫 `executeRuntimeAction`(precedent `wp03_action_provider_test.go`)。
+
 
 - `runtime_workflow.go`:`actionsEnabled`、`ActionsEnabled()`、`runtimeWorkspace()`、early-return 分支設定。
 - §15.2 所有位置;§15.4 註解。

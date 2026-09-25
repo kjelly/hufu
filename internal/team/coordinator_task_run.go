@@ -2377,7 +2377,7 @@ func (c *Coordinator) allocateRuntimeActionWorkspace(todoID string, startedAt ti
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
 		return "", "", fmt.Errorf("action invocation requires a workspace")
 	}
-	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.ActionsEnabled() {
 		return "", "", fmt.Errorf("action invocation requires an enabled runtime workflow")
 	}
 	runID := coordinatorRuntimeRunID(c)
@@ -2386,7 +2386,7 @@ func (c *Coordinator) allocateRuntimeActionWorkspace(todoID string, startedAt ti
 	if taskName == "" {
 		taskName = "unknown"
 	}
-	parent, err := c.phaseWorkflow.executionContext().RuntimeWorkspace.Resolve(filepath.Join("runs", runName, "actions"))
+	parent, err := c.phaseWorkflow.runtimeWorkspace().Resolve(filepath.Join("runs", runName, "actions"))
 	if err != nil {
 		return "", "", fmt.Errorf("resolve action staging parent: %w", err)
 	}
@@ -2429,6 +2429,9 @@ func runtimeActionGateName(action *Action) string {
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
 	if err := c.validateMaterializedActionIdentity(task); err != nil {
 		return "", err
+	}
+	if !c.phaseWorkflow.Enabled() && task.CatalogAction == nil {
+		return "", fmt.Errorf("action invocation requires an enabled runtime workflow")
 	}
 	startedAt := time.Now().UTC()
 	actionID, actionRoot, err := c.allocateRuntimeActionWorkspace(todoID, startedAt)
@@ -2683,7 +2686,7 @@ type runtimeActionReceipt struct {
 }
 
 func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, todoID, actionID, status string, startedAt, finishedAt time.Time, output string, actionErr error, providerArtifacts ...[]ArtifactRef) {
-	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || task.Action == nil {
+	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.ActionsEnabled() || task.Action == nil {
 		return
 	}
 	if strings.TrimSpace(actionID) == "" {
@@ -2723,7 +2726,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		if err != nil {
 			failureSignature = "runtime_action_receipt_failed: " + utils.TruncateString(utils.RedactSecrets(err.Error()), 300)
 			_ = c.emitEvent("observability_degraded", "runtime", todoID, LifecycleEventPayload{
-				Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,
+				Phase: runtimeActionEventPhase(c.phaseWorkflow), Agent: task.Agent, Provider: providerName,
 				Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
 				FailureSignature: failureSignature, Artifacts: []ArtifactRef{},
 			})
@@ -2735,7 +2738,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		refs = append(refs, artifacts...)
 	}
 	_ = c.emitEvent(eventType, "runtime", todoID, LifecycleEventPayload{
-		Phase: string(c.phaseWorkflow.State()), Agent: task.Agent, Provider: providerName,
+		Phase: runtimeActionEventPhase(c.phaseWorkflow), Agent: task.Agent, Provider: providerName,
 		Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
 		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
@@ -2750,7 +2753,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 }
 
 func (c *Coordinator) writeRuntimeActionReceipt(receipt runtimeActionReceipt, actionID string) (ArtifactRef, error) {
-	path, err := c.phaseWorkflow.executionContext().RuntimeWorkspace.Resolve(filepath.Join("receipts", actionID+".json"))
+	path, err := c.phaseWorkflow.runtimeWorkspace().Resolve(filepath.Join("receipts", actionID+".json"))
 	if err != nil {
 		return ArtifactRef{}, err
 	}

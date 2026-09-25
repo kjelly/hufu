@@ -1192,10 +1192,9 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	}
 	cfg.RoutingPolicy = yc.RoutingPolicy
 
-	// Action providers are independent of whether the optional phase workflow
-	// is enabled. Keeping this outside the workflow block ensures configured
-	// providers are available to static validation and runtime action tasks in
-	// every supported team shape.
+	// Action providers are configured outside the workflow block so static
+	// validation sees them in every team shape. Running an action still needs
+	// an enabled phase workflow, or an action catalog in a team without phases.
 	if len(yc.ActionProviders) > 0 {
 		cfg.ActionProviders = make(map[string]agent.ActionProviderConfig, len(yc.ActionProviders))
 		for capability, provider := range yc.ActionProviders {
