@@ -1,0 +1,58 @@
+# Keep in sync with the dynamic-team example in the "Action catalog"
+# section of docs/reference/action-providers.md; TestActionCatalogDocExamplesLoad
+# loads this team.
+name: incident-team
+description: Diagnoses a service incident and runs predefined diagnostics on request
+action-providers:
+  diagnostics:
+    command: [/opt/incident-team/actions/diagnostics.sh]
+    timeout: 120
+
+action-catalog:
+  collect-debug-bundle:
+    description: Collect bounded runtime diagnostics for one service.
+    capability: diagnostics
+    type: collect_debug_bundle
+    agent: runtime-engineer
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+          min-length: 1
+          max-length: 128
+        include-thread-dump:
+          type: boolean
+      required-properties: [service]
+      additional-properties: false
+    output-schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required-properties: [summary]
+    access:
+      discover: [runtime-engineer, network-engineer]
+      propose: [runtime-engineer, network-engineer]
+    invocation:
+      require-proposal: true
+      allow-unattended: true
+      max-invocations: 2
+
+  rotate-service-logs:
+    description: Rotate one service's local logs into the run workspace.
+    capability: diagnostics
+    type: rotate_service_logs
+    agent: runtime-engineer
+    side-effect: workspace_write
+    recovery: manual
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    access:
+      discover: [runtime-engineer]

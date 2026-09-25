@@ -26,3 +26,28 @@ func TestActionProvidersDocExampleLoads(t *testing.T) {
 		t.Fatalf("prepare-workset action = %#v", action)
 	}
 }
+
+// TestActionCatalogDocExamplesLoad keeps the action catalog examples in
+// docs/reference/action-providers.md loadable.
+func TestActionCatalogDocExamplesLoad(t *testing.T) {
+	for _, tt := range []struct {
+		dir     string
+		entries []string
+	}{
+		{dir: "docs-action-catalog-dynamic", entries: []string{"collect-debug-bundle", "rotate-service-logs"}},
+		{dir: "docs-action-catalog-workflow", entries: []string{"check-release-window"}},
+	} {
+		session, err := LoadTeam(filepath.Join("testdata", tt.dir), nil, nil, nil)
+		if err != nil {
+			t.Fatalf("LoadTeam(%s): %v", tt.dir, err)
+		}
+		for _, id := range tt.entries {
+			if _, ok := session.ActionCatalog.Lookup(id); !ok {
+				t.Fatalf("%s: catalog lacks %q", tt.dir, id)
+			}
+		}
+		if len(session.ActionCatalog.Entries) != len(tt.entries) {
+			t.Fatalf("%s: catalog has %d entries, want %d", tt.dir, len(session.ActionCatalog.Entries), len(tt.entries))
+		}
+	}
+}

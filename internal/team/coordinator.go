@@ -96,7 +96,8 @@ type TaskDef struct {
 	// coordinator cannot set it through the agent tool; static task contracts
 	// bind it to a runtime-owned workflow phase.
 	Phase Phase `json:"-" yaml:"phase,omitempty"`
-	// Action is a static execute-phase contract. Its JSON omission prevents a
+	// Action comes from a static contract or is compiled from the action
+	// catalog (docs/reference/action-providers.md). Its JSON omission prevents a
 	// coordinator from choosing a provider, action type, or payload at runtime.
 	Action              *Action              `json:"-" yaml:"action,omitempty"`
 	ActionInputBindings []ActionInputBinding `json:"-" yaml:"-"`

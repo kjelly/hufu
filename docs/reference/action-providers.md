@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `85b00fe`
+> Verified-Commit: `ac89dd6`
 > Supersedes: —
 > Superseded-By: —
 
@@ -234,6 +234,290 @@ Keep mutation in the adapter. Prepare, audit, and verify agents should receive
 only the tools required for their attestation or verification work. Configure
 retries only when replay is safe and idempotent; otherwise use reconciliation
 or explicit recovery.
+
+## Action catalog
+
+An action catalog lets a team offer predefined actions to its model roles
+without letting a model define them. Workers can inspect the actions they are
+allowed to see and record typed recommendations; only the coordinator
+dispatches one, and the runtime compiles it from the frozen catalog into an
+ordinary action task. A model chooses which approved action to run and with
+what arguments. It never chooses the provider, capability, action type, side
+effect, or recovery, and it cannot bypass the normal task lifecycle.
+
+### Declaring entries
+
+Each entry names an `action-providers` capability, the provider's action type,
+the worker the action runs as, and a typed argument schema:
+
+```yaml
+name: incident-team
+description: Diagnoses a service incident and runs predefined diagnostics on request
+action-providers:
+  diagnostics:
+    command: [/opt/incident-team/actions/diagnostics.sh]
+    timeout: 120
+
+action-catalog:
+  collect-debug-bundle:
+    description: Collect bounded runtime diagnostics for one service.
+    capability: diagnostics
+    type: collect_debug_bundle
+    agent: runtime-engineer
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+          min-length: 1
+          max-length: 128
+        include-thread-dump:
+          type: boolean
+      required-properties: [service]
+      additional-properties: false
+    output-schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required-properties: [summary]
+    access:
+      discover: [runtime-engineer, network-engineer]
+      propose: [runtime-engineer, network-engineer]
+    invocation:
+      require-proposal: true
+      allow-unattended: true
+      max-invocations: 2
+
+  rotate-service-logs:
+    description: Rotate one service's local logs into the run workspace.
+    capability: diagnostics
+    type: rotate_service_logs
+    agent: runtime-engineer
+    side-effect: workspace_write
+    recovery: manual
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    access:
+      discover: [runtime-engineer]
+```
+
+| Field | Rule |
+| --- | --- |
+| ID (map key) | `^[a-z][a-z0-9-]{0,63}$` |
+| `description` | 1–2048 bytes |
+| `capability` | a configured `action-providers` capability |
+| `type` | passed to the provider as the action type, 1–128 bytes |
+| `agent` | the worker the task runs as; not the coordinator or `helper`, and inside `delegation.allowed-workers` when set |
+| `side-effect` | `none` or `workspace_write` |
+| `recovery` | `retry`, `manual`, or `never`; optional for `none` (defaults to `retry`), required for `workspace_write` |
+| `input-schema` | the run-input schema dialect; the top level is an object, every object sets `additional-properties: false`, and `number` is not allowed (use `integer`) |
+| `output-schema` | optional; validates the provider's `outputs` |
+| `access.discover` / `access.propose` | workers that may inspect / recommend the entry; propose must be a subset of discover |
+| `invocation.require-proposal` | dispatch needs a `recommended` proposal for the same arguments |
+| `invocation.allow-unattended` | allow dispatch in unattended runs |
+| `invocation.max-invocations` | 1–64 admitted tasks per session, default 1 |
+
+Catalog keys are kebab-case: an entry uses `side-effect`, while a static task
+contract uses `side_effect`. Property names in either schema must not be keys
+that durable-event redaction rewrites. A team may declare at most 128 entries.
+
+The same team is kept loadable in
+[internal/team/testdata/docs-action-catalog-dynamic](../../internal/team/testdata/docs-action-catalog-dynamic/team.yaml);
+`TestActionCatalogDocExamplesLoad` loads it.
+
+### Validation
+
+`hufu team lint` reports every catalog problem, and any error stops `LoadTeam`:
+
+| Code | Meaning |
+| --- | --- |
+| `action_catalog_id_invalid` | the entry ID is not a valid action ID |
+| `action_catalog_entry_invalid` | a required field is missing or too long, an unknown key, or more than 128 entries |
+| `action_provider_missing` | the capability has no configured provider |
+| `action_catalog_side_effect_unsupported` | the side effect is not `none` or `workspace_write` |
+| `action_catalog_recovery_invalid` | recovery is not `retry`, `manual`, or `never` |
+| `action_catalog_recovery_required` | a `workspace_write` entry does not set recovery |
+| `action_catalog_input_schema_invalid` / `action_catalog_output_schema_invalid` | a schema breaks the rules above |
+| `action_catalog_agent_unknown` | the agent or an access role is not a team agent |
+| `action_catalog_agent_unreachable` | the agent is the coordinator, `helper`, or outside `allowed-workers` |
+| `action_catalog_agent_unsupported` | a role declares `extra-models`, or an isolated-workspace agent runs a `workspace_write` entry |
+| `action_catalog_access_invalid` | a duplicate role, or a proposer that cannot discover the entry |
+| `action_catalog_proposer_unreachable` | `require-proposal` is set but no proposer can record a proposal |
+| `action_catalog_invocation_invalid` | `max-invocations` is outside 1–64 |
+| `action_catalog_phase_unreachable` | a workflow team has no phase that may run the entry |
+| `action_catalog_tool_sequence_unsupported` | a closed `tool-sequence` lists a catalog tool |
+
+A proposer counts only if the coordinator can dispatch it, team `tools-denied`
+does not remove `team_action_propose`, and it does not run on an external agent
+backend such as Codex, which does not receive Hufu tools. Startup repeats this
+check after `--worker-model` and model selectors are resolved and fails before
+any provider call when no proposer remains.
+
+### Workers, proposals, and dispatch
+
+A worker listed in `access.discover` gets `team_action_list` and
+`team_action_get`, which show the entries it may see and their input schemas
+but never the capability, type, agent, or provider. A worker listed in
+`access.propose` also gets `team_action_propose`. A proposal records the action,
+canonical arguments, an assessment (`recommended`, `candidate`, `defer`, or
+`reject`), a rationale, an optional expected outcome, and artifact IDs the
+worker may already read. It is a durable `team_action_proposed` event; it
+creates no task and authorizes nothing by itself. Workers never see each
+other's proposals.
+
+The coordinator gets its own `team_action_list` / `team_action_get`, which add
+the executing agent, invocations used, whether each action is dispatchable now
+(with a blocked reason), and the latest proposals. It dispatches by adding a
+task to the `agent` tool:
+
+```json
+{"agent": "runtime-engineer", "goal": "collect a debug bundle for api",
+ "catalog_action": {"id": "collect-debug-bundle", "arguments": {"service": "api"}}}
+```
+
+A catalog task may set only `agent`, `goal`, `constraints`, `catalog_action`,
+and, in a team without phases, `depends_on`. The runtime checks the catalog,
+initial batch, durable journal, entry, agent, phase, unattended policy,
+arguments, duplicates in the batch, required proposal, invocation budget, and
+decision profile, in that order. A rejected dispatch creates nothing and
+returns a `TEAM ACTION DISPATCH REJECTED:` error the coordinator can recover
+from: it can inspect the entry, ask a worker for evidence or a proposal, or
+continue without the action. After three such rejections in one invocation,
+or during policy repair or wrap-up, a rejection takes the ordinary delegation
+policy repair path.
+
+The invocation budget counts every admitted catalog task in the session,
+including one whose provider never started. `--new` starts a session with no
+proposals and a fresh budget.
+
+### Workflow teams
+
+In a workflow team a catalog action may run in EXECUTE, and a `side-effect:
+none` action may also run in PREPARE. The last static EXECUTE contract moves
+the workflow to VERIFY as soon as it succeeds, so dispatch a catalog action
+before, or together with, that contract. A catalog task does not count as a
+phase contract, and a failed catalog task does not fail the phase. Catalog
+tasks in a workflow team cannot use `depends_on`.
+
+```yaml
+name: release-team
+description: Prepares, applies, and verifies a release with a predefined preflight check
+workflow:
+  phases: [prepare, audit, execute, verify]
+verification:
+  required: true
+delegation:
+  bind-task-goal-contracts: true
+
+action-providers:
+  release-checks:
+    command: [/opt/release-team/actions/release-checks.sh]
+    timeout: 300
+
+action-catalog:
+  check-release-window:
+    description: Report whether the release window is open for one environment.
+    capability: release-checks
+    type: check_release_window
+    agent: executor
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        environment:
+          type: string
+          enum: [staging, production]
+      required-properties: [environment]
+      additional-properties: false
+    access:
+      discover: [preparer, executor]
+      propose: [preparer]
+
+tasks:
+  - id: prepare-release
+    agent: preparer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+  - id: audit-release
+    agent: auditor
+    phase: audit
+    when-goal-contains: audit
+    side_effect: none
+  - id: apply-release
+    agent: executor
+    phase: execute
+    when-goal-contains: apply
+    side_effect: workspace_write
+    recovery: manual
+  - id: verify-release
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none
+    verify-spec:
+      type: command_exit
+      command: test -s release-notes.md
+```
+
+This team is kept loadable in
+[internal/team/testdata/docs-action-catalog-workflow](../../internal/team/testdata/docs-action-catalog-workflow/team.yaml).
+
+### Recovery, idempotency, and trust
+
+`side-effect` is the maintainer's declaration about a trusted provider, not a
+sandbox. The provider runs with the Hufu process's working directory and full
+environment; the class only decides how Hufu schedules, replays, and gates the
+task. A `workspace_write` entry therefore has to state its recovery:
+
+- `retry` declares that the provider is idempotent by
+  `HUFU_CATALOG_INVOCATION_ID`. An interrupted task is re-run on resume with the
+  same ID, including a task whose provider finished but whose completion was
+  not yet recorded.
+- `manual` blocks an interrupted task for a human on resume.
+- `never` skips it.
+
+`HUFU_CATALOG_INVOCATION_ID` is stable across attempts and resumes of one
+catalog task; `HUFU_ACTION_INVOCATION_ID` still changes on every attempt.
+
+The catalog hash, which includes each entry's provider configuration (runtime,
+source, mode, command, dir, timeout, and the Go source digest), is part of the
+execution policy snapshot. Changing the catalog or its providers makes a resume
+fail closed; start a new session with `--new`. A command provider's identity is
+its argv, dir, and timeout, not the content of the script it runs: use the
+embedded Go runtime when the adapter's content must be pinned.
+
+When an entry declares an output schema, outputs that do not match fail the
+task without a retry, because the provider has already run.
+
+### Inspecting a catalog
+
+```bash
+hufu team action list [team-directory] [--team <name>] [--output text|json]
+hufu team action show <action-id> [team-directory] [--team <name>] [--output text|json]
+```
+
+Both show each entry's capability, type, agent, side effect, recovery,
+schemas, access, invocation policy, and entry hash, never the provider's
+command, source, or directory. `hufu inspect task` shows a catalog task's
+action, entry and arguments hashes, invocation ID, and linked proposals;
+`hufu report` lists catalog tasks with their arguments hash only.
+
+### Limits
+
+- The `agent` tool schema is refreshed only when a new model stream starts, so
+  `catalog_action` hidden while the initial batch is pending appears on the
+  next stream.
+- When more than 32 entries can run in the current phase, the schema omits the
+  ID enum; the runtime still validates the ID.
+- A session holds at most 256 proposals.
 
 ## Validation
 

@@ -264,6 +264,8 @@ action-providers:
     command: [bash, .agent-teams/my-team/run-action.sh]
     dir: /srv/project
     timeout: 1800
+# Optional: expose provider actions as an action-catalog that workers can
+# propose and the coordinator can dispatch (docs/reference/action-providers.md).
 
 goal-mode: outcome
 acceptance:
@@ -700,6 +702,13 @@ repeat the same shell command.
   is `submit_result`.
 - Bind the execute capability to an `action-providers` adapter. The adapter
   owns the mutation, writes durable receipts, and returns failure to Hufu.
+- To let the coordinator choose among predefined actions at run time, declare
+  them in `action-catalog` instead of adding a static contract per action.
+  Give each entry a closed `input-schema`, list who may `discover` and
+  `propose` it, and set `recovery` explicitly for `workspace_write` entries
+  (`retry` only when the adapter is idempotent by
+  `HUFU_CATALOG_INVOCATION_ID`). See the action catalog section of
+  `docs/reference/action-providers.md`.
 - Define `requires`, workflow phases, `require_phase_success`, `fail_fast`,
   capabilities, blocking acceptance, and verifier linting in `team.yaml`.
 - Set retries to zero unless the domain operation is explicitly idempotent and

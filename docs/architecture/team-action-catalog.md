@@ -1522,7 +1522,7 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
   - Output schema 不符 → task 失敗、不 retry(`permitActionRetry` false)、不標 completed、receipt 記錄失敗。
   - Receipt/LifecycleEventPayload/ExecutionReceipt 的 catalog 欄位正確;非 catalog action 的 receipt JSON 與 baseline 相同。
 
-### WP-9 觀測(§19.1、§19.2、E-18) — ✅ 已完成
+### WP-9 觀測(§19.1、§19.2、E-18) — ✅ 已完成,commit `ac89dd6`
 
 實作紀錄:report 區段標題沿用同檔其他區段的 `###` 層級;E-18 的 Provider 欄對 action task 顯示 `action:<capability>`。
 
@@ -1533,7 +1533,11 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
 - 更新 `docs/architecture/unified-observability-inspector.md` §6.2(308-316)與 `docs/guides/inspect.md` 對應段落。
 - 測試:`internal/inspect/run_test.go:106` pattern、`cmd/hufu/inspectcmd_test.go:199` pattern;report 在無 catalog task 時輸出不變。
 
-### WP-10 文件
+### WP-10 文件 — ✅ 已完成
+
+實作紀錄:範例 team 在 `internal/team/testdata/docs-action-catalog-dynamic`、`docs-action-catalog-workflow`,
+由 `TestActionCatalogDocExamplesLoad` 載入;文件內的 YAML 與 testdata 相同。
+
 
 - `docs/reference/action-providers.md` 新增「Action catalog」章節:設定(§5)、限制、驗證碼、worker/coordinator 流程、
   workflow phase 規則(§16.1)、recovery 與冪等(§18,`HUFU_CATALOG_INVOCATION_ID`)、`side-effect` vs `side_effect` 命名差異、

@@ -741,6 +741,8 @@ Your system prompt here.
 | `rollback` | Unattended: explicit command run after self-healing is exhausted on acceptance failure; empty fails closed without changing the project |
 | `vars` | Template variables map |
 | `notify` | Notification configuration |
+| `action-providers` | Capability → command or embedded Go adapter for structured actions |
+| `action-catalog` | Predefined actions workers may inspect and propose and the coordinator may dispatch with typed arguments; see `docs/reference/action-providers.md` |
 
 ## Workspace Layout
 

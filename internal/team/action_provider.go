@@ -19,8 +19,10 @@ import (
 
 // Action represents a generic structured action intent.
 type Action struct {
-	// Capability selects the registered provider. It is bound by a static team
-	// contract and is never accepted from the coordinator's agent tool.
+	// Capability selects the registered provider. It comes from a static team
+	// contract or, for a catalog action, from the team's action catalog
+	// (docs/reference/action-providers.md); the coordinator's agent tool can
+	// never supply it directly.
 	Capability string `json:"capability" yaml:"capability"`
 	Type       string `json:"type" yaml:"type"`
 	Payload    string `json:"payload" yaml:"payload"`

@@ -255,6 +255,11 @@ the script; Hufu core does not add a Git host capability. See the [action
 provider reference](docs/reference/action-providers.md) for the request,
 response, validation, provenance, and recovery contract.
 
+An `action-catalog` turns providers into predefined actions that workers can
+inspect and recommend and the coordinator can dispatch with typed arguments,
+without letting a model choose the provider, side effect, or recovery. See the
+[action catalog section](docs/reference/action-providers.md#action-catalog).
+
 #### Machine-readable team requirements
 
 Optional `requires` contracts let hufu reject contradictory teams before any

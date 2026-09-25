@@ -1,0 +1,61 @@
+# Keep in sync with the workflow-team example in the "Action catalog"
+# section of docs/reference/action-providers.md; TestActionCatalogDocExamplesLoad
+# loads this team.
+name: release-team
+description: Prepares, applies, and verifies a release with a predefined preflight check
+workflow:
+  phases: [prepare, audit, execute, verify]
+verification:
+  required: true
+delegation:
+  bind-task-goal-contracts: true
+
+action-providers:
+  release-checks:
+    command: [/opt/release-team/actions/release-checks.sh]
+    timeout: 300
+
+action-catalog:
+  check-release-window:
+    description: Report whether the release window is open for one environment.
+    capability: release-checks
+    type: check_release_window
+    agent: executor
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        environment:
+          type: string
+          enum: [staging, production]
+      required-properties: [environment]
+      additional-properties: false
+    access:
+      discover: [preparer, executor]
+      propose: [preparer]
+
+tasks:
+  - id: prepare-release
+    agent: preparer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+  - id: audit-release
+    agent: auditor
+    phase: audit
+    when-goal-contains: audit
+    side_effect: none
+  - id: apply-release
+    agent: executor
+    phase: execute
+    when-goal-contains: apply
+    side_effect: workspace_write
+    recovery: manual
+  - id: verify-release
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none
+    verify-spec:
+      type: command_exit
+      command: test -s release-notes.md

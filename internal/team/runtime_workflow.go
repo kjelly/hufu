@@ -131,11 +131,12 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 	return w, nil
 }
 
-// executeAction invokes a provider selected by a static action contract. The
-// runtime owns this boundary: a coordinator cannot supply an action through
-// its tool schema. Mutating actions are permitted only during EXECUTE; a
-// statically declared side-effect-free action may also run during PREPARE so
-// deterministic discovery can produce the inputs for later phases.
+// executeAction invokes a provider selected by a static action contract or a
+// compiled catalog action (docs/reference/action-providers.md). The runtime
+// owns this boundary: a coordinator cannot supply an action through its tool
+// schema. With phases, mutating actions are permitted only during EXECUTE; a
+// side-effect-free action may also run during PREPARE so deterministic
+// discovery can produce the inputs for later phases.
 func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action) (interface{}, error) {
 	return w.executeActionValueForTask(ctx, action, "")
 }
