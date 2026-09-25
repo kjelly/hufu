@@ -504,8 +504,10 @@ hufu team action list [team-directory] [--team <name>] [--output text|json]
 hufu team action show <action-id> [team-directory] [--team <name>] [--output text|json]
 ```
 
-Both show each entry's capability, type, agent, side effect, recovery,
-schemas, access, invocation policy, and entry hash, never the provider's
+`list` summarizes each entry's capability, type, agent, side effect,
+recovery, and invocation policy; its JSON output also carries access and the
+entry hash. `show` prints one entry in full, adding its description, access,
+entry hash, and input and output schemas. Neither shows the provider's
 command, source, or directory. `hufu inspect task` shows a catalog task's
 action, entry and arguments hashes, invocation ID, and linked proposals;
 `hufu report` lists catalog tasks with their arguments hash only.
