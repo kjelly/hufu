@@ -63,6 +63,9 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 	bound := append([]TaskDef(nil), tasks...)
 	effective := make([]EffectiveTaskContract, 0, len(bound))
 	for i := range bound {
+		if bound[i].CatalogAction != nil {
+			continue
+		}
 		name := strings.ToLower(strings.TrimSpace(bound[i].Agent))
 		contract, ok := contracts[name]
 		if !ok {
@@ -121,6 +124,11 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 	bound := append([]TaskDef(nil), tasks...)
 	effective := make([]EffectiveTaskContract, 0, len(bound))
 	for i := range bound {
+		// A catalog task's contract is its catalog entry; a static contract
+		// bound by agent name must never take it over.
+		if bound[i].CatalogAction != nil {
+			continue
+		}
 		matches := make([]TaskDef, 0, 1)
 		agentContracts := make([]TaskDef, 0, 1)
 		for _, contract := range session.ContractTasks {

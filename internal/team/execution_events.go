@@ -297,6 +297,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	watchdog.owner = owner
 	owner.start()
 	c.coordinatorPolicyRepairsAttempt.Store(0)
+	c.teamActionRejections.Store(0)
 	c.coordinatorPolicyRepairsSuccess.Store(0)
 	c.coordinatorPolicyRepairPending.Store(false)
 	c.coordinatorPolicyRepairExhausted.Store(false)

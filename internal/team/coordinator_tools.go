@@ -41,6 +41,9 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 		// send.
 		taskProperties = providerSafeWorkflowTaskProperties(taskProperties)
 	}
+	if catalogAction := t.coordinator.catalogActionSchemaProperty(); catalogAction != nil {
+		taskProperties["catalog_action"] = catalogAction
+	}
 	taskSchema := map[string]any{
 		"type":                 "object",
 		"properties":           taskProperties,
@@ -143,7 +146,10 @@ var portableProviderTaskFields = []string{
 }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	tasks, err := decodeModelTaskDefs([]byte(call.Input))
+	tasks, err := decodeModelTaskDefsForMode([]byte(call.Input), t.coordinator.phaseWorkflow != nil && t.coordinator.phaseWorkflow.Enabled())
+	if dispatchErr, ok := errors.AsType[*teamActionDispatchError](err); ok {
+		return t.catalogDispatchRejected(dispatchErr)
+	}
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
@@ -155,6 +161,13 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 			return fantasy.NewTextErrorResponse("each task requires 'goal'"), nil
 		}
 	}
+	tasks, rejection, err := t.compileCatalogRequests(tasks)
+	if rejection != nil {
+		return *rejection, err
+	}
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
 	if err := t.coordinator.validateDelegatedTaskCapabilities(tasks); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -163,11 +176,7 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 	if err != nil {
 		var violation *delegationPolicyViolation
 		if errors.As(err, &violation) {
-			response := t.coordinator.coordinatorPolicyRepairResponse(violation)
-			if t.coordinator.coordinatorPolicyRepairExhausted.Load() {
-				return response, errCoordinatorPolicyRepairExhausted
-			}
-			return response, nil
+			return t.policyViolationResponse(violation)
 		}
 		if t.coordinator.terminalUnresolvedRun() {
 			return terminalUnresolvedWorkerResponse(t.coordinator), markCoordinatorFatal(errors.New("terminal unresolved worker outcome"))
@@ -224,6 +233,12 @@ func rejectModelExecutionRuntimeOwnedFields(raw json.RawMessage) error {
 }
 
 func decodeModelTaskDefs(data []byte) ([]TaskDef, error) {
+	return decodeModelTaskDefsForMode(data, false)
+}
+
+// decodeModelTaskDefsForMode also decodes catalog_action tasks; workflowMode
+// forbids their depends_on.
+func decodeModelTaskDefsForMode(data []byte, workflowMode bool) ([]TaskDef, error) {
 	var envelope struct {
 		Tasks []json.RawMessage `json:"tasks"`
 	}
@@ -250,6 +265,14 @@ func decodeModelTaskDefs(data []byte) ([]TaskDef, error) {
 			if err := rejectModelExecutionRuntimeOwnedFields(value); err != nil {
 				return nil, fmt.Errorf("tasks[%d]: %w", index, err)
 			}
+		}
+		if hasCatalogActionField(fields) {
+			task, err := decodeCatalogTaskDef(index, rawTask, workflowMode)
+			if err != nil {
+				return nil, err
+			}
+			tasks = append(tasks, task)
+			continue
 		}
 		var task TaskDef
 		if err := json.Unmarshal(rawTask, &task); err != nil {

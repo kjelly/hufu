@@ -322,7 +322,7 @@ func (c *Coordinator) validateTaskCriterionLinks(tasks []TaskDef) error {
 			criteria[criterion.ID] = true
 		}
 	}
-	for _, task := range tasks {
+	for _, task := range withoutCatalogTasks(tasks) {
 		// Older planners omitted kind. In outcome mode that must not quietly
 		// downgrade a mutation/outcome task into an ungoverned generic task.
 		// Sidecars remain auxiliary by definition; every other untyped task is
@@ -391,7 +391,7 @@ func (c *Coordinator) normalizeOutcomeTaskKinds(tasks []TaskDef) {
 		return
 	}
 	for i := range tasks {
-		if tasks[i].Kind == "" && !tasks[i].Sidecar {
+		if tasks[i].Kind == "" && !tasks[i].Sidecar && tasks[i].CatalogAction == nil {
 			tasks[i].Kind = TaskKindOutcome
 		}
 	}

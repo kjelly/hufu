@@ -44,6 +44,8 @@ type coordinatorTeamActionSummary struct {
 	AllowUnattended bool                     `json:"allow_unattended"`
 	MaxInvocations  int                      `json:"max_invocations"`
 	InvocationsUsed int                      `json:"invocations_used"`
+	DispatchableNow bool                     `json:"dispatchable_now"`
+	BlockedReason   string                   `json:"blocked_reason,omitempty"`
 	ProposalCounts  teamActionProposalCounts `json:"proposal_counts"`
 }
 
@@ -65,16 +67,14 @@ func (c *Coordinator) coordinatorTeamActionTools() []fantasy.AgentTool {
 }
 
 func (c *Coordinator) coordinatorTeamActionSummary(entry ActionCatalogEntry) coordinatorTeamActionSummary {
+	blocked, _ := c.catalogDispatchBlockedReason(entry, 0)
 	return coordinatorTeamActionSummary{
+		DispatchableNow: blocked == "", BlockedReason: blocked,
 		ID: entry.ID, Description: entry.Description, Agent: entry.Agent, SideEffect: entry.SideEffect, Recovery: entry.Recovery,
 		RequireProposal: entry.RequireProposal, AllowUnattended: entry.AllowUnattended, MaxInvocations: entry.MaxInvocations,
 		InvocationsUsed: c.teamActionInvocationsUsed(entry.ID), ProposalCounts: c.teamActionProposalCounts(entry.ID),
 	}
 }
-
-// teamActionInvocationsUsed counts the admitted catalog tasks of an action.
-// Invocation accounting is added with catalog dispatch.
-func (c *Coordinator) teamActionInvocationsUsed(string) int { return 0 }
 
 // teamActionProposalCounts counts an action's recorded proposals by
 // assessment.

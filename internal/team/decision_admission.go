@@ -286,7 +286,9 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if c != nil {
 		task.SideEffect, task.Recovery, task.ReconcileTool = c.PolicyEngine().ResolveRecoveryPolicy(def, task)
 	}
-	task.ResultContract = c.admittedResultContract(task, def)
+	if task.CatalogAction == nil {
+		task.ResultContract = c.admittedResultContract(task, def)
+	}
 	legacyProvider := strings.TrimSpace(task.SubagentProvider)
 	if legacyProvider == "" && def != nil {
 		legacyProvider = strings.TrimSpace(def.SubagentProvider)
@@ -311,11 +313,13 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if err := c.validateExtraModelExecutionTopology(task); err != nil {
 		return task, err
 	}
-	route, err := c.admittedExecutionRoute(task, def)
-	if err != nil {
-		return task, err
+	if task.CatalogAction == nil {
+		route, err := c.admittedExecutionRoute(task, def)
+		if err != nil {
+			return task, err
+		}
+		task.ExecutionRoute = route
 	}
-	task.ExecutionRoute = route
 	workspacePolicy, err := c.admittedWorkerWorkspace(task, def)
 	if err != nil {
 		return task, err

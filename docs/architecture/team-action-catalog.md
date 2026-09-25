@@ -1436,7 +1436,7 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - 多個 worker 對同一 action 留不同 assessment,coordinator get 依新到舊列出。
   - 事件 payload strict 驗證拒絕未知欄位。
 
-### WP-5 Durable binding plumbing(§14) — ✅ 已完成
+### WP-5 Durable binding plumbing(§14) — ✅ 已完成,commit `8e7098e`
 
 實作紀錄:§14.1 的檢查為 `validateCatalogActionIntegrity`(`team_action_binding.go`),放在動態 team 檢查之後、workspace 配置之前,
 另外比對 action 的 capability/type 是否等於 entry。有 binding 但 team 沒有 catalog 時回 `team_action_catalog_drift`。
@@ -1455,7 +1455,14 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - §14.1 `entry.Hash` 與 binding 不符(或 entry 不存在)→ `team_action_catalog_drift`,provider Execute 次數 = 0。
   - `ProposalIDs` 為空 slice 的 binding 經 round-trip 後 `compareTaskDefWithTodoOccurrence` 仍通過。
 
-### WP-6 派工編譯(§11.3、§12、§13)
+### WP-6 派工編譯(§11.3、§12、§13) — ✅ 已完成
+
+實作紀錄:全部新邏輯在 `team_action_dispatch.go`(含共用的 `policyViolationResponse`)。另加拒絕碼 `team_action_task_invalid`
+(允許欄位型別錯誤、重複 key、`catalog_action` 內未知欄位)。§12.3 的 entry 層判斷(#2/#3/#6/#7/#11/#12)是
+`catalogDispatchBlockedReason`,coordinator list/get 的 `dispatchable_now`/`blocked_reason` 使用它;compiler 依 §12.3 順序逐項
+檢查同樣的條件。Workflow team 的 `validateTasks` 分支與 agent enum 聯集留給 WP-7。§12.2 的 stream 層行為以
+`gatePolicyTools` 包裝的 `agent` 工具測試(錯誤回應可恢復、第 4 次轉 policy repair);連續錯誤 streak 終止沿用 `dfc083f` 的既有測試。
+
 
 - 新檔 `team_action_dispatch.go`:`CatalogInvocation` 型別與 TaskDef 欄位(含 `cloneTaskDef` deep copy)、
   `teamActionDispatchError`、decode helper、`compileCatalogActionTasks`、拒絕回應與拒絕計數 `teamActionRejections`(§12.2)、

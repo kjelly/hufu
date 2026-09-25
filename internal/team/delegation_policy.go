@@ -56,10 +56,13 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		return err
 	}
 
-	if err := c.validateTaskGoalInvariants(tasks); err != nil {
+	// Goal invariants, capability routing, and the redispatch locks govern
+	// model workers; a catalog task's identity comes from the catalog.
+	ordinary := withoutCatalogTasks(tasks)
+	if err := c.validateTaskGoalInvariants(ordinary); err != nil {
 		return err
 	}
-	if err := c.validateCapabilityRouting(tasks); err != nil {
+	if err := c.validateCapabilityRouting(ordinary); err != nil {
 		return err
 	}
 	if c.coordinatorPolicyRepairsAttempt.Load() > 0 {
@@ -77,9 +80,9 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 			}
 		}
 		var duplicates []string
-		for _, task := range tasks {
+		for _, task := range ordinary {
 			agentName := strings.ToLower(strings.TrimSpace(task.Agent))
-			if hasDone[agentName] && !hasUnfinished[agentName] {
+			if task.Action == nil && hasDone[agentName] && !hasUnfinished[agentName] {
 				duplicates = append(duplicates, task.Agent)
 			}
 		}
@@ -101,8 +104,8 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		}
 	}
 	var duplicates []string
-	for _, task := range tasks {
-		if name := strings.ToLower(task.Agent); successful[name] {
+	for _, task := range ordinary {
+		if name := strings.ToLower(task.Agent); task.Action == nil && successful[name] {
 			duplicates = append(duplicates, task.Agent)
 		}
 	}

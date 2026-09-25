@@ -89,6 +89,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if err := c.AdmitExecutionPolicy(); err != nil {
 		return "", markCoordinatorFatal(err)
 	}
+	if err := c.rejectUncompiledCatalogTasks(tasks); err != nil {
+		return "", err
+	}
 	var err error
 	// Bind once before expansion so a static contract can contribute its
 	// artifact-backed FanOut definition to the coordinator's minimal goal
@@ -242,7 +245,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 
 	if c.forcePlanFirst {
 		for i := range tasks {
-			if tasks[i].PlanID == "" {
+			if tasks[i].PlanID == "" && tasks[i].CatalogAction == nil {
 				tasks[i].PlanFirst = true
 			}
 		}
@@ -457,6 +460,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			firstReceipt[t.WorksetBinding.WorksetID] = true
 		}
 	}
+	c.assignCatalogInvocationIDs(tasks, todoBatch, ids)
 	// Freeze a conservative resource snapshot for every prospective occurrence
 	// before any task_created event. Stage 3 intentionally classifies every
 	// workspace surface as unenforceable, so these envelopes preserve the

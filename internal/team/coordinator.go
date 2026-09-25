@@ -103,6 +103,9 @@ type TaskDef struct {
 	// CatalogAction is set only by the runtime when it compiles a coordinator
 	// catalog_action request; see docs/reference/action-providers.md.
 	CatalogAction *CatalogActionBinding `json:"-" yaml:"-"`
+	// CatalogInvocation is a decoded catalog_action request awaiting
+	// compilation; it is never persisted.
+	CatalogInvocation *CatalogInvocation `json:"-" yaml:"-"`
 	// The following action-binding fields are runtime-owned occurrence
 	// identity. They are populated from a frozen RunInputSnapshot and omitted
 	// from coordinator/config decoding.
@@ -681,7 +684,10 @@ type Coordinator struct {
 	stepReceipts            *ExecutionStepReceiptRegistry
 	taskAttempts            map[string]int
 	// actionProposals is the session's action catalog proposal index.
-	actionProposals      teamActionProposalIndex
+	actionProposals teamActionProposalIndex
+	// teamActionRejections counts recoverable catalog dispatch rejections in
+	// the current public invocation.
+	teamActionRejections atomic.Int32
 	taskAttemptsMu       sync.RWMutex
 	toolPolicyVerdicts   map[string]string
 	toolPolicyVerdictsMu sync.Mutex
