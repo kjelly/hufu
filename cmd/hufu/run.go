@@ -346,6 +346,9 @@ func makeStepConfirmFn() func(context.Context, []team.TaskDef) (bool, error) {
 				dimStyle.Render(fmt.Sprintf("%d.", i+1)),
 				agentStyle.Render(strings.ToLower(t.Agent)),
 				t.Goal)
+			if t.CatalogAction != nil {
+				fmt.Fprintf(os.Stderr, "     %s\n", dimStyle.Render(catalogStepLabel(t.CatalogAction)))
+			}
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 

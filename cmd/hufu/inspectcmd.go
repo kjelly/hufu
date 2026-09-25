@@ -411,6 +411,12 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			valueOrUnavailable(data.AgentID), valueOrUnavailable(data.ExecutionTarget)); err != nil {
 			return err
 		}
+		if action := data.CatalogAction; action != nil {
+			if _, err := fmt.Fprintf(writer, "Catalog action: %s  entry=%s  args=%s\nInvocation: %s  proposals: %s\n",
+				action.ActionID, action.EntryHash, action.ArgumentsHash, action.InvocationID, refsOrNone(action.ProposalIDs)); err != nil {
+				return err
+			}
+		}
 		for _, attempt := range data.Attempts {
 			if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s execution_target=%s backend=%s exit_code=%s verification=%s winning=%t\n",
 				attempt.Attempt, valueOrUnavailable(attempt.ModelExecutionID), valueOrUnavailable(attempt.ProducerID),

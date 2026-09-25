@@ -65,6 +65,18 @@ type TaskData struct {
 	ContextRefs       []string                  `json:"context_refs"`
 	MemoryRefs        []string                  `json:"memory_refs"`
 	KnowledgeCoverage *KnowledgeCoverageData    `json:"knowledge_coverage,omitempty"`
+	SideEffect        string                    `json:"side_effect,omitempty"`
+	CatalogAction     *CatalogActionData        `json:"catalog_action,omitempty"`
+}
+
+// CatalogActionData identifies the catalog action a task ran. Arguments are
+// shown only by hash; their values need a debug bundle.
+type CatalogActionData struct {
+	ActionID      string   `json:"action_id"`
+	EntryHash     string   `json:"entry_hash"`
+	ArgumentsHash string   `json:"arguments_hash"`
+	InvocationID  string   `json:"invocation_id"`
+	ProposalIDs   []string `json:"proposal_ids,omitempty"`
 }
 
 type selectedRun struct {
@@ -289,6 +301,13 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		ArtifactRefs:      []string{},
 		ContextRefs:       []string{},
 		MemoryRefs:        []string{},
+		SideEffect:        string(item.SideEffect),
+	}
+	if binding := item.CatalogAction; binding != nil {
+		data.CatalogAction = &CatalogActionData{
+			ActionID: binding.ActionID, EntryHash: binding.EntryHash, ArgumentsHash: binding.ArgumentsHash,
+			InvocationID: binding.InvocationID, ProposalIDs: append([]string(nil), binding.ProposalIDs...),
+		}
 	}
 	for _, target := range item.ExecutionTopology {
 		data.ExecutionTopology = append(data.ExecutionTopology, target.String())

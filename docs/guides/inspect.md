@@ -44,6 +44,12 @@ When `--branch` is omitted, inspection is limited to the active branch. It
 does not search sibling branches for a matching ID. Task and context queries
 require `--run` so a task ID cannot be joined to an unrelated run or receipt.
 
+`inspect task` also reports the task's side effect. For a task dispatched from
+the team's [action catalog](../reference/action-providers.md) it adds the
+catalog action ID, entry and arguments hashes, the durable invocation ID, and
+the linked proposal IDs; the arguments themselves are never printed. Worker
+proposals appear in `inspect trace` as `team_action_proposed` events.
+
 Typical operator queries:
 
 ```bash

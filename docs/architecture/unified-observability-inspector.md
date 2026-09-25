@@ -313,8 +313,11 @@ integrity diagnostics。run 本身即使 outcome 是 failed/partial，也不代�
 - retry/reset/recovery decision 與 reason code
 - 每個 attempt 的 receipt identity、exit code、verification status
 - artifact/evidence/context/memory opaque references
+- task 的 side effect;catalog action task 另顯示 catalog action ID、entry hash、
+  arguments hash、durable invocation ID 與連結的 proposal ID
 
-不得顯示 task output、transcript、tool args 或 verifier stdout/stderr。
+不得顯示 task output、transcript、tool args、verifier stdout/stderr,或 catalog action
+的參數原文(只顯示 arguments hash)。
 
 ### 6.3 `inspect trace`
 

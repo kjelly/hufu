@@ -1244,7 +1244,7 @@ hufu team action show <action-id> [team-directory] [--team <name>] [--output tex
 | E-15 | `ValidateTaskDecisionProfiles` 只在 run setup 執行,`team validate`/`lint` 不檢查;`team validate` 遇第一個錯誤就停;provider 設定錯誤是硬錯誤而非 finding | `decision_config.go:139-158`、`cmd/hufu/team_setup.go:77-83`、`cmd/hufu/teamcmd.go:105-109`、`action_provider.go:231-283` | 記錄 |
 | E-16 | `parse.go` 註解宣稱 provider 在任何 team 形態都可供 action task 使用,實際需要 workflow | `parse.go:1191-1194` | **WP-2** 修正註解 |
 | E-17 | 推論(未執行驗證):`todo` 工具建立的 pending item 在 resume 時會被執行,因 `getInterruptedTasks` 不過濾 Source | `coordinator_session.go:868-904` | 記錄 |
-| E-18 | `hufu report` Task Summary 的 Provider 欄對 action task 顯示 worker subagent provider | `cmd/hufu/report.go:212-230`、`944-961` | **WP-9** |
+| E-18 | `hufu report` Task Summary 的 Provider 欄對 action task 顯示 worker subagent provider | `cmd/hufu/report.go:212-230`、`944-961` | **已修正**:WP-9(顯示 `action:<capability>`) |
 | E-19 | 動態 team 的 `policies`、`capabilities`、`verification`、`retry` 設定在 parse 時被丟棄(只在有 phases 時複製) | `parse.go:1156-1162` | 記錄 |
 | E-20 | Workflow disabled 時 `snapshot()` 回傳 nil retry state,動態 team 的 retry 狀態不會進 checkpoint | `runtime_workflow.go:802-805`、`coordinator_session.go:794-795` | 記錄 |
 | E-21 | 動態 team 的 action task 目前一定失敗,且失敗事件被跳過 | §3.1 | **WP-2** |
@@ -1510,7 +1510,7 @@ catalog 時把三個名稱加入 known registry;`declaredWorkerTools` 未改(它
   - Catalog task 失敗不讓 phase 失敗;phase 仍在 static contract 成功後推進。
   - `TestRuntimeWorkflowRequiresEveryStaticContractAndRestoresCheckpoint` 照舊通過。
 
-### WP-8 輸出驗證與 receipt(§17) — ✅ 已完成
+### WP-8 輸出驗證與 receipt(§17) — ✅ 已完成,commit `191b168`
 
 實作紀錄:三個結構共用內嵌的 `CatalogRuntimeFields`(全部 omitempty);runtime receipt 另內嵌 `catalogActionReceiptFields`
 (加 `ProposalIDs`、`SideEffect`,只對 catalog task 填值)。輸出驗證在 `canonicalizeRuntimeActionOutputs` 內,所以仍在 artifact
@@ -1522,7 +1522,10 @@ ingestion 之前。Execution receipt 從 Todo 的 binding 取值。
   - Output schema 不符 → task 失敗、不 retry(`permitActionRetry` false)、不標 completed、receipt 記錄失敗。
   - Receipt/LifecycleEventPayload/ExecutionReceipt 的 catalog 欄位正確;非 catalog action 的 receipt JSON 與 baseline 相同。
 
-### WP-9 觀測(§19.1、§19.2、E-18)
+### WP-9 觀測(§19.1、§19.2、E-18) — ✅ 已完成
+
+實作紀錄:report 區段標題沿用同檔其他區段的 `###` 層級;E-18 的 Provider 欄對 action task 顯示 `action:<capability>`。
+
 
 - `internal/inspect/run.go`、`cmd/hufu/inspectcmd.go`、新檔 `cmd/hufu/report_actions.go`、`report.go` 呼叫與 Provider 欄修正。
 - `--steps` 確認提示(`cmd/hufu/run.go:334-349`,目前只顯示 agent 與 goal):catalog task 另顯示

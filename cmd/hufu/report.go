@@ -219,6 +219,10 @@ func reportProviderIdentity(item *team.TodoItem) string {
 	if item == nil {
 		return ""
 	}
+	// An action task runs an ActionProvider, not a worker subagent.
+	if item.Action != nil {
+		return "action:" + strings.TrimSpace(item.Action.Capability)
+	}
 	if provider := strings.TrimSpace(item.SubagentProvider); provider != "" {
 		return provider
 	}
@@ -967,6 +971,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			runMetrics = &data.RunResult.Metrics
 		}
 		writeExecutionRouteReport(&b, data.Todos, runMetrics)
+		writeCatalogActionReport(&b, data.Todos)
 		writeWorkerAttemptReport(&b, data.Workers)
 		for _, item := range data.Todos {
 			if item == nil || item.TypedResult == nil {
