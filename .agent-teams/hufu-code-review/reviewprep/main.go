@@ -213,6 +213,11 @@ type documentationVerification struct {
 	CheckedPaths   int      `json:"checked_paths"`
 	CheckedSymbols int      `json:"checked_symbols"`
 	Issues         []string `json:"issues,omitempty"`
+	// ForwardReferences lists references that are missing at a historical
+	// reviewed revision but exist at ReferenceTip, the repository's commit
+	// when the review ran. They are reported for the reviewers, not failed.
+	ForwardReferences []string `json:"forward_references,omitempty"`
+	ReferenceTip      string   `json:"reference_tip,omitempty"`
 }
 
 type routedWorkset struct {
@@ -1419,6 +1424,8 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 	seenSymbols := make(map[string]struct{})
 	symbolResolver := newReviewGoSymbolResolver(ctx, repo, r)
 	defer symbolResolver.close()
+	forward := newForwardReferenceChecker(ctx, repo, r)
+	defer forward.close()
 	for _, documentPath := range paths {
 		// Archived documents are immutable historical records. Inline paths and
 		// symbols describe the repository state that the record was written
@@ -1459,7 +1466,11 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 					return verification, checkErr
 				}
 				if !found {
-					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, reviewTargetLabel(r)))
+					later, laterErr := forward.pathExists(repositoryPath)
+					if laterErr != nil {
+						return verification, laterErr
+					}
+					verification.recordMissingReference(fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, reviewTargetLabel(r)), later, forward.tip)
 				}
 			}
 			inlineText := markdownLinkPattern.ReplaceAllString(line, "")
@@ -1478,7 +1489,11 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 							return verification, checkErr
 						}
 						if !found {
-							verification.Issues = append(verification.Issues, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)))
+							later, laterErr := forward.pathExists(repositoryPath)
+							if laterErr != nil {
+								return verification, laterErr
+							}
+							verification.recordMissingReference(fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)), later, forward.tip)
 						}
 					}
 				}
@@ -1502,7 +1517,11 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				seenSymbols[token] = struct{}{}
 				verification.CheckedSymbols++
 				if !found {
-					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)))
+					later, laterErr := forward.symbolExists(token)
+					if laterErr != nil {
+						return verification, laterErr
+					}
+					verification.recordMissingReference(fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)), later, forward.tip)
 				}
 			}
 		}
