@@ -2677,6 +2677,7 @@ type runtimeActionReceipt struct {
 	ActionID                      string            `json:"action_id"`
 	Capability                    string            `json:"capability"`
 	Provider                      string            `json:"provider,omitempty"`
+	ProviderDescriptorSHA256      string            `json:"provider_descriptor_sha256,omitempty"`
 	Type                          string            `json:"type"`
 	Status                        string            `json:"status"`
 	StartedAt                     time.Time         `json:"started_at"`
@@ -2711,7 +2712,8 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
 			Version: 2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
-			Capability: capability, Provider: providerName, Type: task.Action.Type, Status: status,
+			Capability: capability, Provider: providerName, ProviderDescriptorSHA256: c.phaseWorkflow.providerDescriptorDigest(capability),
+			Type: task.Action.Type, Status: status,
 			StartedAt: startedAt, FinishedAt: finishedAt,
 			RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 			MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),

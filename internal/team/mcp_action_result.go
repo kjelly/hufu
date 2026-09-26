@@ -88,3 +88,28 @@ func (c *Coordinator) withRuntimeActionMCPAuthorization(ctx context.Context, tas
 		return nil
 	}))
 }
+
+// providerDescriptorDigest returns the descriptor digest a bound MCP action
+// provider pins for capability, for the runtime action receipt. Other
+// providers have none.
+func (w *runtimeWorkflow) providerDescriptorDigest(capability string) string {
+	if w == nil {
+		return ""
+	}
+	w.mu.RLock()
+	registry := w.registry
+	w.mu.RUnlock()
+	provider, ok := registry.Get(capability)
+	if !ok {
+		return ""
+	}
+	mcpProvider, ok := provider.(*mcpActionProvider)
+	if !ok {
+		return ""
+	}
+	binding, ok := mcpProvider.boundTarget()
+	if !ok {
+		return ""
+	}
+	return binding.descriptorSHA256
+}
