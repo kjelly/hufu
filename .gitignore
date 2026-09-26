@@ -16,6 +16,8 @@ stm.md
 docs/tmp
 /tmp
 .codex
+# Antigravity CLI keeps a per-project link to the user's home directory here.
+.antigravitycli/
 .worktrees/
 spec.md
 review.md
