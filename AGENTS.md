@@ -66,7 +66,7 @@ The command must complete successfully with no errors before the task is conside
 - **`PromptSegment`** (`prompt.go`) — One unit of execution: `switch_team`, `invoke_agent`, or `text`
 - **`team.TeamSession`** — Loaded team state: config, agents map, MCP servers, skills, workspace
 - **`team.Coordinator`** — Orchestrator: delegates via `agent`; provides `finish`/`load_skill`; manages sidecar, guard, auto-skills, dry-run, plan-first
-- **`team.TeamContext`** — Container holding session + coordinator + sessionData for one team
+- **`teamContext`** (`cmd/hufu/team_setup.go`) — Container holding session + coordinator + sessionData for one team. It owns the MCP manager and workspace lease; `Close()` stops the coordinator, then closes the MCP manager, then releases the lease
 - **`skill.SkillDef`** — Parsed from `SKILL.md`; name, description, content, summary
 - **`sidecar.Sidecar`** — Auxiliary LLM agent for skill matching and guard review
 - **`tui.Model`** — Bubble Tea TUI state machine

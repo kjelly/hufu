@@ -32,8 +32,14 @@ type teamContext struct {
 	notifier    *notify.Notifier
 	// roleSources names the configuration layer behind each role model.
 	roleSources []roleModelSource
+	// mcpManager is created by loadTeamCommon and owned by this context:
+	// Coordinator.Close leaves caller-supplied resources open.
+	mcpManager *mcp.MCPToolManager
 }
 
+// Close stops the coordinator first, because its workers may still hold MCP
+// tools, then closes the MCP manager and releases the workspace lease. Every
+// step runs even when an earlier one fails.
 func (tc *teamContext) Close() error {
 	if tc == nil {
 		return nil
@@ -42,7 +48,10 @@ func (tc *teamContext) Close() error {
 	if tc.coordinator != nil {
 		coordinatorErr = tc.coordinator.Close()
 	}
-	return errors.Join(coordinatorErr, closeSessionWorkspaceLease(tc.session))
+	mcpManager := tc.mcpManager
+	tc.mcpManager = nil
+	mcpErr := closeTeamMCPManager(mcpManager)
+	return errors.Join(coordinatorErr, mcpErr, closeSessionWorkspaceLease(tc.session))
 }
 
 func closeTeamContexts(contexts map[string]*teamContext) error {
@@ -158,7 +167,7 @@ func modelsInUse(session *team.TeamSession, sidecarModel, guardModel, judgeModel
 // resolution, coordinator construction, and notification setup.
 // The session must already be loaded (via team.LoadTeam or team.LoadDefaultTeam)
 // and have its Workspace set.
-func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (*teamContext, error) {
+func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSession, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, registry *team.TeamRegistry, forcedSkills []string, planMode bool, autoSkillsMode bool, buildMCP bool) (_ *teamContext, err error) {
 	if err := ensureSessionWorkspaceScope(session); err != nil {
 		return nil, err
 	}
@@ -259,8 +268,16 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	var mcpManager *mcp.MCPToolManager
 	if buildMCP {
-		mcpManager = buildMCPManager(ctx, session, cfg)
+		mcpManager = buildTeamMCPManager(ctx, session, cfg)
 	}
+	// This function owns the manager until the returned teamContext does. A
+	// failure path has already closed any coordinator it built, so the
+	// manager is closed after its last user stopped.
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, closeTeamMCPManager(mcpManager))
+		}
+	}()
 	memStore := buildMemoryStore(resolvedProviderURL)
 
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
@@ -311,38 +328,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
-	// The execution policy is durable before any provider profile/capability
-	// probe. Those probes can open provider transports, so a legacy interrupted
-	// session or configuration drift must fail here rather than after a model
-	// boundary has already been crossed.
-	coordinator.SetExecutionProfile(execProfile)
-	coordinator.SetFreshSession(startsFresh)
-	coordinator.SetSessionData(sessionData)
-	if err := freezeStartupExecutionPolicy(coordinator); err != nil {
-		return nil, errors.Join(err, coordinator.Close())
-	}
-	if err := completeManagedFreshSession(ctx, session); err != nil {
-		return nil, errors.Join(fmt.Errorf("complete rebound workspace fresh-session checkpoint: %w", err), coordinator.Close())
-	}
-	// Warm provider-bound profiles after the coordinator owns the exact
-	// ProviderManager used for invocation. This covers configured agents,
-	// extra models, model-list candidates, and all auxiliary role models.
-	coordinator.WarmModelProfiles(ctx, models, session.Config.Generation.ContextWindow)
-	modelCapabilityValidation := coordinator.ValidateModelCapabilities(ctx)
-	for _, warning := range modelCapabilityValidation.Warnings {
-		stderrLog("%s %s\n", errStyle.Render("⚠"), warning)
-	}
-	if err := modelCapabilityValidation.Err(); err != nil {
-		return nil, errors.Join(err, coordinator.Close())
-	}
-
-	if stallThreshold := cfg.ResolveStallThreshold(session.Config.StallThreshold); stallThreshold > 0 {
-		coordinator.SetStallWatchdog(stallThreshold, 0)
-	}
-	if err := applyUnattendedAndBudget(coordinator, session); err != nil {
-		return nil, errors.Join(err, coordinator.Close())
-	}
-	if err := coordinator.SetPTYTerminalEnabled(opts.enablePTYTerminal); err != nil {
+	if err := startTeamCoordinator(ctx, coordinator, session, cfg, execProfile, startsFresh, sessionData, models); err != nil {
 		return nil, errors.Join(err, coordinator.Close())
 	}
 	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
@@ -356,6 +342,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		sessionData: sessionData,
 		notifier:    notifierInst,
 		roleSources: roleSources,
+		mcpManager:  mcpManager,
 	}, nil
 }
 
@@ -768,17 +755,4 @@ func sortedAgents(agents map[string]*agent.AgentDef) []*agent.AgentDef {
 		return result[i].Name < result[j].Name
 	})
 	return result
-}
-
-// freezeStartupExecutionPolicy persists the execution policy and repeats the
-// action catalog proposer check against resolved worker targets. Both run
-// before any provider preflight.
-func freezeStartupExecutionPolicy(coordinator *team.Coordinator) error {
-	if err := coordinator.FreezeExecutionPolicyAtStartup(); err != nil {
-		return fmt.Errorf("freeze execution policy before provider preflight: %w", err)
-	}
-	if err := coordinator.ValidateActionCatalogProposers(); err != nil {
-		return fmt.Errorf("validate action catalog proposers: %w", err)
-	}
-	return nil
 }

@@ -226,9 +226,29 @@ func displayTeamHeader(session *team.TeamSession, workerModels []WorkerModelOver
 	}
 }
 
+// buildTeamMCPManager and closeTeamMCPManager are the MCP ownership seam.
+// Tests replace them to observe that each manager a team context creates is
+// closed exactly once, without starting MCP servers.
+var (
+	buildTeamMCPManager = buildMCPManager
+	closeTeamMCPManager = closeMCPManager
+)
+
+func closeMCPManager(manager *mcp.MCPToolManager) error {
+	if manager == nil {
+		return nil
+	}
+	if err := manager.Close(); err != nil {
+		return fmt.Errorf("close MCP manager: %w", err)
+	}
+	return nil
+}
+
 // buildMCPManager creates an MCPToolManager if the session has MCP
 // servers or any agent defines mcp-tools. Returns nil otherwise (and
-// for the default team which never has MCP).
+// for the default team which never has MCP). A failed server load stays a
+// warning; the returned manager may still hold the servers that loaded, so
+// the caller must close it.
 func buildMCPManager(ctx context.Context, session *team.TeamSession, cfg *config.Config) *mcp.MCPToolManager {
 	hasMCPTools := false
 	for _, def := range session.Agents {
