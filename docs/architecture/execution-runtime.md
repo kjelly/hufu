@@ -43,6 +43,14 @@ AttemptRequest → AttemptResult → receipt / verification / lifecycle events
   outcome ownership.
 - `BackendBinding` records the session/attempt binding selected for the frozen
   target. The binding is evidence, not a permission to retarget the task.
+  A task holds one backend session per branch, identified by backend and
+  session ID; execution world, cwd, and turn are per-attempt diagnostics.
+  Every attempt resumes that session, and a binding that names a different
+  one fails with `ExecutionIdentityConflictError` instead of replacing it.
+  The `backend_session_bound` event is durable before any turn starts and uses
+  the per-task idempotency key `backend-session-bound:<task>`. An attempt
+  whose projection has no binding reads the active branch lineage before it
+  opens a session, and fails closed when that lineage cannot be read.
 - `ExecutionWorld` is the Hufu-owned workspace/effect boundary for providers
   that can run native process or filesystem operations. Its capabilities do
   not grant authorization by themselves.

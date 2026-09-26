@@ -639,6 +639,13 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex provider does not support extra-model fanout (ModelTopology has %d entries); route this task through hufu-local or reduce it to a single model", len(request.Task.ModelTopology)))
 	}
 
+	// Choose the session to resume before any process or workspace side
+	// effect: an empty projection does not prove no session was bound.
+	existingThreadID, err := p.coordinator.resumableBackendSessionID(ctx, request)
+	if err != nil {
+		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("resolve durable Codex session: %w", err))
+	}
+
 	transcript := newCodexTranscript(p.config.MaxTranscriptBytes)
 	workspace, networkDisabled, worldPolicyErr := p.coordinator.codexExecutionWorld(p.name, request.Agent)
 	if worldPolicyErr != nil {
@@ -718,10 +725,6 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		defer cancel()
 	}
 
-	existingThreadID := ""
-	if request.ProviderBinding != nil {
-		existingThreadID = request.ProviderBinding.SessionID
-	}
 	threadCfg := CodexThreadConfig{
 		CWD: prepared.CWD, Model: request.ModelID, Sandbox: sandbox,
 		NetworkDisabled:       networkDisabled,

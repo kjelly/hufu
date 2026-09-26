@@ -233,6 +233,11 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 		if err := client.Call(ctx, codexMethodThreadResume, params, &result); err != nil {
 			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/resume: %w", err)
 		}
+		// Resuming must continue the durable session. Binding a different
+		// thread here would silently give the task a second session.
+		if result.Thread.ID != existingThreadID {
+			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/resume returned thread %q, want the durable session %q", result.Thread.ID, existingThreadID)
+		}
 		networkAccess, networkKnown := codexSandboxPolicyNetworkAccess(result.Sandbox)
 		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox), NetworkAccess: networkAccess, NetworkAccessKnown: networkKnown}
 	} else {

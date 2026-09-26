@@ -281,21 +281,23 @@ func legacyExecutionTopologyNeedsHistoricalEvidence(item *TodoItem) (bool, error
 	return false, nil
 }
 
-func (c *Coordinator) readLegacyMigrationEvidence(ctx context.Context) ([]RunEvent, error) {
+// readActiveLineageEvents returns the durable events visible on the active
+// branch: its own events after the parent prefix up to the fork point.
+func (c *Coordinator) readActiveLineageEvents(ctx context.Context) ([]RunEvent, error) {
 	events, err := c.EventJournal().ReadEvents(context.WithoutCancel(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("read historical profile evidence: %w", err)
+		return nil, fmt.Errorf("read event journal: %w", err)
 	}
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
 		return events, nil
 	}
 	tree, err := LoadSessionTree(c.session.Workspace)
 	if err != nil {
-		return nil, fmt.Errorf("load session tree for historical profile evidence: %w", err)
+		return nil, fmt.Errorf("load session tree: %w", err)
 	}
 	lineage, err := projectEventsForBranch(events, tree, c.activeBranchID())
 	if err != nil {
-		return nil, fmt.Errorf("project active branch historical profile evidence: %w", err)
+		return nil, fmt.Errorf("project active branch lineage: %w", err)
 	}
 	return lineage, nil
 }
@@ -335,9 +337,9 @@ func (c *Coordinator) migrateLegacyExecutionTarget(ctx context.Context, item *To
 	}
 	var events []RunEvent
 	if needsEvidence {
-		events, err = c.readLegacyMigrationEvidence(ctx)
+		events, err = c.readActiveLineageEvents(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("read historical profile evidence: %w", err)
 		}
 	}
 	topology, evidenceEventIDs, err := resolveLegacyExecutionTopology(item, events)
