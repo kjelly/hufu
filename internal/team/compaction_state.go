@@ -154,6 +154,13 @@ func LoadConversationCompactionState(workspace string) (*ConversationCompactionS
 }
 
 func SaveConversationCompactionState(workspace string, state *ConversationCompactionState) error {
+	return saveConversationCompactionState(workspace, state, nil)
+}
+
+// saveConversationCompactionState is SaveConversationCompactionState for a
+// caller that may lend its open event store, which pruning reads for branch
+// lineage instead of opening and rescanning the log again.
+func saveConversationCompactionState(workspace string, state *ConversationCompactionState, events *EventStore) error {
 	if strings.TrimSpace(workspace) == "" {
 		return errNoCanonicalCompactionState
 	}
@@ -161,7 +168,7 @@ func SaveConversationCompactionState(workspace string, state *ConversationCompac
 	if err != nil {
 		return fmt.Errorf("redact canonical compaction state: %w", err)
 	}
-	state = retainReachableCompactionState(workspace, state)
+	state = retainReachableCompactionState(workspace, state, events)
 	if err := validateCompactionState(state); err != nil {
 		return fmt.Errorf("validate canonical compaction state before save: %w", err)
 	}
@@ -177,8 +184,9 @@ func SaveConversationCompactionState(workspace string, state *ConversationCompac
 // retained, as is the parent snapshot at every extant fork point. Everything
 // else is unreachable from the current session tree and may be removed. If
 // lineage evidence is unavailable, the safe choice is to retain the state and
-// let validation preserve the existing recovery behavior.
-func retainReachableCompactionState(workspace string, state *ConversationCompactionState) *ConversationCompactionState {
+// let validation preserve the existing recovery behavior. events, when it is
+// the workspace's live store, is read instead of opening the log.
+func retainReachableCompactionState(workspace string, state *ConversationCompactionState, events *EventStore) *ConversationCompactionState {
 	if state == nil || strings.TrimSpace(workspace) == "" {
 		return state
 	}
@@ -192,12 +200,12 @@ func retainReachableCompactionState(workspace string, state *ConversationCompact
 	if _, err := os.Stat(filepath.Join(workspace, logsDir, eventStoreFile)); err != nil {
 		return state
 	}
-	es, err := OpenEventStore(workspace)
+	es, release, err := borrowEventStore(workspace, events)
 	if err != nil {
 		return state
 	}
-	defer func() { _ = es.Close() }()
-	events, err := es.ReadEvents()
+	defer release()
+	logEvents, err := es.ReadEvents()
 	if err != nil {
 		return state
 	}
@@ -225,7 +233,7 @@ func retainReachableCompactionState(workspace string, state *ConversationCompact
 		if branch == nil || branch.ParentID == "" || branch.ForkEventID == "" {
 			continue
 		}
-		lineage := FilterEventsForBranch(events, tree, branch.ParentID)
+		lineage := FilterEventsForBranch(logEvents, tree, branch.ParentID)
 		forkIndex := -1
 		for index, event := range lineage {
 			if event.ID == branch.ForkEventID {
@@ -390,7 +398,12 @@ func MigrateLegacyCompactionState(workspace, branchID string) error {
 	if err != nil {
 		return err
 	}
-	eventID, attested, err := findLegacyCompactionAttestation(workspace, generation)
+	eventStore, err := OpenEventStore(workspace)
+	if err != nil {
+		return fmt.Errorf("open event store for legacy compaction migration: %w", err)
+	}
+	defer func() { _ = eventStore.Close() }()
+	eventID, attested, err := findLegacyCompactionAttestation(eventStore, generation)
 	if err != nil {
 		return err
 	}
@@ -419,18 +432,13 @@ func MigrateLegacyCompactionState(workspace, branchID string) error {
 	checkpoint.EventID = compactionCheckpointEventID(checkpoint)
 	state.Branches[branchID] = checkpoint
 	state.Checkpoints[branchID] = []ConversationCompactionCheckpoint{checkpoint}
-	if err := SaveConversationCompactionState(workspace, state); err != nil {
+	if err := saveConversationCompactionState(workspace, state, eventStore); err != nil {
 		return err
 	}
-	es, err := OpenEventStore(workspace)
-	if err != nil {
-		return fmt.Errorf("open event store for migrated compaction attestations: %w", err)
-	}
-	defer func() { _ = es.Close() }()
-	if err := appendCompactionGenerationAttestation(es, generation); err != nil {
+	if err := appendCompactionGenerationAttestation(eventStore, generation); err != nil {
 		return fmt.Errorf("attest migrated compaction generation: %w", err)
 	}
-	if err := appendCompactionCheckpointAttestation(es, checkpoint, generation); err != nil {
+	if err := appendCompactionCheckpointAttestation(eventStore, checkpoint, generation); err != nil {
 		return fmt.Errorf("attest migrated compaction checkpoint: %w", err)
 	}
 	return nil
@@ -540,12 +548,7 @@ func legacyHistorySourceRanges(history []fantasy.Message, sourceOffset int, sour
 // reference identifies the exact migrated generation and checksum. A legacy
 // record ID is not treated as an event ID because the old format did not
 // durably record that identity.
-func findLegacyCompactionAttestation(workspace string, generation CompactionGeneration) (string, bool, error) {
-	es, err := OpenEventStore(workspace)
-	if err != nil {
-		return "", false, fmt.Errorf("open event store for legacy compaction migration: %w", err)
-	}
-	defer func() { _ = es.Close() }()
+func findLegacyCompactionAttestation(es *EventStore, generation CompactionGeneration) (string, bool, error) {
 	events, err := es.ReadEvents()
 	if err != nil {
 		return "", false, fmt.Errorf("read event store for legacy compaction migration: %w", err)
@@ -1211,7 +1214,7 @@ func (c *Coordinator) commitCompactionCheckpointWithProvenance(ctx context.Conte
 	checkpoint.EventID = compactionCheckpointEventID(checkpoint)
 	state.Checkpoints[branchID] = append(state.Checkpoints[branchID], checkpoint)
 	state.Branches[branchID] = checkpoint
-	if err := SaveConversationCompactionState(c.session.Workspace, state); err != nil {
+	if err := saveConversationCompactionState(c.session.Workspace, state, c.eventStore); err != nil {
 		return CompactionRecord{}, err
 	}
 	// Reload the file that was just atomically committed. The reloaded state is
@@ -1326,7 +1329,7 @@ func (c *Coordinator) persistConversationCheckpointWithProvenance(history []fant
 		state.Checkpoints[branchID] = append(checkpoints, checkpoint)
 	}
 	state.Branches[branchID] = checkpoint
-	if err := SaveConversationCompactionState(workspace, state); err != nil {
+	if err := saveConversationCompactionState(workspace, state, c.eventStore); err != nil {
 		return err
 	}
 	committedState, committedExists, loadErr := LoadConversationCompactionState(workspace)
@@ -1906,13 +1909,29 @@ func compactionCheckpointAttestationMatches(event RunEvent, checkpoint Conversat
 // attested in the parent lineage through that event is materialized. No
 // mutable history slice is shared with the parent branch.
 func MaterializeCompactionBranch(workspace, parentBranchID, childBranchID string, forkEventIDs ...string) error {
+	forkEventID := ""
+	if len(forkEventIDs) > 0 {
+		forkEventID = forkEventIDs[0]
+	}
+	return MaterializeCompactionBranchWithEvents(workspace, nil, parentBranchID, childBranchID, forkEventID)
+}
+
+// MaterializeCompactionBranchWithEvents is MaterializeCompactionBranch for a
+// caller that holds the workspace's event store, typically the one it forked
+// the branch from; the fork lineage is read from it instead of a rescan.
+func MaterializeCompactionBranchWithEvents(workspace string, events *EventStore, parentBranchID, childBranchID, forkEventID string) error {
 	state, exists, err := LoadConversationCompactionState(workspace)
 	if err != nil || !exists {
 		return err
 	}
-	forkEventID := ""
-	if len(forkEventIDs) > 0 {
-		forkEventID = strings.TrimSpace(forkEventIDs[0])
+	forkEventID = strings.TrimSpace(forkEventID)
+	if forkEventID != "" {
+		es, release, err := borrowEventStore(workspace, events)
+		if err != nil {
+			return fmt.Errorf("open event store for compaction fork: %w", err)
+		}
+		defer release()
+		events = es
 	}
 	state = cloneCompactionState(state)
 	if state == nil {
@@ -1921,7 +1940,7 @@ func MaterializeCompactionBranch(workspace, parentBranchID, childBranchID string
 	if state.Checkpoints == nil {
 		state.Checkpoints = make(map[string][]ConversationCompactionCheckpoint)
 	}
-	parent, ok, err := latestCompactionCheckpointThroughEvent(workspace, parentBranchID, forkEventID, state)
+	parent, ok, err := latestCompactionCheckpointThroughEvent(workspace, events, parentBranchID, forkEventID, state)
 	if err != nil {
 		return err
 	}
@@ -1930,7 +1949,7 @@ func MaterializeCompactionBranch(workspace, parentBranchID, childBranchID string
 		// current compaction projection through BranchState or a mutable head.
 		delete(state.Branches, childBranchID)
 		delete(state.Checkpoints, childBranchID)
-		return SaveConversationCompactionState(workspace, state)
+		return saveConversationCompactionState(workspace, state, events)
 	}
 
 	ids := compactionGenerationAncestry(state, parent.GenerationID)
@@ -1965,7 +1984,7 @@ func MaterializeCompactionBranch(workspace, parentBranchID, childBranchID string
 	parent.EventID = compactionCheckpointEventID(parent)
 	state.Branches[childBranchID] = parent
 	state.Checkpoints[childBranchID] = []ConversationCompactionCheckpoint{parent}
-	return SaveConversationCompactionState(workspace, state)
+	return saveConversationCompactionState(workspace, state, events)
 }
 
 func compactionGenerationAncestry(state *ConversationCompactionState, generationID string) []string {
@@ -1986,7 +2005,9 @@ func compactionGenerationAncestry(state *ConversationCompactionState, generation
 	return reverse
 }
 
-func latestCompactionCheckpointThroughEvent(workspace, branchID, forkEventID string, state *ConversationCompactionState) (ConversationCompactionCheckpoint, bool, error) {
+// latestCompactionCheckpointThroughEvent reads the fork lineage from es, which
+// must be non-nil when forkEventID is set.
+func latestCompactionCheckpointThroughEvent(workspace string, es *EventStore, branchID, forkEventID string, state *ConversationCompactionState) (ConversationCompactionCheckpoint, bool, error) {
 	checkpoints := state.Checkpoints[branchID]
 	if forkEventID == "" {
 		if len(checkpoints) > 0 {
@@ -1996,11 +2017,6 @@ func latestCompactionCheckpointThroughEvent(workspace, branchID, forkEventID str
 		return checkpoint, ok, nil
 	}
 
-	es, err := OpenEventStore(workspace)
-	if err != nil {
-		return ConversationCompactionCheckpoint{}, false, fmt.Errorf("open event store for compaction fork: %w", err)
-	}
-	defer func() { _ = es.Close() }()
 	events, err := es.ReadEvents()
 	if err != nil {
 		return ConversationCompactionCheckpoint{}, false, fmt.Errorf("read event store for compaction fork: %w", err)

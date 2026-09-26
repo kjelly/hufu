@@ -145,7 +145,7 @@ func forkMetadataOnly(vs *versionedSession, st *team.SessionTree, es *team.Event
 	if err != nil {
 		return fmt.Errorf("failed to fork branch: %w", err)
 	}
-	if err := team.MaterializeCompactionBranch(ws, b.ParentID, b.ID, b.ForkEventID); err != nil {
+	if err := team.MaterializeCompactionBranchWithEvents(ws, es, b.ParentID, b.ID, b.ForkEventID); err != nil {
 		return fmt.Errorf("failed to materialize compaction state for branch %q: %w", b.ID, err)
 	}
 	// Snapshot the live session into the new branch so the fork starts from

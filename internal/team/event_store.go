@@ -160,6 +160,32 @@ func OpenEventStore(workspace string) (*EventStore, error) {
 	return NewEventStore(workspace, "", "")
 }
 
+// borrowEventStore returns open when it is workspace's live, valid event log,
+// and otherwise opens the log for a caller that must call release. Opening
+// rescans the whole log, which costs seconds on a long-lived workspace, so a
+// caller that already holds the store should lend it.
+func borrowEventStore(workspace string, open *EventStore) (store *EventStore, release func(), err error) {
+	if open.servesWorkspace(workspace) {
+		return open, func() {}, nil
+	}
+	store, err = OpenEventStore(workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() { _ = store.Close() }, nil
+}
+
+// servesWorkspace reports whether es is workspace's event log and can still
+// answer reads from validated state.
+func (es *EventStore) servesWorkspace(workspace string) bool {
+	if es == nil || es.mu == nil || strings.TrimSpace(workspace) == "" {
+		return false
+	}
+	es.lock()
+	defer es.release()
+	return !es.closed && es.stateValid && es.path == filepath.Join(workspace, logsDir, eventStoreFile)
+}
+
 // OpenEventStoreReadOnly opens and validates an existing event log without
 // creating the workspace, logs directory, or event file. Mutation methods on
 // the returned store fail closed.

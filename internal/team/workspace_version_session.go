@@ -274,7 +274,7 @@ func (o *WorkspaceSessionOps) finishFork(ctx context.Context, op versionstore.Op
 			return err
 		}
 	}
-	if err := MaterializeCompactionBranch(o.Workspace, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
+	if err := MaterializeCompactionBranchWithEvents(o.Workspace, o.Events, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
 		return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
 	}
 	SnapshotBranchState(o.Workspace, o.Tree, branch.ID)

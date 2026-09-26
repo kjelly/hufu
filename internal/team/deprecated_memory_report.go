@@ -119,8 +119,8 @@ func (c *Coordinator) DeprecatedMemoryToolReport() []DeprecatedMemoryToolUsage {
 	// crash-resumed run with a fresh executionRunID would silently drop
 	// the prior run's compatibility report.
 	if c.session != nil && c.session.Workspace != "" {
-		if store, err := NewEventStore(c.session.Workspace, "", ""); err == nil {
-			defer func() { _ = store.Close() }()
+		if store, release, err := borrowEventStore(c.session.Workspace, c.eventStore); err == nil {
+			defer release()
 			if events, err := store.ReadEvents(); err == nil {
 				// Pick the most recent runID present in the on-disk log
 				// that has at least one compatibility observation. Using
