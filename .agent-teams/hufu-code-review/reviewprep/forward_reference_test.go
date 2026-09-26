@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/golangruntime"
 )
 
 const forwardPlanDocument = "Add `internal/fixture/data.json`, declare `fixture.Future`, and link [the data](../../internal/fixture/data.json).\n"
@@ -79,5 +83,53 @@ func TestDocumentationVerificationWithoutALaterCommitIsUnchanged(t *testing.T) {
 	config.Routing = routingDocumentation
 	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), "internal/later/unwritten.go") {
 		t.Fatalf("working-tree review: error = %v, want the missing path", err)
+	}
+}
+
+// TestEmbeddedRuntimeEmitsDocumentationVerification runs the action through
+// Hufu's embedded Go interpreter, the production path. Compiled tests do not
+// catch a type the interpreter encodes differently: a pointer method on
+// documentationVerification once made it an empty object, so the team's
+// acceptance assertion on /passed could not resolve.
+func TestEmbeddedRuntimeEmitsDocumentationVerification(t *testing.T) {
+	repo, planCommit, head := forwardReferenceRepo(t, forwardPlanDocument)
+	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: planCommit}
+	payload, err := json.Marshal(wireConfig{
+		Scope: &scope, Routing: routingDocumentation,
+		MaxTotalDiffBytes: defaultMaxTotalDiffBytes, MaxTotalDiffLines: defaultMaxTotalDiffLines,
+		MaxChangedPaths: defaultMaxChangedPaths, MaxWorksetItems: defaultMaxWorksetItems,
+		MaxDiffBytes: 24_000, MaxDiffLines: 600, MaxPaths: 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(actionRequest{Type: "prepare_review_workset", Payload: string(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := golangruntime.Prepare(source, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "HUFU_REPOSITORY="+repo, "HUFU_WORKSPACE="+t.TempDir())
+	result, err := golangruntime.Execute(t.Context(), "", program, request, env, 1<<20, 16<<10)
+	if err != nil {
+		t.Fatalf("execute embedded reviewprep runtime: %v; stderr=%s", err, result.Stderr)
+	}
+	var output struct {
+		Outputs struct {
+			DocumentationVerification documentationVerification `json:"documentation_verification"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(result.Stdout, &output); err != nil {
+		t.Fatalf("decode embedded runtime output: %v; stdout=%s", err, result.Stdout)
+	}
+	verification := output.Outputs.DocumentationVerification
+	if !verification.Passed || len(verification.CheckedFiles) != 1 || len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head {
+		t.Fatalf("embedded documentation_verification = %#v, want a pass with three forward references at %s", verification, head)
 	}
 }

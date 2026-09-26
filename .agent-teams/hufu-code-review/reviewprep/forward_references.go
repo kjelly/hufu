@@ -75,8 +75,11 @@ func (f *forwardReferenceChecker) close() {
 
 // recordMissingReference files a reference that is missing at the reviewed
 // revision: as a forward reference when the current commit provides it, and
-// otherwise as a verification issue.
-func (v *documentationVerification) recordMissingReference(issue string, providedLater bool, tip string) {
+// otherwise as a verification issue. It is a function, not a method: Hufu's
+// embedded Go interpreter encodes a struct type that has a pointer method as
+// an empty JSON object, which would drop documentation_verification from the
+// action outputs.
+func recordMissingReference(v *documentationVerification, issue string, providedLater bool, tip string) {
 	if !providedLater {
 		v.Issues = append(v.Issues, issue)
 		return

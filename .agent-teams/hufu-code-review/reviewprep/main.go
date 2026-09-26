@@ -1470,7 +1470,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 					if laterErr != nil {
 						return verification, laterErr
 					}
-					verification.recordMissingReference(fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, reviewTargetLabel(r)), later, forward.tip)
+					recordMissingReference(&verification, fmt.Sprintf("%s: relative link target %q does not exist at %s", documentPath, target, reviewTargetLabel(r)), later, forward.tip)
 				}
 			}
 			inlineText := markdownLinkPattern.ReplaceAllString(line, "")
@@ -1493,7 +1493,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 							if laterErr != nil {
 								return verification, laterErr
 							}
-							verification.recordMissingReference(fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)), later, forward.tip)
+							recordMissingReference(&verification, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)), later, forward.tip)
 						}
 					}
 				}
@@ -1521,7 +1521,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 					if laterErr != nil {
 						return verification, laterErr
 					}
-					verification.recordMissingReference(fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)), later, forward.tip)
+					recordMissingReference(&verification, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)), later, forward.tip)
 				}
 			}
 		}
