@@ -66,6 +66,10 @@ to re-create an abstraction that already exists in the runtime.
 - [SQLite maintenance policy](architecture/sqlite-maintenance-policy.md) —
   discovery evidence and the still-unmet authorization contract for any
   explicit maintenance operation.
+- [MCP-backed action provider](architecture/mcp-action-provider.md) — draft
+  implementation plan for binding a team-declared MCP tool to an action
+  provider capability; code and tests remain authoritative for implementation
+  status.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.
