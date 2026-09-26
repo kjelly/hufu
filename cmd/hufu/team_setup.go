@@ -206,9 +206,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
-	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
-		return nil, err
-	}
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	// Provenance must be read before resolution overwrites the team's
 	// worker/coordinator fields with their resolved values.
@@ -221,9 +218,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedGuardModel := roleModels.Guard
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
-	// This is deliberately before MCP loading, legacy-draft migration,
-	// workspace initialization, lifecycle archive/checkpoint, and coordinator
-	// construction. It is a read-only setup gate.
+	// Target preflight and the effective-contract lint below are the
+	// read-only setup gate. They run before workspace versioning binding
+	// (which takes the project lock and may run workspace recovery), MCP
+	// loading, legacy-draft migration, workspace initialization, lifecycle
+	// archive/checkpoint, and coordinator construction.
 	if err := preflightExecutionTargets(session, cfg, roleModels, nil); err != nil {
 		return nil, err
 	}
@@ -241,6 +240,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	})
 	if messages := contractErrorMessages(effectiveContractFindings); len(messages) > 0 {
 		return nil, fmt.Errorf("effective team contract validation failed: %s", strings.Join(messages, "; "))
+	}
+	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
+		return nil, err
 	}
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {

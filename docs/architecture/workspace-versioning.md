@@ -164,7 +164,11 @@ names the recorded holder.
 ## Recovery
 
 Recovery runs before any workspace operation (required-mode coordinator
-startup and every mutating session or workspace version command). A pending
+startup and every mutating session or workspace version command). At
+coordinator startup it comes after the read-only static checks (role target
+resolution, execution-target preflight, and the effective-contract lint), so
+a configuration error fails before the project lock is taken or recovery
+starts. A pending
 snapshot with a durable commit event is published; one without is orphaned.
 Recovery never appends or replays events. Interrupted checkouts and restores
 are completed forward; a fork is completed forward once its child's commit
