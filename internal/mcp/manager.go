@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -392,11 +393,9 @@ func callMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string
 		defer cancel()
 	}
 
-	var argsMap map[string]any
-	if args != "" && args != "{}" {
-		if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
-			return nil, fmt.Errorf("invalid tool arguments: %w", err)
-		}
+	argsMap, err := decodeToolArguments(args)
+	if err != nil {
+		return nil, err
 	}
 
 	req := mcp.CallToolRequest{
@@ -414,6 +413,25 @@ func callMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string
 		return nil, fmt.Errorf("MCP tool call returned no result")
 	}
 	return result, nil
+}
+
+// decodeToolArguments decodes one JSON object of tool arguments. Numbers stay
+// json.Number, so the request carries each number exactly as the caller wrote
+// it: decoding into float64 would silently change integers above 2^53.
+func decodeToolArguments(args string) (map[string]any, error) {
+	if args == "" || args == "{}" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(args))
+	decoder.UseNumber()
+	var argsMap map[string]any
+	if err := decoder.Decode(&argsMap); err != nil {
+		return nil, fmt.Errorf("invalid tool arguments: %w", err)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("invalid tool arguments: trailing data after the JSON object")
+	}
+	return argsMap, nil
 }
 
 func (m *MCPToolManager) Close() error {

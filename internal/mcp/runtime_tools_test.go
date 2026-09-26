@@ -277,3 +277,58 @@ func TestExecuteRuntimeToolPreservesResultStructure(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPToolCallsSendArgumentNumbersExactly(t *testing.T) {
+	const arguments = `{"id":9007199254740993,"ratio":0.1,"nested":{"big":12345678901234567890}}`
+	manager := NewMCPToolManager("", "")
+	var received []string
+	capture := func(request mcp.CallToolRequest) *mcp.CallToolResult {
+		raw, _ := request.GetRawArguments().(json.RawMessage)
+		received = append(received, string(raw))
+		return mcp.NewToolResultText("ok")
+	}
+	fake := newRuntimeTestServer(t, map[string]func(mcp.CallToolRequest) *mcp.CallToolResult{
+		"collect_debug": capture, "list": capture,
+	})
+	attachRuntimeTestServer(t, manager, "diagnostics", MCPServerConfig{}, fake)
+	runtimeTool, err := manager.ReserveRuntimeTool("diagnostics", "collect_debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeDigest, err := MCPToolDescriptorSHA256(runtimeTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ExecuteRuntimeTool(t.Context(), runtimeTool.Name, runtimeDigest, arguments, allowAll); err != nil {
+		t.Fatalf("runtime call: %v", err)
+	}
+	visible := manager.toolMap["diagnostics__list"]
+	visibleDigest, err := MCPToolDescriptorSHA256(visible)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithToolAuthorizer(t.Context(), allowAll)
+	if _, _, err := manager.ExecuteAuthorizedTool(ctx, visible.Name, visibleDigest, arguments); err != nil {
+		t.Fatalf("worker call: %v", err)
+	}
+	if len(received) != 2 {
+		t.Fatalf("server received %d calls, want 2", len(received))
+	}
+	for index, path := range []string{"runtime", "worker"} {
+		for _, want := range []string{"9007199254740993", "0.1", "12345678901234567890"} {
+			if !strings.Contains(received[index], want) {
+				t.Fatalf("%s call sent %s, want the number %s unchanged", path, received[index], want)
+			}
+		}
+	}
+
+	if _, _, err := manager.ExecuteAuthorizedTool(ctx, visible.Name, visibleDigest, `{"id":1} {"id":2}`); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("arguments with trailing data: error = %v", err)
+	}
+	if _, _, err := manager.ExecuteAuthorizedTool(ctx, visible.Name, visibleDigest, `["id"]`); err == nil || !strings.Contains(err.Error(), "invalid tool arguments") {
+		t.Fatalf("non-object arguments: error = %v", err)
+	}
+	if calls := fake.calls.Load(); calls != 2 {
+		t.Fatalf("CallTool count = %d, want only the two valid calls", calls)
+	}
+}
