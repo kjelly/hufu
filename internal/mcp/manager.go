@@ -198,7 +198,7 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 	var tools []MCPTool
 	for _, t := range toolsResult.Tools {
 		prefixedName := name + "__" + t.Name
-		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
+		if !IsToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
 		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
@@ -258,7 +258,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 	var tools []MCPTool
 	for _, t := range toolsResult.Tools {
 		prefixedName := name + "__" + t.Name
-		if !isToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
+		if !IsToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
 			continue
 		}
 		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
@@ -284,7 +284,10 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 	return tools, cli, nil
 }
 
-func isToolAllowed(toolName string, allowed, excluded []string) bool {
+// IsToolAllowed reports whether a server's allowedTools/excludedTools admit
+// the native tool name. Offline configuration checks use the same rule as
+// server loading.
+func IsToolAllowed(toolName string, allowed, excluded []string) bool {
 	if len(excluded) > 0 {
 		for _, e := range excluded {
 			if e == toolName {

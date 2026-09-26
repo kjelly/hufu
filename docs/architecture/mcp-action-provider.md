@@ -354,3 +354,11 @@ Runtime action authorizer：在 `executeRuntimeAction` 建立 `actionCtx` 處（
 - 分別處理 direct-agent、unattended、chat、resume 各入口的 setup 差異：T2 的單一 seam 已涵蓋。
 - eval harness（`internal/evalharness`）支援 MCP provider：該路徑沒有 MCP manager，遇到 MCP provider 會依 D1 fail closed。
 - 把 `HUFU_*_INVOCATION_ID` 經 MCP `_meta` 傳給 server。
+
+## 14. 實作紀錄
+
+Baseline（`0be3a5f`，計畫移入 `docs/architecture/` 後）：`go build ./...`、`go vet ./...`、`golangci-lint run`（0 issues）與 `go test ./...`（44 個套件全部 ok）皆通過。
+
+| WP | Commit | 偏離與備註 |
+|---|---|---|
+| WP-1 | 見下一筆 commit | `registerConfiguredActionProviders` 多接收 `mcpServers`；runtime 名稱比對不分大小寫並去空白（與 command/golang 相同）。MCP provider 在 WP-3/WP-4 之前一律以 `mcp_action_unbound` fail closed。 |

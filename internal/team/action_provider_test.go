@@ -96,7 +96,7 @@ func Run(_ context.Context, _ io.Reader, _ io.Writer) error { return nil }
 	registry := NewProviderRegistry()
 	err := registerConfiguredActionProviders(registry, map[string]agent.ActionProviderConfig{
 		"demo": {Runtime: "golang", Source: "./action", Mode: golangruntime.TrustedStaticMode},
-	}, teamDir)
+	}, teamDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func Run(_ context.Context, _ io.Reader, _ io.Writer) error { return nil }
 		"unsupported runtime": {Runtime: "python", Source: "./action"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := registerConfiguredActionProviders(NewProviderRegistry(), map[string]agent.ActionProviderConfig{"demo": config}, teamDir); err == nil {
+			if err := registerConfiguredActionProviders(NewProviderRegistry(), map[string]agent.ActionProviderConfig{"demo": config}, teamDir, nil); err == nil {
 				t.Fatal("configuration was accepted")
 			}
 		})

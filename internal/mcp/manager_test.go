@@ -86,7 +86,7 @@ func TestMCPToolFields(t *testing.T) {
 	}
 }
 
-// TestIsToolAllowed tests the isToolAllowed function
+// TestIsToolAllowed tests the IsToolAllowed function
 func TestIsToolAllowed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -148,9 +148,9 @@ func TestIsToolAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isToolAllowed(tt.toolName, tt.allowed, tt.excluded)
+			got := IsToolAllowed(tt.toolName, tt.allowed, tt.excluded)
 			if got != tt.wantResult {
-				t.Errorf("isToolAllowed(%q, %v, %v) = %v, want %v",
+				t.Errorf("IsToolAllowed(%q, %v, %v) = %v, want %v",
 					tt.toolName, tt.allowed, tt.excluded, got, tt.wantResult)
 			}
 		})

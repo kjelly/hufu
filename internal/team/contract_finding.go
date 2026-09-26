@@ -99,6 +99,11 @@ const (
 	FindingActionCatalogInvocationInvalid       = "action_catalog_invocation_invalid"
 	FindingActionCatalogPhaseUnreachable        = "action_catalog_phase_unreachable"
 	FindingActionCatalogToolSequenceUnsupported = "action_catalog_tool_sequence_unsupported"
+	// MCP-backed action provider codes. See docs/reference/action-providers.md.
+	FindingMCPActionSideEffectUnsupported = "mcp_action_side_effect_unsupported"
+	FindingMCPActionPayloadInvalid        = "mcp_action_payload_invalid"
+	FindingMCPActionResolverUnsupported   = "mcp_action_resolver_unsupported"
+	FindingMCPActionToolReserved          = "mcp_action_tool_reserved"
 	// FindingUnsupportedSchemaVersion reports a readable manifest envelope
 	// whose apiVersion is not supported by this build.
 	FindingUnsupportedSchemaVersion = "unsupported_schema_version"

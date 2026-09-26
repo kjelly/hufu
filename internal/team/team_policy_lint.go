@@ -58,6 +58,7 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 	findings = append(findings, validateRequirements("requires", session.Config.Requirements)...)
 	findings = append(findings, validateWorksetAndActionContracts(session)...)
 	findings = append(findings, validateActionCatalog(session)...)
+	findings = append(findings, validateMCPActionProviders(session)...)
 
 	workers := reachableWorkers(session)
 	for _, def := range workers {
@@ -331,7 +332,7 @@ func validateActionTaskContract(field string, task TaskDef, session *TeamSession
 	if nonReplayableSideEffect(task.SideEffect) && task.Recovery == RecoveryRetry {
 		findings = append(findings, errorFinding(field+".action.recovery", FindingActionRecoveryConflict, "non-replayable action provider task cannot use retry recovery without reconciliation"))
 	}
-	return findings
+	return append(findings, validateMCPActionTask(field, task, session)...)
 }
 
 func validateWorksetVerificationContracts(session *TeamSession, fanOutTasks map[string]TaskDef) []ContractFinding {

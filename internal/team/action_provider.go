@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/golangruntime"
+	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -230,7 +232,7 @@ func (p *commandActionProvider) ProviderName() string {
 	return "command:" + p.command[0]
 }
 
-func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[string]agent.ActionProviderConfig, teamDir string) error {
+func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[string]agent.ActionProviderConfig, teamDir string, mcpServers map[string]mcp.MCPServerConfig) error {
 	if len(configs) == 0 {
 		return nil
 	}
@@ -246,6 +248,9 @@ func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[s
 			return fmt.Errorf("action provider %q timeout cannot be negative", capability)
 		}
 		runtimeName := strings.ToLower(strings.TrimSpace(config.Runtime))
+		if runtimeName != mcpActionRuntime && (strings.TrimSpace(config.Server) != "" || strings.TrimSpace(config.Tool) != "") {
+			return fmt.Errorf("action provider %q %s runtime does not accept server or tool", capability, cmp.Or(runtimeName, "command"))
+		}
 		switch runtimeName {
 		case "", "command":
 			if strings.TrimSpace(config.Source) != "" || strings.TrimSpace(config.Mode) != "" {
@@ -277,6 +282,12 @@ func registerConfiguredActionProviders(registry *ProviderRegistry, configs map[s
 				timeout:    time.Duration(config.Timeout) * time.Second,
 				execute:    executeGolangRuntime,
 			})
+		case mcpActionRuntime:
+			provider, err := newMCPActionProvider(capability, config, mcpServers)
+			if err != nil {
+				return err
+			}
+			registry.Register(capability, provider)
 		default:
 			return fmt.Errorf("action provider %q has unsupported runtime %q", capability, config.Runtime)
 		}

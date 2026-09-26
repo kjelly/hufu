@@ -359,9 +359,9 @@ type TeamConfig struct {
 	Capabilities CapabilityConfig
 	Verification VerificationConfig
 	Retry        RetryConfig
-	// ActionProviders bind generic capability names to team-configured command
-	// or trusted-static Go adapters. The core never interprets an adapter's
-	// domain-specific schema; it supplies JSON over stdin and requires JSON stdout.
+	// ActionProviders bind generic capability names to team-configured command,
+	// trusted-static Go, or MCP tool adapters. The core never interprets an
+	// adapter's domain-specific schema.
 	ActionProviders map[string]ActionProviderConfig
 
 	// Unattended runs the team without any blocking human interaction:
@@ -591,13 +591,17 @@ type RetryRepairConfig struct {
 // ActionProviderConfig configures a generic action adapter. Legacy command
 // providers use argv without shell interpolation. A golang provider executes
 // a team-owned source package through Hufu's embedded trusted-static runtime.
-// Timeout is expressed in seconds; zero uses the caller context unchanged.
+// An mcp provider calls Tool on the team's declared MCP server Server.
+// Timeout is expressed in seconds; zero uses the caller context unchanged,
+// except that an mcp call without a caller deadline keeps the MCP default.
 type ActionProviderConfig struct {
 	Runtime string   `json:"runtime,omitempty" yaml:"runtime,omitempty"`
 	Source  string   `json:"source,omitempty" yaml:"source,omitempty"`
 	Mode    string   `json:"mode,omitempty" yaml:"mode,omitempty"`
 	Command []string `json:"command,omitempty" yaml:"command,omitempty"`
 	Dir     string   `json:"dir,omitempty" yaml:"dir,omitempty"`
+	Server  string   `json:"server,omitempty" yaml:"server,omitempty"`
+	Tool    string   `json:"tool,omitempty" yaml:"tool,omitempty"`
 	Timeout int64    `json:"timeout,omitempty" yaml:"timeout,omitempty"`
 }
 

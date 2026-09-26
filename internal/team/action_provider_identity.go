@@ -6,16 +6,21 @@ import "encoding/json"
 // to a capability. Provider is the registry's provider name, which for the
 // golang runtime carries the prepared source digest, so a source change is an
 // identity change. A command provider's identity is its argv, dir, and
-// timeout: the script or program the argv runs is not part of it.
+// timeout: the script or program the argv runs is not part of it. An mcp
+// provider's identity adds its server, tool, and server configuration hash;
+// the fields are omitted for other runtimes, so their identities are unchanged.
 type actionProviderIdentity struct {
-	Capability string   `json:"capability"`
-	Provider   string   `json:"provider,omitempty"`
-	Runtime    string   `json:"runtime,omitempty"`
-	Source     string   `json:"source,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
-	Command    []string `json:"command,omitempty"`
-	Dir        string   `json:"dir,omitempty"`
-	Timeout    int64    `json:"timeout,omitzero"`
+	Capability       string   `json:"capability"`
+	Provider         string   `json:"provider,omitempty"`
+	Runtime          string   `json:"runtime,omitempty"`
+	Source           string   `json:"source,omitempty"`
+	Mode             string   `json:"mode,omitempty"`
+	Command          []string `json:"command,omitempty"`
+	Dir              string   `json:"dir,omitempty"`
+	Server           string   `json:"server,omitempty"`
+	Tool             string   `json:"tool,omitempty"`
+	ServerConfigHash string   `json:"server_config_hash,omitempty"`
+	Timeout          int64    `json:"timeout,omitzero"`
 }
 
 // configuredActionProviderIdentity returns the identity of the provider
@@ -32,10 +37,16 @@ func configuredActionProviderIdentity(session *TeamSession, capability string) (
 	if session.ProviderRegistry != nil {
 		providerName = session.ProviderRegistry.ProviderName(capability)
 	}
-	return actionProviderIdentity{
+	identity := actionProviderIdentity{
 		Capability: capability, Provider: providerName, Runtime: provider.Runtime, Source: provider.Source, Mode: provider.Mode,
 		Command: append([]string(nil), provider.Command...), Dir: provider.Dir, Timeout: provider.Timeout,
-	}, true
+	}
+	if registered, ok := session.ProviderRegistry.Get(capability); ok {
+		if mcpProvider, ok := registered.(*mcpActionProvider); ok {
+			identity.Server, identity.Tool, identity.ServerConfigHash = mcpProvider.server, mcpProvider.tool, mcpProvider.serverConfigHash
+		}
+	}
+	return identity, true
 }
 
 // actionProviderIdentityHash hashes the capability's provider identity, or

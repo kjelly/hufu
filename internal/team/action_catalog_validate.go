@@ -29,6 +29,7 @@ func validateActionCatalog(session *TeamSession) []ContractFinding {
 		findings = append(findings, validateActionCatalogAgents(session, entry, reachable)...)
 		findings = append(findings, validateActionCatalogProposers(session, entry, reachable)...)
 		findings = append(findings, validateActionCatalogPhase(session, entry)...)
+		findings = append(findings, validateMCPActionCatalogEntry(session, entry)...)
 	}
 	findings = append(findings, validateActionCatalogToolSequences(session)...)
 	return findings
