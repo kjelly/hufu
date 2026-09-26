@@ -21,6 +21,9 @@ type eventStoreState struct {
 	sessionID       string
 	events          []RunEvent
 	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
+	// publishedKeys is the already published index a tail scan checks for
+	// conflicts; it is read, never written. Nil for a full scan.
+	publishedKeys map[eventIdempotencyIdentity]RunEvent
 	// size is the byte length of the log prefix this state was derived from.
 	size int64
 }
@@ -49,60 +52,48 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 // path never see, so the store refuses and the next append reopens the path.
 var errEventStoreReplaced = errors.New("event store file was replaced")
 
-// appendedState returns the published state extended with the events other
-// writers appended after the validated prefix, and whether there were any.
-// The log only grows while it is open, so the prefix needs no second scan;
-// a log shorter than the prefix was rewritten and is scanned in full. Like
-// scanFile it never mutates EventStore, so a rejected tail publishes nothing.
-func (es *EventStore) appendedState(f *os.File) (eventStoreState, bool, error) {
+// publishAppendedState validates and publishes the events other writers
+// appended after the validated prefix. The log only grows while it is open, so
+// the prefix needs no second scan; a log shorter than the prefix was rewritten
+// in place and is scanned in full. The tail is scanned into private state and
+// merged only once it validates, so a rejected tail publishes nothing.
+func (es *EventStore) publishAppendedState(f *os.File) error {
 	if f == nil {
-		return eventStoreState{}, false, fmt.Errorf("event store file is unavailable")
+		return fmt.Errorf("event store file is unavailable")
 	}
 	info, err := f.Stat()
 	if err != nil {
-		return eventStoreState{}, false, fmt.Errorf("stat event store: %w", err)
+		return fmt.Errorf("stat event store: %w", err)
 	}
 	if err := es.checkOpenFileIsCurrent(info); err != nil {
-		return eventStoreState{}, false, err
+		return err
 	}
 	switch {
 	case info.Size() == es.validatedSize:
-		return eventStoreState{}, false, nil
+		return nil
 	case info.Size() < es.validatedSize:
 		state, err := es.scanFile(f)
-		return state, err == nil, err
+		if err != nil {
+			return err
+		}
+		es.publishState(state, f, false)
+		return nil
 	}
-	state := eventStoreState{
-		lastEventID: es.lastEventID,
-		lastHash:    es.lastHash,
-		sequence:    es.sequence,
-		runID:       es.runID,
-		sessionID:   es.sessionID,
-		// The full slice expression makes the first append copy, leaving the
-		// published cache untouched until the tail validates.
-		events:          es.cachedEvents[:len(es.cachedEvents):len(es.cachedEvents)],
-		idempotencyKeys: maps.Clone(es.idempotencyKeys),
+	tail := eventStoreState{
+		lastEventID:     es.lastEventID,
+		lastHash:        es.lastHash,
+		sequence:        es.sequence,
+		runID:           es.runID,
+		sessionID:       es.sessionID,
+		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
+		publishedKeys:   es.idempotencyKeys,
 		size:            es.validatedSize,
 	}
-	if state.idempotencyKeys == nil {
-		state.idempotencyKeys = make(map[eventIdempotencyIdentity]RunEvent)
-	}
-	verifier := eventchain.ResumeVerifier(state.sequence, state.lastEventID, state.lastHash)
-	if err := scanEventLog(f, &state, &verifier); err != nil {
-		return eventStoreState{}, false, err
-	}
-	return state, true, nil
-}
-
-// publishAppendedState publishes appendedState when other writers appended.
-func (es *EventStore) publishAppendedState(f *os.File) error {
-	state, appended, err := es.appendedState(f)
-	if err != nil {
+	verifier := eventchain.ResumeVerifier(tail.sequence, tail.lastEventID, tail.lastHash)
+	if err := scanEventLog(f, &tail, &verifier); err != nil {
 		return err
 	}
-	if appended {
-		es.publishState(state, f, false)
-	}
+	es.publishTail(tail)
 	return nil
 }
 
@@ -117,6 +108,23 @@ func (es *EventStore) checkOpenFileIsCurrent(open os.FileInfo) error {
 		return fmt.Errorf("%w: %s", errEventStoreReplaced, es.path)
 	}
 	return nil
+}
+
+// publishTail extends the published state with a validated tail. Only the tail
+// is copied, so merging other writers' events costs what they appended rather
+// than the whole history.
+func (es *EventStore) publishTail(tail eventStoreState) {
+	es.cachedEvents = append(es.cachedEvents, tail.events...)
+	if es.idempotencyKeys == nil {
+		es.idempotencyKeys = make(map[eventIdempotencyIdentity]RunEvent, len(tail.idempotencyKeys))
+	}
+	maps.Copy(es.idempotencyKeys, tail.idempotencyKeys)
+	es.lastEventID = tail.lastEventID
+	es.lastHash = tail.lastHash
+	es.sequence = tail.sequence
+	es.runID = tail.runID
+	es.sessionID = tail.sessionID
+	es.validatedSize = tail.size
 }
 
 // scanEventLog strictly validates the log from state.size to its current end,
@@ -149,7 +157,11 @@ func scanEventLog(f *os.File, state *eventStoreState, chainVerifier *eventchain.
 		state.lastHash = event.Hash
 		if event.IdempotencyKey != "" {
 			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
-			if existing, exists := state.idempotencyKeys[identity]; exists && (isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(existing.Type)) {
+			existing, exists := state.idempotencyKeys[identity]
+			if !exists {
+				existing, exists = state.publishedKeys[identity]
+			}
+			if exists && (isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(existing.Type)) {
 				equivalent, compareErr := decisionIdempotencyEquivalent(existing, event)
 				if compareErr != nil {
 					return fmt.Errorf("compare event %d decision idempotency payload: %w", state.sequence, compareErr)

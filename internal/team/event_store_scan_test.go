@@ -172,6 +172,78 @@ func appendRawChainedEvent(t *testing.T, path string, event RunEvent) {
 	}
 }
 
+// TestEventStoreAppendMergesAnotherWritersTail pins the idempotency semantics
+// of merging a tail scanned apart from the published index: conflicts are
+// found across the prefix and inside the tail, and the latest event for a key
+// answers a retry.
+func TestEventStoreAppendMergesAnotherWritersTail(t *testing.T) {
+	tests := []struct {
+		name          string
+		tail          []RunEvent
+		retryKey      string
+		wantErr       error
+		wantDurableID string
+	}{
+		{
+			name:    "a tail decision event conflicting with a published key fails closed",
+			tail:    []RunEvent{{ID: "tail", Type: string(EventDecisionRunOpened), IdempotencyKey: "own-key"}},
+			wantErr: ErrDecisionIdempotencyConflict,
+		},
+		{
+			name: "a decision event conflicting inside the tail fails closed",
+			tail: []RunEvent{
+				{ID: "tail-1", Type: "task_progress", IdempotencyKey: "tail-key"},
+				{ID: "tail-2", Type: string(EventDecisionRunOpened), IdempotencyKey: "tail-key"},
+			},
+			wantErr: ErrDecisionIdempotencyConflict,
+		},
+		{
+			name:          "the tail's later event answers a key it repeats",
+			tail:          []RunEvent{{ID: "tail", Type: "task_progress", IdempotencyKey: "own-key"}},
+			retryKey:      "own-key",
+			wantDurableID: "tail",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			path := filepath.Join(workspace, logsDir, eventStoreFile)
+			store, err := NewEventStore(workspace, "run-scan", "session-scan")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			if err := store.Append(RunEvent{ID: "own", Type: "task_progress", Actor: "worker", IdempotencyKey: "own-key", Payload: []byte(`{"progress":"own"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range tt.tail {
+				appendRawChainedEvent(t, path, event)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			durable, err := store.AppendPersisted(RunEvent{ID: "next", Type: "task_progress", Actor: "worker", IdempotencyKey: tt.retryKey, Payload: []byte(`{"progress":"next"}`)})
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) || string(after) != string(before) {
+					t.Fatalf("append error = %v, log grew %d -> %d bytes; want %v and no write", err, len(before), len(after), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if durable.ID != tt.wantDurableID || string(after) != string(before) {
+				t.Fatalf("retry returned %q, log grew %d -> %d bytes; want %q and no write", durable.ID, len(before), len(after), tt.wantDurableID)
+			}
+		})
+	}
+}
+
 // TestEventStoreAppendRefusesReplacedLog keeps appends off a file the log path
 // no longer names: such events would never reach anyone who opens the path.
 // The refused append invalidates the store, so the next one reopens the path.
