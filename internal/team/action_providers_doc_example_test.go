@@ -51,3 +51,46 @@ func TestActionCatalogDocExamplesLoad(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPActionProviderDocExamplesLoad keeps the MCP provider examples in
+// docs/reference/action-providers.md loadable and lint-clean without starting
+// their MCP servers.
+func TestMCPActionProviderDocExamplesLoad(t *testing.T) {
+	for _, dir := range []string{"docs-mcp-action-catalog", "docs-mcp-action-workflow"} {
+		t.Run(dir, func(t *testing.T) {
+			path := filepath.Join("testdata", dir)
+			session, err := LoadTeam(path, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("LoadTeam: %v", err)
+			}
+			if name := session.ProviderRegistry.ProviderName("diagnostics"); name != "mcp:diagnostics/collect_debug" {
+				t.Fatalf("diagnostics provider = %q", name)
+			}
+			result, err := LintTeam(path, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("LintTeam: %v", err)
+			}
+			for _, finding := range result.Findings {
+				if finding.Severity == FindingSeverityError {
+					t.Fatalf("lint error %s: %s", finding.Code, finding.Message)
+				}
+			}
+			switch dir {
+			case "docs-mcp-action-catalog":
+				if _, ok := session.ActionCatalog.Lookup("collect-debug"); !ok {
+					t.Fatal("catalog lacks collect-debug")
+				}
+			case "docs-mcp-action-workflow":
+				var action *Action
+				for _, task := range session.ContractTasks {
+					if task.ID == "collect-debug" {
+						action = task.Action
+					}
+				}
+				if action == nil || action.Capability != "diagnostics" || action.Payload != `{"service":"api"}` {
+					t.Fatalf("collect-debug action = %#v", action)
+				}
+			}
+		})
+	}
+}

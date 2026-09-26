@@ -2,13 +2,14 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `ac89dd6`
+> Verified-Commit: `2797cbd`
 > Supersedes: —
 > Superseded-By: —
 
-Action providers are team-owned adapters for structured runtime actions. A
-team declares a provider under `action-providers` and binds a static task to
-its capability. Hufu passes the action as JSON, preserves the normal action
+Action providers are team-owned adapters for structured runtime actions: a
+command, an embedded Go package, or one tool of a declared MCP server. A team
+declares a provider under `action-providers` and binds a static task to its
+capability. Hufu passes the action as JSON, preserves the normal action
 lifecycle, and records provider identity in lifecycle events and receipts.
 
 The provider owns domain semantics. Hufu does not interpret Git, deployment,
@@ -85,6 +86,124 @@ The Go action is trusted team code: it runs with the Hufu process user's
 authority and may deliberately use `os`, `os/exec`, Git, and file I/O. Those
 capabilities remain inside the pre-written adapter; Hufu core does not expose
 a Git capability or turn this provider into a coding-agent tool.
+
+### MCP provider
+
+An `mcp` provider calls one tool of an MCP server that the team declares under
+`mcp-servers`:
+
+```yaml
+mcp-servers:
+  diagnostics:
+    type: local
+    command: [/opt/incident-team/bin/diagnostics-mcp]
+    allowedTools: [collect_debug]
+
+action-providers:
+  diagnostics:
+    runtime: mcp
+    server: diagnostics
+    tool: collect_debug
+    timeout: 120
+```
+
+`server` must name a declared server exactly, and that server must be `local`
+or `remote`. `tool` must pass the server's `allowedTools` and
+`excludedTools`. `command`, `dir`, `source`, and `mode` must not be set, and
+the command and Go providers reject `server` and `tool`. `hufu team validate`,
+`hufu team lint`, and `--dry-run` check all of this without starting the
+server.
+
+Only `team.yaml` selects the server and tool; a model, proposal, catalog
+argument, or payload cannot change them. The action `type` stays Hufu's action
+identity and is not sent. The action `payload` must be one JSON object without
+duplicate keys, at most 64 KiB. It is sent as the tool's arguments and must
+satisfy the tool's input schema, which Hufu validates as full JSON Schema. The
+schema may declare its own draft, but no external reference is loaded. The
+server receives only these arguments: none of the `HUFU_*` values in
+[Runtime environment](#runtime-environment) reach it.
+
+An MCP action is read-only. A static task that uses an MCP provider must
+declare `side_effect: none` explicitly, and a catalog entry must declare
+`side-effect: none`; an MCP provider cannot back a run-input resolver. Like
+every side-effect class, `none` is the maintainer's declaration, not a
+sandbox: confirm that the bound tool does not change anything.
+
+**Startup.** Every run binds each MCP provider to its tool before any model or
+action call. The run does not start when the server failed to load, the server
+does not expose the tool, or the tool's input schema does not compile. An
+unrelated MCP server failure stays the ordinary warning.
+
+**Worker isolation.** A bound tool leaves every worker tool surface, including
+workers that inherit all tools and `use_dynamic_tool`. A worker that declares
+the bound `server__tool` in `tools:` is a load error. Other tools of the same
+server are unaffected. Workers see an MCP-backed catalog entry only through
+`team_action_list` and `team_action_get`, which name no server or tool.
+
+**Authorization.** Before the call is sent, Hufu authorizes exactly that
+`server:tool` on behalf of the task's agent through its MCP authorization
+policy, and records the decision as a `policy_decision` event.
+
+**Timeout.** `timeout` (seconds) bounds the call together with the task's
+deadline. With `timeout: 0` and no task deadline, the MCP default of 30
+seconds applies. This differs from the command provider, where zero means no
+limit.
+
+**Result.** When the tool result has `structuredContent`, it must be a JSON
+object and becomes the action's outputs. Otherwise the result must have
+exactly one text block, which becomes `outputs.result`; the text is not parsed
+as JSON. A tool error (`isError`), any other block shape, and more than 1 MiB of
+raw content fail the action. The runtime output limits and a catalog output
+schema then apply as for any provider; for a text result, the output schema
+declares `result` as a string. An MCP result never declares artifacts.
+
+**Identity and resume.** The provider name is `mcp:<server>/<tool>`. Its
+identity adds the server, the tool, and a hash of the server configuration:
+type, command, URL, allowed and excluded tools, `noOAuth`, and environment
+variable names with digests of their values. The execution policy snapshot pins
+that identity and the tool descriptor bound at startup, and each runtime action
+receipt records `provider_descriptor_sha256`. A resume fails closed after the
+server configuration or the tool's descriptor (name, description, or input
+schema) changes; start a new session with `--new`. Hufu lists a server's tools
+once, when the server loads, so a change on the server during a run is caught
+at the next start, not mid-run.
+
+**Errors.** An MCP action failure starts with a stable code:
+
+| Code | Meaning | Tool called |
+| --- | --- | --- |
+| `mcp_action_bind_failed` | The provider could not be bound at startup | No |
+| `mcp_action_unbound` | The provider was never bound | No |
+| `mcp_action_payload_invalid` | The payload is not one JSON object or fails the input schema | No |
+| `mcp_action_identity_missing` | No runtime-owned task attempt | No |
+| `mcp_action_authorization_missing` | No runtime action authorizer | No |
+| `mcp_action_descriptor_mismatch` | The tool no longer matches the bound descriptor | No |
+| `mcp_action_authorization_denied` | The authorization policy denied the call | No |
+| `mcp_action_transport_failed` | The call failed or timed out | Possibly |
+| `mcp_action_tool_error` | The tool reported an error; its text is redacted | Yes |
+| `mcp_action_result_invalid` | The result does not meet the result rules above | Yes |
+
+A static task binds an MCP provider like any other:
+
+```yaml
+tasks:
+  - id: collect-debug
+    agent: reviewer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+    action:
+      capability: diagnostics
+      type: collect_debug
+      payload: '{"service":"api"}'
+```
+
+Both examples are kept loadable:
+[internal/team/testdata/docs-mcp-action-catalog](../../internal/team/testdata/docs-mcp-action-catalog/team.yaml)
+holds a dynamic team with an MCP-backed catalog entry, and
+[internal/team/testdata/docs-mcp-action-workflow](../../internal/team/testdata/docs-mcp-action-workflow/team.yaml)
+a workflow team with the static task. `TestMCPActionProviderDocExamplesLoad`
+loads and lints both. Update them together with this section.
 
 ## Request and response contract
 
@@ -488,7 +607,8 @@ task. A `workspace_write` entry therefore has to state its recovery:
 catalog task; `HUFU_ACTION_INVOCATION_ID` still changes on every attempt.
 
 The catalog hash, which includes each entry's provider configuration (runtime,
-source, mode, command, dir, timeout, and the Go source digest), is part of the
+source, mode, command, dir, timeout, the Go source digest, and for an MCP
+provider its server, tool, and server configuration hash), is part of the
 execution policy snapshot. Changing the catalog or its providers makes a resume
 fail closed; start a new session with `--new`. A command provider's identity is
 its argv, dir, and timeout, not the content of the script it runs: use the

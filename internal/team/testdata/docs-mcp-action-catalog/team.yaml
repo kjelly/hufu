@@ -1,0 +1,45 @@
+# Keep in sync with the catalog example in the "MCP provider" section of
+# docs/reference/action-providers.md; TestMCPActionProviderDocExamplesLoad
+# loads this team.
+name: incident-team
+description: Collects read-only diagnostics through an MCP-backed action
+mcp-servers:
+  diagnostics:
+    type: local
+    command: [/opt/incident-team/bin/diagnostics-mcp]
+    allowedTools: [collect_debug]
+
+action-providers:
+  diagnostics:
+    runtime: mcp
+    server: diagnostics
+    tool: collect_debug
+    timeout: 120
+
+action-catalog:
+  collect-debug:
+    description: Collect bounded diagnostics for one service.
+    capability: diagnostics
+    type: collect_debug
+    agent: runtime-engineer
+    side-effect: none
+    input-schema:
+      type: object
+      properties:
+        service:
+          type: string
+      required-properties: [service]
+      additional-properties: false
+    output-schema:
+      type: object
+      properties:
+        summary:
+          type: string
+      required-properties: [summary]
+    access:
+      discover: [runtime-engineer]
+      propose: [runtime-engineer]
+    invocation:
+      require-proposal: true
+      allow-unattended: true
+      max-invocations: 2

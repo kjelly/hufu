@@ -1,0 +1,58 @@
+# Keep in sync with the static-task example in the "MCP provider" section of
+# docs/reference/action-providers.md; TestMCPActionProviderDocExamplesLoad
+# loads this team.
+name: diagnostics-review
+description: Collects diagnostics through an MCP-backed action, then reviews them
+workflow:
+  phases: [prepare, audit, execute, verify]
+capabilities:
+  required: [diagnostics]
+verification:
+  required: true
+delegation:
+  bind-task-goal-contracts: true
+
+mcp-servers:
+  diagnostics:
+    type: local
+    command: [/opt/diagnostics-review/bin/diagnostics-mcp]
+    allowedTools: [collect_debug]
+
+action-providers:
+  diagnostics:
+    runtime: mcp
+    server: diagnostics
+    tool: collect_debug
+    timeout: 120
+
+tasks:
+  - id: collect-debug
+    agent: reviewer
+    phase: prepare
+    when-goal-contains: prepare
+    side_effect: none
+    action:
+      capability: diagnostics
+      type: collect_debug
+      payload: '{"service":"api"}'
+
+  - id: audit-diagnostics
+    agent: reviewer
+    phase: audit
+    when-goal-contains: audit
+    side_effect: none
+
+  - id: review-diagnostics
+    agent: reviewer
+    phase: execute
+    when-goal-contains: review
+    side_effect: none
+
+  - id: verify-review
+    agent: verifier
+    phase: verify
+    when-goal-contains: verify
+    side_effect: none
+    verify-spec:
+      type: command_exit
+      command: test -s review.md
