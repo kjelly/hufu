@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -43,6 +44,11 @@ func (es *EventStore) scanFile(f *os.File) (eventStoreState, error) {
 	return state, nil
 }
 
+// errEventStoreReplaced reports that the log path no longer names the file the
+// store holds open. An append would reach a superseded file that readers of the
+// path never see, so the store refuses and the next append reopens the path.
+var errEventStoreReplaced = errors.New("event store file was replaced")
+
 // appendedState returns the published state extended with the events other
 // writers appended after the validated prefix, and whether there were any.
 // The log only grows while it is open, so the prefix needs no second scan;
@@ -55,6 +61,9 @@ func (es *EventStore) appendedState(f *os.File) (eventStoreState, bool, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return eventStoreState{}, false, fmt.Errorf("stat event store: %w", err)
+	}
+	if err := es.checkOpenFileIsCurrent(info); err != nil {
+		return eventStoreState{}, false, err
 	}
 	switch {
 	case info.Size() == es.validatedSize:
@@ -93,6 +102,19 @@ func (es *EventStore) publishAppendedState(f *os.File) error {
 	}
 	if appended {
 		es.publishState(state, f, false)
+	}
+	return nil
+}
+
+// checkOpenFileIsCurrent fails when the log path no longer names open, the
+// file this store appends to.
+func (es *EventStore) checkOpenFileIsCurrent(open os.FileInfo) error {
+	current, err := os.Stat(es.path)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errEventStoreReplaced, err)
+	}
+	if !os.SameFile(open, current) {
+		return fmt.Errorf("%w: %s", errEventStoreReplaced, es.path)
 	}
 	return nil
 }

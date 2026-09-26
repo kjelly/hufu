@@ -65,6 +65,17 @@ func newEventIdempotencyIdentity(branchID, key string) eventIdempotencyIdentity 
 }
 
 // EventStore manages durable append-only event logging with hash chain verification.
+//
+// Integrity model: every supported writer only appends, holding the
+// interprocess lock on the open log file, and nothing rewrites the log while a
+// store has it open. Opening a store and VerifyHashChain validate the whole
+// chain. An append validates only what other writers added past the prefix
+// this store already validated, and refuses to write once the log path no
+// longer names the open file. So an in-place rewrite of the validated prefix,
+// or a replacement that lands between that check and the write, goes unnoticed
+// until the next full validation. The chain is self-contained: even a full
+// validation cannot detect a rewrite that recomputes every hash, which would
+// need an anchor kept outside the log.
 type EventStore struct {
 	// mu is a one-token semaphore so emergency callers can cancel lock
 	// acquisition. Once acquired, kernel write/sync calls are not cancellable.
