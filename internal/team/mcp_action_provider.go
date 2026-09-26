@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // mcpActionRuntime is the action-providers runtime that binds a capability to
@@ -19,7 +20,15 @@ const mcpActionRuntime = "mcp"
 
 // Reason codes that prefix every MCP action provider error.
 const (
-	mcpActionUnbound = "mcp_action_unbound"
+	mcpActionUnbound              = "mcp_action_unbound"
+	mcpActionPayloadInvalid       = "mcp_action_payload_invalid"
+	mcpActionIdentityMissing      = "mcp_action_identity_missing"
+	mcpActionAuthorizationMissing = "mcp_action_authorization_missing"
+	mcpActionDescriptorMismatch   = "mcp_action_descriptor_mismatch"
+	mcpActionAuthorizationDenied  = "mcp_action_authorization_denied"
+	mcpActionTransportFailed      = "mcp_action_transport_failed"
+	mcpActionToolError            = "mcp_action_tool_error"
+	mcpActionResultInvalid        = "mcp_action_result_invalid"
 )
 
 // mcpActionProvider binds one capability to one tool of a team-declared MCP
@@ -115,21 +124,66 @@ func (p *mcpActionProvider) ProviderName() string {
 }
 
 func (p *mcpActionProvider) Validate(action Action) error {
-	if p == nil {
-		return fmt.Errorf("provider is not configured")
-	}
-	if normalizeCapability(action.Capability) != p.capability {
-		return fmt.Errorf("action capability %q does not match provider capability %q", action.Capability, p.capability)
-	}
-	if strings.TrimSpace(action.Type) == "" {
-		return fmt.Errorf("action type is required")
-	}
-	return fmt.Errorf("%s: action provider %q is not bound to an MCP manager", mcpActionUnbound, p.capability)
+	_, err := p.validate(action)
+	return err
 }
 
-func (p *mcpActionProvider) Execute(_ context.Context, action Action) (interface{}, error) {
-	if err := p.Validate(action); err != nil {
+// validate checks the action against the bound tool and returns the target.
+// The payload must be one JSON object that satisfies the tool's input schema.
+func (p *mcpActionProvider) validate(action Action) (mcpActionBinding, error) {
+	if p == nil {
+		return mcpActionBinding{}, fmt.Errorf("provider is not configured")
+	}
+	if normalizeCapability(action.Capability) != p.capability {
+		return mcpActionBinding{}, fmt.Errorf("action capability %q does not match provider capability %q", action.Capability, p.capability)
+	}
+	if strings.TrimSpace(action.Type) == "" {
+		return mcpActionBinding{}, fmt.Errorf("action type is required")
+	}
+	binding, ok := p.boundTarget()
+	if !ok {
+		return mcpActionBinding{}, fmt.Errorf("%s: action provider %q is not bound to an MCP manager", mcpActionUnbound, p.capability)
+	}
+	arguments, err := decodeMCPActionPayload(action.Payload)
+	if err != nil {
+		return mcpActionBinding{}, fmt.Errorf("%s: %w", mcpActionPayloadInvalid, err)
+	}
+	if err := binding.inputSchema.Validate(arguments); err != nil {
+		return mcpActionBinding{}, fmt.Errorf("%s: arguments do not match the input schema of tool %q: %s", mcpActionPayloadInvalid, p.tool, utils.TruncateRunes(err.Error(), 500))
+	}
+	return binding, nil
+}
+
+// Execute calls the bound tool with the payload as its arguments. It needs a
+// runtime-owned task attempt and the runtime action authorizer, and it sends
+// nothing when the descriptor no longer matches or authorization is denied.
+func (p *mcpActionProvider) Execute(ctx context.Context, action Action) (interface{}, error) {
+	binding, err := p.validate(action)
+	if err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("%s: action provider %q is not bound to an MCP manager", mcpActionUnbound, p.capability)
+	env := ActionEnvironmentFromContext(ctx)
+	if strings.TrimSpace(env.TaskID) == "" || strings.TrimSpace(env.ActionInvocationID) == "" || env.Attempt <= 0 {
+		return nil, fmt.Errorf("%s: an MCP action requires a runtime-owned task attempt", mcpActionIdentityMissing)
+	}
+	authorize := runtimeActionMCPAuthorizerFromContext(ctx)
+	if authorize == nil {
+		return nil, fmt.Errorf("%s: an MCP action requires the runtime action authorizer", mcpActionAuthorizationMissing)
+	}
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
+	result, err := binding.manager.ExecuteRuntimeTool(ctx, binding.logicalName, binding.descriptorSHA256, action.Payload, authorize)
+	switch {
+	case err == nil:
+		return mcpActionResult(result)
+	case mcp.IsToolDescriptorMismatchError(err):
+		return nil, fmt.Errorf("%s: %w", mcpActionDescriptorMismatch, err)
+	case mcp.IsToolAuthorizationError(err):
+		return nil, fmt.Errorf("%s: %w", mcpActionAuthorizationDenied, err)
+	default:
+		return nil, fmt.Errorf("%s: %w", mcpActionTransportFailed, err)
+	}
 }

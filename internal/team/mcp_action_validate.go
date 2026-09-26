@@ -26,19 +26,20 @@ func mcpActionProviderConfig(session *TeamSession, capability string) (agent.Act
 	return config, true
 }
 
-// validateMCPActionPayload requires one JSON object without duplicate keys.
-func validateMCPActionPayload(payload string) error {
+// decodeMCPActionPayload decodes one JSON object without duplicate keys.
+func decodeMCPActionPayload(payload string) (map[string]any, error) {
 	if len(payload) > maxMCPActionPayloadBytes {
-		return fmt.Errorf("payload is %d bytes, above the %d byte limit", len(payload), maxMCPActionPayloadBytes)
+		return nil, fmt.Errorf("payload is %d bytes, above the %d byte limit", len(payload), maxMCPActionPayloadBytes)
 	}
 	decoded, err := decodeUniqueJSON([]byte(payload))
 	if err != nil {
-		return fmt.Errorf("payload must be one JSON object: %w", err)
+		return nil, fmt.Errorf("payload must be one JSON object: %w", err)
 	}
-	if _, ok := decoded.(map[string]any); !ok {
-		return errors.New("payload must be a JSON object")
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, errors.New("payload must be a JSON object")
 	}
-	return nil
+	return object, nil
 }
 
 // validateMCPActionTask checks a static action task bound to an MCP provider.
@@ -57,7 +58,7 @@ func validateMCPActionTask(field string, task TaskDef, session *TeamSession) []C
 			fmt.Sprintf("action capability %q uses an MCP provider, so the task must declare side_effect: none", task.Action.Capability)))
 	}
 	if len(task.Action.InputBindings) == 0 && len(task.ActionInputBindings) == 0 {
-		if err := validateMCPActionPayload(task.Action.Payload); err != nil {
+		if _, err := decodeMCPActionPayload(task.Action.Payload); err != nil {
 			findings = append(findings, errorFinding(field+".action.payload", FindingMCPActionPayloadInvalid, err.Error()))
 		}
 	}

@@ -2480,7 +2480,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if c.session != nil {
 		actionEnv.TeamName = c.session.Config.Name
 	}
-	actionCtx := WithActionEnvironment(ctx, actionEnv)
+	actionCtx := c.withRuntimeActionMCPAuthorization(WithActionEnvironment(ctx, actionEnv), task)
 	rawResult, err := c.phaseWorkflow.executeActionValueForTask(actionCtx, *task.Action, string(task.SideEffect))
 	if err != nil {
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
