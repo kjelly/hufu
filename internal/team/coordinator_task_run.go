@@ -2169,6 +2169,8 @@ retryLoop:
 			} else if currentClass == FailureProtocol {
 				source = "protocol"
 				blockedMsg = fmt.Sprintf("protocol failure; worker tools must not be replayed (side_effect=%s, recovery=%s); reconcile before retry: %v", task.SideEffect, task.Recovery, err)
+			} else if currentClass == FailureSessionResumeMismatch || currentClass == FailureIdentityConflict {
+				blockedMsg = fmt.Sprintf("backend session identity needs reconciliation (%s); no turn started in this attempt", currentClass)
 			}
 			failureDetail := c.FailureDetail(err, source) + " | " + blockedMsg
 			c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, failureDetail, ReconcileOnly, currentClass, TaskBlocked, output)

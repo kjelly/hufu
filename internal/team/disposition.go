@@ -189,6 +189,12 @@ func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 		return ReplanRequired, "environment failure requires replan"
 	case FailurePolicy:
 		return ReplanRequired, "policy failure requires replan"
+	case FailureSessionResumeMismatch:
+		// ReconcileOnly never replays the worker, so returning it before the
+		// replay gate cannot bypass that gate.
+		return ReconcileOnly, "backend resumed a different session than the durable binding; reconcile before retry"
+	case FailureIdentityConflict:
+		return ReconcileOnly, "durable backend session identity conflicts or cannot be verified; reconcile before retry"
 	case FailureProtocol:
 		if in.ProtocolRetrySafe && in.Replayable && in.ProtocolRepairRetry {
 			break

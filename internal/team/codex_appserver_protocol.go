@@ -217,6 +217,23 @@ func validateCodexEffectiveThreadState(cfg CodexThreadConfig, effective CodexEff
 	return nil
 }
 
+// CodexSessionResumeMismatchError is a thread/resume that answered with a
+// thread other than the durable one. No binding or turn follows it.
+type CodexSessionResumeMismatchError struct {
+	Requested string
+	Returned  string
+}
+
+func (e *CodexSessionResumeMismatchError) Error() string {
+	return fmt.Sprintf("codex thread/resume returned thread %q, want the durable session %q", e.Returned, e.Requested)
+}
+
+// FailureClassOverride blocks the task for reconciliation: one mismatched
+// resume does not prove the durable session is unrecoverable.
+func (e *CodexSessionResumeMismatchError) FailureClassOverride() TaskFailureClass {
+	return FailureSessionResumeMismatch
+}
+
 // codexStartOrResumeThread implements §14.1/§14.2: start a fresh thread when
 // no durable session exists, or resume by thread id when one does. Either
 // way, the effective cwd/model/sandbox is verified before onSessionBound is
@@ -236,7 +253,7 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 		// Resuming must continue the durable session. Binding a different
 		// thread here would silently give the task a second session.
 		if result.Thread.ID != existingThreadID {
-			return CodexEffectiveThreadState{}, fmt.Errorf("codex thread/resume returned thread %q, want the durable session %q", result.Thread.ID, existingThreadID)
+			return CodexEffectiveThreadState{}, &CodexSessionResumeMismatchError{Requested: existingThreadID, Returned: result.Thread.ID}
 		}
 		networkAccess, networkKnown := codexSandboxPolicyNetworkAccess(result.Sandbox)
 		effective = CodexEffectiveThreadState{ThreadID: result.Thread.ID, CWD: result.CWD, Model: result.Model, Sandbox: codexSandboxPolicyMode(result.Sandbox), NetworkAccess: networkAccess, NetworkAccessKnown: networkKnown}

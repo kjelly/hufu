@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/kjelly/hufu/internal/execution"
@@ -97,9 +96,10 @@ func (c *Coordinator) persistProviderSessionBinding(ctx context.Context, taskID 
 	if err != nil {
 		return fmt.Errorf("persist provider session binding: %w", err)
 	}
-	// The lineage read sees bindings the idempotency index cannot: one
-	// inherited from a parent branch, or one written under the legacy
-	// per-attempt key.
+	// The lineage check applies the session identity rule, which also sees
+	// bindings the idempotency index cannot: one inherited from a parent
+	// branch, one written under the legacy per-attempt key, and one carried
+	// by a task transition.
 	durable, err := c.durableBackendSessionBinding(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("persist provider session binding: %w", err)
@@ -124,7 +124,9 @@ func (c *Coordinator) persistProviderSessionBinding(ctx context.Context, taskID 
 		IdempotencyKey: backendSessionBoundKey(taskID), Payload: data,
 	})
 	if err != nil {
-		return fmt.Errorf("persist provider session binding: %w", err)
+		// A later attempt re-reads the canonical lineage before it opens a
+		// session, so an append whose outcome is unknown is reconciled there.
+		return withFailureClassOverride(fmt.Errorf("persist provider session binding: %w", err), FailureEnvironment)
 	}
 	if winner, ok := durableSessionBindingFromEvent(persisted); ok {
 		if err := backendSessionConflict(taskID, &winner, target.Backend, binding.SessionID); err != nil {
@@ -160,104 +162,4 @@ func (c *Coordinator) sessionBindingTarget(taskID string) (execution.ExecutionTa
 		return item.ExecutionTarget, nil
 	}
 	return targetFromLegacyIdentity(item.Model, item.SubagentProvider), nil
-}
-
-// resumableBackendSessionID returns the session an attempt must resume: the
-// projected binding when there is one, otherwise the canonical binding. The
-// projection can lag the event log after a crash, an unknown sync outcome,
-// or a failed projection update. When the log cannot be read, this fails
-// rather than let the caller open a second session over an unread binding.
-func (c *Coordinator) resumableBackendSessionID(ctx context.Context, request AttemptRequest) (string, error) {
-	if request.ProviderBinding != nil && request.ProviderBinding.SessionID != "" {
-		return request.ProviderBinding.SessionID, nil
-	}
-	durable, err := c.durableBackendSessionBinding(ctx, request.TaskID)
-	if err != nil || durable == nil {
-		return "", err
-	}
-	target, err := c.sessionBindingTarget(request.TaskID)
-	if err != nil {
-		return "", err
-	}
-	if !execution.BackendNamesEqual(durable.Binding.Backend, target.Backend) {
-		return "", &ExecutionIdentityConflictError{TaskID: request.TaskID, EventID: durable.EventID, Reason: fmt.Sprintf("durable session belongs to backend %q, not %q", durable.Binding.Backend, target.Backend)}
-	}
-	return durable.Binding.SessionID, nil
-}
-
-// durableSessionBinding is a session binding read from the event log.
-type durableSessionBinding struct {
-	EventID string
-	Binding BackendBinding
-}
-
-// durableBackendSessionBinding returns the task's last session binding on the
-// active branch lineage, or nil when none names a session. "Last" matches the
-// replay reducer, so history with an earlier superseded session still
-// resumes.
-func (c *Coordinator) durableBackendSessionBinding(ctx context.Context, taskID string) (*durableSessionBinding, error) {
-	events, err := c.readActiveLineageEvents(ctx)
-	if err != nil {
-		// A failed sync invalidates the store's cached state although the
-		// event may have reached disk. Re-verify the chain from disk once:
-		// that either exposes such a binding or fails closed.
-		if verifyErr := c.EventJournal().VerifyHashChain(context.WithoutCancel(ctx)); verifyErr != nil {
-			return nil, fmt.Errorf("read durable session binding: %w", errors.Join(err, verifyErr))
-		}
-		if events, err = c.readActiveLineageEvents(ctx); err != nil {
-			return nil, fmt.Errorf("read durable session binding: %w", err)
-		}
-	}
-	var last *durableSessionBinding
-	for _, event := range events {
-		if event.TaskID != taskID {
-			continue
-		}
-		if binding, ok := durableSessionBindingFromEvent(event); ok {
-			last = &binding
-		}
-	}
-	return last, nil
-}
-
-// durableSessionBindingFromEvent decodes a canonical or legacy session-bound
-// event. Malformed payloads and bindings without a session are skipped, as
-// the replay reducer skips them.
-func durableSessionBindingFromEvent(event RunEvent) (durableSessionBinding, bool) {
-	var binding BackendBinding
-	switch event.Type {
-	case string(EventBackendSessionBound):
-		var payload BackendSessionBoundPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return durableSessionBinding{}, false
-		}
-		binding = BackendBinding{Backend: payload.Backend, SessionID: payload.SessionID, ExecutionWorldID: payload.ExecutionWorldID, CWD: payload.CWD}
-	case string(EventProviderSessionBound):
-		var payload ProviderSessionBoundPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return durableSessionBinding{}, false
-		}
-		binding = BackendBinding{Backend: execution.CanonicalBackendName(payload.Provider), SessionID: payload.SessionID, ExecutionWorldID: payload.ExecutionWorldID, CWD: payload.CWD}
-	default:
-		return durableSessionBinding{}, false
-	}
-	if binding.SessionID == "" {
-		return durableSessionBinding{}, false
-	}
-	return durableSessionBinding{EventID: event.ID, Binding: binding}, true
-}
-
-// backendSessionConflict rejects a binding whose backend session differs
-// from the durable one.
-func backendSessionConflict(taskID string, durable *durableSessionBinding, backend, sessionID string) error {
-	if durable == nil {
-		return nil
-	}
-	if execution.BackendNamesEqual(durable.Binding.Backend, backend) && durable.Binding.SessionID == sessionID {
-		return nil
-	}
-	return &ExecutionIdentityConflictError{
-		TaskID: taskID, EventID: durable.EventID,
-		Reason: fmt.Sprintf("task is bound to backend session %s/%s; refusing a second binding to %s/%s", durable.Binding.Backend, durable.Binding.SessionID, backend, sessionID),
-	}
 }

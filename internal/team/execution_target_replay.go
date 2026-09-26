@@ -20,6 +20,13 @@ type ExecutionIdentityConflictError struct {
 	Reason  string
 }
 
+// FailureClassOverride classifies a task that hits an identity conflict as
+// identity_conflict, which blocks it for reconciliation instead of retrying
+// its worker.
+func (e *ExecutionIdentityConflictError) FailureClassOverride() TaskFailureClass {
+	return FailureIdentityConflict
+}
+
 func (e *ExecutionIdentityConflictError) Error() string {
 	if e.EventID != "" {
 		return fmt.Sprintf("execution identity conflict for task %q at event %q: %s", e.TaskID, e.EventID, e.Reason)

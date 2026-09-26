@@ -43,14 +43,32 @@ AttemptRequest → AttemptResult → receipt / verification / lifecycle events
   outcome ownership.
 - `BackendBinding` records the session/attempt binding selected for the frozen
   target. The binding is evidence, not a permission to retarget the task.
-  A task holds one backend session per branch, identified by backend and
-  session ID; execution world, cwd, and turn are per-attempt diagnostics.
-  Every attempt resumes that session, and a binding that names a different
-  one fails with `ExecutionIdentityConflictError` instead of replacing it.
-  The `backend_session_bound` event is durable before any turn starts and uses
-  the per-task idempotency key `backend-session-bound:<task>`. An attempt
-  whose projection has no binding reads the active branch lineage before it
-  opens a session, and fails closed when that lineage cannot be read.
+  A task holds one backend session per branch. Its identity, backend and
+  session ID, never changes; attempt, execution world, cwd, and turn are
+  execution details that may change between attempts.
+  - The `backend_session_bound` event is durable before any turn starts and
+    uses the per-task idempotency key `backend-session-bound:<task>`. It
+    records the task's first binding, so its `attempt` and
+    `execution_world_id` belong to that binding. Each later attempt's session
+    and world are in its execution receipt and in the task transition's
+    `backend_binding`.
+  - The first event under that key is the anchor. Every later binding on the
+    active lineage, in a session event or in a task transition, must name the
+    anchor's identity. A history written before the per-task key has no
+    anchor: its last binding wins, and the next bind writes the anchor.
+  - Before an attempt starts its backend, it applies this rule to the active
+    lineage: a projected binding must match the durable one, and an empty
+    projection resumes the durable session rather than opening a new one.
+    Startup replay does not enforce the rule, so `hufu reconcile` and
+    `hufu retry` still reach a task whose binding conflicts.
+  - A backend that resumes a different session fails the task as
+    `session_resume_mismatch`. Contradictory or unverifiable identity evidence
+    (a second session, another backend, a broken hash chain or lineage) fails
+    it as `identity_conflict`. Both block the task for reconciliation
+    (`ReconcileOnly`) and are never retried or replanned automatically. A
+    storage I/O fault while reading or appending the binding is
+    `environment`. A mismatch during result repair keeps the `protocol`
+    disposition, because the turn has already changed the workspace.
 - `ExecutionWorld` is the Hufu-owned workspace/effect boundary for providers
   that can run native process or filesystem operations. Its capabilities do
   not grant authorization by themselves.

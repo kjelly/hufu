@@ -14,9 +14,10 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 )
 
-// Session binding identity (docs/tmp/spec.md PR 2): a task holds one backend
-// session per branch. Every attempt resumes it; a different session is a
-// conflict, and execution world, cwd, and turn are not part of the identity.
+// Session binding identity (docs/architecture/execution-runtime.md,
+// BackendBinding): a task holds one backend session per branch. Every attempt
+// resumes it; a different session is a conflict, and execution world, cwd,
+// and turn are not part of the identity.
 
 var bindingTestTarget = execution.ExecutionTarget{Backend: "codex", Model: "gpt-5-codex"}
 
@@ -265,12 +266,31 @@ func TestResumableBackendSessionID(t *testing.T) {
 		wantClash   bool
 	}{
 		{
-			name: "projected binding is used without reading the log",
+			// The durable identity is checked even when the projection has a
+			// binding, so an unreadable log fails closed either way.
+			name: "a projected binding still needs a readable log",
 			prepare: func(_ *testing.T, c *Coordinator, _ string) *ProviderBinding {
 				c.SetEventJournal(unreadableJournal{EventJournal: c.EventJournal()})
 				return &ProviderBinding{Provider: "codex", SessionID: "thread-projected"}
 			},
+			wantErr: "injected unreadable event log",
+		},
+		{
+			name: "a projection-only binding is resumed when the log has none",
+			prepare: func(*testing.T, *Coordinator, string) *ProviderBinding {
+				return &ProviderBinding{Provider: "codex", SessionID: "thread-projected"}
+			},
 			wantSession: "thread-projected",
+		},
+		{
+			name: "a projection that disagrees with the durable session is a conflict",
+			prepare: func(t *testing.T, c *Coordinator, taskID string) *ProviderBinding {
+				if err := c.persistProviderSessionBinding(t.Context(), taskID, 1, codexSessionBinding("thread-1", "world-a")); err != nil {
+					t.Fatal(err)
+				}
+				return &ProviderBinding{Provider: "codex", SessionID: "thread-2"}
+			},
+			wantClash: true,
 		},
 		{
 			name:    "no binding anywhere starts a new session",

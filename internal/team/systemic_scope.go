@@ -35,11 +35,12 @@ func splitSystemicScopePrefix(scopeKey string) (component, operation string, ok 
 
 // SystemicDispositionForClass returns the escalation disposition for a
 // systemic failure of the given class (§6.2): protocol / environment /
-// contract → needs_human; any other → replan_required. Refs:
+// contract and backend session identity failures → needs_human; any other →
+// replan_required. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §6.2, WP-10
 func SystemicDispositionForClass(class TaskFailureClass) string {
 	switch class {
-	case FailureProtocol, FailureEnvironment, FailureContract:
+	case FailureProtocol, FailureEnvironment, FailureContract, FailureSessionResumeMismatch, FailureIdentityConflict:
 		return "needs_human"
 	default:
 		return "replan_required"

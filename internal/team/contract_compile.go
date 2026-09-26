@@ -610,6 +610,7 @@ var knownTaskFailureClasses = []TaskFailureClass{
 	FailureContract, FailureEnvironment, FailureExecution, FailureProtocol,
 	FailureVerify, FailurePolicy, FailureTimeout, FailureCancelled,
 	FailureSemanticRejection, FailureWorkspaceConflict,
+	FailureSessionResumeMismatch, FailureIdentityConflict,
 }
 
 func validateOnFailureClasses(field string, classes []TaskFailureClass) []ContractFinding {

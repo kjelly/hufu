@@ -903,6 +903,17 @@ const (
 	// could not be applied because the canonical project changed underneath
 	// it. Nothing was written; a new attempt starts from the current project.
 	FailureWorkspaceConflict TaskFailureClass = "workspace_conflict"
+	// FailureSessionResumeMismatch is a backend that resumed a different
+	// session than the task's durable one. It proves only that this resume
+	// broke the binding, not that the session is gone for good, so the task
+	// blocks for reconciliation instead of retrying or replanning.
+	FailureSessionResumeMismatch TaskFailureClass = "session_resume_mismatch"
+	// FailureIdentityConflict is durable execution identity evidence that
+	// contradicts itself or cannot be verified: a second backend session for
+	// one task, a binding on another backend, or an event lineage whose hash
+	// chain or branch metadata fails validation. The task blocks for
+	// reconciliation; no worker runs on unverified identity.
+	FailureIdentityConflict TaskFailureClass = "identity_conflict"
 	// FailureSemanticRejection is Hufu's own canonicalized class for a
 	// complete, honest worker self-report of non-success (a submit_result
 	// call with status: failed) — as opposed to the raw class Hufu's

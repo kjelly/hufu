@@ -982,7 +982,10 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	effective, err := codexStartOrResumeThread(ctx, repairProc.Client, threadID, threadCfg, nil)
 	if err != nil {
 		transcript.record("repair: thread/resume failed: %v", err)
-		return nil, nil, "", "", codexFail(CodexFailureProtocolError, fmt.Errorf("codex repair resume: %w", err))
+		// The repair runs after a turn changed the workspace, so it keeps the
+		// protocol disposition that preserves the partial result, even when
+		// the cause is a session resume mismatch.
+		return nil, nil, "", "", codexFail(CodexFailureProtocolError, withFailureClassOverride(fmt.Errorf("codex repair resume: %w", err), FailureProtocol))
 	}
 
 	repairPrompt := codexResultRepairPrompt + request.invariantRepairInstructions
