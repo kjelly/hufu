@@ -643,7 +643,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		if err := c.phaseWorkflow.observe(c.taskTracker.TodoList().Items()); err != nil {
 			c.saveCheckpoint()
-			return "", err
+			return "", c.workflowFailureResult(err)
 		}
 		c.saveCheckpoint()
 	}

@@ -468,7 +468,11 @@ type Coordinator struct {
 	// responses; see maxConsecutiveCoordinatorToolErrors.
 	coordinatorToolErrorStreak       atomic.Int32
 	coordinatorPolicyRepairExhausted atomic.Bool
-	contextRequestSeq                atomic.Uint64
+	// coordinatorCallsAfterWorkflowFailure counts coordinator tool calls made
+	// while the phase workflow is FAILED; see
+	// maxCoordinatorCallsAfterWorkflowFailure.
+	coordinatorCallsAfterWorkflowFailure atomic.Int32
+	contextRequestSeq                    atomic.Uint64
 	// executionAttemptSeq identifies coordinator model-stream invocations
 	// within one public execution run. It is deliberately separate from task
 	// retry attempts and from context-request telemetry sequencing.

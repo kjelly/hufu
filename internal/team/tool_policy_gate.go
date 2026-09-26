@@ -252,6 +252,11 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		})
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", t.Info().Name)), nil
 	}
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && t.coordinator != nil {
+		if err := t.coordinator.failedWorkflowCallStop(t.Info().Name); err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+	}
 	if t.coordinator != nil && t.coordinator.coordinatorPolicyRepairPending.Load() {
 		todoID, _ := ctx.Value(todoIDKey{}).(string)
 		if todoID == CoordTodoID && t.Info().Name != "agent" && t.Info().Name != "finish" {

@@ -691,6 +691,20 @@ func isResolvedTaskResolution(resolution *TaskResolution) bool {
 	}
 }
 
+// failedTask returns the task whose failure moved the workflow into
+// PhaseFailed, or "" for a structural failure or a workflow that has not failed.
+func (w *runtimeWorkflow) failedTask() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.state != PhaseFailed {
+		return ""
+	}
+	return w.failedTaskID
+}
+
 // reconcileFailure recovers the workflow from PhaseFailed when taskID is
 // exactly the task whose terminal failure caused the most recent transition
 // into PhaseFailed. PhaseFailed has no entry in allowedTransitions, so
