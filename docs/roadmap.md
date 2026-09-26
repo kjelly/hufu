@@ -22,7 +22,6 @@ be tracked in an issue or ADR and linked here only while it is active.
 | Dynamic MCP surface | Eligible manager-owned MCP tools use one fixed provider gateway while frozen logical authorization, schema validation, digests, and receipts remain target-specific. | Add future schema/effect capabilities only as versioned contracts without widening restored occurrences. | [execution runtime](architecture/execution-runtime.md) |
 | Worksets | Artifact-backed manifests and expansion receipts are canonical; child bindings can derive frozen bounded resource scopes; path-based TSV fan-out is compatibility-only. | Complete the documented release-cycle migration and then remove the legacy path. | [workset](architecture/workset.md) |
 | Memory learning | Canonical context, injection manifests, typed memory uses, outcome events, and promotion gates are runtime boundaries. Offline memory-conflict judgments (`hufu context conflicts`) block promotion and consolidation and mark injected memories `conflicting`; consolidation text can be model-drafted with `--draft`. | Treat ranking/consolidation changes as separately reviewed experiments with replay evidence; calibrate the conflict prefilter thresholds on real workspaces. | [memory learning](architecture/memory-learning.md) |
-| MCP-backed action provider | Action providers use command or embedded Go runtimes; team MCP tools are reachable only as worker tools. | Implement the plan's work packages in order, one commit each, then move the plan to the archive. | [MCP-backed action provider](architecture/mcp-action-provider.md) |
 | Documentation integrity | Active docs now have explicit lifecycle and authority metadata, with link/path checks in CI. | Extend the checker when new lifecycle rules or document classes are added. | [documentation map](README.md) |
 | Operator experience | Phases 0–6 and the Phase 7 engineering gates are implemented as an additive preview; the human study has zero participants. | Run HF-UX-070 with real participants and retain preview status until its safety and usability gates pass. | [operator experience](architecture/operator-experience.md), [release readiness](reference/operator-release-readiness.md) |
 
@@ -35,3 +34,5 @@ be tracked in an issue or ADR and linked here only while it is active.
   deleting their historical evidence.
 - Implemented the team action catalog; its canonical reference is the
   [action providers](reference/action-providers.md#action-catalog) document.
+- Implemented the MCP-backed action provider; its canonical reference is the
+  [action providers](reference/action-providers.md#mcp-provider) document.

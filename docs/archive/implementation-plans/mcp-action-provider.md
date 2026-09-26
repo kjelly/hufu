@@ -1,10 +1,10 @@
 # MCP-backed ActionProvider（唯讀 MVP）：可實作規格 v2
 
-> Status: draft（Ready for implementation；實作中，完成後移到 `docs/archive/implementation-plans/`）
-> Authority: normative（實作計畫；完成後 canonical 文件為 `docs/reference/action-providers.md`，程式碼註解只引用正式文件）
-> Verified-Commit: `1a244b3`
+> Status: implemented — archived 2026-09-26; implemented through `3bdbec7` on local `main` (see §14 實作紀錄)
+> Authority: reference（實作紀錄；canonical 文件為 `docs/reference/action-providers.md` 的 MCP provider 章節）
+> Verified-Commit: `3bdbec7`
 > Supersedes: —
-> Superseded-By: —
+> Superseded-By: `docs/reference/action-providers.md`
 > Target: `kjelly/hufu` main
 > Baseline: `1a244b3`（本文所有 `file:line` 以此 commit 為準；行號會漂移，以函式名稱為主）
 > Date: 2026-09-26（v2：依查核結果與使用者決策改寫初稿）
@@ -367,4 +367,6 @@ Baseline（`0be3a5f`，計畫移入 `docs/architecture/` 後）：`go build ./..
 | WP-4 | `e42772e` | §7 的結果轉換（`mcpActionResult`）提前在本 WP 實作，因為 `Execute` 必須回傳結果；WP-5 補 receipt digest 與完整結果案例測試。runtime authorizer 用 team 套件私有 context key，worker 的 `mcp.WithToolAuthorizer` 不能代替它（有測試）。mcp-go 的 in-process transport 同步呼叫 server、不理會呼叫端 deadline，timeout 測試因此改用 streamable HTTP（`httptest`）。 |
 | WP-5 | `cb45596` | `structuredContent` 為字面值 `null` 時視同沒有、改用 text 規則。resume 不重播以 `ResumeInterruptedTasks` 驗證：已完成且有 receipt 的 MCP action 不會被選為 interrupted，`CallTool` 維持 1。 |
 | WP-6 | `2797cbd` | 只有測試，沒有正式程式碼：WP-2 的 reservation 已涵蓋所有暴露路徑。以 mutation 驗證（移除 manager 的 reserved 過濾後測試失敗）。 |
-| WP-7 | 見下一筆 commit | workflow fixture 多了 `coordinator.md`（沿用的 docs-action-provider-example 沒有，但 lint 會報 `missing_coordinator`），測試同時要求兩個 fixture lint 沒有 error。錯誤表對 `mcp_action_transport_failed` 標「Possibly」：傳輸失敗時無法確定 tool 是否已收到呼叫。 |
+| WP-7 | `3bdbec7` | workflow fixture 多了 `coordinator.md`（沿用的 docs-action-provider-example 沒有，但 lint 會報 `missing_coordinator`），測試同時要求兩個 fixture lint 沒有 error。錯誤表對 `mcp_action_transport_failed` 標「Possibly」：傳輸失敗時無法確定 tool 是否已收到呼叫。 |
+
+完成驗證（`3bdbec7`）：`go build ./...`、`go vet ./...`、`golangci-lint run`（0 issues）、`bin/check-docs`、`go test ./... -count=1`（44 個套件全部 ok）與 `go test -race -timeout 45m ./internal/mcp/... ./internal/team/...`（`internal/team` 842 秒，無 data race）全部通過。§12 的完成條件皆由上表各 WP 的測試涵蓋；沒有真實 MCP server 或外部 credential 的冒煙測試（本計畫範圍外）。

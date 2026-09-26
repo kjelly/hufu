@@ -66,10 +66,6 @@ to re-create an abstraction that already exists in the runtime.
 - [SQLite maintenance policy](architecture/sqlite-maintenance-policy.md) —
   discovery evidence and the still-unmet authorization contract for any
   explicit maintenance operation.
-- [MCP-backed action provider](architecture/mcp-action-provider.md) — draft
-  implementation plan for binding a team-declared MCP tool to an action
-  provider capability; code and tests remain authoritative for implementation
-  status.
 - [Strict verification design](architecture/strict-verification.md) — a draft
   mechanism design and acceptance-case reference; code and tests remain
   authoritative for implementation status.
@@ -118,7 +114,8 @@ to re-create an abstraction that already exists in the runtime.
   landed or whose remaining work is tracked elsewhere, including the
   [SQLite optimization implementation record](archive/implementation-plans/hufu-sqlite-optimization-plan.md),
   the [managed workspace registry implementation record](archive/implementation-plans/hufu-workspace-registry-improvement-plan.md),
-  and the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md).
+  the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md),
+  and the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for
