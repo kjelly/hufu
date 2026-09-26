@@ -279,6 +279,12 @@ func verifyInputBoundTask(runID string, item *team.TodoItem, snapshot *team.RunI
 		}
 	}
 	receipt := latestRunInputReceipt(item, runID)
+	if receipt == nil && item.Status != team.TaskDone && item.TypedResult == nil {
+		// A runtime action persists its task receipt only after it succeeds.
+		// An action that failed, or never finished, has no receipt and no
+		// result to bind; its materialization identity was checked above.
+		return nil
+	}
 	if receipt == nil || strings.TrimSpace(receipt.ActionInvocationID) == "" || receipt.RunInputSnapshotID != snapshot.ID || receipt.RunInputSnapshotHash != snapshot.SnapshotHash ||
 		receipt.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash || !sameHashes(receipt.BoundInputs, item.BoundInputs) {
 		return errors.New("action receipt does not match task input materialization")
