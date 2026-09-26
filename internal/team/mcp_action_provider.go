@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -31,6 +32,9 @@ type mcpActionProvider struct {
 	tool             string
 	timeout          time.Duration
 	serverConfigHash string
+
+	mu      sync.Mutex
+	binding *mcpActionBinding
 }
 
 func isMCPActionProviderConfig(config agent.ActionProviderConfig) bool {

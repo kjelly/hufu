@@ -1563,8 +1563,9 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	}
 	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
 	c.sharedMemorySvc = NewSharedMemoryService(repo)
-	// Routes are bound before the policy snapshot, which pins them.
-	if err := c.bindExecutionRoutes(); err != nil {
+	// Routes and MCP action providers are bound before the policy snapshot,
+	// which pins them.
+	if err := c.bindPolicyTargets(); err != nil {
 		return nil, err
 	}
 	executionPolicy, err := newExecutionPolicyState(c)

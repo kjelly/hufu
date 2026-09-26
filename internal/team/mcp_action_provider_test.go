@@ -32,7 +32,9 @@ func TestRegisterMCPActionProviderValidatesConfiguration(t *testing.T) {
 		wantErr string
 	}{
 		{name: "valid", config: valid},
-		{name: "runtime case and spaces", config: with(func(c *agent.ActionProviderConfig) { c.Runtime, c.Server, c.Tool = " MCP ", " diagnostics ", " collect_debug " })},
+		{name: "runtime case and spaces", config: with(func(c *agent.ActionProviderConfig) {
+			c.Runtime, c.Server, c.Tool = " MCP ", " diagnostics ", " collect_debug "
+		})},
 		{name: "missing server", config: with(func(c *agent.ActionProviderConfig) { c.Server = " " }), wantErr: "requires server and tool"},
 		{name: "missing tool", config: with(func(c *agent.ActionProviderConfig) { c.Tool = "" }), wantErr: "requires server and tool"},
 		{name: "command", config: with(func(c *agent.ActionProviderConfig) { c.Command = []string{"sh"} }), wantErr: "does not accept command"},

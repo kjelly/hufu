@@ -49,7 +49,10 @@ type ExecutionPolicySnapshot struct {
 	// ActionCatalogHash pins the team's action catalog, including each entry's
 	// provider identity. It is omitted when a team declares no catalog.
 	ActionCatalogHash string `json:"action_catalog_hash,omitempty"`
-	ConfigurationHash string `json:"configuration_hash"`
+	// MCPActionProviders pins every MCP action provider's server, tool, and
+	// bound descriptor. It is omitted when a team declares none.
+	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
+	ConfigurationHash  string                               `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -272,6 +275,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		if c.session.ActionCatalog != nil {
 			snapshot.ActionCatalogHash = c.session.ActionCatalog.Hash
 		}
+		snapshot.MCPActionProviders = executionPolicyMCPActionProviders(c.session)
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,
@@ -540,6 +544,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
 	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
+	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
 		clone.ExecutionWorlds[i] = snapshot.ExecutionWorlds[i]
@@ -570,6 +575,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 				return fmt.Errorf("execution policy snapshot v%d writes legacy_provider", snapshot.Version)
 			}
 		}
+	}
+	if err := validateExecutionPolicyMCPActionProviders(snapshot.Version, snapshot.MCPActionProviders); err != nil {
+		return err
 	}
 	for _, world := range snapshot.ExecutionWorlds {
 		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
@@ -828,6 +836,9 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 // remain readable until the materializer writes an explicit v4 migration.
 func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionPolicySnapshot) (bool, error) {
 	if err := validateExecutionPolicySnapshot(snapshot); err != nil {
+		return false, err
+	}
+	if err := c.checkLegacySnapshotMCPActionProviders(snapshot); err != nil {
 		return false, err
 	}
 	current, err := newExecutionPolicyStateForVersion(c, snapshot.Version)

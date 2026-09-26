@@ -362,4 +362,5 @@ Baseline（`0be3a5f`，計畫移入 `docs/architecture/` 後）：`go build ./..
 | WP | Commit | 偏離與備註 |
 |---|---|---|
 | WP-1 | `78974e6` | `registerConfiguredActionProviders` 多接收 `mcpServers`；runtime 名稱比對不分大小寫並去空白（與 command/golang 相同）。MCP provider 在 WP-3/WP-4 之前一律以 `mcp_action_unbound` fail closed。 |
-| WP-2 | 見下一筆 commit | 沒有另外匯出 `ServerLoadError`：`ReserveRuntimeTool` 的錯誤直接包含該 server 的載入失敗原因（或「未載入」「未列出或已排除」）。`loadLocalServer`/`loadRemoteServer` 的 Initialize/ListTools/過濾尾端抽成 `initializeServerTools`，由 `AttachClient` 共用；`executeMCPTool` 改由共用的 `callMCPTool` 送出請求。 |
+| WP-2 | `172708f` | 沒有另外匯出 `ServerLoadError`：`ReserveRuntimeTool` 的錯誤直接包含該 server 的載入失敗原因（或「未載入」「未列出或已排除」）。`loadLocalServer`/`loadRemoteServer` 的 Initialize/ListTools/過濾尾端抽成 `initializeServerTools`，由 `AttachClient` 共用；`executeMCPTool` 改由共用的 `callMCPTool` 送出請求。 |
+| WP-3 | 見下一筆 commit | `NewCoordinator` 以新 helper `bindPolicyTargets`（先 route、後 MCP provider）取代原本單一的 `bindExecutionRoutes` 呼叫，避免 `newScopedCoordinator` 超過 gocyclo 40。「非 dry-run 的 `newExecutionPolicyState` 遇到未綁定 provider 回錯」改由 `NewCoordinator` 的綁定保證：綁定失敗時 coordinator 不會建立；`validateExecutionPolicySnapshot` 另拒絕任何 digest 為空的持久化 snapshot。 |
