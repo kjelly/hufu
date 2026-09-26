@@ -912,6 +912,14 @@ Checks 依 `category,id` 排序且必為陣列。未要求 `--online` 時 online
 JSON mode 在三種 exit 都輸出一份 document 到 stdout且 stderr 不重複錯誤；text mode 的錯誤只印
 stderr。不得輸出 env value、credential、完整 remote response 或任意 verifier內容。
 
+`hufu run` 啟動時的唯讀檢查沿用 `team check` 的 check ID（`static.role_targets`、
+`static.execution_preflight`）與 status 語彙，另加 run 專屬的 `static.effective_contract`（依
+`--unattended`、`--no-net` 等執行期設定做 effective-contract lint）。這些檢查在 workspace
+versioning binding、MCP 載入與任何 workspace 寫入之前執行。多項獨立檢查同時失敗時，錯誤訊息
+依 check ID 排序一次列出；依賴 role 解析結果的 target preflight 標為 `skipped`
+（`dependency_unavailable`）。只有一項失敗時沿用原本的錯誤訊息。`team check` 的 JSON 與 exit
+code 不因此改變。
+
 ### 9.2 `team show/explain/check/validate/lint` 不互相取代
 
 | 使用者想知道 | 對應入口 |

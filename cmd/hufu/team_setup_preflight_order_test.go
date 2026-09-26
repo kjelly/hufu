@@ -42,6 +42,14 @@ func TestLoadTeamCommonStaticFailureRunsBeforeWorkspaceVersioning(t *testing.T) 
 			wantErr: "effective team contract validation failed",
 		},
 		{
+			name: "independent failures are reported together",
+			prepare: func(session *team.TeamSession) {
+				session.Config.WorkerModel = ""
+				session.Config.Requirements.Environment = []string{"HUFU_TEST_PREFLIGHT_ORDER_UNSET"}
+			},
+			wantErr: "2 startup checks failed",
+		},
+		{
 			// Control: a valid team does reach versioning binding and the lock.
 			name:    "valid configuration reaches versioning binding",
 			prepare: func(*team.TeamSession) {},

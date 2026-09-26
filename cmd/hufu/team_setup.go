@@ -210,37 +210,21 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	// Provenance must be read before resolution overwrites the team's
 	// worker/coordinator fields with their resolved values.
 	roleSources := resolveRoleModelSources(session.Config, teamSourceLabel(session), cfg, cliModelOverrides)
-	roleModels, err := resolveExecutionRoleModels(session, cfg)
+	// The read-only setup gate runs before workspace versioning binding
+	// (which takes the project lock and may run workspace recovery), MCP
+	// loading, legacy-draft migration, workspace initialization, lifecycle
+	// archive/checkpoint, and coordinator construction.
+	gate, err := runStartupStaticGate(session, registry, cfg, execProfile, planMode)
 	if err != nil {
 		return nil, err
 	}
+	roleModels, allowedPaths := gate.RoleModels, gate.AllowedPaths
+	resolvedForceMCP, resolvedNoNet := gate.ForceMCP, gate.NoNet
 	resolvedSidecarModel := roleModels.Sidecar
 	resolvedGuardModel := roleModels.Guard
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
-	// Target preflight and the effective-contract lint below are the
-	// read-only setup gate. They run before workspace versioning binding
-	// (which takes the project lock and may run workspace recovery), MCP
-	// loading, legacy-draft migration, workspace initialization, lifecycle
-	// archive/checkpoint, and coordinator construction.
-	if err := preflightExecutionTargets(session, cfg, roleModels, nil); err != nil {
-		return nil, err
-	}
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
-	allowedPaths := buildAllowedPaths(session, registry, cfg)
-	resolvedForceMCP := opts.forceMCP || cfg.ForceMCP || session.Config.ForceMCP
-	resolvedNoNet := opts.noNet || cfg.NoNet || session.Config.NoNet
-	effectiveContractFindings := team.LintEffectiveTeamContracts(session, team.EffectiveTeamContractContext{
-		Unattended:        opts.unattended || session.Config.Unattended || execProfile.IsUnattended(),
-		ForceMCP:          resolvedForceMCP,
-		NoNet:             resolvedNoNet,
-		PlanFirst:         &planMode,
-		AllowedPaths:      allowedPaths,
-		EnvironmentLookup: os.LookupEnv,
-	})
-	if messages := contractErrorMessages(effectiveContractFindings); len(messages) > 0 {
-		return nil, fmt.Errorf("effective team contract validation failed: %s", strings.Join(messages, "; "))
-	}
 	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
 		return nil, err
 	}
@@ -443,17 +427,6 @@ func applyCLICompactionOverrides(session *team.TeamSession) error {
 	}
 	session.Config.Compaction = policy
 	return nil
-}
-
-func contractErrorMessages(findings []team.ContractFinding) []string {
-	messages := make([]string, 0, len(findings))
-	for _, finding := range findings {
-		if finding.Severity == team.FindingSeverityError {
-			messages = append(messages, fmt.Sprintf("%s: %s (%s)", finding.Field, finding.Message, finding.Code))
-		}
-	}
-	sort.Strings(messages)
-	return messages
 }
 
 func loadTeamByName(ctx context.Context, teamName string, registry *team.TeamRegistry, defaultProviderURL, defaultProviderAPIKey string, pathConsent *tools.PathConsent, vars map[string]string, forcedSkills []string, planMode bool, autoSkillsMode bool) (*teamContext, error) {
