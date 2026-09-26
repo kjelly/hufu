@@ -320,6 +320,9 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 		}
 		task.ExecutionRoute = route
 	}
+	if err := c.validatePlanFirstExecutionTarget(task); err != nil {
+		return task, err
+	}
 	workspacePolicy, err := c.admittedWorkerWorkspace(task, def)
 	if err != nil {
 		return task, err

@@ -174,6 +174,10 @@ coordinator/orchestrator（改用 `--coordinator-model`），也不會改變 pro
 `ExecutionTarget`；每個 worker 的 target 也屬於 run 的 execution-policy
 snapshot，因此 resume 必須沿用原 run 的相同覆寫（或相同 profile），改變 target
 會因 snapshot drift 被拒絕；要換 target 請用 `--new` 開新 session。
+`--plan`（plan-first）的 task 不能在 external agent backend（例如 Codex）上
+規劃：這類 backend 無法呼叫 `submit_plan`，規劃的那一輪會在 plan 審查前就做完
+工作，因此 admission 會以 `plan_first_external_backend` 拒絕，extra-model 的
+leaf 也一樣。
 
 ### 結果合約（result-contract）
 

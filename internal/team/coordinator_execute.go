@@ -340,6 +340,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		if canonicalizeErr = c.validateExtraModelExecutionTopology(t); canonicalizeErr != nil {
 			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
 		}
+		// The extra-model leaves are known only now; a planning leaf on an
+		// external agent backend would skip plan review like the primary.
+		if canonicalizeErr = c.validatePlanFirstExecutionTarget(t); canonicalizeErr != nil {
+			return "", c.rejectDelegationPolicy(canonicalizeErr.Error())
+		}
 		tasks[i] = t
 		todoBatch[i] = TodoSpec{
 			PlanTaskID:                    t.ID,
