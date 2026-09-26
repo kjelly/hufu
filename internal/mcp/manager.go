@@ -133,20 +133,46 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 	}
 	wg.Wait()
 
+	// A rejected client is closed after the lock is released: closing a stdio
+	// client waits for its process.
+	var rejected []*client.Client
+	defer func() {
+		for _, cli := range rejected {
+			_ = cli.Close()
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maps.Copy(m.loadErrors, serverErrs)
 	for _, r := range results {
-		m.clients[r.name] = r.cli
-		for _, t := range r.tools {
-			m.tools = append(m.tools, t)
-			m.toolMap[t.Name] = t
+		if err := m.registerServerLocked(r.name, r.cli, r.tools); err != nil {
+			rejected = append(rejected, r.cli)
+			loadErrs = append(loadErrs, fmt.Errorf("server %q: %w", r.name, err))
+			m.loadErrors[r.name] = err
 		}
 	}
 
 	if len(loadErrs) > 0 && len(m.tools) == 0 {
 		return fmt.Errorf("all MCP servers failed: %v", loadErrs)
 	}
+	return nil
+}
+
+// registerServerLocked adds a loaded server's client and tools. A server
+// name is registered at most once: a second client for it would replace the
+// first without closing it and duplicate its tools. A successful
+// registration clears any earlier load error for that server. m.mu must be
+// held for writing.
+func (m *MCPToolManager) registerServerLocked(name string, cli *client.Client, tools []MCPTool) error {
+	if _, exists := m.clients[name]; exists {
+		return fmt.Errorf("MCP server %q is already loaded", name)
+	}
+	m.clients[name] = cli
+	for _, t := range tools {
+		m.tools = append(m.tools, t)
+		m.toolMap[t.Name] = t
+	}
+	delete(m.loadErrors, name)
 	return nil
 }
 

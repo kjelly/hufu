@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -330,5 +332,88 @@ func TestMCPToolCallsSendArgumentNumbersExactly(t *testing.T) {
 	}
 	if calls := fake.calls.Load(); calls != 2 {
 		t.Fatalf("CallTool count = %d, want only the two valid calls", calls)
+	}
+}
+
+func TestAttachClientRegistersEachServerOnce(t *testing.T) {
+	manager := NewMCPToolManager("", "")
+	t.Cleanup(func() { _ = manager.Close() })
+	fake := newRuntimeTestServer(t, map[string]func(mcp.CallToolRequest) *mcp.CallToolResult{"collect_debug": textResult("ok")})
+	const attempts = 8
+	errs := make(chan error, attempts)
+	var ready sync.WaitGroup
+	ready.Add(attempts)
+	start := make(chan struct{})
+	for range attempts {
+		cli, err := client.NewInProcessClient(fake.server)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cli.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			ready.Done()
+			<-start
+			errs <- manager.AttachClient(t.Context(), "diagnostics", MCPServerConfig{}, cli)
+		}()
+	}
+	ready.Wait()
+	close(start)
+	succeeded := 0
+	for range attempts {
+		if err := <-errs; err == nil {
+			succeeded++
+		} else if !strings.Contains(err.Error(), "already loaded") {
+			t.Fatalf("attach error = %v", err)
+		}
+	}
+	manager.mu.RLock()
+	clients, tools := len(manager.clients), len(manager.tools)
+	manager.mu.RUnlock()
+	if succeeded != 1 || clients != 1 || tools != 1 {
+		t.Fatalf("succeeded=%d clients=%d tools=%d, want one registration without duplicates", succeeded, clients, tools)
+	}
+}
+
+func TestLoadToolsDoesNotReplaceALoadedServer(t *testing.T) {
+	remote := newRuntimeTestServer(t, map[string]func(mcp.CallToolRequest) *mcp.CallToolResult{"remote_only": textResult("remote")})
+	httpServer := httptest.NewServer(server.NewStreamableHTTPServer(remote.server))
+	t.Cleanup(httpServer.Close)
+	remoteConfig := map[string]MCPServerConfig{"diagnostics": {Type: "remote", URL: httpServer.URL}}
+
+	manager := NewMCPToolManager("", "")
+	attachRuntimeTestServer(t, manager, "diagnostics", MCPServerConfig{}, newRuntimeTestServer(t, map[string]func(mcp.CallToolRequest) *mcp.CallToolResult{
+		"collect_debug": textResult("ok"),
+	}))
+	if err := manager.LoadTools(t.Context(), remoteConfig); err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	if got := descriptorNames(manager.SnapshotToolDescriptors()); !slices.Equal(got, []string{"diagnostics__collect_debug"}) {
+		t.Fatalf("descriptors = %v, want the attached server's tools only", got)
+	}
+	if _, err := manager.ReserveRuntimeTool("diagnostics", "remote_only"); err == nil || !strings.Contains(err.Error(), "already loaded") {
+		t.Fatalf("reserve of the rejected server's tool error = %v, want its registration conflict", err)
+	}
+
+	fresh := NewMCPToolManager("", "")
+	t.Cleanup(func() { _ = fresh.Close() })
+	fresh.loadErrors["diagnostics"] = errors.New("earlier failure")
+	if err := fresh.LoadTools(t.Context(), remoteConfig); err != nil {
+		t.Fatalf("LoadTools after a failure: %v", err)
+	}
+	if _, err := fresh.ReserveRuntimeTool("diagnostics", "missing"); err == nil || strings.Contains(err.Error(), "earlier failure") || !strings.Contains(err.Error(), "does not expose tool") {
+		t.Fatalf("reserve error = %v, want the current state instead of the stale load error", err)
+	}
+}
+
+func TestAttachClientClearsAStaleLoadError(t *testing.T) {
+	manager := NewMCPToolManager("", "")
+	manager.loadErrors["diagnostics"] = errors.New("earlier failure")
+	attachRuntimeTestServer(t, manager, "diagnostics", MCPServerConfig{}, newRuntimeTestServer(t, map[string]func(mcp.CallToolRequest) *mcp.CallToolResult{
+		"collect_debug": textResult("ok"),
+	}))
+	if _, err := manager.ReserveRuntimeTool("diagnostics", "missing"); err == nil || strings.Contains(err.Error(), "earlier failure") || !strings.Contains(err.Error(), "does not expose tool") {
+		t.Fatalf("reserve error = %v, want the current state instead of the stale load error", err)
 	}
 }
