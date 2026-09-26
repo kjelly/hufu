@@ -33,6 +33,13 @@ report. A zero counter means no eligible reference was detected, not
 comprehensive coverage. Do not replace covered evidence with guessed source
 line citations; still inspect semantic accuracy and references outside the
 reported coverage.
+The report's `reviewed_revision` is the commit its checks ran against. When
+it is a commit rather than the working tree, the checkout you can read may be
+later than the reviewed state, so a file or symbol that is missing or
+different there is not by itself a finding against the reviewed commits.
+`forward_references` are references missing at `reviewed_revision` that a
+later commit (`reference_tip`) provides; a plan that names work it has not
+done yet produces them, and they are not findings on their own.
 
 The assigned diff artifact is the complete immutable boundary of this workset
 item. Treat artifact EOF as the end of the assigned batch, not as evidence that

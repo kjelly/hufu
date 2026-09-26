@@ -49,8 +49,9 @@ func TestDocumentationVerificationAcceptsForwardReferencesOfAHistoricalReview(t 
 	if !ok || !verification.Passed || len(verification.Issues) != 0 {
 		t.Fatalf("verification = %#v, want a pass", result.Outputs["documentation_verification"])
 	}
-	if len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head {
-		t.Fatalf("forward references = %q at %q, want the link, path, and symbol at %s", verification.ForwardReferences, verification.ReferenceTip, head)
+	if len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head || verification.ReviewedRevision != planCommit {
+		t.Fatalf("forward references = %q at %q (reviewed %q), want the link, path, and symbol at %s reviewed at %s",
+			verification.ForwardReferences, verification.ReferenceTip, verification.ReviewedRevision, head, planCommit)
 	}
 	for _, reference := range verification.ForwardReferences {
 		if !strings.Contains(reference, "does not exist at "+planCommit) || !strings.HasSuffix(reference, "exists at the current commit "+head) {
@@ -129,7 +130,7 @@ func TestEmbeddedRuntimeEmitsDocumentationVerification(t *testing.T) {
 		t.Fatalf("decode embedded runtime output: %v; stdout=%s", err, result.Stdout)
 	}
 	verification := output.Outputs.DocumentationVerification
-	if !verification.Passed || len(verification.CheckedFiles) != 1 || len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head {
+	if !verification.Passed || len(verification.CheckedFiles) != 1 || len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head || verification.ReviewedRevision != planCommit {
 		t.Fatalf("embedded documentation_verification = %#v, want a pass with three forward references at %s", verification, head)
 	}
 }

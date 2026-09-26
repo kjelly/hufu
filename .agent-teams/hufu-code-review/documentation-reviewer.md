@@ -28,6 +28,13 @@ symbols counted in the report. A zero counter means no eligible reference was
 detected, not comprehensive coverage. Do not repeat covered checks or replace
 their evidence with guessed source line numbers; do inspect semantic accuracy
 and any references outside the reported coverage.
+The report's `reviewed_revision` is the commit its checks ran against. When
+it is a commit rather than the working tree, the checkout you can read may be
+later than the reviewed state, so a file or symbol that is missing or
+different there is not by itself a finding against the reviewed commits.
+`forward_references` are references missing at `reviewed_revision` that a
+later commit (`reference_tip`) provides; a plan that names work it has not
+done yet produces them, and they are not findings on their own.
 
 Check clarity, contradictions, examples, commands, user-facing behavior, and
 agreement with only the smallest additional source evidence needed. Limit the

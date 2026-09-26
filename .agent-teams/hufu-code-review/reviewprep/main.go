@@ -213,9 +213,13 @@ type documentationVerification struct {
 	CheckedPaths   int      `json:"checked_paths"`
 	CheckedSymbols int      `json:"checked_symbols"`
 	Issues         []string `json:"issues,omitempty"`
-	// ForwardReferences lists references that are missing at a historical
-	// reviewed revision but exist at ReferenceTip, the repository's commit
-	// when the review ran. They are reported for the reviewers, not failed.
+	// ReviewedRevision is the commit every check ran against, or "working
+	// tree". A reviewer reading the current checkout of a historical review
+	// sees a later state than the one verified here.
+	ReviewedRevision string `json:"reviewed_revision,omitempty"`
+	// ForwardReferences lists references that are missing at ReviewedRevision
+	// but exist at ReferenceTip, the repository's commit when the review ran.
+	// They are reported for the reviewers, not failed.
 	ForwardReferences []string `json:"forward_references,omitempty"`
 	ReferenceTip      string   `json:"reference_tip,omitempty"`
 }
@@ -1418,7 +1422,7 @@ func isRoutineDocumentationPath(lower string) bool {
 }
 
 func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string) (documentationVerification, error) {
-	verification := documentationVerification{Passed: true, CheckedFiles: append([]string(nil), paths...)}
+	verification := documentationVerification{Passed: true, CheckedFiles: append([]string(nil), paths...), ReviewedRevision: reviewTargetLabel(r)}
 	seenLinks := make(map[string]struct{})
 	seenPaths := make(map[string]struct{})
 	seenSymbols := make(map[string]struct{})

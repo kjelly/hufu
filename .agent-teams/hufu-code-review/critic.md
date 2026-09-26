@@ -22,6 +22,13 @@ and deterministic `documentation verification report` artifacts first. Treat
 the report as authoritative for link/path/symbol checks, inspect only the
 smallest source evidence needed for semantic claims, and never manufacture
 positive findings.
+The report's `reviewed_revision` is the commit its checks ran against. When
+it is a commit rather than the working tree, the checkout you can read may be
+later than the reviewed state, so a file or symbol that is missing or
+different there is not by itself a finding against the reviewed commits.
+`forward_references` are references missing at `reviewed_revision` that a
+later commit (`reference_tip`) provides; a plan that names work it has not
+done yet produces them, and they are not findings on their own.
 
 Otherwise, act only on the typed finding and opaque evidence references
 supplied by the coordinator. Re-read the cited diff and the smallest relevant
