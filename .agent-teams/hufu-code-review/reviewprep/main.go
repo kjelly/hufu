@@ -2068,14 +2068,19 @@ func writeArchivedFile(target string, header *tar.Header, source io.Reader) erro
 	return nil
 }
 
+// createArchivedSymlink recreates a relative link that stays inside the
+// snapshot. A link with an absolute target or one that escapes the snapshot
+// is skipped, never created: the snapshot cannot follow it safely, and go
+// list needs only the module's own sources, so one unrelated link, such as a
+// tool's per-project state file, must not abort the whole review.
 func createArchivedSymlink(target, name, linkname string) error {
 	linkPath := filepath.FromSlash(linkname)
 	if filepath.IsAbs(linkPath) {
-		return fmt.Errorf("archive symlink %q has absolute target %q", name, linkname)
+		return nil
 	}
 	resolved := filepath.Clean(filepath.Join(filepath.Dir(name), linkPath))
 	if resolved == ".." || strings.HasPrefix(resolved, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("archive symlink %q escapes the snapshot", name)
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create parent directory for archived symlink %q: %w", name, err)
