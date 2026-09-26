@@ -1731,9 +1731,116 @@ func (r *reviewGoSymbolResolver) exists(symbol string) (bool, error) {
 		return found, err
 	}
 	if r.rangeDef.isWorkingTree() {
-		return worktreeQualifiedGoSymbolExists(r.ctx, r.repo, packageName, symbolName)
+		found, err = worktreeQualifiedGoSymbolExists(r.ctx, r.repo, packageName, symbolName)
+	} else {
+		found, err = gitQualifiedGoSymbolExists(r.ctx, r.repo, r.rangeDef.End, packageName, symbolName)
 	}
-	return gitQualifiedGoSymbolExists(r.ctx, r.repo, r.rangeDef.End, packageName, symbolName)
+	if err != nil || found {
+		return found, err
+	}
+	return r.selectorMemberExists(packageName, symbolName)
+}
+
+// selectorMemberExists resolves a qualified span whose qualifier names no Go
+// package: no import, no standard-library package, and no package clause at
+// the reviewed revision. Such a span is a selector on a variable or receiver,
+// for example c.Method or session.Field, so it resolves when a method, struct
+// field, or interface method of that name is declared. A qualifier that does
+// name a package still fails closed, and a top-level function or type never
+// satisfies a selector.
+func (r *reviewGoSymbolResolver) selectorMemberExists(qualifier, member string) (bool, error) {
+	revision := r.rangeDef.End
+	if r.rangeDef.isWorkingTree() {
+		revision = ""
+	}
+	packagePaths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, "package "+qualifier)
+	if err != nil {
+		return false, err
+	}
+	for _, candidatePath := range packagePaths {
+		content, readErr := reviewGoSource(r.ctx, r.repo, r.rangeDef, candidatePath)
+		if readErr != nil {
+			return false, readErr
+		}
+		parsed, parseErr := parser.ParseFile(token.NewFileSet(), candidatePath, content, parser.PackageClauseOnly)
+		if parseErr != nil {
+			return false, fmt.Errorf("parse Go package candidate %q: %w", candidatePath, parseErr)
+		}
+		if parsed.Name.Name == qualifier {
+			return false, nil
+		}
+	}
+	memberPaths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, member)
+	if err != nil {
+		return false, err
+	}
+	for _, candidatePath := range memberPaths {
+		content, readErr := reviewGoSource(r.ctx, r.repo, r.rangeDef, candidatePath)
+		if readErr != nil {
+			return false, readErr
+		}
+		found, parseErr := sourceDeclaresGoMember(candidatePath, content, member)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// typeDeclaresGoMember reports whether a struct field list or an interface
+// method list inside the type expression names member. Function parameter
+// names are not members and are not considered.
+func typeDeclaresGoMember(expression ast.Expr, member string) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		var fields *ast.FieldList
+		switch current := node.(type) {
+		case *ast.StructType:
+			fields = current.Fields
+		case *ast.InterfaceType:
+			fields = current.Methods
+		}
+		if fields != nil {
+			for _, field := range fields.List {
+				for _, name := range field.Names {
+					found = found || name.Name == member
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// sourceDeclaresGoMember reports whether the file declares member as a
+// method, a struct field, or an interface method.
+func sourceDeclaresGoMember(filename string, content []byte, member string) (bool, error) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, content, 0)
+	if err != nil {
+		return false, fmt.Errorf("parse Go member candidate %q: %w", filename, err)
+	}
+	for _, declaration := range parsed.Decls {
+		switch current := declaration.(type) {
+		case *ast.FuncDecl:
+			if current.Recv != nil && current.Name.Name == member {
+				return true, nil
+			}
+		case *ast.GenDecl:
+			for _, spec := range current.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if typeDeclaresGoMember(typeSpec.Type, member) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // importedQualifiedGoSymbolExists resolves a selector through import
