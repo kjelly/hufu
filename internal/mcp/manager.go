@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -77,8 +78,14 @@ type MCPToolManager struct {
 	clients      map[string]*client.Client
 	toolMap      map[string]MCPTool
 	agentServers map[string]*AgentMCPServer
-	globalShell  string
-	teamShell    string
+	// loadErrors keeps each server's LoadTools failure so a runtime binding
+	// can report why a tool it needs is missing.
+	loadErrors map[string]error
+	// reserved names tools bound to a runtime action. They are hidden from
+	// every model-facing surface and reachable only through ExecuteRuntimeTool.
+	reserved    map[string]bool
+	globalShell string
+	teamShell   string
 }
 
 func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
@@ -86,6 +93,8 @@ func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
 		clients:      make(map[string]*client.Client),
 		toolMap:      make(map[string]MCPTool),
 		agentServers: make(map[string]*AgentMCPServer),
+		loadErrors:   make(map[string]error),
+		reserved:     make(map[string]bool),
 		globalShell:  globalShell,
 		teamShell:    teamShell,
 	}
@@ -95,6 +104,7 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var loadErrs []error
+	serverErrs := make(map[string]error)
 
 	type serverResult struct {
 		name  string
@@ -111,6 +121,7 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 			if err != nil {
 				mu.Lock()
 				loadErrs = append(loadErrs, fmt.Errorf("server %q: %w", name, err))
+				serverErrs[name] = err
 				mu.Unlock()
 				return
 			}
@@ -123,6 +134,7 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	maps.Copy(m.loadErrors, serverErrs)
 	for _, r := range results {
 		m.clients[r.name] = r.cli
 		for _, t := range r.tools {
@@ -173,54 +185,10 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create stdio client: %w", err)
 	}
-
-	initReq := mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			ClientInfo: mcp.Implementation{
-				Name:    "hufu",
-				Version: "0.1.0",
-			},
-		},
-	}
-
-	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		_ = cli.Close()
-		return nil, nil, fmt.Errorf("failed to initialize: %w", err)
-	}
-
-	toolsResult, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
+	tools, err := initializeServerTools(ctx, name, cfg, cli)
 	if err != nil {
-		_ = cli.Close()
-		return nil, nil, fmt.Errorf("failed to list tools: %w", err)
+		return nil, nil, err
 	}
-
-	var tools []MCPTool
-	for _, t := range toolsResult.Tools {
-		prefixedName := name + "__" + t.Name
-		if !IsToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
-			continue
-		}
-		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
-		if err != nil {
-			_ = cli.Close()
-			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
-		}
-		params := map[string]any{}
-		if t.InputSchema.Properties != nil {
-			params = t.InputSchema.Properties
-		}
-		tools = append(tools, MCPTool{
-			Name:        prefixedName,
-			Description: t.Description,
-			InputSchema: inputSchema,
-			Parameters:  params,
-			Required:    t.InputSchema.Required,
-			ServerName:  name,
-			OrigName:    t.Name,
-		})
-	}
-
 	return tools, cli, nil
 }
 
@@ -233,7 +201,16 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create HTTP client: %w", err)
 	}
+	tools, err := initializeServerTools(ctx, name, cfg, cli)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tools, cli, nil
+}
 
+// initializeServerTools initializes a connected client and lists the tools
+// the server's allowedTools/excludedTools admit. It closes cli on failure.
+func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig, cli *client.Client) ([]MCPTool, error) {
 	initReq := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
@@ -246,13 +223,13 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 
 	if _, err := cli.Initialize(ctx, initReq); err != nil {
 		_ = cli.Close()
-		return nil, nil, fmt.Errorf("failed to initialize: %w", err)
+		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 
 	toolsResult, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		_ = cli.Close()
-		return nil, nil, fmt.Errorf("failed to list tools: %w", err)
+		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
 	var tools []MCPTool
@@ -264,7 +241,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
 		if err != nil {
 			_ = cli.Close()
-			return nil, nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
+			return nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
 		}
 		params := map[string]any{}
 		if t.InputSchema.Properties != nil {
@@ -280,8 +257,7 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 			OrigName:    t.Name,
 		})
 	}
-
-	return tools, cli, nil
+	return tools, nil
 }
 
 // IsToolAllowed reports whether a server's allowedTools/excludedTools admit
@@ -311,16 +287,19 @@ func (m *MCPToolManager) GetTools() []MCPTool {
 }
 
 // SnapshotToolDescriptors returns an immutable, name-sorted copy of the
-// manager-owned MCP catalog. It deliberately carries no client handles.
+// manager-owned MCP catalog. It deliberately carries no client handles and
+// omits tools reserved for runtime actions.
 func (m *MCPToolManager) SnapshotToolDescriptors() []MCPTool {
 	if m == nil {
 		return nil
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	tools := make([]MCPTool, len(m.tools))
+	tools := make([]MCPTool, 0, len(m.tools))
 	for i := range m.tools {
-		tools[i] = cloneMCPTool(m.tools[i])
+		if !m.reserved[m.tools[i].Name] {
+			tools = append(tools, cloneMCPTool(m.tools[i]))
+		}
 	}
 	slices.SortFunc(tools, func(a, b MCPTool) int { return cmp.Compare(a.Name, b.Name) })
 	return tools
@@ -365,13 +344,20 @@ func (m *MCPToolManager) ExecuteAuthorizedTool(ctx context.Context, logicalName,
 }
 
 func (m *MCPToolManager) resolveToolForExecution(toolName string) (MCPTool, *client.Client, error) {
+	return m.resolveTool(toolName, false)
+}
+
+// resolveTool finds a tool on the model-facing surface, or with runtime set,
+// only among the tools reserved for runtime actions. The two sets are
+// disjoint, so neither entry point can reach the other's tools.
+func (m *MCPToolManager) resolveTool(toolName string, runtime bool) (MCPTool, *client.Client, error) {
 	if m == nil {
 		return MCPTool{}, nil, fmt.Errorf("MCP tool manager is unavailable")
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t, ok := m.toolMap[toolName]
-	if !ok {
+	if !ok || m.reserved[toolName] != runtime {
 		return MCPTool{}, nil, &toolNotFoundError{name: toolName}
 	}
 	cli, ok := m.clients[t.ServerName]
@@ -382,6 +368,24 @@ func (m *MCPToolManager) resolveToolForExecution(toolName string) (MCPTool, *cli
 }
 
 func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string) (string, bool, error) {
+	result, err := callMCPTool(ctx, t, cli, args)
+	if err != nil {
+		return "", false, err
+	}
+
+	var contentParts []string
+	for _, c := range result.Content {
+		if text, ok := c.(mcp.TextContent); ok {
+			contentParts = append(contentParts, text.Text)
+		}
+	}
+
+	return strings.Join(contentParts, "\n"), result.IsError, nil
+}
+
+// callMCPTool sends one CallTool request. Without a caller deadline the call
+// is bounded by mcpDefaultTimeout.
+func callMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string) (*mcp.CallToolResult, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, mcpDefaultTimeout)
@@ -391,7 +395,7 @@ func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args str
 	var argsMap map[string]any
 	if args != "" && args != "{}" {
 		if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
-			return "", false, fmt.Errorf("invalid tool arguments: %w", err)
+			return nil, fmt.Errorf("invalid tool arguments: %w", err)
 		}
 	}
 
@@ -404,19 +408,12 @@ func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args str
 
 	result, err := cli.CallTool(ctx, req)
 	if err != nil {
-		return "", false, fmt.Errorf("MCP tool call failed: %w", err)
+		return nil, fmt.Errorf("MCP tool call failed: %w", err)
 	}
-
-	isError := result.IsError
-
-	var contentParts []string
-	for _, c := range result.Content {
-		if text, ok := c.(mcp.TextContent); ok {
-			contentParts = append(contentParts, text.Text)
-		}
+	if result == nil {
+		return nil, fmt.Errorf("MCP tool call returned no result")
 	}
-
-	return strings.Join(contentParts, "\n"), isError, nil
+	return result, nil
 }
 
 func (m *MCPToolManager) Close() error {
@@ -442,6 +439,9 @@ func (m *MCPToolManager) AsAgentTools() []fantasy.AgentTool {
 	defer m.mu.RUnlock()
 	var tools []fantasy.AgentTool
 	for _, t := range m.tools {
+		if m.reserved[t.Name] {
+			continue
+		}
 		tools = append(tools, &mcpAgentTool{
 			tool:    t,
 			manager: m,
