@@ -34,13 +34,16 @@ type runtimeWorkflow struct {
 	phaseAgents            map[Phase]map[string]bool
 	phaseContracts         map[Phase]map[string]bool
 	phaseOptionalContracts map[Phase]map[string]bool
-	results                map[Phase]PhaseResult
-	retryState             *RetryState
-	retryPolicy            agent.RetryConfig
-	registry               *ProviderRegistry
-	verificationRequired   bool
-	repositoryRoot         string
-	emitEvent              func(eventType string, phase Phase, details LifecycleEventPayload)
+	// phaseContractHints lists each phase's contracts with the agent and goal
+	// phrase that bind them, for dispatch diagnostics.
+	phaseContractHints   map[Phase][]phaseContractHint
+	results              map[Phase]PhaseResult
+	retryState           *RetryState
+	retryPolicy          agent.RetryConfig
+	registry             *ProviderRegistry
+	verificationRequired bool
+	repositoryRoot       string
+	emitEvent            func(eventType string, phase Phase, details LifecycleEventPayload)
 	// failedTaskID and failedFromPhase identify the specific task and phase
 	// that caused the most recent transition into PhaseFailed. They let
 	// reconcileFailure distinguish "the exact failure that was just resolved"
@@ -116,6 +119,7 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 			w.phaseAgents[task.Phase] = make(map[string]bool)
 		}
 		w.phaseAgents[task.Phase][strings.ToLower(strings.TrimSpace(task.Agent))] = true
+		w.addPhaseContractHint(task)
 		if task.Optional {
 			if w.phaseOptionalContracts[task.Phase] == nil {
 				w.phaseOptionalContracts[task.Phase] = make(map[string]bool)
@@ -506,13 +510,13 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 		}
 		ordinary = true
 		if task.Phase != w.state {
-			return fmt.Errorf("workflow phase %s only accepts %s tasks; task for agent %q is bound to %s", w.state, w.state, task.Agent, task.Phase)
+			return fmt.Errorf("workflow phase %s only accepts %s tasks; task for agent %q is bound to %s%s", w.state, w.state, task.Agent, task.Phase, w.phaseContractGuideLocked())
 		}
 		if !allowed[strings.ToLower(strings.TrimSpace(task.Agent))] {
-			return fmt.Errorf("agent %q is not authorized for workflow phase %s", task.Agent, w.state)
+			return fmt.Errorf("agent %q is not authorized for workflow phase %s%s", task.Agent, w.state, w.phaseContractGuideLocked())
 		}
 		if !expectedContracts[task.ContractID] && !optionalContracts[task.ContractID] {
-			return fmt.Errorf("task for agent %q is not bound to a static contract for workflow phase %s", task.Agent, w.state)
+			return fmt.Errorf("task for agent %q is not bound to a static contract for workflow phase %s%s", task.Agent, w.state, w.phaseContractGuideLocked())
 		}
 		// Fan-out creates one child per workset item under one static contract.
 		// Keep rejecting duplicate ordinary dispatches while allowing those
@@ -522,10 +526,8 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 		}
 		providedContracts[task.ContractID] = true
 	}
-	for contractID := range expectedContracts {
-		if ordinary && !providedContracts[contractID] && w.results[w.state].Status != PhaseStatusSuccess {
-			return fmt.Errorf("workflow phase %s must dispatch static contract %q", w.state, contractID)
-		}
+	if ordinary && w.results[w.state].Status != PhaseStatusSuccess {
+		return w.missingPhaseContractsLocked(providedContracts)
 	}
 	return nil
 }
