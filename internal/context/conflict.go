@@ -502,6 +502,12 @@ func (r *SQLiteRepository) DismissConflict(ctx context.Context, id, projectID, t
 // whose derived state is open. A read-only store older than migration 11 has
 // no conflicts.
 func (r *SQLiteRepository) OpenConflictsForItems(ctx context.Context, projectID, teamID string, itemIDs []string) (map[string][]string, error) {
+	return r.openConflictsForItemsQ(ctx, r.db, projectID, teamID, itemIDs)
+}
+
+// openConflictsForItemsQ is OpenConflictsForItems through q, so transactional
+// callers can check conflicts without leaving their transaction.
+func (r *SQLiteRepository) openConflictsForItemsQ(ctx context.Context, q conflictQuerier, projectID, teamID string, itemIDs []string) (map[string][]string, error) {
 	result := map[string][]string{}
 	if !r.schemaAtLeast(schemaVersionPairJudgments) || len(itemIDs) == 0 {
 		return result, nil
@@ -526,7 +532,7 @@ func (r *SQLiteRepository) OpenConflictsForItems(ctx context.Context, projectID,
 				args = append(args, id)
 			}
 		}
-		found, err := queryPairJudgments(ctx, r.db, "SELECT "+pairJudgmentColumns+" FROM context_pair_judgments WHERE project_id=? AND team_id=? AND verdict='contradicts' AND status='open' AND judge_policy_version=? AND (item_a_id IN ("+marks+") OR item_b_id IN ("+marks+"))", args...)
+		found, err := queryPairJudgments(ctx, q, "SELECT "+pairJudgmentColumns+" FROM context_pair_judgments WHERE project_id=? AND team_id=? AND verdict='contradicts' AND status='open' AND judge_policy_version=? AND (item_a_id IN ("+marks+") OR item_b_id IN ("+marks+"))", args...)
 		if err != nil {
 			return nil, err
 		}
@@ -537,7 +543,7 @@ func (r *SQLiteRepository) OpenConflictsForItems(ctx context.Context, projectID,
 			}
 		}
 	}
-	views, err := conflictViews(ctx, r.db, judgments)
+	views, err := conflictViews(ctx, q, judgments)
 	if err != nil {
 		return nil, err
 	}

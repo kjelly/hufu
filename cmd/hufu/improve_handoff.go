@@ -282,27 +282,18 @@ func prepareConsolidationHandoff(cmd *cobra.Command, workspace string, store *im
 	return printHandoff(updated)
 }
 
+// validateConsolidationHandoffCurrent applies the same freshness rules as
+// consolidation approve, including open conflicts and frozen aggregate
+// revisions, so a handoff never accepts evidence approve would refuse.
 func validateConsolidationHandoffCurrent(ctx context.Context, repo *contextstore.SQLiteRepository, proposal contextstore.ConsolidationProposal, policyVersion string) error {
-	sources, err := repo.GetMany(ctx, proposal.SourceIDs)
-	if err != nil {
-		return err
-	}
-	if err := validateConsolidationSources(sources, proposal.ProjectID, proposal.TeamID); err != nil {
-		return err
-	}
 	if strings.TrimSpace(policyVersion) == "" {
 		policyVersion = "memory-policy-v1"
 	}
-	for _, source := range sources {
-		if proposal.SourceRevisions[source.ID] != source.ContentHash {
-			return fmt.Errorf("source %q content revision changed", source.ID)
-		}
-		aggregate, err := repo.ExperienceAggregate(ctx, source.ID, policyVersion)
-		if err != nil || proposal.AggregateRevisions[source.ID] != aggregate.Revision {
-			return fmt.Errorf("source %q aggregate revision changed", source.ID)
-		}
+	freshness, err := repo.EvaluateConsolidationProposal(ctx, proposal, policyVersion, true)
+	if err != nil {
+		return err
 	}
-	return nil
+	return freshness.Err()
 }
 
 func runImproveHandoffEvaluate(cmd *cobra.Command, args []string) error {

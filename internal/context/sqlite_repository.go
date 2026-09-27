@@ -281,8 +281,14 @@ func (r *SQLiteRepository) backupBeforeMigration() error {
 	return nil
 }
 
+// NormalizeContent is the canonical content form stored and hashed for every
+// context item: trimmed, LF line endings, and secret-like material redacted.
+func NormalizeContent(content string) string {
+	return RedactSecrets(strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n"))
+}
+
 func normalize(item *ContextItem) error {
-	item.Content = RedactSecrets(strings.ReplaceAll(strings.TrimSpace(item.Content), "\r\n", "\n"))
+	item.Content = NormalizeContent(item.Content)
 	if item.Content == "" || item.Scope.ProjectID == "" {
 		return errors.New("context item content and project scope are required")
 	}
@@ -348,11 +354,7 @@ func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem
 		var existingID string
 		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, item.Scope.ProjectID, item.Kind, item.ContentHash, item.Scope.TeamID, item.Scope.SessionID, item.Scope.BranchID, item.Scope.AgentID, item.Scope.TaskID, item.Scope.AttemptID).Scan(&existingID)
 		if errors.Is(err, sql.ErrNoRows) {
-			_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", item.ID, item.Kind, item.Content, item.ContentHash, item.Scope.ProjectID, nilIfEmpty(item.Scope.TeamID), nilIfEmpty(item.Scope.SessionID), nilIfEmpty(item.Scope.BranchID), nilIfEmpty(item.Scope.AgentID), nilIfEmpty(item.Scope.TaskID), nilIfEmpty(item.Scope.AttemptID), item.Authority, item.TrustLevel, item.Priority, boolInt(item.MustKeep), boolInt(item.Pinned), item.Confidence, mustJSON(item.Source), mustJSON(item.Evidence), mustJSON(item.Tags), mustJSON(item.Metadata), item.CreatedAt.UnixMilli(), item.UpdatedAt.UnixMilli(), millis(item.ValidFrom), millis(item.ValidUntil), millis(item.ExpiresAt), nilIfEmpty(item.SupersededBy), string(item.Lifecycle), item.EmbeddingState, nilIfEmpty(item.EmbeddingModel))
-			if err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) VALUES(?,?,?,?)", item.ID, item.Content, item.Kind, strings.Join(item.Tags, " ")); err != nil {
+			if err = insertItemRowTx(ctx, tx, item); err != nil {
 				return err
 			}
 			if err = insertEvent(ctx, tx, "candidate_append", item.ID, item.Scope, map[string]string{"lifecycle": string(LifecycleCandidate)}); err != nil {
@@ -414,11 +416,7 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.BranchID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), string(it.Lifecycle), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel))
-		if err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) VALUES(?,?,?,?)", it.ID, it.Content, it.Kind, strings.Join(it.Tags, " ")); err != nil {
+		if err = insertItemRowTx(ctx, tx, it); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "append", it.ID, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
@@ -509,11 +507,7 @@ func (r *SQLiteRepository) appendReducerOnce(ctx context.Context, items ...Conte
 			id = it.ID + "-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:8]
 		}
 		it.ID = id
-		_, err = tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.BranchID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), string(it.Lifecycle), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel))
-		if err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO context_items_fts(id,content,kind,tags) VALUES(?,?,?,?)", it.ID, it.Content, it.Kind, strings.Join(it.Tags, " ")); err != nil {
+		if err = insertItemRowTx(ctx, tx, it); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "reducer_append", it.ID, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
@@ -1110,62 +1104,12 @@ func (r *SQLiteRepository) ConfirmCandidates(ctx context.Context, ids []string, 
 			if strings.TrimSpace(id) == "" {
 				continue
 			}
-			item, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
+			item, err := getItemQ(ctx, tx, id)
 			if err != nil {
 				return err
 			}
-			if item.Lifecycle != LifecycleCandidate {
-				return fmt.Errorf("context item %q is not a candidate", id)
-			}
-			metadata := item.Metadata
-			if metadata == nil {
-				metadata = make(map[string]string, len(binding.Metadata))
-			}
-			for key, value := range binding.Metadata {
-				metadata[key] = value
-			}
-			evidence := append([]EvidenceRef(nil), item.Evidence...)
-			bound := false
-			for _, existing := range evidence {
-				if existing.ItemID == binding.Evidence.ItemID && existing.Type == binding.Evidence.Type && existing.Ref == binding.Evidence.Ref {
-					bound = true
-					break
-				}
-			}
-			if !bound {
-				evidence = append(evidence, binding.Evidence)
-			}
-			now := time.Now().UnixMilli()
-			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET evidence_json=?,metadata_json=?,lifecycle=?,updated_at=? WHERE id=?", mustJSON(evidence), mustJSON(metadata), string(LifecycleConfirmed), now, id); err != nil {
+			if err = confirmCandidateTx(ctx, tx, item, binding, seenOld); err != nil {
 				return err
-			}
-			if err = insertEvent(ctx, tx, "candidate_bind", id, item.Scope, map[string]string{"evidence_type": binding.Evidence.Type, "evidence_ref": binding.Evidence.Ref}); err != nil {
-				return err
-			}
-			if err = insertEvent(ctx, tx, "lifecycle", id, item.Scope, map[string]string{"lifecycle": string(LifecycleConfirmed)}); err != nil {
-				return err
-			}
-			for _, oldID := range strings.Fields(metadata["supersedes_ids"]) {
-				if prior, duplicate := seenOld[oldID]; duplicate && prior != id {
-					return fmt.Errorf("superseded item %q is proposed by multiple candidates", oldID)
-				}
-				seenOld[oldID] = id
-				old, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", oldID))
-				if err != nil {
-					return fmt.Errorf("load superseded context item %q: %w", oldID, err)
-				}
-				if old.Lifecycle != LifecycleConfirmed || old.SupersededBy != "" {
-					return fmt.Errorf("superseded context item %q is not current confirmed knowledge", oldID)
-				}
-				if _, err = tx.ExecContext(ctx, "UPDATE context_items SET superseded_by=?,updated_at=? WHERE id=?", id, now, oldID); err != nil {
-					return err
-				}
-				if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO context_edges(from_id,relation,to_id,metadata_json,created_at) VALUES(?,?,?,?,?)", oldID, "supersedes", id, "{}", now); err != nil {
-					return err
-				}
-				if err = insertEvent(ctx, tx, "supersede", oldID, old.Scope, map[string]string{"superseded_by": id}); err != nil {
-					return err
-				}
 			}
 		}
 		return tx.Commit()

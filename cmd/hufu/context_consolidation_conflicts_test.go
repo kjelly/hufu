@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -33,33 +31,6 @@ func (f *scopedConflictLookup) OpenConflictsForItems(_ context.Context, projectI
 		}
 	}
 	return result, nil
-}
-
-func TestValidateConsolidationConflicts(t *testing.T) {
-	sources := []contextstore.ContextItem{consolidationTestItem("a", "project-a", nil), consolidationTestItem("b", "project-a", nil)}
-	cases := []struct {
-		name    string
-		lookup  *scopedConflictLookup
-		wantErr string
-	}{
-		{name: "no conflicts", lookup: &scopedConflictLookup{}},
-		{name: "conflicted source", lookup: &scopedConflictLookup{byScope: map[string]map[string][]string{"project-a/team": {"b": {"conflict-1"}}}}, wantErr: `source "b" has an unresolved memory conflict (conflict-1)`},
-		{name: "lookup failure fails closed", lookup: &scopedConflictLookup{err: errors.New("table missing")}, wantErr: "table missing"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateConsolidationConflicts(context.Background(), tc.lookup, sources)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want %q", err, tc.wantErr)
-			}
-		})
-	}
 }
 
 func TestConflictedClusterIDsChecksEachItemTeam(t *testing.T) {

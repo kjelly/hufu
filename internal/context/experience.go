@@ -146,7 +146,12 @@ func applyExperienceObservationTx(ctx context.Context, tx experienceTx, observat
 }
 
 func (r *SQLiteRepository) ExperienceAggregate(ctx context.Context, itemID, policyVersion string) (ExperienceAggregate, error) {
-	return scanExperienceAggregate(r.db.QueryRowContext(ctx, `SELECT context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,revision FROM experience_aggregates WHERE context_item_id=? AND policy_version=?`, itemID, policyVersion))
+	return experienceAggregateQ(ctx, r.db, itemID, policyVersion)
+}
+
+// experienceAggregateQ is ExperienceAggregate through q.
+func experienceAggregateQ(ctx context.Context, q queryer, itemID, policyVersion string) (ExperienceAggregate, error) {
+	return scanExperienceAggregate(q.QueryRowContext(ctx, `SELECT context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,revision FROM experience_aggregates WHERE context_item_id=? AND policy_version=?`, itemID, policyVersion))
 }
 
 func (r *SQLiteRepository) ListExperienceAggregates(ctx context.Context, policyVersion string) ([]ExperienceAggregate, error) {

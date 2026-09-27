@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -85,69 +84,41 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 	if utils.RedactSecrets(contextProposalText) != contextProposalText {
 		return fmt.Errorf("proposal text contains secret-like material")
 	}
-	sources, ids, err := loadConsolidationSources(cmd, repo)
+	_, ids, err := loadConsolidationSources(cmd, repo)
 	if err != nil {
 		return err
 	}
-	return persistConsolidationProposal(cmd, repo, sources, ids, contextProposalText, "operator", "")
+	return persistConsolidationProposal(cmd, repo, ids, contextProposalText, "operator", "")
+}
+
+// consolidationSelection is the source selection named by --source under the
+// memory learning policy's support thresholds.
+func consolidationSelection() contextstore.ConsolidationSourceSelection {
+	policy := agent.DefaultMemoryLearningPolicy()
+	return contextstore.ConsolidationSourceSelection{
+		ProjectID: contextProject, TeamID: contextTeam, SourceIDs: splitConsolidationIDs(contextProposalSources),
+		PolicyVersion: contextPolicyVersion,
+		Support:       contextstore.ConsolidationSupportPolicy{MinConfirmedSupport: policy.MinConfirmedSupport, MinIndependentTasks: policy.MinIndependentTasks},
+	}
 }
 
 // loadConsolidationSources resolves --source and applies every source gate
 // shared by the operator and model drafting paths. The returned IDs are
-// sorted.
+// sorted. CreateConsolidationProposal repeats the gates in its transaction.
 func loadConsolidationSources(cmd *cobra.Command, repo *contextstore.SQLiteRepository) ([]contextstore.ContextItem, []string, error) {
-	ids := splitConsolidationIDs(contextProposalSources)
-	if len(ids) < 2 {
-		return nil, nil, fmt.Errorf("consolidation requires at least two source items")
-	}
-	sources, err := repo.GetMany(cmd.Context(), ids)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := validateConsolidationSources(sources, contextProject, contextTeam); err != nil {
-		return nil, nil, err
-	}
-	if err := validateConsolidationConflicts(cmd.Context(), repo, sources); err != nil {
-		return nil, nil, err
-	}
-	policy := agent.DefaultMemoryLearningPolicy()
-	policy.PolicyVersion = contextPolicyVersion
-	if err := validateConsolidationSupport(cmd, repo, sources, policy); err != nil {
-		return nil, nil, err
-	}
-	sort.Strings(ids)
-	return sources, ids, nil
+	return repo.ValidateConsolidationSources(cmd.Context(), consolidationSelection())
 }
 
 // persistConsolidationProposal stores text as a candidate derived from the
-// sources plus a pending proposal, and records the proposal event. origin is
-// "operator" for --proposal-text or "model" for --draft (with draftModel).
-func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteRepository, sources []contextstore.ContextItem, ids []string, text, origin, draftModel string) error {
-	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00") + "\x00" + text))
-	proposalID := "consolidation-" + hex.EncodeToString(sum[:10])
-	candidateID := "ctx-consolidated-" + hex.EncodeToString(sum[10:20])
-	metadata := map[string]string{"derived_from": strings.Join(ids, ","), "consolidation_proposal": proposalID, "proposal_origin": origin}
-	if draftModel != "" {
-		metadata["draft_model"] = draftModel
-	}
-	candidate, err := repo.UpsertCandidate(cmd.Context(), contextstore.ContextItem{ID: candidateID, Kind: sources[0].Kind, Content: text, Scope: sources[0].Scope, Authority: sources[0].Authority, TrustLevel: contextstore.TrustInternal, Priority: sources[0].Priority, Confidence: minimumSourceConfidence(sources), Lifecycle: contextstore.LifecycleCandidate, Source: contextstore.SourceRef{Type: "consolidation_proposal", Ref: proposalID}, Metadata: metadata})
+// sources plus a pending proposal in one transaction, then records the
+// idempotent proposal event. origin is "operator" for --proposal-text or
+// "model" for --draft (with draftModel). Rerunning the same proposal records a
+// missed event without writing context records again.
+func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteRepository, ids []string, text, origin, draftModel string) error {
+	selection := consolidationSelection()
+	selection.SourceIDs = ids
+	proposal, created, err := repo.CreateConsolidationProposal(cmd.Context(), contextstore.ConsolidationCreateInput{ConsolidationSourceSelection: selection, Text: text, Origin: origin, DraftModel: draftModel})
 	if err != nil {
-		return err
-	}
-	revisions, aggregateRevisions := map[string]string{}, map[string]int64{}
-	edges := make([]contextstore.ContextEdge, 0, len(sources))
-	for _, source := range sources {
-		revisions[source.ID] = source.ContentHash
-		if aggregate, aggregateErr := repo.ExperienceAggregate(cmd.Context(), source.ID, contextPolicyVersion); aggregateErr == nil {
-			aggregateRevisions[source.ID] = aggregate.Revision
-		}
-		edges = append(edges, contextstore.ContextEdge{FromID: candidate.ID, Relation: "derived_from", ToID: source.ID})
-	}
-	if err := repo.AddEdges(cmd.Context(), edges...); err != nil {
-		return err
-	}
-	proposal := contextstore.ConsolidationProposal{ID: proposalID, ProjectID: contextProject, TeamID: contextTeam, CandidateContextItemID: candidate.ID, SourceIDs: ids, SourceRevisions: revisions, AggregateRevisions: aggregateRevisions, Status: "proposed", CreatedAt: time.Now().UTC()}
-	if err := repo.SaveConsolidationProposal(cmd.Context(), proposal); err != nil {
 		return err
 	}
 	eventStore, err := team.OpenEventStore(getContextWorkspace())
@@ -155,14 +126,18 @@ func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteR
 		return fmt.Errorf("open event store for consolidation telemetry: %w", err)
 	}
 	defer func() { _ = eventStore.Close() }()
-	eventPayload, err := json.Marshal(map[string]any{"schema_version": 1, "proposal_id": proposal.ID, "candidate_context_item_id": candidate.ID, "source_ids": ids, "policy_version": contextPolicyVersion, "proposal_origin": origin})
+	eventPayload, err := json.Marshal(map[string]any{"schema_version": 1, "proposal_id": proposal.ID, "candidate_context_item_id": proposal.CandidateContextItemID, "source_ids": proposal.SourceIDs, "policy_version": contextPolicyVersion, "proposal_origin": origin})
 	if err != nil {
 		return err
 	}
 	if err := eventStore.Append(team.RunEvent{Type: "memory_consolidation_proposed", Actor: "maintenance", IdempotencyKey: "memory:consolidation_proposed:" + proposal.ID, Payload: eventPayload}); err != nil {
 		return fmt.Errorf("record consolidation proposal: %w", err)
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidate: proposal=%s candidate=%s status=proposed (explicit approval required)\n", proposal.ID, candidate.ID)
+	pending := "explicit approval required"
+	if !created {
+		pending = "already pending; explicit approval required"
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidate: proposal=%s candidate=%s status=proposed (%s)\n", proposal.ID, proposal.CandidateContextItemID, pending)
 	return err
 }
 
@@ -212,44 +187,6 @@ func consolidationSignature(item contextstore.ContextItem) string {
 	return "semantic:" + hex.EncodeToString(digest[:8])
 }
 
-func validateConsolidationSupport(cmd *cobra.Command, repo *contextstore.SQLiteRepository, sources []contextstore.ContextItem, policy agent.MemoryLearningPolicy) error {
-	for _, source := range sources {
-		aggregate, err := repo.ExperienceAggregate(cmd.Context(), source.ID, policy.PolicyVersion)
-		if err != nil {
-			return fmt.Errorf("source %q has no verified experience aggregate under policy %q", source.ID, policy.PolicyVersion)
-		}
-		if aggregate.VerifiedSupportCount < policy.MinConfirmedSupport || aggregate.IndependentTaskCount < policy.MinIndependentTasks || aggregate.CausalFailureCount > 0 {
-			return fmt.Errorf("source %q lacks stable verified cross-task support", source.ID)
-		}
-	}
-	return nil
-}
-
-func validateConsolidationSources(items []contextstore.ContextItem, projectID, teamID string) error {
-	if len(items) < 2 {
-		return fmt.Errorf("at least two source items are required")
-	}
-	first := items[0]
-	selected := map[string]bool{}
-	for _, item := range items {
-		selected[item.ID] = true
-	}
-	for _, item := range items {
-		if item.Lifecycle != contextstore.LifecycleConfirmed || item.SupersededBy != "" {
-			return fmt.Errorf("source %q is not current confirmed knowledge", item.ID)
-		}
-		if item.Scope.ProjectID != projectID || item.Scope.TeamID != teamID || item.Scope != first.Scope || item.Kind != first.Kind {
-			return fmt.Errorf("source %q would widen or mix scope/kind", item.ID)
-		}
-		for _, contradiction := range splitConsolidationIDs(item.Metadata["contradicts_ids"]) {
-			if selected[contradiction] {
-				return fmt.Errorf("contradictory sources %q and %q cannot be merged", item.ID, contradiction)
-			}
-		}
-	}
-	return nil
-}
-
 func splitConsolidationIDs(value string) []string {
 	var result []string
 	for _, part := range strings.Split(value, ",") {
@@ -258,16 +195,6 @@ func splitConsolidationIDs(value string) []string {
 		}
 	}
 	return result
-}
-
-func minimumSourceConfidence(items []contextstore.ContextItem) float64 {
-	value := 1.0
-	for _, item := range items {
-		if item.Confidence < value {
-			value = item.Confidence
-		}
-	}
-	return value
 }
 
 func loadConsolidationRepo(cmd *cobra.Command, id string) (*contextstore.SQLiteRepository, contextstore.ConsolidationProposal, error) {
@@ -279,12 +206,12 @@ func loadConsolidationRepo(cmd *cobra.Command, id string) (*contextstore.SQLiteR
 		return nil, contextstore.ConsolidationProposal{}, err
 	}
 	proposal, err := repo.GetConsolidationProposal(cmd.Context(), id)
-	if err != nil || proposal.ProjectID != contextProject {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && proposal.ProjectID != contextProject) {
+		err = fmt.Errorf("%w: %q in project %q", contextstore.ErrConsolidationNotFound, id, contextProject)
+	}
+	if err != nil {
 		_ = repo.Close()
-		if err == nil {
-			err = fmt.Errorf("proposal %q is outside project %q", id, contextProject)
-		}
-		return nil, proposal, err
+		return nil, contextstore.ConsolidationProposal{}, err
 	}
 	return repo, proposal, nil
 }
@@ -302,55 +229,21 @@ func runContextConsolidationShow(cmd *cobra.Command, args []string) error {
 	return err
 }
 
+func consolidationReviewInput(id, actor, reason string) contextstore.ConsolidationReviewInput {
+	return contextstore.ConsolidationReviewInput{ProposalID: id, ProjectID: contextProject, PolicyVersion: contextPolicyVersion, Actor: actor, Reason: reason}
+}
+
 func runContextConsolidationApprove(cmd *cobra.Command, args []string) error {
 	repo, proposal, err := loadConsolidationRepo(cmd, args[0])
 	if err != nil {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	if proposal.Status != "proposed" {
-		return fmt.Errorf("proposal %q status is %s", proposal.ID, proposal.Status)
-	}
-	if err := validateConsolidationProposalCurrent(cmd, repo, proposal); err != nil {
-		return err
-	}
-	if err := repo.ConfirmCandidates(cmd.Context(), []string{proposal.CandidateContextItemID}, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "operator_approval", Ref: proposal.ID}, Metadata: map[string]string{"approved_by": "hufu context consolidation approve"}}); err != nil {
-		return err
-	}
-	if err := repo.UpdateConsolidationProposal(cmd.Context(), proposal.ID, "approved", "explicit operator approval"); err != nil {
+	if _, err := repo.ApproveConsolidationProposal(cmd.Context(), consolidationReviewInput(proposal.ID, "hufu context consolidation approve", "explicit operator approval")); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidation approve: %s confirmed candidate %s\n", proposal.ID, proposal.CandidateContextItemID)
 	return err
-}
-
-func validateConsolidationProposalCurrent(cmd *cobra.Command, repo *contextstore.SQLiteRepository, proposal contextstore.ConsolidationProposal) error {
-	sources, err := repo.GetMany(cmd.Context(), proposal.SourceIDs)
-	if err != nil {
-		return err
-	}
-	if err := validateConsolidationSources(sources, proposal.ProjectID, proposal.TeamID); err != nil {
-		return fmt.Errorf("proposal source validation changed: %w", err)
-	}
-	if err := validateConsolidationConflicts(cmd.Context(), repo, sources); err != nil {
-		return fmt.Errorf("proposal source validation changed: %w", err)
-	}
-	for _, source := range sources {
-		if proposal.SourceRevisions[source.ID] != source.ContentHash {
-			return fmt.Errorf("proposal source %q revision changed; create a new proposal", source.ID)
-		}
-		currentRevision := int64(0)
-		aggregate, aggregateErr := repo.ExperienceAggregate(cmd.Context(), source.ID, contextPolicyVersion)
-		if aggregateErr == nil {
-			currentRevision = aggregate.Revision
-		} else if !errors.Is(aggregateErr, sql.ErrNoRows) {
-			return aggregateErr
-		}
-		if proposal.AggregateRevisions[source.ID] != currentRevision {
-			return fmt.Errorf("proposal source %q aggregate revision changed; create a new proposal", source.ID)
-		}
-	}
-	return nil
 }
 
 func runContextConsolidationReject(cmd *cobra.Command, args []string) error {
@@ -359,10 +252,7 @@ func runContextConsolidationReject(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	if err := repo.UpdateLifecycle(cmd.Context(), []string{proposal.CandidateContextItemID}, contextstore.LifecycleRejected); err != nil {
-		return err
-	}
-	if err := repo.UpdateConsolidationProposal(cmd.Context(), proposal.ID, "rejected", "explicit operator rejection"); err != nil {
+	if _, err := repo.RejectConsolidationProposal(cmd.Context(), consolidationReviewInput(proposal.ID, "hufu context consolidation reject", "explicit operator rejection")); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context consolidation reject: %s\n", proposal.ID)

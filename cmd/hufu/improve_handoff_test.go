@@ -48,12 +48,7 @@ func TestConsolidationHandoffLifecycleRejectsWrongEvidenceAndRecommendsRollback(
 	}
 
 	repo := openHandoffTestRepo(t, fixture.workspace)
-	if err := repo.ConfirmCandidates(t.Context(), []string{fixture.candidate.ID}, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "operator_approval", Ref: fixture.proposalID}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.UpdateConsolidationProposal(t.Context(), fixture.proposalID, "approved", "explicit operator approval"); err != nil {
-		t.Fatal(err)
-	}
+	approveHandoffConsolidation(t, repo, fixture.scope, fixture.proposalID)
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,12 +99,7 @@ func TestHandoffMonitoringRejectsUnboundHealthyBaseline(t *testing.T) {
 	}
 	handoff = assertHandoffStatus(t, fixture.store, fixture.handoffID, improve.HandoffApproved)
 	repo := openHandoffTestRepo(t, fixture.workspace)
-	if err := repo.ConfirmCandidates(t.Context(), []string{fixture.candidate.ID}, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "operator_approval", Ref: fixture.proposalID}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.UpdateConsolidationProposal(t.Context(), fixture.proposalID, "approved", "explicit operator approval"); err != nil {
-		t.Fatal(err)
-	}
+	approveHandoffConsolidation(t, repo, fixture.scope, fixture.proposalID)
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -202,22 +192,7 @@ func TestConsolidationHandoffRejectsChangedSource(t *testing.T) {
 	scope := improve.HandoffScope{ProjectID: "project", TeamID: "team", PolicyVersion: "memory-policy-v1"}
 	repo := openHandoffTestRepo(t, workspace)
 	sources := appendConfirmedHandoffSources(t, repo, scope, 2)
-	candidate, err := repo.UpsertCandidate(t.Context(), contextstore.ContextItem{
-		ID: "changed-source-candidate", Kind: contextstore.ContextPattern, Content: "consolidated guidance",
-		Scope: scopeToContextScope(scope), Lifecycle: contextstore.LifecycleCandidate,
-		Source: contextstore.SourceRef{Type: "consolidation_proposal", Ref: "changed-source-proposal"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal := contextstore.ConsolidationProposal{
-		ID: "changed-source-proposal", ProjectID: scope.ProjectID, TeamID: scope.TeamID, CandidateContextItemID: candidate.ID,
-		SourceIDs: []string{sources[0].ID, sources[1].ID}, SourceRevisions: map[string]string{sources[0].ID: sources[0].ContentHash, sources[1].ID: sources[1].ContentHash},
-		AggregateRevisions: map[string]int64{sources[0].ID: 1, sources[1].ID: 1}, Status: "proposed",
-	}
-	if err := repo.SaveConsolidationProposal(t.Context(), proposal); err != nil {
-		t.Fatal(err)
-	}
+	proposal := createHandoffConsolidation(t, repo, scope, sources, "consolidated guidance")
 	if err := repo.UpdateLifecycle(t.Context(), []string{sources[0].ID}, contextstore.LifecycleRejected); err != nil {
 		t.Fatal(err)
 	}
@@ -244,22 +219,7 @@ func prepareConsolidationHandoffFixture(t *testing.T) consolidationHandoffFixtur
 	scope := improve.HandoffScope{ProjectID: "project", TeamID: "team", PolicyVersion: "memory-policy-v1"}
 	repo := openHandoffTestRepo(t, workspace)
 	sources := appendConfirmedHandoffSources(t, repo, scope, 2)
-	item, err := repo.UpsertCandidate(t.Context(), contextstore.ContextItem{
-		ID: "context-candidate", Kind: contextstore.ContextPattern, Content: "consolidated guidance",
-		Scope: contextstore.Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID}, Lifecycle: contextstore.LifecycleCandidate,
-		Source: contextstore.SourceRef{Type: "consolidation_proposal", Ref: "consolidation-proposal"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal := contextstore.ConsolidationProposal{
-		ID: "consolidation-proposal", ProjectID: scope.ProjectID, TeamID: scope.TeamID, CandidateContextItemID: item.ID,
-		SourceIDs: []string{sources[0].ID, sources[1].ID}, SourceRevisions: map[string]string{sources[0].ID: sources[0].ContentHash, sources[1].ID: sources[1].ContentHash},
-		AggregateRevisions: map[string]int64{sources[0].ID: 1, sources[1].ID: 1}, Status: "proposed",
-	}
-	if err := repo.SaveConsolidationProposal(t.Context(), proposal); err != nil {
-		t.Fatal(err)
-	}
+	proposal := createHandoffConsolidation(t, repo, scope, sources, "consolidated guidance")
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -358,23 +318,7 @@ func testPrepareConsolidationHandoff(t *testing.T) {
 	scope := improve.HandoffScope{ProjectID: "project", TeamID: "team", PolicyVersion: "memory-policy-v1"}
 	repo := openHandoffTestRepo(t, workspace)
 	sources := appendConfirmedHandoffSources(t, repo, scope, 2)
-	candidate, err := repo.UpsertCandidate(t.Context(), contextstore.ContextItem{
-		ID: "context-candidate", Kind: contextstore.ContextPattern, Content: "consolidated guidance",
-		Scope: contextstore.Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID}, Lifecycle: contextstore.LifecycleCandidate,
-		Source: contextstore.SourceRef{Type: "consolidation_proposal", Ref: "consolidation-proposal"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal := contextstore.ConsolidationProposal{
-		ID: "consolidation-proposal", ProjectID: scope.ProjectID, TeamID: scope.TeamID, CandidateContextItemID: candidate.ID,
-		SourceIDs:          []string{sources[0].ID, sources[1].ID},
-		SourceRevisions:    map[string]string{sources[0].ID: sources[0].ContentHash, sources[1].ID: sources[1].ContentHash},
-		AggregateRevisions: map[string]int64{sources[0].ID: 1, sources[1].ID: 1}, Status: "proposed",
-	}
-	if err := repo.SaveConsolidationProposal(t.Context(), proposal); err != nil {
-		t.Fatal(err)
-	}
+	proposal := createHandoffConsolidation(t, repo, scope, sources, "consolidated guidance")
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -510,4 +454,30 @@ func handoffTestCommand(t *testing.T) *cobra.Command {
 
 func scopeToContextScope(scope improve.HandoffScope) contextstore.Scope {
 	return contextstore.Scope{ProjectID: scope.ProjectID, TeamID: scope.TeamID}
+}
+
+// createHandoffConsolidation creates a pending consolidation proposal over
+// sources through the transactional repository path. The handoff fixtures'
+// sources carry exposure-only evidence, so the support threshold is disabled.
+func createHandoffConsolidation(t *testing.T, repo *contextstore.SQLiteRepository, scope improve.HandoffScope, sources []contextstore.ContextItem, text string) contextstore.ConsolidationProposal {
+	t.Helper()
+	ids := make([]string, len(sources))
+	for i, source := range sources {
+		ids[i] = source.ID
+	}
+	proposal, created, err := repo.CreateConsolidationProposal(t.Context(), contextstore.ConsolidationCreateInput{
+		ConsolidationSourceSelection: contextstore.ConsolidationSourceSelection{ProjectID: scope.ProjectID, TeamID: scope.TeamID, SourceIDs: ids, PolicyVersion: scope.PolicyVersion},
+		Text:                         text, Origin: "operator",
+	})
+	if err != nil || !created {
+		t.Fatalf("create consolidation: created=%v err=%v", created, err)
+	}
+	return proposal
+}
+
+func approveHandoffConsolidation(t *testing.T, repo *contextstore.SQLiteRepository, scope improve.HandoffScope, proposalID string) {
+	t.Helper()
+	if _, err := repo.ApproveConsolidationProposal(t.Context(), contextstore.ConsolidationReviewInput{ProposalID: proposalID, ProjectID: scope.ProjectID, PolicyVersion: scope.PolicyVersion, Actor: "test", Reason: "explicit operator approval"}); err != nil {
+		t.Fatal(err)
+	}
 }

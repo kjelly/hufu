@@ -83,5 +83,5 @@ func runContextConsolidateDraft(cmd *cobra.Command, repo *contextstore.SQLiteRep
 	if err = consolidation.ValidateDraft(result, draftSources); err != nil {
 		return err
 	}
-	return persistConsolidationProposal(cmd, repo, sources, ids, strings.TrimSpace(result.Text), "model", model)
+	return persistConsolidationProposal(cmd, repo, ids, strings.TrimSpace(result.Text), "model", model)
 }
