@@ -1,8 +1,8 @@
 # RRF fusion opt-in 與 ranking replay：實作計畫
 
-> Status: implemented — on branch `feat/rrf-fusion-replay` through `503884c` (see §5 實作紀錄); the default fusion stays `legacy`
+> Status: implemented — on branch `feat/rrf-fusion-replay` through `a60f5c2` (see §5 實作紀錄 and §6); the default fusion stays `legacy`
 > Authority: reference（實作紀錄；現行行為以程式、測試與 [memory learning](../../architecture/memory-learning.md) 為準）
-> Verified-Commit: `503884c`
+> Verified-Commit: `a60f5c2`
 > Supersedes: —
 > Superseded-By: —
 > Scope: [consolidation integrity 計畫](consolidation-integrity-and-retrieval-explain.md) §10 的 BUG-01 後續：opt-in 的正規化 RRF、`hufu context ranking-replay`
@@ -120,4 +120,34 @@ fixture：300 筆 filler，加上三組 L3 情境。一是 positive transfer：`
 ### 5.2 後續（需使用者決定）
 
 - 在自己的 workspace 累積足夠的 shared persistent 記憶與 aggregate（memory learning 開 observe 或 shadow）後，執行 `hufu context ranking-replay --from-session`，同時比較選取差異與結果指標。
-- 若要修正 BUG-01 的尺度不一致又保留命中強度，可評估另一種 fusion 候選（例如把帶入的 BM25 以該次結果的最大值正規化到 [0,1]，再加 RRF），並用同一個 replay 與 L3 fixture 比較。本計畫未實作。
+- 若要修正 BUG-01 的尺度不一致又保留命中強度，可評估另一種 fusion 候選（例如把帶入的 BM25 以該次結果的最大值正規化到 [0,1]，再加 RRF），並用同一個 replay 與 L3 fixture 比較。→ 已於 §6 實作。
+
+## 6. 後續：`score_normalized`（`a60f5c2`）
+
+使用者要求「把帶入的 BM25 依最大值正規化再加 RRF」。實作：
+
+- `fused = w · score / max(同清單分數) + (1 − w) · Σ 61/(61+rank₀) / nonEmptyLists`，其中 score 是第一個含該項目的清單的原始分數，與 legacy 的 carried 語意相同。
+- `w` 由 `retrieval.fusion_carried_weight`（(0,1]，省略時用 `DefaultScoreFusionCarriedWeight = 0.8`）或 replay 的 `--candidate-carried-weight` 指定。
+- 分數落在 (0,1]；命中較強的項目在 MMR 之前不會排在較弱的後面（測試 `TestScoreNormalizedFusionKeepsMatchStrength`）。
+
+權重不是照字面的 1:1。依字面實作的 0.5 在 reinforced ranker 仍選入 irrelevant-high-utility，所以在同一個 L3 情境上掃描權重（`TestScoreNormalizedFusionOnL3IrrelevantHighUtility` 固定了其中的代表點）。結果中，「選入」代表違反 gate：
+
+| 權重 | 大語料 reinforced | 小語料 reinforced | relevance（兩種語料） |
+| --- | --- | --- | --- |
+| 0.50–0.65 | 選入 | 選入 | 排除 |
+| 0.70 | 選入 | 排除 | 排除 |
+| 0.75 | 排除 | 排除 | 排除 |
+| 0.9、1.0 | 排除 | 排除 | 排除 |
+
+- 原因：lexical-only 時，reciprocal-rank 項隨名次單調，對前幾名都接近 1，只會壓縮命中強度的差距；reinforced 的 utility 乘數（約 0.75–1.25）因此能讓弱命中勝出。
+- 預設取 0.8，比臨界點（0.70–0.75）留一點餘裕。這是由單一合成 fixture 決定的值，切換前應在真實 workspace 用 replay 掃描 0.75–1.0。
+- 同一個測試也證明 `legacy` 在小語料會違反 gate（BM25≈0 時退化成只看名次），這是 BUG-01 值得修的直接證據。
+
+建議：若要修 BUG-01，以 `score_normalized`（權重 0.8–1.0）作為候選，而不是 `rrf_normalized`。仍需使用者在自己的 workspace 累積記憶後執行：
+
+```text
+hufu context ranking-replay --workspace <w> --project <p> --team <t> --from-session \
+  --candidate-fusion score_normalized [--candidate-carried-weight 0.8]
+```
+
+再決定是否把 policy 的 `retrieval.fusion` 設為 `score_normalized`。

@@ -445,19 +445,38 @@ hufu context doctor --learning
 
 已知限制：預設的 `legacy` fusion 讓 `rrf` 以第一個清單（lexical）的原始分數為起點再加上 reciprocal rank，所以 lexical 命中時 fused score 由原始 BM25 主導（`FusedScore == CarriedScore + LexicalRRF + VectorRRF`）；runtime 的 ×61 正規化只處理小於 1 的分數，因此 base relevance 的尺度會依語料大小而不同。`explain-memory` 會如實揭露這一點，並輸出使用的 `fusion`。
 
-Memory policy snapshot 可以用 `retrieval.fusion` 選擇 shared persistent 排序的 fusion：省略或 `legacy` 是現行行為（既有 snapshot 的 revision hash 不變），`rrf_normalized` 只加總 reciprocal rank，並依非空清單數正規化到 (0,1]，runtime 只把分數截在 [0,1]、不再 ×61。未知值會使整個 policy 無效。worker memory recall、`memory_query` 與 `hufu context query` 不受此參數影響。
+Memory policy snapshot 可以用 `retrieval.fusion` 選擇 shared persistent 排序的 fusion：
+
+- 省略或 `legacy`：現行行為，既有 snapshot 的 revision hash 不變。
+- `rrf_normalized`：只加總 reciprocal rank，並依非空清單數正規化到 (0,1]。
+- `score_normalized`：把帶入的原始分數除以該清單的最大值，再以 `retrieval.fusion_carried_weight`（(0,1]，預設 0.8）與正規化的 reciprocal-rank 和混合。分數落在 (0,1]，且命中較強的項目在 MMR 之前不會排在較弱的後面。
+
+非 legacy 的 fusion 在 runtime 只把分數截在 [0,1]、不再 ×61。未知值或超出範圍的權重會使整個 policy 無效。worker memory recall、`memory_query` 與 `hufu context query` 不受此參數影響。
 
 切換前用唯讀的 replay 比較：
 
 ```text
 hufu context ranking-replay --workspace <w> --project <p> --team <t> \
   (--query <q> ... | --queries-file <f> | --from-session) \
-  [--candidate-fusion rrf_normalized] [--policy-version <v>] [--json]
+  [--candidate-fusion rrf_normalized|score_normalized] [--candidate-carried-weight <w>] \
+  [--policy-version <v>] [--json]
 ```
 
 它以 `mode=ro`／`query_only` 開啟 store、不寫 trace，對每個查詢分別以 relevance ranker（off／observe／shadow）與 reinforced ranker（active），比較現行與候選 fusion 的選取結果：新增、移除、順序、Jaccard、最大 base relevance。有 experience aggregate 時，另比較 verified support、causal failure、negative weight 的筆數與平均 utility。`--from-session` 以 session 內 task 的 goal 近似重建 dispatch 查詢（manifest 只存 query hash）。輸出只含 ID、query hash、數值與 enum。
 
-在合成的 L3 fixture 上，`rrf_normalized` 會選出現行 fusion 排除的「弱命中、高 utility」記憶：分數落到 (0,1] 後，MMR 的多樣性 penalty 與 utility 乘數都會壓過比較弱的 lexical 命中，違反 irrelevant-high-utility gate。此時結果指標（verified support、平均 utility）反而顯得變好。所以判讀 replay 時，要同時看選取差異與結果指標，不能只看後者。預設維持 `legacy`。
+合成 L3 fixture 的 irrelevant-high-utility 情境（弱命中、高 utility 的記憶不應入選）結果如下：
+
+| fusion | 大語料（300 筆 filler） | 小語料（無 filler） |
+| --- | --- | --- |
+| `legacy` | relevance、reinforced 都排除 | **relevance、reinforced 都選入** |
+| `rrf_normalized` | 都選入 | 都選入 |
+| `score_normalized`，權重 0.5 | relevance 排除、reinforced 選入 | relevance 排除、reinforced 選入 |
+| `score_normalized`，權重 ≥0.75（預設 0.8） | 都排除 | 都排除 |
+
+- 小語料的 BM25 接近 0，`legacy` 會退化成只看名次的尺度，所以同一個 gate 會隨語料大小而通過或失敗，這正是 BUG-01 的實際影響。
+- 在 lexical-only 檢索（所有 runtime 注入路徑）下，reciprocal-rank 項不帶來 BM25 順序以外的資訊，只會壓縮差距；權重 0.70 在大語料仍失敗，所以預設 0.8。
+- 選入不相關記憶時，結果指標（verified support、平均 utility）反而顯得變好。判讀 replay 時要同時看選取差異與結果指標。
+- 這些是單一合成 fixture 的結果；切換預設之前，仍要在真實 workspace 上以 replay 確認。預設維持 `legacy`。
 
 擴充 `internal/improve.Metrics`：
 
