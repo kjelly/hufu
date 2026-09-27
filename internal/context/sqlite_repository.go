@@ -1003,6 +1003,9 @@ func (r *SQLiteRepository) MarkSuperseded(ctx context.Context, old []string, new
 		if e = insertEvent(ctx, tx, "supersede", id, scope, map[string]string{"superseded_by": newID}); e != nil {
 			return e
 		}
+		if e = demoteDerivedConsolidationsTx(ctx, tx, []string{id}, ReasonSourceSuperseded); e != nil {
+			return e
+		}
 	}
 	return tx.Commit()
 }

@@ -233,10 +233,17 @@ func runContextConsolidationShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	if contextQueryJSON {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(proposal)
+	freshness, err := repo.EvaluateConsolidationProposal(cmd.Context(), proposal, contextPolicyVersion, false)
+	if err != nil {
+		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "proposal: %s\nstatus: %s\ncandidate: %s\nsources: %s\n", proposal.ID, proposal.Status, proposal.CandidateContextItemID, strings.Join(proposal.SourceIDs, ","))
+	if contextQueryJSON {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+			contextstore.ConsolidationProposal
+			Freshness contextstore.ConsolidationFreshness `json:"freshness"`
+		}{proposal, freshness})
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "proposal: %s\nstatus: %s\ncandidate: %s\nsources: %s\nfreshness: %s reasons=%s\n", proposal.ID, proposal.Status, proposal.CandidateContextItemID, strings.Join(proposal.SourceIDs, ","), freshness.State, consolidationReasonList(freshness.Reasons))
 	return err
 }
 

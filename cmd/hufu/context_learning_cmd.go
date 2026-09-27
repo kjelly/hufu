@@ -44,7 +44,7 @@ var contextExplainMemoryCmd = &cobra.Command{
 
 var contextLearningDoctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check the outcome-driven memory event chain and aggregate projection",
+	Short: "Check the outcome-driven memory event chain (--learning) or consolidation freshness (--consolidation)",
 	Args:  cobra.NoArgs,
 	RunE:  runContextLearningDoctor,
 }
@@ -222,8 +222,11 @@ func runContextExplainMemory(cmd *cobra.Command, args []string) error {
 }
 
 func runContextLearningDoctor(cmd *cobra.Command, _ []string) error {
-	if !contextLearningCheck {
-		return fmt.Errorf("--learning is required")
+	if contextLearningCheck == contextConsolidationCheck {
+		return fmt.Errorf("one of --learning or --consolidation is required")
+	}
+	if contextConsolidationCheck {
+		return runContextConsolidationDoctor(cmd)
 	}
 	repo, err := openExistingContextRepository(getContextWorkspace())
 	if err != nil {

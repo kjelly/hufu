@@ -88,6 +88,9 @@ func confirmCandidateTx(ctx context.Context, tx *sql.Tx, item ContextItem, bindi
 		if err = insertEvent(ctx, tx, "supersede", oldID, old.Scope, map[string]string{"superseded_by": id}); err != nil {
 			return err
 		}
+		if err = demoteDerivedConsolidationsTx(ctx, tx, []string{oldID}, ReasonSourceSuperseded); err != nil {
+			return err
+		}
 	}
 	return nil
 }

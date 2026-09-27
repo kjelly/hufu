@@ -852,7 +852,7 @@ func validateCanonicalHandoffProposal(ctx context.Context, workspace string, han
 		if err != nil {
 			return canonicalArtifactError("consolidation proposal", err)
 		}
-		if proposal.ProjectID != handoff.Scope.ProjectID || proposal.TeamID != handoff.Scope.TeamID || consolidationProposalRevision(proposal) != handoff.Proposal.Revision || proposal.Status == "rejected" || proposal.Status == "failed" {
+		if proposal.ProjectID != handoff.Scope.ProjectID || proposal.TeamID != handoff.Scope.TeamID || consolidationProposalRevision(proposal) != handoff.Proposal.Revision || proposal.Status == contextstore.ConsolidationStatusRejected || proposal.Status == contextstore.ConsolidationStatusFailed || proposal.Status == contextstore.ConsolidationStatusStale {
 			return staleHandoffEvidencef("consolidation proposal changed")
 		}
 		if !handoffHasAdoption(handoff.Status) {
