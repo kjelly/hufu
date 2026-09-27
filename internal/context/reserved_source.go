@@ -17,6 +17,9 @@ var (
 	// the same scope and kind under a different source type, so refreshing it
 	// would hand it to another workflow.
 	ErrCandidateIdentityConflict = errors.New("candidate content already exists under another source")
+	// ErrOperatorRejected means an operator rejected identical content, so a
+	// later proposal must not reopen it.
+	ErrOperatorRejected = errors.New("identical content was rejected by an operator")
 )
 
 // IsReservedSourceType reports whether only a dedicated workflow may create or
@@ -31,6 +34,24 @@ func reservedSourceError(id string) error {
 
 func candidateIdentityConflict(existingID, existingSourceType string) error {
 	return fmt.Errorf("%w: item %q has source type %q", ErrCandidateIdentityConflict, existingID, existingSourceType)
+}
+
+func operatorRejected(existingID string) error {
+	return fmt.Errorf("%w: item %q", ErrOperatorRejected, existingID)
+}
+
+// hasOperatorRejection reports whether an operator, rather than a failed run,
+// rejected item.
+func hasOperatorRejection(item ContextItem) bool {
+	if item.Lifecycle != LifecycleRejected {
+		return false
+	}
+	for _, evidence := range item.Evidence {
+		if evidence.Type == EvidenceTypeOperatorRejection {
+			return true
+		}
+	}
+	return false
 }
 
 func refuseReservedItems(items []ContextItem) error {

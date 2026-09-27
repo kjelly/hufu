@@ -336,9 +336,12 @@ func (r *SQLiteRepository) Append(ctx context.Context, items ...ContextItem) err
 }
 
 // UpsertCandidate preserves a candidate's canonical identity while allowing a
-// later run to refresh an unconfirmed/rejected duplicate with its own trusted
-// run and evidence metadata. Confirmed records are immutable knowledge: a
-// duplicate proposal returns the confirmed record instead of reopening it.
+// later run to refresh an unconfirmed duplicate, or reopen one a failed run
+// rejected, with its own trusted run and evidence metadata. Confirmed records
+// are immutable knowledge: a duplicate proposal returns the confirmed record
+// instead of reopening it. A duplicate owned by another source type returns
+// ErrCandidateIdentityConflict, and one an operator rejected returns
+// ErrOperatorRejected; neither is modified.
 func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem) (ContextItem, error) {
 	if item.Lifecycle != LifecycleCandidate {
 		return ContextItem{}, errors.New("upsert candidate requires candidate lifecycle")
@@ -376,8 +379,11 @@ func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem
 		if err != nil {
 			return err
 		}
-		if existing.Lifecycle != LifecycleConfirmed && IsReservedSourceType(existing.Source.Type) {
+		if existing.Lifecycle != LifecycleConfirmed && existing.Source.Type != item.Source.Type {
 			return candidateIdentityConflict(existing.ID, existing.Source.Type)
+		}
+		if hasOperatorRejection(existing) {
+			return operatorRejected(existing.ID)
 		}
 		if existing.Lifecycle == LifecycleConfirmed {
 			stored = existing

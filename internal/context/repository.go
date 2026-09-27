@@ -28,8 +28,10 @@ type Repository interface {
 	// provenance.
 	AppendReducer(context.Context, ...ContextItem) error
 	// UpsertCandidate creates a candidate or refreshes an existing
-	// non-confirmed candidate with the same canonical identity. A confirmed
-	// duplicate remains confirmed and is returned unchanged.
+	// non-confirmed candidate with the same canonical identity and source
+	// type. A confirmed duplicate remains confirmed and is returned unchanged;
+	// a duplicate under another source type (ErrCandidateIdentityConflict) or
+	// rejected by an operator (ErrOperatorRejected) is left untouched.
 	UpsertCandidate(context.Context, ContextItem) (ContextItem, error)
 	Get(context.Context, string) (ContextItem, error)
 	GetMany(context.Context, []string) ([]ContextItem, error)
