@@ -441,6 +441,10 @@ hufu context doctor --learning
 
 `explain-memory` 至少輸出 base relevance、scope/applicability、utility lower bound、freshness、trust、harm penalty、final score、support/failure counts、policy version 與 retrieval ID；預設不顯示原文。
 
+`explain-memory` 需要 `--project`、`--team`、`--query`。它以目前資料、指定 scope／query／policy 重算 runtime 的 shared persistent 排序：與 coordinator 共用同一個無副作用的排序核心（同一組候選上限、分數正規化、goal-line fallback、eligible set 與 mode），因此 `base_relevance` 是 runtime 正規化後的值，`ranking.selected` 與 runtime 選取一致。輸出另含 `schema_version: 2`、`recomputed: true`、`mode`／`mode_source`、各檢索途徑（exact／lexical／vector）的名次與分數、RRF 貢獻、`carried_score`、MMR 前後名次與 penalty、file-path boost、固定 enum 的 `reasons`（例如 `selected`、`inject_limit`、`candidate_limit`、`duplicate_content`、`outside_observed_candidates`），以及無法在 CLI 評估的 `not_evaluated`（`activation`、`token_budget`）。`outside_observed_candidates` 表示沒有任何檢索途徑在上限內回傳該項，不代表不相關。只有在 durable manifest 相符時才回報 `retrieval_id`；其餘都是重算結果，不是歷史執行紀錄。越權與不存在的 item 回同一個錯誤；輸出不含 query 原文與記憶內容，也不寫入任何紀錄。
+
+已知限制：`rrf` 以第一個清單（lexical）的原始分數為起點再加上 reciprocal rank，所以 lexical 命中時 fused score 由原始 BM25 主導（`FusedScore == CarriedScore + LexicalRRF + VectorRRF`）；runtime 的 ×61 正規化只處理小於 1 的分數。`explain-memory` 如實揭露這一點，修正需以 replay 證據另行評估，未改變 production 排序。
+
 擴充 `internal/improve.Metrics`：
 
 ```text
@@ -505,6 +509,11 @@ LLM proposal 步驟由 `hufu context consolidate --apply-proposal --source <ids>
 - 記憶衝突（兩筆 confirmed 持久記憶互相矛盾）不使用 `contradicts` edge，而是記錄在 `context_pair_judgments`：edge 的主鍵 `(from_id, relation, to_id)` 無法記錄判定時的內容 hash、judge policy version、模型與人工審查狀態，而衝突判定是模型產生、可被人工 dismiss 的審查紀錄，不是知識圖譜關係。
 - 單一 task 不得自動升 project；跨 project/team/global scope 必須人工批准。
 - LLM 不能直接建立 confirmed item，也不能直接 supersede source。
+- 建立、核准、拒絕各自是單一 SQLite 交易。建立時在交易內重新檢查來源（current confirmed、有效期、scope／kind、contradiction、open conflict、experience support），候選內容與同 scope／kind 既有項目相同時拒絕，同一組來源已有其他 `proposed` proposal 時拒絕；proposal ID 由排序後的來源 ID 與正規化後文字決定，重跑相同輸入回傳既有 proposal，並補寫 idempotent 的 `memory_consolidation_proposed` 事件。
+- 核准以 create、approve、`consolidation show`、doctor 與 improve handoff 共用的同一份新鮮度判斷（固定 reason code）要求 `fresh`，並要求凍結的 content hash 與 aggregate revision 未變。已核准的 proposal 不能 reject；要替換已核准的合併知識，使用 `hufu context supersede`。
+- `consolidation_proposal` 是保留的 source type：`hufu context confirm|reject` 與通用 repository 方法都拒絕它，只能透過 `consolidation approve|reject` 審核。
+- 來源被 supersede 時，同一交易把使用它的 `proposed`／`approved` proposal 標為 `stale`，並把已核准的候選降回 `candidate`（因此離開 prompt）；以該候選為來源的 consolidation 也依序降級。`stale` proposal 不能 approve，可以 reject。
+- 沒有寫入事件的失效（過期、有效期結束、open conflict）由唯讀的 `hufu context doctor --consolidation --project <id> [--team <id>] [--json]` 回報：輸出每個 proposal 的狀態（`fresh`／`stale`／`blocked`／`invalid`）、reason code 與孤兒候選，不輸出內容、不修改任何資料。
 
 ### HF-MEM4-007 — Versioned memory policy experiment
 

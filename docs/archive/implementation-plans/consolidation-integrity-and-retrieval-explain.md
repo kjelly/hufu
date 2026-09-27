@@ -1,8 +1,8 @@
 # Hufu consolidation 完整性修正與檢索解釋：實作計畫
 
-> Status: in progress — moved 2026-09-27 from local scratch space (`docs/tmp/spec.md`); implementing on branch `fix/consolidation-integrity`
-> Authority: reference（實作計畫；現行行為以程式、測試與 [memory learning](../../architecture/memory-learning.md) 為準）
-> Verified-Commit: `489db51`
+> Status: implemented — moved 2026-09-27 from local scratch space (`docs/tmp/spec.md`); implemented on branch `fix/consolidation-integrity` through `b9e1b5c` (see §11 實作紀錄)
+> Authority: reference（實作紀錄；現行行為以程式、測試、[memory learning](../../architecture/memory-learning.md) 與 [context SQLite schema](../../reference/context-sqlite-schema.md) 為準）
+> Verified-Commit: `b9e1b5c`
 > Supersedes: —
 > Superseded-By: —
 > Scope: consolidation 提案／審核交易化、通用 lifecycle 旁路封鎖、候選身份與 reject 黏性、來源失效連動降級與唯讀 doctor、`explain-memory` 重做、兩個讀取路徑 bug
@@ -543,3 +543,27 @@ CLI：`explain-memory` 要求 `--project`、`--team`、`--query`；呼叫 `Expla
 - **BUG-01 修正（ranking 實驗）**：coding agent 無法單獨判斷改成純 RRF 後的排序品質，需要真實 workspace 的 replay 資料。建議做法：WP-5 完成後，在 2～3 個真實 workspace 上以 `explain-memory` 取樣記錄現行排序；另開計畫，以 memory policy snapshot 的 fusion 參數提供純 RRF 選項（預設舊行為），用既有 `hufu improve` replay／experiment 流程比較選取差異與任務結果；有證據後再決定是否採用新 policy。
 - **BUG-10 一般行為**：`Append` 去重改寫 `source_json` 的行為自初版（`85c8499`）即存在，沒有記錄理由，可能有呼叫端依賴。改動前需要盤點所有 `Append` 呼叫端並決定 provenance 語意。
 - **OBS-1～OBS-5**：需要先決定期望語意（例如失敗 run 的 findings 是否應在同 session 可見），再各自立項。
+
+## 11. 實作紀錄
+
+Baseline（`3fae664`，即 `489db51` 加上本計畫文件）：`go vet ./...` 通過；`golangci-lint run ./...` 0 issues；`go test ./...` 43 個 package 通過。`cmd/hufu` 在 scratchpad git worktree 中因子程序 `go build` 讀不到 VCS 狀態（`error obtaining VCS status`）失敗，以 `GOFLAGS=-buildvcs=false` 重跑後通過，屬環境問題，不是邏輯失敗。在主 checkout 執行時不需要該旗標。
+
+| WP | Commit | 內容 |
+| --- | --- | --- |
+| WP-1 | `b1cefdd` | `CreateConsolidationProposal`／`ApproveConsolidationProposal`／`RejectConsolidationProposal` 單一交易；`evaluateConsolidationQ` 共用新鮮度判斷；CLI 與 improve handoff 改用；移除 `SaveConsolidationProposal`、`UpdateConsolidationProposal`、`ConsolidationRepository` |
+| WP-2 | `8007aaa` | 保留 source type、`UpdateLifecycle` 只允許 candidate→rejected、CLI `confirm`／`reject` 指向 consolidation 指令 |
+| WP-3 | `00563cb` | `UpsertCandidate` 跨 source type 回 `ErrCandidateIdentityConflict`、操作者 reject 回 `ErrOperatorRejected` |
+| WP-4 | `bc18d79` | `demoteDerivedConsolidationsTx`（接在 `MarkSuperseded` 與 `confirmCandidateTx` 的 supersede 迴圈）、`consolidation show` freshness、`hufu context doctor --consolidation`、handoff 把 `stale` 視為已變更 |
+| WP-5 | `a3d3de8` | `RetrievalObservation`、`rankPersistentMemory` 排序核心、`evaluateLifecycleEligibility`、`ExplainPersistentMemory` 與 CLI |
+| WP-6 | `b9e1b5c` | `RepositoryQuery.IDs` 與 `context_get` 修正；chromem 搜尋逐步放大鄰居視窗 |
+
+與計畫的差異：
+
+- BUG-15 的 handoff 驗證在 WP-1 就改用共用判斷（WP-1 移除了 `validateConsolidationSources`，不能等到 WP-4）；WP-4 只補上 `stale` 狀態處理。
+- `ConsolidationSupportPolicy` 的零值代表不檢查 support 門檻。production 一律傳入 memory learning policy 的非零門檻；improve handoff 測試 fixture 的來源只有曝光證據，因此用零值。
+- `ConfirmCandidates` 的迴圈主體抽成 `confirmCandidateTx`，公開方法在呼叫前檢查保留 source type；三處重複的 INSERT 抽成 `insertItemRowTx`，`normalize` 的內容正規化抽成 `NormalizeContent`。
+- WP-5 另加 `ranking.injected`（`selected` 或 router 會強制加回的 must-keep）。off／observe mode 的 `score_parts`／`final_score` 另以同一組候選計算 reinforced 分數作顯示，不影響選取判斷。
+- 為了證明重構不改變 prompt 選取，新增行為鎖定測試 `TestPersistentRankingBehaviourIsLocked`（`internal/team/testdata/memory_ranking_lock.golden`），在重構前以舊程式產生，涵蓋四種 mode、goal-line fallback、allowed subset 與 content 去重。
+- `hufu context doctor --consolidation` 的 JSON 另含 `orphans`；能產出報告就 exit 0，讀取失敗才回非零（與計畫相同）。
+
+驗證：每個 WP commit 前都跑過 `go test ./...`、`go vet ./...`、`golangci-lint run ./...`，全部通過；`go test -race ./internal/context -run 'Consolidation|Reserved|Upsert|Demot|Supersed'` 通過。`docs/reference/operator-command-reference.md` 的生成內容不受影響（`TestGeneratedOperatorCommandReferenceIsCurrent` 通過）。正式文件已依 §9 更新 `docs/architecture/memory-learning.md` 與 `docs/reference/context-sqlite-schema.md`。

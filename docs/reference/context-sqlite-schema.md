@@ -99,6 +99,10 @@ their 24-hour recovery window.
 
 `promotion_proposals` stores the scoped draft, target-relative path, target base hash, metrics snapshot, and review status. `generated_draft_hash` is the draft hash at creation and never changes on edit; it is empty for proposals created before migration 10, whose edit state is unknown. Read-only opens never migrate, so readers of a store older than migration 10 treat the column as empty. `promotion_sources` preserves each source context ID, content hash, and aggregate revision without modifying or superseding the source. `promotion_event_outbox` transactionally records content-free lifecycle events; promotion commands deliver pending rows to the hash-chained event store and then mark them delivered. Proposed or rejected drafts are not runtime context inputs.
 
+### Consolidation table
+
+`consolidation_proposals` stores one reviewable merge of two or more sources: the project and team, the candidate context item, the sorted source IDs, each source's content hash and experience-aggregate revision frozen at proposal time, the status, a reason, and timestamps. Statuses are `proposed`, `approved`, `rejected`, `stale`, and the legacy read-only `failed`; `stale` needs no migration because the column has no CHECK constraint. Creating a proposal writes the candidate (source type `consolidation_proposal`, lifecycle `candidate`), its `derived_from` edges, the proposal row, and a content-free `consolidation_proposed` event in one transaction; approval and rejection each change the candidate and the proposal together and record `consolidation_approved` or `consolidation_rejected`. The `consolidation_proposal` source type is reserved: generic append, upsert, bind, confirm, and lifecycle methods refuse it, and deduplication never rewrites such a row's source. When a source is superseded, the same transaction marks every proposed or approved proposal that uses it `stale` (reason code in `reason`, a `consolidation_stale` event) and returns an approved candidate to `candidate` lifecycle so it leaves every confirmed-only read path; the demotion repeats for consolidations built on that candidate. Failures without a write event (expiry, validity windows, open conflicts) are reported by `hufu context doctor --consolidation`, which only reads.
+
 ### Memory conflict table
 
 `context_pair_judgments` records one model judgment per pair of existing persistent context items in the same project, team, and agent scope: the two item IDs (bytewise ordered), their content hashes at judgment time, the verdict (`contradicts`, `compatible`, `duplicate`, `refines`, or `undetermined` for invalid judge output), the judge policy version and model, a redacted rationale of at most 512 runes, and review state. Only contradictions are `open` or `dismissed`; every other verdict is `not_applicable` and acts as a cache so a pair is not judged twice. The table stores relations and review state, never knowledge content, and has no foreign key because expired items may be deleted. Whether a conflict is currently open is derived at read time: dismissed, an outdated judge version, a superseded item (`resolved_by_supersede`), and a deleted, expired, or changed item all stop it from counting. `memory_conflict_detected` and `memory_conflict_dismissed` lifecycle events use the promotion outbox. Read-only opens of a store older than migration 11 report conflicts as unavailable.
@@ -126,7 +130,9 @@ embeds through Ollama with the configured `embedding-model`; a leading
 is removed before calling the Ollama embeddings API, while the index keeps the
 configured string as its identity. Use `hufu context query`, `list`, `show`,
 `candidates`, `history`, `confirm`, `reject`, and `supersede` for lifecycle
-inspection and explicit maintenance. To upgrade an old chromem store, first
+inspection and explicit maintenance; `confirm` and `reject` refuse
+consolidation candidates, which are reviewed with
+`hufu context consolidation approve|reject`. To upgrade an old chromem store, first
 run `hufu context migrate-memory --workspace <workspace> --project <project>
 --legacy-project <old-project>` for its count/checksum dry run, then repeat
 with `--apply`; the destination database is backed up before mutation. These
