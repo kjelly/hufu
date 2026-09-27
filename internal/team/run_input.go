@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -789,7 +790,8 @@ func selectResolvedRunInput(definition RunInputDefinition, perSource map[RunInpu
 		chosen = file
 	}
 	if chosen != nil && resolver != nil && !bytes.Equal(chosen.value, resolver.value) {
-		return ResolvedRunInput{}, false, fmt.Errorf("input_prompt_conflict: %s explicit value differs from resolver candidate", definition.Name)
+		return ResolvedRunInput{}, false, fmt.Errorf("input_prompt_conflict: %s explicit %s value %s differs from resolver candidate %s",
+			definition.Name, chosen.source, runInputConflictValue(chosen.value), runInputConflictValue(resolver.value))
 	}
 	if chosen == nil {
 		chosen = resolver
@@ -819,6 +821,19 @@ func selectResolvedRunInput(definition RunInputDefinition, perSource map[RunInpu
 		ValueHash: runInputHash(chosen.value), Source: chosen.source, ResolverID: resolverID,
 		ResolverVersion: resolverVersion, Evidence: evidence,
 	}, true, nil
+}
+
+// maxRunInputConflictValueRunes bounds each value an input_prompt_conflict
+// error shows.
+const maxRunInputConflictValueRunes = 512
+
+// runInputConflictValue renders a canonical value for a conflict error, so an
+// operator can see whether the resolver misread the prompt or the prompt was
+// ambiguous. Run inputs cannot be secret or sensitive (their schemas reject
+// both), and resolved values already appear in reports; redaction and a
+// length bound still guard against a value that carries a credential.
+func runInputConflictValue(value []byte) string {
+	return utils.TruncateRunes(utils.RedactSecrets(string(value)), maxRunInputConflictValueRunes)
 }
 
 func resolveExplicitRunInputValues(definitions []RunInputDefinition, assignments []RunInputAssignment, teamName string) (map[string]json.RawMessage, error) {

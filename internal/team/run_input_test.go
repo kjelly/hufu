@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -155,8 +156,9 @@ func TestResolveRunInputSnapshotMergesResolverWithoutSilentPrecedence(t *testing
 	resolver.RawValue = []byte("4")
 	if _, err := ResolveRunInputSnapshot(definitions, []RunInputAssignment{
 		{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}, resolver,
-	}, "run", "invocation", "demo"); err == nil || !strings.Contains(err.Error(), "input_prompt_conflict") {
-		t.Fatalf("conflict error = %v", err)
+	}, "run", "invocation", "demo"); err == nil || !strings.Contains(err.Error(), "input_prompt_conflict") ||
+		!strings.Contains(err.Error(), "explicit cli value 3 differs from resolver candidate 4") {
+		t.Fatalf("conflict error = %v, want both canonical values", err)
 	}
 }
 
@@ -458,5 +460,33 @@ func writeTypedInputFixture(t *testing.T, dir, manifest string) {
 	agent := "---\nname: coordinator\nrole: coordinator\n---\nCoordinate.\n"
 	if err := os.WriteFile(filepath.Join(dir, "coordinator.md"), []byte(agent), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunInputConflictValueIsRedactedAndBounded(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		check func(string) bool
+	}{
+		{name: "canonical value shown", value: `{"count":1,"head":"HEAD","kind":"last_n"}`, check: func(got string) bool {
+			return got == `{"count":1,"head":"HEAD","kind":"last_n"}`
+		}},
+		{name: "credential redacted", value: `{"note":"api_token=conflict-secret-value"}`, check: func(got string) bool {
+			return !strings.Contains(got, "conflict-secret-value")
+		}},
+		{name: "long value bounded", value: `"` + strings.Repeat("x", 4*maxRunInputConflictValueRunes) + `"`, check: func(got string) bool {
+			return utf8.RuneCountInString(got) <= maxRunInputConflictValueRunes+3
+		}},
+		{name: "multi-byte value stays valid", value: `"` + strings.Repeat("審查", 2*maxRunInputConflictValueRunes) + `"`, check: func(got string) bool {
+			return utf8.ValidString(got) && utf8.RuneCountInString(got) <= maxRunInputConflictValueRunes+3
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runInputConflictValue([]byte(tt.value)); !tt.check(got) {
+				t.Fatalf("runInputConflictValue(%.60q) = %.120q", tt.value, got)
+			}
+		})
 	}
 }

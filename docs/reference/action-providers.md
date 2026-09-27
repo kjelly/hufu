@@ -263,7 +263,9 @@ Explicit `--input` or `--input-file` values do not bypass prompt resolution.
 Hufu compares each explicit value with the resolver candidate after canonical
 JSON validation: equal values retain the explicit source plus resolver
 evidence, while different values fail with `input_prompt_conflict`. This is an
-intentional fail-closed consistency check, not an override precedence rule.
+intentional fail-closed consistency check, not an override precedence rule. The
+error shows both canonical values, redacted and bounded, so a misread prompt can
+be told apart from an ambiguous one.
 
 ## Runtime environment
 
