@@ -134,3 +134,26 @@ func TestEmbeddedRuntimeEmitsDocumentationVerification(t *testing.T) {
 		t.Fatalf("embedded documentation_verification = %#v, want a pass with three forward references at %s", verification, head)
 	}
 }
+
+func TestDocumentationVerificationIgnoresReferencesOnlyAnotherBranchProvides(t *testing.T) {
+	repo := newFixtureRepo(t)
+	gitRun(t, repo, "checkout", "-q", "-b", "feature")
+	writeAndCommit(t, repo, "docs/architecture/plan.md", forwardPlanDocument, "plan on a branch", "2025-01-02T00:00:00Z")
+	featureCommit, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The checkout moves to main, which gains the referenced file and
+	// declaration without ever containing the reviewed commit.
+	gitRun(t, repo, "checkout", "-q", "main")
+	writeFile(t, filepath.Join(repo, "internal/fixture/data.json"), "{}\n")
+	writeFile(t, filepath.Join(repo, "internal/fixture/fixture.go"), "package fixture\n\nfunc Future() {}\n")
+	commit(t, repo, "unrelated change on main", "2025-01-03T00:00:00Z")
+
+	_, err = Prepare(t.Context(), documentationScopeConfig(repo, strings.TrimSpace(featureCommit)))
+	for _, want := range []string{`repository path "internal/fixture/data.json" does not exist`, `Go symbol "fixture.Future" does not exist`} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Prepare error = %v, want %q: a commit that does not descend from the review cannot provide a forward reference", err, want)
+		}
+	}
+}
