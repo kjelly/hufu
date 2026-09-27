@@ -838,6 +838,7 @@ func compileRepositoryPredicates(q RepositoryQuery, now int64) ([]string, []any,
 		where = append(where, "confidence>=?")
 		args = append(args, *q.MinConfidence)
 	}
+	appendAllowedItemIDPredicate("", &where, &args, normalizeAllowedItemIDs(q.IDs))
 	if q.OriginRunID != "" {
 		where = append(where, "json_extract(metadata_json, '$.run_id') = ?")
 		args = append(args, q.OriginRunID)

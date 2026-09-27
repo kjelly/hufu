@@ -168,7 +168,10 @@ type RepositoryQuery struct {
 	OriginRunID       string
 	SourceTypes       []string
 	MinConfidence     *float64
-	Limit             int
+	// IDs is an optional ID restriction applied in SQL before Limit. Nil
+	// means unrestricted; a non-nil empty slice matches nothing.
+	IDs   []string
+	Limit int
 }
 
 type SearchRequest struct {

@@ -193,7 +193,8 @@ func (c *Coordinator) GetAuthorizedContextItem(ctx context.Context, request Cont
 		Scope:             c.contextScope(),
 		Visibility:        contextstore.VisibilityAncestors,
 		IncludeCandidates: true,
-		Limit:             200,
+		IDs:               []string{id},
+		Limit:             1,
 	})
 	if err != nil {
 		return contextstore.ContextItem{}, ContextOmittedLifecycle, fmt.Errorf("query canonical context: %w", err)

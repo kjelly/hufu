@@ -122,14 +122,35 @@ func (s *VectorStore) SearchVector(ctx context.Context, req SearchRequest) ([]Se
 	if limit <= 0 {
 		limit = 20
 	}
-	if limit > s.collection.Count() {
-		limit = s.collection.Count()
+	return s.searchAuthorized(ctx, req, limit, 0, "", func(n int) ([]chromem.Result, error) {
+		return s.collection.Query(ctx, req.Query, n, nil, nil)
+	})
+}
+
+// searchAuthorized asks chromem for more nearest neighbours until limit
+// results survive canonical authorization or the index is exhausted, so
+// out-of-scope or stale neighbours cannot shrink the result below limit.
+// extra accounts for a query item that is always excluded.
+func (s *VectorStore) searchAuthorized(ctx context.Context, req SearchRequest, limit, extra int, exclude string, query func(int) ([]chromem.Result, error)) ([]SearchResult, error) {
+	count := s.collection.Count()
+	n := min(limit+extra, count)
+	for {
+		results, err := query(n)
+		if err != nil {
+			return nil, err
+		}
+		out, err := s.hydrateVectorResults(ctx, results, req, exclude)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) >= limit || n >= count {
+			if len(out) > limit {
+				out = out[:limit]
+			}
+			return out, nil
+		}
+		n = min(n*2, count)
 	}
-	results, err := s.collection.Query(ctx, req.Query, limit, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	return s.hydrateVectorResults(ctx, results, req, "")
 }
 
 // ErrVectorItemNotIndexed reports that an item has no stored embedding.
@@ -156,11 +177,9 @@ func (s *VectorStore) SearchSimilarTo(ctx context.Context, itemID string, req Se
 	if limit <= 0 {
 		limit = 20
 	}
-	results, err := s.collection.QueryEmbedding(ctx, doc.Embedding, min(limit+1, count), nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	return s.hydrateVectorResults(ctx, results, req, itemID)
+	return s.searchAuthorized(ctx, req, limit, 1, itemID, func(n int) ([]chromem.Result, error) {
+		return s.collection.QueryEmbedding(ctx, doc.Embedding, n, nil, nil)
+	})
 }
 
 // hydrateVectorResults loads each hit from SQLite and applies the canonical

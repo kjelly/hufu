@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +194,34 @@ func TestGetAuthorizedContextItemRejectsForeignCandidate(t *testing.T) {
 	request.AssignRequestID()
 	if _, reason, err := c.GetAuthorizedContextItem(context.Background(), request, item.ID); err == nil || reason != ContextOmittedLifecycle {
 		t.Fatalf("foreign candidate authorization = %q, %v", reason, err)
+	}
+}
+
+// BUG-12: the lookup used to fetch the first 200 scoped items and match the
+// ID in Go, so an authorized item beyond them looked missing.
+func TestGetAuthorizedContextItemFindsItemsBeyondTheFirstPage(t *testing.T) {
+	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	target := rankingItem("oldest-low-priority", 1)
+	if err := repo.Append(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	var newer []contextstore.ContextItem
+	for i := range 250 {
+		item := rankingItem(fmt.Sprintf("newer-%03d", i), 90)
+		item.Content = fmt.Sprintf("newer item %d", i)
+		newer = append(newer, item)
+	}
+	if err := repo.Append(context.Background(), newer...); err != nil {
+		t.Fatal(err)
+	}
+	request := c.contextToolRequest(context.Background(), "look up guidance", "", nil)
+	if item, _, err := c.GetAuthorizedContextItem(context.Background(), request, target.ID); err != nil || item.ID != target.ID {
+		t.Fatalf("item = %q err = %v", item.ID, err)
+	}
+	if err := repo.Append(context.Background(), contextstore.ContextItem{ID: "other-team", Kind: contextstore.ContextPattern, Content: "other team", Scope: contextstore.Scope{ProjectID: "project", TeamID: "rival"}, Lifecycle: contextstore.LifecycleConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.GetAuthorizedContextItem(context.Background(), request, "other-team"); err == nil {
+		t.Fatalf("out-of-scope item was returned")
 	}
 }
