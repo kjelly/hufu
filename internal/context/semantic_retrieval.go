@@ -45,6 +45,9 @@ type HybridRetrievalOptions struct {
 	UnavailableReason SemanticFallbackReason
 	TraceHasher       TraceHasher
 	TraceSink         func(SemanticRetrievalTrace)
+	// Observer, when set, records every path's ranks and the fusion steps
+	// for an explanation. It never changes the results and is never persisted.
+	Observer *RetrievalObservation
 }
 
 type SemanticRetrievalTrace struct {

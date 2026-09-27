@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/agent"
-	contextstore "github.com/kjelly/hufu/internal/context"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -37,7 +36,7 @@ var contextOutcomesCmd = &cobra.Command{
 
 var contextExplainMemoryCmd = &cobra.Command{
 	Use:   "explain-memory <id>",
-	Short: "Explain retrieval and reinforced ranking without displaying memory content",
+	Short: "Recompute and explain one memory's retrieval, fusion, and ranking without displaying content",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runContextExplainMemory,
 }
@@ -63,7 +62,7 @@ func init() {
 		contextCmd.AddCommand(command)
 	}
 	contextExplainMemoryCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID (required)")
-	contextExplainMemoryCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope")
+	contextExplainMemoryCmd.Flags().StringVar(&contextTeam, "team", "", "Canonical team ID (required)")
 	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryQuery, "query", "", "Goal/query used to calculate base relevance (required)")
 	contextLearningDoctorCmd.Flags().BoolVar(&contextLearningCheck, "learning", false, "Check outcome-driven memory learning state")
 }
@@ -164,60 +163,6 @@ func runContextOutcomes(cmd *cobra.Command, args []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(aggregate)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context_item_id: %s\npolicy_version: %s\npositive_weight: %.6f\nnegative_weight: %.6f\nutility_lower_bound: %.6f\nexposures: %d\napplied: %d\nconsulted: %d\nrejected: %d\nverified_support: %d\ncausal_failures: %d\nindependent_tasks: %d\nindependent_projects: %d\nrevision: %d\n", aggregate.ContextItemID, aggregate.PolicyVersion, aggregate.PositiveWeight, aggregate.NegativeWeight, aggregate.UtilityLowerBound, aggregate.ExposureCount, aggregate.AppliedCount, aggregate.ConsultedCount, aggregate.RejectedCount, aggregate.VerifiedSupportCount, aggregate.CausalFailureCount, aggregate.IndependentTaskCount, aggregate.IndependentProjectCount, aggregate.Revision)
-	return err
-}
-
-func runContextExplainMemory(cmd *cobra.Command, args []string) error {
-	if strings.TrimSpace(contextProject) == "" || strings.TrimSpace(contextMemoryQuery) == "" {
-		return fmt.Errorf("--project and --query are required")
-	}
-	repo, err := openExistingContextRepository(getContextWorkspace())
-	if err != nil {
-		return err
-	}
-	defer func() { _ = repo.Close() }()
-	item, err := repo.Get(cmd.Context(), args[0])
-	if err != nil {
-		return err
-	}
-	// Resolve the policy to its own immutable snapshot and runtime parameters so
-	// the explained final score, the aggregate, and the retrieval ID all come
-	// from the same policy. An explicitly passed --policy-version is resolved to
-	// that version's snapshot (rejected if it is not recorded); otherwise the
-	// active policy is authoritative (spec §7 HF-MEM4-005).
-	policyVersion := ""
-	if cmd.Flags().Changed("policy-version") {
-		policyVersion = contextPolicyVersion
-	}
-	policy, runtimePolicy, err := team.LoadMemoryPolicy(cmd.Context(), repo, policyVersion)
-	if err != nil {
-		return err
-	}
-	results, _, err := contextstore.HybridRetrieve(cmd.Context(), repo, nil, contextstore.SearchRequest{Query: contextMemoryQuery, Scope: contextstore.Scope{ProjectID: contextProject, TeamID: contextTeam}, Limit: 100})
-	if err != nil {
-		return err
-	}
-	base := 0.0
-	for _, result := range results {
-		if result.Item.ID == item.ID {
-			base = result.Score
-			break
-		}
-	}
-	aggregate, aggregateErr := repo.ExperienceAggregate(cmd.Context(), item.ID, policy.PolicyVersion)
-	if aggregateErr != nil && !errors.Is(aggregateErr, sql.ErrNoRows) {
-		return aggregateErr
-	}
-	explanation := team.ExplainMemoryScoreWithPolicy(item, base, aggregate, policy, runtimePolicy)
-	// The retrieval ID is the durable manifest's attempt-scoped binding for
-	// this item under the exact policy version and query being explained. When
-	// no manifest matches, the explanation is counterfactual and carries no
-	// execution retrieval ID (spec §5.1, §7 HF-MEM4-005).
-	explanation.RetrievalID = team.RetrievalIDForItem(getContextWorkspace(), policy.PolicyVersion, team.QueryHash(contextMemoryQuery), item.ID)
-	if contextQueryJSON {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(explanation)
-	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context_item_id: %s\npolicy_version: %s\nretrieval_id: %s\nbase_relevance: %.6f\napplicability: %.6f\nutility_lower_bound: %.6f\nfreshness: %.6f\ntrust_factor: %.6f\nharm_penalty: %.6f\nstale_environment_penalty: %.6f\nfinal_score: %.6f\nexposures: %d\napplied: %d\nverified_support: %d\ncausal_failures: %d\n", explanation.ContextItemID, explanation.PolicyVersion, explanation.RetrievalID, explanation.ScoreParts.BaseRelevance, explanation.ScoreParts.Applicability, explanation.ScoreParts.UtilityLowerBound, explanation.ScoreParts.Freshness, explanation.ScoreParts.TrustFactor, explanation.ScoreParts.HarmfulUsePenalty, explanation.ScoreParts.StaleEnvironmentPenalty, explanation.FinalScore, explanation.ExposureCount, explanation.AppliedCount, explanation.VerifiedSupportCount, explanation.CausalFailureCount)
 	return err
 }
 

@@ -32,7 +32,12 @@ func defaultMemoryRuntimeRankingPolicy() MemoryRuntimeRankingPolicy {
 }
 
 func (c *Coordinator) effectiveMemoryRankingPolicy() MemoryRuntimeRankingPolicy {
-	policy := c.memoryRankingPolicy
+	return effectiveRankingPolicy(c.memoryRankingPolicy)
+}
+
+// effectiveRankingPolicy fills unset candidate/inject limits from TopK and
+// falls back to the defaults when the limits are inconsistent.
+func effectiveRankingPolicy(policy MemoryRuntimeRankingPolicy) MemoryRuntimeRankingPolicy {
 	if policy.CandidateTopK <= 0 {
 		policy.CandidateTopK = policy.TopK
 	}

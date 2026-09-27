@@ -323,3 +323,46 @@ func TestContextExplainMemoryBindsPolicyAndRetrievalID(t *testing.T) {
 		t.Fatalf("v2 final score = %f, want %f (base=%f)", explanation.FinalScore, wantV2, parts.BaseRelevance)
 	}
 }
+
+func TestContextExplainMemoryRequiresTeamAndReportsRecomputation(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "explain-json", Kind: contextstore.ContextPattern, Content: "deploy checklist", Scope: contextstore.Scope{ProjectID: "project-cli", TeamID: "team-cli"}, Lifecycle: contextstore.LifecycleConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The command is package-level, so an earlier test's --policy-version
+	// would otherwise still count as explicitly set.
+	contextTeam, contextPolicyVersion = "", "memory-policy-v1"
+	contextExplainMemoryCmd.Flags().Lookup("policy-version").Changed = false
+	root := newRootCommand()
+	root.SetOut(new(bytes.Buffer))
+	root.SetArgs([]string{"context", "explain-memory", "explain-json", "--workspace", workspace, "--project", "project-cli", "--query", "deploy"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--team") {
+		t.Fatalf("missing --team err = %v", err)
+	}
+	root = newRootCommand()
+	out := new(bytes.Buffer)
+	root.SetOut(out)
+	root.SetArgs([]string{"context", "explain-memory", "explain-json", "--workspace", workspace, "--project", "project-cli", "--team", "team-cli", "--query", "deploy", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"context_item_id", "policy_version", "score_parts", "final_score", "schema_version", "recomputed", "reasons", "not_evaluated", "retrieval", "ranking"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("explain JSON is missing %q: %s", key, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "deploy checklist") {
+		t.Fatalf("explain JSON leaked content: %s", out.String())
+	}
+}

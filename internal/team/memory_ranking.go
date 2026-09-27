@@ -2,14 +2,11 @@ package team
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -90,90 +87,30 @@ func (c *Coordinator) rankSharedPersistentMemory(ctx context.Context, query stri
 
 func (c *Coordinator) rankSharedPersistentMemoryAllowed(ctx context.Context, query string, base []contextstore.ContextItem, allowed map[string]bool) ([]contextstore.ContextItem, map[string]MemoryScoreParts, map[string]float64, map[string]*contextstore.ExperienceAggregate, error) {
 	policy := c.session.Config.MemoryLearning
-	rankingPolicy := c.effectiveMemoryRankingPolicy()
-	if strings.TrimSpace(query) == "" {
-		mustKeep := make([]contextstore.ContextItem, 0)
-		pinned := make([]contextstore.ContextItem, 0)
-		for _, item := range base {
-			if item.MustKeep {
-				mustKeep = append(mustKeep, item)
-			} else if item.Pinned {
-				pinned = append(pinned, item)
-			}
-		}
-		selected := append([]contextstore.ContextItem(nil), mustKeep...)
-		remaining := rankingPolicy.InjectTopK - len(selected)
-		if remaining > 0 {
-			if len(pinned) > remaining {
-				pinned = pinned[:remaining]
-			}
-			selected = append(selected, pinned...)
-		}
-		return selected, nil, nil, nil, nil
-	}
-	candidateLimit := rankingPolicy.CandidateTopK
-	if allowed != nil && len(base) > candidateLimit {
-		candidateLimit = len(base)
-	}
-	results, _, err := contextstore.HybridRetrieve(ctx, c.contextRepo, nil, contextstore.SearchRequest{
-		Query: query, Scope: persistentContextScope(c.contextScope()), Limit: candidateLimit,
+	experience, _ := c.contextRepo.(contextstore.ExperienceRepository)
+	ranked, err := rankPersistentMemory(ctx, c.contextRepo, experience, persistentRankingInput{
+		Query: query, RequestScope: c.contextScope(), Base: base, Allowed: allowed,
+		Learning: policy, Ranking: c.effectiveMemoryRankingPolicy(),
 	})
+	var reinforcementErr memoryReinforcementError
+	if errors.As(err, &reinforcementErr) {
+		return base, nil, nil, nil, reinforcementErr.err
+	}
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	if len(results) == 0 {
-		// ContextRequest queries deliberately carry structured state on separate
-		// lines. Some lexical backends interpret the whole string conjunctively;
-		// fall back to the goal line so state labels cannot suppress an otherwise
-		// relevant candidate. Activation gates still enforce the state contract.
-		if goal, _, found := strings.Cut(query, "\n"); found && strings.TrimSpace(goal) != "" {
-			results, _, err = contextstore.HybridRetrieve(ctx, c.contextRepo, nil, contextstore.SearchRequest{Query: goal, Scope: persistentContextScope(c.contextScope()), Limit: candidateLimit})
-			if err != nil {
-				return nil, nil, nil, nil, err
-			}
-		}
+	if strings.TrimSpace(query) == "" {
+		return ranked.Selected, nil, nil, nil, nil
 	}
-	if allowed != nil {
-		filtered := results[:0]
-		for _, result := range results {
-			if allowed[result.Item.ID] {
-				filtered = append(filtered, result)
-			}
-		}
-		results = filtered
-		if len(results) > rankingPolicy.CandidateTopK {
-			results = results[:rankingPolicy.CandidateTopK]
-		}
+	switch policy.Mode {
+	case agent.MemoryLearningOff:
+		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, nil
+	case agent.MemoryLearningObserve:
+		c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, ranked.Results, ranked.RelevanceEntries))
+		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, nil
 	}
-	// HybridRetrieve's RRF scores are reciprocal ranks (the first lexical hit
-	// is about 1/61), while runtime policy relevance is defined on [0,1].
-	// Normalize that fused scale before applying the policy threshold.
-	for i := range results {
-		if results[i].Score > 0 && results[i].Score < 1 {
-			results[i].Score = math.Min(1, results[i].Score*61)
-		}
-	}
-	relevanceEntries, relevanceScores, relevanceFinal := relevanceMemoryEntries(results, rankingPolicy)
-	if policy.Mode == agent.MemoryLearningOff || policy.Mode == agent.MemoryLearningObserve {
-		if policy.Mode == agent.MemoryLearningObserve {
-			c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, results, relevanceEntries))
-		}
-		return selectedMemoryResults(results, relevanceEntries), relevanceScores, relevanceFinal, nil, nil
-	}
-	entries, scores, aggregates, err := c.reinforceSearchResults(ctx, results, policy)
-	if err != nil {
-		return base, nil, nil, nil, err
-	}
-	trace := memoryRankingTrace(policy, query, results, entries)
-	c.persistMemoryRankingTrace(trace)
-	if policy.Mode == agent.MemoryLearningShadow {
-		return selectedMemoryResults(results, relevanceEntries), relevanceScores, relevanceFinal, aggregates, nil
-	}
-	finalScores := make(map[string]float64, len(entries))
-	for _, entry := range entries {
-		finalScores[entry.ContextItemID] = entry.FinalScore
-	}
-	return selectedMemoryResults(results, entries), scores, finalScores, aggregates, nil
+	c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, ranked.Results, ranked.ReinforcedEntries))
+	return ranked.Selected, ranked.Scores, ranked.FinalScores, ranked.Aggregates, nil
 }
 
 func relevanceMemoryEntries(results []contextstore.SearchResult, policy MemoryRuntimeRankingPolicy) ([]MemoryRankingEntry, map[string]MemoryScoreParts, map[string]float64) {
@@ -215,66 +152,8 @@ func persistentContextScope(scope contextstore.Scope) contextstore.Scope {
 }
 
 func (c *Coordinator) reinforceSearchResults(ctx context.Context, results []contextstore.SearchResult, policy agent.MemoryLearningPolicy) ([]MemoryRankingEntry, map[string]MemoryScoreParts, map[string]*contextstore.ExperienceAggregate, error) {
-	repo, _ := c.contextRepo.(contextstore.ExperienceRepository)
-	rankingPolicy := c.effectiveMemoryRankingPolicy()
-	asOf := rankingReferenceTime(results)
-	entries := make([]MemoryRankingEntry, 0, len(results))
-	scores := make(map[string]MemoryScoreParts, len(results))
-	aggregates := make(map[string]*contextstore.ExperienceAggregate, len(results))
-	for rank, result := range results {
-		utility := contextstore.BetaQuantile(policy.PriorAlpha, policy.PriorBeta, policy.UtilityPercentile)
-		positive, negative := 0.0, 0.0
-		if repo != nil {
-			if aggregate, err := repo.ExperienceAggregate(ctx, result.Item.ID, policy.PolicyVersion); err == nil {
-				utility, positive, negative = aggregate.UtilityLowerBound, aggregate.PositiveWeight, aggregate.NegativeWeight
-				aggregates[result.Item.ID] = new(aggregate)
-			} else if !errors.Is(err, sql.ErrNoRows) {
-				return nil, nil, nil, fmt.Errorf("load experience aggregate for %s: %w", result.Item.ID, err)
-			}
-		}
-		parts := MemoryScoreParts{
-			BaseRelevance: result.Score, Applicability: 1,
-			UtilityLowerBound: utility, Freshness: memoryFreshnessAt(result.Item, asOf),
-			TrustFactor:             memoryTrustFactor(result.Item.TrustLevel),
-			HarmfulUsePenalty:       negative / (positive + negative + 1),
-			StaleEnvironmentPenalty: staleEnvironmentPenalty(result.Item),
-		}
-		entry := MemoryRankingEntry{ContextItemID: result.Item.ID, BaseRank: rank + 1, ScoreParts: parts, FinalScore: reinforcedFinalScoreWithPolicy(parts, rankingPolicy)}
-		entries = append(entries, entry)
-		scores[result.Item.ID] = parts
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].FinalScore != entries[j].FinalScore {
-			return entries[i].FinalScore > entries[j].FinalScore
-		}
-		if entries[i].ScoreParts.BaseRelevance != entries[j].ScoreParts.BaseRelevance {
-			return entries[i].ScoreParts.BaseRelevance > entries[j].ScoreParts.BaseRelevance
-		}
-		left, right := searchItem(results, entries[i].ContextItemID), searchItem(results, entries[j].ContextItemID)
-		leftDistance, rightDistance := memoryScopeDistance(left.Scope, c.contextScope()), memoryScopeDistance(right.Scope, c.contextScope())
-		if leftDistance != rightDistance {
-			return leftDistance < rightDistance
-		}
-		if left.Priority != right.Priority {
-			return left.Priority > right.Priority
-		}
-		if left.Confidence != right.Confidence {
-			return left.Confidence > right.Confidence
-		}
-		if !left.UpdatedAt.Equal(right.UpdatedAt) {
-			return left.UpdatedAt.After(right.UpdatedAt)
-		}
-		return entries[i].ContextItemID < entries[j].ContextItemID
-	})
-	selected := 0
-	for i := range entries {
-		entries[i].FinalRank = i + 1
-		entries[i].Selected = selected < rankingPolicy.InjectTopK && entries[i].ScoreParts.BaseRelevance >= rankingPolicy.MinimumRelevance && entries[i].ScoreParts.HarmfulUsePenalty == 0 && entries[i].ScoreParts.StaleEnvironmentPenalty == 0 && entries[i].FinalScore > 0
-		if entries[i].Selected {
-			selected++
-		}
-	}
-	return entries, scores, aggregates, nil
+	experience, _ := c.contextRepo.(contextstore.ExperienceRepository)
+	return reinforceSearchResultsWith(ctx, experience, results, policy, c.effectiveMemoryRankingPolicy(), c.contextScope())
 }
 
 func searchItem(results []contextstore.SearchResult, id string) contextstore.ContextItem {

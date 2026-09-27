@@ -157,22 +157,32 @@ func MatchContextActivation(activation ContextActivation, request ContextRequest
 	return true, ContextIncludedRelevant
 }
 
-func EvaluateContextEligibility(item contextstore.ContextItem, request ContextRequest, runID string, now time.Time) (bool, ContextDecisionReason, error) {
+// evaluateLifecycleEligibility is the request-independent part of
+// EvaluateContextEligibility: lifecycle, supersession, validity, and stale
+// environment. It returns "" when the item passes.
+func evaluateLifecycleEligibility(item contextstore.ContextItem, runID string, now time.Time) ContextDecisionReason {
 	if item.Lifecycle == contextstore.LifecycleCandidate {
 		if runID == "" || item.Metadata["run_id"] != runID {
-			return false, ContextOmittedLifecycle, nil
+			return ContextOmittedLifecycle
 		}
 	} else if item.Lifecycle != "" && item.Lifecycle != contextstore.LifecycleConfirmed {
-		return false, ContextOmittedLifecycle, nil
+		return ContextOmittedLifecycle
 	}
 	if item.SupersededBy != "" {
-		return false, ContextOmittedLifecycle, nil
+		return ContextOmittedLifecycle
 	}
 	if (item.ValidFrom != nil && now.Before(*item.ValidFrom)) || (item.ValidUntil != nil && !now.Before(*item.ValidUntil)) || (item.ExpiresAt != nil && !now.Before(*item.ExpiresAt)) {
-		return false, ContextOmittedExpired, nil
+		return ContextOmittedExpired
 	}
 	if staleEnvironmentPenalty(item) > 0 {
-		return false, ContextOmittedEnvironment, nil
+		return ContextOmittedEnvironment
+	}
+	return ""
+}
+
+func EvaluateContextEligibility(item contextstore.ContextItem, request ContextRequest, runID string, now time.Time) (bool, ContextDecisionReason, error) {
+	if reason := evaluateLifecycleEligibility(item, runID, now); reason != "" {
+		return false, reason, nil
 	}
 	activation, err := ParseContextActivation(item.Metadata)
 	if err != nil {

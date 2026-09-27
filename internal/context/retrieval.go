@@ -171,6 +171,8 @@ func HybridRetrieveWithOptions(
 		return nil, RetrievalTrace{}, err
 	}
 	trace := RetrievalTrace{Query: req.Query}
+	obs := options.Observer
+	obs.reset()
 	parts := DecomposeQuery(req.Query)
 	exactTerms := []string{}
 	for _, group := range [][]string{parts.Quoted, parts.Paths, parts.Symbols, parts.Commands, parts.SHAs, parts.ErrorCodes, parts.TaskIDs, parts.AttemptIDs, parts.ToolNames, parts.IPs, parts.Ports, parts.ArtifactIDs} {
@@ -185,11 +187,13 @@ func HybridRetrieveWithOptions(
 		}
 		trace.ExactResults = mergeResults(trace.ExactResults, filterSearchResults(found, req))
 	}
+	obs.recordPath("exact", len(exactTerms) > 0, "", trace.ExactResults)
 	lexical, err := repo.SearchLexical(ctx, req)
 	if err != nil {
 		return nil, trace, err
 	}
 	trace.LexicalResults = filterSearchResults(lexical, req)
+	obs.recordPath("lexical", true, "", trace.LexicalResults)
 	semanticStarted := time.Now()
 	semanticResults := []SearchResult(nil)
 	semanticCandidateCount := 0
@@ -222,13 +226,22 @@ func HybridRetrieveWithOptions(
 			}
 		}
 	}
-	fused := rrf(trace.LexicalResults, trace.VectorResults)
-	fused = applyMMR(rankForScope(fused, req.Scope), 0.75)
+	vectorFused := options.Mode == RetrievalActive && fallbackReason == SemanticFallbackNone
+	vectorReason := fallbackReason
+	if options.Mode == RetrievalOff {
+		vectorReason = ""
+	}
+	obs.recordPath("vector", vectorFused, vectorReason, trace.VectorResults)
+	fused := rrfObserved(obs, []string{"lexical", "vector"}, trace.LexicalResults, trace.VectorResults)
+	fused = applyMMRObserved(obs, rankForScope(fused, req.Scope), 0.75)
+	obs.recordExactPrefix(trace.ExactResults)
 	// Exact matches are a deterministic prefix, not a short-circuit: lexical
 	// and vector retrieval can still contribute relevant context for the rest
 	// of a mixed query.
 	trace.FusedResults = mergeResults(rankForScope(trace.ExactResults, req.Scope), fused)
 	trace.FusedResults, trace.FilePathBoosted = applyFilePathBoost(trace.FusedResults, req.FilePaths)
+	obs.recordBoost(trace.FilePathBoosted, filePathBoost)
+	obs.finish(trace.FusedResults, req.Limit)
 	if req.Limit > 0 && len(trace.FusedResults) > req.Limit {
 		trace.FusedResults = trace.FusedResults[:req.Limit]
 	}
@@ -306,6 +319,10 @@ func filterSearchResults(results []SearchResult, req SearchRequest) []SearchResu
 	return out
 }
 
+// filePathBoost is the deterministic score added to results whose evidence
+// names a requested file path.
+const filePathBoost = .15
+
 func applyFilePathBoost(results []SearchResult, paths []string) ([]SearchResult, []string) {
 	if len(paths) == 0 {
 		return results, nil
@@ -318,7 +335,7 @@ func applyFilePathBoost(results []SearchResult, paths []string) ([]SearchResult,
 	for i := range results {
 		for _, evidence := range results[i].Item.Evidence {
 			if evidence.Type == "file_path" && pathSet[evidence.Ref] {
-				results[i].Score += .15
+				results[i].Score += filePathBoost
 				boosted = append(boosted, results[i].Item.ID)
 				break
 			}
@@ -336,14 +353,29 @@ func hasRelevantScore(results []SearchResult) bool {
 }
 
 func rrf(lists ...[]SearchResult) []SearchResult {
+	return rrfObserved(nil, nil, lists...)
+}
+
+// rrfObserved is rrf that also reports each list's reciprocal-rank
+// contribution, the raw score an item's fused score starts from, and content
+// duplicates. paths names lists for the observer; the result is identical to
+// rrf.
+func rrfObserved(obs *RetrievalObservation, paths []string, lists ...[]SearchResult) []SearchResult {
 	scores := map[string]SearchResult{}
-	for _, list := range lists {
+	for index, list := range lists {
+		path := ""
+		if index < len(paths) {
+			path = paths[index]
+		}
 		for rank, result := range list {
 			current, ok := scores[result.Item.ID]
 			if !ok {
 				current = result
+				obs.recordCarried(result.Item.ID, result.Score)
 			}
-			current.Score += 1.0 / float64(60+rank+1)
+			contribution := 1.0 / float64(60+rank+1)
+			current.Score += contribution
+			obs.recordRRF(path, result.Item.ID, contribution)
 			scores[result.Item.ID] = current
 		}
 	}
@@ -354,17 +386,20 @@ func rrf(lists ...[]SearchResult) []SearchResult {
 	// Map iteration is deliberately normalized before duplicate suppression.
 	// This makes equal-content winner selection deterministic.
 	out = rankDeterministic(out)
-	seenContent := map[string]bool{}
+	seenContent := map[string]string{}
 	deduped := make([]SearchResult, 0, len(out))
 	for _, result := range out {
 		key := result.Item.ContentHash
 		if key == "" {
 			key = result.Item.ID
 		}
-		if !seenContent[key] {
-			seenContent[key] = true
-			deduped = append(deduped, result)
+		if winner, seen := seenContent[key]; seen {
+			obs.recordFused(result.Item.ID, result.Score, winner)
+			continue
 		}
+		seenContent[key] = result.Item.ID
+		obs.recordFused(result.Item.ID, result.Score, "")
+		deduped = append(deduped, result)
 	}
 	return deduped
 }
@@ -372,15 +407,26 @@ func rrf(lists ...[]SearchResult) []SearchResult {
 // applyMMR selects diverse results using Maximal Marginal Relevance. Lambda
 // 0.75 balances fused relevance against lexical token overlap.
 func applyMMR(candidates []SearchResult, lambda float64) []SearchResult {
+	return applyMMRObserved(nil, candidates, lambda)
+}
+
+// applyMMRObserved is applyMMR that also reports each candidate's rank before
+// and after selection with its penalty and MMR score; the result is identical.
+func applyMMRObserved(obs *RetrievalObservation, candidates []SearchResult, lambda float64) []SearchResult {
+	obs.recordPreMMR(candidates)
 	if len(candidates) < 2 {
+		for i, c := range candidates {
+			obs.recordMMR(c.Item.ID, i+1, 0, lambda*c.Score)
+		}
 		return candidates
 	}
 	remaining := append([]SearchResult(nil), candidates...)
 	selected := []SearchResult{remaining[0]}
+	obs.recordMMR(remaining[0].Item.ID, 1, 0, lambda*remaining[0].Score)
 	remaining = remaining[1:]
 	for len(remaining) > 0 {
 		best := 0
-		bestScore := -1.0
+		bestScore, bestPenalty := -1.0, 0.0
 		for i, c := range remaining {
 			penalty := 0.0
 			for _, s := range selected {
@@ -390,10 +436,11 @@ func applyMMR(candidates []SearchResult, lambda float64) []SearchResult {
 			}
 			score := lambda*c.Score - (1-lambda)*penalty
 			if score > bestScore || (score == bestScore && c.Item.ID < remaining[best].Item.ID) {
-				best, bestScore = i, score
+				best, bestScore, bestPenalty = i, score, penalty
 			}
 		}
 		selected = append(selected, remaining[best])
+		obs.recordMMR(remaining[best].Item.ID, len(selected), bestPenalty, bestScore)
 		remaining = append(remaining[:best], remaining[best+1:]...)
 	}
 	return selected
