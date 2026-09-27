@@ -423,6 +423,9 @@ func runContextConfirm(cmd *cobra.Command, ids []string) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseConsolidationCandidates(items); err != nil {
+		return err
+	}
 	for _, item := range items {
 		if item.Lifecycle != contextstore.LifecycleCandidate {
 			return fmt.Errorf("context item %q is not a candidate", item.ID)
@@ -451,12 +454,15 @@ func runContextReject(cmd *cobra.Command, ids []string) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseConsolidationCandidates(items); err != nil {
+		return err
+	}
 	for _, item := range items {
 		if item.Lifecycle != contextstore.LifecycleCandidate {
 			return fmt.Errorf("context item %q is not a candidate", item.ID)
 		}
 	}
-	if err := repo.BindCandidates(cmd.Context(), ids, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "operator_rejection", Ref: contextReason}, Metadata: map[string]string{"rejection_reason": contextReason}}); err != nil {
+	if err := repo.BindCandidates(cmd.Context(), ids, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: contextstore.EvidenceTypeOperatorRejection, Ref: contextReason}, Metadata: map[string]string{"rejection_reason": contextReason}}); err != nil {
 		return err
 	}
 	if err := repo.UpdateLifecycle(cmd.Context(), ids, contextstore.LifecycleRejected); err != nil {

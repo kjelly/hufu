@@ -329,6 +329,9 @@ func boolInt(v bool) int {
 func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func (r *SQLiteRepository) Append(ctx context.Context, items ...ContextItem) error {
+	if err := refuseReservedItems(items); err != nil {
+		return err
+	}
 	return r.withBusyRetry(ctx, func() error { return r.appendOnce(ctx, items...) })
 }
 
@@ -339,6 +342,9 @@ func (r *SQLiteRepository) Append(ctx context.Context, items ...ContextItem) err
 func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem) (ContextItem, error) {
 	if item.Lifecycle != LifecycleCandidate {
 		return ContextItem{}, errors.New("upsert candidate requires candidate lifecycle")
+	}
+	if err := refuseReservedItems([]ContextItem{item}); err != nil {
+		return ContextItem{}, err
 	}
 	var stored ContextItem
 	err := r.withBusyRetry(ctx, func() error {
@@ -369,6 +375,9 @@ func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem
 		existing, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", existingID))
 		if err != nil {
 			return err
+		}
+		if existing.Lifecycle != LifecycleConfirmed && IsReservedSourceType(existing.Source.Type) {
+			return candidateIdentityConflict(existing.ID, existing.Source.Type)
 		}
 		if existing.Lifecycle == LifecycleConfirmed {
 			stored = existing
@@ -403,10 +412,14 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 		}
 		it := items[i]
 		var existing string
-		err = tx.QueryRowContext(ctx, `SELECT id FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, it.Scope.ProjectID, it.Kind, it.ContentHash, it.Scope.TeamID, it.Scope.SessionID, it.Scope.BranchID, it.Scope.AgentID, it.Scope.TaskID, it.Scope.AttemptID).Scan(&existing)
+		var existingSource sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT id, json_extract(source_json,'$.type') FROM context_items WHERE project_id=? AND kind=? AND content_hash=? AND COALESCE(team_id,'')=? AND COALESCE(session_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(agent_id,'')=? AND COALESCE(task_id,'')=? AND COALESCE(attempt_id,'')=? LIMIT 1`, it.Scope.ProjectID, it.Kind, it.ContentHash, it.Scope.TeamID, it.Scope.SessionID, it.Scope.BranchID, it.Scope.AgentID, it.Scope.TaskID, it.Scope.AttemptID).Scan(&existing, &existingSource)
 		if err == nil {
-			if _, err = tx.ExecContext(ctx, "UPDATE context_items SET updated_at=?, source_json=? WHERE id=?", it.UpdatedAt.UnixMilli(), mustJSON(it.Source), existing); err != nil {
-				return err
+			// A reserved row keeps the provenance its workflow depends on.
+			if !IsReservedSourceType(existingSource.String) {
+				if _, err = tx.ExecContext(ctx, "UPDATE context_items SET updated_at=?, source_json=? WHERE id=?", it.UpdatedAt.UnixMilli(), mustJSON(it.Source), existing); err != nil {
+					return err
+				}
 			}
 			if _, err = tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", "deduplicate", existing, mustJSON(it.Scope), "{}", it.UpdatedAt.UnixMilli()); err != nil {
 				return err
@@ -432,6 +445,9 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 // provenance instead of collapsing. On a duplicate it merges immutable
 // evidence refs and refreshes metadata rather than overwriting provenance.
 func (r *SQLiteRepository) AppendReducer(ctx context.Context, items ...ContextItem) error {
+	if err := refuseReservedItems(items); err != nil {
+		return err
+	}
 	return r.withBusyRetry(ctx, func() error { return r.appendReducerOnce(ctx, items...) })
 }
 
@@ -985,37 +1001,42 @@ func (r *SQLiteRepository) MarkSuperseded(ctx context.Context, old []string, new
 	return tx.Commit()
 }
 
-// UpdateLifecycle changes explicitly selected records and emits an event for
-// each change.  Scope checks deliberately live with the higher-level caller:
-// lifecycle mutation is also used by maintenance operations, while runtime
-// promotion first selects candidates with an authorised exact scope.
+// UpdateLifecycle rejects explicitly selected candidates and emits an event for
+// each change. It is the only generic lifecycle mutation: confirmation must go
+// through ConfirmCandidates with sealed evidence, and reserved source types
+// through their dedicated workflow. Scope checks deliberately live with the
+// higher-level caller: runtime rejection first selects candidates with an
+// authorised exact scope.
 func (r *SQLiteRepository) UpdateLifecycle(ctx context.Context, ids []string, lifecycle ContextLifecycle) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if lifecycle != LifecycleCandidate && lifecycle != LifecycleConfirmed && lifecycle != LifecycleRejected {
-		return fmt.Errorf("invalid context lifecycle %q", lifecycle)
+	if lifecycle != LifecycleRejected {
+		return fmt.Errorf("%w: generic lifecycle updates only reject candidates, got target %q", ErrLifecycleTransition, lifecycle)
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for _, id := range ids {
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		scope := r.itemScope(ctx, tx, id)
-		result, err := tx.ExecContext(ctx, "UPDATE context_items SET lifecycle=?,updated_at=? WHERE id=?", string(lifecycle), time.Now().UnixMilli(), id)
+		item, err := getItemQ(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if n, err := result.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return sql.ErrNoRows
+		if IsReservedSourceType(item.Source.Type) {
+			return reservedSourceError(id)
 		}
-		if err := insertEvent(ctx, tx, "lifecycle", id, scope, map[string]string{"lifecycle": string(lifecycle)}); err != nil {
+		if item.Lifecycle != LifecycleCandidate {
+			return fmt.Errorf("%w: context item %q is %s, not a candidate", ErrLifecycleTransition, id, item.Lifecycle)
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE context_items SET lifecycle=?,updated_at=? WHERE id=? AND lifecycle='candidate'", string(lifecycle), time.Now().UnixMilli(), id); err != nil {
+			return err
+		}
+		if err := insertEvent(ctx, tx, "lifecycle", id, item.Scope, map[string]string{"lifecycle": string(lifecycle)}); err != nil {
 			return err
 		}
 	}
@@ -1046,6 +1067,9 @@ func (r *SQLiteRepository) BindCandidates(ctx context.Context, ids []string, bin
 			item, err := scanItem(tx.QueryRowContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE id=?", id))
 			if err != nil {
 				return err
+			}
+			if IsReservedSourceType(item.Source.Type) {
+				return reservedSourceError(id)
 			}
 			if item.Lifecycle != LifecycleCandidate {
 				return fmt.Errorf("context item %q is not a candidate", id)
@@ -1107,6 +1131,9 @@ func (r *SQLiteRepository) ConfirmCandidates(ctx context.Context, ids []string, 
 			item, err := getItemQ(ctx, tx, id)
 			if err != nil {
 				return err
+			}
+			if IsReservedSourceType(item.Source.Type) {
+				return reservedSourceError(id)
 			}
 			if err = confirmCandidateTx(ctx, tx, item, binding, seenOld); err != nil {
 				return err

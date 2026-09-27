@@ -187,6 +187,17 @@ func consolidationSignature(item contextstore.ContextItem) string {
 	return "semantic:" + hex.EncodeToString(digest[:8])
 }
 
+// refuseConsolidationCandidates points generic confirm/reject at the
+// consolidation review commands, which revalidate the proposal atomically.
+func refuseConsolidationCandidates(items []contextstore.ContextItem) error {
+	for _, item := range items {
+		if contextstore.IsReservedSourceType(item.Source.Type) {
+			return fmt.Errorf("context item %q belongs to consolidation proposal %q; use \"hufu context consolidation approve|reject %s\"", item.ID, item.Source.Ref, item.Source.Ref)
+		}
+	}
+	return nil
+}
+
 func splitConsolidationIDs(value string) []string {
 	var result []string
 	for _, part := range strings.Split(value, ",") {

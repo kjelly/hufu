@@ -39,10 +39,11 @@ type Repository interface {
 	// own one SQLite connection, so re-entry while Rows is open can deadlock.
 	Iterate(context.Context, RepositoryQuery, func(ContextItem) error) error
 	MarkSuperseded(context.Context, []string, string) error
-	// UpdateLifecycle changes the lifecycle of explicitly selected records.
-	// Callers must authorise and select IDs before calling this method; it is
-	// intentionally an ID-only mutation so repository users cannot broaden a
-	// private scope through a lifecycle request.
+	// UpdateLifecycle rejects explicitly selected candidates; any other target
+	// or current lifecycle returns ErrLifecycleTransition. Callers must
+	// authorise and select IDs before calling this method; it is intentionally
+	// an ID-only mutation so repository users cannot broaden a private scope
+	// through a lifecycle request.
 	UpdateLifecycle(context.Context, []string, ContextLifecycle) error
 	// BindCandidates records accepted-run evidence before lifecycle promotion.
 	// Callers must authorize and select IDs; the repository deliberately does

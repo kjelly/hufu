@@ -174,7 +174,7 @@ func TestHandoffCommandsEnforceScopeAndMarkChangedEvidenceStale(t *testing.T) {
 	}
 	setHandoffTestGlobals(fixture.workspace, fixture.scope)
 	repo := openHandoffTestRepo(t, fixture.workspace)
-	if err := repo.UpdateLifecycle(t.Context(), []string{"source-a"}, contextstore.LifecycleRejected); err != nil {
+	if err := repo.MarkSuperseded(t.Context(), []string{"source-a"}, "source-b"); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Close(); err != nil {
@@ -193,7 +193,7 @@ func TestConsolidationHandoffRejectsChangedSource(t *testing.T) {
 	repo := openHandoffTestRepo(t, workspace)
 	sources := appendConfirmedHandoffSources(t, repo, scope, 2)
 	proposal := createHandoffConsolidation(t, repo, scope, sources, "consolidated guidance")
-	if err := repo.UpdateLifecycle(t.Context(), []string{sources[0].ID}, contextstore.LifecycleRejected); err != nil {
+	if err := repo.MarkSuperseded(t.Context(), []string{sources[0].ID}, sources[1].ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Close(); err != nil {

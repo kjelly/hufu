@@ -76,3 +76,22 @@ func TestConsolidationReviewHidesOtherProjects(t *testing.T) {
 		t.Fatalf("missing and out-of-project errors differ: %q vs %q", missingErr, otherErr)
 	}
 }
+
+func TestGenericConfirmAndRejectRefuseConsolidationCandidates(t *testing.T) {
+	workspace, _ := consolidationDraftFixture(t)
+	if _, err := helperRunConsolidateCLI(manualConsolidationArgs(workspace)...); err != nil {
+		t.Fatal(err)
+	}
+	proposal, candidate := pendingProposal(t, workspace)
+	for _, args := range [][]string{
+		{"context", "confirm", "--workspace", workspace, "--project", "proj1", "--team", "demo", "--evidence", "bypass", candidate.ID},
+		{"context", "reject", "--workspace", workspace, "--project", "proj1", "--team", "demo", "--reason", "bypass", candidate.ID},
+	} {
+		if _, err := helperRunConsolidateCLI(args...); err == nil || !strings.Contains(err.Error(), "hufu context consolidation approve|reject "+proposal.ID) {
+			t.Fatalf("%s err = %v, want a pointer to the consolidation review commands", args[1], err)
+		}
+	}
+	if got := candidateLifecycle(t, workspace, candidate.ID); got != contextstore.LifecycleCandidate {
+		t.Fatalf("generic command changed the consolidation candidate to %s", got)
+	}
+}

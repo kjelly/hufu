@@ -136,7 +136,7 @@ func TestCanonicalMemorySavePreservesContractFieldsAndQueryFilters(t *testing.T)
 	if !foundPath {
 		t.Fatalf("memory_save lost file path evidence: %#v", item.Evidence)
 	}
-	if err := repo.UpdateLifecycle(context.Background(), []string{item.ID}, contextstore.LifecycleConfirmed); err != nil {
+	if err := repo.ConfirmCandidates(context.Background(), []string{item.ID}, contextstore.CandidateBinding{Evidence: contextstore.EvidenceRef{Type: "test", Ref: "memory-query"}}); err != nil {
 		t.Fatal(err)
 	}
 	query := &canonicalMemoryQueryTool{coordinator: c}
