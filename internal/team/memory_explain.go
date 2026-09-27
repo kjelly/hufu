@@ -84,6 +84,7 @@ type MemoryExplanation struct {
 	Scope            contextstore.Scope       `json:"scope"`
 	Mode             agent.MemoryLearningMode `json:"mode"`
 	ModeSource       string                   `json:"mode_source"`
+	Fusion           contextstore.FusionMode  `json:"fusion"`
 	QueryHash        string                   `json:"query_hash"`
 	UsedGoalFallback bool                     `json:"used_goal_fallback"`
 	Retrieval        MemoryExplainRetrieval   `json:"retrieval"`
@@ -150,7 +151,7 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 		}
 	}
 	out := MemoryExplanation{
-		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource,
+		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource, Fusion: effectiveFusion(ranking.Fusion),
 		QueryHash: QueryHash(in.Query), UsedGoalFallback: ranked.UsedGoalFallback,
 		Retrieval:    MemoryExplainRetrieval{Paths: observation.Paths, ObservedCandidateCount: len(observation.Candidates)},
 		NotEvaluated: []string{memoryExplainNotEvaluatedGates, memoryExplainNotEvaluatedBudget},
@@ -242,6 +243,14 @@ func memoryExplainReasons(item contextstore.ContextItem, eligible bool, candidat
 		reasons = append(reasons, MemoryExplainInjectLimit)
 	}
 	return reasons
+}
+
+// effectiveFusion names the fusion actually used; empty means legacy.
+func effectiveFusion(fusion contextstore.FusionMode) contextstore.FusionMode {
+	if fusion == "" {
+		return contextstore.FusionLegacy
+	}
+	return fusion
 }
 
 func memoryRankingEntry(entries []MemoryRankingEntry, id string) (MemoryRankingEntry, bool) {

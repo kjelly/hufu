@@ -48,6 +48,9 @@ type HybridRetrievalOptions struct {
 	// Observer, when set, records every path's ranks and the fusion steps
 	// for an explanation. It never changes the results and is never persisted.
 	Observer *RetrievalObservation
+	// Fusion selects how lexical and vector lists are fused; empty means
+	// FusionLegacy.
+	Fusion FusionMode
 }
 
 type SemanticRetrievalTrace struct {
@@ -97,6 +100,9 @@ func validateHybridRetrievalOptions(options HybridRetrievalOptions) error {
 	}
 	if (options.TraceHasher == nil) != (options.TraceSink == nil) {
 		return errors.New("semantic trace hasher and sink must be configured together")
+	}
+	if !ValidFusionMode(options.Fusion) {
+		return fmt.Errorf("unknown retrieval fusion %q", options.Fusion)
 	}
 	if options.UnavailableReason != "" && !validSemanticFallbackReason(options.UnavailableReason) {
 		return fmt.Errorf("unknown semantic fallback reason %q", options.UnavailableReason)

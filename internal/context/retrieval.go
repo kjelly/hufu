@@ -232,7 +232,7 @@ func HybridRetrieveWithOptions(
 		vectorReason = ""
 	}
 	obs.recordPath("vector", vectorFused, vectorReason, trace.VectorResults)
-	fused := rrfObserved(obs, []string{"lexical", "vector"}, trace.LexicalResults, trace.VectorResults)
+	fused := rrfObserved(obs, []string{"lexical", "vector"}, options.Fusion, trace.LexicalResults, trace.VectorResults)
 	fused = applyMMRObserved(obs, rankForScope(fused, req.Scope), 0.75)
 	obs.recordExactPrefix(trace.ExactResults)
 	// Exact matches are a deterministic prefix, not a short-circuit: lexical
@@ -352,15 +352,47 @@ func hasRelevantScore(results []SearchResult) bool {
 	return false
 }
 
-func rrf(lists ...[]SearchResult) []SearchResult {
-	return rrfObserved(nil, nil, lists...)
+// FusionMode selects how HybridRetrieve fuses its lexical and vector lists.
+type FusionMode string
+
+const (
+	// FusionLegacy is the default: each item's fused score starts from the
+	// raw score of the first list that contains it and adds reciprocal ranks,
+	// so a lexical hit is dominated by its BM25 score (BUG-01).
+	FusionLegacy FusionMode = "legacy"
+	// FusionRRFNormalized sums reciprocal ranks only and scales them so an
+	// item ranked first in every non-empty list scores 1.
+	FusionRRFNormalized FusionMode = "rrf_normalized"
+)
+
+// ValidFusionMode reports whether mode is empty (legacy) or a known mode.
+func ValidFusionMode(mode FusionMode) bool {
+	return mode == "" || mode == FusionLegacy || mode == FusionRRFNormalized
 }
 
-// rrfObserved is rrf that also reports each list's reciprocal-rank
+func rrf(lists ...[]SearchResult) []SearchResult {
+	return rrfObserved(nil, nil, FusionLegacy, lists...)
+}
+
+// rrfObserved fuses lists with reciprocal-rank fusion and reports each list's
 // contribution, the raw score an item's fused score starts from, and content
-// duplicates. paths names lists for the observer; the result is identical to
-// rrf.
-func rrfObserved(obs *RetrievalObservation, paths []string, lists ...[]SearchResult) []SearchResult {
+// duplicates. paths names lists for the observer. FusionLegacy is identical
+// to rrf; FusionRRFNormalized starts every item at zero and scales the sum by
+// 61 over the number of non-empty lists.
+func rrfObserved(obs *RetrievalObservation, paths []string, fusion FusionMode, lists ...[]SearchResult) []SearchResult {
+	normalized := fusion == FusionRRFNormalized
+	scale := 1.0
+	if normalized {
+		nonEmpty := 0
+		for _, list := range lists {
+			if len(list) > 0 {
+				nonEmpty++
+			}
+		}
+		if nonEmpty > 0 {
+			scale = 61 / float64(nonEmpty)
+		}
+	}
 	scores := map[string]SearchResult{}
 	for index, list := range lists {
 		path := ""
@@ -371,9 +403,12 @@ func rrfObserved(obs *RetrievalObservation, paths []string, lists ...[]SearchRes
 			current, ok := scores[result.Item.ID]
 			if !ok {
 				current = result
-				obs.recordCarried(result.Item.ID, result.Score)
+				if normalized {
+					current.Score = 0
+				}
+				obs.recordCarried(result.Item.ID, current.Score)
 			}
-			contribution := 1.0 / float64(60+rank+1)
+			contribution := scale / float64(60+rank+1)
 			current.Score += contribution
 			obs.recordRRF(path, result.Item.ID, contribution)
 			scores[result.Item.ID] = current

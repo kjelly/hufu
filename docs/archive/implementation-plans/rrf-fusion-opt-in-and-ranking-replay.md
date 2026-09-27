@@ -15,8 +15,8 @@ BUG-01：`rrf` 以第一個清單的原始分數起算（`current = result`）�
 查核（合成語料，未使用使用者資料）：
 
 - 純 RRF（不正規化）讓分數約 0.016，MMR（λ=0.75）變成幾乎只看多樣性，排序偏離相關度，不可採用。
-- 正規化 RRF（最佳名次為 1）在 lexical-only 時，順序與現行相同；runtime 的注入路徑都不用向量，所以 relevance 選取不變。
-- 差異在 reinforced（active）排序：現行 base 是 BM25 強度，正規化後 base 只看名次，utility 乘數比較容易壓過弱的 lexical 命中。這可能改善 positive transfer，也可能違反 L3 的 irrelevant-high-utility gate，必須以 replay 證據判斷。
+- 正規化 RRF（最佳名次為 1）在 lexical-only 時，MMR 之前的順序與現行相同（兩者都隨 lexical 名次單調）。但分數落在 (0,1] 後，MMR 的多樣性 penalty（最多 0.25）有了原本 λ=0.75 設計的權重，會重排內容重疊的項目；現行大語料分數是數個單位的 BM25，penalty 只能重排分數幾乎相同的項目。runtime 注入路徑都不用向量，所以 relevance 選取的差異來自 MMR（Stage 1 的測試實際觀察到順序改變）。
+- reinforced（active）排序另有差異：現行 base 是 BM25 強度，正規化後 base 只看名次，utility 乘數比較容易壓過弱的 lexical 命中。這可能改善 positive transfer，也可能違反 L3 的 irrelevant-high-utility gate，必須以 replay 證據判斷。
 - 本機真實 workspace 的 shared persistent 記憶都只有 0–5 筆，沒有 aggregate、manifest 或 ranking trace，目前無法以真實資料判斷優劣（使用者資料的讀取也不在本次權限內）。
 
 決策（使用者確認）：

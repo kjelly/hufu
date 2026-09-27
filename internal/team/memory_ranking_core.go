@@ -83,7 +83,7 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
 		results, _, err := contextstore.HybridRetrieveWithOptions(ctx, repo, contextstore.SearchRequest{
 			Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit,
-		}, contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer})
+		}, contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion})
 		return results, err
 	}
 	results, err := retrieve(in.Query)
@@ -117,14 +117,7 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 			results = results[:in.Ranking.CandidateTopK]
 		}
 	}
-	// HybridRetrieve's RRF scores are reciprocal ranks (the first lexical hit
-	// is about 1/61), while runtime policy relevance is defined on [0,1].
-	// Normalize that fused scale before applying the policy threshold.
-	for i := range results {
-		if results[i].Score > 0 && results[i].Score < 1 {
-			results[i].Score = math.Min(1, results[i].Score*61)
-		}
-	}
+	normalizeFusedRelevance(results, in.Ranking.Fusion)
 	out.Results = results
 	relevanceEntries, relevanceScores, relevanceFinal := relevanceMemoryEntries(results, in.Ranking)
 	out.RelevanceEntries = relevanceEntries
@@ -147,6 +140,23 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	}
 	out.Selected, out.Scores, out.FinalScores = selectedMemoryResults(results, entries), scores, finalScores
 	return out, nil
+}
+
+// normalizeFusedRelevance maps fused scores onto the policy's [0,1]
+// relevance scale. Legacy fusion multiplies sub-unit scores by 61, which
+// normalizes a pure reciprocal rank but leaves a carried raw BM25 score of 1
+// or more unscaled (BUG-01). Normalized RRF is already on the unit scale, so
+// it is only clamped; multiplying it again would saturate every score to 1.
+func normalizeFusedRelevance(results []contextstore.SearchResult, fusion contextstore.FusionMode) {
+	for i := range results {
+		if fusion == contextstore.FusionRRFNormalized {
+			results[i].Score = math.Max(0, math.Min(1, results[i].Score))
+			continue
+		}
+		if results[i].Score > 0 && results[i].Score < 1 {
+			results[i].Score = math.Min(1, results[i].Score*61)
+		}
+	}
 }
 
 // reinforceSearchResultsWith applies the reinforced memory score to retrieval

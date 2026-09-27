@@ -25,6 +25,9 @@ type MemoryRuntimeRankingPolicy struct {
 	MinimumRelevance float64
 	UtilityWeight    float64
 	FreshnessWeight  float64
+	// Fusion is the retrieval fusion for shared-persistent ranking; empty
+	// means contextstore.FusionLegacy.
+	Fusion contextstore.FusionMode
 }
 
 func defaultMemoryRuntimeRankingPolicy() MemoryRuntimeRankingPolicy {
@@ -45,7 +48,9 @@ func effectiveRankingPolicy(policy MemoryRuntimeRankingPolicy) MemoryRuntimeRank
 		policy.InjectTopK = policy.TopK
 	}
 	if policy.CandidateTopK <= 0 || policy.InjectTopK <= 0 || policy.InjectTopK > policy.CandidateTopK {
-		return defaultMemoryRuntimeRankingPolicy()
+		fallback := defaultMemoryRuntimeRankingPolicy()
+		fallback.Fusion = policy.Fusion
+		return fallback
 	}
 	policy.TopK = policy.CandidateTopK
 	return policy
@@ -104,6 +109,7 @@ func LoadMemoryPolicy(ctx context.Context, repo contextstore.Repository, policyV
 			MinimumRelevance float64 `json:"minimum_relevance"`
 			UtilityWeight    float64 `json:"utility_weight"`
 			FreshnessWeight  float64 `json:"freshness_weight"`
+			Fusion           string  `json:"fusion"`
 		} `json:"retrieval"`
 	}
 	if err := json.Unmarshal(record.Snapshot, &snapshot); err != nil {
@@ -121,11 +127,11 @@ func LoadMemoryPolicy(ctx context.Context, repo contextstore.Repository, policyV
 	if candidateTopK == 0 && injectTopK == 0 {
 		candidateTopK, injectTopK = snapshot.Retrieval.TopK, snapshot.Retrieval.TopK
 	}
-	if !validMode || snapshot.Learning.PriorAlpha <= 0 || snapshot.Learning.PriorBeta <= 0 || snapshot.Learning.UtilityPercentile <= 0 || snapshot.Learning.UtilityPercentile >= 1 || snapshot.Learning.MaxCreditPerSignal <= 0 || snapshot.Learning.MinConfirmedSupport < 0 || snapshot.Learning.MinIndependentTasks < 0 || snapshot.Learning.MaxHarmRate < 0 || snapshot.Learning.MaxHarmRate > 1 || candidateTopK <= 0 || injectTopK <= 0 || injectTopK > candidateTopK || snapshot.Retrieval.MinimumRelevance < 0 || snapshot.Retrieval.MinimumRelevance > 1 || snapshot.Retrieval.UtilityWeight < 0 || snapshot.Retrieval.FreshnessWeight < 0 {
+	if !validMode || snapshot.Learning.PriorAlpha <= 0 || snapshot.Learning.PriorBeta <= 0 || snapshot.Learning.UtilityPercentile <= 0 || snapshot.Learning.UtilityPercentile >= 1 || snapshot.Learning.MaxCreditPerSignal <= 0 || snapshot.Learning.MinConfirmedSupport < 0 || snapshot.Learning.MinIndependentTasks < 0 || snapshot.Learning.MaxHarmRate < 0 || snapshot.Learning.MaxHarmRate > 1 || candidateTopK <= 0 || injectTopK <= 0 || injectTopK > candidateTopK || snapshot.Retrieval.MinimumRelevance < 0 || snapshot.Retrieval.MinimumRelevance > 1 || snapshot.Retrieval.UtilityWeight < 0 || snapshot.Retrieval.FreshnessWeight < 0 || !contextstore.ValidFusionMode(contextstore.FusionMode(snapshot.Retrieval.Fusion)) {
 		return learning, runtime, fmt.Errorf("memory policy %q contains invalid runtime parameters", record.PolicyVersion)
 	}
 	snapshot.Learning.PolicyVersion = record.PolicyVersion
-	return snapshot.Learning, MemoryRuntimeRankingPolicy{CandidateTopK: candidateTopK, InjectTopK: injectTopK, TopK: candidateTopK, MinimumRelevance: snapshot.Retrieval.MinimumRelevance, UtilityWeight: snapshot.Retrieval.UtilityWeight, FreshnessWeight: snapshot.Retrieval.FreshnessWeight}, nil
+	return snapshot.Learning, MemoryRuntimeRankingPolicy{CandidateTopK: candidateTopK, InjectTopK: injectTopK, TopK: candidateTopK, MinimumRelevance: snapshot.Retrieval.MinimumRelevance, UtilityWeight: snapshot.Retrieval.UtilityWeight, FreshnessWeight: snapshot.Retrieval.FreshnessWeight, Fusion: contextstore.FusionMode(snapshot.Retrieval.Fusion)}, nil
 }
 
 func (c *Coordinator) loadAdoptedMemoryPolicy(ctx context.Context) error {

@@ -29,6 +29,9 @@ type MemoryRetrievalPolicy struct {
 	FreshnessWeight  float64 `json:"freshness_weight"`
 	PromptLayout     string  `json:"prompt_layout"`
 	AgentCategory    string  `json:"agent_category,omitempty"`
+	// Fusion is the shared-persistent retrieval fusion. Omitted means
+	// legacy, which keeps existing snapshot revision hashes unchanged.
+	Fusion string `json:"fusion,omitempty"`
 }
 
 type MemoryAttributionPolicy struct {
@@ -96,6 +99,9 @@ func CreateMemoryPolicyCandidate(id string, baseline, candidate MemoryPolicySnap
 }
 
 func validateMemoryRetrievalPolicy(policy MemoryRetrievalPolicy) error {
+	if !contextstore.ValidFusionMode(contextstore.FusionMode(policy.Fusion)) {
+		return fmt.Errorf("unknown retrieval fusion %q", policy.Fusion)
+	}
 	if policy.CandidateTopK == 0 && policy.InjectTopK == 0 {
 		if policy.TopK <= 0 {
 			return fmt.Errorf("legacy top_k must be positive")
