@@ -32,6 +32,9 @@ type MemoryRetrievalPolicy struct {
 	// Fusion is the shared-persistent retrieval fusion. Omitted means
 	// legacy, which keeps existing snapshot revision hashes unchanged.
 	Fusion string `json:"fusion,omitempty"`
+	// FusionCarriedWeight is the score_normalized carried weight in (0,1];
+	// omitted means the default.
+	FusionCarriedWeight float64 `json:"fusion_carried_weight,omitempty"`
 }
 
 type MemoryAttributionPolicy struct {
@@ -101,6 +104,9 @@ func CreateMemoryPolicyCandidate(id string, baseline, candidate MemoryPolicySnap
 func validateMemoryRetrievalPolicy(policy MemoryRetrievalPolicy) error {
 	if !contextstore.ValidFusionMode(contextstore.FusionMode(policy.Fusion)) {
 		return fmt.Errorf("unknown retrieval fusion %q", policy.Fusion)
+	}
+	if !contextstore.ValidFusionCarriedWeight(policy.FusionCarriedWeight) {
+		return fmt.Errorf("retrieval fusion carried weight %v is outside [0,1]", policy.FusionCarriedWeight)
 	}
 	if policy.CandidateTopK == 0 && policy.InjectTopK == 0 {
 		if policy.TopK <= 0 {

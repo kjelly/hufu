@@ -62,6 +62,35 @@ func replayL3Fixture(t *testing.T) (*Coordinator, *contextstore.SQLiteRepository
 	return c, repo
 }
 
+// replaySmallL3Fixture is the irrelevant-high-utility case without filler:
+// BM25 is then near zero, so legacy fusion collapses to a rank-only scale.
+func replaySmallL3Fixture(t *testing.T) *contextstore.SQLiteRepository {
+	t.Helper()
+	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	var items []contextstore.ContextItem
+	for i, content := range []string{"sqlite schema version table", "sqlite schema readers check the version", "sqlite schema checksum mismatch aborts the open", "sqlite schema migrations are append only", "sqlite schema backups happen before migrating"} {
+		item := rankingItem(fmt.Sprintf("relevant-%d", i+1), 10)
+		item.Content = content
+		items = append(items, item)
+	}
+	weak := rankingItem("irrelevant-high-utility", 10)
+	weak.Content = "a long unrelated operations note about cache warming dashboards alerting rotations and on call handoffs that mentions sqlite once and schema once"
+	items = append(items, weak)
+	if err := repo.Append(context.Background(), items...); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		if _, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{
+			IdempotencyKey: fmt.Sprintf("weak-%d", i), ContextItemID: "irrelevant-high-utility", PolicyVersion: replayTestPolicy, ProjectID: "project", TaskID: fmt.Sprintf("task-%d", i),
+			AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 6, PriorAlpha: 1, PriorBeta: 1, UtilityPercentile: 0.1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adoptExplainTestPolicy(t, c, repo, agent.MemoryLearningOff, nil)
+	return repo
+}
+
 func replayInput(queries ...string) RankingReplayInput {
 	in := RankingReplayInput{ProjectID: "project", TeamID: "team", CandidateFusion: contextstore.FusionRRFNormalized}
 	for _, query := range queries {
@@ -178,5 +207,46 @@ func TestSessionReplayQueriesUseTaskGoals(t *testing.T) {
 	}
 	if goal, _, _ := strings.Cut(queries[1].Text, "\n"); goal != "fix the sqlite schema" || !strings.Contains(queries[1].Text, "phase:verify") {
 		t.Fatalf("second query = %q", queries[1].Text)
+	}
+}
+
+// TestScoreNormalizedFusionOnL3IrrelevantHighUtility records the synthetic
+// evidence for the fusion candidates: whether each ranker selects the weakly
+// matching high-utility memory, on a large and a small corpus.
+func TestScoreNormalizedFusionOnL3IrrelevantHighUtility(t *testing.T) {
+	_, large := replayL3Fixture(t)
+	small := replaySmallL3Fixture(t)
+	type picks struct{ relevance, reinforced bool }
+	pick := func(repo *contextstore.SQLiteRepository, fusion contextstore.FusionMode, weight float64) (picks, picks) {
+		in := replayInput("sqlite schema\nphase:execute")
+		in.CandidateFusion, in.CandidateCarriedWeight = fusion, weight
+		report, err := ReplayPersistentRanking(context.Background(), repo, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := report.Queries[0]
+		has := func(ids []string) bool { return slices.Contains(ids, "irrelevant-high-utility") }
+		return picks{has(q.Relevance.BaselineSelected), has(q.Reinforced.BaselineSelected)}, picks{has(q.Relevance.CandidateSelected), has(q.Reinforced.CandidateSelected)}
+	}
+	cases := []struct {
+		name       string
+		repo       *contextstore.SQLiteRepository
+		fusion     contextstore.FusionMode
+		weight     float64
+		wantLegacy picks
+		want       picks
+	}{
+		{name: "large rrf_normalized", repo: large, fusion: contextstore.FusionRRFNormalized, want: picks{true, true}},
+		{name: "large score_normalized 0.5", repo: large, fusion: contextstore.FusionScoreNormalized, weight: 0.5, want: picks{false, true}},
+		{name: "large score_normalized default", repo: large, fusion: contextstore.FusionScoreNormalized},
+		{name: "small rrf_normalized", repo: small, fusion: contextstore.FusionRRFNormalized, wantLegacy: picks{true, true}, want: picks{true, true}},
+		{name: "small score_normalized 0.5", repo: small, fusion: contextstore.FusionScoreNormalized, weight: 0.5, wantLegacy: picks{true, true}, want: picks{false, true}},
+		{name: "small score_normalized default", repo: small, fusion: contextstore.FusionScoreNormalized, wantLegacy: picks{true, true}},
+	}
+	for _, tc := range cases {
+		legacy, candidate := pick(tc.repo, tc.fusion, tc.weight)
+		if legacy != tc.wantLegacy || candidate != tc.want {
+			t.Fatalf("%s: legacy picks %+v (want %+v), candidate picks %+v (want %+v)", tc.name, legacy, tc.wantLegacy, candidate, tc.want)
+		}
 	}
 }

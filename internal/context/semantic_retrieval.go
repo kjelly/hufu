@@ -51,6 +51,9 @@ type HybridRetrievalOptions struct {
 	// Fusion selects how lexical and vector lists are fused; empty means
 	// FusionLegacy.
 	Fusion FusionMode
+	// FusionCarriedWeight is FusionScoreNormalized's carried-score weight in
+	// (0,1]; 0 means DefaultScoreFusionCarriedWeight.
+	FusionCarriedWeight float64
 }
 
 type SemanticRetrievalTrace struct {
@@ -103,6 +106,9 @@ func validateHybridRetrievalOptions(options HybridRetrievalOptions) error {
 	}
 	if !ValidFusionMode(options.Fusion) {
 		return fmt.Errorf("unknown retrieval fusion %q", options.Fusion)
+	}
+	if !ValidFusionCarriedWeight(options.FusionCarriedWeight) {
+		return fmt.Errorf("retrieval fusion carried weight %v is outside [0,1]", options.FusionCarriedWeight)
 	}
 	if options.UnavailableReason != "" && !validSemanticFallbackReason(options.UnavailableReason) {
 		return fmt.Errorf("unknown semantic fallback reason %q", options.UnavailableReason)

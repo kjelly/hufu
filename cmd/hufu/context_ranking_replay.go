@@ -21,6 +21,7 @@ var (
 	rankingReplayQueriesFile string
 	rankingReplayFromSession bool
 	rankingReplayFusion      string
+	rankingReplayWeight      float64
 )
 
 var contextRankingReplayCmd = &cobra.Command{
@@ -38,7 +39,8 @@ func init() {
 	flags.StringArrayVar(&rankingReplayQueries, "query", nil, "Query to replay (repeatable)")
 	flags.StringVar(&rankingReplayQueriesFile, "queries-file", "", "File with one query per line; blank lines and lines starting with # are ignored")
 	flags.BoolVar(&rankingReplayFromSession, "from-session", false, "Rebuild dispatch queries from the goals of the tasks in the workspace session")
-	flags.StringVar(&rankingReplayFusion, "candidate-fusion", string(contextstore.FusionRRFNormalized), "Candidate fusion: legacy or rrf_normalized")
+	flags.StringVar(&rankingReplayFusion, "candidate-fusion", string(contextstore.FusionRRFNormalized), "Candidate fusion: legacy, rrf_normalized, or score_normalized")
+	flags.Float64Var(&rankingReplayWeight, "candidate-carried-weight", 0, "Carried-score weight in (0,1] for score_normalized (default 0.8)")
 	flags.StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version (default: the active policy)")
 	flags.BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 	contextCmd.AddCommand(contextRankingReplayCmd)
@@ -73,7 +75,7 @@ func runContextRankingReplay(cmd *cobra.Command, _ []string) error {
 	}
 	report, err := team.ReplayPersistentRanking(cmd.Context(), repo, team.RankingReplayInput{
 		ProjectID: contextProject, TeamID: contextTeam, PolicyVersion: policyVersion, Queries: queries,
-		CandidateFusion: contextstore.FusionMode(rankingReplayFusion), Now: time.Now().UTC(),
+		CandidateFusion: contextstore.FusionMode(rankingReplayFusion), CandidateCarriedWeight: rankingReplayWeight, Now: time.Now().UTC(),
 	})
 	if err != nil {
 		return err
@@ -117,8 +119,12 @@ func writeRankingReplay(out io.Writer, report team.RankingReplayReport) error {
 	if report.OutcomeMetricsAvailable {
 		metrics = "available"
 	}
+	candidate := string(report.CandidateFusion)
+	if report.CandidateCarriedWeight > 0 {
+		candidate += fmt.Sprintf("(carried_weight=%.2f)", report.CandidateCarriedWeight)
+	}
 	if _, err := fmt.Fprintf(out, "context ranking-replay: scope=%s/%s policy=%s (%s) baseline=%s candidate=%s\neligible=%d with_aggregates=%d outcome_metrics=%s queries=%d\n",
-		report.Scope.ProjectID, report.Scope.TeamID, report.PolicyVersion, report.ModeSource, report.BaselineFusion, report.CandidateFusion,
+		report.Scope.ProjectID, report.Scope.TeamID, report.PolicyVersion, report.ModeSource, report.BaselineFusion, candidate,
 		report.EligibleItems, report.ItemsWithAggregates, metrics, report.QueryCount); err != nil {
 		return err
 	}

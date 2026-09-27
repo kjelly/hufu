@@ -232,7 +232,7 @@ func HybridRetrieveWithOptions(
 		vectorReason = ""
 	}
 	obs.recordPath("vector", vectorFused, vectorReason, trace.VectorResults)
-	fused := rrfObserved(obs, []string{"lexical", "vector"}, options.Fusion, trace.LexicalResults, trace.VectorResults)
+	fused := rrfObserved(obs, []string{"lexical", "vector"}, fusionConfig{mode: options.Fusion, carriedWeight: options.FusionCarriedWeight}, trace.LexicalResults, trace.VectorResults)
 	fused = applyMMRObserved(obs, rankForScope(fused, req.Scope), 0.75)
 	obs.recordExactPrefix(trace.ExactResults)
 	// Exact matches are a deterministic prefix, not a short-circuit: lexical
@@ -363,34 +363,74 @@ const (
 	// FusionRRFNormalized sums reciprocal ranks only and scales them so an
 	// item ranked first in every non-empty list scores 1.
 	FusionRRFNormalized FusionMode = "rrf_normalized"
+	// FusionScoreNormalized keeps the legacy carried score but divides it by
+	// the maximum raw score of its list, and mixes it with the normalized
+	// reciprocal-rank sum by a carried weight, so match strength survives on
+	// a (0,1] scale.
+	FusionScoreNormalized FusionMode = "score_normalized"
 )
+
+// DefaultScoreFusionCarriedWeight is FusionScoreNormalized's carried-score
+// weight when none is configured. With lexical-only retrieval the
+// reciprocal-rank term only compresses match-strength gaps; on the synthetic
+// L3 fixture a weight of 0.5 let a weak high-utility match win the reinforced
+// ranking, 0.70 still did on a large corpus, and 0.75 or more did not.
+const DefaultScoreFusionCarriedWeight = 0.8
+
+// ValidFusionCarriedWeight reports whether weight is unset (0) or in (0,1].
+func ValidFusionCarriedWeight(weight float64) bool {
+	return weight >= 0 && weight <= 1
+}
 
 // ValidFusionMode reports whether mode is empty (legacy) or a known mode.
 func ValidFusionMode(mode FusionMode) bool {
-	return mode == "" || mode == FusionLegacy || mode == FusionRRFNormalized
+	return mode == "" || mode == FusionLegacy || mode == FusionRRFNormalized || mode == FusionScoreNormalized
+}
+
+// fusionConfig is a fusion mode and, for FusionScoreNormalized, its carried
+// weight (0 means DefaultScoreFusionCarriedWeight).
+type fusionConfig struct {
+	mode          FusionMode
+	carriedWeight float64
 }
 
 func rrf(lists ...[]SearchResult) []SearchResult {
-	return rrfObserved(nil, nil, FusionLegacy, lists...)
+	return rrfObserved(nil, nil, fusionConfig{mode: FusionLegacy}, lists...)
 }
 
 // rrfObserved fuses lists with reciprocal-rank fusion and reports each list's
-// contribution, the raw score an item's fused score starts from, and content
+// contribution, the score an item's fused score starts from, and content
 // duplicates. paths names lists for the observer. FusionLegacy is identical
-// to rrf; FusionRRFNormalized starts every item at zero and scales the sum by
-// 61 over the number of non-empty lists.
-func rrfObserved(obs *RetrievalObservation, paths []string, fusion FusionMode, lists ...[]SearchResult) []SearchResult {
-	normalized := fusion == FusionRRFNormalized
-	scale := 1.0
+// to rrf. FusionRRFNormalized starts every item at zero and scales the sum by
+// 61 over the number of non-empty lists. FusionScoreNormalized starts from
+// the carried weight times the carried raw score divided by its list's
+// maximum and adds the remaining weight times the FusionRRFNormalized sum, so
+// the fused score stays in (0,1].
+func rrfObserved(obs *RetrievalObservation, paths []string, config fusionConfig, lists ...[]SearchResult) []SearchResult {
+	fusion := config.mode
+	normalized := fusion == FusionRRFNormalized || fusion == FusionScoreNormalized
+	carriedWeight, scale := 1.0, 1.0
+	listMax := make([]float64, len(lists))
 	if normalized {
 		nonEmpty := 0
-		for _, list := range lists {
+		for index, list := range lists {
 			if len(list) > 0 {
 				nonEmpty++
+			}
+			for _, result := range list {
+				listMax[index] = max(listMax[index], result.Score)
 			}
 		}
 		if nonEmpty > 0 {
 			scale = 61 / float64(nonEmpty)
+		}
+		carriedWeight = 0
+		if fusion == FusionScoreNormalized {
+			carriedWeight = config.carriedWeight
+			if carriedWeight <= 0 {
+				carriedWeight = DefaultScoreFusionCarriedWeight
+			}
+			scale *= 1 - carriedWeight
 		}
 	}
 	scores := map[string]SearchResult{}
@@ -405,6 +445,9 @@ func rrfObserved(obs *RetrievalObservation, paths []string, fusion FusionMode, l
 				current = result
 				if normalized {
 					current.Score = 0
+					if carriedWeight > 0 && listMax[index] > 0 && result.Score > 0 {
+						current.Score = carriedWeight * result.Score / listMax[index]
+					}
 				}
 				obs.recordCarried(result.Item.ID, current.Score)
 			}

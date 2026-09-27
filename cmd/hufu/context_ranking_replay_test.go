@@ -42,7 +42,7 @@ func rankingReplayWorkspace(t *testing.T) string {
 func runRankingReplayCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	contextWorkspace, contextProject, contextTeam, contextQueryJSON, contextPolicyVersion = "", "", "", false, "memory-policy-v1"
-	rankingReplayQueries, rankingReplayQueriesFile, rankingReplayFromSession, rankingReplayFusion = nil, "", false, string(contextstore.FusionRRFNormalized)
+	rankingReplayQueries, rankingReplayQueriesFile, rankingReplayFromSession, rankingReplayFusion, rankingReplayWeight = nil, "", false, string(contextstore.FusionRRFNormalized), 0
 	contextRankingReplayCmd.Flags().Lookup("policy-version").Changed = false
 	root := newRootCommand()
 	out := new(bytes.Buffer)
@@ -125,10 +125,28 @@ func TestContextRankingReplayRejectsInvalidInvocations(t *testing.T) {
 		{args: []string{"--workspace", workspace, "--project", "proj1", "--query", "x"}, want: "--project and --team"},
 		{args: []string{"--workspace", workspace, "--project", "proj1", "--team", "demo"}, want: "no queries"},
 		{args: []string{"--workspace", workspace, "--project", "proj1", "--team", "demo", "--query", "x", "--candidate-fusion", "rrf"}, want: "unknown candidate fusion"},
+		{args: []string{"--workspace", workspace, "--project", "proj1", "--team", "demo", "--query", "x", "--candidate-fusion", "score_normalized", "--candidate-carried-weight", "1.5"}, want: "outside [0,1]"},
 	}
 	for _, tc := range cases {
 		if _, err := runRankingReplayCLI(t, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%v err = %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestContextRankingReplayReportsScoreNormalizedWeight(t *testing.T) {
+	workspace := rankingReplayWorkspace(t)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--candidate-fusion", "score_normalized"}, want: "candidate=score_normalized(carried_weight=0.80)"},
+		{args: []string{"--candidate-fusion", "score_normalized", "--candidate-carried-weight", "0.9"}, want: "candidate=score_normalized(carried_weight=0.90)"},
+		{args: []string{"--candidate-fusion", "rrf_normalized"}, want: "candidate=rrf_normalized\n"},
+	} {
+		out, err := runRankingReplayCLI(t, append([]string{"--workspace", workspace, "--project", "proj1", "--team", "demo", "--query", "rollback deploy"}, tc.args...)...)
+		if err != nil || !strings.Contains(out, tc.want) {
+			t.Fatalf("%v output = %q err=%v, want %q", tc.args, out, err, tc.want)
 		}
 	}
 }

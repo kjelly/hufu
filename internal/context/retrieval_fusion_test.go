@@ -106,3 +106,50 @@ func TestHybridRetrieveRejectsUnknownFusion(t *testing.T) {
 		t.Fatal("unknown fusion accepted")
 	}
 }
+
+func TestScoreNormalizedFusionKeepsMatchStrength(t *testing.T) {
+	repo := fusionTestRepo(t)
+	for _, weight := range []float64{0, 0.5, 1} {
+		t.Run(fmt.Sprintf("weight=%v", weight), func(t *testing.T) {
+			obs := &RetrievalObservation{}
+			results, _, err := HybridRetrieveWithOptions(context.Background(), repo, SearchRequest{Query: "sqlite schema", Scope: Scope{ProjectID: "p"}, Limit: 10}, HybridRetrievalOptions{
+				Mode: RetrievalActive, UnavailableReason: SemanticFallbackProjectionMissing, Fusion: FusionScoreNormalized, FusionCarriedWeight: weight, Observer: obs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			effective := weight
+			if effective == 0 {
+				effective = DefaultScoreFusionCarriedWeight
+			}
+			maxLexical := 0.0
+			for _, c := range obs.Candidates {
+				maxLexical = max(maxLexical, c.LexicalScore)
+			}
+			for _, result := range results {
+				c, _ := obs.Candidate(result.Item.ID)
+				if want := effective * c.LexicalScore / maxLexical; math.Abs(c.CarriedScore-want) > 1e-12 {
+					t.Fatalf("%s carried = %v, want %v", c.ItemID, c.CarriedScore, want)
+				}
+				if math.Abs(c.CarriedScore+c.LexicalRRF-c.FusedScore) > 1e-12 || c.FusedScore <= 0 || c.FusedScore > 1+1e-12 {
+					t.Fatalf("%s observation %+v", c.ItemID, c)
+				}
+			}
+			// Match strength orders the fused list: a strictly stronger
+			// lexical match is never ranked below a weaker one before MMR.
+			for _, a := range obs.Candidates {
+				for _, b := range obs.Candidates {
+					if a.LexicalScore > b.LexicalScore && a.PreMMRRank > b.PreMMRRank {
+						t.Fatalf("%s (%v) ranked below %s (%v) before MMR", a.ItemID, a.LexicalScore, b.ItemID, b.LexicalScore)
+					}
+				}
+			}
+			if math.Abs(results[0].Score-1) > 1e-12 {
+				t.Fatalf("top fused score = %v, want 1", results[0].Score)
+			}
+		})
+	}
+	if _, _, err := HybridRetrieveWithOptions(context.Background(), repo, SearchRequest{Query: "sqlite", Scope: Scope{ProjectID: "p"}}, HybridRetrievalOptions{Mode: RetrievalOff, Fusion: FusionScoreNormalized, FusionCarriedWeight: 1.5}); err == nil {
+		t.Fatal("carried weight above 1 accepted")
+	}
+}

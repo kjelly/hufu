@@ -81,16 +81,18 @@ type MemoryExplanation struct {
 	SchemaVersion int  `json:"schema_version"`
 	Recomputed    bool `json:"recomputed"`
 	MemoryScoreExplanation
-	Scope            contextstore.Scope       `json:"scope"`
-	Mode             agent.MemoryLearningMode `json:"mode"`
-	ModeSource       string                   `json:"mode_source"`
-	Fusion           contextstore.FusionMode  `json:"fusion"`
-	QueryHash        string                   `json:"query_hash"`
-	UsedGoalFallback bool                     `json:"used_goal_fallback"`
-	Retrieval        MemoryExplainRetrieval   `json:"retrieval"`
-	Ranking          MemoryExplainRanking     `json:"ranking"`
-	Reasons          []MemoryExplainReason    `json:"reasons"`
-	NotEvaluated     []string                 `json:"not_evaluated"`
+	Scope      contextstore.Scope       `json:"scope"`
+	Mode       agent.MemoryLearningMode `json:"mode"`
+	ModeSource string                   `json:"mode_source"`
+	Fusion     contextstore.FusionMode  `json:"fusion"`
+	// FusionCarriedWeight is set only for score_normalized fusion.
+	FusionCarriedWeight float64                `json:"fusion_carried_weight,omitempty"`
+	QueryHash           string                 `json:"query_hash"`
+	UsedGoalFallback    bool                   `json:"used_goal_fallback"`
+	Retrieval           MemoryExplainRetrieval `json:"retrieval"`
+	Ranking             MemoryExplainRanking   `json:"ranking"`
+	Reasons             []MemoryExplainReason  `json:"reasons"`
+	NotEvaluated        []string               `json:"not_evaluated"`
 }
 
 // ExplainPersistentMemory reruns the runtime shared-persistent ranking without
@@ -143,7 +145,7 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 		}
 	}
 	out := MemoryExplanation{
-		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource, Fusion: effectiveFusion(ranking.Fusion),
+		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource, Fusion: effectiveFusion(ranking.Fusion), FusionCarriedWeight: effectiveCarriedWeight(ranking.Fusion, ranking.FusionCarriedWeight),
 		QueryHash: QueryHash(in.Query), UsedGoalFallback: ranked.UsedGoalFallback,
 		Retrieval:    MemoryExplainRetrieval{Paths: observation.Paths, ObservedCandidateCount: len(observation.Candidates)},
 		NotEvaluated: []string{memoryExplainNotEvaluatedGates, memoryExplainNotEvaluatedBudget},
@@ -261,6 +263,18 @@ func effectiveFusion(fusion contextstore.FusionMode) contextstore.FusionMode {
 		return contextstore.FusionLegacy
 	}
 	return fusion
+}
+
+// effectiveCarriedWeight is the carried weight score_normalized fusion uses,
+// or 0 for the other fusions.
+func effectiveCarriedWeight(fusion contextstore.FusionMode, weight float64) float64 {
+	if fusion != contextstore.FusionScoreNormalized {
+		return 0
+	}
+	if weight <= 0 {
+		return contextstore.DefaultScoreFusionCarriedWeight
+	}
+	return weight
 }
 
 func memoryRankingEntry(entries []MemoryRankingEntry, id string) (MemoryRankingEntry, bool) {

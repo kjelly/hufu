@@ -83,7 +83,7 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
 		results, _, err := contextstore.HybridRetrieveWithOptions(ctx, repo, contextstore.SearchRequest{
 			Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit,
-		}, contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion})
+		}, contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight})
 		return results, err
 	}
 	results, err := retrieve(in.Query)
@@ -145,11 +145,12 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 // normalizeFusedRelevance maps fused scores onto the policy's [0,1]
 // relevance scale. Legacy fusion multiplies sub-unit scores by 61, which
 // normalizes a pure reciprocal rank but leaves a carried raw BM25 score of 1
-// or more unscaled (BUG-01). Normalized RRF is already on the unit scale, so
-// it is only clamped; multiplying it again would saturate every score to 1.
+// or more unscaled (BUG-01). The normalized fusions are already on the unit
+// scale, so they are only clamped; multiplying again would saturate every
+// score to 1.
 func normalizeFusedRelevance(results []contextstore.SearchResult, fusion contextstore.FusionMode) {
 	for i := range results {
-		if fusion == contextstore.FusionRRFNormalized {
+		if fusion != "" && fusion != contextstore.FusionLegacy {
 			results[i].Score = math.Max(0, math.Min(1, results[i].Score))
 			continue
 		}

@@ -48,6 +48,7 @@ func TestRuntimeFusionPolicyControlsRelevanceScale(t *testing.T) {
 		{fusion: "", wantFusion: "", wantAboveOne: true},
 		{fusion: "legacy", wantFusion: contextstore.FusionLegacy, wantAboveOne: true},
 		{fusion: "rrf_normalized", wantFusion: contextstore.FusionRRFNormalized},
+		{fusion: "score_normalized", wantFusion: contextstore.FusionScoreNormalized},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("fusion=%q", tc.fusion), func(t *testing.T) {

@@ -26,7 +26,10 @@ type RankingReplayInput struct {
 	PolicyVersion   string
 	Queries         []RankingReplayQuery
 	CandidateFusion contextstore.FusionMode
-	Now             time.Time
+	// CandidateCarriedWeight is the score_normalized carried weight; 0 means
+	// the default.
+	CandidateCarriedWeight float64
+	Now                    time.Time
 }
 
 // RankingReplayOutcome summarizes the experience evidence of selected items.
@@ -79,7 +82,9 @@ type RankingReplayReport struct {
 	PolicyVersion           string                     `json:"policy_version"`
 	ModeSource              string                     `json:"mode_source"`
 	BaselineFusion          contextstore.FusionMode    `json:"baseline_fusion"`
+	BaselineCarriedWeight   float64                    `json:"baseline_carried_weight,omitempty"`
 	CandidateFusion         contextstore.FusionMode    `json:"candidate_fusion"`
+	CandidateCarriedWeight  float64                    `json:"candidate_carried_weight,omitempty"`
 	EligibleItems           int                        `json:"eligible_items"`
 	ItemsWithAggregates     int                        `json:"items_with_aggregates"`
 	OutcomeMetricsAvailable bool                       `json:"outcome_metrics_available"`
@@ -100,6 +105,9 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	}
 	if in.CandidateFusion == "" || !contextstore.ValidFusionMode(in.CandidateFusion) {
 		return RankingReplayReport{}, fmt.Errorf("unknown candidate fusion %q", in.CandidateFusion)
+	}
+	if !contextstore.ValidFusionCarriedWeight(in.CandidateCarriedWeight) {
+		return RankingReplayReport{}, fmt.Errorf("candidate carried weight %v is outside [0,1]", in.CandidateCarriedWeight)
 	}
 	queries := make([]RankingReplayQuery, 0, len(in.Queries))
 	for _, query := range in.Queries {
@@ -124,7 +132,7 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	}
 	baseline := effectiveRankingPolicy(runtimePolicy)
 	candidate := baseline
-	candidate.Fusion = in.CandidateFusion
+	candidate.Fusion, candidate.FusionCarriedWeight = in.CandidateFusion, in.CandidateCarriedWeight
 	eligible, allowed, err := eligiblePersistentMemory(ctx, repo, scope, now)
 	if err != nil {
 		return RankingReplayReport{}, err
@@ -142,7 +150,8 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	}
 	report := RankingReplayReport{
 		SchemaVersion: 1, Scope: scope, PolicyVersion: learning.PolicyVersion, ModeSource: modeSource,
-		BaselineFusion: effectiveFusion(baseline.Fusion), CandidateFusion: in.CandidateFusion,
+		BaselineFusion: effectiveFusion(baseline.Fusion), BaselineCarriedWeight: effectiveCarriedWeight(baseline.Fusion, baseline.FusionCarriedWeight),
+		CandidateFusion: in.CandidateFusion, CandidateCarriedWeight: effectiveCarriedWeight(candidate.Fusion, candidate.FusionCarriedWeight),
 		EligibleItems: len(eligible), ItemsWithAggregates: len(aggregates), OutcomeMetricsAvailable: len(aggregates) > 0,
 		QueryCount: len(queries), Queries: make([]RankingReplayQueryResult, 0, len(queries)),
 	}
