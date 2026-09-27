@@ -1,8 +1,8 @@
 # RRF fusion opt-in 與 ranking replay：實作計畫
 
-> Status: in progress — implementing on branch `feat/rrf-fusion-replay`
-> Authority: reference（實作計畫；現行行為以程式、測試與 [memory learning](../../architecture/memory-learning.md) 為準）
-> Verified-Commit: `38e7bf1`
+> Status: implemented — on branch `feat/rrf-fusion-replay` through `503884c` (see §5 實作紀錄); the default fusion stays `legacy`
+> Authority: reference（實作紀錄；現行行為以程式、測試與 [memory learning](../../architecture/memory-learning.md) 為準）
+> Verified-Commit: `503884c`
 > Supersedes: —
 > Superseded-By: —
 > Scope: [consolidation integrity 計畫](consolidation-integrity-and-retrieval-explain.md) §10 的 BUG-01 後續：opt-in 的正規化 RRF、`hufu context ranking-replay`
@@ -83,3 +83,41 @@ hufu context ranking-replay --workspace <w> --project <p> --team <t>
 - worker memory recall、`memory_query`、`hufu context query` 的 fusion。
 - 改變 MMR λ、exact 前綴或 `MinimumRelevance` 的語意。
 - 讀取使用者真實 workspace 資料（由使用者自行執行 replay）。
+
+## 5. 實作紀錄
+
+| Stage | Commit | 內容 |
+| --- | --- | --- |
+| 1 | `8e17605` | `FusionMode`／`FusionRRFNormalized`、`retrieval.fusion`、`normalizeFusedRelevance`、explain 輸出 `fusion`、improve 驗證 |
+| 2 | `503884c` | `ReplayPersistentRanking`、`SessionReplayQueries`、`hufu context ranking-replay` |
+| 3 | 本 commit | `docs/architecture/memory-learning.md` 與本實作紀錄 |
+
+與計畫的差異：
+
+- §1 原本寫「正規化 RRF 在 lexical-only 時順序與現行相同」，Stage 1 的測試證明這不成立：MMR 之前的順序相同，但分數落到 (0,1] 後，MMR 的多樣性 penalty 會重排內容重疊的項目；現行大語料下 penalty 只能重排 BM25 幾乎相同的項目。已在 Stage 1 修正 §1。
+- `effectiveRankingPolicy` 在 limit 不一致而退回預設值時，保留原本的 fusion。
+
+驗證：每個 stage 都通過 `go test ./...`、`go vet ./...`、`golangci-lint run ./...`；在預設 fusion 下，`TestPersistentRankingBehaviourIsLocked` 不變。
+
+### 5.1 合成 replay 結果（`TestReplayPersistentRankingOnL3Fixture`）
+
+fixture：300 筆 filler，加上三組 L3 情境。一是 positive transfer：`transfer-verified` 同時是最強命中並帶 verified support。二是 irrelevant high utility：`irrelevant-high-utility` 只弱命中，但帶 4 次 verified support。三是 stale／harmful：`harmful` 強命中，但有 causal failure 與 negative weight。查詢為 `rollback deploy` 與 `sqlite schema`。
+
+| 查詢 | ranker | legacy 選取 | rrf_normalized 選取 |
+| --- | --- | --- | --- |
+| rollback deploy | relevance | transfer-verified, transfer-plain-1, transfer-plain-2 | transfer-verified, transfer-plain-2, transfer-plain-1 |
+| rollback deploy | reinforced | transfer-verified, transfer-plain-1, transfer-plain-2 | 相同 |
+| sqlite schema | relevance | relevant-1, relevant-4, relevant-5, relevant-2 | relevant-1, relevant-4, **irrelevant-high-utility**, relevant-5 |
+| sqlite schema | reinforced | relevant-1, relevant-2, relevant-4, relevant-5 | **irrelevant-high-utility**, relevant-1, relevant-2, relevant-4 |
+
+- 兩種 fusion 在兩個 ranker 下都不會選 `harmful`（harm penalty 是硬性排除）。
+- positive transfer 兩邊都選到 `transfer-verified`。
+- irrelevant high utility：`rrf_normalized` 在兩個 ranker 都選入弱命中的高 utility 記憶，reinforced 甚至排第一，違反 L3 gate；`legacy` 保持排除。
+- 結果指標：reinforced ranker 的 verified 由 1 增到 2、平均 utility 由 0.199 增到 0.315，看起來「變好」，實際上來自不相關的選取。
+
+結論：本 fixture 不支持把預設切換為 `rrf_normalized`。rank-only 的正規化丟掉了 lexical 命中強度，而這個強度正是現行排序擋住 irrelevant-high-utility 的原因。
+
+### 5.2 後續（需使用者決定）
+
+- 在自己的 workspace 累積足夠的 shared persistent 記憶與 aggregate（memory learning 開 observe 或 shadow）後，執行 `hufu context ranking-replay --from-session`，同時比較選取差異與結果指標。
+- 若要修正 BUG-01 的尺度不一致又保留命中強度，可評估另一種 fusion 候選（例如把帶入的 BM25 以該次結果的最大值正規化到 [0,1]，再加 RRF），並用同一個 replay 與 L3 fixture 比較。本計畫未實作。

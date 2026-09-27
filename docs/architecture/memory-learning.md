@@ -443,7 +443,21 @@ hufu context doctor --learning
 
 `explain-memory` 需要 `--project`、`--team`、`--query`。它以目前資料、指定 scope／query／policy 重算 runtime 的 shared persistent 排序：與 coordinator 共用同一個無副作用的排序核心（同一組候選上限、分數正規化、goal-line fallback、eligible set 與 mode），因此 `base_relevance` 是 runtime 正規化後的值，`ranking.selected` 與 runtime 選取一致。輸出另含 `schema_version: 2`、`recomputed: true`、`mode`／`mode_source`、各檢索途徑（exact／lexical／vector）的名次與分數、RRF 貢獻、`carried_score`、MMR 前後名次與 penalty、file-path boost、固定 enum 的 `reasons`（例如 `selected`、`inject_limit`、`candidate_limit`、`duplicate_content`、`outside_observed_candidates`），以及無法在 CLI 評估的 `not_evaluated`（`activation`、`token_budget`）。`outside_observed_candidates` 表示沒有任何檢索途徑在上限內回傳該項，不代表不相關。只有在 durable manifest 相符時才回報 `retrieval_id`；其餘都是重算結果，不是歷史執行紀錄。越權與不存在的 item 回同一個錯誤；輸出不含 query 原文與記憶內容，也不寫入任何紀錄。
 
-已知限制：`rrf` 以第一個清單（lexical）的原始分數為起點再加上 reciprocal rank，所以 lexical 命中時 fused score 由原始 BM25 主導（`FusedScore == CarriedScore + LexicalRRF + VectorRRF`）；runtime 的 ×61 正規化只處理小於 1 的分數。`explain-memory` 如實揭露這一點，修正需以 replay 證據另行評估，未改變 production 排序。
+已知限制：預設的 `legacy` fusion 讓 `rrf` 以第一個清單（lexical）的原始分數為起點再加上 reciprocal rank，所以 lexical 命中時 fused score 由原始 BM25 主導（`FusedScore == CarriedScore + LexicalRRF + VectorRRF`）；runtime 的 ×61 正規化只處理小於 1 的分數，因此 base relevance 的尺度會依語料大小而不同。`explain-memory` 會如實揭露這一點，並輸出使用的 `fusion`。
+
+Memory policy snapshot 可以用 `retrieval.fusion` 選擇 shared persistent 排序的 fusion：省略或 `legacy` 是現行行為（既有 snapshot 的 revision hash 不變），`rrf_normalized` 只加總 reciprocal rank，並依非空清單數正規化到 (0,1]，runtime 只把分數截在 [0,1]、不再 ×61。未知值會使整個 policy 無效。worker memory recall、`memory_query` 與 `hufu context query` 不受此參數影響。
+
+切換前用唯讀的 replay 比較：
+
+```text
+hufu context ranking-replay --workspace <w> --project <p> --team <t> \
+  (--query <q> ... | --queries-file <f> | --from-session) \
+  [--candidate-fusion rrf_normalized] [--policy-version <v>] [--json]
+```
+
+它以 `mode=ro`／`query_only` 開啟 store、不寫 trace，對每個查詢分別以 relevance ranker（off／observe／shadow）與 reinforced ranker（active），比較現行與候選 fusion 的選取結果：新增、移除、順序、Jaccard、最大 base relevance。有 experience aggregate 時，另比較 verified support、causal failure、negative weight 的筆數與平均 utility。`--from-session` 以 session 內 task 的 goal 近似重建 dispatch 查詢（manifest 只存 query hash）。輸出只含 ID、query hash、數值與 enum。
+
+在合成的 L3 fixture 上，`rrf_normalized` 會選出現行 fusion 排除的「弱命中、高 utility」記憶：分數落到 (0,1] 後，MMR 的多樣性 penalty 與 utility 乘數都會壓過比較弱的 lexical 命中，違反 irrelevant-high-utility gate。此時結果指標（verified support、平均 utility）反而顯得變好。所以判讀 replay 時，要同時看選取差異與結果指標，不能只看後者。預設維持 `legacy`。
 
 擴充 `internal/improve.Metrics`：
 
