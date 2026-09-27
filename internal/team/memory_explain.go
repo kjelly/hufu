@@ -122,17 +122,9 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 		return MemoryExplanation{}, err
 	}
 	ranking := effectiveRankingPolicy(runtimePolicy)
-	persistent, err := repo.QuerySharedPersistentProjection(ctx, scope)
+	eligible, allowed, err := eligiblePersistentMemory(ctx, repo, scope, now)
 	if err != nil {
-		return MemoryExplanation{}, fmt.Errorf("query shared persistent memory: %w", err)
-	}
-	eligible := make([]contextstore.ContextItem, 0, len(persistent))
-	allowed := make(map[string]bool, len(persistent))
-	for _, candidate := range persistent {
-		if evaluateLifecycleEligibility(candidate, "", now) == "" {
-			eligible = append(eligible, candidate)
-			allowed[candidate.ID] = true
-		}
+		return MemoryExplanation{}, err
 	}
 	observation := &contextstore.RetrievalObservation{}
 	ranked, err := rankPersistentMemory(ctx, repo, repo, persistentRankingInput{
@@ -243,6 +235,24 @@ func memoryExplainReasons(item contextstore.ContextItem, eligible bool, candidat
 		reasons = append(reasons, MemoryExplainInjectLimit)
 	}
 	return reasons
+}
+
+// eligiblePersistentMemory is the shared-persistent base the runtime ranks,
+// filtered by the request-independent eligibility checks.
+func eligiblePersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepository, scope contextstore.Scope, now time.Time) ([]contextstore.ContextItem, map[string]bool, error) {
+	persistent, err := repo.QuerySharedPersistentProjection(ctx, scope)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query shared persistent memory: %w", err)
+	}
+	eligible := make([]contextstore.ContextItem, 0, len(persistent))
+	allowed := make(map[string]bool, len(persistent))
+	for _, candidate := range persistent {
+		if evaluateLifecycleEligibility(candidate, "", now) == "" {
+			eligible = append(eligible, candidate)
+			allowed[candidate.ID] = true
+		}
+	}
+	return eligible, allowed, nil
 }
 
 // effectiveFusion names the fusion actually used; empty means legacy.
