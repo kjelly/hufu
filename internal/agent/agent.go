@@ -980,6 +980,7 @@ type TaskResultAssertion struct {
 type AcceptanceSpec struct {
 	Commands                 []string              `yaml:"commands" json:"commands,omitempty"`
 	RequiredArtifacts        []string              `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
+	RequiredWorkers          []string              `yaml:"required-workers" json:"required_workers,omitempty"`
 	RequireNoUnresolvedTasks bool                  `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
 	Mode                     string                `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Verifications            []VerificationSpec    `yaml:"verifications" json:"verifications,omitempty"`

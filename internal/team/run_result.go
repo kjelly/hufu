@@ -207,6 +207,9 @@ func cloneAcceptanceSpec(spec AcceptanceSpec) AcceptanceSpec {
 	if spec.RequiredArtifacts != nil {
 		clone.RequiredArtifacts = append([]string(nil), spec.RequiredArtifacts...)
 	}
+	if spec.RequiredWorkers != nil {
+		clone.RequiredWorkers = append([]string(nil), spec.RequiredWorkers...)
+	}
 	if spec.Verifications != nil {
 		clone.Verifications = make([]VerificationSpec, len(spec.Verifications))
 		for i, v := range spec.Verifications {
@@ -230,6 +233,7 @@ type AcceptanceResult struct {
 	Errors               []string              `json:"errors,omitempty"`
 	Commands             []string              `json:"commands,omitempty"`
 	RequiredArtifacts    []string              `json:"required_artifacts,omitempty"`
+	RequiredWorkers      []string              `json:"required_workers,omitempty"`
 	VerificationEvidence []*VerificationResult `json:"verification_evidence,omitempty"`
 	CriterionResults     []CriterionResult     `json:"criterion_results,omitempty"`
 }

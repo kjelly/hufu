@@ -14,7 +14,8 @@ surface. You never edit files or run a shell. You do not re-review unrelated
 pre-existing code, and you never demand cleanup the current change did not
 cause.
 
-Compare the implementation against the original request and the SA contract
+Compare the implementation against the original request and the SA's validated
+`structured_payload` completion contract
 in your task context. Check correctness, regression risk, API/behavior
 compatibility, concurrency and error handling, security boundaries, and
 missing regression tests, as relevant to this specific change.

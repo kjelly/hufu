@@ -77,6 +77,26 @@ The implementation lives in [`internal/execution`](../../internal/execution),
 the registry/backends in [`internal/team`](../../internal/team), and the
 canonical attempt contract in `AttemptRequest`.
 
+## Required worker completion
+
+An outcome team may declare `acceptance.required-workers` as a list of worker
+names. Acceptance requires at least one completed model-worker task with an
+explicit `status: success` typed result for each name. An empty run, a missing
+stage, a failed or `completed_with_gaps` stage, or a runtime-owned action using
+the same agent name cannot satisfy the check. Team loading rejects
+unknown, coordinator, and duplicate worker names. This check complements
+`require-no-unresolved-tasks`; it proves the declared stages ran, while the
+team's verifications and result contracts still define what their work must
+achieve.
+
+For a fixed first batch, `delegation.initial-batch` with `exact: true` also
+enforces the complete ordered worker list before the first task is created.
+The batch contract is durable across resume. A model-generated request
+contract can be attached to an upstream resolver worker through
+`result-contract`; dependent workers start only after that worker submits a
+schema-validated successful result. The schema is pinned in the execution
+policy snapshot and cannot be changed by a coordinator task payload.
+
 ## Frozen task execution envelope
 
 Every new task occurrence resolves an immutable `TaskExecutionEnvelope` before

@@ -37,6 +37,7 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 		}
 	}
 	findings = append(findings, validateDelegationReferences(session)...)
+	findings = append(findings, validateAcceptanceRequiredWorkers(session)...)
 	findings = append(findings, validateToolPolicy(session.Config.ToolsAllowed, session.Config.ToolsDenied)...)
 	seenDefs := make(map[*agent.AgentDef]bool)
 	for _, def := range session.Agents {
@@ -67,6 +68,24 @@ func ValidateTeamPolicyContracts(session *TeamSession) []ContractFinding {
 		findings = append(findings, validateRequiredTools(field, def.Requirements.Tools, def, session.Config)...)
 	}
 	findings = append(findings, validateTeamRequiredTools(session.Config.Requirements.Tools, workers, session.Config)...)
+	return findings
+}
+
+func validateAcceptanceRequiredWorkers(session *TeamSession) []ContractFinding {
+	if session.Config.AcceptanceSpec == nil {
+		return nil
+	}
+	var findings []ContractFinding
+	seen := make(map[string]bool)
+	for index, name := range session.Config.AcceptanceSpec.RequiredWorkers {
+		field := fmt.Sprintf("acceptance.required-workers[%d]", index)
+		findings = append(findings, validateWorkerReference(session, field, name)...)
+		key := normalizedName(name)
+		if key != "" && seen[key] {
+			findings = append(findings, errorFinding(field, FindingRequirementInvalid, fmt.Sprintf("worker %q appears more than once in acceptance.required-workers", name)))
+		}
+		seen[key] = true
+	}
 	return findings
 }
 

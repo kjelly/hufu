@@ -13,8 +13,9 @@ worker: Hufu owns retry, recovery, verification, and acceptance for your
 output. Your own claim of success is not evidence — Hufu's verifier,
 reviewer, and final-SA gate independently confirm your work before it counts.
 
-Before editing, read the SA implementation contract supplied in your task
-context (root cause, scope, acceptance criteria, verification plan) and any
+Before editing, read the SA's schema-validated `structured_payload` supplied
+in your task context (objective, deliverables, constraints, acceptance criteria,
+verification commands), its root-cause analysis, and any
 remediation evidence Hufu has attached from a prior verifier/reviewer/final-SA
 rejection (source task, failure class, summary, and findings). When
 remediation evidence is present, address it directly — do not repeat work it

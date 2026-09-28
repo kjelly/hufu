@@ -11,6 +11,13 @@
     "unattended": true,
     "max_wall_clock": 21600,
     "acceptance_spec": {
+      "required_workers": [
+        "sa",
+        "coder",
+        "verifier",
+        "reviewer",
+        "final-sa"
+      ],
       "require_no_unresolved_tasks": true,
       "mode": "blocking"
     },
@@ -24,9 +31,15 @@
         "reviewer",
         "final-sa"
       ],
-      "InitialBatch": null,
-      "RequireExactInitialBatch": false,
-      "InitialCoordinatorTool": "",
+      "InitialBatch": [
+        "sa",
+        "coder",
+        "verifier",
+        "reviewer",
+        "final-sa"
+      ],
+      "RequireExactInitialBatch": true,
+      "InitialCoordinatorTool": "agent",
       "BindInitialTaskContracts": false,
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": [

@@ -47,6 +47,22 @@ Hufu's DAG scheduler (`internal/team/dag_scheduler.go`) owns everything past
 that point: readiness, concurrency, retry, and the bounded coder-remediation
 loop.
 
+The team now declares this sequence as an exact `delegation.initial-batch`.
+The first coordinator tool call must be `agent` with these five workers in
+order; the generic `acceptance.required-workers` check requires a completed
+model-worker task with an explicit `status: success` result for every role.
+An empty run or missing stage fails
+acceptance even though it has no unresolved tasks. This is checked from
+durable task state, not from the coordinator's summary.
+
+The SA resolves the request into a schema-validated `structured_payload`
+(`schemas/coding-task-contract-v1.json`) before the coder starts. It names the
+objective, deliverables, constraints, acceptance criteria, and verification
+commands. A successful SA result must contain at least one deliverable,
+criterion, and verification command; the static `task_result_assert` rejects
+an incomplete success submission. A genuinely ambiguous or blocked request
+remains `partial` or `blocked`, so the coder dependency does not open.
+
 ## SA never lets the coder start on an unconfirmed contract
 
 The coder depends on SA (`depends_on: [0]`), and Hufu's own DAG readiness

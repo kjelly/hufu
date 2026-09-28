@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,71 @@ func TestHufuCodingTeamLoadsWithoutContractFindings(t *testing.T) {
 		if session.Agents[name] == nil {
 			t.Fatalf("hufu-coding is missing the %q worker", name)
 		}
+	}
+}
+
+func TestHufuCodingRequiresCompletedBatchAndStructuredSAContract(t *testing.T) {
+	session := loadHufuCodingTeam(t)
+	want := []string{"sa", "coder", "verifier", "reviewer", "final-sa"}
+	policy := session.Config.Delegation
+	if !policy.RequireExactInitialBatch || policy.InitialCoordinatorTool != "agent" || !slices.Equal(policy.InitialBatch, want) {
+		t.Fatalf("initial batch policy = %#v, want exact ordered coding stages", policy)
+	}
+	acceptance := session.Config.AcceptanceSpec
+	if acceptance == nil || !slices.Equal(acceptance.RequiredWorkers, want) {
+		t.Fatalf("required completion stages = %#v, want %v", acceptance, want)
+	}
+	ref, ok := session.AgentResultContracts["sa"]
+	if !ok || !ref.RequireStructured {
+		t.Fatalf("SA structured result contract = %#v, %v", ref, ok)
+	}
+	compiled := session.ResultContracts[ref.ID]
+	if compiled == nil {
+		t.Fatalf("SA schema %q was not compiled", ref.ID)
+	}
+	valid := []byte(`{"readiness":"ready","objective":"Fix the bug","deliverables":["Changed code and regression test"],"constraints":[],"acceptance_criteria":["Regression case passes"],"verification_commands":["go test ./..."]}`)
+	payload, err := validateStructuredResultPayload(compiled, ref, valid)
+	if err != nil {
+		t.Fatalf("valid SA completion contract rejected: %v", err)
+	}
+	for _, raw := range [][]byte{
+		[]byte(`{"readiness":"ready","deliverables":[],"constraints":[],"acceptance_criteria":[],"verification_commands":[]}`),
+		[]byte(`{"readiness":"ready","objective":"Fix the bug","deliverables":[],"constraints":[],"acceptance_criteria":[],"verification_commands":[],"unknown":"value"}`),
+		[]byte(`{"readiness":"ready","objective":" ","deliverables":[" "],"constraints":[],"acceptance_criteria":[" "],"verification_commands":[" "]}`),
+	} {
+		if _, err := validateStructuredResultPayload(compiled, ref, raw); err == nil {
+			t.Fatalf("SA schema accepted invalid payload: %s", raw)
+		}
+	}
+	saContract := session.ContractTasks[0]
+	if saContract.Agent != "sa" || saContract.VerifySpec == nil || saContract.VerifySpec.Type != VerifyTaskResultAssert {
+		t.Fatalf("SA success assertion is missing: %#v", saContract)
+	}
+	result := &TaskResult{Status: TaskResultStatusSuccess, StructuredPayload: payload}
+	if _, err := executeTaskResultAssertVerification(t.TempDir(), *saContract.VerifySpec, result); err != nil {
+		t.Fatalf("valid SA contract failed success assertion: %v", err)
+	}
+	emptyPayload, err := validateStructuredResultPayload(compiled, ref, []byte(`{"readiness":"ready","objective":"Fix the bug","deliverables":[],"constraints":[],"acceptance_criteria":[],"verification_commands":[]}`))
+	if err != nil {
+		t.Fatalf("incomplete but well-formed payload rejected by schema: %v", err)
+	}
+	result.StructuredPayload = emptyPayload
+	if _, err := executeTaskResultAssertVerification(t.TempDir(), *saContract.VerifySpec, result); err == nil {
+		t.Fatal("SA success assertion accepted empty completion criteria")
+	}
+	result.StructuredPayload = nil
+	if _, err := executeTaskResultAssertVerification(t.TempDir(), *saContract.VerifySpec, result); err == nil {
+		t.Fatal("SA success assertion accepted a missing structured contract")
+	}
+}
+
+func TestHufuCodingRejectsIncompleteFirstDelegation(t *testing.T) {
+	c := &Coordinator{session: loadHufuCodingTeam(t), taskTracker: NewTaskTracker(), sessionData: NewSession()}
+	if !c.initialDelegationPending() {
+		t.Fatal("fresh coding run did not require its initial batch")
+	}
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "sa", Goal: "SA_ANALYZE: implement request"}}); err == nil {
+		t.Fatal("single-stage initial delegation was accepted")
 	}
 }
 

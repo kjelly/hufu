@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "readiness",
+    "objective",
+    "deliverables",
+    "constraints",
+    "acceptance_criteria",
+    "verification_commands"
+  ],
+  "properties": {
+    "readiness": {
+      "type": "string",
+      "enum": ["ready", "needs_clarification", "blocked"]
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "maxLength": 2000
+    },
+    "deliverables": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 500}
+    },
+    "constraints": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 500}
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 500}
+    },
+    "verification_commands": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S", "maxLength": 500}
+    }
+  }
+}

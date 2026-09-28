@@ -667,6 +667,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 
 	res.Commands = spec.Commands
 	res.RequiredArtifacts = spec.RequiredArtifacts
+	res.RequiredWorkers = spec.RequiredWorkers
 
 	// Build all verification specifications (translated legacy + explicit typed verifications)
 	var allSpecs []VerificationSpec
@@ -700,6 +701,9 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 			res.Passed = false
 			res.State = AcceptanceFailed
 		}
+	}
+	if len(spec.RequiredWorkers) > 0 {
+		c.checkRequiredWorkers(spec.RequiredWorkers, res)
 	}
 
 	shell := "sh"
@@ -810,6 +814,27 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	}
 	c.recordMemoryRunOutcome("acceptance_passed", "positive", 1)
 	return res, nil
+}
+
+func (c *Coordinator) checkRequiredWorkers(workers []string, res *AcceptanceResult) {
+	var items []*TodoItem
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		items = c.taskTracker.TodoList().Items()
+	}
+	for _, worker := range workers {
+		completed := false
+		for _, item := range items {
+			if item != nil && strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(worker)) && isSuccessfulWorkerExecution(item) && item.TypedResult != nil && item.TypedResult.Status == TaskResultStatusSuccess {
+				completed = true
+				break
+			}
+		}
+		if !completed {
+			res.Errors = append(res.Errors, fmt.Sprintf("required worker %q has no completed task", worker))
+			res.Passed = false
+			res.State = AcceptanceFailed
+		}
+	}
 }
 
 func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {

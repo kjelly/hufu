@@ -497,7 +497,7 @@ func acceptanceContractConfigured(session *TeamSession, result *RunResult) bool 
 			return true
 		}
 		if spec := cfg.AcceptanceSpec; spec != nil {
-			if len(spec.Commands) > 0 || len(spec.RequiredArtifacts) > 0 || spec.RequireNoUnresolvedTasks || len(spec.Verifications) > 0 || len(spec.Criteria) > 0 {
+			if AcceptanceSpecHasChecks(*spec) {
 				return true
 			}
 		}

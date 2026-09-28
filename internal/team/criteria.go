@@ -50,10 +50,14 @@ func AcceptanceContractStateOf(spec *AcceptanceSpec) AcceptanceContractState {
 	return AcceptanceContractConfigured
 }
 
-// AcceptanceSpecHasChecks reports whether an AcceptanceSpec contains any non-empty verification commands,
-// required artifacts, verifications, criteria, or unresolved task check requirement.
+// AcceptanceSpecHasChecks reports whether an AcceptanceSpec contains any
+// required worker, command, artifact, verification, criterion, or unresolved
+// task check.
 func AcceptanceSpecHasChecks(spec AcceptanceSpec) bool {
 	if spec.RequireNoUnresolvedTasks {
+		return true
+	}
+	if len(spec.RequiredWorkers) > 0 {
 		return true
 	}
 	for _, command := range spec.Commands {
