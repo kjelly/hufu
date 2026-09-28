@@ -208,6 +208,7 @@ type teamManifestSpecFields struct {
 	ExecutionRoute   string                     `yaml:"execution-route,omitempty"`
 	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
 	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
+	ContextArtifacts *rawContextArtifactsPolicy `yaml:"context-artifacts,omitempty"`
 	Tasks            []TaskDef                  `yaml:"tasks,omitempty"`
 }
 

@@ -83,6 +83,33 @@ team.yaml 的 `worker-workspace` 是所有 worker 的預設值，agent frontmatt
 `execution-route` 是沒有自己 `model` 與 route 的 worker 的預設 route（見下方
 「Execution route」）。
 
+### Context artifacts（context-artifacts）
+
+選用的 team 層級區塊，預設關閉。開啟後，worker attempt 中很大的 `bash` 或
+`use_dynamic_tool` 結果會完整（已 redaction）存進 artifact store，模型只收到一段
+有上限的 preview 和一個不透明的 `artifact_ref`，需要時再用 `view` 的
+`byte_offset`/`byte_limit` 分段讀回，不必重跑命令。
+
+```yaml
+context-artifacts:
+  enabled: false                 # 預設關閉
+  min-bytes: 51200               # 超過這個大小才 offload（等於 bash 既有的 50 KiB 上限）
+  preview-bytes: 8192            # 模型看到的 preview 大小（開頭 3/4 + 結尾 1/4）
+  max-artifact-bytes: 1048576    # 超過就維持既有的截斷行為；上限 4194304
+  max-read-bytes: 32768          # 單次 view 分段讀取上限；不得超過 524288
+  max-artifacts-per-attempt: 32
+```
+
+- 省略的欄位使用上面的預設值；明確寫出的值必須是正數。
+- 必須滿足 `1024 <= preview-bytes < min-bytes <= max-artifact-bytes`，
+  且 `max-read-bytes <= max-artifact-bytes`；不合法的區塊在 team 載入時就失敗。
+- 即使結果小於 `min-bytes`，只要既有截斷會丟掉或切掉內容，而且大於
+  `preview-bytes`，也會 offload。
+- 生效值會固定在 execution-policy snapshot；resume 或 `hufu retry` 時設定不同
+  會以 policy drift 失敗。
+- worker 的工具必須包含 `view`；coordinator、structured step、closed tool
+  sequence、`result-contains` 斷言所指的工具都不會 offload。
+
 ## Provider URL 優先順序
 
 ```

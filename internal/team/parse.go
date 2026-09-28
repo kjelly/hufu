@@ -1100,6 +1100,11 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	} else {
 		cfg.Compaction = policy
 	}
+	if policy, err := yc.ContextArtifacts.resolve(); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	} else {
+		cfg.ContextArtifacts = policy
+	}
 	if tools := parseAllowedTools(yc.ToolsAllowed); len(tools) > 0 {
 		cfg.ToolsAllowed = strings.Split(agent.ExpandImpliedTools(strings.Join(tools, ",")), ",")
 	}

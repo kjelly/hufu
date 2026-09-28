@@ -52,7 +52,10 @@ type ExecutionPolicySnapshot struct {
 	// MCPActionProviders pins every MCP action provider's server, tool, and
 	// bound descriptor. It is omitted when a team declares none.
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
-	ConfigurationHash  string                               `json:"configuration_hash"`
+	// ContextArtifacts pins the opt-in tool-result offload limits. It is
+	// omitted when offload is disabled.
+	ContextArtifacts  *ExecutionContextArtifactPolicySnapshot `json:"context_artifacts,omitempty"`
+	ConfigurationHash string                                  `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -276,6 +279,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			snapshot.ActionCatalogHash = c.session.ActionCatalog.Hash
 		}
 		snapshot.MCPActionProviders = executionPolicyMCPActionProviders(c.session)
+		snapshot.ContextArtifacts = executionPolicyContextArtifacts(c.session)
 	}
 	state := &executionPolicyState{
 		snapshot:             snapshot,
@@ -545,6 +549,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
 	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
+	clone.ContextArtifacts = cloneExecutionContextArtifactPolicy(snapshot.ContextArtifacts)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
 		clone.ExecutionWorlds[i] = snapshot.ExecutionWorlds[i]
@@ -577,6 +582,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 		}
 	}
 	if err := validateExecutionPolicyMCPActionProviders(snapshot.Version, snapshot.MCPActionProviders); err != nil {
+		return err
+	}
+	if err := validateExecutionContextArtifactPolicy(snapshot.Version, snapshot.ContextArtifacts); err != nil {
 		return err
 	}
 	for _, world := range snapshot.ExecutionWorlds {

@@ -405,6 +405,9 @@ type TeamConfig struct {
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.
 	Compaction CompactionPolicy
+	// ContextArtifacts controls opt-in offload of large tool results to the
+	// artifact store. The zero value is disabled.
+	ContextArtifacts ContextArtifactsPolicy
 	// Decision configures the decision-aware runtime's rigor profiles. An
 	// absent block resolves every task to the reserved "off" profile, which
 	// preserves pre-decision behavior exactly
