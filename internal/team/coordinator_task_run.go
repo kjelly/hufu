@@ -669,6 +669,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// the retry budget, so the loop bound grows with every fallback taken.
 	fallback := newExecutionFallbackState(task.ExecutionRoute)
 	defer c.clearAttemptExecutionTarget(todoID)
+	// One service per call: a retry carries earlier tool messages, so its
+	// references must stay readable across attempts.
+	contextArtifacts := c.newContextArtifactService(todoID, task)
 retryLoop:
 	for attempt := 1; attempt <= maxAttempts+fallback.used; attempt++ {
 		attemptsMade = attempt
@@ -1130,6 +1133,7 @@ retryLoop:
 					DeclaredShellTools:           declaredShellTools(agentDef),
 				})
 			}
+			taskCtx = contextArtifacts.install(taskCtx, resolvedTools)
 
 			workerDef := c.injectWorkerContext(taskCtx, agentDef)
 			gatedTools := c.gatePolicyTools(resolvedTools.Tools)

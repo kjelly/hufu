@@ -34,6 +34,10 @@ type viewItemArgs struct {
 	ArtifactRef string `json:"artifact_ref,omitempty"`
 	Offset      int    `json:"offset,omitempty"`
 	Limit       int    `json:"limit,omitempty"`
+	// ByteOffset and ByteLimit select a byte range of an artifact. Pointers
+	// distinguish an omitted field from an explicit value.
+	ByteOffset *int `json:"byte_offset,omitempty"`
+	ByteLimit  *int `json:"byte_limit,omitempty"`
 }
 
 type viewArgs struct {
@@ -41,6 +45,8 @@ type viewArgs struct {
 	ArtifactRef string         `json:"artifact_ref,omitempty"`
 	Offset      int            `json:"offset,omitempty"`
 	Limit       int            `json:"limit,omitempty"`
+	ByteOffset  *int           `json:"byte_offset,omitempty"`
+	ByteLimit   *int           `json:"byte_limit,omitempty"`
 	Items       []viewItemArgs `json:"items,omitempty"`
 }
 
@@ -70,6 +76,14 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 					"type":        "number",
 					"description": "The number of lines to read (default 2000)",
 				},
+				"byte_offset": map[string]any{
+					"type":        "number",
+					"description": "For artifact_ref only: the byte offset to start reading from (default 0). Use instead of offset/limit, for example with the byte_offset a context artifact preview gives you.",
+				},
+				"byte_limit": map[string]any{
+					"type":        "number",
+					"description": "For artifact_ref only: the maximum number of bytes to read. Use instead of offset/limit.",
+				},
 				"items": map[string]any{
 					"type":        "array",
 					"description": "A batch of 1 to 16 independently authorized reads. Do not combine items with top-level source fields.",
@@ -94,6 +108,14 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 								"type":        "number",
 								"description": "The number of lines to read (default 2000)",
 							},
+							"byte_offset": map[string]any{
+								"type":        "number",
+								"description": "For artifact_ref only: the byte offset to start reading from.",
+							},
+							"byte_limit": map[string]any{
+								"type":        "number",
+								"description": "For artifact_ref only: the maximum number of bytes to read.",
+							},
 						},
 					},
 				},
@@ -113,8 +135,8 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	}
 
 	if args.Items != nil {
-		if args.FilePath != "" || args.ArtifactRef != "" || args.Offset != 0 || args.Limit != 0 {
-			return fantasy.NewTextErrorResponse("items cannot be combined with top-level file_path, artifact_ref, offset, or limit"), nil
+		if args.FilePath != "" || args.ArtifactRef != "" || args.Offset != 0 || args.Limit != 0 || args.ByteOffset != nil || args.ByteLimit != nil {
+			return fantasy.NewTextErrorResponse("items cannot be combined with top-level file_path, artifact_ref, offset, limit, byte_offset, or byte_limit"), nil
 		}
 		if len(args.Items) == 0 {
 			return fantasy.NewTextErrorResponse("items must contain at least one read"), nil
@@ -135,6 +157,8 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		ArtifactRef: args.ArtifactRef,
 		Offset:      args.Offset,
 		Limit:       args.Limit,
+		ByteOffset:  args.ByteOffset,
+		ByteLimit:   args.ByteLimit,
 	}
 	if err := validateViewItem(item); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -146,7 +170,19 @@ func validateViewItem(args viewItemArgs) error {
 	if (args.FilePath == "") == (args.ArtifactRef == "") {
 		return fmt.Errorf("exactly one of file_path or artifact_ref is required")
 	}
+	if args.hasByteRange() {
+		if args.ArtifactRef == "" {
+			return fmt.Errorf("byte_offset and byte_limit apply only to artifact_ref")
+		}
+		if args.Offset != 0 || args.Limit != 0 {
+			return fmt.Errorf("byte_offset/byte_limit cannot be combined with offset/limit")
+		}
+	}
 	return nil
+}
+
+func (args viewItemArgs) hasByteRange() bool {
+	return args.ByteOffset != nil || args.ByteLimit != nil
 }
 
 func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string, cfg ToolConfig) (fantasy.ToolResponse, error) {
@@ -220,6 +256,9 @@ func executeViewItem(ctx context.Context, args viewItemArgs, workDir string, cfg
 	}
 
 	if args.ArtifactRef != "" {
+		if args.hasByteRange() {
+			return executeViewArtifactRange(ctx, args, cfg)
+		}
 		return executeViewArtifact(ctx, args, cfg)
 	}
 
@@ -297,7 +336,7 @@ func executeViewArtifact(ctx context.Context, args viewItemArgs, cfg ToolConfig)
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to read artifact: %v", err)), nil
 	}
 	if len(data) > maxViewSize {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("artifact is too large (%d+ bytes, max %d)", maxViewSize, maxViewSize)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("artifact is too large (%d+ bytes, max %d); read it in parts with byte_offset and byte_limit", maxViewSize, maxViewSize)), nil
 	}
 
 	offset := args.Offset

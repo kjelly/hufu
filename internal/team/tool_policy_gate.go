@@ -385,6 +385,9 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	}
 
 	recordExecutedToolCall(ctx, t.Info().Name, call.Input)
+	// Offload is bound only now, after every authorization, sequence,
+	// checkpoint, and commit-gate check has admitted this exact call.
+	ctx = contextArtifactServiceFromContext(ctx).withToolOffloader(ctx, t.Info().Name, call.ID)
 	response, err := t.inner.Run(ctx, call)
 
 	// A checkpoint is evaluated after the call completes. Its non-continue

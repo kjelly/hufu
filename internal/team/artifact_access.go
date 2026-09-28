@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,21 +173,33 @@ func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCl
 	if scope, scoped := artifactAccessScopeFromContext(ctx); scoped && strings.TrimSpace(scope.StoreRoot) != "" {
 		storeRoot = scope.StoreRoot
 	}
+	// Store errors wrap *os.PathError values that name absolute paths. This
+	// error reaches the model through view, so report a fixed reason only.
 	store, err := NewFileArtifactStore(storeRoot, c.projectDir)
 	if err != nil {
-		return nil, fmt.Errorf("open artifact store: %w", err)
+		return nil, fmt.Errorf("artifact reference %q is unavailable", id)
 	}
 	if err := store.Verify(ctx, ref); err != nil {
-		return nil, fmt.Errorf("artifact reference %q failed integrity verification: %w", id, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("artifact reference %q is unavailable", id)
+		}
+		return nil, fmt.Errorf("artifact reference %q failed integrity verification", id)
 	}
 	reader, err := store.Open(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("open artifact reference %q: %w", id, err)
+		return nil, fmt.Errorf("artifact reference %q could not be opened", id)
 	}
 	return reader, nil
 }
 
 func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (ArtifactRef, string, bool) {
+	if service := contextArtifactServiceFromContext(ctx); service != nil {
+		// A context artifact is readable only through the service that
+		// published it; the frozen ArtifactAccessScope is never widened.
+		if ref, ok := service.authorizedRef(c, ctx, id); ok {
+			return ref, service.taskID, true
+		}
+	}
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return ArtifactRef{}, "", false
 	}

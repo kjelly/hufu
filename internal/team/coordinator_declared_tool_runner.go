@@ -60,7 +60,9 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	}
 
 	exposed := agentToolNames(agentTools)
-	stepCtx := context.WithValue(ctx, todoIDKey{}, request.TaskID)
+	// A structured step consumes Content as stdout, exit code, and facts, so
+	// it must never receive an offload preview.
+	stepCtx := context.WithValue(withoutContextArtifactService(ctx), todoIDKey{}, request.TaskID)
 	stepCtx = context.WithValue(stepCtx, executionAttemptKey{}, request.Attempt)
 	stepCtx = context.WithValue(stepCtx, tools.AgentNameKey, strings.ToLower(agentDef.Name))
 	stepCtx = tools.SetSSHSessionManager(stepCtx, r.c.sshSessionMgr)
