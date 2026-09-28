@@ -250,7 +250,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 			ToolCallID: call.ID,
 			Executed:   false,
 		})
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", t.Info().Name)), nil
+		return fantasy.NewTextErrorResponse(readOnlyToolDenialMessage(t.Info().Name, call.Input)), nil
 	}
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && t.coordinator != nil {
 		if err := t.coordinator.failedWorkflowCallStop(t.Info().Name); err != nil {
@@ -421,6 +421,22 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		taskToolSequenceFromContext(ctx).markFailedAt(reservedSlot, t.Info().Name, response.Content)
 	}
 	return response, err
+}
+
+// readOnlyToolDenialMessage explains a side_effect:none denial. A bash
+// rejection names the construct the read-only grammar refused and what it
+// admits: a bare "bash is denied" made models conclude that every command,
+// even go test, was forbidden, and retry through other tools.
+func readOnlyToolDenialMessage(name, input string) string {
+	if strings.EqualFold(strings.TrimSpace(name), "bash") {
+		var args struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(input), &args) == nil && strings.TrimSpace(args.Command) != "" {
+			return tools.ReadOnlyBashDenialMessage(args.Command)
+		}
+	}
+	return fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", name)
 }
 
 func readOnlyToolMutation(name, input string) bool {

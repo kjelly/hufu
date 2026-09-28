@@ -36,11 +36,11 @@ var cdPathRe = regexp.MustCompile(`(?:^|\s|;|&|\||\n)cd\s+(?:'([^']+)'|"([^"]+)"
 var cdBlockRe = regexp.MustCompile(`(?:^|[;&&|\|\||\(\s]+)\s*cd\s`)
 
 // leadingCDRe matches the single most common shape models default to out of
-// shell habit: "cd <dir> && <rest>" at the very start of the command, with
-// no other cd anywhere else. Real runs hit this 5 times in one session
-// (always this exact shape) and burned a round trip each time on a reject
-// that just repeats what the tool description already says.
-var leadingCDRe = regexp.MustCompile(`^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*&&\s*(.+)$`)
+// shell habit: "cd <dir> && <rest>" (or "cd <dir>; <rest>") at the very start
+// of the command, with no other cd anywhere else. Real runs hit this 5 times
+// in one session and burned a round trip each time on a reject that just
+// repeats what the tool description already says.
+var leadingCDRe = regexp.MustCompile(`^\s*cd\s+(?:'([^']+)'|"([^"]+)"|(\S+))\s*(?:&&|;)\s*(.+)$`)
 
 // extractLeadingCD splits a "cd <dir> && <rest>" command into its directory
 // and remainder. It only fires for that exact leading shape — if a cd
@@ -147,8 +147,8 @@ func checkReadOnlyBashCommand(command string) error {
 	if trimmed == "" {
 		return fmt.Errorf("read-only bash policy: command is required")
 	}
-	if hasUnsafeReadOnlyShellSyntax(trimmed) {
-		return fmt.Errorf("read-only bash policy denied shell expansion, control syntax, or output redirection")
+	if construct := unsafeReadOnlyShellConstruct(trimmed); construct != "" {
+		return fmt.Errorf("read-only bash policy denied %s", construct)
 	}
 
 	segments, ok := splitReadOnlyBashSegments(trimmed)
@@ -164,6 +164,25 @@ func checkReadOnlyBashCommand(command string) error {
 		}
 	}
 	return nil
+}
+
+// readOnlyBashGrammarHint tells a model what the read-only grammar admits, so
+// a rejected command is rewritten instead of retried or moved to another tool.
+const readOnlyBashGrammarHint = "Read-only inspection commands are allowed, for example go test, go vet, git diff/log/show/status, grep, rg, cat, head, tail, wc, sort, and find, joined with |, &&, || or ;. Merge stderr with 2>&1 or discard it with 2>/dev/null. Writing files (>, >>, tee, sed -i), variable expansion, command substitution, and subshells are not allowed: rewrite the command rather than switching tools."
+
+// ReadOnlyBashDenialMessage explains why command was rejected for a
+// side_effect:none task: it names the rejected construct or command and
+// states what the read-only grammar admits.
+func ReadOnlyBashDenialMessage(command string) string {
+	check := command
+	if _, rest, ok := extractLeadingCD(command); ok {
+		check = rest
+	}
+	detail := "read-only bash policy denied a command outside the read-only grammar"
+	if err := checkReadOnlyBashCommand(check); err != nil {
+		detail = err.Error()
+	}
+	return detail + ". This side_effect:none task runs only read-only commands. " + readOnlyBashGrammarHint
 }
 
 // ReadOnlyBashDenialReason returns a stable, non-sensitive reason code for a
@@ -189,9 +208,11 @@ func ReadOnlyBashDenialReason(command string) string {
 func hasReadOnlyShellRedirect(command string) bool {
 	var quote byte
 	for i := 0; i < len(command); i++ {
-		if quote == 0 && hasReadOnlyStderrDiscardAt(command, i) {
-			i += len("2>/dev/null") - 1
-			continue
+		if quote == 0 {
+			if n := readOnlyStderrRedirectAt(command, i); n > 0 {
+				i += n - 1
+				continue
+			}
 		}
 		ch := command[i]
 		if ch == '\\' && quote != '\'' {
@@ -304,11 +325,21 @@ func checkReadOnlyBashSegment(segment string) error {
 // parenthesis or semicolon inside single or double quotes does not trigger a
 // false positive.
 func hasUnsafeReadOnlyShellSyntax(command string) bool {
+	return unsafeReadOnlyShellConstruct(command) != ""
+}
+
+// unsafeReadOnlyShellConstruct names the first construct outside quotes that
+// the read-only grammar rejects, or returns "". A ; is not rejected here: it
+// only sequences commands, and splitReadOnlyBashSegments checks every
+// segment it separates.
+func unsafeReadOnlyShellConstruct(command string) string {
 	var quote byte
 	for i := 0; i < len(command); i++ {
-		if quote == 0 && hasReadOnlyStderrDiscardAt(command, i) {
-			i += len("2>/dev/null") - 1
-			continue
+		if quote == 0 {
+			if n := readOnlyStderrRedirectAt(command, i); n > 0 {
+				i += n - 1
+				continue
+			}
 		}
 		r := command[i]
 		if r == '\\' && quote != '\'' {
@@ -326,11 +357,24 @@ func hasUnsafeReadOnlyShellSyntax(command string) bool {
 		switch r {
 		case '\'', '"':
 			quote = r
-		case '\n', ';', '`', '$', '<', '>', '(', ')', '{', '}':
-			return true
+		case '>':
+			return "output redirection (>)"
+		case '<':
+			return "input redirection or process substitution (<)"
+		case '`', '$':
+			return "variable expansion or command substitution ($ or backtick)"
+		case '(', ')':
+			return "a subshell (parentheses)"
+		case '{', '}':
+			return "brace grouping or expansion ({ })"
+		case '\n':
+			return "a multi-line command"
 		}
 	}
-	return quote != 0
+	if quote != 0 {
+		return "an unterminated quote"
+	}
+	return ""
 }
 
 // hasReadOnlyStderrDiscardAt recognizes the sole redirection admitted by the
@@ -344,18 +388,44 @@ func hasReadOnlyStderrDiscardAt(command string, index int) bool {
 		return false
 	}
 	next := index + len(discard)
-	return next == len(command) || strings.ContainsRune(" \t|&", rune(command[next]))
+	return next == len(command) || strings.ContainsRune(" \t|&;", rune(command[next]))
+}
+
+// readOnlyStderrRedirectAt returns the length of a stderr redirection the
+// read-only grammar admits at index, or 0. Besides the null-device discard it
+// admits 2>&1, a standalone word that merges stderr into stdout: it only
+// duplicates a file descriptor and cannot write project state.
+func readOnlyStderrRedirectAt(command string, index int) int {
+	if hasReadOnlyStderrDiscardAt(command, index) {
+		return len("2>/dev/null")
+	}
+	const merge = "2>&1"
+	if !strings.HasPrefix(command[index:], merge) || (index > 0 && command[index-1] != ' ' && command[index-1] != '\t') {
+		return 0
+	}
+	next := index + len(merge)
+	if next == len(command) || strings.ContainsRune(" \t|&;", rune(command[next])) {
+		return len(merge)
+	}
+	return 0
 }
 
 // splitReadOnlyBashSegments permits only the ordinary inspection pipelines
-// agents need: commands joined by |, &&, or ||. It recognizes separators only
-// outside quotes and rejects a lone &, so background jobs cannot escape the
-// read-only policy.
+// agents need: commands joined by |, |&, &&, ||, or ;. It recognizes
+// separators only outside quotes and rejects a lone &, so background jobs
+// cannot escape the read-only policy. The & inside an admitted 2>&1 is part of
+// the redirection, not a separator.
 func splitReadOnlyBashSegments(command string) ([]string, bool) {
 	var segments []string
 	start := 0
 	var quote byte
 	for i := 0; i < len(command); i++ {
+		if quote == 0 {
+			if n := readOnlyStderrRedirectAt(command, i); n > 0 {
+				i += n - 1
+				continue
+			}
+		}
 		ch := command[i]
 		if ch == '\\' && quote != '\'' {
 			i++
@@ -371,7 +441,7 @@ func splitReadOnlyBashSegments(command string) ([]string, bool) {
 			quote = ch
 			continue
 		}
-		if ch != '|' && ch != '&' {
+		if ch != '|' && ch != '&' && ch != ';' {
 			continue
 		}
 		width := 1
@@ -380,7 +450,7 @@ func splitReadOnlyBashSegments(command string) ([]string, bool) {
 				return nil, false
 			}
 			width = 2
-		} else if i+1 < len(command) && command[i+1] == '|' {
+		} else if ch == '|' && i+1 < len(command) && (command[i+1] == '|' || command[i+1] == '&') {
 			width = 2
 		}
 		segment := strings.TrimSpace(command[start:i])

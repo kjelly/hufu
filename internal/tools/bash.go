@@ -111,7 +111,7 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 				ToolCallID: call.ID,
 				Executed:   false,
 			})
-			return fantasy.NewTextErrorResponse(err.Error()), nil
+			return fantasy.NewTextErrorResponse(ReadOnlyBashDenialMessage(args.Command)), nil
 		}
 	}
 

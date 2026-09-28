@@ -95,7 +95,7 @@ func buildPolicyDeniedRetryContext(dispositions []ToolExecutionDisposition) stri
 			lines = append(lines, line)
 		}
 	}
-	return "\n\n## Deterministic Policy Repair\nNo prior tool call executed. The policy denied: " + strings.Join(lines, ", ") + ".\nIf bash is needed, make exactly one inspection command with no redirect or shell expansion. Do not use `2>&1`, `>`, `>>`, a temporary output file, command substitution, or control syntax. Do not repeat the denied syntax or tool. Complete the assigned task, then call submit_result exactly once with a truthful status; if you cannot continue, submit `partial` or `blocked`. This is the only fresh retry for this policy denial.\n"
+	return "\n\n## Deterministic Policy Repair\nNo prior tool call executed. The policy denied: " + strings.Join(lines, ", ") + ".\nIf bash is needed, make exactly one read-only inspection command. Merging stderr with `2>&1` or discarding it with `2>/dev/null` is allowed; do not use `>`, `>>`, `tee`, a temporary output file, variable expansion, command substitution, or subshells. Do not repeat the denied syntax or tool. Complete the assigned task, then call submit_result exactly once with a truthful status; if you cannot continue, submit `partial` or `blocked`. This is the only fresh retry for this policy denial.\n"
 }
 
 func handoffStateForMissingResult(budgetExhausted bool, dispositions *attemptToolDispositions, steps []fantasy.StepResult, ctxErr error) ResultHandoffState {

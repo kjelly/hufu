@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestReadOnlyBashGrammarRejectsWriteFlags covers the write-bypass class
 // where a read-only (side_effect:none) command mutates the filesystem via a
@@ -123,6 +126,74 @@ func TestReadOnlyBashGrammarRestrictsRedirectionToStderrNullDiscard(t *testing.T
 		t.Run(command, func(t *testing.T) {
 			if err := checkReadOnlyBashCommand(command); err == nil {
 				t.Fatalf("checkReadOnlyBashCommand(%q) = nil, want error", command)
+			}
+		})
+	}
+}
+
+// TestReadOnlyBashGrammarAdmitsStderrMergeAndSequencing covers the shapes
+// models reach for first when inspecting test output. 2>&1 only duplicates a
+// file descriptor, |& is its pipe shorthand, and ; sequences commands whose
+// every segment is still checked.
+func TestReadOnlyBashGrammarAdmitsStderrMergeAndSequencing(t *testing.T) {
+	allowed := []string{
+		"go test -v ./internal/tools/ 2>&1",
+		"go test -v ./internal/tools/ 2>&1 | grep -c '^--- PASS'",
+		"go test -v ./internal/tools/ 2>&1|grep -E '^--- (PASS|FAIL)'",
+		"go test ./... |& tail -20",
+		"go vet ./... 2>&1 && git status",
+		"go vet ./... ; git status",
+		"grep -rn needle . 2>/dev/null; echo done",
+		"cd internal/team; go test ./...",
+		"cd internal/team && go test -v ./... 2>&1 | grep -E '^--- (PASS|FAIL)' | wc -l",
+	}
+	for _, command := range allowed {
+		t.Run(command, func(t *testing.T) {
+			if !IsReadOnlyBashCommand(command) {
+				t.Fatalf("IsReadOnlyBashCommand(%q) = false, want true (%s)", command, ReadOnlyBashDenialMessage(command))
+			}
+		})
+	}
+	denied := []string{
+		"go test ./... 2>&1 > out.txt",
+		"go test ./... > out.txt 2>&1",
+		"go test ./... 2>&1 | tee out.txt",
+		"go test ./... 2>&1 &",
+		"go test ./... 2>&12",
+		"echo a2>&1",
+		"go test ./... 1>&2",
+		"echo ok; rm -rf build",
+		"cd internal/team; rm x",
+		"ls;",
+		"; ls",
+		"go test ./... ;; ls",
+	}
+	for _, command := range denied {
+		t.Run(command, func(t *testing.T) {
+			if err := checkReadOnlyBashCommand(command); err == nil {
+				t.Fatalf("checkReadOnlyBashCommand(%q) = nil, want error", command)
+			}
+			if IsReadOnlyBashCommand(command) {
+				t.Fatalf("IsReadOnlyBashCommand(%q) = true, want false", command)
+			}
+		})
+	}
+}
+
+func TestReadOnlyBashDenialMessageNamesTheRejectedConstruct(t *testing.T) {
+	cases := []struct{ command, want string }{
+		{"go test ./... > out.txt", "output redirection (>)"},
+		{"go test ./... | tee out.txt", `command "tee"`},
+		{"cat $(ls)", "command substitution"},
+		{"(go test ./...)", "a subshell"},
+		{"cd internal/team && go test ./... | tee out.txt", `command "tee"`},
+		{"echo 'unterminated", "an unterminated quote"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			message := ReadOnlyBashDenialMessage(tc.command)
+			if !strings.Contains(message, tc.want) || !strings.Contains(message, "Merge stderr with 2>&1") || !strings.Contains(message, "rewrite the command rather than switching tools") {
+				t.Fatalf("message = %q, want it to name %q and state the grammar", message, tc.want)
 			}
 		})
 	}
