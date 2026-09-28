@@ -107,18 +107,10 @@ spec:
           was considered on equal footing and was not excluded by default.
 
   decision:
-    # Storage questions prefer architecture capability. This can route JUDGE
-    # or CHALLENGE to reference-specialist while preserving the authorized set.
     profile: standard
     # Primary decision formation is a distinct V2 bundle. It does not replace
     # the auxiliary per-task profile above.
     primary-profile: primary-standard
-    routing:
-      hints:
-        - when-goal-contains: storage
-          preferred-capabilities:
-            - architecture
-
     # These local names consume Decision Runtime's versioned built-ins. The
     # team still owns authorization, routing hints, and request intent above.
     profiles:

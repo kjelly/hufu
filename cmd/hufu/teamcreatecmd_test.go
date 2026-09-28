@@ -10,6 +10,7 @@ import (
 func resetTeamCreateFlags() {
 	teamCreatePreset = ""
 	teamCreateFrom = ""
+	teamCreateCategory = "general"
 	teamCreateModel = ""
 	teamCreateForce = false
 	teamCreateExpanded = false
@@ -93,6 +94,7 @@ func TestRunTeamCreate_FromGeneratesTaskSpecificTeam(t *testing.T) {
 	t.Cleanup(resetTeamCreateFlags)
 	dir := chdirTemp(t)
 	teamCreateFrom = "Fix the OAuth callback bug and add regression tests"
+	teamCreateCategory = "bugfix"
 
 	if err := runTeamCreate(nil, []string{"oauth-fix"}); err != nil {
 		t.Fatalf("runTeamCreate: %v", err)

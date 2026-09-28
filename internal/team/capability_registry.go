@@ -345,7 +345,7 @@ func (c *Coordinator) ResolveCapabilityCandidates(ctx context.Context, query Cap
 
 // validateCapabilityRouting is the production dispatch-path wiring for
 // plan.md Stage 8: it rejects a delegated task before a TODO is created when
-// a configured delegation.capability-routing rule applies to the task's goal
+// a configured delegation.capability-routing rule applies to its contract ID
 // and the chosen worker cannot show the required capability while another
 // already-authorized worker can. It never expands eligibility — a rejection
 // only ever redirects the coordinator toward a worker already inside
@@ -365,7 +365,7 @@ func (c *Coordinator) validateCapabilityRouting(tasks []TaskDef) error {
 	for taskIndex, task := range tasks {
 		chosen := strings.TrimSpace(task.Agent)
 		for ruleIndex, rule := range c.session.Config.Delegation.CapabilityRouting {
-			if !strings.Contains(task.Goal, rule.WhenGoalContains) {
+			if !strings.EqualFold(strings.TrimSpace(task.ContractID), strings.TrimSpace(rule.ContractID)) {
 				continue
 			}
 			candidates, err := registry.Resolve(context.Background(), CapabilityQuery{
@@ -389,8 +389,8 @@ func (c *Coordinator) validateCapabilityRouting(tasks []TaskDef) error {
 				taskIndex, ruleIndex, rule.RequiredCapability, chosen, chosenScore, formatAgentNames(qualified))))
 			if chosenScore <= 0 && len(qualified) > 0 {
 				return c.rejectDelegationPolicy(fmt.Sprintf(
-					"tasks[%d] violates delegation.capability-routing[%d]: %q requires capability %q, which %q does not show, but %s do(es)",
-					taskIndex, ruleIndex, rule.WhenGoalContains, rule.RequiredCapability, chosen, formatAgentNames(qualified)))
+					"tasks[%d] violates delegation.capability-routing[%d]: contract %q requires capability %q, which %q does not show, but %s do(es)",
+					taskIndex, ruleIndex, rule.ContractID, rule.RequiredCapability, chosen, formatAgentNames(qualified)))
 			}
 		}
 	}

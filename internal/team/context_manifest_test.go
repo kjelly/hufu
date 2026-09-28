@@ -334,11 +334,11 @@ func TestAuxiliaryCompilerFailsClosedWithoutBoundInvocationContext(t *testing.T)
 func TestAuxiliaryFallbackManifestDistinguishesNoModel(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-fallback"
-	if err := c.recordAuxiliaryFallback(context.Background(), "skill_matcher", "keyword_fallback"); err != nil {
+	if err := c.recordAuxiliaryFallback(context.Background(), "skill_matcher", "no_selection"); err != nil {
 		t.Fatal(err)
 	}
 	manifest := c.sessionData.CoordinatorContextManifests[0]
-	if manifest.ModelCalled || manifest.Outcome != "keyword_fallback" || manifest.Purpose != "skill_matcher" {
+	if manifest.ModelCalled || manifest.Outcome != "no_selection" || manifest.Purpose != "skill_matcher" {
 		t.Fatalf("fallback manifest = %#v", manifest)
 	}
 }

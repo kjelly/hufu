@@ -30,15 +30,12 @@ action-providers:
 tasks:
   - id: prepare
     agent: preparer
-    when-goal-contains: prepare
     phase: prepare
   - id: audit
     agent: auditor
-    when-goal-contains: audit
     phase: audit
   - id: execute
     agent: executor
-    when-goal-contains: execute
     phase: execute
     action:
       capability: structured-actions
@@ -46,7 +43,6 @@ tasks:
       payload: '{}'
   - id: verify
     agent: verifier
-    when-goal-contains: verify
     phase: verify
 `
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(teamYAML), 0o644); err != nil {

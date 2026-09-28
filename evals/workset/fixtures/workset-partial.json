@@ -3,7 +3,7 @@
     {
       "tool_call": {
         "name": "agent",
-        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Process the workset.\"}]}"
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Process the workset.\",\"contract_id\":\"process-workset\"}]}"
       }
     },
     {

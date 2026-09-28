@@ -1973,7 +1973,7 @@ func (c *Coordinator) finalizeNormalCompletion() {
 
 func (c *Coordinator) emitThinkSkills(matched []*skill.SkillDef) {
 	if len(matched) == 0 {
-		c.report(c.newEvent("think_skills").withMessage("no skills matched (keyword fallback used)"))
+		c.report(c.newEvent("think_skills").withMessage("no skills selected by the structured resolver"))
 		return
 	}
 	names := make([]string, len(matched))

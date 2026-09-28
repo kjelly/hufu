@@ -950,8 +950,11 @@ func validateRuntimeWorkflowTeam(session *TeamSession, registry *ProviderRegistr
 		if !configured[phase] {
 			return fmt.Errorf("workflow task %q declares phase %q outside configured workflow", task.ID, task.Phase)
 		}
-		if strings.TrimSpace(task.WhenGoalContains) == "" {
-			return fmt.Errorf("workflow task %q must declare when-goal-contains", task.ID)
+		if strings.TrimSpace(task.ID) == "" {
+			return fmt.Errorf("workflow tasks must declare an explicit id")
+		}
+		if strings.TrimSpace(task.WhenGoalContains) != "" {
+			return fmt.Errorf("workflow task %q cannot declare when-goal-contains; dispatch it by contract_id", task.ID)
 		}
 		if strings.TrimSpace(task.Agent) == "" {
 			return fmt.Errorf("workflow task %q must declare agent", task.ID)
@@ -1006,10 +1009,7 @@ func containsCapability(capabilities []string, capability string) bool {
 }
 
 func runtimeContractID(task TaskDef) string {
-	if id := strings.TrimSpace(task.ID); id != "" {
-		return id
-	}
-	return strings.ToLower(strings.TrimSpace(task.Agent)) + ":" + strings.ToLower(strings.TrimSpace(task.WhenGoalContains))
+	return strings.TrimSpace(task.ID)
 }
 
 func validateWorkflowCapabilities(required []string, registry *ProviderRegistry) error {

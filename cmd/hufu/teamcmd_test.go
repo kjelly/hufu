@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildGeneratedTeam_SelectsBugfixRoles(t *testing.T) {
-	g := buildGeneratedTeam("oauth-bugfix", "Fix the OAuth callback error and add regression tests", "")
+	g := buildGeneratedTeamForCategory("oauth-bugfix", "Fix the OAuth callback error and add regression tests", "", "bugfix")
 	if g.Category != "bugfix" {
 		t.Fatalf("category = %q, want bugfix", g.Category)
 	}
@@ -20,7 +20,7 @@ func TestBuildGeneratedTeam_SelectsBugfixRoles(t *testing.T) {
 }
 
 func TestBuildGeneratedTeam_SelectsResearchRoles(t *testing.T) {
-	g := buildGeneratedTeam("api-research", "研究並比較 API authentication options，寫成文件", "")
+	g := buildGeneratedTeamForCategory("api-research", "研究並比較 API authentication options，寫成文件", "", "research")
 	if g.Category != "research" {
 		t.Fatalf("category = %q, want research", g.Category)
 	}
@@ -28,6 +28,13 @@ func TestBuildGeneratedTeam_SelectsResearchRoles(t *testing.T) {
 		if _, ok := g.Files[name]; !ok {
 			t.Errorf("generated files missing %s", name)
 		}
+	}
+}
+
+func TestBuildGeneratedTeamDoesNotInferCategoryFromPrompt(t *testing.T) {
+	g := buildGeneratedTeam("oauth-bugfix", "Fix a production deployment bug", "")
+	if g.Category != "general" {
+		t.Fatalf("category = %q, want explicit default general", g.Category)
 	}
 }
 

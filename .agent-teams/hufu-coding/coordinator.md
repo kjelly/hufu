@@ -20,11 +20,11 @@ Submit exactly one batch of five tasks in this shape, using the runtime's
 delegation tool with `depends_on`/`on_failure` indices:
 
 ```text
-index 0: agent=sa,        goal="SA_ANALYZE: <restate the user's request>"
-index 1: agent=coder,     goal="CODER_IMPLEMENT: ...", depends_on=[0]
-index 2: agent=verifier,  goal="VERIFY_IMPLEMENTATION: ...", depends_on=[0,1], on_failure=1
-index 3: agent=reviewer,  goal="REVIEW_CODE: ...", depends_on=[0,1,2], on_failure=1
-index 4: agent=final-sa,  goal="FINAL_SA_GATE: ...", depends_on=[0,1,2,3], on_failure=1
+index 0: agent=sa,        contract_id="sa-analyze",            goal="Analyze the user's request and produce the implementation contract."
+index 1: agent=coder,     contract_id="coder-implement",       goal="Implement the approved change.", depends_on=[0]
+index 2: agent=verifier,  contract_id="verify-implementation", goal="Verify the implementation objectively.", depends_on=[0,1], on_failure=1
+index 3: agent=reviewer,  contract_id="review-code",            goal="Review correctness and regression coverage.", depends_on=[0,1,2], on_failure=1
+index 4: agent=final-sa,  contract_id="final-sa-gate",          goal="Perform the final architecture and acceptance gate.", depends_on=[0,1,2,3], on_failure=1
 ```
 
 Each `depends_on` list is deliberately every earlier task, not just the one
@@ -35,10 +35,9 @@ contract — final-sa additionally needs verifier's and reviewer's own results,
 not only reviewer's. Do not shrink any of these lists to only the immediately
 preceding index.
 
-Each goal MUST contain its literal uppercase token (`SA_ANALYZE`,
-`CODER_IMPLEMENT`, `VERIFY_IMPLEMENTATION`, `REVIEW_CODE`, `FINAL_SA_GATE`)
-followed by the concrete request text, so the team's static task contracts
-bind correctly. Do not change the agent names, the dependency shape, or the
+Each task MUST provide the exact `contract_id` shown above. Goal wording is
+descriptive only and never selects an execution contract. Do not change the
+agent names, contract IDs, the dependency shape, or the
 `on_failure` targets — they encode the required remediation loop (verifier,
 reviewer, and final-sa all reset the coder on a genuine semantic rejection;
 Hufu's runtime, not this batch, decides whether a given failure actually

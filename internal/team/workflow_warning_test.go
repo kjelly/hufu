@@ -35,7 +35,7 @@ func TestShouldWarnPromptWorkflowDeprecation(t *testing.T) {
 		},
 		{
 			name: "goal invariant",
-			sess: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{Agent: "reviewer"}}}}},
+			sess: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{ContractID: "review"}}}}},
 			want: true,
 		},
 	}

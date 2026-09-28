@@ -792,23 +792,9 @@ func (d *SkillPatternDetector) isInSameClusterFast(descs1, descs2 []string, desc
 		}
 	}
 
-	// Fallback to keyword overlap if no cluster matched
-	keywords1 := d.extractKeywords(descs1)
-	keywords2 := d.extractKeywords(descs2)
-
-	overlap := 0
-	for word := range keywords1 {
-		if keywords2[word] {
-			overlap++
-		}
-	}
-
-	total := len(keywords1) + len(keywords2) - overlap
-	if total == 0 {
-		return false
-	}
-
-	return float64(overlap)/float64(total) >= 0.5
+	// If semantic clustering is unavailable or yields no match, do not guess
+	// from overlapping words in the task descriptions.
+	return false
 }
 
 // dedupPrefixes removes candidates whose tool sequence is a contiguous
@@ -952,28 +938,6 @@ func (d *SkillPatternDetector) generateMergedDescription(descs []string, count i
 	}
 
 	return fmt.Sprintf("Auto-generated skill from %d executions", count)
-}
-
-// extractKeywords extracts keywords from descriptions
-func (d *SkillPatternDetector) extractKeywords(descs []string) map[string]bool {
-	keywords := make(map[string]bool)
-	stopWords := map[string]bool{
-		"the": true, "a": true, "an": true, "is": true, "are": true,
-		"to": true, "of": true, "in": true, "for": true, "on": true,
-		"with": true, "and": true, "or": true, "but": true,
-	}
-
-	for _, desc := range descs {
-		words := strings.Fields(strings.ToLower(desc))
-		for _, word := range words {
-			word = strings.Trim(word, ".,!?;:")
-			if len(word) > 2 && !stopWords[word] {
-				keywords[word] = true
-			}
-		}
-	}
-
-	return keywords
 }
 
 // generateSuggestedName creates a name from the tool sequence

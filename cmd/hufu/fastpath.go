@@ -25,14 +25,17 @@ type fastPathOutcome struct {
 
 // shouldUseFastPath reports whether the resolved route warrants a fast-path
 // direct dispatch for the given team. It returns true only when the route is
-// Fast and the team has exactly one worker agent (PrimaryWorkerName != "").
-// Multi-worker teams fall through to the team path so the coordinator can pick
-// the right specialist rather than guessing.
+// Fast, the team has exactly one worker agent (PrimaryWorkerName != ""), and
+// the coordinator has an executable acceptance contract. Without that
+// contract a direct result cannot be certified, so dispatching it would only
+// add a redundant model call before the required coordinator run.
 func shouldUseFastPath(route RouteDecision, coordinator *team.Coordinator) bool {
 	if route.Route != RouteFast {
 		return false
 	}
-	return coordinator != nil && coordinator.PrimaryWorkerName() != ""
+	return coordinator != nil &&
+		coordinator.PrimaryWorkerName() != "" &&
+		coordinator.HasExecutableAcceptanceContract()
 }
 
 // runFastPath executes the prompt via a single direct agent, retrying up to

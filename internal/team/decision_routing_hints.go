@@ -6,7 +6,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Goal-driven routing hints (spec.md v2 §16, §30-31).
+// Contract-driven routing hints (spec.md v2 §16, §30-31).
 //
 // A hint widens a routed role's preferred-capability list for one specific
 // decision, based on the task's own question text — never its required
@@ -14,18 +14,18 @@ import (
 // ranks highest, never grant eligibility to one that failed the
 // required-capability check.
 
-// applyRoutingHints returns preferred augmented with every hint whose
-// selector matches question. It never mutates preferred and is pure: the
-// same (hints, question, preferred) always produces the same result, which
+// applyRoutingHints returns preferred augmented with every hint whose exact
+// contract ID matches. It never mutates preferred and is pure: the same
+// (hints, contractID, preferred) always produces the same result, which
 // is what lets the JUDGE and REVISE construction sites apply it
 // independently and still land on the same resolved candidate.
-func applyRoutingHints(hints []agent.RoutingHint, question string, preferred []string) []string {
+func applyRoutingHints(hints []agent.RoutingHint, contractID string, preferred []string) []string {
 	if len(hints) == 0 {
 		return preferred
 	}
 	augmented := append([]string(nil), preferred...)
 	for _, hint := range hints {
-		if hint.WhenGoalContains == "" || !strings.Contains(question, hint.WhenGoalContains) {
+		if hint.ContractID == "" || !strings.EqualFold(strings.TrimSpace(contractID), strings.TrimSpace(hint.ContractID)) {
 			continue
 		}
 		augmented = append(augmented, hint.PreferredCapabilities...)

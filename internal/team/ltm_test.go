@@ -232,27 +232,41 @@ func TestClassifyLTMEntry(t *testing.T) {
 		source string
 		want   string
 	}{
-		{"login.go has SQL injection", "finding", ltmSectionFiles},
-		{"always run go vet before committing", "finding", ltmSectionConventions},
+		{"login.go has SQL injection", "finding", ltmSectionPatterns},
+		{"always run go vet before committing", "finding", ltmSectionPatterns},
 		{"use the factory pattern for new services", "finding", ltmSectionPatterns},
 		{"switch from SQLite to PostgreSQL", "decision", ltmSectionArchitecture},
 		{"fixed: timeout by adding retry logic", "error", ltmSectionIssues},
-		{"run go build before deploying", "finding", ltmSectionTools},
-		// persistReflexionLesson's un-rescued lessons always end in "avoid
-		// this approach" — "approach" alone used to match the Patterns
-		// keyword check before Issues ever got a look, since that check ran
-		// ahead of the source=="error" routing below.
+		{"run go build before deploying", "finding", ltmSectionPatterns},
+		// Typed source wins regardless of incidental wording in the entry.
 		{`agent deployer: "cleanup" fails: deliverable verification failed — avoid this approach`, "error", ltmSectionIssues},
 		{"context canceled", "error", ltmSectionIssues},
-		// An explicit convention/rule signal still wins over the generic
-		// error-source default.
-		{"always retry on timeout", "error", ltmSectionConventions},
+		{"always retry on timeout", "error", ltmSectionIssues},
 	}
 	for _, tt := range tests {
 		got := ClassifyLTMEntry(tt.entry, tt.source)
 		if got != tt.want {
 			t.Errorf("classifyLTMEntry(%q, %q) = %q, want %q", tt.entry, tt.source, got, tt.want)
 		}
+	}
+}
+
+func TestLTMSectionForCategoryUsesTypedCategoryOnly(t *testing.T) {
+	tests := map[string]string{
+		"architecture": ltmSectionArchitecture,
+		"convention":   ltmSectionConventions,
+		"error":        ltmSectionIssues,
+		"artifact":     ltmSectionFiles,
+		"verification": ltmSectionTools,
+		"":             ltmSectionPatterns,
+	}
+	for category, want := range tests {
+		if got := ltmSectionForCategory(category); got != want {
+			t.Errorf("ltmSectionForCategory(%q) = %q, want %q", category, got, want)
+		}
+	}
+	if got := ltmSectionForCategory("invented"); got != "" {
+		t.Fatalf("unknown category = %q, want rejection", got)
 	}
 }
 

@@ -7,13 +7,11 @@ import (
 )
 
 // phaseContractHint describes one static contract of a workflow phase in the
-// terms a coordinator dispatches it: the agent and the goal phrase that bind a
-// task to the contract.
+// terms a coordinator dispatches it: the exact contract ID and agent.
 type phaseContractHint struct {
-	ID         string
-	Agent      string
-	GoalMarker string
-	Optional   bool
+	ID       string
+	Agent    string
+	Optional bool
 }
 
 func (h phaseContractHint) describe() string {
@@ -21,7 +19,7 @@ func (h phaseContractHint) describe() string {
 	if h.Optional {
 		optional = ", optional"
 	}
-	return fmt.Sprintf("%s (agent %s, goal containing %q%s)", h.ID, h.Agent, h.GoalMarker, optional)
+	return fmt.Sprintf("%s (agent %s%s)", h.ID, h.Agent, optional)
 }
 
 // addPhaseContractHint records a contract for dispatch diagnostics.
@@ -31,7 +29,7 @@ func (w *runtimeWorkflow) addPhaseContractHint(task TaskDef) {
 	}
 	hints := append(w.phaseContractHints[task.Phase], phaseContractHint{
 		ID: runtimeContractID(task), Agent: strings.ToLower(strings.TrimSpace(task.Agent)),
-		GoalMarker: strings.TrimSpace(task.WhenGoalContains), Optional: task.Optional,
+		Optional: task.Optional,
 	})
 	sort.Slice(hints, func(i, j int) bool { return hints[i].ID < hints[j].ID })
 	w.phaseContractHints[task.Phase] = hints

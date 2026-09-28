@@ -68,7 +68,6 @@
       "id": "plan",
       "agent": "developer",
       "phase": "PREPARE",
-      "when_goal_contains": "plan",
       "side_effect": "none",
       "recovery": "retry"
     },
@@ -76,15 +75,13 @@
       "id": "implement",
       "agent": "developer",
       "phase": "EXECUTE",
-      "when_goal_contains": "implement",
       "side_effect": "workspace_write",
       "recovery": "retry"
     },
     {
       "id": "review",
       "agent": "reviewer",
-      "phase": "VERIFY",
-      "when_goal_contains": "review"
+      "phase": "VERIFY"
     }
   ]
 }

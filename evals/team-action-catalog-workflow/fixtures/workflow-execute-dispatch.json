@@ -3,7 +3,7 @@
     {
       "tool_call": {
         "name": "agent",
-        "arguments": "{\"tasks\": [{\"agent\": \"preparer\", \"goal\": \"prepare the staging release\"}]}"
+        "arguments": "{\"tasks\": [{\"agent\": \"preparer\", \"goal\": \"prepare the staging release\", \"contract_id\": \"prepare-release\"}]}"
       }
     },
     {
@@ -21,7 +21,7 @@
     {
       "tool_call": {
         "name": "agent",
-        "arguments": "{\"tasks\": [{\"agent\": \"executor\", \"goal\": \"apply the staging release\"}]}"
+        "arguments": "{\"tasks\": [{\"agent\": \"executor\", \"goal\": \"apply the staging release\", \"contract_id\": \"apply-release\"}]}"
       }
     },
     {
@@ -33,7 +33,7 @@
     {
       "tool_call": {
         "name": "agent",
-        "arguments": "{\"tasks\": [{\"agent\": \"verifier\", \"goal\": \"verify the staging release\"}]}"
+        "arguments": "{\"tasks\": [{\"agent\": \"verifier\", \"goal\": \"verify the staging release\", \"contract_id\": \"verify-release\"}]}"
       }
     },
     {

@@ -8,26 +8,26 @@ import (
 
 func TestApplyRoutingHints(t *testing.T) {
 	hints := []agent.RoutingHint{
-		{WhenGoalContains: "kubernetes", PreferredCapabilities: []string{"kubernetes", "platform-engineering"}},
-		{WhenGoalContains: "security", PreferredCapabilities: []string{"security"}},
+		{ContractID: "kubernetes", PreferredCapabilities: []string{"kubernetes", "platform-engineering"}},
+		{ContractID: "kubernetes", PreferredCapabilities: []string{"security"}},
 	}
 
 	t.Run("no matching hint is a no-op", func(t *testing.T) {
-		got := applyRoutingHints(hints, "should we migrate the database", []string{"architecture"})
+		got := applyRoutingHints(hints, "database", []string{"architecture"})
 		if len(got) != 1 || got[0] != "architecture" {
 			t.Fatalf("got = %#v, want unchanged [architecture]", got)
 		}
 	})
 
 	t.Run("one matching hint appends", func(t *testing.T) {
-		got := applyRoutingHints(hints, "should we migrate to kubernetes", []string{"architecture"})
+		got := applyRoutingHints(hints[:1], "kubernetes", []string{"architecture"})
 		if len(got) != 3 || got[0] != "architecture" || got[1] != "kubernetes" || got[2] != "platform-engineering" {
 			t.Fatalf("got = %#v, want [architecture kubernetes platform-engineering]", got)
 		}
 	})
 
 	t.Run("multiple matching hints all apply", func(t *testing.T) {
-		got := applyRoutingHints(hints, "kubernetes security review", nil)
+		got := applyRoutingHints(hints, "kubernetes", nil)
 		if len(got) != 3 {
 			t.Fatalf("got = %#v, want 3 preferred capabilities from both matching hints", got)
 		}
@@ -51,11 +51,11 @@ func TestApplyRoutingHints(t *testing.T) {
 
 func TestHintedJudgeRole(t *testing.T) {
 	hints := []agent.RoutingHint{
-		{WhenGoalContains: "storage", PreferredCapabilities: []string{"architecture"}},
+		{ContractID: "storage", PreferredCapabilities: []string{"architecture"}},
 	}
 	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
 
-	augmented := hintedJudgeRole(role, hints, "should we change the storage backend")
+	augmented := hintedJudgeRole(role, hints, "storage")
 	if augmented == role {
 		t.Fatal("hintedJudgeRole must return a new value when a hint matches, not the original pointer")
 	}
@@ -69,7 +69,7 @@ func TestHintedJudgeRole(t *testing.T) {
 	// A non-matching question still returns a value equivalent to role (no
 	// preferred capabilities added) — it need not be the same pointer, since
 	// applyRoutingHints always returns a fresh copy once hints is non-empty.
-	unchanged := hintedJudgeRole(role, hints, "should we change the network config")
+	unchanged := hintedJudgeRole(role, hints, "network")
 	if len(unchanged.PreferredCapabilities) != 0 {
 		t.Fatalf("non-matching question must not add preferred capabilities, got %#v", unchanged.PreferredCapabilities)
 	}

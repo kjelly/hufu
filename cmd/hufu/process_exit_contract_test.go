@@ -333,7 +333,7 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := fmt.Sprintf("name: %s\nmodel: test\nprovider-url: %s/v1\ncontext-window: 32768\nmax-rounds: 2\ntimeout: 10\n", teamName, server.URL)
+	manifest := fmt.Sprintf("name: %s\nmodel: test\nprovider-url: %s/v1\ncontext-window: 32768\nmax-rounds: 2\ntimeout: 10\nacceptance: {commands: [\"true\"]}\n", teamName, server.URL)
 	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
 		if _, err := time.Parse(time.RFC3339Nano, event.Time); err != nil {
 			t.Fatalf("stderr line %d time = %q: %v", index+1, event.Time, err)
 		}
-		if event.Type == "error" && strings.Contains(event.Message, "task") {
+		if event.Type == "error" && strings.Contains(event.Message, "failed") {
 			foundCommandError = true
 		}
 		if event.InvocationID != output.InvocationID {

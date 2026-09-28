@@ -3,8 +3,8 @@ description: Minimal coordinator + one worker fixture team for the workset eval 
 delegation:
   bind-task-goal-contracts: true
 tasks:
-  - agent: worker
-    when-goal-contains: "workset"
+  - id: process-workset
+    agent: worker
     fan_out:
       source: workset.json
       goal-template: "handle {name}"

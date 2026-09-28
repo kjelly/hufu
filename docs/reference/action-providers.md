@@ -190,7 +190,6 @@ tasks:
   - id: collect-debug
     agent: reviewer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
     action:
       capability: diagnostics
@@ -290,7 +289,7 @@ provenance after execution.
 The capability is referenced by a static task contract in a workflow team.
 The workflow owns phase dispatch, so the team must bind task goals to
 contracts, list the capability as required, give every phase a static
-contract with `when-goal-contains`, and, when verification is required,
+contract with `contract_id`, and, when verification is required,
 declare an objective check in the verify phase. An action outside the execute
 phase must be `side_effect: none`:
 
@@ -317,7 +316,6 @@ tasks:
   - id: prepare-workset
     agent: reviewer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
     action:
       capability: prepare-workset
@@ -327,19 +325,16 @@ tasks:
   - id: audit-workset
     agent: reviewer
     phase: audit
-    when-goal-contains: audit
     side_effect: none
 
   - id: review-workset
     agent: reviewer
     phase: execute
-    when-goal-contains: review
     side_effect: none
 
   - id: verify-review
     agent: verifier
     phase: verify
-    when-goal-contains: verify
     side_effect: none
     verify-spec:
       type: command_exit
@@ -565,23 +560,19 @@ tasks:
   - id: prepare-release
     agent: preparer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
   - id: audit-release
     agent: auditor
     phase: audit
-    when-goal-contains: audit
     side_effect: none
   - id: apply-release
     agent: executor
     phase: execute
-    when-goal-contains: apply
     side_effect: workspace_write
     recovery: manual
   - id: verify-release
     agent: verifier
     phase: verify
-    when-goal-contains: verify
     side_effect: none
     verify-spec:
       type: command_exit

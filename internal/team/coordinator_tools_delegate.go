@@ -273,38 +273,24 @@ func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (stri
 		return workers[0].Name, nil
 	}
 
-	var workersList strings.Builder
+	if s == nil {
+		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "fail_closed")
+		return "", fmt.Errorf("cannot select among multiple workers without a structured agent resolver; specify agent explicitly")
+	}
+	candidates := make([]sidecar.TeamSummary, 0, len(workers))
 	for _, w := range workers {
-		fmt.Fprintf(&workersList, "- %s", w.Name)
-		if w.Description != "" {
-			fmt.Fprintf(&workersList, ": %s", w.Description)
-		}
-		if w.Tools != "" {
-			fmt.Fprintf(&workersList, " (tools: %s)", w.Tools)
-		}
-		workersList.WriteString("\n")
+		candidates = append(candidates, sidecar.TeamSummary{Name: w.Name, Description: w.Description})
 	}
-
-	if s != nil {
-		prompt := fmt.Sprintf("Select the single best agent name for this task:\n\nGoal: %s\n\nAvailable agents:\n%s\nReturn ONLY the agent name.", goal, workersList.String())
-		selection, err := s.Execute(sidecar.WithPurpose(ctx, "agent_matcher"), prompt)
-		if err == nil {
-			selection = strings.TrimSpace(selection)
-			for _, w := range workers {
-				if strings.EqualFold(w.Name, selection) {
-					return w.Name, nil
-				}
-			}
-		}
+	selection, err := s.SelectAgent(sidecar.WithPurpose(ctx, "agent_matcher"), goal, candidates)
+	if err != nil {
+		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "fail_closed")
+		return "", fmt.Errorf("structured agent selection failed: %w", err)
 	}
-	_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "deterministic_fallback")
-
-	for _, w := range workers {
-		if strings.Contains(strings.ToLower(w.Description), "helper") || strings.Contains(strings.ToLower(w.Name), "helper") {
-			return w.Name, nil
-		}
+	if selection.Agent == "" {
+		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "abstained")
+		return "", fmt.Errorf("structured agent selection was ambiguous; specify agent explicitly")
 	}
-	return workers[0].Name, nil
+	return selection.Agent, nil
 }
 
 func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (string, error) {

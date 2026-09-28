@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,19 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 	workerNames := t.coordinator.workerNameList()
 	allowContextFiles := !t.coordinator.session.Config.Delegation.ForbidContextFiles
 	taskProperties := portableProviderTaskProperties(buildAgentTaskProperties(workerNames, len(t.coordinator.modelList) > 0, filepath.Join(t.coordinator.session.Workspace, sharedDir), t.coordinator.taskCapabilityNames(), allowContextFiles))
+	if t.coordinator.session.Config.Delegation.BindTaskGoalContracts {
+		contractIDs := make([]string, 0, len(t.coordinator.session.ContractTasks))
+		for _, contract := range t.coordinator.session.ContractTasks {
+			if id := strings.TrimSpace(contract.ID); id != "" {
+				contractIDs = append(contractIDs, id)
+			}
+		}
+		slices.Sort(contractIDs)
+		taskProperties["contract_id"] = map[string]any{
+			"type": "string", "enum": contractIDs,
+			"description": "Required for ordinary tasks in this team. Select the exact immutable task contract ID; goal prose never selects execution policy.",
+		}
+	}
 	if t.coordinator.phaseWorkflow != nil && t.coordinator.phaseWorkflow.Enabled() {
 		// Runtime workflows own execution, verification, artifact, and
 		// workset contracts. Exposing their full recursive JSON schema to a
@@ -95,8 +109,8 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 }
 
 func providerSafeWorkflowTaskProperties(properties map[string]any) map[string]any {
-	compact := make(map[string]any, 3)
-	for _, name := range []string{"agent", "goal", "constraints"} {
+	compact := make(map[string]any, 4)
+	for _, name := range []string{"agent", "goal", "constraints", "contract_id"} {
 		if value, ok := properties[name]; ok {
 			compact[name] = value
 		}
@@ -130,6 +144,7 @@ var portableProviderTaskFields = []string{
 	"agent",
 	"goal",
 	"constraints",
+	"contract_id",
 	"plan_first",
 	"summarize",
 	"output_mode",

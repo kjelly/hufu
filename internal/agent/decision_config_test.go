@@ -639,9 +639,9 @@ func TestRoutingHintValidate(t *testing.T) {
 		hint    RoutingHint
 		wantErr bool
 	}{
-		{name: "valid", hint: RoutingHint{WhenGoalContains: "kubernetes", PreferredCapabilities: []string{"kubernetes"}}},
+		{name: "valid", hint: RoutingHint{ContractID: "kubernetes", PreferredCapabilities: []string{"kubernetes"}}},
 		{name: "empty selector", hint: RoutingHint{PreferredCapabilities: []string{"kubernetes"}}, wantErr: true},
-		{name: "no preferred capabilities", hint: RoutingHint{WhenGoalContains: "kubernetes"}, wantErr: true},
+		{name: "no preferred capabilities", hint: RoutingHint{ContractID: "kubernetes"}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -659,7 +659,7 @@ func TestRoutingHintValidate(t *testing.T) {
 // A malformed routing hint must fail team-level DecisionConfig.Validate,
 // not silently no-op forever at dispatch time.
 func TestDecisionConfigRejectsInvalidRoutingHint(t *testing.T) {
-	cfg := DecisionConfig{RoutingHints: []RoutingHint{{WhenGoalContains: "kubernetes"}}}
+	cfg := DecisionConfig{RoutingHints: []RoutingHint{{ContractID: "kubernetes"}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("want error for a routing hint with no preferred capabilities")
 	}

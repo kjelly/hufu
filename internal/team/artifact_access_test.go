@@ -255,7 +255,7 @@ func TestBuildArtifactAccessScopeBindsManagedSkillSnapshot(t *testing.T) {
 	}
 }
 
-func TestBuildArtifactAccessScopeUsesLivePromptGoalForManagedSkills(t *testing.T) {
+func TestBuildArtifactAccessScopeUsesStructuredSelectedManagedSkills(t *testing.T) {
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{
@@ -285,8 +285,8 @@ func TestBuildArtifactAccessScopeUsesLivePromptGoalForManagedSkills(t *testing.T
 	if err != nil {
 		t.Fatalf("buildArtifactAccessScope: %v", err)
 	}
-	if len(scope.ManagedSkillRefs) != 1 || scope.ManagedSkillRefs[0].Description != beta.Name {
-		t.Fatalf("managed skill refs = %#v, want only live-goal skill %q", scope.ManagedSkillRefs, beta.Name)
+	if len(scope.ManagedSkillRefs) != 2 || scope.ManagedSkillRefs[0].Description != alpha.Name || scope.ManagedSkillRefs[1].Description != beta.Name {
+		t.Fatalf("managed skill refs = %#v, want all structured-selected skills", scope.ManagedSkillRefs)
 	}
 }
 

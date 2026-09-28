@@ -73,6 +73,23 @@ func AcceptanceSpecHasChecks(spec AcceptanceSpec) bool {
 	return len(spec.Verifications) > 0 || len(spec.Criteria) > 0
 }
 
+// HasExecutableAcceptanceContract reports whether this coordinator can turn a
+// direct worker result into a certified run outcome. Fast-path callers must
+// check this before dispatching a worker: without an executable acceptance
+// contract, direct execution can only end as unverified and would immediately
+// require a second, coordinator-driven run.
+func (c *Coordinator) HasExecutableAcceptanceContract() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.acceptanceSpec != nil {
+		return AcceptanceSpecHasChecks(*c.acceptanceSpec)
+	}
+	return strings.TrimSpace(c.acceptanceCmd) != ""
+}
+
 // ValidateAcceptanceSpec validates an AcceptanceSpec against the target goalMode.
 // In outcome mode ("outcome"), an empty or missing acceptance contract is invalid
 // and returns an acceptance_vacuous error because run-level completion cannot be achieved.

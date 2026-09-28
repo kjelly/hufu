@@ -19,6 +19,7 @@ import (
 var (
 	teamCreatePreset   string
 	teamCreateFrom     string
+	teamCreateCategory string
 	teamCreateModel    string
 	teamCreateForce    bool
 	teamCreateExpanded bool
@@ -33,9 +34,9 @@ var teamCreateCmd = &cobra.Command{
 With no flags, scaffolds a single generic worker (the coding-single team
 preset). --preset selects a deterministic team preset (coding-single,
 coding-reviewed, research, safe-ops) or a single-worker agent preset
-(readonly, coding, review, research, writer, ops). --from generates a
-task-specific team from a natural-language description using the same
-deterministic classifier as ` + "`hufu team generate`" + ` (no model call).
+(readonly, coding, review, research, writer, ops). --from supplies a task
+description for a generated team; --category explicitly selects its template.
+Prompt prose never selects workers or tool permissions.
 
 A small team.yaml is written only when --model is given, since every
 other setting already has a built-in default; --expanded additionally
@@ -54,7 +55,7 @@ Examples:
   hufu team create dev --preset coding-reviewed
   hufu team create dev --wizard
   hufu team create dev --preset coding-reviewed --model ollama/qwen3.5:27b
-  hufu team create oauth-fix --from "Fix OAuth callback bugs and add regression tests"`,
+  hufu team create oauth-fix --category bugfix --from "Fix OAuth callback bugs and add regression tests"`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTeamCreate,
 }
@@ -63,6 +64,7 @@ func init() {
 	teamCmd.AddCommand(teamCreateCmd)
 	teamCreateCmd.Flags().StringVar(&teamCreatePreset, "preset", "", "Team or agent preset name")
 	teamCreateCmd.Flags().StringVar(&teamCreateFrom, "from", "", "Generate a task-specific team from a natural-language description")
+	teamCreateCmd.Flags().StringVar(&teamCreateCategory, "category", "general", "Explicit generated-team template: general, bugfix, research, or release")
 	teamCreateCmd.Flags().StringVar(&teamCreateModel, "model", "", "Pin a model in team.yaml")
 	teamCreateCmd.Flags().BoolVar(&teamCreateForce, "force", false, "Overwrite an existing team directory")
 	teamCreateCmd.Flags().BoolVar(&teamCreateExpanded, "expanded", false, "Write a fully explicit team.yaml pinning built-in defaults")
@@ -95,7 +97,11 @@ func runTeamCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		name = normalized
-		generated := buildGeneratedTeam(name, teamCreateFrom, teamCreateModel)
+		category, err := normalizeGeneratedTeamCategory(teamCreateCategory)
+		if err != nil {
+			return err
+		}
+		generated := buildGeneratedTeamForCategory(name, teamCreateFrom, teamCreateModel, category)
 		if err := validateGeneratedTeam(generated); err != nil {
 			return fmt.Errorf("generated team is invalid: %w", err)
 		}

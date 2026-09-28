@@ -22,15 +22,15 @@ claim a range that differs from those canonical values.
 
 Run the runtime phases in order:
 
-1. Dispatch `reviewer` with the exact goal `produce workset`. This is a static
+1. Dispatch `reviewer` with `contract_id="produce-workset"`. This is a static
    ActionProvider contract. Do not run shell, reconstruct Git ranges, inspect
    its output, or rewrite any path/digest yourself.
-2. In one delegation batch, dispatch these exact goals:
-   - `reviewer`: `review primary workset`;
-   - `documentation-reviewer`: `review documentation workset`;
-   - `critic`: `review documentation escalation`.
+2. In one delegation batch, dispatch these exact contracts:
+   - `reviewer`: `contract_id="review-primary-workset"`;
+   - `documentation-reviewer`: `contract_id="review-documentation-workset"`;
+   - `critic`: `contract_id="review-documentation-escalation"`.
    The `agent` call must be structurally equivalent to:
-   `{"tasks":[{"agent":"reviewer","goal":"review primary workset"},{"agent":"documentation-reviewer","goal":"review documentation workset"},{"agent":"critic","goal":"review documentation escalation"}]}`.
+   `{"tasks":[{"agent":"reviewer","contract_id":"review-primary-workset","goal":"Review the primary workset."},{"agent":"documentation-reviewer","contract_id":"review-documentation-workset","goal":"Review the documentation workset."},{"agent":"critic","contract_id":"review-documentation-escalation","goal":"Review the documentation escalation workset."}]}`.
    Do not replace either specialized agent with `reviewer`. The initial
    phase-scoped Available Agents summary may list only the PREPARE worker; the
    static VERIFY contracts above become available after `produce workset`.
@@ -49,7 +49,7 @@ Run the runtime phases in order:
    was detected, not that the category was comprehensively checked. Never
    bypass a producer failure or ask a worker to guess references; reviewers
    still own semantic correctness and references outside the reported coverage.
-4. Dispatch `critic review` only when a primary result contains a blocker, a
+4. Dispatch `contract_id="critic-review"` only when a primary result contains a blocker, a
    security concern, or a material disagreement that was not already covered
    by documentation escalation. Give the critic only the completed typed
    finding and its opaque evidence refs.

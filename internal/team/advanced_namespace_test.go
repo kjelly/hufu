@@ -33,15 +33,12 @@ delegation:
 tasks:
   - id: plan
     agent: developer
-    when-goal-contains: plan
     phase: prepare
   - id: implement
     agent: developer
-    when-goal-contains: implement
     phase: execute
   - id: review
     agent: developer
-    when-goal-contains: review
     phase: verify
 `
 	legacyDir := t.TempDir()
@@ -60,15 +57,12 @@ advanced:
   tasks:
     - id: plan
       agent: developer
-      when-goal-contains: plan
       phase: prepare
     - id: implement
       agent: developer
-      when-goal-contains: implement
       phase: execute
     - id: review
       agent: developer
-      when-goal-contains: review
       phase: verify
 `
 	advancedDir := t.TempDir()
@@ -167,15 +161,12 @@ advanced:
 tasks:
   - id: plan
     agent: developer
-    when-goal-contains: plan
     phase: prepare
   - id: implement
     agent: developer
-    when-goal-contains: implement
     phase: execute
   - id: review
     agent: developer
-    when-goal-contains: review
     phase: verify
 `)
 	writeAdvancedNamespaceFile(t, dir, "developer.md", advancedNamespaceDeveloperMD)
@@ -203,15 +194,12 @@ advanced:
 tasks:
   - id: plan
     agent: developer
-    when-goal-contains: plan
     phase: prepare
   - id: implement
     agent: developer
-    when-goal-contains: implement
     phase: execute
   - id: review
     agent: developer
-    when-goal-contains: review
     phase: verify
 `)
 	writeAdvancedNamespaceFile(t, dir, "developer.md", advancedNamespaceDeveloperMD)

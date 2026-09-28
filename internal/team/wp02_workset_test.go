@@ -58,11 +58,11 @@ func TestTaskGoalContractCarriesArtifactFanOutBeforeExpansion(t *testing.T) {
 	session := &TeamSession{
 		Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
 		ContractTasks: []TaskDef{{
-			ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+			ID: "review-workset", Agent: "reviewer",
 			FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: "manifest"}, GoalTemplate: "review {key}"},
 		}},
 	}
-	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset", ContractID: "review-workset"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,13 +78,13 @@ func TestTaskGoalInvariantContractPropagatesThroughFanOutAndSubmission(t *testin
 		Workspace: workspace,
 		Config:    agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
 		ContractTasks: []TaskDef{{
-			ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+			ID: "review-workset", Agent: "reviewer",
 			InvariantVerification: InvariantVerificationReport,
 			Execution:             ExecutionContract{RequiresResult: true, ToolSequence: []string{"submit_result"}},
 			FanOut:                &FanOutSpec{Source: "manifest.json", GoalTemplate: "review {key}"},
 		}},
 	}
-	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset", ContractID: "review-workset"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1335,7 +1335,7 @@ func TestParseTeamYMLDelegationCapabilityRouting(t *testing.T) {
 	content := `name: routed
 delegation:
   capability-routing:
-    - when-goal-contains: security audit
+    - contract-id: security-audit
       required-capability: security-review
 `
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
@@ -1349,7 +1349,7 @@ delegation:
 		t.Fatalf("CapabilityRouting = %#v", cfg.Delegation.CapabilityRouting)
 	}
 	rule := cfg.Delegation.CapabilityRouting[0]
-	if rule.WhenGoalContains != "security audit" || rule.RequiredCapability != "security-review" {
+	if rule.ContractID != "security-audit" || rule.RequiredCapability != "security-review" {
 		t.Fatalf("rule = %#v", rule)
 	}
 }
@@ -1360,7 +1360,7 @@ func TestParseTeamYMLRejectsEmptyCapabilityRoutingRequirement(t *testing.T) {
 	dir := t.TempDir()
 	content := `delegation:
   capability-routing:
-    - when-goal-contains: security audit
+    - contract-id: security-audit
 `
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)

@@ -50,11 +50,41 @@ var evalRunCmd = &cobra.Command{
 	RunE:  runEvalRun,
 }
 
+var evalPerformanceGateCmd = &cobra.Command{
+	Use:   "performance-gate <single-agent-baseline.json> <hufu-candidate.json>",
+	Short: "Compare five end-to-end task classes without allowing correctness regressions",
+	Args:  cobra.ExactArgs(2),
+	RunE:  runEvalPerformanceGate,
+}
+
 func init() {
 	evalRunCmd.Flags().StringVar(&evalCaseID, "case", "", "Run only the case with this id (across every fixture found)")
 	evalRunCmd.Flags().StringVar(&evalFormat, "format", "text", "Report format: text or json")
 	evalCmd.AddCommand(evalListCmd)
 	evalCmd.AddCommand(evalRunCmd)
+	evalCmd.AddCommand(evalPerformanceGateCmd)
+}
+
+func runEvalPerformanceGate(cmd *cobra.Command, args []string) error {
+	baseline, err := evalharness.LoadPerformanceSamples(args[0])
+	if err != nil {
+		return fmt.Errorf("load single-agent baseline: %w", err)
+	}
+	candidate, err := evalharness.LoadPerformanceSamples(args[1])
+	if err != nil {
+		return fmt.Errorf("load hufu candidate: %w", err)
+	}
+	report, err := evalharness.EvaluatePerformanceGate(baseline, candidate, evalharness.DefaultPerformanceGateBudget())
+	if err != nil {
+		return err
+	}
+	if err := evalharness.WritePerformanceGateReport(cmd.OutOrStdout(), report); err != nil {
+		return err
+	}
+	if !report.Passed {
+		return &evalExitError{code: 1}
+	}
+	return nil
 }
 
 func loadEvalSuites(dir string) ([]*evalharness.SuiteFixture, error) {

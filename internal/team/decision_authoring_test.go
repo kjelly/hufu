@@ -173,7 +173,7 @@ func TestNormalizeDecisionAuthoringRejectsBlankUnknownAndConflicts(t *testing.T)
   routing:
     hints: []
   routing-hints:
-    - when-goal-contains: storage
+    - contract-id: storage
       preferred-capabilities: [architecture]
 `,
 	}

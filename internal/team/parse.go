@@ -1146,6 +1146,9 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		cfg.Delegation.TaskGoalInvariants = yc.Delegation.TaskGoalInvariants
 	}
 	for i, rule := range yc.Delegation.CapabilityRouting {
+		if strings.TrimSpace(rule.ContractID) == "" {
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("delegation.capability-routing[%d].contract-id must not be empty", i)
+		}
 		if strings.TrimSpace(rule.RequiredCapability) == "" {
 			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("delegation.capability-routing[%d].required-capability must not be empty", i)
 		}

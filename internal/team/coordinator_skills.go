@@ -268,7 +268,7 @@ func (c *Coordinator) buildSuggestedSkillsText(agentDef *agent.AgentDef, agentNa
 	return b.String(), names
 }
 
-func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc string) []*skill.SkillDef {
+func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, _ string) []*skill.SkillDef {
 	autoSkills := c.getAutoLoadedSkills()
 	if len(autoSkills) == 0 && len(c.forcedSkillNames) == 0 {
 		return nil
@@ -280,20 +280,10 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 		existingSet[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 
-	agentText := strings.ToLower(agentDef.Name + " " + agentDef.Description + " " + agentDef.Role)
-	taskText := strings.ToLower(taskDesc)
-
 	var relevant []*skill.SkillDef
 	addedSet := map[string]bool{}
 	for _, s := range autoSkills {
 		if existingSet[strings.ToLower(s.Name)] {
-			continue
-		}
-		keywords := extractSkillKeywords(s)
-		if !containsAny(keywords, agentText) {
-			continue
-		}
-		if !containsAny(keywords, taskText) {
 			continue
 		}
 		addedSet[strings.ToLower(s.Name)] = true
@@ -311,15 +301,6 @@ func (c *Coordinator) computeRelevantSkills(agentDef *agent.AgentDef, taskDesc s
 	}
 
 	return relevant
-}
-
-func containsAny(keywords []string, text string) bool {
-	for _, kw := range keywords {
-		if strings.Contains(text, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 const maxSTMAutoInject = 2000
@@ -458,57 +439,6 @@ func (c *Coordinator) mandatorySkillLoadDenial(ctx context.Context, toolName, in
 		return ""
 	}
 	return fmt.Sprintf("mandatory skill %q is not loaded; call load_skill for it before task-work tool %q", mandatory, toolName)
-}
-
-func (c *Coordinator) matchSkillsForPrompt(prompt string) []*skill.SkillDef {
-	skills := c.getSkills()
-	if len(skills) == 0 {
-		return nil
-	}
-	promptLower := strings.ToLower(prompt)
-	var matched []*skill.SkillDef
-	for _, s := range skills {
-		for _, kw := range extractSkillKeywords(s) {
-			if strings.Contains(promptLower, kw) {
-				matched = append(matched, s)
-				break
-			}
-		}
-	}
-	return matched
-}
-
-func extractSkillKeywords(s *skill.SkillDef) []string {
-	stopWords := map[string]bool{
-		"this": true, "that": true, "with": true, "from": true,
-		"for": true, "the": true, "and": true, "its": true,
-		"use": true, "like": true, "into": true, "over": true,
-		"when": true, "also": true, "just": true, "than": true,
-		"then": true, "will": true, "your": true, "both": true,
-	}
-	seen := map[string]bool{}
-	var result []string
-	add := func(s string) {
-		s = strings.ToLower(strings.TrimSpace(s))
-		if s != "" && !seen[s] && !stopWords[s] {
-			seen[s] = true
-			result = append(result, s)
-		}
-	}
-	for _, part := range strings.Split(s.Name, "-") {
-		if len(part) >= 3 {
-			add(part)
-		}
-	}
-	add(s.Name)
-	add(strings.ReplaceAll(s.Name, "-", " "))
-	for _, word := range strings.Fields(s.Description) {
-		word = strings.Trim(word, ".,;:!?\"'()")
-		if len(word) >= 4 {
-			add(word)
-		}
-	}
-	return result
 }
 
 func (c *Coordinator) SkillDetector() *skill.SkillPatternDetector {
@@ -744,7 +674,7 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 		}
 		names, err := s.MatchSkills(sidecar.WithPurpose(ctx, "skill_matcher"), prompt, summaries)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed, using keyword fallback: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: sidecar skill matching failed; no automatic skills selected: %v\n", err)
 		} else if len(names) > 0 {
 			nameSet := map[string]bool{}
 			for _, n := range names {
@@ -771,36 +701,8 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 			c.report(c.newEvent("sidecar_call").withMessage("match_skills → (no matches)"))
 		}
 	} else {
-		_ = c.recordAuxiliaryFallback(ctx, "skill_matcher", "keyword_fallback")
-		fallback := c.matchSkillsForPrompt(prompt)
-		if len(fallback) > 0 {
-			names := make([]string, len(fallback))
-			for i, sk := range fallback {
-				names[i] = sk.Name
-			}
-			if c.think {
-				c.emitThinkSidecar("MatchSkills(keyword)", fmt.Sprintf("fallback matched: %s", strings.Join(names, ", ")))
-			}
-			c.report(c.newEvent("sidecar_call").withMessage("match_skills (keyword) → " + strings.Join(names, ", ")))
-		}
-		matched = fallback
+		_ = c.recordAuxiliaryFallback(ctx, "skill_matcher", "no_selection")
 	}
 
 	return matched
-}
-
-// SkillMatchesPrompt returns true when the prompt contains any keyword
-// extracted from the skill's name or description (case-insensitive).
-// This is the LLM-free fallback used by DryRun().
-func SkillMatchesPrompt(s *skill.SkillDef, prompt string) bool {
-	p := strings.ToLower(prompt)
-	if p == "" || s == nil {
-		return false
-	}
-	for _, kw := range extractSkillKeywords(s) {
-		if strings.Contains(p, kw) {
-			return true
-		}
-	}
-	return false
 }

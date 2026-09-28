@@ -133,7 +133,7 @@ func (e *decisionEngine) runReferenceEvidence(ctx context.Context, req DecisionR
 		Question:         req.Question,
 		ContractRef:      req.RequestContractRef,
 		ContractRevision: req.RequestContractRevision,
-		RoutingRole:      hintedReferenceRole(req.Policy.OutsideView.Role, req.RoutingHints, req.Question),
+		RoutingRole:      hintedReferenceRole(req.Policy.OutsideView.Role, req.RoutingHints, req.RoutingContractID),
 	}
 	inputHash, err := request.ComputeInputHash()
 	if err != nil {

@@ -144,7 +144,7 @@ decision:
   profile: standard
   routing:
     hints:
-      - when-goal-contains: storage
+      - contract-id: storage
         preferred-capabilities:
           - architecture
 ~~~
@@ -191,7 +191,7 @@ decision:
       - id: safe
         statement: Material risks are represented.
   routing-hints:
-    - when-goal-contains: storage
+    - contract-id: storage
       preferred-capabilities:
         - architecture
   profiles:

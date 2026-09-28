@@ -439,7 +439,8 @@ func (e cachedTaskEntry) isFresh(target CacheIdentity) bool {
 	return true
 }
 
-// IsCacheForbidden checks if a task or verify prompt explicitly disables caching or is non-idempotent.
+// IsCacheForbidden recognizes only explicit cache-control protocol markers.
+// Domain words in task prose must never infer idempotency or side effects.
 func (c *Coordinator) IsCacheForbidden(taskGoal, verify string) bool {
 	combined := strings.ToLower(taskGoal + " " + verify)
 	forbiddenKeywords := []string{
@@ -447,11 +448,6 @@ func (c *Coordinator) IsCacheForbidden(taskGoal, verify string) bool {
 		"[no-cache]",
 		"[rerun]",
 		"[force-refresh]",
-		"vm_create",
-		"deploy_prod",
-		"rotate_credentials",
-		"security_audit",
-		"benchmark_run",
 	}
 	for _, kw := range forbiddenKeywords {
 		if strings.Contains(combined, kw) {

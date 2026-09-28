@@ -16,14 +16,12 @@ delegation:
 tasks:
   - id: plan
     agent: developer
-    when-goal-contains: plan
     phase: prepare
     side_effect: none
     recovery: retry
 
   - id: implement
     agent: developer
-    when-goal-contains: implement
     phase: execute
     side_effect: workspace_write
     recovery: retry
@@ -31,7 +29,6 @@ tasks:
   - id: review
     agent: reviewer
     phase: verify
-    when-goal-contains: review
     execution:
       requires-result: true
     verify-spec:

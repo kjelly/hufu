@@ -85,9 +85,8 @@ type delegationChainKey struct{}
 
 type TaskDef struct {
 	ID string `json:"id,omitempty"`
-	// WhenGoalContains selects a static team task contract for a later
-	// coordinator dispatch. It is configuration-only and is never exposed as a
-	// coordinator tool parameter.
+	// WhenGoalContains is retained only so legacy manifests fail with a focused
+	// validation finding. Runtime contract selection never reads goal prose.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
 	// InvariantVerification is repository-authored completion policy. Keeping it
 	// out of JSON prevents a coordinator from granting report/gate authority.

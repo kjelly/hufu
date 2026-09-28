@@ -155,22 +155,14 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 		result.ContractFindings = LintTeamContracts(c.session)
 	}
 
-	// Skill matching: keyword-only, no LLM, no sidecar.
+	// Dry-run is LLM-free, so it lists available skills without pretending to
+	// infer semantic matches from prompt substrings.
 	allSkills := c.getSkills()
-	matchedSet := map[string]bool{}
 	for _, sk := range allSkills {
-		if strings.Contains(strings.ToLower(userPrompt), strings.ToLower(sk.Name)) || SkillMatchesPrompt(sk, userPrompt) {
-			matchedSet[strings.ToLower(sk.Name)] = true
-		}
 		result.AllSkills = append(result.AllSkills, DryRunSkillInfo{
 			Name:        sk.Name,
 			Description: sk.Description,
 		})
-	}
-	for _, sk := range allSkills {
-		if matchedSet[strings.ToLower(sk.Name)] {
-			result.MatchedSkillNames = append(result.MatchedSkillNames, sk.Name)
-		}
 	}
 
 	// Agent listing: derived from session config, not from an LLM.

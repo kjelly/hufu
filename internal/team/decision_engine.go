@@ -115,9 +115,14 @@ type DecisionRequest struct {
 
 	Question string
 	Options  []DecisionOption
+	// RoutingContractID is the immutable task contract used to select optional
+	// capability-routing hints. Free-form Question text is never interpreted by
+	// deterministic routing code.
+	RoutingContractID string
 
 	// RoutingHints widens a routed role's preferred-capability list for
-	// this specific decision, based on Question (spec.md v2 §16, §30-31).
+	// this specific decision, based on RoutingContractID (spec.md v2 §16,
+	// §30-31).
 	// Sourced once from the team's decision.routing-hints at request
 	// construction (decision_dispatch.go); applying it independently but
 	// identically at both the JUDGE and REVISE construction sites is what
@@ -583,7 +588,7 @@ func (e *decisionEngine) runJudgeWithRepair(
 		}
 		opinion, err := e.services.Judges.RunJudge(ctx, JudgeRequest{
 			DecisionID: req.DecisionID, Round: 1, JudgeID: judgeID, DispatchCount: policy.IndependentJudgments, Context: judgeCtx, Packet: packet,
-			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.Question),
+			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.RoutingContractID),
 		})
 		if err != nil {
 			lastOperationalErr = err

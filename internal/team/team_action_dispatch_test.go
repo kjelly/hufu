@@ -285,7 +285,7 @@ func TestCatalogActionSchemaProperty(t *testing.T) {
 func TestCatalogTasksSkipGoalContractsAndDuplicateSuppression(t *testing.T) {
 	session := &TeamSession{
 		Config:        agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
-		ContractTasks: []TaskDef{{ID: "static", Agent: "runtime-engineer", WhenGoalContains: "collect", Verify: "true"}},
+		ContractTasks: []TaskDef{{ID: "static", Agent: "runtime-engineer", Verify: "true"}},
 	}
 	catalogTask := TaskDef{Agent: "runtime-engineer", Goal: "collect diagnostics", CatalogAction: &CatalogActionBinding{ActionID: "collect"}}
 	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{catalogTask})

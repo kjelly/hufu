@@ -37,10 +37,10 @@ func workflowTestSession(t *testing.T) *TeamSession {
 			"verifier": {Name: "verifier", Role: "worker"},
 		},
 		ContractTasks: []TaskDef{
-			{ID: "prepare", Agent: "preparer", WhenGoalContains: "prepare", Phase: PhasePrepare},
-			{ID: "audit", Agent: "auditor", WhenGoalContains: "audit", Phase: PhaseAudit},
-			{ID: "execute", Agent: "executor", WhenGoalContains: "execute", Phase: PhaseExecute},
-			{ID: "verify", Agent: "verifier", WhenGoalContains: "verify", Phase: PhaseVerify},
+			{ID: "prepare", Agent: "preparer", Phase: PhasePrepare},
+			{ID: "audit", Agent: "auditor", Phase: PhaseAudit},
+			{ID: "execute", Agent: "executor", Phase: PhaseExecute},
+			{ID: "verify", Agent: "verifier", Phase: PhaseVerify},
 		},
 	}
 }
@@ -138,7 +138,7 @@ func TestRuntimeWorkflowRequiresEveryStaticContractAndRestoresCheckpoint(t *test
 	session := workflowTestSession(t)
 	// Two PREPARE contracts demonstrate that completion is tracked by immutable
 	// contract ID, not merely by worker name.
-	session.ContractTasks = append(session.ContractTasks, TaskDef{ID: "prepare-receipt", Agent: "preparer", WhenGoalContains: "receipt", Phase: PhasePrepare})
+	session.ContractTasks = append(session.ContractTasks, TaskDef{ID: "prepare-receipt", Agent: "preparer", Phase: PhasePrepare})
 	if err := validateRuntimeWorkflowTeam(session, workflowTestRegistry()); err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +274,8 @@ func TestRuntimeWorkflowAllowsSideEffectFreePrepareAction(t *testing.T) {
 			"verifier": {Name: "verifier", Role: "worker"},
 		},
 		ContractTasks: []TaskDef{
-			{ID: "produce", Agent: "producer", WhenGoalContains: "produce", Phase: PhasePrepare, SideEffect: "none", Action: &Action{Capability: "structured-actions", Type: "prepare"}},
-			{ID: "verify", Agent: "verifier", WhenGoalContains: "verify", Phase: PhaseVerify, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/summary", Op: "non_empty"}}}},
+			{ID: "produce", Agent: "producer", Phase: PhasePrepare, SideEffect: "none", Action: &Action{Capability: "structured-actions", Type: "prepare"}},
+			{ID: "verify", Agent: "verifier", Phase: PhaseVerify, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/summary", Op: "non_empty"}}}},
 		},
 	}
 	provider := &recordingActionProvider{result: "prepared"}
@@ -563,7 +563,7 @@ func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, execErr := coordinator.ExecuteTasks(ctx, []TaskDef{{
-			ID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
+			ID: "prepare", ContractID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
 		}})
 		done <- execErr
 	}()
@@ -649,7 +649,7 @@ func TestExecuteTasksPreCancelledContextProjectsTypedWorkflowFailure(t *testing.
 	cancel()
 
 	_, execErr := coordinator.ExecuteTasks(ctx, []TaskDef{{
-		ID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
+		ID: "prepare", ContractID: "prepare", Agent: "preparer", Goal: "prepare the review", Phase: PhasePrepare,
 	}})
 	if !errors.Is(execErr, context.Canceled) {
 		t.Fatalf("pre-cancelled ExecuteTasks error = %v, want context.Canceled", execErr)

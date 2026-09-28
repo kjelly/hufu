@@ -179,7 +179,7 @@ func TestValidateEffectiveTeamReportsDecisionAuthoringDeprecations(t *testing.T)
     standard:
       preset: builtin/standard@v1
   routing-hints:
-    - when-goal-contains: storage
+    - contract-id: storage
       preferred-capabilities: [architecture]
   request-contract:
     enabled: true

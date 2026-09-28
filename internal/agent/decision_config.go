@@ -96,24 +96,13 @@ type DecisionConfig struct {
 	ProfileSpecs    map[string]DecisionProfileSpec `yaml:"-" json:"-"`
 	RoleConstraints DecisionRoleConstraintsV1      `yaml:"-" json:"-"`
 	// RoutingHints widen a role's preferred-capability list for a specific
-	// decision, based on the task's own question text (spec.md v2 §16,
-	// §30-31). Team-wide, not per-profile: every profile that opts a role
-	// into capability routing sees the same hints. A hint can only ever add
-	// to a role's *preferred* list — never to required — so it can widen
-	// which already-qualified candidate wins, never grant eligibility to one
-	// that failed the required-capability check.
+	// immutable task contract. A hint can only add to a role's preferred list.
 	RoutingHints []RoutingHint `yaml:"routing-hints,omitempty"`
 }
 
-// RoutingHint is one goal-substring-triggered capability-routing rule
-// (spec.md v2 §16). It reuses the same selector shape TaskGoalInvariants
-// already uses, rather than a new model-facing schema field: the task's
-// Goal is already free text a coordinator writes for its own reasons, and a
-// team-declared, auditable rule set matches spec.md v2's own examples
-// (its "Kubernetes migration" / "Security-sensitive task" hints are
-// themselves static, scenario-keyed rules, not freeform LLM-authored tags).
+// RoutingHint is one contract-ID-triggered capability-routing rule.
 type RoutingHint struct {
-	WhenGoalContains      string   `yaml:"when-goal-contains"`
+	ContractID            string   `yaml:"contract-id"`
 	PreferredCapabilities []string `yaml:"preferred-capabilities"`
 }
 
@@ -121,8 +110,8 @@ type RoutingHint struct {
 // anything — either mistake would silently no-op forever rather than fail
 // at load time.
 func (h RoutingHint) Validate() error {
-	if strings.TrimSpace(h.WhenGoalContains) == "" {
-		return fmt.Errorf("routing-hints[].when-goal-contains must not be empty")
+	if strings.TrimSpace(h.ContractID) == "" {
+		return fmt.Errorf("routing-hints[].contract-id must not be empty")
 	}
 	if len(h.PreferredCapabilities) == 0 {
 		return fmt.Errorf("routing-hints[].preferred-capabilities must name at least one capability")

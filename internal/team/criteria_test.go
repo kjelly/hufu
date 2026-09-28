@@ -14,6 +14,24 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
+func TestHasExecutableAcceptanceContract(t *testing.T) {
+	if (*Coordinator)(nil).HasExecutableAcceptanceContract() {
+		t.Fatal("nil coordinator reported an acceptance contract")
+	}
+	if (&Coordinator{}).HasExecutableAcceptanceContract() {
+		t.Fatal("empty coordinator reported an acceptance contract")
+	}
+	if !(&Coordinator{acceptanceCmd: "true"}).HasExecutableAcceptanceContract() {
+		t.Fatal("legacy acceptance command was not recognized")
+	}
+	if !(&Coordinator{acceptanceSpec: &AcceptanceSpec{Commands: []string{"true"}}}).HasExecutableAcceptanceContract() {
+		t.Fatal("configured acceptance spec was not recognized")
+	}
+	if (&Coordinator{acceptanceSpec: &AcceptanceSpec{}, acceptanceCmd: "stale"}).HasExecutableAcceptanceContract() {
+		t.Fatal("explicit empty acceptance spec must override a stale legacy command")
+	}
+}
+
 func TestNamedCriteriaPersistAndRespectDependencies(t *testing.T) {
 	dir := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "test"}}, projectDir: dir, taskTracker: NewTaskTracker(), sessionData: NewSession()}

@@ -658,11 +658,11 @@ func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *tes
 	runners := newDecisionRunners(h.coordinator, "task-1")
 	baseRole := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
 	hints := []agent.RoutingHint{
-		{WhenGoalContains: "storage", PreferredCapabilities: []string{"architecture"}},
+		{ContractID: "storage", PreferredCapabilities: []string{"architecture"}},
 	}
-	const question = "Should we change the storage backend?"
+	const contractID = "storage"
 
-	// Without the hint applying (a non-matching question), judge-1 ranks to
+	// Without the hint applying (a non-matching contract ID), judge-1 ranks to
 	// cand-c exactly as the non-hinted tests already prove.
 	unhintedRole := hintedJudgeRole(baseRole, hints, "an unrelated question")
 	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", unhintedRole)); err != nil {
@@ -675,11 +675,11 @@ func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *tes
 		t.Fatalf("unhinted judge-1 must not reach cand-a, got %d calls", got)
 	}
 
-	// With the hint matching, cand-a's declared "architecture" preference
+	// With the exact contract ID matching, cand-a's declared "architecture" preference
 	// (0.9 confidence) outscores cand-c's plain required match (0.7), so
 	// judge-1 now binds to cand-a instead.
 	beforeB, beforeC := h.candB.count(), h.candC.count()
-	hintedRole := hintedJudgeRole(baseRole, hints, question)
+	hintedRole := hintedJudgeRole(baseRole, hints, contractID)
 	hintedOpinion, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", hintedRole))
 	if err != nil {
 		t.Fatalf("RunJudge(judge-1, hinted): %v", err)
@@ -699,7 +699,7 @@ func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *tes
 		JudgeID:     "judge-1",
 		Original:    DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute"},
 		Prompt:      "You are judge judge-1 revising your own judgment once (round 2).",
-		RoutingRole: hintedJudgeRole(baseRole, hints, question),
+		RoutingRole: hintedJudgeRole(baseRole, hints, contractID),
 	}
 	revision, err := runners.RunRevision(context.Background(), revisionReq)
 	if err != nil {

@@ -211,7 +211,7 @@ func TestCoordinator_ResolveCapabilityCandidates_RespectsAllowedWorkers(t *testi
 }
 
 // validateCapabilityRouting is the production dispatch-path wiring for
-// plan.md Stage 8: a task whose goal matches a configured rule, delegated to
+// plan.md Stage 8: a task whose contract ID matches a configured rule, delegated to
 // a worker that cannot show the required capability while a qualified
 // alternative exists, must be rejected before a TODO is created.
 func TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative(t *testing.T) {
@@ -222,7 +222,7 @@ func TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative(t *te
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
 			CapabilityRouting: []agent.CapabilityRoutingRule{
-				{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+				{ContractID: "security-audit", RequiredCapability: "security-review"},
 			},
 		},
 		CapabilityRegistry: map[string][]agent.DeclaredCapability{
@@ -231,7 +231,7 @@ func TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative(t *te
 	}
 	c := newTestCoordinatorForDryRun(t, agents, nil, cfg)
 
-	err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", Goal: "run a security audit on the API"}})
+	err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", ContractID: "security-audit", Goal: "run a security audit on the API"}})
 	if err == nil {
 		t.Fatal("want a policy rejection, got nil")
 	}
@@ -249,7 +249,7 @@ func TestValidateCapabilityRouting_AllowsQualifiedChoice(t *testing.T) {
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
 			CapabilityRouting: []agent.CapabilityRoutingRule{
-				{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+				{ContractID: "security-audit", RequiredCapability: "security-review"},
 			},
 		},
 		CapabilityRegistry: map[string][]agent.DeclaredCapability{
@@ -258,7 +258,7 @@ func TestValidateCapabilityRouting_AllowsQualifiedChoice(t *testing.T) {
 	}
 	c := newTestCoordinatorForDryRun(t, agents, nil, cfg)
 
-	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "specialist", Goal: "run a security audit on the API"}}); err != nil {
+	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "specialist", ContractID: "security-audit", Goal: "run a security audit on the API"}}); err != nil {
 		t.Fatalf("qualified choice was rejected: %v", err)
 	}
 }
@@ -269,13 +269,13 @@ func TestValidateCapabilityRouting_IgnoresNonMatchingGoal(t *testing.T) {
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
 			CapabilityRouting: []agent.CapabilityRoutingRule{
-				{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+				{ContractID: "security-audit", RequiredCapability: "security-review"},
 			},
 		},
 	}
 	c := newTestCoordinatorForDryRun(t, agents, nil, cfg)
 
-	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", Goal: "write the release notes"}}); err != nil {
+	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", ContractID: "release-notes", Goal: "write the release notes"}}); err != nil {
 		t.Fatalf("non-matching goal must not be affected: %v", err)
 	}
 }
@@ -287,13 +287,13 @@ func TestValidateCapabilityRouting_DoesNotBlockWhenNoOneQualifies(t *testing.T) 
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
 			CapabilityRouting: []agent.CapabilityRoutingRule{
-				{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+				{ContractID: "security-audit", RequiredCapability: "security-review"},
 			},
 		},
 	}
 	c := newTestCoordinatorForDryRun(t, agents, nil, cfg)
 
-	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", Goal: "run a security audit on the API"}}); err != nil {
+	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", ContractID: "security-audit", Goal: "run a security audit on the API"}}); err != nil {
 		t.Fatalf("must not block when no eligible candidate qualifies: %v", err)
 	}
 }
@@ -311,7 +311,7 @@ func TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative(t *testing.
 		Delegation: agent.DelegationPolicy{
 			AllowedWorkers: []string{"generalist"},
 			CapabilityRouting: []agent.CapabilityRoutingRule{
-				{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+				{ContractID: "security-audit", RequiredCapability: "security-review"},
 			},
 		},
 		CapabilityRegistry: map[string][]agent.DeclaredCapability{
@@ -320,7 +320,7 @@ func TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative(t *testing.
 	}
 	c := newTestCoordinatorForDryRun(t, agents, nil, cfg)
 
-	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", Goal: "run a security audit on the API"}}); err != nil {
+	if err := c.validateCapabilityRouting([]TaskDef{{Agent: "generalist", ContractID: "security-audit", Goal: "run a security audit on the API"}}); err != nil {
 		t.Fatalf("must not block: the only capable worker is unauthorized, so nothing eligible qualifies: %v", err)
 	}
 }
@@ -331,7 +331,7 @@ func TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative(t *testing.
 func TestValidateDelegationPolicy_EnforcesCapabilityRouting(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		CapabilityRouting: []agent.CapabilityRoutingRule{
-			{WhenGoalContains: "security audit", RequiredCapability: "security-review"},
+			{ContractID: "security-audit", RequiredCapability: "security-review"},
 		},
 	})
 	c.session.Agents = map[string]*agent.AgentDef{
@@ -342,7 +342,7 @@ func TestValidateDelegationPolicy_EnforcesCapabilityRouting(t *testing.T) {
 		"specialist": {{Capability: "security-review", Confidence: 0.7}},
 	}
 
-	err := c.validateDelegationPolicy([]TaskDef{{Agent: "generalist", Goal: "run a security audit on the API"}})
+	err := c.validateDelegationPolicy([]TaskDef{{Agent: "generalist", ContractID: "security-audit", Goal: "run a security audit on the API"}})
 	if err == nil || !strings.Contains(err.Error(), "capability-routing") {
 		t.Fatalf("validateDelegationPolicy = %v, want a capability-routing rejection", err)
 	}

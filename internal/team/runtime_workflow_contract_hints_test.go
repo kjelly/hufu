@@ -11,12 +11,12 @@ func threeContractExecuteWorkflow(t *testing.T) *runtimeWorkflow {
 	t.Helper()
 	session := workflowTestSession(t)
 	session.ContractTasks = []TaskDef{
-		{ID: "prepare", Agent: "preparer", WhenGoalContains: "prepare", Phase: PhasePrepare},
-		{ID: "audit", Agent: "auditor", WhenGoalContains: "audit", Phase: PhaseAudit},
-		{ID: "review-primary", Agent: "executor", WhenGoalContains: "review primary workset", Phase: PhaseExecute},
-		{ID: "review-docs", Agent: "auditor", WhenGoalContains: "review documentation workset", Phase: PhaseExecute},
-		{ID: "review-escalation", Agent: "verifier", WhenGoalContains: "review documentation escalation", Phase: PhaseExecute},
-		{ID: "verify", Agent: "verifier", WhenGoalContains: "verify", Phase: PhaseVerify},
+		{ID: "prepare", Agent: "preparer", Phase: PhasePrepare},
+		{ID: "audit", Agent: "auditor", Phase: PhaseAudit},
+		{ID: "review-primary", Agent: "executor", Phase: PhaseExecute},
+		{ID: "review-docs", Agent: "auditor", Phase: PhaseExecute},
+		{ID: "review-escalation", Agent: "verifier", Phase: PhaseExecute},
+		{ID: "verify", Agent: "verifier", Phase: PhaseVerify},
 	}
 	w, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -44,9 +44,7 @@ func TestPhaseDispatchRejectionsListEveryContract(t *testing.T) {
 	docs := TaskDef{Agent: "auditor", ContractID: "review-docs", Phase: PhaseExecute}
 	escalation := TaskDef{Agent: "verifier", ContractID: "review-escalation", Phase: PhaseExecute}
 	guide := `phase EXECUTE dispatches these static contracts together in one batch: ` +
-		`review-docs (agent auditor, goal containing "review documentation workset"); ` +
-		`review-escalation (agent verifier, goal containing "review documentation escalation"); ` +
-		`review-primary (agent executor, goal containing "review primary workset")`
+		`review-docs (agent auditor); review-escalation (agent verifier); review-primary (agent executor)`
 	tests := []struct {
 		name  string
 		tasks []TaskDef
@@ -54,8 +52,7 @@ func TestPhaseDispatchRejectionsListEveryContract(t *testing.T) {
 	}{
 		{name: "complete batch", tasks: []TaskDef{primary, docs, escalation}},
 		{name: "two contracts missing", tasks: []TaskDef{docs}, want: []string{
-			`must dispatch static contract review-escalation (agent verifier, goal containing "review documentation escalation"); ` +
-				`review-primary (agent executor, goal containing "review primary workset") in the same batch`,
+			`must dispatch static contract review-escalation (agent verifier); review-primary (agent executor) in the same batch`,
 			guide,
 		}},
 		{name: "task bound to another phase", tasks: []TaskDef{primary, {Agent: "executor", ContractID: "prepare", Phase: PhasePrepare}}, want: []string{

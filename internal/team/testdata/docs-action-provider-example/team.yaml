@@ -23,7 +23,6 @@ tasks:
   - id: prepare-workset
     agent: reviewer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
     action:
       capability: prepare-workset
@@ -33,19 +32,16 @@ tasks:
   - id: audit-workset
     agent: reviewer
     phase: audit
-    when-goal-contains: audit
     side_effect: none
 
   - id: review-workset
     agent: reviewer
     phase: execute
-    when-goal-contains: review
     side_effect: none
 
   - id: verify-review
     agent: verifier
     phase: verify
-    when-goal-contains: verify
     side_effect: none
     verify-spec:
       type: command_exit

@@ -461,33 +461,6 @@ func TestSkillPatternDetector_CollectAllTaskDescriptions(t *testing.T) {
 	}
 }
 
-func TestSkillPatternDetector_ExtractKeywords(t *testing.T) {
-	detector := NewSkillPatternDetector(2, 2, 3)
-
-	descs := []string{
-		"Fix the bug in the code",
-		"Modify the implementation",
-	}
-
-	keywords := detector.extractKeywords(descs)
-
-	// Should extract content words, not stop words
-	expectedKeywords := []string{"fix", "bug", "code", "modify", "implementation"}
-	for _, keyword := range expectedKeywords {
-		if !keywords[keyword] {
-			t.Errorf("Expected keyword %q not found", keyword)
-		}
-	}
-
-	// Should not include stop words
-	stopWords := []string{"the", "in", "and", "or"}
-	for _, word := range stopWords {
-		if keywords[word] {
-			t.Errorf("Stop word %q should not be included", word)
-		}
-	}
-}
-
 func TestSkillPatternDetector_HashDescriptions(t *testing.T) {
 	detector := NewSkillPatternDetector(2, 2, 3)
 
@@ -538,15 +511,16 @@ func TestSkillPatternDetector_IsInSameCluster(t *testing.T) {
 		t.Error("Expected descriptions to be in different clusters via cluster mapping")
 	}
 
-	// Test case 3: Fallback keyword overlap (no clusters map)
+	// Test case 3: No semantic cluster means no guessed merge, even when the
+	// descriptions reuse the same words.
 	descs5 := []string{"fix bug code"}
 	descs6 := []string{"fix code bug"}
 
-	if !detector.isInSameClusterFast(descs5, descs6, nil) {
-		t.Error("Expected descriptions with overlapping keywords to be in same cluster via fallback")
+	if detector.isInSameClusterFast(descs5, descs6, nil) {
+		t.Error("descriptions were merged by keyword overlap without a semantic cluster")
 	}
 
-	// Test case 4: Fallback no overlap (no clusters map)
+	// Test case 4: No overlap also remains unmerged without a cluster.
 	descs7 := []string{"completely different task"}
 	descs8 := []string{"another unrelated thing"}
 

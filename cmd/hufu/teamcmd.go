@@ -24,6 +24,7 @@ var (
 	teamGenerateDryRun    bool
 	teamGenerateOutputDir string
 	teamGenerateModel     string
+	teamGenerateCategory  string
 	teamValidateName      string
 )
 
@@ -44,13 +45,13 @@ again after runtime CLI/profile policy is resolved.`,
 var teamGenerateCmd = &cobra.Command{
 	Use:   "generate <team-name>",
 	Short: "Generate a task-specific agent team",
-	Long: `Generate a candidate team from a task description.
+	Long: `Generate a candidate team from a task description and explicit category.
 
 By default this previews the generated files and validates that hufu can load
-them. Pass --write to save the validated team. The initial generator uses
-deterministic task categories, so generation does not make an LLM call.`,
-	Example: `  hufu team generate oauth-bugfix --from-prompt "Fix the OAuth callback bug and add regression tests"
-  hufu team generate docs-research --from-prompt "Compare API authentication options and write documentation" --write`,
+them. Pass --write to save the validated team. Prompt prose never selects
+workers or tool permissions; use --category explicitly.`,
+	Example: `  hufu team generate oauth-bugfix --category bugfix --from-prompt "Fix the OAuth callback bug and add regression tests"
+  hufu team generate docs-research --category research --from-prompt "Compare API authentication options and write documentation" --write`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTeamGenerate,
 }
@@ -65,6 +66,7 @@ func init() {
 	teamGenerateCmd.Flags().BoolVar(&teamGenerateDryRun, "dry-run", false, "Validate without writing files (the default preview also validates)")
 	teamGenerateCmd.Flags().StringVar(&teamGenerateOutputDir, "output-dir", ".agent-teams", "Directory in which to create the team")
 	teamGenerateCmd.Flags().StringVar(&teamGenerateModel, "model", "", "Optional model to set in the generated team.yaml")
+	teamGenerateCmd.Flags().StringVar(&teamGenerateCategory, "category", "general", "Explicit team template: general, bugfix, research, or release")
 	_ = teamGenerateCmd.MarkFlagRequired("from-prompt")
 	teamValidateCmd.Flags().StringVar(&teamValidateName, "team", "", "Discoverable team name to validate")
 }
@@ -128,7 +130,11 @@ func runTeamGenerate(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("--write and --dry-run cannot be used together")
 	}
 
-	generated := buildGeneratedTeam(name, teamGeneratePrompt, teamGenerateModel)
+	category, err := normalizeGeneratedTeamCategory(teamGenerateCategory)
+	if err != nil {
+		return err
+	}
+	generated := buildGeneratedTeamForCategory(name, teamGeneratePrompt, teamGenerateModel, category)
 	if err := validateGeneratedTeam(generated); err != nil {
 		return fmt.Errorf("generated team is invalid: %w", err)
 	}
@@ -188,7 +194,10 @@ func normalizeGeneratedTeamName(name string) (string, error) {
 }
 
 func buildGeneratedTeam(name, prompt, model string) generatedTeam {
-	category := classifyGeneratedTeamTask(prompt)
+	return buildGeneratedTeamForCategory(name, prompt, model, "general")
+}
+
+func buildGeneratedTeamForCategory(name, prompt, model, category string) generatedTeam {
 	description := fmt.Sprintf("Task-specific %s team generated for: %s", category, strings.TrimSpace(prompt))
 	modelLine := ""
 	if strings.TrimSpace(model) != "" {
@@ -233,7 +242,7 @@ Analyze the request, delegate independent work to the appropriate workers, and s
 	case "release":
 		files["release-engineer.md"] = generatedAgentMarkdown("release-engineer", "Prepares release and deployment changes", "worker", "view,write,edit,multiedit,grep,glob,ls,bash", "Inspect release configuration, implement necessary release changes, and run relevant checks. Prefer reversible, well-documented actions.")
 		files["risk-reviewer.md"] = generatedAgentMarkdown("risk-reviewer", "Assesses operational and rollback risk", "worker", "view,grep,glob,ls,bash", "Review the release plan for operational risks, observability gaps, rollout sequencing, and rollback readiness.")
-	default:
+	case "general":
 		files["architect.md"] = generatedAgentMarkdown("architect", "Designs implementation-ready changes", "worker", "view,grep,glob,ls", "Inspect the codebase and propose a minimal implementation plan, including affected interfaces, files, and verification steps. Do not modify code.")
 		files["developer.md"] = generatedAgentMarkdown("developer", "Implements production changes", "worker", "view,write,edit,multiedit,grep,glob,ls,bash", "Implement the approved change with minimal, idiomatic edits. Run focused tests and clearly report what changed.")
 		files["test-reviewer.md"] = generatedAgentMarkdown("test-reviewer", "Reviews tests and implementation quality", "worker", "view,grep,glob,ls,bash", "Review the implementation for correctness, maintainability, and test coverage. Run relevant tests and report concrete findings.")
@@ -245,27 +254,14 @@ func generatedAgentMarkdown(name, description, role, tools, system string) strin
 	return fmt.Sprintf("---\nname: %s\ndescription: %s\nrole: %s\ntools: %s\n---\n%s\n", name, description, role, tools, system)
 }
 
-func classifyGeneratedTeamTask(prompt string) string {
-	p := strings.ToLower(prompt)
-	if containsGeneratedTaskKeyword(p, "bug", "fix", "regression", "error", "failure", "issue", "修正", "修復", "錯誤", "問題") {
-		return "bugfix"
+func normalizeGeneratedTeamCategory(category string) (string, error) {
+	category = strings.ToLower(strings.TrimSpace(category))
+	switch category {
+	case "general", "bugfix", "research", "release":
+		return category, nil
+	default:
+		return "", fmt.Errorf("invalid category %q: use general, bugfix, research, or release", category)
 	}
-	if containsGeneratedTaskKeyword(p, "research", "investigate", "compare", "documentation", "document", "docs", "研究", "調查", "比較", "文件") {
-		return "research"
-	}
-	if containsGeneratedTaskKeyword(p, "release", "deploy", "deployment", "incident", "operations", "infrastructure", "發佈", "發布", "部署", "維運", "事故") {
-		return "release"
-	}
-	return "development"
-}
-
-func containsGeneratedTaskKeyword(prompt string, keywords ...string) bool {
-	for _, keyword := range keywords {
-		if strings.Contains(prompt, keyword) {
-			return true
-		}
-	}
-	return false
 }
 
 // validateGeneratedTeam loads an isolated copy through the normal team parser.

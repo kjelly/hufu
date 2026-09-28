@@ -95,7 +95,8 @@ func TestDryRun_NoLLMCall_Structure(t *testing.T) {
 		t.Errorf("AllSkills has %d entries, want %d", len(result.AllSkills), len(skills))
 	}
 
-	// MatchedSkillNames is a subset of AllSkills and includes matches
+	// Dry-run remains LLM-free, so it exposes the catalog without guessing
+	// semantic matches from prompt words.
 	allSet := map[string]bool{}
 	for _, s := range result.AllSkills {
 		allSet[s.Name] = true
@@ -106,15 +107,8 @@ func TestDryRun_NoLLMCall_Structure(t *testing.T) {
 		}
 	}
 
-	// "code review" / "pull request" should match the code-reviewer skill
-	matched := false
-	for _, m := range result.MatchedSkillNames {
-		if m == "code-reviewer" {
-			matched = true
-		}
-	}
-	if !matched {
-		t.Errorf("expected code-reviewer in MatchedSkillNames, got: %v", result.MatchedSkillNames)
+	if len(result.MatchedSkillNames) != 0 {
+		t.Errorf("MatchedSkillNames should be empty without a structured resolver, got: %v", result.MatchedSkillNames)
 	}
 
 	// No LLM, so no FirstRoundTasks
@@ -245,54 +239,5 @@ func TestDryRun_NoLLMCall_DoesNotCreateProviderManager(t *testing.T) {
 	_, err := c.DryRun(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
-	}
-}
-
-func TestSkillMatchesPromptKeywords(t *testing.T) {
-	tests := []struct {
-		name   string
-		skill  *skill.SkillDef
-		prompt string
-		want   bool
-	}{
-		{
-			name:   "name match",
-			skill:  &skill.SkillDef{Name: "code-reviewer", Description: "Reviews code"},
-			prompt: "Please run the code reviewer on this PR",
-			want:   true,
-		},
-		{
-			name:   "description keyword match",
-			skill:  &skill.SkillDef{Name: "git-commit", Description: "Conventional commit message analysis"},
-			prompt: "Write a commit message following conventions",
-			want:   true,
-		},
-		{
-			name:   "no match",
-			skill:  &skill.SkillDef{Name: "code-reviewer", Description: "Reviews code"},
-			prompt: "deploy the kubernetes cluster",
-			want:   false,
-		},
-		{
-			name:   "empty prompt",
-			skill:  &skill.SkillDef{Name: "code-reviewer", Description: "Reviews code"},
-			prompt: "",
-			want:   false,
-		},
-		{
-			name:   "case insensitive",
-			skill:  &skill.SkillDef{Name: "Code-Reviewer", Description: "Reviews code"},
-			prompt: "CODE REVIEW PLEASE",
-			want:   true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := SkillMatchesPrompt(tt.skill, tt.prompt)
-			if got != tt.want {
-				t.Errorf("SkillMatchesPrompt(%q, %q) = %v, want %v",
-					tt.skill.Name, tt.prompt, got, tt.want)
-			}
-		})
 	}
 }

@@ -151,9 +151,10 @@ func TestHufuCodeReviewWorkersShareTheReviewRoute(t *testing.T) {
 func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	requested := []TaskDef{{
-		Agent:  "reviewer",
-		Goal:   "Produce workset for the last 7 commits.",
-		Action: &Action{Payload: `{"max_commits":7}`},
+		Agent:      "reviewer",
+		Goal:       "Produce workset for the last 7 commits.",
+		ContractID: "produce-workset",
+		Action:     &Action{Payload: `{"max_commits":7}`},
 	}}
 	bound, _, err := CompileTaskGoalContracts(session, requested)
 	if err != nil {

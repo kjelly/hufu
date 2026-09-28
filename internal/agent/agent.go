@@ -698,9 +698,9 @@ type DelegationPolicy struct {
 	// the coordinator reproduce a long provider JSON object.
 	BindInitialTaskContracts bool
 	// BindTaskGoalContracts replaces the execution and output contracts of a
-	// task that matches a static team task contract's agent and goal selector.
-	// It is for later closed checkpoints whose task goal can be dynamic while
-	// their execution shape must remain coordinator-independent.
+	// task that names a static team task contract by ID. It is for later closed
+	// checkpoints whose task goal can be dynamic while their execution shape
+	// remains coordinator-independent.
 	BindTaskGoalContracts bool
 	// NoRedispatchAfterSuccess lists workers that may not be delegated again
 	// after one of their tasks reached a successful terminal result.
@@ -710,37 +710,27 @@ type DelegationPolicy struct {
 	// attach workspace/shared files to a delegated task. Teams that do not set
 	// this keep the legacy context_files behavior.
 	ForbidContextFiles bool
-	// TaskGoalInvariants are optional, team-declared text boundaries checked
-	// before a delegated task creates a TODO or starts a worker.  The runtime
-	// only compares literals; provider- and project-specific content remains
-	// in the team configuration.
+	// TaskGoalInvariants are optional, team-declared boundaries selected by an
+	// exact task contract ID and checked before a delegated task creates a TODO
+	// or starts a worker.
 	TaskGoalInvariants []TaskGoalInvariant
 	// CapabilityRouting requires a delegated task's chosen worker to show a
-	// declared capability before a TODO is created (plan.md Stage 8; spec1.md
-	// §12). It reuses TaskGoalInvariants' goal-substring selector shape so
-	// authors do not learn a second selector language, but the check itself
-	// only ever narrows which already-authorized worker (from AllowedWorkers)
-	// may be chosen — it can never grant eligibility to one absent from it.
+	// declared capability before a TODO is created. Rules are selected by exact
+	// task contract ID and can only narrow the already-authorized workers.
 	CapabilityRouting []CapabilityRoutingRule
 }
 
-// CapabilityRoutingRule is one maintainer-authored routing requirement
-// (plan.md Stage 8; spec1.md §12). WhenGoalContains selects which delegated
-// tasks the rule applies to, the same way TaskGoalInvariant.WhenGoalContains
-// does; RequiredCapability is checked against the CapabilityRegistry, never
-// against the coordinator's own claim about its task.
+// CapabilityRoutingRule is one maintainer-authored routing requirement.
+// ContractID selects the immutable task contract to which it applies;
+// RequiredCapability is checked against the CapabilityRegistry.
 type CapabilityRoutingRule struct {
-	WhenGoalContains   string `yaml:"when-goal-contains" json:"when_goal_contains"`
+	ContractID         string `yaml:"contract-id" json:"contract_id"`
 	RequiredCapability string `yaml:"required-capability" json:"required_capability"`
 }
 
-// TaskGoalInvariant constrains a task selected by worker and a required goal
-// substring. Integrations supply the selector and contract details; the
-// runtime only enforces generic text and execution-shape boundaries before a
-// TODO is created or a worker can start.
+// TaskGoalInvariant constrains a task selected by an immutable contract ID.
 type TaskGoalInvariant struct {
-	Agent                    string             `yaml:"agent" json:"agent"`
-	WhenGoalContains         string             `yaml:"when-goal-contains" json:"when_goal_contains"`
+	ContractID               string             `yaml:"contract-id" json:"contract_id"`
 	RequiredLiterals         []string           `yaml:"required-literals" json:"required_literals"`
 	ForbiddenLiterals        []string           `yaml:"forbidden-literals" json:"forbidden_literals"`
 	RequiredToolSequence     []string           `yaml:"required-tool-sequence" json:"required_tool_sequence"`

@@ -236,8 +236,8 @@ func TestIsCacheForbiddenTasks(t *testing.T) {
 	if !c.IsCacheForbidden("run task [no-cache]", "") {
 		t.Fatalf("expected [no-cache] to trigger cache forbidden")
 	}
-	if !c.IsCacheForbidden("deploy_prod to cluster", "") {
-		t.Fatalf("expected deploy_prod to trigger cache forbidden")
+	if c.IsCacheForbidden("deploy_prod to cluster", "") {
+		t.Fatalf("domain words must not infer cache policy")
 	}
 	if c.IsCacheForbidden("read doc file", "test -f doc.md") {
 		t.Fatalf("normal task should be cacheable")

@@ -116,13 +116,13 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		ID: "freeze-v1", Agent: "runner", WhenGoalContains: "candidate-freeze",
+		ID: "freeze-v1", Agent: "runner",
 		OutputMode: TaskOutputModeVerbatim,
 		SideEffect: SideEffectWorkspaceWrite, Recovery: RecoveryReconcile, MaxRetries: 2,
 		Execution: ExecutionContract{ForbidArtifacts: true, ToolSequence: []string{"bash", "bash", "submit_result"}},
 	}}}
 	requested := TaskDef{
-		Agent: "runner", Goal: "§3.1 candidate-freeze",
+		Agent: "runner", Goal: "§3.1 candidate-freeze", ContractID: "freeze-v1",
 		Execution: ExecutionContract{
 			ToolSequence:          []string{"bash", "bash", "submit_result"},
 			ToolExpectedExitCodes: [][]int{{}, {}, {}},
@@ -151,12 +151,12 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 
 func TestRestoreLegacyBoundInvariantVerificationRequiresMatchingContractHash(t *testing.T) {
 	contract := TaskDef{
-		ID: "review-workset", Agent: "reviewer", WhenGoalContains: "review workset",
+		ID: "review-workset", Agent: "reviewer",
 		InvariantVerification: InvariantVerificationReport,
 		Execution:             ExecutionContract{RequiresResult: true, ToolSequence: []string{"view", "submit_result"}},
 	}
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}}, ContractTasks: []TaskDef{contract}}
-	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset"}})
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "reviewer", Goal: "review workset", ContractID: "review-workset"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,10 +192,10 @@ func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		ID: "apply-v1", Agent: "executor", WhenGoalContains: "apply change", Phase: PhaseExecute,
+		ID: "apply-v1", Agent: "executor", Phase: PhaseExecute,
 		Action: &Action{Capability: "structured-actions", Type: "apply", Payload: `{"safe":true}`},
 	}}}
-	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "executor", Goal: "apply change"}})
+	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "executor", Goal: "apply change", ContractID: "apply-v1"}})
 	if err != nil {
 		t.Fatalf("compile goal contract: %v", err)
 	}
@@ -210,26 +210,19 @@ func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
 	}
 }
 
-func TestCompileTaskGoalContractsBindsUniqueAgentContractAfterParaphrase(t *testing.T) {
+func TestCompileTaskGoalContractsRejectsMissingContractID(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		ID: "author-v1", Agent: "author", WhenGoalContains: "author bundle",
+		ID: "author-v1", Agent: "author",
 		Execution: ExecutionContract{RequiresResult: true, ToolSequence: []string{"bash", "submit_result"}},
 	}}}
 	requested := TaskDef{Agent: "author", Goal: "Create the structured-action scenarios", Execution: ExecutionContract{
 		ToolSequence: []string{"bash ./invented-script.sh", "submit_result"}, ToolExpectedExitCodes: [][]int{{0}},
 	}}
 
-	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{requested})
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
-	if len(effective) != 1 || effective[0].ID != "author-v1" {
-		t.Fatalf("unique agent contract was not selected: %#v", effective)
-	}
-	if got := bound[0].Execution; !reflect.DeepEqual(got.ToolSequence, []string{"bash", "submit_result"}) || len(got.ToolExpectedExitCodes) != 0 {
-		t.Fatalf("model-authored execution fields survived unique binding: %#v", got)
+	if _, _, err := CompileTaskGoalContracts(session, []TaskDef{requested}); err == nil || !strings.Contains(err.Error(), "must provide contract_id") {
+		t.Fatalf("missing contract ID error = %v, want fail-closed rejection", err)
 	}
 }
 
@@ -237,13 +230,14 @@ func TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields(t *testin
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		Agent:            "topology-preparer",
-		WhenGoalContains: "topology",
-		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+		ID:        "topology",
+		Agent:     "topology-preparer",
+		Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
 	}}}
 	requested := TaskDef{
 		Agent:      "topology-preparer",
 		Goal:       "rebuild topology",
+		ContractID: "topology",
 		Verify:     "test -s receipt.json",
 		VerifySpec: &VerificationSpec{Type: VerifyFileExists, Path: "receipt.json"},
 	}
@@ -269,13 +263,13 @@ func TestCompileTaskGoalContractsBindsStaticProgressCriterionFields(t *testing.T
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		Agent:            "go-reviewer",
-		WhenGoalContains: "review batch",
-		Execution:        ExecutionContract{ToolSequence: []string{"view", "submit_result"}},
-		Kind:             TaskKindOutcome,
-		Advances:         []string{"all-batches-reviewed"},
+		ID:        "review-batch",
+		Agent:     "go-reviewer",
+		Execution: ExecutionContract{ToolSequence: []string{"view", "submit_result"}},
+		Kind:      TaskKindOutcome,
+		Advances:  []string{"all-batches-reviewed"},
 	}}}
-	requested := TaskDef{Agent: "go-reviewer", Goal: "review batch-0000"}
+	requested := TaskDef{Agent: "go-reviewer", Goal: "review batch-0000", ContractID: "review-batch"}
 
 	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{requested})
 	if err != nil {
@@ -305,15 +299,16 @@ func TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields(t *t
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		Agent:            "topology-preparer",
-		WhenGoalContains: "topology",
-		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+		ID:        "topology",
+		Agent:     "topology-preparer",
+		Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
 	}}}
 	requested := TaskDef{
-		Agent:    "topology-preparer",
-		Goal:     "rebuild topology",
-		Kind:     TaskKindRepair,
-		Advances: []string{"invented-criterion"},
+		Agent:      "topology-preparer",
+		Goal:       "rebuild topology",
+		ContractID: "topology",
+		Kind:       TaskKindRepair,
+		Advances:   []string{"invented-criterion"},
 	}
 	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{requested})
 	if err != nil {
@@ -324,36 +319,54 @@ func TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields(t *t
 	}
 }
 
-func TestCompileTaskGoalContractsMatchesGoalSelectorCaseInsensitively(t *testing.T) {
+func TestCompileTaskGoalContractsMatchesContractIDCaseInsensitively(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
-		Agent:            "author",
-		WhenGoalContains: "AUTHOR STRUCTURED-ACTION BUNDLE",
-		Execution:        ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
+		ID:        "AUTHOR-BUNDLE",
+		Agent:     "author",
+		Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}},
 	}}}
 	bound, effective, err := CompileTaskGoalContracts(session, []TaskDef{{
-		Agent: "author",
-		Goal:  "Author structured-action bundle",
+		Agent:      "author",
+		Goal:       "Arbitrary prose",
+		ContractID: "author-bundle",
 	}})
 	if err != nil {
-		t.Fatalf("compile case-insensitive selector: %v", err)
+		t.Fatalf("compile case-insensitive contract ID: %v", err)
 	}
 	if len(effective) != 1 || !reflect.DeepEqual(bound[0].Execution.ToolSequence, []string{"bash", "submit_result"}) {
-		t.Fatalf("case-insensitive selector did not bind static contract: bound=%#v effective=%#v", bound, effective)
+		t.Fatalf("case-insensitive contract ID did not bind static contract: bound=%#v effective=%#v", bound, effective)
 	}
 }
 
-func TestCompileTaskGoalContractsRejectsAmbiguousSelectors(t *testing.T) {
+func TestCompileTaskGoalContractsRejectsDuplicateContractIDs(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{
-		{Agent: "runner", WhenGoalContains: "freeze", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
-		{Agent: "runner", WhenGoalContains: "candidate-freeze", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
+		{ID: "freeze", Agent: "runner", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
+		{ID: "FREEZE", Agent: "runner", Execution: ExecutionContract{ToolSequence: []string{"submit_result"}}},
 	}}
-	if _, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "runner", Goal: "candidate-freeze"}}); err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("ambiguous goal selectors error = %v, want rejection", err)
+	if _, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "runner", Goal: "candidate-freeze", ContractID: "freeze"}}); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate contract ID error = %v, want rejection", err)
 	}
+}
+
+func TestValidateTeamTaskContractsRejectsLegacySemanticSelector(t *testing.T) {
+	session := &TeamSession{
+		Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
+		Agents: map[string]*agent.AgentDef{"runner": {Name: "runner", Role: "worker"}},
+		ContractTasks: []TaskDef{{
+			ID: "freeze", Agent: "runner", WhenGoalContains: "candidate-freeze",
+		}},
+	}
+	findings := ValidateTeamTaskContracts(session)
+	for _, finding := range findings {
+		if finding.Code == "semantic_contract_selector_forbidden" {
+			return
+		}
+	}
+	t.Fatalf("findings = %#v, want semantic_contract_selector_forbidden", findings)
 }
 
 func TestValidateTeamTaskContractsRejectsMissingInitialContract(t *testing.T) {

@@ -41,7 +41,7 @@ func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
 			},
 			"category": map[string]any{
 				"type": "string", "enum": []string{"decision", "convention", "architecture", "issue", "error", "lesson", "pattern", "observation", "finding", "verification", "artifact", "requirement", "instruction", "summary"},
-				"description": "Optional canonical knowledge category. If omitted, the compatibility section classifier chooses the kind.",
+				"description": "Optional canonical knowledge category. If omitted, the safe generic pattern section is used; content is never keyword-classified.",
 			},
 			"supersedes": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
@@ -81,9 +81,9 @@ func (t *memorySaveLTMWrapper) Run(ctx context.Context, call fantasy.ToolCall) (
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
-	section := ClassifyLTMEntry(args.Content, "finding")
+	section := ltmSectionForCategory(args.Category)
 	if section == "" {
-		section = ltmSectionPatterns
+		return fantasy.NewTextErrorResponse("category is not supported"), nil
 	}
 	visibility = strings.ToLower(strings.TrimSpace(args.Visibility))
 	if visibility == "" {

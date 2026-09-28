@@ -90,8 +90,8 @@ func TestAutoSelectTeamFallbackReleasesPreflightHandle(t *testing.T) {
 	t.Cleanup(func() { selectionSidecarBuilder = original })
 
 	name, method := autoSelectTeam(context.Background(), "write a manual", registry)
-	if name != "docs" || method != "keyword" {
-		t.Fatalf("selection = (%q, %q), want keyword docs", name, method)
+	if name != "" || method != "" {
+		t.Fatalf("selection = (%q, %q), want unresolved selection", name, method)
 	}
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
@@ -179,77 +179,11 @@ func TestMaybeAutoSelectTeamClassifierFallbackBuildsSelectionPreflightLazily(t *
 	})
 
 	decision := maybeAutoSelectTeam(context.Background(), strings.Repeat("tell me something ", 5), "", nil)
-	if decision.Route != RouteFast || decision.Team != "default" {
-		t.Fatalf("decision = %#v, want concise default fallback route", decision)
+	if decision.Route != RouteTeam || decision.Team != "" {
+		t.Fatalf("decision = %#v, want safe unresolved team route", decision)
 	}
 	if buildCalls != 1 {
 		t.Fatalf("selection preflight builds = %d, want 1 for classifier fallback", buildCalls)
-	}
-}
-
-func TestTokenSet_FiltersStopwordsAndShort(t *testing.T) {
-	got := tokenSet("Please deploy the cluster to prod")
-	for _, w := range []string{"deploy", "cluster", "prod"} {
-		if !got[w] {
-			t.Errorf("expected token %q to be kept", w)
-		}
-	}
-	for _, w := range []string{"please", "the", "to"} {
-		if got[w] {
-			t.Errorf("stopword/short token %q should be dropped", w)
-		}
-	}
-}
-
-func TestSingularize(t *testing.T) {
-	cases := map[string]string{
-		"manuals":   "manual",
-		"tutorials": "tutorial",
-		"logs":      "log",
-		"class":     "class", // -ss preserved
-		"is":        "is",    // too short
-		"cd":        "cd",
-	}
-	for in, want := range cases {
-		if got := singularize(in); got != want {
-			t.Errorf("singularize(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestKeywordBestTeam(t *testing.T) {
-	candidates := []sidecar.TeamSummary{
-		{Name: "doc-gen", Description: "Generates documentation, manuals and tutorials from code"},
-		{Name: "infra-team", Description: "Kubernetes, CI/CD pipelines, cloud infrastructure and deployment"},
-		{Name: "reviewer", Description: "Reviews code for correctness, security and quality"},
-	}
-
-	cases := []struct {
-		prompt string
-		want   string
-	}{
-		{"deploy the kubernetes cluster and set up CI/CD pipelines", "infra-team"},
-		{"write a tutorial and user manual for the project", "doc-gen"},
-		{"review this code for security issues", "reviewer"},
-	}
-	for _, tc := range cases {
-		if got := keywordBestTeam(tc.prompt, candidates); got != tc.want {
-			t.Errorf("keywordBestTeam(%q) = %q, want %q", tc.prompt, got, tc.want)
-		}
-	}
-}
-
-func TestKeywordBestTeam_NoSignal(t *testing.T) {
-	candidates := []sidecar.TeamSummary{
-		{Name: "alpha", Description: "does alpha things"},
-		{Name: "beta", Description: "does beta things"},
-	}
-	// No overlapping words → no confident pick.
-	if got := keywordBestTeam("xyzzy frobnicate", candidates); got != "" {
-		t.Errorf("expected empty (no signal), got %q", got)
-	}
-	if got := keywordBestTeam("", candidates); got != "" {
-		t.Errorf("empty prompt should yield no pick, got %q", got)
 	}
 }
 

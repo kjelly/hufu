@@ -2,7 +2,6 @@ package sidecar
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -82,6 +81,61 @@ func TestGenerateNotifiesUsageObserver(t *testing.T) {
 	}
 	if observed != 23 {
 		t.Fatalf("observer saw %d tokens, want 23", observed)
+	}
+}
+
+func TestDecodeRouteClassificationRequiresStrictSchema(t *testing.T) {
+	got, err := decodeRouteClassification(`{"route":"FAST","confidence":0.9,"reason":"one bounded task"}`)
+	if err != nil {
+		t.Fatalf("decode valid classification: %v", err)
+	}
+	if got.Route != "fast" || got.Confidence != 0.9 || got.Reason != "one bounded task" {
+		t.Fatalf("classification = %#v", got)
+	}
+
+	invalid := []string{
+		`{"route":"fast","reason":"missing confidence"}`,
+		`{"route":"fast","confidence":1.1,"reason":"out of range"}`,
+		`{"route":"maybe","confidence":0.5,"reason":"invalid enum"}`,
+		`{"route":"team","confidence":0.8,"reason":""}`,
+		`{"route":"team","confidence":0.8,"reason":"ok","extra":true}`,
+		`{"route":"team","confidence":0.8,"reason":"ok"} {}`,
+	}
+	for _, raw := range invalid {
+		if _, err := decodeRouteClassification(raw); err == nil {
+			t.Errorf("decodeRouteClassification(%s) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestDecodeTeamSelectionRequiresStrictSchema(t *testing.T) {
+	got, err := decodeTeamSelection(`{"team":"docs","confidence":0.75,"reason":"documentation task"}`)
+	if err != nil {
+		t.Fatalf("decode valid team selection: %v", err)
+	}
+	if got.Team != "docs" || got.Confidence != 0.75 {
+		t.Fatalf("selection = %#v", got)
+	}
+	for _, raw := range []string{
+		`"docs"`,
+		`{"team":"docs","confidence":0.75}`,
+		`{"team":"docs","confidence":-0.1,"reason":"invalid"}`,
+		`{"team":"docs","confidence":0.75,"reason":"ok","extra":true}`,
+	} {
+		if _, err := decodeTeamSelection(raw); err == nil {
+			t.Errorf("decodeTeamSelection(%s) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestMatchTeamDeclinesLowConfidenceSelection(t *testing.T) {
+	s := &Sidecar{agent: &callCapturingAgent{response: `{"team":"docs","confidence":0.59,"reason":"ambiguous"}`}}
+	teamName, err := s.MatchTeam(t.Context(), "write something", []TeamSummary{{Name: "docs"}, {Name: "infra"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teamName != "" {
+		t.Fatalf("low-confidence team selection = %q, want unresolved", teamName)
 	}
 }
 
@@ -400,82 +454,54 @@ func TestMatchSkillsJSON(t *testing.T) {
 	tests := []struct {
 		name     string
 		response string
-		skills   []SkillSummary
 		want     []string
 		wantErr  bool
 	}{
 		{
-			name:     "valid JSON array",
-			response: `["code-reviewer", "git-commit"]`,
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-				{Name: "git-commit", Description: "Commit changes"},
-			},
-			want:    []string{"code-reviewer", "git-commit"},
-			wantErr: false,
+			name:     "valid structured selection",
+			response: `{"skills":["code-reviewer","git-commit"],"confidence":0.9,"reason":"both are required"}`,
+			want:     []string{"code-reviewer", "git-commit"},
 		},
 		{
 			name:     "JSON in markdown code block",
-			response: "```json\n[\"code-reviewer\"]\n```",
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-				{Name: "git-commit", Description: "Commit changes"},
-			},
-			want:    []string{"code-reviewer"},
-			wantErr: false,
+			response: "```json\n{\"skills\":[\"code-reviewer\"],\"confidence\":0.8,\"reason\":\"review requested\"}\n```",
+			want:     []string{"code-reviewer"},
 		},
 		{
-			name:     "JSON in code block without language",
-			response: "```\n[\"git-commit\"]\n```",
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-				{Name: "git-commit", Description: "Commit changes"},
-			},
-			want:    []string{"git-commit"},
-			wantErr: false,
+			name:     "low confidence abstains",
+			response: `{"skills":["git-commit"],"confidence":0.4,"reason":"uncertain"}`,
 		},
 		{
-			name:     "empty array",
-			response: `[]`,
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-			},
-			want:    nil,
-			wantErr: false,
+			name:     "empty structured selection",
+			response: `{"skills":[],"confidence":0.9,"reason":"none required"}`,
 		},
 		{
 			name:     "invalid JSON",
-			response: `not a json array`,
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-			},
-			wantErr: true,
+			response: `not JSON`,
+			wantErr:  true,
 		},
 		{
-			name:     "unknown skill names filtered",
-			response: `["code-reviewer", "unknown-skill"]`,
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-			},
-			want:    []string{"code-reviewer"},
-			wantErr: false,
+			name:     "unknown skill rejected",
+			response: `{"skills":["unknown-skill"],"confidence":0.9,"reason":"selected"}`,
+			wantErr:  true,
 		},
 		{
-			name:     "all unknown names returns empty",
-			response: `["unknown-skill", "another-unknown"]`,
-			skills: []SkillSummary{
-				{Name: "code-reviewer", Description: "Review code"},
-			},
-			want:    nil,
-			wantErr: false,
+			name:     "missing reason rejected",
+			response: `{"skills":["code-reviewer"],"confidence":0.9,"reason":""}`,
+			wantErr:  true,
 		},
+	}
+	skills := []SkillSummary{
+		{Name: "code-reviewer", Description: "Review code"},
+		{Name: "git-commit", Description: "Commit changes"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			names, err := parseMatchSkillsResponse(tt.response, tt.skills)
+			s := &Sidecar{agent: &callCapturingAgent{response: tt.response}}
+			names, err := s.MatchSkills(t.Context(), "review and commit this change", skills)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseMatchSkillsResponse() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("MatchSkills() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if len(names) != len(tt.want) {
@@ -486,6 +512,34 @@ func TestMatchSkillsJSON(t *testing.T) {
 				if name != tt.want[i] {
 					t.Errorf("names[%d] = %q, want %q", i, name, tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestSelectAgentRequiresAuthorizedHighConfidenceSelection(t *testing.T) {
+	candidates := []TeamSummary{{Name: "reviewer", Description: "review code"}, {Name: "writer", Description: "write docs"}}
+	tests := []struct {
+		name     string
+		response string
+		want     string
+		wantErr  bool
+	}{
+		{name: "authorized", response: `{"agent":"reviewer","confidence":0.9,"reason":"review task"}`, want: "reviewer"},
+		{name: "low confidence", response: `{"agent":"reviewer","confidence":0.4,"reason":"uncertain"}`},
+		{name: "explicit abstention", response: `{"agent":"","confidence":0.9,"reason":"insufficient evidence"}`},
+		{name: "unknown agent", response: `{"agent":"invented","confidence":0.9,"reason":"selected"}`, wantErr: true},
+		{name: "invalid schema", response: `{"agent":"reviewer","confidence":0.9,"reason":"selected","extra":true}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Sidecar{agent: &callCapturingAgent{response: tt.response}}
+			selection, err := s.SelectAgent(t.Context(), "review this change", candidates)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("SelectAgent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if selection.Agent != tt.want {
+				t.Fatalf("SelectAgent() agent = %q, want %q", selection.Agent, tt.want)
 			}
 		})
 	}
@@ -520,32 +574,6 @@ func TestNormalizeAskUserSelection(t *testing.T) {
 	if resp.Free != "custom" {
 		t.Fatalf("unexpected free text: %q", resp.Free)
 	}
-}
-
-func parseMatchSkillsResponse(response string, skills []SkillSummary) ([]string, error) {
-	result := strings.TrimSpace(response)
-
-	extracted := jsonCodeBlockRe.FindStringSubmatch(result)
-	if len(extracted) >= 2 {
-		result = strings.TrimSpace(extracted[1])
-	}
-
-	var names []string
-	if err := json.Unmarshal([]byte(result), &names); err != nil {
-		return nil, err
-	}
-
-	validMap := map[string]bool{}
-	for _, sk := range skills {
-		validMap[strings.ToLower(sk.Name)] = true
-	}
-	var filtered []string
-	for _, name := range names {
-		if validMap[strings.ToLower(strings.TrimSpace(name))] {
-			filtered = append(filtered, strings.TrimSpace(name))
-		}
-	}
-	return filtered, nil
 }
 
 func TestParseReviewToolCallResponse(t *testing.T) {

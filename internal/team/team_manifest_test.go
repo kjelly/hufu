@@ -356,8 +356,8 @@ metadata:
   name: v1alpha1-tasks-team
 spec:
   tasks:
-    - agent: developer
-      when-goal-contains: IMPLEMENT
+    - id: implement
+      agent: developer
       side_effect: workspace_write
       recovery: retry
 `)
@@ -372,8 +372,8 @@ spec:
 	if len(tasks) != 1 {
 		t.Fatalf("len(tasks) = %d, want 1 (spec.tasks: must resolve for a v1alpha1 team)", len(tasks))
 	}
-	if tasks[0].Agent != "developer" || tasks[0].WhenGoalContains != "IMPLEMENT" {
-		t.Errorf("tasks[0] = %+v, want agent=developer when-goal-contains=IMPLEMENT", tasks[0])
+	if tasks[0].Agent != "developer" || tasks[0].ID != "implement" {
+		t.Errorf("tasks[0] = %+v, want id=implement agent=developer", tasks[0])
 	}
 
 	session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)

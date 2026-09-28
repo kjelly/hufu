@@ -13,6 +13,10 @@ import (
 // has the given worker count. It uses the same construction shape as the
 // internal services tests (empty provider URL, temp workspace).
 func newTestCoordinator(t *testing.T, workerCount int) *team.Coordinator {
+	return newTestCoordinatorWithAcceptance(t, workerCount, true)
+}
+
+func newTestCoordinatorWithAcceptance(t *testing.T, workerCount int, withAcceptance bool) *team.Coordinator {
 	t.Helper()
 	agents := map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator"},
@@ -26,10 +30,14 @@ func newTestCoordinator(t *testing.T, workerCount int) *team.Coordinator {
 		agents["w1"] = &agent.AgentDef{Name: "w1", Role: "worker"}
 		agents["w2"] = &agent.AgentDef{Name: "w2", Role: "worker"}
 	}
+	config := agent.TeamConfig{Name: "test", GoalMode: "exploratory"}
+	if withAcceptance {
+		config.AcceptanceSpec = &agent.AcceptanceSpec{Commands: []string{"true"}}
+	}
 	session := &team.TeamSession{
 		Workspace: t.TempDir(),
 		Dir:       t.TempDir(),
-		Config:    agent.TeamConfig{Name: "test", GoalMode: "exploratory"},
+		Config:    config,
 		Agents:    agents,
 	}
 	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
@@ -52,7 +60,12 @@ func TestShouldUseFastPath(t *testing.T) {
 		t.Error("expected false for empty route")
 	}
 	if !shouldUseFastPath(RouteDecision{Route: RouteFast}, single) {
-		t.Error("expected true for fast route + single worker")
+		t.Error("expected true for fast route + single worker + acceptance contract")
+	}
+
+	withoutAcceptance := newTestCoordinatorWithAcceptance(t, 1, false)
+	if shouldUseFastPath(RouteDecision{Route: RouteFast}, withoutAcceptance) {
+		t.Error("expected false when direct output cannot be certified")
 	}
 
 	multi := newTestCoordinator(t, 2)

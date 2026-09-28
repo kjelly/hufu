@@ -92,30 +92,30 @@ func TestDelegationPolicyBindsInitialStaticExecutionContract(t *testing.T) {
 func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
 	canonical := "BEGIN CANONICAL\nSPACE\nEND CANONICAL"
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "worker", WhenGoalContains: "prepare", RequiredLiterals: []string{canonical}, ForbiddenLiterals: []string{"CHECKLIST_DOWN 0"},
+		ContractID: "prepare", RequiredLiterals: []string{canonical}, ForbiddenLiterals: []string{"CHECKLIST_DOWN 0"},
 	}}})
 	for _, goal := range []string{
 		"prepare\nCHECKLIST_DOWN 0",
 		"prepare\nBEGIN CANONICAL\nSPACE\nEND CANONICAL\nCHECKLIST_DOWN 0",
 		"prepare\nSPACE",
 	} {
-		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", ContractID: "prepare", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
 			t.Fatalf("goal %q error = %v, want invariant rejection", goal, err)
 		}
 		if got := len(c.taskTracker.TodoList().Items()); got != 0 {
 			t.Fatalf("rejected goal %q created %d TODOs, want none", goal, got)
 		}
 	}
-	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "prepare\n" + canonical}}); err != nil {
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", ContractID: "prepare", Goal: "prepare\n" + canonical}}); err != nil {
 		t.Fatalf("canonical goal rejected: %v", err)
 	}
 }
 
 func TestDelegationPolicyChecksInvariantLiteralsInConstraints(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "worker", WhenGoalContains: "batch-", RequiredLiterals: []string{"literal-range"}, ForbiddenLiterals: []string{"sizing"},
+		ContractID: "batch", RequiredLiterals: []string{"literal-range"}, ForbiddenLiterals: []string{"sizing"},
 	}}})
-	task := TaskDef{Agent: "worker", Goal: "Review batch-0001", Constraints: "literal-range: abc..def"}
+	task := TaskDef{Agent: "worker", ContractID: "batch", Goal: "Review batch-0001", Constraints: "literal-range: abc..def"}
 	if err := c.validateDelegationPolicy([]TaskDef{task}); err != nil {
 		t.Fatalf("constraint-carried invariant literal rejected: %v", err)
 	}
@@ -128,32 +128,32 @@ func TestDelegationPolicyChecksInvariantLiteralsInConstraints(t *testing.T) {
 
 func TestDelegationPolicyRejectsRawRangeDiscoveryBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "worker", WhenGoalContains: "git log", RequiredLiterals: []string{"summary"}, ForbiddenLiterals: []string{"raw output"},
+		ContractID: "discovery", RequiredLiterals: []string{"summary"}, ForbiddenLiterals: []string{"raw output"},
 	}}})
 	for _, goal := range []string{
 		"Run git log and return raw output as a summary",
 		"Run git log and return the result",
 	} {
-		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", ContractID: "discovery", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task-goal-invariants") {
 			t.Fatalf("goal %q error = %v, want invariant rejection", goal, err)
 		}
 	}
-	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "Run git log and return a compact summary"}}); err != nil {
+	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", ContractID: "discovery", Goal: "Run git log and return a compact summary"}}); err != nil {
 		t.Fatalf("compact discovery goal rejected: %v", err)
 	}
 }
 
 func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent:                    "worker",
-		WhenGoalContains:         "freeze",
+		ContractID:               "freeze",
 		RequiredToolSequence:     []string{"bash", "bash", "submit_result"},
 		ForbiddenExecutionFields: []string{"tool_input_field", "tool_input_value_sequence", "tool_input_sequence"},
 	}}})
 
 	invalid := TaskDef{
-		Agent: "worker",
-		Goal:  "candidate freeze",
+		Agent:      "worker",
+		ContractID: "freeze",
+		Goal:       "candidate freeze",
 		Execution: ExecutionContract{
 			ToolSequence:           []string{"bash", "bash", "submit_result"},
 			ToolInputField:         "command",
@@ -178,7 +178,7 @@ func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.
 
 func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "auditor", WhenGoalContains: "freeze audit",
+		ContractID: "freeze-audit",
 		RequiredTaskReference: &agent.TaskGoalReference{
 			GoalPrefix: "runner_task_id=", Agent: "runner", TaskContains: "§3.1 candidate-freeze",
 		},
@@ -188,7 +188,7 @@ func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *te
 		t.Fatal(err)
 	}
 
-	valid := TaskDef{Agent: "auditor", Goal: "freeze audit\nrunner_task_id=" + runner.ID}
+	valid := TaskDef{Agent: "auditor", ContractID: "freeze-audit", Goal: "freeze audit\nrunner_task_id=" + runner.ID}
 	if err := c.validateDelegationPolicy([]TaskDef{valid}); err != nil {
 		t.Fatalf("valid task reference rejected: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *te
 		"freeze audit\nrunner_task_id=",
 		"freeze audit\nrunner_task_id=" + runner.ID + "\nrunner_task_id=" + runner.ID,
 	} {
-		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "auditor", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task reference") && !strings.Contains(err.Error(), "referenced Todo") {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "auditor", ContractID: "freeze-audit", Goal: goal}}); err == nil || !strings.Contains(err.Error(), "task reference") && !strings.Contains(err.Error(), "referenced Todo") {
 			t.Fatalf("goal %q error = %v, want task-reference rejection", goal, err)
 		}
 	}
@@ -213,7 +213,7 @@ func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *te
 // rejected as a missing task reference even though it was present.
 func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "auditor", WhenGoalContains: "freeze audit",
+		ContractID: "freeze-audit",
 		RequiredTaskReference: &agent.TaskGoalReference{
 			GoalPrefix: "runner_task_id=", Agent: "runner", TaskContains: "§3.1 candidate-freeze",
 		},
@@ -223,7 +223,7 @@ func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task := TaskDef{Agent: "auditor", Goal: "freeze audit", Constraints: "runner_task_id=" + runner.ID}
+	task := TaskDef{Agent: "auditor", ContractID: "freeze-audit", Goal: "freeze audit", Constraints: "runner_task_id=" + runner.ID}
 	if err := c.validateDelegationPolicy([]TaskDef{task}); err != nil {
 		t.Fatalf("constraint-carried task reference rejected: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
 
 func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation(t *testing.T) {
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
-		Agent: "consumer", WhenGoalContains: "consensus",
+		ContractID: "consensus",
 		RequiredTaskReferences: []agent.TaskGoalReference{
 			{GoalPrefix: "code_task_id=", Agent: "producer", TaskContains: "source candidate"},
 			{GoalPrefix: "live_task_id=", Agent: "observer", TaskContains: "live observation"},
@@ -244,7 +244,7 @@ func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation
 			t.Fatal(err)
 		}
 	}
-	valid := TaskDef{Agent: "consumer", Goal: "consensus\ncode_task_id=" + code.ID + "\nlive_task_id=" + live.ID}
+	valid := TaskDef{Agent: "consumer", ContractID: "consensus", Goal: "consensus\ncode_task_id=" + code.ID + "\nlive_task_id=" + live.ID}
 	if err := c.validateDelegationPolicy([]TaskDef{valid}); err != nil {
 		t.Fatalf("valid producer set rejected: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation
 		"consensus\ncode_task_id=" + code.ID + "\nlive_task_id=" + code.ID,
 		"consensus\ncode_task_id=" + code.ID + "\nlive_task_id=missing",
 	} {
-		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "consumer", Goal: goal}}); err == nil {
+		if err := c.validateDelegationPolicy([]TaskDef{{Agent: "consumer", ContractID: "consensus", Goal: goal}}); err == nil {
 			t.Fatalf("invalid producer set accepted: %q", goal)
 		}
 	}

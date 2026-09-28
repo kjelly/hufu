@@ -156,7 +156,6 @@ spec:
   tasks:
     - id: produce-workset
       agent: reviewer
-      when-goal-contains: produce workset
       phase: prepare
       side_effect: none
       recovery: retry
@@ -171,7 +170,6 @@ spec:
 
     - id: review-primary-workset
       agent: reviewer
-      when-goal-contains: review primary workset
       phase: verify
       invariant-verification: report
       fan_out:
@@ -191,7 +189,6 @@ spec:
 
     - id: review-documentation-workset
       agent: documentation-reviewer
-      when-goal-contains: review documentation workset
       phase: verify
       fan_out:
         source-artifact:
@@ -210,7 +207,6 @@ spec:
 
     - id: review-documentation-escalation
       agent: critic
-      when-goal-contains: review documentation escalation
       phase: verify
       fan_out:
         source-artifact:
@@ -229,7 +225,6 @@ spec:
 
     - id: critic-review
       agent: critic
-      when-goal-contains: critic review
       phase: verify
       optional: true
       execution:

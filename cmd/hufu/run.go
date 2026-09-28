@@ -445,7 +445,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 }
 
 // maybeAutoSelectTeam implements execution route selection and --auto-team.
-// It uses ExecutionRouter (evaluating deterministic signals and sidecar classifier)
+// It uses ExecutionRouter (explicit syntax plus a structured sidecar resolver)
 // to pick the route (fast vs team) and appropriate team, and returns the full
 // RouteDecision so the caller can thread the chosen route into execution.
 func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry) RouteDecision {
@@ -478,7 +478,7 @@ func maybeAutoSelectTeam(ctx context.Context, prompt, initialTeam string, regist
 		return RouteDecision{Route: RouteTeam, Team: initialTeam, Confidence: 0, Reasons: []string{"auto-team fallback to manual selection"}}
 	}
 	stderrLog("%s Auto-selected team %s (%s)\n", boldStyle.Render("→"), teamStyle.Render(picked), method)
-	return RouteDecision{Route: RouteTeam, Team: strings.ToLower(picked), Confidence: 0.6, Reasons: []string{"auto-team keyword match: " + method}}
+	return RouteDecision{Route: RouteTeam, Team: strings.ToLower(picked), Confidence: 0.6, Reasons: []string{"auto-team structured match: " + method}}
 }
 
 // resolveInitialSegments parses the prompt into team/agent segments. When the

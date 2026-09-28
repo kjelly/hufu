@@ -3,7 +3,7 @@
     {
       "tool_call": {
         "name": "agent",
-        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Attempt an operation whose side-effect state may be unknown.\"}]}"
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Attempt an operation whose side-effect state may be unknown.\",\"contract_id\":\"side-effect-unknown\"}]}"
       }
     },
     {

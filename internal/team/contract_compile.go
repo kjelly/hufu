@@ -109,9 +109,9 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 }
 
 // CompileTaskGoalContracts replaces coordinator-authored execution/output
-// fields with an opt-in static contract selected by worker name and a literal
-// goal substring. The coordinator continues to own the goal prose, but cannot
-// add scalar or per-slot execution values to a matching closed sequence.
+// fields with an opt-in static contract selected by an exact contract ID. The
+// coordinator continues to own the goal prose, but free-form text never
+// selects an execution contract.
 //
 // A matching template is deliberately authoritative instead of a conflict
 // error: a coordinator may send a generic schema default that is irrelevant to
@@ -123,42 +123,36 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 	}
 	bound := append([]TaskDef(nil), tasks...)
 	effective := make([]EffectiveTaskContract, 0, len(bound))
+	contracts := make(map[string]TaskDef, len(session.ContractTasks))
+	for _, contract := range session.ContractTasks {
+		contractID := strings.TrimSpace(contract.ID)
+		if contractID == "" {
+			return nil, nil, fmt.Errorf("task contract for agent %q is missing an id", contract.Agent)
+		}
+		key := strings.ToLower(contractID)
+		if _, exists := contracts[key]; exists {
+			return nil, nil, fmt.Errorf("task contract ID %q is duplicated", contractID)
+		}
+		contracts[key] = contract
+	}
 	for i := range bound {
 		// A catalog task's contract is its catalog entry; a static contract
 		// bound by agent name must never take it over.
 		if bound[i].CatalogAction != nil {
 			continue
 		}
-		matches := make([]TaskDef, 0, 1)
-		agentContracts := make([]TaskDef, 0, 1)
-		for _, contract := range session.ContractTasks {
-			selector := strings.TrimSpace(contract.WhenGoalContains)
-			if selector == "" || !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(bound[i].Agent)) {
-				continue
-			}
-			agentContracts = append(agentContracts, contract)
-			if strings.Contains(strings.ToLower(bound[i].Goal), strings.ToLower(selector)) {
-				matches = append(matches, contract)
-			}
-		}
-		// A worker with exactly one configured goal contract has no routing
-		// ambiguity. Bind it by agent identity when the coordinator paraphrases
-		// the selector, so harmless wording changes cannot leak model-authored
-		// execution fields past the static team boundary.
-		if len(matches) == 0 && len(agentContracts) == 1 {
-			matches = append(matches, agentContracts[0])
-		}
-		if len(matches) == 0 {
-			continue
-		}
-		if len(matches) > 1 {
-			return nil, nil, fmt.Errorf("task goal contract is ambiguous for agent %q", bound[i].Agent)
-		}
-		contract := matches[0]
-		contractID := strings.TrimSpace(contract.ID)
+		contractID := strings.TrimSpace(bound[i].ContractID)
 		if contractID == "" {
-			contractID = strings.ToLower(strings.TrimSpace(contract.Agent)) + ":" + contract.WhenGoalContains
+			return nil, nil, fmt.Errorf("task for agent %q must provide contract_id", bound[i].Agent)
 		}
+		contract, ok := contracts[strings.ToLower(contractID)]
+		if !ok {
+			return nil, nil, fmt.Errorf("task contract %q is not configured", contractID)
+		}
+		if !strings.EqualFold(strings.TrimSpace(contract.Agent), strings.TrimSpace(bound[i].Agent)) {
+			return nil, nil, fmt.Errorf("task contract %q belongs to agent %q, not %q", contractID, contract.Agent, bound[i].Agent)
+		}
+		contractID = strings.TrimSpace(contract.ID)
 		hash, err := effectiveContractHash(contractID, strings.ToLower(strings.TrimSpace(contract.Agent)), contract.Execution, contract.OutputMode, contract.SideEffect, contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
@@ -216,15 +210,7 @@ func restoreLegacyBoundInvariantVerification(tasks []*TodoItem, contracts []Task
 }
 
 func staticContractMatchesID(contract TaskDef, id string) bool {
-	if declared := strings.TrimSpace(contract.ID); declared != "" {
-		return declared == id
-	}
-	agentName := strings.ToLower(strings.TrimSpace(contract.Agent))
-	if agentName == id {
-		return true
-	}
-	selector := strings.TrimSpace(contract.WhenGoalContains)
-	return selector != "" && agentName+":"+selector == id
+	return strings.EqualFold(strings.TrimSpace(contract.ID), strings.TrimSpace(id))
 }
 
 // applyStaticVerificationContract makes verification and progress-criterion
@@ -379,9 +365,6 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	if session.Config.Delegation.BindTaskGoalContracts {
 		seenIDs := map[string]bool{}
 		for index, task := range session.ContractTasks {
-			if strings.TrimSpace(task.WhenGoalContains) == "" {
-				continue
-			}
 			field := fmt.Sprintf("tasks[%d]", index)
 			name := strings.ToLower(strings.TrimSpace(task.Agent))
 			if name == "" {
@@ -390,12 +373,17 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 			}
 			id := strings.TrimSpace(task.ID)
 			if id == "" {
-				id = name + ":" + task.WhenGoalContains
+				findings = append(findings, contractFinding(field+".id", "task_contract_id_missing", "statically bound task contracts require an explicit id"))
+				continue
 			}
-			if seenIDs[id] {
-				findings = append(findings, contractFinding(field+".id", "goal_contract_id_duplicate", fmt.Sprintf("goal-selected static contract ID %q is not unique", id)))
+			key := strings.ToLower(id)
+			if seenIDs[key] {
+				findings = append(findings, contractFinding(field+".id", "task_contract_id_duplicate", fmt.Sprintf("static contract ID %q is not unique", id)))
 			}
-			seenIDs[id] = true
+			seenIDs[key] = true
+			if strings.TrimSpace(task.WhenGoalContains) != "" {
+				findings = append(findings, contractFinding(field+".when-goal-contains", "semantic_contract_selector_forbidden", "when-goal-contains is unsupported; dispatch this contract with contract_id"))
+			}
 			def := session.Agents[name]
 			if def == nil {
 				findings = append(findings, contractFinding(field+".agent", "goal_contract_agent_unknown", fmt.Sprintf("goal-selected static contract agent %q is not a loaded worker", task.Agent)))
@@ -423,9 +411,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 	}
 	byAgent := make(map[string]TaskDef)
 	for index, task := range session.ContractTasks {
-		if strings.TrimSpace(task.WhenGoalContains) != "" {
-			// Goal-selected contracts are validated above and are not initial
-			// batch templates, even when both binding modes are enabled.
+		if session.Config.Delegation.BindTaskGoalContracts {
+			// ID-selected contracts are validated above. A team may opt into both
+			// modes only when its initial contracts are also explicitly named.
 			continue
 		}
 		field := fmt.Sprintf("tasks[%d]", index)
@@ -508,11 +496,8 @@ func validateInvariantVerificationContract(session *TeamSession, index int, task
 
 func validateTaskGoalInvariantContract(field string, invariant agent.TaskGoalInvariant) []ContractFinding {
 	var findings []ContractFinding
-	if strings.TrimSpace(invariant.Agent) == "" {
-		findings = append(findings, contractFinding(field+".agent", "task_goal_invariant_agent_missing", "task-goal invariant must name an agent"))
-	}
-	if strings.TrimSpace(invariant.WhenGoalContains) == "" {
-		findings = append(findings, contractFinding(field+".when-goal-contains", "task_goal_invariant_selector_missing", "task-goal invariant must select a goal substring"))
+	if strings.TrimSpace(invariant.ContractID) == "" {
+		findings = append(findings, contractFinding(field+".contract-id", "task_goal_invariant_contract_missing", "task-goal invariant must name an exact task contract ID"))
 	}
 	if len(invariant.RequiredLiterals) == 0 && len(invariant.ForbiddenLiterals) == 0 && len(invariant.RequiredToolSequence) == 0 && len(invariant.ForbiddenExecutionFields) == 0 && invariant.RequiredTaskReference == nil && len(invariant.RequiredTaskReferences) == 0 {
 		findings = append(findings, contractFinding(field, "task_goal_invariant_empty", "task-goal invariant must constrain a literal, task reference, or execution contract field"))

@@ -233,7 +233,7 @@ func (e *decisionEngine) runChallenges(
 			DecisionID: req.DecisionID, ChallengerID: challengerID, DispatchCount: policy.Challenge.Count,
 			Packet: packet, Aggregate: aggregate, Prompt: prompt,
 			RoutingRole: adaptiveChallengeRole(
-				hintedChallengeRole(req.Policy.ChallengeRole, req.RoutingHints, req.Question),
+				hintedChallengeRole(req.Policy.ChallengeRole, req.RoutingHints, req.RoutingContractID),
 				opinions, aggregate),
 		})
 		if err != nil {
@@ -296,7 +296,7 @@ func (e *decisionEngine) runRevisions(
 			// Same (role, hints, question) JUDGE round 1 used — this is what
 			// makes REVISE resolve to the identical binding rather than a
 			// freshly re-hinted one (spec2.md §8).
-			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.Question),
+			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.RoutingContractID),
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("decision %s revision %s: %w", req.DecisionID, original.JudgeID, err)

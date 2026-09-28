@@ -422,7 +422,7 @@ func TestParseTeamYMLRoutingHints(t *testing.T) {
 decision:
   default-profile: standard
   routing-hints:
-    - when-goal-contains: kubernetes
+    - contract-id: kubernetes
       preferred-capabilities:
         - kubernetes
         - platform-engineering
@@ -437,7 +437,7 @@ decision:
 	if err != nil {
 		t.Fatalf("parseTeamYML = %v", err)
 	}
-	if len(cfg.Decision.RoutingHints) != 1 || cfg.Decision.RoutingHints[0].WhenGoalContains != "kubernetes" {
+	if len(cfg.Decision.RoutingHints) != 1 || cfg.Decision.RoutingHints[0].ContractID != "kubernetes" {
 		t.Fatalf("RoutingHints = %#v", cfg.Decision.RoutingHints)
 	}
 }
@@ -448,7 +448,7 @@ func TestParseTeamYMLRejectsInvalidRoutingHint(t *testing.T) {
 	content := `decision:
   default-profile: standard
   routing-hints:
-    - when-goal-contains: kubernetes
+    - contract-id: kubernetes
   profiles:
     standard:
       independent-judgments: 3

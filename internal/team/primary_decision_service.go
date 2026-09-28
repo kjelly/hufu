@@ -291,7 +291,7 @@ func (service *primaryDecisionService) primaryEvidenceCandidates(ctx context.Con
 				continue
 			}
 			kind := "artifact_text"
-			baseRate := strings.Contains(strings.ToLower(ref.Role+" "+ref.Kind+" "+ref.Description), "base rate") || strings.Contains(strings.ToLower(ref.Role+" "+ref.Kind), "base_rate")
+			baseRate := strings.EqualFold(strings.TrimSpace(ref.Kind), "base_rate") || strings.EqualFold(strings.TrimSpace(ref.Role), "base_rate")
 			if baseRate {
 				kind = "base_rate"
 			}

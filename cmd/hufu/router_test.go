@@ -7,58 +7,14 @@ import (
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
-func TestRoute_DeterministicFastSignals(t *testing.T) {
+func TestRoute_UnresolvedNaturalLanguageFailsSafeToTeam(t *testing.T) {
 	router := NewExecutionRouter(nil, nil)
-	ctx := context.Background()
-
-	cases := []struct {
-		prompt string
-		want   ExecutionRoute
-	}{
-		{"explain how the coordinator works", RouteFast},
-		{"what is the default model context window?", RouteFast},
-		{"fix typo in main.go", RouteFast},
-		{"run test TestRoute", RouteFast},
-		{"list available teams", RouteFast},
+	dec := router.Route(t.Context(), "fix typo in main.go", "")
+	if dec.Route != RouteTeam {
+		t.Fatalf("route = %s, want safe team fallback", dec.Route)
 	}
-
-	for _, tc := range cases {
-		dec := router.Route(ctx, tc.prompt, "")
-		if dec.Route != tc.want {
-			t.Errorf("Route(%q) = %s, want %s (reasons: %v)", tc.prompt, dec.Route, tc.want, dec.Reasons)
-		}
-		if len(dec.Reasons) == 0 {
-			t.Errorf("Route(%q) should have explainable reasons", tc.prompt)
-		}
-		if dec.Confidence <= 0 {
-			t.Errorf("Route(%q) confidence = %f, want > 0", tc.prompt, dec.Confidence)
-		}
-	}
-}
-
-func TestRoute_DeterministicTeamSignals(t *testing.T) {
-	router := NewExecutionRouter(nil, nil)
-	ctx := context.Background()
-
-	cases := []struct {
-		prompt string
-		want   ExecutionRoute
-	}{
-		{"@researcher research the bug and @coder fix it", RouteTeam},
-		{"research and implement a new memory system with debate and skeptic review", RouteTeam},
-		{"deploy kubernetes cluster to production with ci/cd pipeline", RouteTeam},
-		{"refactor entire codebase across packages for new architecture", RouteTeam},
-		{"run full test suite and verify with acceptance criteria", RouteTeam},
-	}
-
-	for _, tc := range cases {
-		dec := router.Route(ctx, tc.prompt, "")
-		if dec.Route != tc.want {
-			t.Errorf("Route(%q) = %s, want %s (reasons: %v)", tc.prompt, dec.Route, tc.want, dec.Reasons)
-		}
-		if len(dec.Reasons) == 0 {
-			t.Errorf("Route(%q) should have explainable reasons", tc.prompt)
-		}
+	if dec.Team != "" || dec.Confidence != 0 || len(dec.Reasons) == 0 {
+		t.Fatalf("unexpected fallback decision: %#v", dec)
 	}
 }
 
@@ -82,7 +38,7 @@ func TestRoute_ExplicitFlagOverrides(t *testing.T) {
 	}
 }
 
-func TestRoute_DefaultTeamHandling(t *testing.T) {
+func TestRoute_DefaultTeamStillRequiresStructuredResolution(t *testing.T) {
 	router := NewExecutionRouter(nil, nil)
 	ctx := context.Background()
 
@@ -91,8 +47,8 @@ func TestRoute_DefaultTeamHandling(t *testing.T) {
 
 	opts.defaultTeam = true
 	dec := router.Route(ctx, "fix typo in doc", "default")
-	if dec.Route != RouteFast {
-		t.Errorf("expected RouteFast for --default with simple prompt, got %s", dec.Route)
+	if dec.Route != RouteTeam {
+		t.Errorf("expected safe RouteTeam when resolver is unavailable, got %s", dec.Route)
 	}
 	if dec.Team != "default" {
 		t.Errorf("expected team 'default', got %q", dec.Team)
@@ -136,7 +92,7 @@ func TestRoute_SelectionPreflightContextAndCloseEncloseClassifier(t *testing.T) 
 			t.Fatalf("classifier context value = %v, want builder context", ctx.Value(key))
 		}
 		calls = append(calls, "classify")
-		return sidecar.RouteClassification{Route: "fast", Reason: "test"}, nil
+		return sidecar.RouteClassification{Route: "fast", Confidence: 0.91, Reason: "test"}, nil
 	}
 	t.Cleanup(func() { classifyRouteWithSelectionSidecar = originalClassifier })
 
@@ -144,8 +100,25 @@ func TestRoute_SelectionPreflightContextAndCloseEncloseClassifier(t *testing.T) 
 	if decision.Route != RouteFast {
 		t.Fatalf("route = %s, want %s", decision.Route, RouteFast)
 	}
+	if decision.Confidence != 0.91 {
+		t.Fatalf("confidence = %v, want 0.91", decision.Confidence)
+	}
 	if got, want := len(calls), 2; got != want || calls[0] != "classify" || calls[1] != "close" {
 		t.Fatalf("classifier/close order = %v, want [classify close]", calls)
+	}
+}
+
+func TestRoute_LowConfidenceFastClassificationFailsSafeToTeam(t *testing.T) {
+	router := NewExecutionRouter(nil, &sidecar.Sidecar{})
+	originalClassifier := classifyRouteWithSelectionSidecar
+	classifyRouteWithSelectionSidecar = func(context.Context, *sidecar.Sidecar, string) (sidecar.RouteClassification, error) {
+		return sidecar.RouteClassification{Route: "fast", Confidence: 0.59, Reason: "uncertain"}, nil
+	}
+	t.Cleanup(func() { classifyRouteWithSelectionSidecar = originalClassifier })
+
+	decision := router.Route(t.Context(), "ambiguous task", "")
+	if decision.Route != RouteTeam || decision.Team != "" || decision.Confidence != 0 {
+		t.Fatalf("low-confidence decision = %#v, want safe team fallback", decision)
 	}
 }
 

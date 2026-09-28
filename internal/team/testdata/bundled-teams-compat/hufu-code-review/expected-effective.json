@@ -184,33 +184,28 @@
       "id": "produce-workset",
       "agent": "reviewer",
       "phase": "PREPARE",
-      "when_goal_contains": "produce workset",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
       "id": "review-primary-workset",
       "agent": "reviewer",
-      "phase": "VERIFY",
-      "when_goal_contains": "review primary workset"
+      "phase": "VERIFY"
     },
     {
       "id": "review-documentation-workset",
       "agent": "documentation-reviewer",
-      "phase": "VERIFY",
-      "when_goal_contains": "review documentation workset"
+      "phase": "VERIFY"
     },
     {
       "id": "review-documentation-escalation",
       "agent": "critic",
-      "phase": "VERIFY",
-      "when_goal_contains": "review documentation escalation"
+      "phase": "VERIFY"
     },
     {
       "id": "critic-review",
       "agent": "critic",
       "phase": "VERIFY",
-      "when_goal_contains": "critic review",
       "optional": true
     }
   ]

@@ -180,7 +180,6 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 		return nil
 	}
 	for taskIndex, task := range tasks {
-		agentName := strings.ToLower(strings.TrimSpace(task.Agent))
 		// Coordinators commonly keep the literal artifact/range contract in
 		// Constraints to avoid bloating the human-readable goal. Invariants must
 		// validate the complete delegated payload, not just its selector text;
@@ -191,7 +190,7 @@ func (c *Coordinator) validateTaskGoalInvariants(tasks []TaskDef) error {
 			goalPayload += "\n" + task.Constraints
 		}
 		for invariantIndex, invariant := range c.session.Config.Delegation.TaskGoalInvariants {
-			if agentName != strings.ToLower(strings.TrimSpace(invariant.Agent)) || !strings.Contains(task.Goal, invariant.WhenGoalContains) {
+			if !strings.EqualFold(strings.TrimSpace(task.ContractID), strings.TrimSpace(invariant.ContractID)) {
 				continue
 			}
 			for _, required := range invariant.RequiredLiterals {

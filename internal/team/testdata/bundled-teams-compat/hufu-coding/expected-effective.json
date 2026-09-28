@@ -104,32 +104,32 @@
   ],
   "tasks": [
     {
+      "id": "sa-analyze",
       "agent": "sa",
-      "when_goal_contains": "SA_ANALYZE",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
+      "id": "coder-implement",
       "agent": "coder",
-      "when_goal_contains": "CODER_IMPLEMENT",
       "side_effect": "workspace_write",
       "recovery": "retry"
     },
     {
+      "id": "verify-implementation",
       "agent": "verifier",
-      "when_goal_contains": "VERIFY_IMPLEMENTATION",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
+      "id": "review-code",
       "agent": "reviewer",
-      "when_goal_contains": "REVIEW_CODE",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
+      "id": "final-sa-gate",
       "agent": "final-sa",
-      "when_goal_contains": "FINAL_SA_GATE",
       "side_effect": "none",
       "recovery": "retry"
     }

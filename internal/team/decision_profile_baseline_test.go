@@ -64,7 +64,7 @@ func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
 	req.DecisionID = "decision-baseline"
 	req.EvidenceArtifactRef = ArtifactRef{ID: "evidence-baseline", SHA256: "evidence-sha"}
 	envelope := legacyDecisionRunEnvelopeForBaseline(req, policy, DecisionEvidencePacket{Hash: "packet-baseline"}, time.Unix(1_700_000_000, 0).UTC())
-	if got, want := baselineJSONHash(t, envelope), "d16a0d53e2dd6880a2f9402b052a3d583898af6b83989a3c4e4be794f4b5dd7b"; got != want {
+	if got, want := baselineJSONHash(t, envelope), "ae6e631833b1ecef56ccfdea95e8bc6aa9961e9c41ebca6f55e767b6c7b0f1a8"; got != want {
 		t.Errorf("v1 envelope JSON hash = %s, want %s", got, want)
 	}
 }
@@ -105,10 +105,7 @@ func TestStrategicDecisionRuntimeContractBaseline(t *testing.T) {
 	if contract := cfg.RequestContract; !contract.Enabled || len(contract.SuccessCriteria) != 2 {
 		t.Fatalf("request contract = %#v, want enabled with two success criteria", contract)
 	}
-	wantHints := []agent.RoutingHint{{
-		WhenGoalContains:      "storage",
-		PreferredCapabilities: []string{"architecture"},
-	}}
+	var wantHints []agent.RoutingHint
 	if !reflect.DeepEqual(cfg.Decision.RoutingHints, wantHints) {
 		t.Fatalf("routing hints = %#v, want %#v", cfg.Decision.RoutingHints, wantHints)
 	}

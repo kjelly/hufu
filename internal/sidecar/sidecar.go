@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -22,6 +23,9 @@ const (
 	compactMaxChars        = 4000
 	defaultExecuteMaxRunes = 8000
 	sidecarMaxSteps        = 1
+	minimumTeamConfidence  = 0.60
+	minimumSkillConfidence = 0.60
+	minimumAgentConfidence = 0.60
 	sidecarSystemPrompt    = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
 )
 
@@ -500,6 +504,12 @@ type SkillSummary struct {
 	Description string
 }
 
+type skillSelection struct {
+	Skills     []string `json:"skills"`
+	Confidence float64  `json:"confidence"`
+	Reason     string   `json:"reason"`
+}
+
 var jsonCodeBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
 
 func (s *Sidecar) MatchSkills(ctx context.Context, prompt string, skills []SkillSummary) ([]string, error) {
@@ -520,9 +530,11 @@ func (s *Sidecar) MatchSkills(ctx context.Context, prompt string, skills []Skill
 		fmt.Fprintf(&skillList, "%d. %s: %s\n", i+1, sk.Name, desc)
 	}
 
-	matchPrompt := fmt.Sprintf(`Given the user's task below, identify ALL skills from the list that are relevant or potentially helpful for completing the task. A task can require multiple skills — return every skill name that could assist with any part of the task.
+	matchPrompt := fmt.Sprintf(`Given the user's task below, identify the skills required to complete it.
 
-Return ONLY a JSON array of skill name strings (e.g., ["skill-a", "skill-b"]). Return multiple names when multiple skills are relevant. If none are relevant, return [].
+Return ONLY one JSON object in this exact schema:
+{"skills":["skill-a"],"confidence":0.0,"reason":"brief explanation"}
+"confidence" must be between 0 and 1. If no skill is clearly required, return an empty skills array.
 
 Available skills:
 %s
@@ -541,9 +553,18 @@ User task: %s`, skillList.String(), prompt)
 		result = strings.TrimSpace(extracted[1])
 	}
 
-	var names []string
-	if err := json.Unmarshal([]byte(result), &names); err != nil {
+	var selection skillSelection
+	if err := decodeStrictJSONObject(result, &selection); err != nil {
 		return nil, fmt.Errorf("sidecar match skills: failed to parse JSON response %q: %w", result, err)
+	}
+	if selection.Confidence < 0 || selection.Confidence > 1 {
+		return nil, fmt.Errorf("sidecar match skills: confidence must be between 0 and 1")
+	}
+	if strings.TrimSpace(selection.Reason) == "" {
+		return nil, fmt.Errorf("sidecar match skills: reason must be non-empty")
+	}
+	if selection.Confidence < minimumSkillConfidence {
+		return nil, nil
 	}
 
 	validMap := map[string]bool{}
@@ -551,9 +572,16 @@ User task: %s`, skillList.String(), prompt)
 		validMap[strings.ToLower(sk.Name)] = true
 	}
 	var filtered []string
-	for _, name := range names {
-		if validMap[strings.ToLower(strings.TrimSpace(name))] {
-			filtered = append(filtered, strings.TrimSpace(name))
+	seen := make(map[string]bool)
+	for _, name := range selection.Skills {
+		trimmed := strings.TrimSpace(name)
+		key := strings.ToLower(trimmed)
+		if !validMap[key] {
+			return nil, fmt.Errorf("sidecar match skills returned unknown skill %q", trimmed)
+		}
+		if !seen[key] {
+			seen[key] = true
+			filtered = append(filtered, trimmed)
 		}
 	}
 	return filtered, nil
@@ -565,11 +593,73 @@ type TeamSummary struct {
 	Description string
 }
 
+// AgentSelection is the schema-validated result of a worker-routing decision.
+type AgentSelection struct {
+	Agent      string  `json:"agent"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+// SelectAgent chooses one authorized worker without deterministic prose
+// guessing. Invalid, unknown, or low-confidence output fails closed.
+func (s *Sidecar) SelectAgent(ctx context.Context, goal string, agents []TeamSummary) (AgentSelection, error) {
+	if s == nil || s.agent == nil {
+		return AgentSelection{}, fmt.Errorf("sidecar not initialized")
+	}
+	if len(agents) == 0 {
+		return AgentSelection{}, nil
+	}
+	var candidates strings.Builder
+	for i, candidate := range agents {
+		description := candidate.Description
+		if utf8.RuneCountInString(description) > 300 {
+			runes := []rune(description)
+			description = string(runes[:300]) + "..."
+		}
+		fmt.Fprintf(&candidates, "%d. %s: %s\n", i+1, candidate.Name, description)
+	}
+	prompt := fmt.Sprintf(`Select the single authorized worker best suited to the task.
+
+Return ONLY one JSON object in this exact schema:
+{"agent":"exact agent name or empty","confidence":0.0,"reason":"brief explanation"}
+"confidence" must be between 0 and 1. If the evidence is insufficient, use an empty agent.
+
+Available workers:
+%s
+Task: %s`, candidates.String(), goal)
+	result, err := s.generate(ctx, prompt, ClassifierProfile)
+	if err != nil {
+		return AgentSelection{}, fmt.Errorf("sidecar select agent generate failed: %w", err)
+	}
+	result = strings.TrimSpace(result)
+	if extracted := jsonCodeBlockRe.FindStringSubmatch(result); len(extracted) >= 2 {
+		result = strings.TrimSpace(extracted[1])
+	}
+	var selection AgentSelection
+	if err := decodeStrictJSONObject(result, &selection); err != nil {
+		return AgentSelection{}, fmt.Errorf("sidecar select agent: %w", err)
+	}
+	if selection.Confidence < 0 || selection.Confidence > 1 || strings.TrimSpace(selection.Reason) == "" {
+		return AgentSelection{}, fmt.Errorf("sidecar select agent returned an invalid confidence or reason")
+	}
+	if selection.Agent == "" || selection.Confidence < minimumAgentConfidence {
+		return AgentSelection{}, nil
+	}
+	for _, candidate := range agents {
+		if strings.EqualFold(candidate.Name, selection.Agent) {
+			selection.Agent = candidate.Name
+			selection.Reason = strings.TrimSpace(selection.Reason)
+			return selection, nil
+		}
+	}
+	return AgentSelection{}, fmt.Errorf("sidecar select agent returned unknown agent %q", selection.Agent)
+}
+
 // MatchTeam asks the sidecar to pick the single most suitable team for the
 // user's prompt from the candidates. It returns the chosen team name (matched
 // case-insensitively against the candidates) or "" if the model declines or
-// returns something unrecognized — callers should then fall back to a
-// deterministic heuristic.
+// returns something unrecognized. Natural-language callers must not replace a
+// failed structured resolution with keyword guessing.
 func (s *Sidecar) MatchTeam(ctx context.Context, prompt string, teams []TeamSummary) (string, error) {
 	if s == nil || s.agent == nil {
 		return "", fmt.Errorf("sidecar not initialized")
@@ -590,7 +680,9 @@ func (s *Sidecar) MatchTeam(ctx context.Context, prompt string, teams []TeamSumm
 
 	matchPrompt := fmt.Sprintf(`Choose the single team best suited to accomplish the user's task from the list below.
 
-Return ONLY the exact team name as a JSON string (e.g. "dev-team"). If none clearly fit, return "".
+Return ONLY one JSON object in this exact schema:
+{"team":"exact team name or empty","confidence":0.0,"reason":"brief explanation"}
+"confidence" must be between 0 and 1. If none clearly fit, use an empty team.
 
 Available teams:
 %s
@@ -606,26 +698,28 @@ User task: %s`, teamList.String(), prompt)
 		result = strings.TrimSpace(extracted[1])
 	}
 
-	var name string
-	if err := json.Unmarshal([]byte(result), &name); err != nil {
-		// Tolerate a bare, unquoted name on its own line.
-		name = strings.Trim(strings.TrimSpace(result), `"`)
+	selection, err := decodeTeamSelection(result)
+	if err != nil {
+		return "", fmt.Errorf("sidecar match team: %w", err)
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
+	if selection.Team == "" {
+		return "", nil
+	}
+	if selection.Confidence < minimumTeamConfidence {
 		return "", nil
 	}
 	for _, t := range teams {
-		if strings.EqualFold(t.Name, name) {
+		if strings.EqualFold(t.Name, selection.Team) {
 			return t.Name, nil
 		}
 	}
-	return "", nil
+	return "", fmt.Errorf("sidecar match team returned unknown team %q", selection.Team)
 }
 
 type RouteClassification struct {
-	Route  string `json:"route"`
-	Reason string `json:"reason"`
+	Route      string  `json:"route"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
 }
 
 // ClassifyRoute asks the sidecar to determine whether a task should use a "fast" or "team" execution path.
@@ -636,7 +730,9 @@ func (s *Sidecar) ClassifyRoute(ctx context.Context, prompt string) (RouteClassi
 	matchPrompt := fmt.Sprintf(`Classify whether the user task requires a "fast" execution path (single agent, simple lookup/edit/test) or a "team" execution path (multi-agent, multi-role research/design/refactor/deploy workflow).
 
 Return ONLY JSON in this exact format:
-{"route": "fast" or "team", "reason": "brief explanation"}
+{"route":"fast","confidence":0.0,"reason":"brief explanation"}
+The "route" value must be exactly "fast" or "team".
+"confidence" must be between 0 and 1.
 
 User task: %s`, prompt)
 
@@ -649,15 +745,78 @@ User task: %s`, prompt)
 		result = strings.TrimSpace(extracted[1])
 	}
 
-	var parsed RouteClassification
-	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
-		return RouteClassification{}, fmt.Errorf("failed to parse route classification response %q: %w", result, err)
-	}
-	parsed.Route = strings.ToLower(strings.TrimSpace(parsed.Route))
-	if parsed.Route != "fast" && parsed.Route != "team" {
-		return RouteClassification{}, fmt.Errorf("invalid route %q", parsed.Route)
+	parsed, err := decodeRouteClassification(result)
+	if err != nil {
+		return RouteClassification{}, fmt.Errorf("failed to validate route classification response %q: %w", result, err)
 	}
 	return parsed, nil
+}
+
+type teamSelection struct {
+	Team       string  `json:"team"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+func decodeTeamSelection(raw string) (teamSelection, error) {
+	type wire struct {
+		Team       string   `json:"team"`
+		Confidence *float64 `json:"confidence"`
+		Reason     string   `json:"reason"`
+	}
+	var decoded wire
+	if err := decodeStrictJSONObject(raw, &decoded); err != nil {
+		return teamSelection{}, err
+	}
+	if decoded.Confidence == nil || *decoded.Confidence < 0 || *decoded.Confidence > 1 {
+		return teamSelection{}, fmt.Errorf("confidence must be present and between 0 and 1")
+	}
+	if strings.TrimSpace(decoded.Reason) == "" {
+		return teamSelection{}, fmt.Errorf("reason must be non-empty")
+	}
+	return teamSelection{
+		Team:       strings.TrimSpace(decoded.Team),
+		Confidence: *decoded.Confidence,
+		Reason:     strings.TrimSpace(decoded.Reason),
+	}, nil
+}
+
+func decodeRouteClassification(raw string) (RouteClassification, error) {
+	type wire struct {
+		Route      string   `json:"route"`
+		Confidence *float64 `json:"confidence"`
+		Reason     string   `json:"reason"`
+	}
+	var decoded wire
+	if err := decodeStrictJSONObject(raw, &decoded); err != nil {
+		return RouteClassification{}, err
+	}
+	route := strings.ToLower(strings.TrimSpace(decoded.Route))
+	if route != "fast" && route != "team" {
+		return RouteClassification{}, fmt.Errorf("route must be fast or team, got %q", decoded.Route)
+	}
+	if decoded.Confidence == nil || *decoded.Confidence < 0 || *decoded.Confidence > 1 {
+		return RouteClassification{}, fmt.Errorf("confidence must be present and between 0 and 1")
+	}
+	if strings.TrimSpace(decoded.Reason) == "" {
+		return RouteClassification{}, fmt.Errorf("reason must be non-empty")
+	}
+	return RouteClassification{Route: route, Confidence: *decoded.Confidence, Reason: strings.TrimSpace(decoded.Reason)}, nil
+}
+
+func decodeStrictJSONObject(raw string, dst any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return fmt.Errorf("decode JSON object: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("response contains a trailing JSON value")
+		}
+		return fmt.Errorf("decode trailing JSON: %w", err)
+	}
+	return nil
 }
 
 type GuardReviewResult struct {

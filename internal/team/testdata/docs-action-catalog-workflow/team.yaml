@@ -38,23 +38,19 @@ tasks:
   - id: prepare-release
     agent: preparer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
   - id: audit-release
     agent: auditor
     phase: audit
-    when-goal-contains: audit
     side_effect: none
   - id: apply-release
     agent: executor
     phase: execute
-    when-goal-contains: apply
     side_effect: workspace_write
     recovery: manual
   - id: verify-release
     agent: verifier
     phase: verify
-    when-goal-contains: verify
     side_effect: none
     verify-spec:
       type: command_exit

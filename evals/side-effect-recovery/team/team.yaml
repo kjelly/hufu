@@ -3,8 +3,8 @@ description: Static unknown-side-effect contract used to verify reconcile-only r
 delegation:
   bind-task-goal-contracts: true
 tasks:
-  - agent: worker
-    when-goal-contains: "side-effect state may be unknown"
+  - id: side-effect-unknown
+    agent: worker
     side_effect: unknown
     recovery: reconcile
     max_retries: 2

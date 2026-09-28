@@ -29,7 +29,6 @@ tasks:
   - id: collect-debug
     agent: reviewer
     phase: prepare
-    when-goal-contains: prepare
     side_effect: none
     action:
       capability: diagnostics
@@ -39,19 +38,16 @@ tasks:
   - id: audit-diagnostics
     agent: reviewer
     phase: audit
-    when-goal-contains: audit
     side_effect: none
 
   - id: review-diagnostics
     agent: reviewer
     phase: execute
-    when-goal-contains: review
     side_effect: none
 
   - id: verify-review
     agent: verifier
     phase: verify
-    when-goal-contains: verify
     side_effect: none
     verify-spec:
       type: command_exit

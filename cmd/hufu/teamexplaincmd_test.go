@@ -81,7 +81,7 @@ func TestRunTeamExplain_JSONIsWellFormed(t *testing.T) {
 
 func TestRunTeamExplain_ExactBuiltinUsesStableDecisionProjection(t *testing.T) {
 	dir := t.TempDir()
-	manifest := "request:\n  objective: keep service safe\n  success-criteria:\n    - id: safe\n      statement: service remains safe\ndecision:\n  profile: builtin/standard@v1\n  primary-profile: builtin/standard@v2\n  routing:\n    hints:\n      - when-goal-contains: storage\n        preferred-capabilities: [architecture]\n"
+	manifest := "request:\n  objective: keep service safe\n  success-criteria:\n    - id: safe\n      statement: service remains safe\ndecision:\n  profile: builtin/standard@v1\n  primary-profile: builtin/standard@v2\n  routing:\n    hints:\n      - contract-id: storage\n        preferred-capabilities: [architecture]\n"
 	writeExplainAgentFile(t, dir, "team.yaml", manifest)
 
 	teamExplainFormat = "json"

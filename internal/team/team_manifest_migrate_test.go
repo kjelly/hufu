@@ -188,7 +188,7 @@ func TestTeamMigrateCanonicalizesDecisionAuthoring(t *testing.T) {
 decision:
   default-profile: standard
   routing-hints:
-    - when-goal-contains: storage
+    - contract-id: storage
       preferred-capabilities: [architecture]
   request-contract:
     enabled: true

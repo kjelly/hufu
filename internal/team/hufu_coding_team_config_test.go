@@ -300,8 +300,7 @@ func TestHufuCodingOnFailureClassesFreezeSemanticRejectionOnly(t *testing.T) {
 // and reflect.DeepEqual-rejects the entire batch on any mismatch), or a real
 // hufu-coding run never reaches a dagScheduler at all. This test lets
 // bindTaskGoalContracts derive OnFailureClasses from the real team.yaml
-// contract by goal-text match (exactly as coordinator.md instructs the
-// coordinator to phrase goals) rather than setting the field directly, so it
+// contract by exact contract ID rather than setting the field directly, so it
 // exercises the identical path production uses. A short-timeout context
 // bounds real (and here, expected-to-fail: no live model/Codex configured)
 // worker execution — this test only cares that admission itself does not
@@ -326,11 +325,11 @@ func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) 
 		maxConcurrent:  1,
 	}
 	tasks := []TaskDef{
-		{Agent: "sa", Goal: "SA_ANALYZE: implement a small safe test change"},
-		{Agent: "coder", Goal: "CODER_IMPLEMENT: implement the change", DependsOn: []int{0}},
-		{Agent: "verifier", Goal: "VERIFY_IMPLEMENTATION: run required checks", DependsOn: []int{0, 1}, OnFailure: intPtr(1), MaxRetries: 4},
-		{Agent: "reviewer", Goal: "REVIEW_CODE: review the change", DependsOn: []int{0, 1, 2}, OnFailure: intPtr(1), MaxRetries: 4},
-		{Agent: "final-sa", Goal: "FINAL_SA_GATE: accept or reject the result", DependsOn: []int{0, 1, 2, 3}, OnFailure: intPtr(1), MaxRetries: 2},
+		{Agent: "sa", Goal: "SA_ANALYZE: implement a small safe test change", ContractID: "sa-analyze"},
+		{Agent: "coder", Goal: "CODER_IMPLEMENT: implement the change", ContractID: "coder-implement", DependsOn: []int{0}},
+		{Agent: "verifier", Goal: "VERIFY_IMPLEMENTATION: run required checks", ContractID: "verify-implementation", DependsOn: []int{0, 1}, OnFailure: intPtr(1), MaxRetries: 4},
+		{Agent: "reviewer", Goal: "REVIEW_CODE: review the change", ContractID: "review-code", DependsOn: []int{0, 1, 2}, OnFailure: intPtr(1), MaxRetries: 4},
+		{Agent: "final-sa", Goal: "FINAL_SA_GATE: accept or reject the result", ContractID: "final-sa-gate", DependsOn: []int{0, 1, 2, 3}, OnFailure: intPtr(1), MaxRetries: 2},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
