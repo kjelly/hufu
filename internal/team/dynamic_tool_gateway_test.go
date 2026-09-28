@@ -241,7 +241,7 @@ func gatewayProjectionFixture(t *testing.T, count int) ([]fantasy.AgentTool, []i
 		descriptors = append(descriptors, descriptor)
 		targets = append(targets, FrozenDynamicToolTarget{Name: name, DescriptorSHA256: fingerprint})
 	}
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets, StaticToolCeiling: []string{}}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(targets)
 	return concrete, descriptors, snapshot
 }

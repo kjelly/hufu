@@ -20,11 +20,16 @@ import (
 )
 
 const (
-	dynamicToolAuthorizationSnapshotVersion = 1
-	logicalToolsetDigestVersion             = 1
-	providerSurfaceDigestVersion            = 1
-	maxFrozenDynamicTargets                 = 512
-	maxDynamicTargetNameBytes               = 256
+	// Version 2 added StaticToolCeiling. Version 1 snapshots have no ceiling
+	// and are rejected: there is no persisted data to migrate.
+	dynamicToolAuthorizationSnapshotVersion = 2
+	// frozenDynamicCatalogDigestVersion is independent of the snapshot
+	// version so adding snapshot fields does not change catalog digests.
+	frozenDynamicCatalogDigestVersion = 1
+	logicalToolsetDigestVersion       = 1
+	providerSurfaceDigestVersion      = 1
+	maxFrozenDynamicTargets           = 512
+	maxDynamicTargetNameBytes         = 256
 )
 
 type FrozenDynamicToolTarget struct {
@@ -36,6 +41,10 @@ type DynamicToolAuthorizationSnapshot struct {
 	Version             int                       `json:"version"`
 	Targets             []FrozenDynamicToolTarget `json:"targets,omitempty"`
 	FrozenCatalogDigest string                    `json:"frozen_catalog_digest"`
+	// StaticToolCeiling is the sorted set of built-in and agent-scoped MCP
+	// tool names the occurrence may ever expose. Live configuration can
+	// narrow it but never widen it.
+	StaticToolCeiling []string `json:"static_tool_ceiling"`
 }
 
 type DynamicToolTarget struct {
@@ -90,6 +99,7 @@ func cloneDynamicToolAuthorizationSnapshot(src *DynamicToolAuthorizationSnapshot
 	}
 	cloned := *src
 	cloned.Targets = slices.Clone(src.Targets)
+	cloned.StaticToolCeiling = slices.Clone(src.StaticToolCeiling)
 	return &cloned
 }
 
@@ -123,12 +133,20 @@ func validateDynamicToolAuthorizationSnapshot(snapshot *DynamicToolAuthorization
 	if snapshot.FrozenCatalogDigest != digest {
 		return fmt.Errorf("dynamic_snapshot_invalid: frozen catalog digest mismatch")
 	}
+	if snapshot.StaticToolCeiling == nil {
+		return fmt.Errorf("dynamic_snapshot_invalid: static tool ceiling is missing")
+	}
+	for i, name := range snapshot.StaticToolCeiling {
+		if name == "" || (i > 0 && name <= snapshot.StaticToolCeiling[i-1]) {
+			return fmt.Errorf("dynamic_snapshot_invalid: static tool ceiling is not a sorted set of names")
+		}
+	}
 	return nil
 }
 
 func frozenDynamicCatalogDigest(targets []FrozenDynamicToolTarget) string {
 	hasher := sha256.New()
-	writeDigestRecord(hasher, "dynamic_catalog_version", strconv.Itoa(dynamicToolAuthorizationSnapshotVersion))
+	writeDigestRecord(hasher, "dynamic_catalog_version", strconv.Itoa(frozenDynamicCatalogDigestVersion))
 	for _, target := range targets {
 		writeDigestRecord(hasher, "target", target.Name, target.DescriptorSHA256)
 	}
@@ -198,7 +216,7 @@ func (c *Coordinator) resolveNewTaskToolAuthorization(_ context.Context, task Ta
 	if len(targets) > maxFrozenDynamicTargets {
 		return nil, fmt.Errorf("dynamic_snapshot_invalid: %d targets exceeds limit %d", len(targets), maxFrozenDynamicTargets)
 	}
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets, StaticToolCeiling: c.staticToolGrantNames(def, task)}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(snapshot.Targets)
 	if err := validateDynamicToolAuthorizationSnapshot(snapshot); err != nil {
 		return nil, err
@@ -207,7 +225,7 @@ func (c *Coordinator) resolveNewTaskToolAuthorization(_ context.Context, task Ta
 }
 
 func newEmptyDynamicToolAuthorizationSnapshot() *DynamicToolAuthorizationSnapshot {
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, StaticToolCeiling: []string{}}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(nil)
 	return snapshot
 }

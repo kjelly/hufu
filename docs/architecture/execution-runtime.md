@@ -92,12 +92,36 @@ task occurrence digest
 ```
 
 The durable `TaskResourceScopeSnapshot` and
-`DynamicToolAuthorizationSnapshot` are created before `task_created`. Restored
-occurrences reuse those snapshots: current configuration may narrow or make a
-frozen capability unavailable, but live resources and tools cannot widen an
-existing occurrence. Cache and in-flight de-duplication use both the logical
-toolset and resource-scope digests; the provider-visible schema digest is
-telemetry, not cache authority.
+`DynamicToolAuthorizationSnapshot` are created before `task_created`. The
+dynamic snapshot freezes two things:
+
+- the manager MCP targets, by name and descriptor digest;
+- the `StaticToolCeiling`: the built-in and agent-scoped MCP tool names the
+  worker's configuration grants.
+
+The ceiling is phase-free. The phase gate hides execution tools outside
+EXECUTE on every resolution, but it is not frozen.
+
+Restored occurrences reuse those snapshots. Every resolution applies them:
+each attempt, retry, result repair, resume, extra-model leaf, route fallback,
+and declared structured step. Current configuration may narrow a frozen
+capability or make it unavailable, but live resources and tools cannot widen
+an existing occurrence.
+
+- A tool added to an agent's `tools:` after admission is ignored for that
+  occurrence.
+- A tool removed or newly denied is dropped.
+- Either difference is recorded once as a content-free
+  `static_tool_grant_narrowed` event.
+
+`hufu retry --task` reuses the same occurrence, so it keeps the frozen ceiling.
+To run with a newly granted tool, start a new occurrence: replan or start a new
+run. Snapshots from before the ceiling existed (version 1) are rejected, so
+such occurrences cannot be resumed or retried.
+
+Cache and in-flight de-duplication use both the logical toolset and
+resource-scope digests; the provider-visible schema digest is telemetry, not
+cache authority.
 
 ## Resource-aware scheduling and path enforcement
 

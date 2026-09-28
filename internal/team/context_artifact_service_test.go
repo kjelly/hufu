@@ -31,7 +31,7 @@ func (j *failingEventJournal) Append(context.Context, RunEvent) (RunEvent, error
 	return RunEvent{}, errors.New("journal unavailable")
 }
 func (j *failingEventJournal) ReadEvents(context.Context) ([]RunEvent, error) { return nil, nil }
-func (j *failingEventJournal) VerifyHashChain(context.Context) error           { return nil }
+func (j *failingEventJournal) VerifyHashChain(context.Context) error          { return nil }
 
 func testContextArtifactPolicy() ExecutionContextArtifactPolicySnapshot {
 	return ExecutionContextArtifactPolicySnapshot{MinBytes: 4096, PreviewBytes: 1024, MaxArtifactBytes: 65536, MaxReadBytes: 2048, MaxArtifactsPerAttempt: 3}

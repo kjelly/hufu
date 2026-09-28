@@ -29,7 +29,7 @@ func TestDynamicToolAuthorizationSnapshotValidationAndClone(t *testing.T) {
 		{Name: "a__one", DescriptorSHA256: strings.Repeat("a", 64)},
 		{Name: "z__two", DescriptorSHA256: strings.Repeat("b", 64)},
 	}
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: targets, StaticToolCeiling: []string{}}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(targets)
 	if err := validateDynamicToolAuthorizationSnapshot(snapshot); err != nil {
 		t.Fatalf("validate snapshot: %v", err)
@@ -99,7 +99,7 @@ func TestFrozenDynamicAuthorizationCannotWiden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("descriptor hash: %v", err)
 	}
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: []FrozenDynamicToolTarget{{Name: descriptor.Name, DescriptorSHA256: fingerprint}}}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: []FrozenDynamicToolTarget{{Name: descriptor.Name, DescriptorSHA256: fingerprint}}, StaticToolCeiling: []string{}}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(snapshot.Targets)
 	allowed := &dynamicTestTool{info: fantasy.ToolInfo{Name: descriptor.Name}}
 	newer := &dynamicTestTool{info: fantasy.ToolInfo{Name: "server__new"}}
@@ -121,7 +121,7 @@ func TestFrozenDynamicAuthorizationReportsChangedOptionalTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("descriptor hash: %v", err)
 	}
-	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: []FrozenDynamicToolTarget{{Name: descriptor.Name, DescriptorSHA256: fingerprint}}}
+	snapshot := &DynamicToolAuthorizationSnapshot{Version: dynamicToolAuthorizationSnapshotVersion, Targets: []FrozenDynamicToolTarget{{Name: descriptor.Name, DescriptorSHA256: fingerprint}}, StaticToolCeiling: []string{}}
 	snapshot.FrozenCatalogDigest = frozenDynamicCatalogDigest(snapshot.Targets)
 	descriptor.Description = "new"
 	tool := &dynamicTestTool{info: fantasy.ToolInfo{Name: descriptor.Name}}

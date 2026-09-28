@@ -12,6 +12,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -39,15 +40,10 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	if agentDef == nil {
 		return ExecutionStepResult{}, fmt.Errorf("resolve structured task agent %q: definition is nil", item.Agent)
 	}
-	agentTools := r.c.selectWorkerTools(agentDef)
-	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
-	if r.c.mcpManager != nil && mcpAllowed {
-		agentTools = append(agentTools, r.c.mcpManager.AsAgentTools()...)
-		if len(agentDef.MCPTools) > 0 {
-			agentTools = append(agentTools, r.c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell)...)
-		}
+	agentTools, err := r.declaredStepTools(item, agentDef)
+	if err != nil {
+		return ExecutionStepResult{}, fmt.Errorf("structured step %q tool authorization: %w", request.Step.ID, err)
 	}
-	agentTools = r.c.filterDeniedWorkerTools(agentTools)
 	var selected fantasy.AgentTool
 	for _, candidate := range agentTools {
 		if candidate != nil && candidate.Info().Name == request.Step.Tool {
@@ -273,6 +269,30 @@ func inspectFileArtifact(base string, artifact ArtifactRef) (ArtifactRef, error)
 	artifact.SHA256 = hex.EncodeToString(hash.Sum(nil))
 	artifact.Bytes = size
 	return artifact, nil
+}
+
+// declaredStepTools assembles the tools a structured step may select. It
+// obeys the occurrence's frozen grant like a model attempt: the static ceiling
+// bounds built-in and agent-scoped MCP tools, and the frozen targets bound
+// manager MCP tools.
+func (r *coordinatorDeclaredToolRunner) declaredStepTools(item *TodoItem, agentDef *agent.AgentDef) ([]fantasy.AgentTool, error) {
+	snapshot := item.DynamicToolAuthorization
+	agentTools := filterToolsByStaticCeiling(r.c.selectWorkerTools(agentDef), snapshot)
+	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
+	if r.c.mcpManager != nil && mcpAllowed {
+		managerTools := r.c.mcpManager.AsAgentTools()
+		if snapshot != nil {
+			var err error
+			if managerTools, _, err = filterManagerToolsThroughSnapshot(snapshot, r.c.managerMCPDescriptors(), managerTools, item.Execution.ToolSequence); err != nil {
+				return nil, err
+			}
+		}
+		agentTools = append(agentTools, managerTools...)
+		if len(agentDef.MCPTools) > 0 {
+			agentTools = append(agentTools, filterToolsByStaticCeiling(r.c.mcpManager.GetAgentMCPTools(agentDef.Name, agentDef.Shell), snapshot)...)
+		}
+	}
+	return r.c.filterDeniedWorkerTools(agentTools), nil
 }
 
 func (c *Coordinator) todoItemByID(todoID string) *TodoItem {

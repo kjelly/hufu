@@ -478,8 +478,11 @@ type Coordinator struct {
 	// retry attempts and from context-request telemetry sequencing.
 	executionAttemptSeq    atomic.Uint64
 	initialToolCorrections atomic.Int32
-	projectDir             string
-	allowedPaths           []string
+	// staticToolNarrowingReported keeps the static tool-grant narrowing
+	// status line to once per event key in this process.
+	staticToolNarrowingReported sync.Map
+	projectDir                  string
+	allowedPaths                []string
 	// artifactStoreRoot is the coordinator-owned CAS root. Isolated
 	// extra-model coordinators change session.Workspace, but must continue to
 	// resolve the parent run's immutable artifact capabilities from this root.

@@ -723,9 +723,9 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		}
 	}
 
-	var baseTools []fantasy.AgentTool
-	if !resultOnly {
-		baseTools = r.c.selectWorkerToolsForTask(def, task)
+	baseTools, err := r.c.frozenBaseWorkerTools(ctx, todo, def, task, dynamicAuthorization, req.ProspectiveTodo != nil, resultOnly)
+	if err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
 	var supplementalTools []fantasy.AgentTool
 	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
@@ -743,7 +743,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 			if err := r.c.mcpManager.LoadAgentMCPServer(def.Name, def.MCPTools, def.Shell); err != nil {
 				return ResolvedWorkerTools{}, fmt.Errorf("load MCP server for agent %s: %w", def.Name, err)
 			}
-			supplementalTools = append(supplementalTools, r.c.mcpManager.GetAgentMCPTools(def.Name, def.Shell)...)
+			supplementalTools = append(supplementalTools, filterToolsByStaticCeiling(r.c.mcpManager.GetAgentMCPTools(def.Name, def.Shell), dynamicAuthorization)...)
 		}
 	}
 

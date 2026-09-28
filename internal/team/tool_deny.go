@@ -110,10 +110,11 @@ func (c *Coordinator) selectWorkerTools(def *agent.AgentDef) []fantasy.AgentTool
 	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerTools(c.filterLegacyMemoryMutationTools(def, agent.SelectTools(c.coreTools, def.Tools))))
 }
 
-// selectWorkerToolsForTask preserves the team-wide deny list except for a
-// tool explicitly granted by a goal-selected static template. The caller must
-// pass the runtime-assigned contract ID: an arbitrary task execution object is
-// never enough to bypass a team denial.
+// selectWorkerToolsForTask applies the team-wide deny list and the phase
+// gate. A tool explicitly granted by a goal-selected static template is
+// exempt from the phase gate only; a ToolsDenied entry always wins. The caller
+// must pass the runtime-assigned contract ID: an arbitrary task execution
+// object is never enough to earn a grant.
 func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef) []fantasy.AgentTool {
 	if def == nil {
 		return nil
@@ -266,6 +267,13 @@ func (c *Coordinator) filterDeniedWorkerTools(candidate []fantasy.AgentTool) []f
 }
 
 func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.AgentTool, grants map[string]bool) []fantasy.AgentTool {
+	return c.filterTeamDeniedWorkerTools(candidate, grants, true)
+}
+
+// filterTeamDeniedWorkerTools removes ToolsDenied entries and, when
+// phaseGate is set, execution-capability tools outside EXECUTE that no grant
+// exempts.
+func (c *Coordinator) filterTeamDeniedWorkerTools(candidate []fantasy.AgentTool, grants map[string]bool, phaseGate bool) []fantasy.AgentTool {
 	if c == nil || c.session == nil {
 		return candidate
 	}
@@ -285,7 +293,7 @@ func (c *Coordinator) filterDeniedWorkerToolsWithGrants(candidate []fantasy.Agen
 		if denied[name] {
 			continue
 		}
-		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
+		if phaseGate && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() != PhaseExecute {
 			if executionCapabilityTools[name] && !grants[name] {
 				continue
 			}
