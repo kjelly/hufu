@@ -22,6 +22,11 @@ type TruncationResult struct {
 	TruncBy   string
 	Total     int
 	Kept      int
+	// Omitted reports that whole lines or leading bytes were dropped, and
+	// LongLinesCut that at least one line was shortened. Either one means
+	// Content is not the complete text.
+	Omitted      bool
+	LongLinesCut bool
 }
 
 func TruncateTail(content string, maxLines, maxBytes int) TruncationResult {
@@ -35,12 +40,15 @@ func TruncateTail(content string, maxLines, maxBytes int) TruncationResult {
 	lines := strings.Split(content, "\n")
 	total := len(lines)
 
+	longLinesCut := false
 	for i, line := range lines {
 		if utf8.RuneCountInString(line) > defaultMaxLineLen {
 			lines[i] = safeTruncateString(line, defaultMaxLineLen) + "..."
+			longLinesCut = true
 		}
 	}
 
+	omitted := total > maxLines
 	if total > maxLines {
 		lines = lines[total-maxLines:]
 	}
@@ -48,15 +56,18 @@ func TruncateTail(content string, maxLines, maxBytes int) TruncationResult {
 	result := strings.Join(lines, "\n")
 	if len(result) > maxBytes {
 		result = safeTruncateTailBytes(result, maxBytes)
+		omitted = true
 	}
 
 	kept := len(lines)
 	return TruncationResult{
-		Content:   result,
-		Truncated: total > maxLines || len(content) > maxBytes,
-		TruncBy:   truncBy(total, maxLines, len(content), maxBytes),
-		Total:     total,
-		Kept:      kept,
+		Content:      result,
+		Truncated:    total > maxLines || len(content) > maxBytes,
+		TruncBy:      truncBy(total, maxLines, len(content), maxBytes),
+		Total:        total,
+		Kept:         kept,
+		Omitted:      omitted,
+		LongLinesCut: longLinesCut,
 	}
 }
 

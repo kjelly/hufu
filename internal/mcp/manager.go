@@ -18,6 +18,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type MCPTool struct {
@@ -367,7 +368,13 @@ func (m *MCPToolManager) ExecuteAuthorizedTool(ctx context.Context, logicalName,
 			return "", false, &toolAuthorizationError{cause: err}
 		}
 	}
-	return executeMCPTool(ctx, t, cli, input)
+	content, isError, err := executeMCPTool(ctx, t, cli, input)
+	if err != nil {
+		return "", false, err
+	}
+	// Both callers hand this text to a model, so redact it here like bash
+	// output. Runtime action providers use a separate path and keep raw text.
+	return utils.RedactSecrets(content), isError, nil
 }
 
 func (m *MCPToolManager) resolveToolForExecution(toolName string) (MCPTool, *client.Client, error) {

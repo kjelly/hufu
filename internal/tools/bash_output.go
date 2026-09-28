@@ -33,6 +33,13 @@ func timeoutResponseMessage(timeout time.Duration, stdout, stderr string) string
 }
 
 func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse {
+	return bashExitResponse(boundBashOutput(assembleBashOutput(stdout, stderr, exitCode)), exitCode)
+}
+
+// assembleBashOutput builds the complete, redacted model-facing text of a
+// finished command: stdout, a STDERR section, and the exit-code footer, which
+// is always the final line.
+func assembleBashOutput(stdout, stderr string, exitCode int) string {
 	stdout = utils.RedactSecrets(stdout)
 	stderr = utils.RedactSecrets(stderr)
 	var result strings.Builder
@@ -50,16 +57,40 @@ func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse
 		result.WriteString("\n")
 	}
 	fmt.Fprintf(&result, "Exit code: %d", exitCode)
+	return result.String()
+}
 
-	output := result.String()
-	if output == "" {
-		output = "(no output)"
-	}
-
+// boundBashOutput applies the legacy display bound. When the bound changes
+// anything it says so on the first line, so the model never mistakes a tail
+// for the whole output.
+func boundBashOutput(output string) string {
 	tr := TruncateTail(output, defaultMaxLines, defaultMaxBytes)
-
-	if exitCode != 0 {
-		return fantasy.NewTextErrorResponse(tr.Content)
+	if tr.Content == output {
+		return output
 	}
-	return fantasy.NewTextResponse(tr.Content)
+	return bashTruncationNotice(output, tr) + "\n" + tr.Content
+}
+
+// bashOutputWouldTruncate reports whether boundBashOutput would change output.
+func bashOutputWouldTruncate(output string) bool {
+	return TruncateTail(output, defaultMaxLines, defaultMaxBytes).Content != output
+}
+
+func bashTruncationNotice(output string, tr TruncationResult) string {
+	var clauses strings.Builder
+	if tr.Omitted {
+		clauses.WriteString("; earlier output was omitted")
+	}
+	if tr.LongLinesCut {
+		fmt.Fprintf(&clauses, "; lines over %d characters were cut", defaultMaxLineLen)
+	}
+	return fmt.Sprintf("[output truncated by hufu: kept %d of %d lines (%d of %d bytes)%s]",
+		strings.Count(tr.Content, "\n")+1, strings.Count(output, "\n")+1, len(tr.Content), len(output), clauses.String())
+}
+
+func bashExitResponse(content string, exitCode int) fantasy.ToolResponse {
+	if exitCode != 0 {
+		return fantasy.NewTextErrorResponse(content)
+	}
+	return fantasy.NewTextResponse(content)
 }
