@@ -325,6 +325,17 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		reportDynamicToolInvocation(ctx, event, "", err.Error())
 		return dynamicGatewayError(code, err.Error()), nil
 	}
+	if response, ok := tools.OffloadToolOutput(ctx, tools.ToolOutputCapture{
+		ToolName: dynamicToolGatewayName, Content: content, IsError: isError,
+		LegacyWouldTruncate: len(content) > maxDynamicGatewayOutputBytes,
+	}); ok {
+		// The model sees a preview, so the invocation is recorded as
+		// truncated; the publication event binds the full digest.
+		event := dynamicInvocation(target, callID, "finished", "")
+		event.IsError, event.Truncated, event.OriginalBytes = isError, true, len(content)
+		reportDynamicToolInvocation(ctx, event, "", response.Content)
+		return response, nil
+	}
 	bounded, truncated, originalBytes := boundDynamicToolOutput(content)
 	event := dynamicInvocation(target, callID, "finished", "")
 	event.IsError, event.Truncated, event.OriginalBytes = isError, truncated, originalBytes

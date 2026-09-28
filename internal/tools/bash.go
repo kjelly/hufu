@@ -194,16 +194,16 @@ func executeBash(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fa
 		if rp, ok := ctx.Value(AgentRestrictedPathKey).(string); ok && rp != "" {
 			restrictedPath = rp
 		}
-		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, args.Command)
+		return runShellCommandRestricted(ctx, timeout, effCfg.WorkDir, restrictedPath, effCfg.NetworkBlock, true, args.Command)
 	}
 
 	if forwardToSudo {
-		resp, err := runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "sudo", []string{"bash", "-c", args.Command}, nil)
+		resp, err := runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, false, "sudo", []string{"bash", "-c", args.Command}, nil)
 		if err == nil {
 			resp.Content = "[bash: command required root privileges — automatically routed through the sudo tool]\n" + resp.Content
 		}
 		return resp, err
 	}
 
-	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, "bash", []string{"-c", args.Command}, nil)
+	return runShellCommand(ctx, timeout, effCfg.WorkDir, effCfg.NetworkBlock, true, "bash", []string{"-c", args.Command}, nil)
 }

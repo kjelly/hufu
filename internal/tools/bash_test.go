@@ -281,7 +281,7 @@ func TestRunShellCommandTimeoutKillsProcessGroup(t *testing.T) {
 	cmdStr := fmt.Sprintf("sleep %s & sleep %s", marker, marker)
 
 	start := time.Now()
-	resp, err := runShellCommand(context.Background(), 500*time.Millisecond, "", false, "bash", []string{"-c", cmdStr}, nil)
+	resp, err := runShellCommand(context.Background(), 500*time.Millisecond, "", false, false, "bash", []string{"-c", cmdStr}, nil)
 	if err != nil {
 		t.Fatalf("runShellCommand error: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestRunShellCommandTimeoutKillsProcessGroup(t *testing.T) {
 // goroutine-scheduling gap, not something a single run reliably hits.
 func TestRunShellCommandDoesNotTruncateOutput(t *testing.T) {
 	for i := 0; i < 200; i++ {
-		resp, err := runShellCommand(context.Background(), 5*time.Second, "", false, "bash", []string{"-c", "echo hello-world"}, nil)
+		resp, err := runShellCommand(context.Background(), 5*time.Second, "", false, false, "bash", []string{"-c", "echo hello-world"}, nil)
 		if err != nil {
 			t.Fatalf("iteration %d: runShellCommand error: %v", i, err)
 		}
@@ -333,6 +333,7 @@ func TestRunShellCommandRedactsInheritedSecretEnvironment(t *testing.T) {
 		context.Background(),
 		5*time.Second,
 		"",
+		false,
 		false,
 		"bash",
 		[]string{"-c", "printf '%s\\n' \"$HUFU_TEST_PASSWORD\"; env | grep '^HUFU_TEST_PASSWORD='"},
@@ -359,7 +360,7 @@ func TestRunShellCommandBackgroundedProcessReturnsPromptly(t *testing.T) {
 	cmdStr := fmt.Sprintf("sleep %s & echo done", marker)
 
 	start := time.Now()
-	resp, err := runShellCommand(context.Background(), 30*time.Second, "", false, "bash", []string{"-c", cmdStr}, nil)
+	resp, err := runShellCommand(context.Background(), 30*time.Second, "", false, false, "bash", []string{"-c", cmdStr}, nil)
 	if err != nil {
 		t.Fatalf("runShellCommand error: %v", err)
 	}

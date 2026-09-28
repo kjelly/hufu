@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +31,22 @@ func timeoutResponseMessage(timeout time.Duration, stdout, stderr string) string
 	}
 	tr := TruncateTail(combined, defaultMaxLines, defaultMaxBytes)
 	return msg + ". Output before the kill:\n" + tr.Content
+}
+
+// bashCommandResponse returns the response for a finished shell command. An
+// offloadable call first hands the complete output to the attempt's
+// offloader; otherwise, or when it declines, the legacy bound applies.
+func bashCommandResponse(ctx context.Context, offloadable bool, stdout, stderr string, exitCode int) fantasy.ToolResponse {
+	output := assembleBashOutput(stdout, stderr, exitCode)
+	if offloadable {
+		if response, ok := OffloadToolOutput(ctx, ToolOutputCapture{
+			ToolName: "bash", Content: output, IsError: exitCode != 0,
+			LegacyWouldTruncate: bashOutputWouldTruncate(output),
+		}); ok {
+			return response
+		}
+	}
+	return bashExitResponse(boundBashOutput(output), exitCode)
 }
 
 func buildBashResponse(stdout, stderr string, exitCode int) fantasy.ToolResponse {

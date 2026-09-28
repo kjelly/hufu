@@ -104,8 +104,9 @@ func configureCommandReaping(cmd *exec.Cmd) {
 
 // runShellCommand runs name+args under a derived context with the given timeout,
 // sets Dir and the SHELL env var, then collects stdout/stderr and builds a response.
-// It is used by the bash and sudo tools.
-func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, name string, args []string, envReplacer func(env []string) []string) (fantasy.ToolResponse, error) {
+// It is used by the bash and sudo tools. Only the bash tool passes offloadable,
+// which lets the attempt's offloader receive the complete finished output.
+func runShellCommand(ctx context.Context, timeout time.Duration, workDir string, networkBlock bool, offloadable bool, name string, args []string, envReplacer func(env []string) []string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -164,10 +165,10 @@ func runShellCommand(ctx context.Context, timeout time.Duration, workDir string,
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return buildBashResponse(stdoutText, stderrText, exitCode), nil
+	return bashCommandResponse(ctx, offloadable, stdoutText, stderrText, exitCode), nil
 }
 
-func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, command string) (fantasy.ToolResponse, error) {
+func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workDir string, restrictedPath string, networkBlock bool, offloadable bool, command string) (fantasy.ToolResponse, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -231,7 +232,7 @@ func runShellCommandRestricted(ctx context.Context, timeout time.Duration, workD
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return buildBashResponse(stdoutText, stderrText, exitCode), nil
+	return bashCommandResponse(ctx, offloadable, stdoutText, stderrText, exitCode), nil
 }
 
 // runBashDirenv executes a bash command with the project's .envrc/.env
@@ -245,7 +246,7 @@ func runBashDirenv(ctx context.Context, timeout time.Duration, cfg ToolConfig, c
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to load project env: %v", err)), nil
 	}
-	return runShellCommand(ctx, timeout, cfg.WorkDir, cfg.NetworkBlock, "bash", []string{"-c", command}, func(env []string) []string {
+	return runShellCommand(ctx, timeout, cfg.WorkDir, cfg.NetworkBlock, true, "bash", []string{"-c", command}, func(env []string) []string {
 		bashPath, _ := exec.LookPath("bash")
 		if bashPath == "" {
 			bashPath = "/bin/bash"
