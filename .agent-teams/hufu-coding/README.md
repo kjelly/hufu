@@ -56,7 +56,7 @@ acceptance even though it has no unresolved tasks. This is checked from
 durable task state, not from the coordinator's summary.
 
 The SA resolves the request into a schema-validated `structured_payload`
-(`schemas/coding-task-contract-v1.json`) before the coder starts. It names the
+(`.agent-teams/hufu-coding/schemas/coding-task-contract-v1.json`) before the coder starts. It names the
 objective, deliverables, constraints, acceptance criteria, and verification
 commands. A successful SA result must contain at least one deliverable,
 criterion, and verification command; the static `task_result_assert` rejects
