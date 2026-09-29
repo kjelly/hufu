@@ -203,6 +203,126 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 	}
 }
 
+func TestCompareExecutionEventsParityAllowsConcurrentTaskInterleaving(t *testing.T) {
+	event := func(status, taskID string) ExecutionEvent {
+		return ExecutionEvent{Status: status, RunID: "run-1", TaskID: taskID, Agent: "worker", Attempt: 1}
+	}
+	legacy := []ExecutionEvent{
+		{Status: "run_started", RunID: "run-1", Agent: "coordinator"},
+		event("in_progress", "3"),
+		event("in_progress", "4"),
+		event("in_progress", "2"),
+		event("verifying", "3"),
+		event("done", "3"),
+		event("verifying", "2"),
+		event("done", "2"),
+		event("verifying", "4"),
+		event("done", "4"),
+		{Status: "run_finished", RunID: "run-1", Agent: "coordinator", Outcome: RunOutcomeCompleted},
+	}
+	exported := []ExecutionEvent{
+		{Status: "run_started", RunID: "run-1", Agent: "coordinator"},
+		event("in_progress", "3"),
+		event("in_progress", "2"),
+		event("in_progress", "4"),
+		event("verifying", "3"),
+		event("done", "3"),
+		event("verifying", "4"),
+		event("done", "4"),
+		event("verifying", "2"),
+		event("done", "2"),
+		{Status: "run_finished", RunID: "run-1", Agent: "coordinator", Outcome: RunOutcomeCompleted},
+	}
+
+	if err := CompareExecutionEventsParity(legacy, exported); err != nil {
+		t.Fatalf("independent task interleaving should have parity: %v", err)
+	}
+}
+
+func TestCompareExecutionEventsParityRejectsTaskLifecycleDivergence(t *testing.T) {
+	event := func(status, taskID string, attempt int) ExecutionEvent {
+		return ExecutionEvent{Status: status, RunID: "run-1", TaskID: taskID, Agent: "worker", Attempt: attempt}
+	}
+	tests := []struct {
+		name     string
+		legacy   []ExecutionEvent
+		exported []ExecutionEvent
+		want     string
+	}{
+		{
+			name: "within-task status order",
+			legacy: []ExecutionEvent{
+				event("in_progress", "1", 1),
+				event("verifying", "1", 1),
+				event("done", "1", 1),
+			},
+			exported: []ExecutionEvent{
+				event("in_progress", "1", 1),
+				event("done", "1", 1),
+				event("verifying", "1", 1),
+			},
+			want: "status mismatch",
+		},
+		{
+			name: "retry order",
+			legacy: []ExecutionEvent{
+				event("in_progress", "1", 1),
+				event("error", "1", 1),
+				event("in_progress", "1", 2),
+			},
+			exported: []ExecutionEvent{
+				event("in_progress", "1", 2),
+				event("error", "1", 1),
+				event("in_progress", "1", 1),
+			},
+			want: "attempt mismatch",
+		},
+		{
+			name: "missing task replaced by duplicate",
+			legacy: []ExecutionEvent{
+				event("in_progress", "1", 1),
+				event("done", "1", 1),
+				event("in_progress", "2", 1),
+				event("done", "2", 1),
+			},
+			exported: []ExecutionEvent{
+				event("in_progress", "1", 1),
+				event("done", "1", 1),
+				event("in_progress", "1", 1),
+				event("done", "1", 1),
+			},
+			want: "task_id mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CompareExecutionEventsParity(tt.legacy, tt.exported)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("CompareExecutionEventsParity() error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompareExecutionEventsParityRejectsRunBoundaryMovement(t *testing.T) {
+	legacy := []ExecutionEvent{
+		{Status: "run_started", RunID: "run-1"},
+		{Status: "in_progress", RunID: "run-1", TaskID: "1", Attempt: 1},
+		{Status: "run_finished", RunID: "run-1"},
+	}
+	exported := []ExecutionEvent{
+		{Status: "run_started", RunID: "run-1"},
+		{Status: "run_finished", RunID: "run-1"},
+		{Status: "in_progress", RunID: "run-1", TaskID: "1", Attempt: 1},
+	}
+
+	err := CompareExecutionEventsParity(legacy, exported)
+	if err == nil || !strings.Contains(err.Error(), "position mismatch") {
+		t.Fatalf("CompareExecutionEventsParity() error = %v, want run boundary position mismatch", err)
+	}
+}
+
 func TestExportAndVerifyExecutionEvents_EndToEndParityAndForcedMismatch(t *testing.T) {
 	workspace := t.TempDir()
 	runID := "run-test-123"

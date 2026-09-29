@@ -249,37 +249,115 @@ func ExportAndVerifyExecutionEvents(workspace, runID string, events []RunEvent) 
 }
 
 // CompareExecutionEventsParity compares a legacy ExecutionEvent sequence with
-// an exported ExecutionEvent sequence to verify shadow compatibility.
+// an exported ExecutionEvent sequence to verify shadow compatibility. Run
+// boundaries retain their global positions, while task lifecycle events are
+// compared in order per task. The two writers observe concurrent task
+// goroutines at different points, so the global interleaving of independent
+// tasks is not a stable parity signal.
 func CompareExecutionEventsParity(legacy, exported []ExecutionEvent) error {
 	if len(legacy) != len(exported) {
 		return fmt.Errorf("execution events length mismatch: legacy=%d exported=%d", len(legacy), len(exported))
 	}
-	for i := range legacy {
-		leg := legacy[i]
-		exp := exported[i]
-		if leg.Status != exp.Status {
-			return fmt.Errorf("event %d status mismatch: legacy=%s exported=%s", i, leg.Status, exp.Status)
+
+	legacyPartition := partitionExecutionEvents(legacy)
+	exportedPartition := partitionExecutionEvents(exported)
+	if len(legacyPartition.boundaries) != len(exportedPartition.boundaries) {
+		return fmt.Errorf("run boundary count mismatch: legacy=%d exported=%d", len(legacyPartition.boundaries), len(exportedPartition.boundaries))
+	}
+	for i := range legacyPartition.boundaries {
+		leg := legacyPartition.boundaries[i]
+		exp := exportedPartition.boundaries[i]
+		if leg.index != exp.index {
+			return fmt.Errorf("run boundary %d position mismatch: legacy=%d exported=%d", i, leg.index, exp.index)
 		}
-		if leg.TaskID != exp.TaskID {
-			return fmt.Errorf("event %d task_id mismatch: legacy=%s exported=%s", i, leg.TaskID, exp.TaskID)
+		if err := compareExecutionEvent(fmt.Sprintf("event %d", leg.index), leg.event, exp.event); err != nil {
+			return err
 		}
-		if leg.Agent != "" && exp.Agent != "" && !strings.EqualFold(leg.Agent, exp.Agent) {
-			return fmt.Errorf("event %d agent mismatch: legacy=%s exported=%s", i, leg.Agent, exp.Agent)
+	}
+
+	for _, key := range legacyPartition.taskOrder {
+		if _, ok := exportedPartition.tasks[key]; !ok {
+			return fmt.Errorf("task_id mismatch: legacy task stream run_id=%q task_id=%q has no exported counterpart", key.runID, key.taskID)
 		}
-		if leg.Attempt > 0 && exp.Attempt > 0 && leg.Attempt != exp.Attempt {
-			return fmt.Errorf("event %d attempt mismatch: legacy=%d exported=%d", i, leg.Attempt, exp.Attempt)
+	}
+	for _, key := range exportedPartition.taskOrder {
+		if _, ok := legacyPartition.tasks[key]; !ok {
+			return fmt.Errorf("task_id mismatch: exported task stream run_id=%q task_id=%q has no legacy counterpart", key.runID, key.taskID)
 		}
-		if leg.Status == "run_finished" {
-			if leg.Outcome != "" && exp.Outcome != "" && leg.Outcome != exp.Outcome {
-				return fmt.Errorf("run_finished outcome mismatch: legacy=%s exported=%s", leg.Outcome, exp.Outcome)
+	}
+	for _, key := range legacyPartition.taskOrder {
+		legacyTaskEvents := legacyPartition.tasks[key]
+		exportedTaskEvents := exportedPartition.tasks[key]
+		if len(legacyTaskEvents) != len(exportedTaskEvents) {
+			return fmt.Errorf("task %q event count mismatch: legacy=%d exported=%d", key.taskID, len(legacyTaskEvents), len(exportedTaskEvents))
+		}
+		for i := range legacyTaskEvents {
+			scope := fmt.Sprintf("task %q event %d", key.taskID, i)
+			if err := compareExecutionEvent(scope, legacyTaskEvents[i].event, exportedTaskEvents[i].event); err != nil {
+				return err
 			}
-			if leg.AcceptanceState != "" && exp.AcceptanceState != "" && leg.AcceptanceState != exp.AcceptanceState {
-				return fmt.Errorf("run_finished acceptance mismatch: legacy=%s exported=%s", leg.AcceptanceState, exp.AcceptanceState)
-			}
-			if leg.EvidenceManifestHash != "" && exp.EvidenceManifestHash != "" && leg.EvidenceManifestHash != exp.EvidenceManifestHash {
-				return fmt.Errorf("run_finished evidence hash mismatch: legacy=%s exported=%s", leg.EvidenceManifestHash, exp.EvidenceManifestHash)
-			}
 		}
+	}
+	return nil
+}
+
+type executionEventTaskKey struct {
+	runID  string
+	taskID string
+}
+
+type indexedExecutionEvent struct {
+	index int
+	event ExecutionEvent
+}
+
+type executionEventPartition struct {
+	boundaries []indexedExecutionEvent
+	tasks      map[executionEventTaskKey][]indexedExecutionEvent
+	taskOrder  []executionEventTaskKey
+}
+
+func partitionExecutionEvents(events []ExecutionEvent) executionEventPartition {
+	partition := executionEventPartition{tasks: make(map[executionEventTaskKey][]indexedExecutionEvent)}
+	for i, event := range events {
+		indexed := indexedExecutionEvent{index: i, event: event}
+		if event.TaskID == "" {
+			partition.boundaries = append(partition.boundaries, indexed)
+			continue
+		}
+		key := executionEventTaskKey{runID: event.RunID, taskID: event.TaskID}
+		if _, ok := partition.tasks[key]; !ok {
+			partition.taskOrder = append(partition.taskOrder, key)
+		}
+		partition.tasks[key] = append(partition.tasks[key], indexed)
+	}
+	return partition
+}
+
+func compareExecutionEvent(scope string, legacy, exported ExecutionEvent) error {
+	if legacy.Status != exported.Status {
+		return fmt.Errorf("%s status mismatch: legacy=%s exported=%s", scope, legacy.Status, exported.Status)
+	}
+	if legacy.TaskID != exported.TaskID {
+		return fmt.Errorf("%s task_id mismatch: legacy=%s exported=%s", scope, legacy.TaskID, exported.TaskID)
+	}
+	if legacy.Agent != "" && exported.Agent != "" && !strings.EqualFold(legacy.Agent, exported.Agent) {
+		return fmt.Errorf("%s agent mismatch: legacy=%s exported=%s", scope, legacy.Agent, exported.Agent)
+	}
+	if legacy.Attempt > 0 && exported.Attempt > 0 && legacy.Attempt != exported.Attempt {
+		return fmt.Errorf("%s attempt mismatch: legacy=%d exported=%d", scope, legacy.Attempt, exported.Attempt)
+	}
+	if legacy.Status != "run_finished" {
+		return nil
+	}
+	if legacy.Outcome != "" && exported.Outcome != "" && legacy.Outcome != exported.Outcome {
+		return fmt.Errorf("run_finished outcome mismatch: legacy=%s exported=%s", legacy.Outcome, exported.Outcome)
+	}
+	if legacy.AcceptanceState != "" && exported.AcceptanceState != "" && legacy.AcceptanceState != exported.AcceptanceState {
+		return fmt.Errorf("run_finished acceptance mismatch: legacy=%s exported=%s", legacy.AcceptanceState, exported.AcceptanceState)
+	}
+	if legacy.EvidenceManifestHash != "" && exported.EvidenceManifestHash != "" && legacy.EvidenceManifestHash != exported.EvidenceManifestHash {
+		return fmt.Errorf("run_finished evidence hash mismatch: legacy=%s exported=%s", legacy.EvidenceManifestHash, exported.EvidenceManifestHash)
 	}
 	return nil
 }
