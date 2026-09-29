@@ -97,6 +97,17 @@ func Prepare(teamDir, source string) (Program, error) {
 	return Program{Source: resolved, Digest: digest}, nil
 }
 
+// SourceFiles returns the sorted, non-test Go source filenames that make up a
+// prepared trusted-static program. It revalidates the directory entry types so
+// callers that copy a program (for example, the portable team packager) use
+// exactly the same structural ownership rules as execution.
+func SourceFiles(program Program) ([]string, error) {
+	if strings.TrimSpace(program.Source) == "" {
+		return nil, errors.New("go runtime program is not prepared")
+	}
+	return sourceFileNames(program.Source)
+}
+
 // Execute invokes a prepared program through the current Hufu executable.
 func Execute(ctx context.Context, executable string, program Program, input []byte, env []string, outputLimit, errorLimit int) (Result, error) {
 	if ctx == nil {
@@ -270,38 +281,10 @@ func stagePackage(source, expectedDigest string) (string, string, func(), error)
 }
 
 func inspectPackage(source string) (string, error) {
-	info, err := os.Stat(source)
+	files, err := sourceFileNames(source)
 	if err != nil {
-		return "", fmt.Errorf("stat Go runtime source: %w", err)
+		return "", err
 	}
-	if !info.IsDir() {
-		return "", errors.New("go runtime source must be a directory")
-	}
-	entries, err := os.ReadDir(source)
-	if err != nil {
-		return "", fmt.Errorf("read Go runtime source: %w", err)
-	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("go runtime source %q must not be a symlink", name)
-		}
-		if !entry.Type().IsRegular() {
-			entryInfo, infoErr := entry.Info()
-			if infoErr != nil || !entryInfo.Mode().IsRegular() {
-				return "", fmt.Errorf("go runtime source %q must be a regular file", name)
-			}
-		}
-		files = append(files, name)
-	}
-	if len(files) == 0 {
-		return "", errors.New("go runtime source contains no non-test Go files")
-	}
-	slices.Sort(files)
 	hash := sha256.New()
 	runDeclarations := 0
 	for _, name := range files {
@@ -341,6 +324,42 @@ func inspectPackage(source string) (string, error) {
 		return "", fmt.Errorf("trusted Go action requires exactly one exported Run function; found %d", runDeclarations)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func sourceFileNames(source string) ([]string, error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return nil, fmt.Errorf("stat Go runtime source: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("go runtime source must be a directory")
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return nil, fmt.Errorf("read Go runtime source: %w", err)
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("go runtime source %q must not be a symlink", name)
+		}
+		if !entry.Type().IsRegular() {
+			entryInfo, infoErr := entry.Info()
+			if infoErr != nil || !entryInfo.Mode().IsRegular() {
+				return nil, fmt.Errorf("go runtime source %q must be a regular file", name)
+			}
+		}
+		files = append(files, name)
+	}
+	if len(files) == 0 {
+		return nil, errors.New("go runtime source contains no non-test Go files")
+	}
+	slices.Sort(files)
+	return files, nil
 }
 
 func validRunSignature(file *ast.File, function *ast.FuncDecl) bool {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -1648,6 +1649,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 			workerNames = append(workerNames, def.Name)
 		}
 	}
+	slices.Sort(workerNames)
 	if _, ok := templateVars["AGENT_COUNT"]; !ok {
 		templateVars["AGENT_COUNT"] = fmt.Sprintf("%d", len(workerNames))
 	}

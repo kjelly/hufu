@@ -41,7 +41,7 @@ func parseSkillFile(path string) *SkillDef {
 
 // ValidateSkillDraft parses a complete SKILL.md without touching the filesystem.
 func ValidateSkillDraft(raw []byte) (*SkillDef, error) {
-	def, err := parseSkillBytes(raw)
+	def, err := ValidateSkill(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +52,13 @@ func ValidateSkillDraft(raw []byte) (*SkillDef, error) {
 		return nil, fmt.Errorf("skill draft body is empty")
 	}
 	return def, nil
+}
+
+// ValidateSkill parses a complete SKILL.md using the same acceptance rules as
+// runtime skill discovery. Unlike ValidateSkillDraft, it does not impose the
+// additional authoring requirements for generated drafts.
+func ValidateSkill(raw []byte) (*SkillDef, error) {
+	return parseSkillBytes(raw)
 }
 
 func parseSkillBytes(raw []byte) (*SkillDef, error) {

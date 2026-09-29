@@ -1399,6 +1399,22 @@ func TestLoadTeamExcludesREADMEFromAgentDiscovery(t *testing.T) {
 	}
 }
 
+func TestLoadTeamBuiltinAgentNamesAreDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentFileForTest(t, dir, "zeta.md", "---\nname: zeta\nrole: worker\n---\nZeta.\n")
+	writeAgentFileForTest(t, dir, "alpha.md", "---\nname: alpha\nrole: worker\n---\nAlpha.\n")
+
+	for range 20 {
+		session, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
+		if err != nil {
+			t.Fatalf("LoadTeam: %v", err)
+		}
+		if got := session.Config.Vars["AGENT_NAMES"]; got != "Helper, alpha, zeta" {
+			t.Fatalf("AGENT_NAMES = %q, want sorted stable names", got)
+		}
+	}
+}
+
 func writeAgentFileForTest(t *testing.T, dir, filename, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
