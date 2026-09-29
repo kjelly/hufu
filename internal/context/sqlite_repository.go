@@ -292,12 +292,30 @@ func normalize(item *ContextItem) error {
 	if item.Content == "" || item.Scope.ProjectID == "" {
 		return errors.New("context item content and project scope are required")
 	}
+	contentSum := sha256.Sum256([]byte(item.Content))
+	item.ContentHash = hex.EncodeToString(contentSum[:])
 	if item.ID == "" {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s", item.Scope.ProjectID, item.Kind, item.Content)))
+		// Generated IDs must encode the same exact-scope identity used by the
+		// repository's deduplication queries. A content-only ID collides when
+		// identical context is validly recorded in another session or child
+		// scope, even though those records must remain distinct.
+		identity, err := json.Marshal([9]string{
+			item.Scope.ProjectID,
+			string(item.Kind),
+			item.ContentHash,
+			item.Scope.TeamID,
+			item.Scope.SessionID,
+			item.Scope.BranchID,
+			item.Scope.AgentID,
+			item.Scope.TaskID,
+			item.Scope.AttemptID,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal context item identity: %w", err)
+		}
+		sum := sha256.Sum256(identity)
 		item.ID = "ctx-" + hex.EncodeToString(sum[:12])
 	}
-	sum := sha256.Sum256([]byte(item.Content))
-	item.ContentHash = hex.EncodeToString(sum[:])
 	// Confidence is preserved verbatim: an explicit 0 is a legitimate low-trust
 	// value and must not be rewritten to the default. Callers that intend a
 	// default set it explicitly before Append.
@@ -513,8 +531,9 @@ func (r *SQLiteRepository) appendReducerOnce(ctx context.Context, items ...Conte
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		// The deterministic ID from normalize() is content-derived, so two items
-		// with the same content but different execution identity would collide.
+		// The deterministic ID from normalize() includes exact scope, but not the
+		// reducer's additional execution identity. Two tasks may therefore report
+		// the same content in the same scope and still require distinct rows.
 		// Ensure a unique ID before inserting.
 		id := it.ID
 		for {

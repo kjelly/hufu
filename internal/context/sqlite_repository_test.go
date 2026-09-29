@@ -2,6 +2,8 @@ package context
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -295,6 +297,68 @@ func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
 	n, err := r.DeleteExpired(ctx, time.Now())
 	if err != nil || n != 1 {
 		t.Fatalf("deleted=%d err=%v", n, err)
+	}
+}
+
+func TestSQLiteRepositoryGeneratedIDIncludesDedupeScope(t *testing.T) {
+	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	const content = "same progress summary"
+	legacyScope := Scope{ProjectID: "project", TeamID: "team", SessionID: "old-session"}
+	legacySum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s", legacyScope.ProjectID, ContextProgress, content)))
+	legacyID := "ctx-" + hex.EncodeToString(legacySum[:12])
+	base := ContextItem{
+		Kind: ContextProgress, Content: content,
+		Authority: AuthorityAgent, TrustLevel: TrustInternal,
+	}
+	legacy := base
+	legacy.ID = legacyID
+	legacy.Scope = legacyScope
+	if err := r.Append(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	// Existing databases contain IDs generated without child scope. An exact
+	// duplicate must still resolve to that row rather than creating a new one.
+	legacyDuplicate := base
+	legacyDuplicate.Scope = legacyScope
+	if err := r.Append(t.Context(), legacyDuplicate); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same content in a new session is a distinct exact-scope record. Its
+	// generated ID must not collide with the legacy content-only primary key.
+	newScope := legacyScope
+	newScope.SessionID = "new-session"
+	newSessionItem := base
+	newSessionItem.Scope = newScope
+	if err := r.Append(t.Context(), newSessionItem); err != nil {
+		t.Fatalf("append same content in a new session: %v", err)
+	}
+	if err := r.Append(t.Context(), newSessionItem); err != nil {
+		t.Fatalf("deduplicate same content in the new session: %v", err)
+	}
+
+	items, err := r.Query(t.Context(), RepositoryQuery{
+		Scope:      Scope{ProjectID: legacyScope.ProjectID},
+		Visibility: VisibilitySubtree,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("scoped context items = %d, want 2: %#v", len(items), items)
+	}
+	ids := map[string]bool{}
+	for _, item := range items {
+		ids[item.ID] = true
+	}
+	if !ids[legacyID] || len(ids) != 2 {
+		t.Fatalf("generated IDs = %v, want legacy ID plus one distinct scoped ID", ids)
 	}
 }
 
