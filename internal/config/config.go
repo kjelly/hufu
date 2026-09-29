@@ -157,6 +157,7 @@ type Config struct {
 	ForceMCP              bool                      `yaml:"force-mcp"`
 	ProjectContext        bool                      `yaml:"project-context"`
 	Presentation          PresentationConfig        `yaml:"presentation"`
+	Cost                  CostConfig                `yaml:"cost"`
 	Shell                 string                    `yaml:"shell"`
 	RawVars               interface{}               `yaml:"vars"`
 	Hooks                 map[string]string         `yaml:"hooks"`
@@ -234,6 +235,7 @@ func (c *Config) mergeFromFile(path string) {
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
+	c.Cost.merge(fileCfg.Cost)
 	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {
 		c.mergeNotify(fileCfg.Notify)
