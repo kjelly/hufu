@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,27 +28,38 @@ func (a *rejectingAdmission) AdmitProviderRequest(context.Context, ProviderReque
 }
 
 type countingLanguageModel struct {
-	calls int
+	calls  int
+	events *[]string
 }
 
 func (m *countingLanguageModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
 	m.calls++
+	m.record("provider")
 	return &fantasy.Response{}, nil
 }
 
 func (m *countingLanguageModel) Stream(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
 	m.calls++
+	m.record("provider")
 	return nil, nil
 }
 
 func (m *countingLanguageModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
 	m.calls++
+	m.record("provider")
 	return &fantasy.ObjectResponse{}, nil
 }
 
 func (m *countingLanguageModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
 	m.calls++
+	m.record("provider")
 	return nil, nil
+}
+
+func (m *countingLanguageModel) record(event string) {
+	if m.events != nil {
+		*m.events = append(*m.events, event)
+	}
 }
 
 func (*countingLanguageModel) Provider() string { return "test" }
@@ -129,6 +141,7 @@ type recordingAdmission struct {
 	mu        sync.Mutex
 	requests  []ProviderRequest
 	commits   []ProviderRequest
+	events    *[]string
 	limiter   InvocationLimiter
 	err       error
 	commitErr error
@@ -138,6 +151,9 @@ func (a *recordingAdmission) AdmitProviderRequest(_ context.Context, request Pro
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.requests = append(a.requests, request)
+	if a.events != nil {
+		*a.events = append(*a.events, "admit")
+	}
 	return a.err
 }
 
@@ -145,6 +161,9 @@ func (a *recordingAdmission) CommitProviderInvocation(_ context.Context, request
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.commits = append(a.commits, request)
+	if a.events != nil {
+		*a.events = append(*a.events, "commit")
+	}
 	return a.commitErr
 }
 
@@ -233,8 +252,9 @@ func assertReleaseCount(t *testing.T, limiter *capacityLimiter, want int32) {
 }
 
 func TestBoundAdmissionContextCoversAllLanguageModelMethods(t *testing.T) {
-	admission := &recordingAdmission{}
-	model := &countingLanguageModel{}
+	events := []string{}
+	admission := &recordingAdmission{events: &events}
+	model := &countingLanguageModel{events: &events}
 	bound := ProviderAdmissionContext{
 		ModelID:       "local/model",
 		ContextWindow: 32_768, MaxOutputTokens: 1_024,
@@ -264,6 +284,15 @@ func TestBoundAdmissionContextCoversAllLanguageModelMethods(t *testing.T) {
 	}
 	if len(admission.commits) != 4 {
 		t.Fatalf("provider commits = %d, want four", len(admission.commits))
+	}
+	wantEvents := []string{
+		"admit", "commit", "provider",
+		"admit", "commit", "provider",
+		"admit", "commit", "provider",
+		"admit", "commit", "provider",
+	}
+	if !slices.Equal(events, wantEvents) {
+		t.Fatalf("provider boundary events = %q, want %q", events, wantEvents)
 	}
 	seenInvocationIDs := make(map[string]struct{}, len(admission.commits))
 	for index, request := range admission.commits {

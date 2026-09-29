@@ -51,6 +51,9 @@ to re-create an abstraction that already exists in the runtime.
   compatibility, and incremental delivery contract.
 - [Model metadata](architecture/model-metadata.md) — model profile evidence,
   runtime introspection, and effective context admission.
+- [Cost governance and portable team packages](architecture/cost-governance-and-portable-team-packages.md)
+  — implementation-ready generation-cost admission, replayable projections,
+  deterministic team packaging, inspection, and atomic local installation.
 - [Workset](architecture/workset.md) — artifact-backed fan-out, immutable
   expansion receipts, typed results, and group verification.
 - [Memory learning](architecture/memory-learning.md) — outcome attribution,
@@ -86,6 +89,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.
+- [Cost and team-package Phase 0 baseline](reference/cost-package-baseline.md)
+  — verified generation-call, persistence, schema, and package-ownership
+  boundaries used by the implementation-ready cost/package contract.
 - [Generated operator command reference](reference/operator-command-reference.md)
 - [Workspace command reference](reference/workspace-command-reference.md)
 - [Workspace versions SQLite schema](reference/workspace-versions-sqlite-schema.md)
