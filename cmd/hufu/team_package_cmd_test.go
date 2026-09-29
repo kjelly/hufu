@@ -110,3 +110,48 @@ func TestTeamPackageInspectCommandRendersFindingBeforeFailure(t *testing.T) {
 		t.Fatalf("failure report = %#v", report)
 	}
 }
+
+func TestTeamInstallCommandDryRunThenPublishes(t *testing.T) {
+	project := t.TempDir()
+	t.Chdir(project)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: cli-install\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte("---\nrole: worker\n---\nWork.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	packagePath := filepath.Join(project, "cli-install.hufu")
+	if _, err := teampkg.Pack(teampkg.PackOptions{TeamDir: dir, Version: "test-3", Output: packagePath}); err != nil {
+		t.Fatal(err)
+	}
+
+	dryRun := newTeamInstallCommand()
+	dryOutput := new(bytes.Buffer)
+	dryRun.SetOut(dryOutput)
+	dryRun.SetArgs([]string{packagePath, "--dry-run"})
+	if err := dryRun.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := dryOutput.String(); !strings.Contains(got, "validated team cli-install version test-3") {
+		t.Fatalf("dry-run output = %q", got)
+	}
+	target := filepath.Join(project, ".agent-teams", "cli-install")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created target: %v", err)
+	}
+
+	install := newTeamInstallCommand()
+	installOutput := new(bytes.Buffer)
+	install.SetOut(installOutput)
+	install.SetArgs([]string{packagePath})
+	if err := install.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := installOutput.String(); !strings.Contains(got, "installed team cli-install version test-3") {
+		t.Fatalf("install output = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(target, "team.yaml")); err != nil {
+		t.Fatal(err)
+	}
+}

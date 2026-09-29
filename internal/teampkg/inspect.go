@@ -159,23 +159,12 @@ func inspectPackageBytes(data []byte, scratchBase string) (report InspectionRepo
 	if err := stageArchiveSources(root, archive); err != nil {
 		return inspectionFailure(report, "staging", err)
 	}
-	spec, err := team.CompileTeam(root, nil, nil, nil)
+	spec, manifestSchema, err := validateStagedArchive(root, archive)
 	if err != nil {
+		if staged, ok := errors.AsType[*stagedValidationError](err); ok {
+			return inspectionFailure(report, staged.category, staged.err)
+		}
 		return inspectionFailure(report, "compile", err)
-	}
-	if spec.Name.Value != archive.Manifest.Name {
-		return inspectionFailure(report, "identity", fmt.Errorf("package name does not match compiled team name"))
-	}
-	manifestSchema, err := team.DetectTeamSchemaVersion(root, nil)
-	if err != nil {
-		return inspectionFailure(report, "manifest_schema", err)
-	}
-	inventory, err := BuildInventory(root, spec)
-	if err != nil {
-		return inspectionFailure(report, "structural_inventory", err)
-	}
-	if err := compareArchiveInventory(archive, inventory); err != nil {
-		return inspectionFailure(report, "structural_inventory", err)
 	}
 
 	report.ManifestSchema = manifestSchema
@@ -250,6 +239,36 @@ func compareArchiveInventory(archive *Archive, inventory Inventory) error {
 		}
 	}
 	return nil
+}
+
+type stagedValidationError struct {
+	category string
+	err      error
+}
+
+func (e *stagedValidationError) Error() string { return e.err.Error() }
+func (e *stagedValidationError) Unwrap() error { return e.err }
+
+func validateStagedArchive(root string, archive *Archive) (*team.EffectiveTeamSpec, string, error) {
+	spec, err := team.CompileTeam(root, nil, nil, nil)
+	if err != nil {
+		return nil, "", &stagedValidationError{category: "compile", err: err}
+	}
+	if spec.Name.Value != archive.Manifest.Name {
+		return nil, "", &stagedValidationError{category: "identity", err: errors.New("package name does not match compiled team name")}
+	}
+	manifestSchema, err := team.DetectTeamSchemaVersion(root, nil)
+	if err != nil {
+		return nil, "", &stagedValidationError{category: "manifest_schema", err: err}
+	}
+	inventory, err := BuildInventory(root, spec)
+	if err != nil {
+		return nil, "", &stagedValidationError{category: "structural_inventory", err: err}
+	}
+	if err := compareArchiveInventory(archive, inventory); err != nil {
+		return nil, "", &stagedValidationError{category: "structural_inventory", err: err}
+	}
+	return spec, manifestSchema, nil
 }
 
 func inspectAgents(session *team.TeamSession) []InspectedAgent {

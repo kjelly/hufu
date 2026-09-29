@@ -73,6 +73,34 @@ func newTeamPackageInspectCommand() *cobra.Command {
 	return command
 }
 
+func newTeamInstallCommand() *cobra.Command {
+	var global bool
+	var dryRun bool
+	command := &cobra.Command{
+		Use:   "install <file.hufu>",
+		Short: "Validate and atomically install a portable team package",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			result, err := teampkg.Install(teampkg.InstallOptions{
+				Package: args[0], Global: global, DryRun: dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			verb := "installed"
+			if result.DryRun {
+				verb = "validated"
+			}
+			_, err = fmt.Fprintf(command.OutOrStdout(), "%s team %s version %s for %s (%s)\n",
+				verb, result.Manifest.Name, result.Manifest.Version, result.Target, result.Lock.TeamDigest)
+			return err
+		},
+	}
+	command.Flags().BoolVar(&global, "global", false, "Install under the user home .agent-teams directory")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "Validate fully without publishing the team")
+	return command
+}
+
 func renderTeamPackageJSON(writer io.Writer, report teampkg.InspectionReport) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
@@ -165,5 +193,5 @@ func renderTeamPackageText(writer io.Writer, report teampkg.InspectionReport) er
 }
 
 func init() {
-	teamCmd.AddCommand(newTeamPackCommand(), newTeamPackageCommand())
+	teamCmd.AddCommand(newTeamPackCommand(), newTeamPackageCommand(), newTeamInstallCommand())
 }

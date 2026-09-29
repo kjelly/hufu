@@ -1,6 +1,6 @@
 # Hufu Cost Governance and Portable Team Packages
 
-> Status: active
+> Status: implemented
 > Authority: normative
 > Verified-Commit: `5665cc34e4eef23c6af93e370f1672f5168dc43c`
 > Supersedes: —
@@ -1189,23 +1189,23 @@ Additional rules:
 
 The plan is complete only when:
 
-- [ ] every in-scope generation path is covered by reservation and settlement;
-- [ ] hard cost denial occurs before provider/process side effect;
-- [ ] parallel work cannot oversubscribe the in-process run budget;
-- [ ] usage-derived, admission-bound, local, subscription, and unknown remain
+- [x] every in-scope generation path is covered by reservation and settlement;
+- [x] hard cost denial occurs before provider/process side effect;
+- [x] parallel work cannot oversubscribe the in-process run budget;
+- [x] usage-derived, admission-bound, local, subscription, and unknown remain
       distinct through replay and every operator projection;
-- [ ] open reservations remain conservative after crash/reopen;
-- [ ] cost persistence failure cannot cause provider replay;
-- [ ] old workspaces and snapshots remain readable;
-- [ ] team package input is structurally allowlisted;
-- [ ] deterministic package bytes and lock verification pass;
-- [ ] package inspection states that authenticity is unverified;
-- [ ] install is bounded, traversal-safe, collision-safe, staged, compiled,
+- [x] open reservations remain conservative after crash/reopen;
+- [x] cost persistence failure cannot cause provider replay;
+- [x] old workspaces and snapshots remain readable;
+- [x] team package input is structurally allowlisted;
+- [x] deterministic package bytes and lock verification pass;
+- [x] package inspection states that authenticity is unverified;
+- [x] install is bounded, traversal-safe, collision-safe, staged, compiled,
       and atomically published;
-- [ ] pack/install preserves normalized team configuration;
-- [ ] no Task Lease, Wakeup daemon, HTTP API, Web UI, cost-based route
+- [x] pack/install preserves normalized team configuration;
+- [x] no Task Lease, Wakeup daemon, HTTP API, Web UI, cost-based route
       selection, provider billing integration, registry, or signature system
       was introduced;
-- [ ] `go test ./...`, `go vet ./...`, and `golangci-lint run` pass.
+- [x] `go test ./...`, `go vet ./...`, and `golangci-lint run` pass.
 
 ## End
