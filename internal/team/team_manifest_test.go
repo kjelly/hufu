@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 func writeTeamManifest(t *testing.T, dir, content string) {
@@ -338,6 +340,54 @@ spec:
 	}
 	if !jsonEqual(t, legacyJSON, v1JSON) {
 		t.Errorf("legacy and v1alpha1 normalize differently:\n--- legacy ---\n%s\n--- v1alpha1 ---\n%s", legacyJSON, v1JSON)
+	}
+}
+
+func TestTeamCostPolicyLegacyAndV1Alpha1NormalizeIdentically(t *testing.T) {
+	manifests := []string{
+		`name: cost-team
+cost:
+  max-run-usd: "1.50"
+  warning-run-usd: "1.00"
+  unknown-price-policy: deny
+`,
+		`apiVersion: hufu.io/v1alpha1
+kind: AgentTeam
+metadata:
+  name: cost-team
+spec:
+  cost:
+    max-run-usd: "1.50"
+    warning-run-usd: "1.00"
+    unknown-price-policy: deny
+`,
+	}
+	var policies [2]agent.TeamConfig
+	for index, manifest := range manifests {
+		dir := t.TempDir()
+		writeTeamManifest(t, dir, manifest)
+		cfg, err := parseTeamYML(dir, nil)
+		if err != nil {
+			t.Fatalf("parse manifest %d: %v", index, err)
+		}
+		policies[index] = cfg
+	}
+	left, right := policies[0].CostPolicy, policies[1].CostPolicy
+	if left.UnknownPricePolicy != right.UnknownPricePolicy || left.MaxRunMicros == nil || right.MaxRunMicros == nil || *left.MaxRunMicros != *right.MaxRunMicros || left.WarningRunMicros == nil || right.WarningRunMicros == nil || *left.WarningRunMicros != *right.WarningRunMicros {
+		t.Fatalf("legacy policy %#v differs from v1alpha1 %#v", left, right)
+	}
+}
+
+func TestTeamCostPolicyRejectsUnknownAndNumericFields(t *testing.T) {
+	for _, costBlock := range []string{
+		"  max-run-usd: 1.50\n",
+		"  mystery: true\n",
+	} {
+		dir := t.TempDir()
+		writeTeamManifest(t, dir, "name: invalid-cost\ncost:\n"+costBlock)
+		if _, err := parseTeamYML(dir, nil); err == nil {
+			t.Fatalf("parseTeamYML accepted cost block:\n%s", costBlock)
+		}
 	}
 }
 

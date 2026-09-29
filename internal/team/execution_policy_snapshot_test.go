@@ -14,6 +14,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
@@ -188,10 +189,10 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	}
 	encodedSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
-		t.Fatalf("marshal v4 snapshot: %v", err)
+		t.Fatalf("marshal v5 snapshot: %v", err)
 	}
 	if strings.Contains(string(encodedSnapshot), `"legacy_provider"`) {
-		t.Fatalf("v4 snapshot wrote legacy_provider: %s", encodedSnapshot)
+		t.Fatalf("v5 snapshot wrote legacy_provider: %s", encodedSnapshot)
 	}
 
 	var codexWorld *ExecutionWorldPolicySnapshot
@@ -299,14 +300,28 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	}
 }
 
-func TestExecutionPolicySnapshotV4OmitsLegacyProviderAndReadsV3(t *testing.T) {
+func TestExecutionPolicySnapshotV5OmitsLegacyProviderAndReadsV4AndV3(t *testing.T) {
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 4, 3)
-	v4 := c.ExecutionPolicySnapshot()
-	if v4 == nil {
-		t.Fatal("missing v4 execution policy snapshot")
+	v5 := c.ExecutionPolicySnapshot()
+	if v5 == nil {
+		t.Fatal("missing v5 execution policy snapshot")
 	}
-	if err := validateExecutionPolicySnapshot(v4); err != nil {
-		t.Fatalf("validate v4 snapshot: %v", err)
+	if err := validateExecutionPolicySnapshot(v5); err != nil {
+		t.Fatalf("validate v5 snapshot: %v", err)
+	}
+
+	v4State, err := newExecutionPolicyStateForVersion(c, executionPolicyPreviousSnapshotVersion)
+	if err != nil {
+		t.Fatalf("build v4 compatibility snapshot: %v", err)
+	}
+	if v4State.snapshot.Version != executionPolicyPreviousSnapshotVersion || v4State.snapshot.Cost != nil {
+		t.Fatalf("v4 compatibility snapshot = %#v, want version 4 without cost", v4State.snapshot)
+	}
+	if err := validateExecutionPolicySnapshot(v4State.snapshot); err != nil {
+		t.Fatalf("validate v4 compatibility snapshot: %v", err)
+	}
+	if matches, matchErr := c.executionPolicySnapshotMatchesCurrent(v4State.snapshot); matchErr != nil || !matches {
+		t.Fatalf("v4 snapshot compatibility match = %v, err=%v", matches, matchErr)
 	}
 
 	v3State, err := newExecutionPolicyStateForVersion(c, executionPolicyLegacySnapshotVersion)
@@ -328,14 +343,48 @@ func TestExecutionPolicySnapshotV4OmitsLegacyProviderAndReadsV3(t *testing.T) {
 		t.Fatalf("v3 snapshot compatibility match = %v, err=%v", matches, err)
 	}
 
-	bad := cloneExecutionPolicySnapshot(v4)
+	bad := cloneExecutionPolicySnapshot(v5)
 	bad.ModelRoutes[0].LegacyProvider = "ollama"
 	bad.ConfigurationHash, err = executionPolicyConfigurationHash(bad)
 	if err != nil {
-		t.Fatalf("rehash invalid v4 snapshot: %v", err)
+		t.Fatalf("rehash invalid v5 snapshot: %v", err)
 	}
 	if err := validateExecutionPolicySnapshot(bad); err == nil || !strings.Contains(err.Error(), "legacy_provider") {
-		t.Fatalf("invalid v4 legacy provider error = %v, want rejection", err)
+		t.Fatalf("invalid v5 legacy provider error = %v, want rejection", err)
+	}
+}
+
+func TestExecutionPolicySnapshotFreezesRelevantCostPolicy(t *testing.T) {
+	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 4, 3)
+	policy, err := cost.ResolveRunPolicy(&cost.PolicyConfig{MaxRunUSD: "2", WarningRunUSD: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := cost.NewCatalog(map[string]cost.PriceConfig{
+		"remote/agent-model":    {BillingMode: cost.BillingMetered, InputUSDPerMillion: "2", OutputUSDPerMillion: "8"},
+		"remote/not-configured": {BillingMode: cost.BillingSubscription},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.session.Config.CostPolicy = policy
+	c.session.CostCatalog = catalog
+	state, err := newExecutionPolicyState(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.executionPolicy = state
+	snapshot := c.ExecutionPolicySnapshot()
+	if snapshot.Cost == nil || snapshot.Cost.PolicyHash == "" || snapshot.Cost.MaxRunMicros == nil || *snapshot.Cost.MaxRunMicros != 2_000_000 {
+		t.Fatalf("cost snapshot = %#v", snapshot.Cost)
+	}
+	if len(snapshot.Cost.Prices) != 1 || snapshot.Cost.Prices[0].ExecutionTarget != "remote/agent-model" {
+		t.Fatalf("relevant prices = %#v, want only remote/agent-model", snapshot.Cost.Prices)
+	}
+
+	c.session.Config.CostPolicy.WarningRunMicros = new(int64(500_000))
+	if err := c.ensureExecutionPolicySnapshot(); err == nil || !strings.Contains(err.Error(), "execution policy changed after coordinator startup") {
+		t.Fatalf("cost policy drift error = %v", err)
 	}
 }
 

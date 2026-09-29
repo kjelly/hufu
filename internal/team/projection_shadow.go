@@ -81,7 +81,7 @@ func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnaps
 			if err := validateExecutionPolicySnapshot(&candidate); err != nil {
 				return nil, fmt.Errorf("execution policy snapshot event %q is invalid: %w", event.ID, err)
 			}
-			if admitted != nil && admitted.Version >= executionPolicySnapshotVersion && admitted.ConfigurationHash != candidate.ConfigurationHash {
+			if admitted != nil && admitted.Version >= executionPolicyPreviousSnapshotVersion && admitted.ConfigurationHash != candidate.ConfigurationHash {
 				return nil, fmt.Errorf("execution policy snapshot events disagree: %s != %s", admitted.ConfigurationHash, candidate.ConfigurationHash)
 			}
 			admitted = cloneExecutionPolicySnapshot(&candidate)
@@ -96,7 +96,7 @@ func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnaps
 			if payload.SourceKind == "event_lineage" && !policyMigrationSourceMatches(payload, events[:index]) {
 				return nil, fmt.Errorf("execution policy migration event %q source disagrees with preceding lineage", event.ID)
 			}
-			if admitted != nil && admitted.Version >= executionPolicySnapshotVersion && admitted.ConfigurationHash != payload.Snapshot.ConfigurationHash {
+			if admitted != nil && admitted.Version >= executionPolicyPreviousSnapshotVersion && admitted.ConfigurationHash != payload.Snapshot.ConfigurationHash {
 				return nil, fmt.Errorf("execution policy migration events disagree: %s != %s", admitted.ConfigurationHash, payload.Snapshot.ConfigurationHash)
 			}
 			admitted = cloneExecutionPolicySnapshot(&payload.Snapshot)

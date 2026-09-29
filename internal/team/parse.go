@@ -16,6 +16,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
@@ -51,8 +52,11 @@ type TeamSession struct {
 	// each worker (by lower-case agent name) to one. None is persisted;
 	// admitted occurrences carry an ExecutionRouteBinding.
 	ExecutionRouteConfigs map[string]config.ExecutionRouteConfig
-	ExecutionRoutes       map[string]*ExecutionRouteDefinition
-	AgentExecutionRoutes  map[string]string
+	// CostCatalog is the host's validated global/project price catalog. It is
+	// immutable after setup and contains no provider credentials or endpoints.
+	CostCatalog          cost.Catalog
+	ExecutionRoutes      map[string]*ExecutionRouteDefinition
+	AgentExecutionRoutes map[string]string
 	// RunInputDefinitions is the normalized, immutable typed invocation-input
 	// contract declared by the team manifest.
 	RunInputDefinitions []RunInputDefinition
@@ -955,6 +959,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	}
 	if yc.MaxTotalTokens > 0 {
 		cfg.MaxTotalTokens = yc.MaxTotalTokens
+	}
+	cfg.CostPolicy, err = cost.ResolveRunPolicy(yc.Cost)
+	if err != nil {
+		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid cost policy: %w", err)
 	}
 	if yc.Acceptance != nil {
 		switch v := yc.Acceptance.(type) {

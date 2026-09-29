@@ -202,6 +202,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	displayTeamHeader(session, cliModelOverrides.WorkerModels)
 
 	cfg := config.LoadConfig()
+	costCatalog, err := cfg.Cost.Catalog()
+	if err != nil {
+		return nil, fmt.Errorf("resolve cost catalog: %w", err)
+	}
+	session.CostCatalog = costCatalog
 	if err := applyConfiguredBackends(session, cfg); err != nil {
 		return nil, err
 	}

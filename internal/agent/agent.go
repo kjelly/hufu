@@ -17,6 +17,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
@@ -376,6 +377,9 @@ type TeamConfig struct {
 	MaxWallClock int64
 	// MaxTotalTokens caps cumulative LLM token usage across the run (0 = unlimited).
 	MaxTotalTokens int64
+	// CostPolicy is the normalized generation-only economic policy. The global
+	// price catalog is host-owned and bound separately on TeamSession.
+	CostPolicy cost.RunPolicy
 	// Acceptance is an optional shell command run when the coordinator finishes;
 	// a non-zero exit marks the run as not-accepted.
 	Acceptance     string

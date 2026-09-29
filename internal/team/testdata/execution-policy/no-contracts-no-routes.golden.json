@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "team_max_concurrent": 4,
   "default_llm_backend": "ollama",
   "backends": [

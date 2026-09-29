@@ -85,7 +85,7 @@ func validateExecutionContextArtifactPolicy(version int, snapshot *ExecutionCont
 	if snapshot == nil {
 		return nil
 	}
-	if version != executionPolicySnapshotVersion {
+	if version < executionPolicyPreviousSnapshotVersion || version > executionPolicySnapshotVersion {
 		return fmt.Errorf("execution policy snapshot v%d cannot pin context artifacts", version)
 	}
 	policy := agent.ContextArtifactsPolicy{

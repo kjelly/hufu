@@ -6,22 +6,25 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
 // executionPolicySnapshotVersion is incremented only when the canonical
-// fingerprint input changes. New snapshots use version 4; version 3 remains
-// read-compatible until the append-only compatibility materializer replaces
-// it with a canonical v4 snapshot.
+// fingerprint input changes. New snapshots use version 5; versions 3 and 4
+// remain read-compatible. The append-only compatibility materializer may
+// replace a v3 snapshot with the current canonical version.
 const (
-	executionPolicyLegacySnapshotVersion = 3
-	executionPolicySnapshotVersion       = 4
+	executionPolicyLegacySnapshotVersion   = 3
+	executionPolicyPreviousSnapshotVersion = 4
+	executionPolicySnapshotVersion         = 5
 )
 
 // ExecutionPolicySnapshot is the durable, secret-free execution admission
@@ -54,8 +57,11 @@ type ExecutionPolicySnapshot struct {
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
 	// ContextArtifacts pins the opt-in tool-result offload limits. It is
 	// omitted when offload is disabled.
-	ContextArtifacts  *ExecutionContextArtifactPolicySnapshot `json:"context_artifacts,omitempty"`
-	ConfigurationHash string                                  `json:"configuration_hash"`
+	ContextArtifacts *ExecutionContextArtifactPolicySnapshot `json:"context_artifacts,omitempty"`
+	// Cost pins explicit generation-price entries used by this team and the
+	// effective team policy. It is omitted when neither is configured.
+	Cost              *cost.PolicySnapshot `json:"cost,omitempty"`
+	ConfigurationHash string               `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -79,7 +85,7 @@ type ExecutionModelRouteSnapshot struct {
 	Backend     string `json:"backend"`
 	ProviderKey string `json:"provider_key,omitempty"`
 	// LegacyProvider is retained only to decode and verify v3 snapshots. New
-	// v4 writers leave it empty, so it is omitted from all new durable state.
+	// v4 and newer writers leave it empty, so it is omitted from new state.
 	LegacyProvider string `json:"legacy_provider,omitempty"`
 }
 
@@ -248,7 +254,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	if c == nil || c.session == nil || c.providerManager == nil {
 		return nil, fmt.Errorf("execution policy snapshot requires an initialized coordinator")
 	}
-	if version != executionPolicyLegacySnapshotVersion && version != executionPolicySnapshotVersion {
+	if !supportedExecutionPolicySnapshotVersion(version) {
 		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
 	}
 	defaultBackend := execution.OllamaBackendName
@@ -260,7 +266,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		TeamMaxConcurrent: c.maxConcurrent,
 		DefaultLLMBackend: defaultBackend,
 	}
-	if version == executionPolicySnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
+	if version >= executionPolicyPreviousSnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
 		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
 		if err != nil {
 			return nil, fmt.Errorf("hash run input schema: %w", err)
@@ -272,7 +278,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		}
 		snapshot.RunInputPolicyHash = policyHash
 	}
-	if version == executionPolicySnapshotVersion {
+	if version >= executionPolicyPreviousSnapshotVersion {
 		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
 		snapshot.ExecutionRoutes = executionPolicyExecutionRoutes(c.session)
 		if c.session.ActionCatalog != nil {
@@ -288,6 +294,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		environmentByBackend: make(map[string][]string),
 		codexWorldByBackend:  make(map[string]executionPolicyCodexWorldState),
 	}
+	relevantCostTargets := make(map[string]struct{})
 
 	for _, ref := range c.providerManager.EffectiveProviderRefs() {
 		backend := execution.CanonicalTargetBackendName(ref.Name)
@@ -345,6 +352,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		if err != nil {
 			return nil, fmt.Errorf("resolve execution policy backend for %q: %w", input.model, err)
 		}
+		relevantCostTargets[target.String()] = struct{}{}
 		route := ExecutionModelRouteSnapshot{
 			Model:   input.model,
 			Backend: execution.CanonicalTargetBackendName(target.Backend),
@@ -364,6 +372,19 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			state.modelRouteByModel[input.model] = route
 		}
 		snapshot.ModelRoutes = append(snapshot.ModelRoutes, route)
+	}
+	if version == executionPolicySnapshotVersion {
+		prices := make([]cost.PriceSnapshot, 0, len(relevantCostTargets))
+		for _, target := range slices.Sorted(maps.Keys(relevantCostTargets)) {
+			if price, ok := c.session.CostCatalog.Resolve(target); ok {
+				prices = append(prices, price)
+			}
+		}
+		var err error
+		snapshot.Cost, err = cost.NewPolicySnapshot(c.session.Config.CostPolicy, prices)
+		if err != nil {
+			return nil, fmt.Errorf("freeze execution cost policy: %w", err)
+		}
 	}
 
 	for _, backend := range state.backendByName {
@@ -550,6 +571,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
 	clone.ContextArtifacts = cloneExecutionContextArtifactPolicy(snapshot.ContextArtifacts)
+	clone.Cost = cost.ClonePolicySnapshot(snapshot.Cost)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
 		clone.ExecutionWorlds[i] = snapshot.ExecutionWorlds[i]
@@ -563,7 +585,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if snapshot == nil {
 		return fmt.Errorf("execution policy snapshot is missing")
 	}
-	if snapshot.Version != executionPolicyLegacySnapshotVersion && snapshot.Version != executionPolicySnapshotVersion {
+	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
 	}
 	if len(snapshot.Backends) == 0 {
@@ -574,7 +596,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 			return fmt.Errorf("execution policy snapshot backend identity is incomplete")
 		}
 	}
-	if snapshot.Version == executionPolicySnapshotVersion {
+	if snapshot.Version >= executionPolicyPreviousSnapshotVersion {
 		for _, route := range snapshot.ModelRoutes {
 			if strings.TrimSpace(route.LegacyProvider) != "" {
 				return fmt.Errorf("execution policy snapshot v%d writes legacy_provider", snapshot.Version)
@@ -586,6 +608,12 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if err := validateExecutionContextArtifactPolicy(snapshot.Version, snapshot.ContextArtifacts); err != nil {
 		return err
+	}
+	if snapshot.Version < executionPolicySnapshotVersion && snapshot.Cost != nil {
+		return fmt.Errorf("execution policy snapshot v%d cannot pin cost policy", snapshot.Version)
+	}
+	if err := cost.ValidatePolicySnapshot(snapshot.Cost); err != nil {
+		return fmt.Errorf("execution policy snapshot cost: %w", err)
 	}
 	for _, world := range snapshot.ExecutionWorlds {
 		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
@@ -613,6 +641,10 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 		return fmt.Errorf("execution policy snapshot configuration hash does not match its contents")
 	}
 	return nil
+}
+
+func supportedExecutionPolicySnapshotVersion(version int) bool {
+	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion
 }
 
 func (s *executionPolicyState) teamMaxConcurrent() int {

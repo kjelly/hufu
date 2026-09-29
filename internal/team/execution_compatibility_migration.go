@@ -41,8 +41,8 @@ type ExecutionCompatibilityMigratedPayload struct {
 	CanonicalTask     json.RawMessage             `json:"canonical_task,omitempty"`
 }
 
-// ExecutionPolicySnapshotMigratedPayload is the analogous self-contained v4
-// policy snapshot replacement for one historical v3 policy event.
+// ExecutionPolicySnapshotMigratedPayload is the analogous self-contained
+// current policy snapshot replacement for one historical v3 policy event.
 type ExecutionPolicySnapshotMigratedPayload struct {
 	SchemaVersion int                     `json:"schema_version"`
 	BranchID      string                  `json:"branch_id"`
@@ -732,7 +732,7 @@ func buildPolicyCompatibilityPlan(branchID, sourceEventID, runID, sourceKind str
 	if snapshot == nil {
 		return executionCompatibilityPolicyPlan{}, false, fmt.Errorf("policy snapshot is nil")
 	}
-	if snapshot.Version >= executionPolicySnapshotVersion {
+	if snapshot.Version >= executionPolicyPreviousSnapshotVersion {
 		return executionCompatibilityPolicyPlan{}, false, nil
 	}
 	if err := validateExecutionPolicySnapshot(snapshot); err != nil {

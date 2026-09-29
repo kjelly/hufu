@@ -12,6 +12,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
@@ -198,6 +199,7 @@ type teamManifestSpecFields struct {
 	AutoApprove      bool                       `yaml:"auto-approve,omitempty"`
 	MaxWallClock     int64                      `yaml:"max-duration,omitempty"`
 	MaxTotalTokens   int64                      `yaml:"max-total-tokens,omitempty"`
+	Cost             *cost.PolicyConfig         `yaml:"cost,omitempty"`
 	Acceptance       interface{}                `yaml:"acceptance,omitempty"`
 	Rollback         string                     `yaml:"rollback,omitempty"`
 	ExecutionProfile string                     `yaml:"execution-profile,omitempty"`
