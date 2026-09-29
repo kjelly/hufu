@@ -143,74 +143,163 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 		if resolver == nil {
 			continue
 		}
+		resolverProvider, err := c.runInputResolverProvider(resolver)
+		if err != nil {
+			return nil, err
+		}
 		if allowSemantic && resolver.Mode == runInputResolverModeSemanticJSON {
-			if assignment, matched := c.resolveSemanticRunInputCandidate(ctx, prompt, explicit[definition.Name], definition, resolver, schemaHash); matched {
+			assignment, matched, err := c.resolveValidatedSemanticRunInput(ctx, prompt, explicit[definition.Name], definition, resolver, resolverProvider, schemaHash, runID)
+			if err != nil {
+				return nil, err
+			}
+			if matched {
 				assignments = append(assignments, assignment)
 				continue
 			}
 		}
-		if c.session.ProviderRegistry == nil {
-			return nil, errors.New("input_resolver_failed: action provider registry is unavailable")
+		response, err := c.callRunInputResolver(ctx, prompt, explicit[definition.Name], nil, definition, resolver, resolverProvider, schemaHash, runID, "fallback")
+		if err != nil {
+			return nil, err
 		}
-		provider, ok := c.session.ProviderRegistry.Get(resolver.Capability)
-		if !ok {
-			return nil, fmt.Errorf("input_resolver_failed: capability %q is not registered", resolver.Capability)
+		assignment, matched, err := resolverResponseAssignment(definition, resolver, prompt, response)
+		if err != nil {
+			return nil, err
 		}
-		resolverProvider, ok := provider.(RunInputResolverProvider)
-		if !ok {
-			return nil, fmt.Errorf("input_resolver_failed: provider for %q does not implement deterministic run input resolution", resolver.Capability)
-		}
-		resolverCtx := ctx
-		var cancel context.CancelFunc
-		if resolver.Timeout > 0 {
-			resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
-		}
-		invocationID := "run-input-resolver:" + runID + ":" + definition.Name + ":" + schemaHash
-		resolverCtx = WithActionEnvironment(resolverCtx, ActionEnvironment{
-			Workspace: c.session.Workspace, Repository: c.projectDir, TeamName: c.session.Config.Name,
-			RunID: runID, TaskID: "<run-input:" + definition.Name + ">", Attempt: 1, ActionInvocationID: invocationID,
-		})
-		response, resolveErr := resolverProvider.ResolveRunInput(resolverCtx, RunInputResolverRequest{
-			Type: "resolve_run_input", InputName: definition.Name, Prompt: prompt,
-			ExplicitValue: slices.Clone(explicit[definition.Name]), SchemaHash: schemaHash, ResolverID: resolver.ID,
-		})
-		if cancel != nil {
-			cancel()
-		}
-		if resolveErr != nil {
-			return nil, fmt.Errorf("input_resolver_failed: %s: %w", definition.Name, resolveErr)
-		}
-		if err := validateRunInputResolverResponse(response); err != nil {
-			return nil, fmt.Errorf("input_resolver_failed: %s: %w", definition.Name, err)
-		}
-		switch response.Status {
-		case "no_match":
-			continue
-		case "ambiguous":
-			return nil, fmt.Errorf("input_ambiguous: %s: %s", definition.Name, utils.RedactSecrets(response.Diagnostic))
-		case "invalid":
-			return nil, fmt.Errorf("input_invalid: %s: %s", definition.Name, utils.RedactSecrets(response.Diagnostic))
-		case "matched":
-			evidence := make([]InputEvidence, len(response.Evidence))
-			for index, item := range response.Evidence {
-				if item.End > len(prompt) {
-					return nil, fmt.Errorf("input_resolver_failed: %s evidence range exceeds invocation prompt", definition.Name)
-				}
-				evidence[index] = InputEvidence{Source: RunInputSourceResolver, Location: "invocation_prompt", Start: item.Start, End: item.End, Kind: item.Kind}
-			}
-			assignments = append(assignments, RunInputAssignment{
-				Name: definition.Name, RawValue: slices.Clone(response.Value), Source: RunInputSourceResolver,
-				ResolverID: resolver.ID, ResolverVersion: response.ResolverVersion, Evidence: evidence,
-			})
+		if matched {
+			assignments = append(assignments, assignment)
 		}
 	}
 	return assignments, nil
 }
 
-func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prompt string, explicit json.RawMessage, definition RunInputDefinition, resolver *RunInputResolverSpec, schemaHash string) (RunInputAssignment, bool) {
+func (c *Coordinator) runInputResolverProvider(resolver *RunInputResolverSpec) (RunInputResolverProvider, error) {
+	if c.session.ProviderRegistry == nil {
+		return nil, errors.New("input_resolver_failed: action provider registry is unavailable")
+	}
+	provider, ok := c.session.ProviderRegistry.Get(resolver.Capability)
+	if !ok {
+		return nil, fmt.Errorf("input_resolver_failed: capability %q is not registered", resolver.Capability)
+	}
+	resolverProvider, ok := provider.(RunInputResolverProvider)
+	if !ok {
+		return nil, fmt.Errorf("input_resolver_failed: provider for %q does not implement deterministic run input resolution", resolver.Capability)
+	}
+	return resolverProvider, nil
+}
+
+func (c *Coordinator) callRunInputResolver(ctx context.Context, prompt string, explicit, candidate json.RawMessage, definition RunInputDefinition, resolver *RunInputResolverSpec, provider RunInputResolverProvider, schemaHash, runID, stage string) (RunInputResolverResponse, error) {
+	resolverCtx := ctx
+	var cancel context.CancelFunc
+	if resolver.Timeout > 0 {
+		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
+	}
+	if cancel != nil {
+		defer cancel()
+	}
+	invocationID := "run-input-resolver:" + runID + ":" + definition.Name + ":" + schemaHash + ":" + stage
+	resolverCtx = WithActionEnvironment(resolverCtx, ActionEnvironment{
+		Workspace: c.session.Workspace, Repository: c.projectDir, TeamName: c.session.Config.Name,
+		RunID: runID, TaskID: "<run-input:" + definition.Name + ">", Attempt: 1, ActionInvocationID: invocationID,
+	})
+	response, err := provider.ResolveRunInput(resolverCtx, RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: definition.Name, Prompt: prompt,
+		ExplicitValue: slices.Clone(explicit), CandidateValue: slices.Clone(candidate), SchemaHash: schemaHash, ResolverID: resolver.ID,
+	})
+	if err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("input_resolver_failed: %s: %w", definition.Name, err)
+	}
+	if err := validateRunInputResolverResponse(response); err != nil {
+		return RunInputResolverResponse{}, fmt.Errorf("input_resolver_failed: %s: %w", definition.Name, err)
+	}
+	return response, nil
+}
+
+func resolverResponseAssignment(definition RunInputDefinition, resolver *RunInputResolverSpec, prompt string, response RunInputResolverResponse) (RunInputAssignment, bool, error) {
+	switch response.Status {
+	case "no_match":
+		return RunInputAssignment{}, false, nil
+	case "ambiguous":
+		return RunInputAssignment{}, false, fmt.Errorf("input_ambiguous: %s: %s", definition.Name, utils.RedactSecrets(response.Diagnostic))
+	case "invalid":
+		return RunInputAssignment{}, false, fmt.Errorf("input_invalid: %s: %s", definition.Name, utils.RedactSecrets(response.Diagnostic))
+	case "matched":
+		evidence := make([]InputEvidence, len(response.Evidence))
+		for index, item := range response.Evidence {
+			if item.End > len(prompt) {
+				return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s evidence range exceeds invocation prompt", definition.Name)
+			}
+			evidence[index] = InputEvidence{Source: RunInputSourceResolver, Location: "invocation_prompt", Start: item.Start, End: item.End, Kind: item.Kind}
+		}
+		return RunInputAssignment{
+			Name: definition.Name, RawValue: slices.Clone(response.Value), Source: RunInputSourceResolver,
+			ResolverID: resolver.ID, ResolverVersion: response.ResolverVersion, Evidence: evidence,
+		}, true, nil
+	default:
+		return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s returned unsupported status %q", definition.Name, response.Status)
+	}
+}
+
+type semanticRunInputCandidate struct {
+	assignment RunInputAssignment
+	raw        json.RawMessage
+	status     string
+	diagnostic string
+}
+
+func (c *Coordinator) resolveValidatedSemanticRunInput(ctx context.Context, prompt string, explicit json.RawMessage, definition RunInputDefinition, resolver *RunInputResolverSpec, provider RunInputResolverProvider, schemaHash, runID string) (RunInputAssignment, bool, error) {
+	candidate := c.resolveSemanticRunInputCandidate(ctx, prompt, explicit, definition, resolver, schemaHash, nil, "")
+	if candidate.status == "no_match" {
+		return RunInputAssignment{}, false, nil
+	}
+	repaired := false
+	validationAttempt := 0
+	for {
+		if candidate.status == "invalid" {
+			if repaired {
+				return RunInputAssignment{}, false, fmt.Errorf("input_invalid: %s: semantic candidate remained invalid after one repair: %s", definition.Name, utils.RedactSecrets(candidate.diagnostic))
+			}
+			repaired = true
+			candidate = c.resolveSemanticRunInputCandidate(ctx, prompt, explicit, definition, resolver, schemaHash, candidate.raw, candidate.diagnostic)
+			if candidate.status == "no_match" {
+				return RunInputAssignment{}, false, fmt.Errorf("input_invalid: %s: semantic repair returned no value", definition.Name)
+			}
+			continue
+		}
+
+		validationAttempt++
+		response, err := c.callRunInputResolver(ctx, prompt, explicit, candidate.assignment.RawValue, definition, resolver, provider, schemaHash, runID, fmt.Sprintf("candidate-%d", validationAttempt))
+		if err != nil {
+			return RunInputAssignment{}, false, err
+		}
+		switch response.Status {
+		case "matched":
+			if len(response.Evidence) != 0 {
+				return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s candidate validator returned prompt evidence", definition.Name)
+			}
+			validated, err := validateAndCanonicalizeRunInput(definition.Schema, response.Value)
+			if err != nil {
+				return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s validator returned an invalid typed value: %w", definition.Name, err)
+			}
+			if !bytes.Equal(validated, candidate.assignment.RawValue) {
+				return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s validator changed the semantic candidate instead of validating it", definition.Name)
+			}
+			candidate.assignment.ResolverVersion = semanticRunInputResolverVersion + "+" + response.ResolverVersion
+			return candidate.assignment, true, nil
+		case "invalid":
+			candidate.status = "invalid"
+			candidate.diagnostic = response.Diagnostic
+		case "ambiguous":
+			return RunInputAssignment{}, false, fmt.Errorf("input_ambiguous: %s: %s", definition.Name, utils.RedactSecrets(response.Diagnostic))
+		case "no_match":
+			return RunInputAssignment{}, false, fmt.Errorf("input_resolver_failed: %s candidate validator returned no_match", definition.Name)
+		}
+	}
+}
+
+func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prompt string, explicit json.RawMessage, definition RunInputDefinition, resolver *RunInputResolverSpec, schemaHash string, previous json.RawMessage, diagnostic string) semanticRunInputCandidate {
 	semanticResolver := c.semanticRunInputResolver()
 	if semanticResolver == nil {
-		return RunInputAssignment{}, false
+		return semanticRunInputCandidate{status: "no_match"}
 	}
 	resolverCtx := ctx
 	var cancel context.CancelFunc
@@ -219,26 +308,30 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 	}
 	raw, err := semanticResolver.Resolve(resolverCtx, SemanticRunInputRequest{
 		InputName: definition.Name, Prompt: prompt, Schema: definition.Schema, SchemaHash: schemaHash,
-		ResolverID: resolver.ID, ExplicitValue: slices.Clone(explicit),
+		ResolverID: resolver.ID, ExplicitValue: slices.Clone(explicit), Guidance: resolver.SemanticGuidance,
+		PreviousValue: slices.Clone(previous), Diagnostic: diagnostic,
 	})
 	if cancel != nil {
 		cancel()
 	}
 	if err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return RunInputAssignment{}, false
+		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "no_match"}
 	}
 	canonical, err := validateAndCanonicalizeRunInput(definition.Schema, raw)
 	if err != nil {
-		return RunInputAssignment{}, false
+		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "invalid", diagnostic: err.Error()}
 	}
 	if semanticJSONContainsCommand(canonical) {
-		return RunInputAssignment{}, false
+		return semanticRunInputCandidate{raw: slices.Clone(canonical), status: "invalid", diagnostic: "semantic candidate contains a command-shaped value"}
 	}
-	return RunInputAssignment{
-		Name: definition.Name, RawValue: canonical, Source: RunInputSourceResolver,
-		ResolverID: resolver.ID, ResolverVersion: semanticRunInputResolverVersion,
-		Evidence: []InputEvidence{{Source: RunInputSourceResolver, Location: "invocation_prompt", Kind: "semantic_json"}},
-	}, true
+	return semanticRunInputCandidate{
+		raw: slices.Clone(canonical), status: "matched",
+		assignment: RunInputAssignment{
+			Name: definition.Name, RawValue: canonical, Source: RunInputSourceResolver,
+			ResolverID: resolver.ID, ResolverVersion: semanticRunInputResolverVersion,
+			Evidence: []InputEvidence{{Source: RunInputSourceResolver, Location: "invocation_prompt", Kind: "semantic_json"}},
+		},
+	}
 }
 
 func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*RunInputSnapshot, error) {

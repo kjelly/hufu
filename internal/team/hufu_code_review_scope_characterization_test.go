@@ -36,6 +36,9 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	if definition.Name != "review.scope" || definition.Resolver == nil || definition.Resolver.ID != "review-scope-v1" || definition.Resolver.Mode != runInputResolverModeSemanticJSON {
 		t.Fatalf("review scope definition = %#v", definition)
 	}
+	if !strings.Contains(definition.Resolver.SemanticGuidance, "named commit") || !strings.Contains(definition.Resolver.SemanticGuidance, "working_tree") {
+		t.Fatalf("review scope semantic guidance = %q", definition.Resolver.SemanticGuidance)
+	}
 	if string(definition.Default) != `{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}` {
 		t.Fatalf("review scope default = %s", definition.Default)
 	}
@@ -106,6 +109,24 @@ func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testi
 		if response.Status != "no_match" || len(response.Value) != 0 || len(response.Evidence) != 0 {
 			t.Fatalf("deterministic resolver inferred prompt %q: %#v", prompt, response)
 		}
+	}
+	commit := "af6205cd743eba5b62412d9f4347952c74f37576"
+	invalid, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review commit " + commit,
+		ExplicitValue: json.RawMessage(`null`), CandidateValue: json.RawMessage(`{"kind":"working_tree","history":"first_parent","head":"` + commit + `"}`),
+		SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+	})
+	if err != nil || invalid.Status != "invalid" || !strings.Contains(invalid.Diagnostic, "requires head HEAD") {
+		t.Fatalf("invalid semantic candidate response = %#v, err = %v", invalid, err)
+	}
+	validValue := json.RawMessage(`{"kind":"last_n","count":1,"history":"first_parent","head":"` + commit + `"}`)
+	valid, err := resolver.ResolveRunInput(t.Context(), RunInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", Prompt: "Review commit " + commit,
+		ExplicitValue: json.RawMessage(`null`), CandidateValue: validValue,
+		SchemaHash: "sha256:fixture", ResolverID: "review-scope-v1",
+	})
+	if err != nil || valid.Status != "matched" || string(valid.Value) != string(validValue) {
+		t.Fatalf("valid semantic candidate response = %#v, err = %v", valid, err)
 	}
 	if name := session.ProviderRegistry.ProviderName("resolve-review-scope"); !strings.HasPrefix(name, "golang:sha256:") {
 		t.Fatalf("provider identity = %q", name)

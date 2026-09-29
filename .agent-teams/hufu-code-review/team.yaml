@@ -69,6 +69,15 @@ spec:
         source: invocation_prompt
         side_effect: none
         timeout: 10
+        semantic-guidance: |
+          Interpret only the requested Git review scope; do not infer it from domain keywords.
+          A named commit or "latest commit" means kind=last_n with count=1 and head set to that revision or HEAD.
+          "Latest N commits" means kind=last_n with count=N and the requested head, defaulting to HEAD.
+          An explicit base and head means kind=revision_range with those two revisions.
+          A YYYY-MM-DD lower bound means kind=since with since set to that date.
+          kind=working_tree is only for staged, unstaged, or untracked changes, always uses head=HEAD, and never carries count, base, since, or commit_type.
+          Never use kind=working_tree for a named commit, commit hash, committed revision, or commit history.
+          Return null when the scope remains ambiguous.
 
   # No agent selects codex by default. This configures the codex backend for
   # `--worker-model <agent>=codex/<model>` runs; the built-in defaults would

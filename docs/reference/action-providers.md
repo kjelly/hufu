@@ -250,13 +250,25 @@ An input may additionally declare `resolver.mode: semantic_json`. In that
 mode Hufu first asks its provider-bound sidecar to translate the invocation
 prompt into exactly one JSON value matching the input schema (or `null`). The
 sidecar cannot return a command, action payload, path request, or prose. Hufu
-strictly parses and schema-validates the value, stamps resolver provenance,
-and then passes the typed value to the normal typed consumer path. A valid
-semantic value replaces natural-language matching; the deterministic resolver
-is retained only as the unavailable/invalid-output fallback. `--dry-run` never
-invokes the semantic resolver. Command-shaped strings inside a semantic value
-are rejected before snapshot/event persistence and also use the deterministic
-fallback.
+strictly parses and schema-validates the value, then sends it to the declared
+resolver provider as `candidate_value`. The provider must deterministically
+validate team-owned cross-field rules and either return `matched` with the
+candidate unchanged or return `invalid` with a diagnostic. It must not infer
+meaning from the prompt or rewrite the candidate. Hufu allows one bounded
+semantic repair using that diagnostic and revalidates the repaired value before
+stamping resolver provenance and freezing the input snapshot. A second invalid
+candidate fails closed. The deterministic resolver remains the fallback only
+when semantic resolution is unavailable or returns `null`; invalid semantic
+output is never silently replaced by a default. `--dry-run` never invokes the
+semantic resolver. Command-shaped strings are rejected before provider
+validation or snapshot/event persistence.
+
+Team-owned vocabulary belongs in `resolver.semantic-guidance`. Hufu includes
+this bounded repository-authored text in the semantic conversion prompt while
+keeping the core runtime domain-neutral. For example, a review team can declare
+that a named commit maps to its `last_n` variant while `working_tree` is reserved
+for uncommitted changes. Guidance improves translation accuracy; the provider's
+candidate validation remains the authoritative safety boundary.
 
 Explicit `--input` or `--input-file` values do not bypass prompt resolution.
 Hufu compares each explicit value with the resolver candidate after canonical

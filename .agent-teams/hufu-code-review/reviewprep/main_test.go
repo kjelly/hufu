@@ -365,6 +365,25 @@ func TestResolveReviewScopeInputRejectsInvalidExplicitScope(t *testing.T) {
 	}
 }
 
+func TestResolveReviewScopeInputValidatesSemanticCandidate(t *testing.T) {
+	commit := "af6205cd743eba5b62412d9f4347952c74f37576"
+	invalid := resolveReviewScopeInput(runInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1",
+		CandidateValue: json.RawMessage(`{"kind":"working_tree","history":"first_parent","head":"` + commit + `"}`),
+	})
+	if invalid.Status != "invalid" || !strings.Contains(invalid.Diagnostic, "requires head HEAD") {
+		t.Fatalf("invalid candidate response = %#v", invalid)
+	}
+
+	value := json.RawMessage(`{"kind":"last_n","count":1,"history":"first_parent","head":"` + commit + `"}`)
+	matched := resolveReviewScopeInput(runInputResolverRequest{
+		Type: "resolve_run_input", InputName: "review.scope", ResolverID: "review-scope-v1", CandidateValue: value,
+	})
+	if matched.Status != "matched" || string(matched.Value) != string(value) || matched.ResolverVersion != scopeResolverVersion {
+		t.Fatalf("valid candidate response = %#v", matched)
+	}
+}
+
 func TestDecodeWireConfigRejectsInvalidMaxCommitsAndJSON(t *testing.T) {
 	for _, value := range []string{"0", "-1", "10.0", "text", `10\",\"unexpected\":true`, "101", "999999999999999999999999999999999999"} {
 		t.Run(value, func(t *testing.T) {

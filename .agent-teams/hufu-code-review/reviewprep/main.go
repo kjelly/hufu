@@ -28,7 +28,7 @@ import (
 
 const (
 	manifestSchemaVersion = 2
-	scopeResolverVersion  = "semantic-fallback-2"
+	scopeResolverVersion  = "semantic-validator-3"
 )
 
 const (
@@ -56,12 +56,13 @@ type resolverScope struct {
 }
 
 type runInputResolverRequest struct {
-	Type          string          `json:"type"`
-	InputName     string          `json:"input_name"`
-	Prompt        string          `json:"prompt"`
-	ExplicitValue json.RawMessage `json:"explicit_value"`
-	SchemaHash    string          `json:"schema_hash"`
-	ResolverID    string          `json:"resolver_id"`
+	Type           string          `json:"type"`
+	InputName      string          `json:"input_name"`
+	Prompt         string          `json:"prompt"`
+	ExplicitValue  json.RawMessage `json:"explicit_value"`
+	CandidateValue json.RawMessage `json:"candidate_value,omitempty"`
+	SchemaHash     string          `json:"schema_hash"`
+	ResolverID     string          `json:"resolver_id"`
 }
 
 type runInputResolverEvidence struct {
@@ -352,9 +353,26 @@ func resolveReviewScopeInput(request runInputResolverRequest) runInputResolverRe
 			return response
 		}
 	}
+	if len(request.CandidateValue) > 0 && string(request.CandidateValue) != "null" {
+		var candidate resolverScope
+		if err := decodeStrictJSON(request.CandidateValue, &candidate); err != nil {
+			response.Status = "invalid"
+			response.Diagnostic = "semantic review scope candidate is not a valid scope object"
+			return response
+		}
+		if err := validateRequestedScope(candidate); err != nil {
+			response.Status = "invalid"
+			response.Diagnostic = err.Error()
+			return response
+		}
+		response.Status = "matched"
+		response.Value = json.RawMessage(bytes.Clone(request.CandidateValue))
+		return response
+	}
 	// Natural-language interpretation belongs to Hufu's semantic_json model
 	// resolver. This deterministic provider is only the fail-closed fallback;
-	// it validates explicit structured input but never guesses scope from prose.
+	// it validates explicit input and semantic candidates but never guesses scope
+	// from prose.
 	response.Status = "no_match"
 	return response
 }

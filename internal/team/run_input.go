@@ -23,7 +23,7 @@ const (
 	runInputSnapshotVersion            = 1
 	runInputResolverModeDeterministic  = "deterministic"
 	runInputResolverModeSemanticJSON   = "semantic_json"
-	semanticRunInputResolverVersion    = "3"
+	semanticRunInputResolverVersion    = "4"
 	maxRunInputDefinitions             = 64
 	maxRunInputValueBytes              = 64 * 1024
 	maxRunInputSnapshotBytes           = 256 * 1024
@@ -35,6 +35,7 @@ const (
 	maxRunInputPromptBytes             = 256 * 1024
 	maxRunInputResolverOutputBytes     = 128 * 1024
 	maxRunInputResolverDiagnosticBytes = 8 * 1024
+	maxRunInputResolverGuidanceBytes   = 16 * 1024
 )
 
 var runInputNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -80,13 +81,14 @@ type runInputDefinitionYAML struct {
 }
 
 type RunInputResolverSpec struct {
-	ID         string `json:"id" yaml:"id"`
-	Capability string `json:"capability" yaml:"capability"`
-	Type       string `json:"type" yaml:"type"`
-	Mode       string `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Source     string `json:"source" yaml:"source"`
-	SideEffect string `json:"side_effect" yaml:"side_effect"`
-	Timeout    int    `json:"timeout" yaml:"timeout"`
+	ID               string `json:"id" yaml:"id"`
+	Capability       string `json:"capability" yaml:"capability"`
+	Type             string `json:"type" yaml:"type"`
+	Mode             string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Source           string `json:"source" yaml:"source"`
+	SideEffect       string `json:"side_effect" yaml:"side_effect"`
+	Timeout          int    `json:"timeout" yaml:"timeout"`
+	SemanticGuidance string `json:"semantic_guidance,omitempty" yaml:"semantic-guidance,omitempty"`
 }
 
 type RunInputDefinition struct {
@@ -155,12 +157,13 @@ type runInputCandidate struct {
 }
 
 type RunInputResolverRequest struct {
-	Type          string          `json:"type"`
-	InputName     string          `json:"input_name"`
-	Prompt        string          `json:"prompt"`
-	ExplicitValue json.RawMessage `json:"explicit_value"`
-	SchemaHash    string          `json:"schema_hash"`
-	ResolverID    string          `json:"resolver_id"`
+	Type           string          `json:"type"`
+	InputName      string          `json:"input_name"`
+	Prompt         string          `json:"prompt"`
+	ExplicitValue  json.RawMessage `json:"explicit_value"`
+	CandidateValue json.RawMessage `json:"candidate_value,omitempty"`
+	SchemaHash     string          `json:"schema_hash"`
+	ResolverID     string          `json:"resolver_id"`
 }
 
 type RunInputResolverEvidence struct {
@@ -345,6 +348,12 @@ func validateRunInputResolver(resolver *RunInputResolverSpec) error {
 	}
 	if len(resolver.ID) > 256 || len(resolver.Capability) > 256 || len(resolver.Type) > 256 {
 		return errors.New("id, capability, and type must not exceed 256 bytes")
+	}
+	if len(resolver.SemanticGuidance) > maxRunInputResolverGuidanceBytes {
+		return fmt.Errorf("semantic-guidance must not exceed %d bytes", maxRunInputResolverGuidanceBytes)
+	}
+	if resolver.Mode != runInputResolverModeSemanticJSON && strings.TrimSpace(resolver.SemanticGuidance) != "" {
+		return errors.New("semantic-guidance requires mode semantic_json")
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ type testRunInputResolverProvider struct {
 	response RunInputResolverResponse
 	err      error
 	requests []RunInputResolverRequest
+	resolve  func(RunInputResolverRequest) (RunInputResolverResponse, error)
 }
 
 func (*testRunInputResolverProvider) Validate(Action) error { return nil }
@@ -27,6 +28,9 @@ func (*testRunInputResolverProvider) Execute(context.Context, Action) (any, erro
 }
 func (p *testRunInputResolverProvider) ResolveRunInput(_ context.Context, request RunInputResolverRequest) (RunInputResolverResponse, error) {
 	p.requests = append(p.requests, request)
+	if p.resolve != nil {
+		return p.resolve(request)
+	}
 	return p.response, p.err
 }
 
@@ -174,6 +178,26 @@ func TestRunInputResolverResponseFailsClosed(t *testing.T) {
 				t.Fatalf("accepted response %#v", response)
 			}
 		})
+	}
+}
+
+func TestRunInputResolverSemanticGuidanceValidation(t *testing.T) {
+	base := RunInputResolverSpec{
+		ID: "scope-v1", Capability: "resolve-scope", Type: "resolve_scope",
+		Source: "invocation_prompt", SideEffect: "none", Timeout: 1,
+	}
+	deterministic := base
+	deterministic.Mode = runInputResolverModeDeterministic
+	deterministic.SemanticGuidance = "interpret the request"
+	if err := validateRunInputResolver(&deterministic); err == nil || !strings.Contains(err.Error(), "requires mode semantic_json") {
+		t.Fatalf("deterministic semantic guidance error = %v", err)
+	}
+
+	oversized := base
+	oversized.Mode = runInputResolverModeSemanticJSON
+	oversized.SemanticGuidance = strings.Repeat("x", maxRunInputResolverGuidanceBytes+1)
+	if err := validateRunInputResolver(&oversized); err == nil || !strings.Contains(err.Error(), "must not exceed") {
+		t.Fatalf("oversized semantic guidance error = %v", err)
 	}
 }
 
