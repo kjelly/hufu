@@ -2,6 +2,23 @@ package cost
 
 import "fmt"
 
+// EstimateAdmission returns the conservative pre-transport estimate for any
+// resolved billing mode. Metered token prices use request and output bounds;
+// opaque metered prices use their configured invocation maximum.
+func EstimateAdmission(price PriceSnapshot, inputTokens, maxOutputTokens int64) (Estimate, error) {
+	switch price.BillingMode {
+	case BillingMetered:
+		if hasTokenPrice(price) {
+			return EstimateTokenAdmissionBound(price, inputTokens, maxOutputTokens)
+		}
+		return EstimateOpaqueBound(price)
+	case BillingLocal, BillingSubscription, BillingUnknown:
+		return EstimateUsageCost(price, TokenUsage{})
+	default:
+		return Estimate{}, fmt.Errorf("unsupported billing mode %q", price.BillingMode)
+	}
+}
+
 func EstimateUsageCost(price PriceSnapshot, usage TokenUsage) (Estimate, error) {
 	if err := validateUsage(usage); err != nil {
 		return Estimate{}, err

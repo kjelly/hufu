@@ -90,6 +90,11 @@ var numericTelemetryKeys = map[string]struct{}{
 	"progress_tokens":       {},
 	"cache_read_tokens":     {},
 	"cache_creation_tokens": {},
+	// Cost reservation bounds are typed numeric telemetry. Keeping these
+	// numbers intact is required for durable replay; arbitrary values under
+	// other token-named keys remain redacted.
+	"estimated_input_tokens": {},
+	"reserved_output_tokens": {},
 	// token_count is the per-item token estimate in a memory injection
 	// manifest. It matches the secret-key regex ("token") but is numeric
 	// telemetry, not a credential; redacting it corrupts session.json and

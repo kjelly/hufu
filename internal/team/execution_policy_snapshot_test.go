@@ -32,6 +32,8 @@ type executionPolicySnapshotCoordinatorOptions struct {
 	workerExtraModels     []string
 	codexWorkerNoNet      bool
 	subjectRoot           string
+	costPolicy            cost.RunPolicy
+	costCatalog           cost.Catalog
 }
 
 func defaultExecutionPolicyCodexConfig() agent.SubagentProviderConfig {
@@ -63,6 +65,7 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 			WorkerModel:       "remote/worker-model",
 			CoordinatorModel:  "remote/coordinator-model",
 			GuardModel:        "remote/config-guard-model",
+			CostPolicy:        options.costPolicy,
 			Providers: map[string]config.ProviderConfig{
 				"ollama": {MaxConcurrent: 2},
 				"remote": {MaxConcurrent: remoteLimit},
@@ -71,6 +74,7 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 				codexSubagentProviderName: options.codexConfig,
 			},
 		},
+		CostCatalog: options.costCatalog,
 		Agents: map[string]*agent.AgentDef{
 			"worker": {
 				Name:        "worker",
@@ -150,6 +154,9 @@ func TestExecutionPolicySnapshotFreezesPolicyBeforeTaskAdmission(t *testing.T) {
 	t.Setenv("CODEX_HOME", firstCodexHome)
 
 	c := newExecutionPolicySnapshotCoordinator(t, workspace, 4, 3)
+	if c.costManager != nil {
+		t.Fatal("cost manager enabled for a team without a frozen cost policy")
+	}
 	c.initEventStore()
 	if err := c.checkRunAdmission(); err != nil {
 		t.Fatalf("freeze execution policy: %v", err)
@@ -355,7 +362,6 @@ func TestExecutionPolicySnapshotV5OmitsLegacyProviderAndReadsV4AndV3(t *testing.
 }
 
 func TestExecutionPolicySnapshotFreezesRelevantCostPolicy(t *testing.T) {
-	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 4, 3)
 	policy, err := cost.ResolveRunPolicy(&cost.PolicyConfig{MaxRunUSD: "2", WarningRunUSD: "1"})
 	if err != nil {
 		t.Fatal(err)
@@ -367,19 +373,18 @@ func TestExecutionPolicySnapshotFreezesRelevantCostPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.session.Config.CostPolicy = policy
-	c.session.CostCatalog = catalog
-	state, err := newExecutionPolicyState(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.executionPolicy = state
+	c := newExecutionPolicySnapshotCoordinatorWithOptions(t, t.TempDir(), 4, 3, executionPolicySnapshotCoordinatorOptions{
+		codexConfig: defaultExecutionPolicyCodexConfig(), costPolicy: policy, costCatalog: catalog,
+	})
 	snapshot := c.ExecutionPolicySnapshot()
 	if snapshot.Cost == nil || snapshot.Cost.PolicyHash == "" || snapshot.Cost.MaxRunMicros == nil || *snapshot.Cost.MaxRunMicros != 2_000_000 {
 		t.Fatalf("cost snapshot = %#v", snapshot.Cost)
 	}
 	if len(snapshot.Cost.Prices) != 1 || snapshot.Cost.Prices[0].ExecutionTarget != "remote/agent-model" {
 		t.Fatalf("relevant prices = %#v, want only remote/agent-model", snapshot.Cost.Prices)
+	}
+	if c.costManager == nil {
+		t.Fatal("coordinator did not initialize its root cost manager from the frozen policy")
 	}
 
 	c.session.Config.CostPolicy.WarningRunMicros = new(int64(500_000))

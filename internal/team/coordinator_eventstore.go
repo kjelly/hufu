@@ -159,6 +159,11 @@ func (c *Coordinator) initEventStore() {
 		branchEvents := FilterEventsForBranch(events, st, activeBranch)
 		c.hydrateContextWindowTelemetry(branchEvents)
 		c.rebuildTeamActionProposals(branchEvents)
+		if c.costManager != nil {
+			if costErr := c.costManager.Rehydrate(branchEvents); costErr != nil {
+				c.markSessionRecovery("cost ledger replay failed: " + utils.RedactSecrets(costErr.Error()))
+			}
+		}
 	}
 	// Reconcile and validate the canonical event binding before publishing any
 	// restored history to the coordinator/provider path.

@@ -628,6 +628,10 @@ type Coordinator struct {
 	// scheduler and backend semaphores consume this immutable state instead of
 	// reading live team/provider configuration.
 	executionPolicy *executionPolicyState
+	// costManager is the root-owned economic ledger created from executionPolicy.
+	// Extra-model coordinators share this pointer so reservations serialize
+	// across the complete in-process run.
+	costManager *CostManager
 	// attemptExecutionTargets maps an in-flight task to the target its
 	// current attempt runs on (a route fallback may differ from the frozen
 	// primary). It feeds telemetry only.
@@ -1579,6 +1583,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
 	}
 	c.executionPolicy = executionPolicy
+	c.costManager = newCostManager(executionPolicy.snapshot.Cost)
 	auditLogger, err := audit.NewAuditLogger(session.Workspace, session.Config.Name)
 	if err == nil {
 		c.auditLogger = auditLogger

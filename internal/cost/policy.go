@@ -151,8 +151,8 @@ func ValidatePolicySnapshot(snapshot *PolicySnapshot) error {
 		return fmt.Errorf("cost policy snapshot warning exceeds max")
 	}
 	for index, price := range snapshot.Prices {
-		if strings.TrimSpace(price.ID) == "" || strings.TrimSpace(price.ExecutionTarget) == "" || strings.TrimSpace(price.CatalogHash) == "" {
-			return fmt.Errorf("cost policy snapshot price is incomplete")
+		if err := ValidatePriceSnapshot(price); err != nil {
+			return fmt.Errorf("cost policy snapshot price: %w", err)
 		}
 		if index > 0 && snapshot.Prices[index-1].ExecutionTarget >= price.ExecutionTarget {
 			return fmt.Errorf("cost policy snapshot prices are not in strict target order")

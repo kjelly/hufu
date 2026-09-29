@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,8 +15,9 @@ import (
 )
 
 const (
-	priceHashDomain   = "hufu-cost-price-v1\x00"
-	catalogHashDomain = "hufu-cost-catalog-v1\x00"
+	priceHashDomain             = "hufu-cost-price-v1\x00"
+	catalogHashDomain           = "hufu-cost-catalog-v1\x00"
+	unresolvedCatalogHashDomain = "hufu-cost-unresolved-catalog-v1\x00"
 )
 
 // PriceConfig is the authored hufu.yaml representation of one execution
@@ -152,7 +154,15 @@ func compilePrice(target string, config PriceConfig) (PriceSnapshot, error) {
 	default:
 		return PriceSnapshot{}, fmt.Errorf("cost price %q: unsupported billing-mode %q", target, snapshot.BillingMode)
 	}
-	snapshot.ID, err = hashJSON(priceHashDomain, struct {
+	snapshot.ID, err = priceSnapshotID(snapshot)
+	if err != nil {
+		return PriceSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func priceSnapshotID(snapshot PriceSnapshot) (string, error) {
+	return hashJSON(priceHashDomain, struct {
 		ExecutionTarget              string      `json:"execution_target"`
 		BillingMode                  BillingMode `json:"billing_mode"`
 		InputMicrosPerMillion        *int64      `json:"input_micros_per_million,omitempty"`
@@ -161,15 +171,77 @@ func compilePrice(target string, config PriceConfig) (PriceSnapshot, error) {
 		OutputMicrosPerMillion       *int64      `json:"output_micros_per_million,omitempty"`
 		OpaqueMaxMicrosPerInvocation *int64      `json:"opaque_max_micros_per_invocation,omitempty"`
 	}{
-		ExecutionTarget: target, BillingMode: snapshot.BillingMode,
+		ExecutionTarget: snapshot.ExecutionTarget, BillingMode: snapshot.BillingMode,
 		InputMicrosPerMillion: snapshot.InputMicrosPerMillion, CacheReadMicrosPerMillion: snapshot.CacheReadMicrosPerMillion,
 		CacheWriteMicrosPerMillion: snapshot.CacheWriteMicrosPerMillion, OutputMicrosPerMillion: snapshot.OutputMicrosPerMillion,
 		OpaqueMaxMicrosPerInvocation: snapshot.OpaqueMaxMicrosPerInvocation,
 	})
+}
+
+// NewUnknownPriceSnapshot returns the deterministic runtime representation of
+// a canonical target that has no authored catalog entry. Its catalog hash is
+// explicitly an unresolved-target digest, not the identity of an authored
+// catalog.
+func NewUnknownPriceSnapshot(target string) (PriceSnapshot, error) {
+	selector, err := execution.ParseExecutionSelector(target)
+	if err != nil || selector.Backend == "" || selector.Backend+"/"+selector.Model != target {
+		return PriceSnapshot{}, fmt.Errorf("unknown cost target %q must be canonical and backend-qualified", target)
+	}
+	snapshot := PriceSnapshot{ExecutionTarget: target, BillingMode: BillingUnknown}
+	snapshot.ID, err = priceSnapshotID(snapshot)
+	if err != nil {
+		return PriceSnapshot{}, err
+	}
+	snapshot.CatalogHash, err = hashJSON(unresolvedCatalogHashDomain, struct {
+		ExecutionTarget string `json:"execution_target"`
+	}{ExecutionTarget: target})
 	if err != nil {
 		return PriceSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// ValidatePriceSnapshot verifies a resolved snapshot without consulting live
+// configuration. It accepts runtime-derived unknown snapshots but authored
+// catalogs still reject BillingUnknown in compilePrice.
+func ValidatePriceSnapshot(snapshot PriceSnapshot) error {
+	if strings.TrimSpace(snapshot.ID) == "" || strings.TrimSpace(snapshot.ExecutionTarget) == "" || strings.TrimSpace(snapshot.CatalogHash) == "" {
+		return fmt.Errorf("cost price snapshot is incomplete")
+	}
+	selector, err := execution.ParseExecutionSelector(snapshot.ExecutionTarget)
+	if err != nil || selector.Backend == "" || selector.Backend+"/"+selector.Model != snapshot.ExecutionTarget {
+		return fmt.Errorf("cost price snapshot target %q is not canonical", snapshot.ExecutionTarget)
+	}
+	switch snapshot.BillingMode {
+	case BillingMetered:
+		if hasTokenPrice(snapshot) {
+			for _, value := range []*int64{snapshot.InputMicrosPerMillion, snapshot.CacheReadMicrosPerMillion, snapshot.CacheWriteMicrosPerMillion, snapshot.OutputMicrosPerMillion} {
+				if value == nil || *value < 0 {
+					return fmt.Errorf("cost price snapshot has invalid token rate")
+				}
+			}
+		} else if snapshot.OpaqueMaxMicrosPerInvocation == nil || *snapshot.OpaqueMaxMicrosPerInvocation < 0 {
+			return fmt.Errorf("cost price snapshot metered price is unbounded")
+		}
+	case BillingLocal, BillingSubscription, BillingUnknown:
+		if hasAnyPriceField(snapshot) {
+			return fmt.Errorf("cost price snapshot %s mode must not define rates", snapshot.BillingMode)
+		}
+	default:
+		return fmt.Errorf("cost price snapshot has unsupported billing mode %q", snapshot.BillingMode)
+	}
+	wantID, err := priceSnapshotID(snapshot)
+	if err != nil {
+		return err
+	}
+	if snapshot.ID != wantID {
+		return fmt.Errorf("cost price snapshot ID does not match its contents")
+	}
+	return nil
+}
+
+func hasAnyPriceField(snapshot PriceSnapshot) bool {
+	return snapshot.InputMicrosPerMillion != nil || snapshot.CacheReadMicrosPerMillion != nil || snapshot.CacheWriteMicrosPerMillion != nil || snapshot.OutputMicrosPerMillion != nil || snapshot.OpaqueMaxMicrosPerInvocation != nil
 }
 
 func hashJSON(domain string, value any) (string, error) {

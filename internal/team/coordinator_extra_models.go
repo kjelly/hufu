@@ -709,6 +709,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		forcedSkillNames:                   forcedSkillNamesClone,
 		maxConcurrent:                      orig.maxConcurrent,
 		executionPolicy:                    orig.executionPolicy,
+		costManager:                        orig.costManager,
 		providerSemState:                   providerSemState,
 		backendSemState:                    backendSemState,
 		sessionTime:                        orig.sessionTime,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/executioncompat"
 )
 
@@ -110,6 +111,17 @@ func ValidateEventPayload(event RunEvent) error {
 		return validateRunFinishedEventPayload(event)
 	case EventTeamActionProposed:
 		return validateTeamActionProposedPayload(event)
+	case EventCostPriceSnapshotResolved, EventCostReservationCommitted, EventCostSettled, EventCostBudgetWarning, EventCostBudgetDenied:
+		costEvent, err := cost.DecodeEvent(event.Type, event.Payload)
+		if err != nil {
+			return err
+		}
+		if costEventRunID(costEvent) != event.RunID {
+			return fmt.Errorf("%s payload run_id does not match event envelope", event.Type)
+		}
+		if costEventTaskID(costEvent) != event.TaskID || costEventAttempt(costEvent) != event.Attempt {
+			return fmt.Errorf("%s payload task occurrence does not match event envelope", event.Type)
+		}
 	case EventRunInputsResolved:
 		var snapshot RunInputSnapshot
 		decoder := json.NewDecoder(bytes.NewReader(event.Payload))

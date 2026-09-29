@@ -1,5 +1,7 @@
 package team
 
+import "github.com/kjelly/hufu/internal/cost"
+
 // EventType is the stable catalog identifier for a runtime event. RunEvent
 // deliberately keeps Type as a string so existing JSONL workspaces and API
 // callers remain source and wire compatible while producers migrate.
@@ -72,7 +74,7 @@ const (
 	// replacement for a legacy task execution identity. It is written only by
 	// the explicit append-only compatibility materializer.
 	EventExecutionCompatibilityMigrated EventType = "execution_compatibility_migrated"
-	// EventExecutionPolicySnapshotMigrated carries a canonical v4 policy
+	// EventExecutionPolicySnapshotMigrated carries a current canonical policy
 	// snapshot for one historical v3 snapshot subject.
 	EventExecutionPolicySnapshotMigrated EventType = "execution_policy_snapshot_migrated"
 	// EventExecutionCompatibilityObserved is a metadata-only observation that
@@ -106,7 +108,12 @@ const (
 	EventExecutionFallbackDecided EventType = "execution_fallback_decided"
 	// EventTeamActionProposed records a worker's typed recommendation that the
 	// coordinator run one catalog action with specific arguments.
-	EventTeamActionProposed EventType = "team_action_proposed"
+	EventTeamActionProposed        EventType = "team_action_proposed"
+	EventCostPriceSnapshotResolved EventType = EventType(cost.EventPriceSnapshotResolved)
+	EventCostReservationCommitted  EventType = EventType(cost.EventReservationCommitted)
+	EventCostSettled               EventType = EventType(cost.EventSettled)
+	EventCostBudgetWarning         EventType = EventType(cost.EventBudgetWarning)
+	EventCostBudgetDenied          EventType = EventType(cost.EventBudgetDenied)
 )
 
 func (e EventType) String() string { return string(e) }
@@ -137,7 +144,8 @@ func IsKnownEventType(eventType string) bool {
 		EventResourceLocked, EventWorkspaceSnapshotCommitted,
 		EventAttemptWorkspacePrepared, EventAttemptWorkspaceApplyStarted, EventAttemptWorkspaceApplyConflicted,
 		EventAttemptWorkspaceApplied, EventAttemptWorkspaceDiscarded, EventAttemptWorkspaceOrphanRemoved,
-		EventExecutionFallbackDecided, EventTeamActionProposed:
+		EventExecutionFallbackDecided, EventTeamActionProposed,
+		EventCostPriceSnapshotResolved, EventCostReservationCommitted, EventCostSettled, EventCostBudgetWarning, EventCostBudgetDenied:
 		return true
 	default:
 		return false
