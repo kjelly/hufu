@@ -17,28 +17,52 @@ import (
 
 // Archive is a fully bounded, hash-verified V1 team package held in memory.
 type Archive struct {
-	Manifest Manifest
-	Lock     Lock
-	Files    map[string][]byte
+	Manifest      Manifest
+	Lock          Lock
+	Files         map[string][]byte
+	ArchiveSHA256 string
+	ArchiveSize   int64
 }
 
 // ReadArchive reads and validates a local package without extracting it.
 func ReadArchive(filename string) (*Archive, error) {
-	info, err := os.Stat(filename)
+	data, err := readArchiveData(filename)
 	if err != nil {
-		return nil, fmt.Errorf("stat team package: %w", err)
+		return nil, err
+	}
+	return ReadArchiveBytes(data)
+}
+
+func readArchiveData(filename string) ([]byte, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("open team package: %w", err)
+	}
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("stat team package: %w", statErr)
 	}
 	if !info.Mode().IsRegular() {
+		_ = file.Close()
 		return nil, validationError(filename, validationFieldArchive, "archive_not_regular")
 	}
 	if info.Size() > MaxArchiveBytes {
+		_ = file.Close()
 		return nil, validationError(filename, validationFieldArchive, "archive_too_large")
 	}
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("read team package: %w", err)
+	data, readErr := io.ReadAll(io.LimitReader(file, int64(MaxArchiveBytes)+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read team package: %w", readErr)
 	}
-	return ReadArchiveBytes(data)
+	if closeErr != nil {
+		return nil, fmt.Errorf("close team package: %w", closeErr)
+	}
+	if len(data) > MaxArchiveBytes {
+		return nil, validationError(filename, validationFieldArchive, "archive_too_large")
+	}
+	return data, nil
 }
 
 // ReadArchiveBytes validates archive structure, bounds, metadata, lock hashes,
@@ -116,7 +140,11 @@ func ReadArchiveBytes(data []byte) (*Archive, error) {
 	if err := validateSourceFiles(manifest.TeamManifest, files); err != nil {
 		return nil, err
 	}
-	return &Archive{Manifest: manifest, Lock: lock, Files: files}, nil
+	sum := sha256.Sum256(data)
+	return &Archive{
+		Manifest: manifest, Lock: lock, Files: files,
+		ArchiveSHA256: hex.EncodeToString(sum[:]), ArchiveSize: int64(len(data)),
+	}, nil
 }
 
 func decodeManifest(data []byte) (Manifest, error) {

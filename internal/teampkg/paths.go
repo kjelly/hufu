@@ -75,6 +75,19 @@ func ValidateEntryPath(value string) error {
 	return nil
 }
 
+// ValidatePackageName requires a package identity that is also safe as one
+// installation-directory component. Team names may otherwise contain any
+// character accepted by the existing compiler.
+func ValidatePackageName(value string) error {
+	if err := ValidateEntryPath(value); err != nil {
+		return validationError(value, "name", "package_name_invalid")
+	}
+	if strings.Contains(value, "/") {
+		return validationError(value, "name", "package_name_not_component")
+	}
+	return nil
+}
+
 func hasWindowsDrivePrefix(value string) bool {
 	return len(value) >= 2 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':'
 }
