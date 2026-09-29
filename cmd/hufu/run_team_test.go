@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -197,16 +198,57 @@ func TestIsInteractiveEnvironment(t *testing.T) {
 }
 
 func TestRenderExecutionSummary(t *testing.T) {
-	summary := executionSummary{teams: []string{"dev"}, workspaces: []string{"/tmp/workspace"}, total: 4, done: 1, errored: 1, skipped: 1, pending: 1}
+	summary := executionSummary{
+		teams: []string{"dev"}, workspaces: []string{"/tmp/workspace"}, total: 4, done: 1, errored: 1, skipped: 1, pending: 1,
+		costs: []executionCostSummary{{team: "dev", view: cost.View{
+			SchemaVersion: cost.ViewSchemaVersion, Coverage: "generation_only", Available: true, RunID: "run-summary",
+			KnownMicros: new(int64(420_000)), UnknownInvocations: 1, OpenReservationCount: 2, Integrity: "ok",
+		}}},
+	}
 	res := &team.RunResult{
 		Outcome: team.RunOutcomePartial, StopReason: team.StopReasonBudgetExceeded, GoalMode: team.GoalModeOutcome,
 		UnresolvedTasks: []team.TaskReference{{ID: "task-7", Status: string(team.TaskError), RetryDisposition: team.ReplanRequired, NextAction: team.RecoveryNextAction(team.ReplanRequired)}},
 	}
 	out := formatExecutionSummary(summary, 3*time.Second, []*team.RunResult{res})
+	if !strings.Contains(out, "Cost:") || !strings.Contains(out, "$0.420000 known · 1 unknown · 2 open (generation_only)") {
+		t.Fatalf("execution summary missing canonical cost view:\n%s", out)
+	}
 	for _, want := range []string{"Team:      dev", "1 done", "3s", "Outcome:   partial", "Status:    Budget exhausted", "Recovery:  replan_required", "task task-7", "materially changed plan"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q: %q", want, out)
 		}
+	}
+}
+
+func TestExecutionReportUsesCanonicalCostView(t *testing.T) {
+	data := &reportData{
+		StartedAt: time.Now(), SourceRunID: "run-report", EvidenceIdentity: "unavailable",
+		Cost: &cost.View{
+			SchemaVersion: cost.ViewSchemaVersion, Coverage: "generation_only", Available: true, RunID: "run-report",
+			KnownMicros: new(int64(420_000)), UsageDerivedMicros: new(int64(300_000)),
+			AdmissionBoundMicros: new(int64(100_000)), OpenReservationMicros: new(int64(20_000)),
+			OpenReservationCount: 1, UnknownInvocations: 1, LocalInvocations: 2, SubscriptionInvocations: 3,
+			BudgetMicros: new(int64(1_000_000)), RemainingMicros: new(int64(580_000)), Integrity: "ok",
+		},
+	}
+	report := buildReportMD(data, "demo", "done")
+	for _, want := range []string{
+		"## Generation Cost", "**Coverage:** `generation_only`", "**Usage-derived:** $0.300000",
+		"**Admission-bound:** $0.100000", "**Open reservations:** $0.020000 (1)",
+		"**Unknown / local / subscription:** 1 / 2 / 3", "**Remaining:** $0.580000",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestExecutionSummaryMakesCostIntegrityFailureExplicit(t *testing.T) {
+	output := formatExecutionSummary(executionSummary{
+		teams: []string{"dev"}, total: 1, done: 1, costErrors: []string{"dev"},
+	}, time.Second, nil)
+	if !strings.Contains(output, "Cost dev: unavailable (integrity degraded)") {
+		t.Fatalf("cost integrity failure was hidden:\n%s", output)
 	}
 }
 

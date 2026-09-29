@@ -101,6 +101,13 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Learning:         learning,
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
+	costView, err := team.ProjectCostView(selected.runEvents, bound.Scope.RunID, "")
+	if err != nil {
+		return nil, fmt.Errorf("%w: project run cost: %v", ErrIntegrity, err)
+	}
+	if costView.Available {
+		snapshot.Cost = &costView
+	}
 	recovery := RecoveryEligibilityForTasks(tasks, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
 	if recovery != nil {
 		snapshot.Attention = operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", recovery.ExternalEffectState)

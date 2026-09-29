@@ -4,6 +4,8 @@
 // owns database, provider, or runtime mutation behavior.
 package operator
 
+import "github.com/kjelly/hufu/internal/cost"
+
 const SchemaVersion = 1
 
 const (
@@ -58,6 +60,7 @@ type OperatorSnapshot struct {
 	LatestChanges    []ChangeView       `json:"latest_changes"`
 	RoleTargets      []RoleTargetView   `json:"role_targets"`
 	Learning         LearningView       `json:"learning"`
+	Cost             *cost.View         `json:"cost,omitempty"`
 	PrimaryAction    *ActionSuggestion  `json:"primary_action"`
 	SecondaryActions []ActionSuggestion `json:"secondary_actions"`
 }

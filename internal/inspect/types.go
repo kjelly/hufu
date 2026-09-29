@@ -23,6 +23,7 @@ const (
 	KindReplay   Kind = "replay"
 	KindStorage  Kind = "storage"
 	KindOverview Kind = "overview"
+	KindCost     Kind = "cost"
 )
 
 type Format string
@@ -89,6 +90,10 @@ func (q InspectQuery) Validate(kind Kind) error {
 		if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" ||
 			strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
 			return fmt.Errorf("%w: overview accepts only workspace, run, branch, and session", ErrInvalidQuery)
+		}
+	case KindCost:
+		if q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" || strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+			return fmt.Errorf("%w: cost accepts only workspace, run, task, branch, and session", ErrInvalidQuery)
 		}
 	case KindStorage:
 		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||

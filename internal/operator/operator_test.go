@@ -1,9 +1,13 @@
 package operator
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/cost"
 )
 
 func TestResolveWorkspacePathModes(t *testing.T) {
@@ -154,6 +158,32 @@ func TestNormalizeSnapshotClonesPointersAndRejectsUnknownEnums(t *testing.T) {
 	snapshot.Activity.State = "future_activity"
 	if _, err := FinalizeSnapshot(snapshot); err == nil {
 		t.Fatal("unknown activity was accepted")
+	}
+}
+
+func TestOperatorSnapshotCostIsOptionalAndCloned(t *testing.T) {
+	legacy := testSnapshot()
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"cost"`) {
+		t.Fatalf("legacy snapshot gained a cost field: %s", encoded)
+	}
+
+	known := int64(250_000)
+	withCost := testSnapshot()
+	withCost.Cost = &cost.View{
+		SchemaVersion: cost.ViewSchemaVersion, Coverage: "generation_only", Available: true,
+		RunID: "run-1", KnownMicros: &known, Integrity: "ok",
+	}
+	normalized := NormalizeSnapshot(withCost)
+	known = 900_000
+	if normalized.Cost == nil || normalized.Cost.KnownMicros == nil || *normalized.Cost.KnownMicros != 250_000 {
+		t.Fatalf("normalized cost aliases source: %#v", normalized.Cost)
+	}
+	if _, err := FinalizeSnapshot(withCost); err != nil {
+		t.Fatal(err)
 	}
 }
 

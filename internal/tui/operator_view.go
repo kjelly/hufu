@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -40,7 +41,7 @@ func (m *Model) loadOperatorContent() {
 
 func (m Model) buildOperatorContent() string {
 	var output strings.Builder
-	output.WriteString(m.styles.header.Render("─── Evidence · Context · Learning · Promotion ───"))
+	output.WriteString(m.styles.header.Render("─── Evidence · Cost · Context · Learning · Promotion ───"))
 	output.WriteString("\n\n")
 	output.WriteString(m.styles.bold.Render("Evidence"))
 	output.WriteByte('\n')
@@ -54,6 +55,24 @@ func (m Model) buildOperatorContent() string {
 			m.operatorEvidence.Artifacts, m.operatorEvidence.Findings)
 		output.WriteString(m.styles.dim.Render("Only audit-verified verdicts are verification; raw claims remain claims."))
 		output.WriteByte('\n')
+	}
+
+	output.WriteString("\n" + m.styles.bold.Render("Cost") + "\n")
+	if m.operatorSnapshot.Cost == nil || !m.operatorSnapshot.Cost.Available {
+		output.WriteString(m.styles.dim.Render("unavailable: no canonical generation-cost projection"))
+		output.WriteByte('\n')
+	} else {
+		view := m.operatorSnapshot.Cost
+		fmt.Fprintf(&output, "known=%s usage=%s admission=%s open=%s (%d)\n",
+			operatorCostMicros(view.KnownMicros, view.UnknownInvocations > 0), operatorCostMicros(view.UsageDerivedMicros, false),
+			operatorCostMicros(view.AdmissionBoundMicros, false), operatorCostMicros(view.OpenReservationMicros, view.OpenReservationCount > 0),
+			view.OpenReservationCount)
+		fmt.Fprintf(&output, "unknown=%d local=%d subscription=%d coverage=%s integrity=%s\n",
+			view.UnknownInvocations, view.LocalInvocations, view.SubscriptionInvocations,
+			sanitizeTerminalText(view.Coverage), sanitizeTerminalText(view.Integrity))
+		if view.BudgetMicros != nil {
+			fmt.Fprintf(&output, "budget=%s remaining=%s\n", operatorCostMicros(view.BudgetMicros, true), operatorCostMicros(view.RemainingMicros, true))
+		}
 	}
 
 	output.WriteString("\n" + m.styles.bold.Render("Context") + "\n")
@@ -155,6 +174,20 @@ func operatorCount(value *int64) string {
 		return "unknown"
 	}
 	return fmt.Sprintf("%d", *value)
+}
+
+func operatorCostMicros(value *int64, unavailableWhenNil bool) string {
+	if value == nil {
+		if unavailableWhenNil {
+			return "unavailable"
+		}
+		return "$0.000000"
+	}
+	formatted, err := cost.FormatUSDMicros(*value)
+	if err != nil {
+		return "unavailable"
+	}
+	return "$" + formatted
 }
 
 func unknownIfEmpty(value string) string {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+
+	"github.com/kjelly/hufu/internal/cost"
 )
 
 const snapshotHashDomain = "hufu-operator-snapshot-v1\x00"
@@ -40,6 +42,10 @@ func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
 	snapshot.Learning.AppliedEditedPromotions = clonePointer(snapshot.Learning.AppliedEditedPromotions)
 	snapshot.Learning.AppliedEditUnknownPromotions = clonePointer(snapshot.Learning.AppliedEditUnknownPromotions)
 	snapshot.Learning.OpenConflicts = clonePointer(snapshot.Learning.OpenConflicts)
+	if snapshot.Cost != nil {
+		costView := snapshot.Cost.Clone()
+		snapshot.Cost = &costView
+	}
 	snapshot.Activity.RawTaskStates = cloneSorted(snapshot.Activity.RawTaskStates)
 	snapshot.Activity.RawReasonCodes = cloneSorted(snapshot.Activity.RawReasonCodes)
 	snapshot.Integrity.ReasonCodes = cloneSorted(snapshot.Integrity.ReasonCodes)
@@ -185,6 +191,14 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 			return fmt.Errorf("operator snapshot learning counter %s must not be negative", counter.name)
 		}
 	}
+	if snapshot.Cost != nil {
+		if err := cost.ValidateView(*snapshot.Cost); err != nil {
+			return fmt.Errorf("operator snapshot cost: %w", err)
+		}
+		if snapshot.Cost.RunID != snapshot.Scope.RunID {
+			return fmt.Errorf("operator snapshot cost run %q does not match scope %q", snapshot.Cost.RunID, snapshot.Scope.RunID)
+		}
+	}
 	return nil
 }
 
@@ -258,6 +272,7 @@ func ComputeSnapshotID(snapshot OperatorSnapshot) (string, error) {
 		LatestChanges []ChangeView     `json:"latest_changes"`
 		RoleTargets   []RoleTargetView `json:"role_targets"`
 		Learning      LearningView     `json:"learning"`
+		Cost          *cost.View       `json:"cost,omitempty"`
 	}
 	blockers := make([]diagnosticHash, 0, len(snapshot.Blockers))
 	for _, blocker := range snapshot.Blockers {
@@ -281,6 +296,7 @@ func ComputeSnapshotID(snapshot OperatorSnapshot) (string, error) {
 		LatestChanges: snapshot.LatestChanges,
 		RoleTargets:   snapshot.RoleTargets,
 		Learning:      snapshot.Learning,
+		Cost:          snapshot.Cost,
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {

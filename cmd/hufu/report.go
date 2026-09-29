@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/cost"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
@@ -143,6 +144,8 @@ type reportData struct {
 	HistoricalTodoCount   int
 	ModelProfiles         []modelprofile.TelemetryProjection
 	ReviewScope           *reviewScopeReport
+	Cost                  *cost.View
+	CostUnavailableReason string
 	// Workers is the canonical worker attempt projection of the active
 	// branch; nil when it could not be loaded.
 	Workers *inspectpkg.WorkerAttempts
@@ -296,6 +299,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if d.EvidenceIdentity == "" {
 		d.EvidenceIdentity = "unavailable"
 	}
+	d.Cost, d.CostUnavailableReason = gatherReportCost(tc, d.SourceRunID)
 	if tc.session != nil {
 		var metrics *team.RunMetrics
 		if d.RunResult != nil {
@@ -387,6 +391,20 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.ReviewScope = nil
 	}
 	return d
+}
+
+func gatherReportCost(tc *teamContext, runID string) (*cost.View, string) {
+	if tc == nil || tc.coordinator == nil || runID == "run-unavailable" {
+		return nil, ""
+	}
+	view, err := tc.coordinator.CostView(runID, "")
+	if err != nil {
+		return nil, err.Error()
+	}
+	if view == nil || !view.Available {
+		return nil, ""
+	}
+	return view, ""
 }
 
 func gatherRuntimeReviewScope(todos []*team.TodoItem) *reviewScopeReport {
@@ -740,6 +758,24 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	fmt.Fprintf(&b, "- **Evidence identity:** `%s`\n\n", reportSafeMetadata(data.EvidenceIdentity, 160))
 	if data.CanonicalRunError != "" {
 		fmt.Fprintf(&b, "> ⚠️ Canonical run snapshot was not accepted: %s\n\n", reportSafeMetadata(data.CanonicalRunError, 240))
+	}
+	if data.Cost != nil && data.Cost.Available {
+		b.WriteString("## Generation Cost\n\n")
+		fmt.Fprintf(&b, "- **Coverage:** `%s`\n", reportSafeMetadata(data.Cost.Coverage, 40))
+		fmt.Fprintf(&b, "- **Usage-derived:** %s\n", formatCostMicros(data.Cost.UsageDerivedMicros, false))
+		fmt.Fprintf(&b, "- **Admission-bound:** %s\n", formatCostMicros(data.Cost.AdmissionBoundMicros, false))
+		fmt.Fprintf(&b, "- **Open reservations:** %s (%d)\n", formatCostMicros(data.Cost.OpenReservationMicros, data.Cost.OpenReservationCount > 0), data.Cost.OpenReservationCount)
+		fmt.Fprintf(&b, "- **Unknown / local / subscription:** %d / %d / %d\n", data.Cost.UnknownInvocations, data.Cost.LocalInvocations, data.Cost.SubscriptionInvocations)
+		if data.Cost.BudgetMicros != nil {
+			fmt.Fprintf(&b, "- **Budget:** %s\n", formatCostMicros(data.Cost.BudgetMicros, true))
+		}
+		if data.Cost.RemainingMicros != nil && data.Cost.Integrity == "ok" {
+			fmt.Fprintf(&b, "- **Remaining:** %s\n", formatCostMicros(data.Cost.RemainingMicros, true))
+		}
+		fmt.Fprintf(&b, "- **Integrity:** `%s`\n\n", reportSafeMetadata(data.Cost.Integrity, 40))
+	} else if data.CostUnavailableReason != "" {
+		b.WriteString("## Generation Cost\n\n")
+		fmt.Fprintf(&b, "> ⚠️ Cost projection unavailable: %s\n\n", reportSafeMetadata(data.CostUnavailableReason, 240))
 	}
 	if data.RunResult != nil {
 		b.WriteString(renderResolvedRunInputs(data.RunResult.RunInputs, finalResult))

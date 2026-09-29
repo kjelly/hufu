@@ -95,6 +95,7 @@ func TestInspectDoesNotPersistNewTruth(t *testing.T) {
 		func() error { _, err := InspectEvidence(t.Context(), base); return err },
 		func() error { _, err := InspectTrace(t.Context(), base); return err },
 		func() error { _, err := InspectReplay(t.Context(), base); return err },
+		func() error { _, err := InspectCost(t.Context(), base); return err },
 		func() error {
 			query := base
 			query.TaskID = fixture.taskID
@@ -111,6 +112,18 @@ func TestInspectDoesNotPersistNewTruth(t *testing.T) {
 	after := snapshotInspectWorkspace(t, fixture.workspace)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("inspection changed workspace\nbefore: %#v\nafter:  %#v", before, after)
+	}
+}
+
+func TestInspectCostOldWorkspaceIsUnavailableNotZero(t *testing.T) {
+	fixture := buildRunFixture(t)
+	envelope, err := InspectCost(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, ok := envelope.Data.(CostData)
+	if !ok || data.Available || data.KnownMicros != nil || data.Integrity != "ok" {
+		t.Fatalf("old workspace cost = %#v", envelope.Data)
 	}
 }
 

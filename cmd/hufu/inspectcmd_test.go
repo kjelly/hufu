@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
@@ -40,6 +41,92 @@ func TestInspectCommandRunJSON(t *testing.T) {
 	}
 }
 
+func TestInspectCommandCostJSONAndTextUseCanonicalProjection(t *testing.T) {
+	workspace, runID, taskID := buildInspectCommandFixture(t)
+	t.Run("json task filter", func(t *testing.T) {
+		command := newInspectCommand()
+		var stdout bytes.Buffer
+		command.SetOut(&stdout)
+		command.SetErr(&bytes.Buffer{})
+		command.SetArgs([]string{"--workspace", workspace, "--format", "json", "cost", runID, "--task", taskID})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Kind inspectpkg.Kind     `json:"kind"`
+			Data inspectpkg.CostData `json:"data"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode cost output: %v\n%s", err, stdout.String())
+		}
+		if envelope.Kind != inspectpkg.KindCost || !envelope.Data.Available || envelope.Data.KnownMicros == nil || *envelope.Data.KnownMicros != 200_000 || envelope.Data.TaskID != taskID {
+			t.Fatalf("cost envelope = %#v", envelope)
+		}
+		if envelope.Data.Freshness.EventID == "" || envelope.Data.Freshness.EventHash == "" {
+			t.Fatalf("cost freshness = %#v", envelope.Data.Freshness)
+		}
+		for _, secret := range []string{"inspect CLI", "private worker output", "provider.example", "sk-fixture-secret"} {
+			if strings.Contains(stdout.String(), secret) {
+				t.Fatalf("cost JSON exposed %q: %s", secret, stdout.String())
+			}
+		}
+	})
+
+	t.Run("text resolves sole run", func(t *testing.T) {
+		command := newInspectCommand()
+		var stdout bytes.Buffer
+		command.SetOut(&stdout)
+		command.SetErr(&bytes.Buffer{})
+		command.SetArgs([]string{"--workspace", workspace, "cost"})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Coverage: generation_only", "Run: " + runID, "Usage-derived: $0.200000", "Unknown invocations: 0", "Integrity: ok", "Freshness: event="} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Fatalf("cost text missing %q:\n%s", want, stdout.String())
+			}
+		}
+	})
+}
+
+func TestInspectCommandCostMissingWorkspaceDoesNotCreateIt(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "missing")
+	command := newInspectCommand()
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--workspace", workspace, "cost", "run-missing"})
+	if err := command.Execute(); err == nil {
+		t.Fatal("cost inspection unexpectedly succeeded")
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("cost inspection created missing workspace: %v", err)
+	}
+}
+
+func TestRenderInspectCostTextDistinguishesEstimateModes(t *testing.T) {
+	data := inspectpkg.CostData{View: cost.View{
+		SchemaVersion: cost.ViewSchemaVersion, Coverage: "generation_only", Available: true,
+		RunID: "run-cost", TaskID: "task-cost", UsageDerivedMicros: new(int64(384_200)),
+		AdmissionBoundMicros: new(int64(100_000)), OpenReservationMicros: new(int64(20_000)),
+		OpenReservationCount: 1, UnknownInvocations: 1, LocalInvocations: 4, SubscriptionInvocations: 2,
+		BudgetMicros: new(int64(1_500_000)), RemainingMicros: new(int64(995_800)), Integrity: "ok",
+		Freshness: cost.Freshness{EventID: "event-cost", EventHash: "hash-cost"},
+	}}
+	var output bytes.Buffer
+	if err := renderInspectText(&output, &inspectpkg.Envelope{Kind: inspectpkg.KindCost, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Usage-derived: $0.384200", "Admission-bound: $0.100000", "Open reservations: $0.020000",
+		"Unknown invocations: 1", "Local invocations: 4", "Subscription calls: 2",
+		"Budget: $1.500000", "Remaining: $0.995800", "Integrity: ok", "event=event-cost hash=hash-cost",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("cost text missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestInspectCommandOverviewJSONUsesQuerySuccessContract(t *testing.T) {
 	workspace, runID, _ := buildInspectCommandFixture(t)
 	command := newInspectCommand()
@@ -62,6 +149,9 @@ func TestInspectCommandOverviewJSONUsesQuerySuccessContract(t *testing.T) {
 	}
 	if envelope.Data.Snapshot.Outcome.RunOutcome != string(team.RunOutcomePartial) || envelope.Data.Snapshot.Scope.RunID != runID {
 		t.Fatalf("overview snapshot = %#v", envelope.Data.Snapshot)
+	}
+	if envelope.Data.Snapshot.Cost == nil || envelope.Data.Snapshot.Cost.KnownMicros == nil || *envelope.Data.Snapshot.Cost.KnownMicros != 200_000 {
+		t.Fatalf("overview cost = %#v", envelope.Data.Snapshot.Cost)
 	}
 	if envelope.Data.Snapshot.PrimaryAction == nil || envelope.Data.Snapshot.PrimaryAction.ID != operatorpkg.ActionReviewResult {
 		t.Fatalf("overview action = %#v", envelope.Data.Snapshot.PrimaryAction)
@@ -488,11 +578,50 @@ func buildInspectCommandFixture(t *testing.T) (workspace, runID, taskID string) 
 		}
 	}
 	target := execution.ExecutionTarget{Backend: "ollama", Model: "frozen-cli-model"}
-	appendEvent(team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: inspectCommandJSON(t, map[string]any{"goal": "inspect CLI"})})
+	appendEvent(team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: inspectCommandJSON(t, map[string]any{
+		"goal": "inspect CLI", "provider_url": "https://provider.example/v1", "api_key": "sk-fixture-secret",
+	})})
 	appendEvent(team.RunEvent{Type: "task_created", Actor: "coordinator", TaskID: taskID, Payload: inspectCommandJSON(t, map[string]any{
 		"id": taskID, "status": team.TaskPending, "agent": "worker", "execution_target": target,
 		"execution_topology": []execution.ExecutionTarget{target},
 	})})
+	catalog, err := cost.NewCatalog(map[string]cost.PriceConfig{
+		"openai/gpt": {BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, ok := catalog.Resolve("openai/gpt")
+	if !ok {
+		t.Fatal("cost fixture price is unavailable")
+	}
+	identity := cost.InvocationIdentity{
+		ProviderInvocationID: "pinv-cli-inspect", RunID: runID, TaskID: taskID, OccurrenceAttempt: 1,
+		Agent: "worker", Role: "worker", Purpose: cost.PurposeWorker,
+	}
+	reservation := cost.ReservationEvent{
+		SchemaVersion: cost.EventSchemaVersion, InvocationIdentity: identity, ExecutionTarget: "openai/gpt", PriceSnapshotID: price.ID,
+		EstimatedInputTokens: 500_000, ReservedOutputTokens: 500_000, ReservedMicros: new(int64(1_000_000)),
+		EstimateSource: cost.EstimateAdmissionBound, BillingMode: cost.BillingMetered, ReservedAt: "2026-09-29T00:00:00Z",
+	}
+	settlement := cost.SettlementEvent{
+		SchemaVersion: cost.EventSchemaVersion, InvocationIdentity: identity, ExecutionTarget: "openai/gpt", PriceSnapshotID: price.ID,
+		Usage: new(cost.TokenUsage{InputTokens: 100_000, OutputTokens: 100_000, TotalTokens: 200_000}), FinalMicros: new(int64(200_000)),
+		EstimateSource: cost.EstimateUsage, BillingMode: cost.BillingMetered, Outcome: cost.OutcomeSuccess, SettledAt: "2026-09-29T00:00:01Z",
+	}
+	appendCost := func(kind team.EventType, event cost.Event, task string, attempt int) {
+		t.Helper()
+		payload, encodeErr := cost.EncodeEvent(event)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		appendEvent(team.RunEvent{Type: string(kind), Actor: "runtime", TaskID: task, Attempt: attempt, Payload: payload})
+	}
+	appendCost(team.EventCostPriceSnapshotResolved, cost.Event{Kind: cost.EventPriceSnapshotResolved, Price: &cost.PriceSnapshotResolvedEvent{
+		SchemaVersion: cost.EventSchemaVersion, RunID: runID, Price: price,
+	}}, "", 0)
+	appendCost(team.EventCostReservationCommitted, cost.Event{Kind: cost.EventReservationCommitted, Reservation: &reservation}, taskID, 1)
+	appendCost(team.EventCostSettled, cost.Event{Kind: cost.EventSettled, Settlement: &settlement}, taskID, 1)
 	appendEvent(team.RunEvent{Type: "task_completed", Actor: "worker", TaskID: taskID, Payload: inspectCommandJSON(t, map[string]any{
 		"id": taskID, "status": team.TaskDone, "agent": "worker", "output": "private worker output", "execution_target": target,
 		"execution_topology": []execution.ExecutionTarget{target},

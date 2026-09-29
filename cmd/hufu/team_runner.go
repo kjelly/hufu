@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -442,6 +443,13 @@ type executionSummary struct {
 	errored    int
 	skipped    int
 	pending    int
+	costs      []executionCostSummary
+	costErrors []string
+}
+
+type executionCostSummary struct {
+	team string
+	view cost.View
 }
 
 func summarizeExecution(loadedTeams map[string]*teamContext) executionSummary {
@@ -467,9 +475,18 @@ func summarizeExecution(loadedTeams map[string]*teamContext) executionSummary {
 				summary.pending++
 			}
 		}
+		if result := tc.coordinator.LastRunResult(); result != nil {
+			if view, err := tc.coordinator.CostView(result.RunID, ""); err != nil {
+				summary.costErrors = append(summary.costErrors, name)
+			} else if view != nil && view.Available {
+				summary.costs = append(summary.costs, executionCostSummary{team: name, view: view.Clone()})
+			}
+		}
 	}
 	sort.Strings(summary.teams)
 	sort.Strings(summary.workspaces)
+	slices.SortFunc(summary.costs, func(left, right executionCostSummary) int { return strings.Compare(left.team, right.team) })
+	sort.Strings(summary.costErrors)
 	return summary
 }
 
@@ -508,6 +525,18 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration, ru
 	fmt.Fprintf(&b, "  Duration:  %s\n", duration.Round(time.Second))
 	if len(summary.workspaces) > 0 {
 		fmt.Fprintf(&b, "  Workspace: %s\n", strings.Join(summary.workspaces, ", "))
+	}
+	for _, entry := range summary.costs {
+		label := "Cost"
+		if len(summary.costs) > 1 {
+			label = "Cost " + entry.team
+		}
+		fmt.Fprintf(&b, "  %-9s %s known · %d unknown · %d open (%s)\n", label+":",
+			formatCostMicros(entry.view.KnownMicros, entry.view.UnknownInvocations > 0),
+			entry.view.UnknownInvocations, entry.view.OpenReservationCount, entry.view.Coverage)
+	}
+	for _, teamName := range summary.costErrors {
+		fmt.Fprintf(&b, "  Cost %s: unavailable (integrity degraded)\n", teamName)
 	}
 	if len(runResults) > 0 {
 		canonical := team.AggregateRunResults(runResults, nil, team.RunStats{})

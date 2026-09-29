@@ -25,6 +25,7 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
                      [--attempt <n>] [--team <team-id>]
                      [--agent <agent-id> | --all-agents] [--show-content]
 hufu inspect trace <run-id>
+hufu inspect cost [run-id] [--task <task-id>]
 hufu inspect replay <run-id>
 hufu inspect storage
 ```
@@ -58,6 +59,7 @@ hufu inspect task task-7 --run run-123 --format json
 hufu inspect evidence run-123
 hufu inspect context task-7 --run run-123 --project project-1 --agent worker-1
 hufu inspect trace run-123 --branch incident-fix
+hufu inspect cost run-123 --task task-7 --format json
 hufu inspect replay run-123 --format json
 hufu inspect storage --workspace ./workspace --format json
 ```
@@ -67,6 +69,13 @@ size, journal mode, WAL autocheckpoint, schema version, database/WAL byte sizes,
 and FTS/context row counts. A missing WAL is reported as zero bytes. The command
 does not create storage, migrate, checkpoint, optimize, vacuum, or rebuild a
 projection.
+
+`inspect cost` projects only canonical generation-cost events. Numeric values
+use integer USD micros in JSON and fixed-six-decimal USD in text. Usage-derived,
+admission-bound, and open-reservation amounts remain separate; unknown, local,
+and subscription invocations are counted instead of being folded into zero.
+When the run ID is omitted, the command uses the same exact active/sole-run
+binding rules as `inspect overview` and fails on ambiguity.
 
 ## Output and exit status
 

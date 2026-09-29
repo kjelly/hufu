@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/cost"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 )
@@ -44,6 +45,7 @@ the detailed audit, context, or decision maintenance commands.`,
   hufu inspect overview --workspace ./workspace --output json
   hufu inspect task task-7 --run run-123 --format json
   hufu inspect trace run-123 --branch incident-fix
+  hufu inspect cost run-123 --task task-7 --format json
   hufu inspect replay run-123 --format json
   hufu inspect storage --workspace ./workspace --format json`,
 		Args:              cobra.NoArgs,
@@ -63,9 +65,38 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectEvidenceCommand(options),
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
+		newInspectCostCommand(options),
 		newInspectReplayCommand(options),
 		newInspectStorageCommand(options),
 	)
+	return command
+}
+
+func newInspectCostCommand(options *inspectCLIOptions) *cobra.Command {
+	var taskID string
+	command := &cobra.Command{
+		Use:               "cost [run-id]",
+		Short:             "Show generation-cost totals from canonical cost events",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(command *cobra.Command, args []string) error {
+			format, err := options.resolveFormat(command)
+			if err != nil {
+				return err
+			}
+			query, err := options.query()
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				query.RunID = args[0]
+			}
+			query.TaskID = taskID
+			envelope, inspectErr := inspectpkg.InspectCost(command.Context(), query)
+			return finishInspect(command, format, envelope, inspectErr)
+		},
+	}
+	command.Flags().StringVar(&taskID, "task", "", "Optional exact task ID filter")
 	return command
 }
 
@@ -398,6 +429,13 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 				return err
 			}
 		}
+		if snapshot.Cost != nil && snapshot.Cost.Available {
+			if _, err := fmt.Fprintf(writer, "Cost: %s known · %d unknown · %d open (%s)\n",
+				formatCostMicros(snapshot.Cost.KnownMicros, snapshot.Cost.UnknownInvocations > 0),
+				snapshot.Cost.UnknownInvocations, snapshot.Cost.OpenReservationCount, snapshot.Cost.Coverage); err != nil {
+				return err
+			}
+		}
 		return nil
 	case inspectpkg.RunData:
 		_, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nTasks: %d total, %d done, %d unresolved\nAttempts: %d total, %d failed\nEvidence refs: %s\n",
@@ -405,6 +443,8 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			data.TaskSummary.Total, data.TaskSummary.Done, data.TaskSummary.Unresolved,
 			data.AttemptSummary.Total, data.AttemptSummary.Failed, refsOrNone(data.EvidenceRefs))
 		return err
+	case inspectpkg.CostData:
+		return renderInspectCostText(writer, data)
 	case inspectpkg.TaskData:
 		if _, err := fmt.Fprintf(writer, "Run: %s\nTask: %s\nBranch: %s\nStatus: %s\nPhase: %s\nAgent: %s\nExecution target: %s\n",
 			data.RunID, data.TaskID, envelope.Query.BranchID, data.Status, valueOrUnavailable(data.Phase),
@@ -497,6 +537,54 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 	default:
 		return fmt.Errorf("unsupported inspect data %T", envelope.Data)
 	}
+}
+
+func renderInspectCostText(writer io.Writer, data inspectpkg.CostData) error {
+	if _, err := fmt.Fprintf(writer, "Coverage: %s\nRun: %s\n", safeOverviewValue(data.Coverage), safeOverviewValue(data.RunID)); err != nil {
+		return err
+	}
+	if data.TaskID != "" {
+		if _, err := fmt.Fprintf(writer, "Task: %s\n", safeOverviewValue(data.TaskID)); err != nil {
+			return err
+		}
+	}
+	if !data.Available {
+		_, err := fmt.Fprintf(writer, "Cost: unavailable\nIntegrity: %s\n", safeOverviewValue(data.Integrity))
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Usage-derived: %s\nAdmission-bound: %s\nOpen reservations: %s\nUnknown invocations: %d\nLocal invocations: %d\nSubscription calls: %d\n",
+		formatCostMicros(data.UsageDerivedMicros, false), formatCostMicros(data.AdmissionBoundMicros, false),
+		formatCostMicros(data.OpenReservationMicros, data.OpenReservationCount > 0), data.UnknownInvocations,
+		data.LocalInvocations, data.SubscriptionInvocations); err != nil {
+		return err
+	}
+	if data.BudgetMicros != nil {
+		if _, err := fmt.Fprintf(writer, "Budget: %s\n", formatCostMicros(data.BudgetMicros, true)); err != nil {
+			return err
+		}
+	}
+	if data.RemainingMicros != nil && data.Integrity == "ok" {
+		if _, err := fmt.Fprintf(writer, "Remaining: %s\n", formatCostMicros(data.RemainingMicros, true)); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(writer, "Integrity: %s\nFreshness: event=%s hash=%s\n", safeOverviewValue(data.Integrity),
+		safeOverviewValue(valueOrUnavailable(data.Freshness.EventID)), safeOverviewValue(valueOrUnavailable(data.Freshness.EventHash)))
+	return err
+}
+
+func formatCostMicros(value *int64, unavailableWhenNil bool) string {
+	if value == nil {
+		if unavailableWhenNil {
+			return "unavailable"
+		}
+		return "$0.000000"
+	}
+	formatted, err := cost.FormatUSDMicros(*value)
+	if err != nil {
+		return "unavailable"
+	}
+	return "$" + formatted
 }
 
 func safeOverviewValue(value string) string {

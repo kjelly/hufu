@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -139,6 +140,12 @@ func TestOperatorPanelUsesVerifiedDetailsAndSeparatedLearningSignals(t *testing.
 			Status: "available", RequestedMode: "active", EffectiveMode: "observe", PolicyVersion: "policy-v1",
 			Exposures: &exposed, Consulted: &consulted, Applied: &applied, VerifiedSupport: &verified,
 		},
+		Cost: &cost.View{
+			SchemaVersion: cost.ViewSchemaVersion, Coverage: "generation_only", Available: true, RunID: "run-cost",
+			KnownMicros: new(int64(320_000)), UsageDerivedMicros: new(int64(300_000)),
+			OpenReservationMicros: new(int64(20_000)), OpenReservationCount: 1, UnknownInvocations: 1, Integrity: "ok",
+			BudgetMicros: new(int64(1_000_000)), RemainingMicros: new(int64(680_000)),
+		},
 	}
 	updated, _ = m.Update(OperatorSnapshotMsg{Snapshot: snapshot})
 	m = updated.(Model)
@@ -158,6 +165,8 @@ func TestOperatorPanelUsesVerifiedDetailsAndSeparatedLearningSignals(t *testing.
 	for _, want := range []string{
 		"Evidence", "verdict=verified", "raw claims remain claims", "Context", "task=task-1",
 		"exposed=7 consulted=5", "applied=3", "verified=2", "approved", "context promotion review",
+		"Cost", "known=$0.320000", "open=$0.020000 (1)", "unknown=1", "coverage=generation_only",
+		"budget=$1.000000 remaining=$0.680000",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("operator panel missing %q:\n%s", want, view)

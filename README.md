@@ -113,6 +113,7 @@ hufu chat --agent-team my-team  # interactive REPL with that team
 hufu chat --default    # interactive REPL with the built-in team
 hufu workspace path                            # print the active managed control root
 hufu inspect run run-123                       # inspect persisted run facts
+hufu inspect cost run-123                      # inspect generation-cost projection
 ```
 
 ### 1. Start Ollama
