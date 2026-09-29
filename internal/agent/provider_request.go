@@ -345,7 +345,9 @@ func (m *admittedLanguageModel) request(request ProviderRequest) ProviderRequest
 	return request
 }
 
-func newProviderInvocationID() (string, error) {
+// NewProviderInvocationID returns the shared durable identity used by both
+// Fantasy provider calls and external execution backends.
+func NewProviderInvocationID() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", fmt.Errorf("generate provider invocation ID: %w", err)
@@ -357,7 +359,7 @@ func (m *admittedLanguageModel) commitInvocation(ctx context.Context, request *P
 	if m.invocationCommitter == nil {
 		return nil
 	}
-	id, err := newProviderInvocationID()
+	id, err := NewProviderInvocationID()
 	if err != nil {
 		return err
 	}

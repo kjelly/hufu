@@ -18,6 +18,10 @@ type CostReservationRequest struct {
 	ExecutionTarget      string
 	EstimatedInputTokens int64
 	ReservedOutputTokens int64
+	// Opaque requires admission from the configured per-invocation maximum,
+	// even when the target also publishes token rates. External execution
+	// backends cannot prove their serialized request size before launch.
+	Opaque bool
 }
 
 type CostSettlementRequest struct {
@@ -160,6 +164,10 @@ func (m *CostManager) Reserve(ctx context.Context, journal EventJournal, request
 	if err := m.ensurePriceSnapshot(ctx, journal, request.Identity.RunID, price); err != nil {
 		return cost.ReservationEvent{}, &CostAdmissionError{Reason: cost.DenialIntegrity, Detail: "price snapshot persistence failed", Cause: err}
 	}
+	if m.opaquePriceUnbounded(request) &&
+		(m.policy.MaxRunMicros != nil || m.policy.UnknownPricePolicy == cost.UnknownPriceDeny) {
+		return cost.ReservationEvent{}, m.deny(ctx, journal, request, cost.DenialUnboundedCost, "external execution target has no opaque invocation maximum")
+	}
 	if reservation.EstimateSource == cost.EstimateUnknown && m.policy.UnknownPricePolicy == cost.UnknownPriceDeny {
 		return cost.ReservationEvent{}, m.deny(ctx, journal, request, cost.DenialUnknownPrice, "execution target has no configured price")
 	}
@@ -250,7 +258,24 @@ func (m *CostManager) buildReservation(request CostReservationRequest) (cost.Res
 			return cost.ReservationEvent{}, cost.PriceSnapshot{}, err
 		}
 	}
-	estimate, err := cost.EstimateAdmission(price, request.EstimatedInputTokens, request.ReservedOutputTokens)
+	if request.Opaque && price.BillingMode == cost.BillingMetered && price.OpaqueMaxMicrosPerInvocation == nil {
+		var err error
+		price, err = cost.NewUnknownPriceSnapshot(request.ExecutionTarget)
+		if err != nil {
+			return cost.ReservationEvent{}, cost.PriceSnapshot{}, err
+		}
+	}
+	var estimate cost.Estimate
+	var err error
+	if request.Opaque && price.BillingMode == cost.BillingMetered {
+		if price.OpaqueMaxMicrosPerInvocation == nil {
+			estimate = cost.Estimate{Source: cost.EstimateUnknown, BillingMode: cost.BillingUnknown}
+		} else {
+			estimate, err = cost.EstimateOpaqueBound(price)
+		}
+	} else {
+		estimate, err = cost.EstimateAdmission(price, request.EstimatedInputTokens, request.ReservedOutputTokens)
+	}
 	if err != nil {
 		return cost.ReservationEvent{}, cost.PriceSnapshot{}, fmt.Errorf("estimate cost admission: %w", err)
 	}
@@ -265,6 +290,11 @@ func (m *CostManager) buildReservation(request CostReservationRequest) (cost.Res
 		return cost.ReservationEvent{}, cost.PriceSnapshot{}, err
 	}
 	return reservation, price, nil
+}
+
+func (m *CostManager) opaquePriceUnbounded(request CostReservationRequest) bool {
+	price, ok := m.prices[request.ExecutionTarget]
+	return request.Opaque && ok && price.BillingMode == cost.BillingMetered && price.OpaqueMaxMicrosPerInvocation == nil
 }
 
 func (m *CostManager) buildSettlement(reservation cost.ReservationEvent, request CostSettlementRequest) cost.SettlementEvent {

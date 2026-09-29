@@ -2564,7 +2564,7 @@ func (c *Coordinator) SetSubagentRegistry(registry *SubagentRegistry) {
 			if name == localSubagentProviderName {
 				continue
 			}
-			backend, err := NewAgentExecutionBackend(name, provider)
+			backend, err := NewAgentExecutionBackend(name, provider, coordinatorAgentExecutionCost{c: c})
 			if err == nil {
 				_ = canonical.Register(backend)
 			}
@@ -2614,7 +2614,7 @@ func newExecutionRegistryFor(c *Coordinator) *ExecutionRegistry {
 	}
 	providers := configuredAgentProvidersFor(c)
 	for name, provider := range providers {
-		backend, err := NewAgentExecutionBackend(name, provider)
+		backend, err := NewAgentExecutionBackend(name, provider, coordinatorAgentExecutionCost{c: c})
 		if err == nil {
 			_ = registry.Register(backend)
 		}

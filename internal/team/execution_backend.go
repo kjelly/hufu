@@ -177,11 +177,12 @@ func (b *LLMExecutionBackend) providerModelID(target execution.ExecutionTarget) 
 // AgentExecutionBackend adapts an existing external SubagentProvider without
 // reimplementing its protocol or weakening its result canonicalization.
 type AgentExecutionBackend struct {
-	name     string
-	provider SubagentProvider
+	name         string
+	provider     SubagentProvider
+	costBoundary AgentExecutionCostBoundary
 }
 
-func NewAgentExecutionBackend(name string, provider SubagentProvider) (*AgentExecutionBackend, error) {
+func NewAgentExecutionBackend(name string, provider SubagentProvider, costBoundary AgentExecutionCostBoundary) (*AgentExecutionBackend, error) {
 	name = execution.CanonicalBackendName(name)
 	if name == "" {
 		return nil, fmt.Errorf("agent execution backend name is required")
@@ -189,7 +190,10 @@ func NewAgentExecutionBackend(name string, provider SubagentProvider) (*AgentExe
 	if provider == nil {
 		return nil, fmt.Errorf("agent execution backend %q requires a provider", name)
 	}
-	return &AgentExecutionBackend{name: name, provider: provider}, nil
+	if costBoundary == nil {
+		return nil, fmt.Errorf("agent execution backend %q requires a cost boundary", name)
+	}
+	return &AgentExecutionBackend{name: name, provider: provider, costBoundary: costBoundary}, nil
 }
 
 func (b *AgentExecutionBackend) Name() string { return b.name }
@@ -205,7 +209,7 @@ func (b *AgentExecutionBackend) Capabilities() execution.BackendCapabilities {
 }
 
 func (b *AgentExecutionBackend) ValidateTarget(_ context.Context, target execution.ExecutionTarget) error {
-	if b == nil || b.provider == nil {
+	if b == nil || b.provider == nil || b.costBoundary == nil {
 		return fmt.Errorf("agent execution backend is unavailable")
 	}
 	if err := target.Validate(); err != nil {
@@ -218,7 +222,7 @@ func (b *AgentExecutionBackend) ValidateTarget(_ context.Context, target executi
 }
 
 func (b *AgentExecutionBackend) RunAttempt(ctx context.Context, request AttemptRequest) (AttemptResult, error) {
-	if b == nil || b.provider == nil {
+	if b == nil || b.provider == nil || b.costBoundary == nil {
 		return AttemptResult{}, fmt.Errorf("agent execution backend is unavailable")
 	}
 	if err := b.ValidateTarget(ctx, request.ExecutionTarget); err != nil {
@@ -227,7 +231,15 @@ func (b *AgentExecutionBackend) RunAttempt(ctx context.Context, request AttemptR
 	request.ModelID = request.ExecutionTarget.Model
 	request.Provider = b.name
 	request.ProviderBinding = providerBindingFromBackendBinding(request.BackendBinding)
-	return b.provider.RunAttempt(ctx, request)
+	reservation, err := b.costBoundary.ReserveAgentExecution(ctx, request)
+	if err != nil {
+		return AttemptResult{}, err
+	}
+	result, err := b.provider.RunAttempt(ctx, request)
+	if reservation.ProviderInvocationID != "" {
+		b.costBoundary.SettleAgentExecution(ctx, reservation, result, err)
+	}
+	return result, err
 }
 
 func executionBackendName(backend ExecutionBackend) (string, error) {
