@@ -124,6 +124,9 @@ func (b *inventoryBuilder) addTeamSkills() error {
 		return fmt.Errorf("read team skills: %w", err)
 	}
 	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return validationError(filepath.ToSlash(filepath.Join("skills", entry.Name())), "path", "source_symlink")
+		}
 		if !entry.IsDir() {
 			continue
 		}

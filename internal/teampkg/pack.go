@@ -41,12 +41,18 @@ func Pack(options PackOptions) (PackResult, error) {
 	if err := validateVersion(options.Version); err != nil {
 		return PackResult{}, err
 	}
+	if err := preflightRawManifest(options.TeamDir); err != nil {
+		return PackResult{}, err
+	}
 	source, err := team.CompileTeam(options.TeamDir, nil, nil, team.DefaultProviderRegistry)
 	if err != nil {
 		return PackResult{}, fmt.Errorf("compile source team: %w", err)
 	}
 	inventory, err := BuildInventory(options.TeamDir, source)
 	if err != nil {
+		return PackResult{}, err
+	}
+	if err := validateInventoryPolicy(inventory, source.RuntimeSession()); err != nil {
 		return PackResult{}, err
 	}
 	name := source.RuntimeSession().Config.Name
@@ -103,6 +109,9 @@ func Pack(options PackOptions) (PackResult, error) {
 	archive, err := encodeArchive(archiveFiles)
 	if err != nil {
 		return PackResult{}, err
+	}
+	if _, err := ReadArchiveBytes(archive); err != nil {
+		return PackResult{}, fmt.Errorf("validate generated team package: %w", err)
 	}
 	output, err := filepath.Abs(options.Output)
 	if err != nil {

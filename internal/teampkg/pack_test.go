@@ -237,7 +237,7 @@ func TestPackRequiresExactlyOneTeamManifest(t *testing.T) {
 	dir := basicTeam(t, "name: portable-team\n")
 	writeFixture(t, dir, "team.yml", "name: duplicate\n")
 	_, err := Pack(PackOptions{TeamDir: dir, Version: "v1", Output: filepath.Join(t.TempDir(), "team.hufu")})
-	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+	if err == nil || !strings.Contains(err.Error(), "manifest_count") {
 		t.Fatalf("error = %v", err)
 	}
 }
