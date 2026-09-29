@@ -67,6 +67,12 @@ func ClassifyProviderError(err error) ProviderFailureClass {
 	if err == nil {
 		return ""
 	}
+	// Cost admission is a local policy decision even when its durable append
+	// cause happens to look like a transport timeout. It must never enter the
+	// provider-route fallback mechanism or select a cheaper candidate.
+	if _, ok := errors.AsType[*CostAdmissionError](err); ok {
+		return ProviderOther
+	}
 	var providerErr *fantasy.ProviderError
 	if errors.As(err, &providerErr) {
 		switch {

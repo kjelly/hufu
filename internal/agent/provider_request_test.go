@@ -147,6 +147,29 @@ type recordingAdmission struct {
 	commitErr error
 }
 
+type providerSettlement struct {
+	request ProviderRequest
+	result  ProviderInvocationResult
+}
+
+type settlingAdmission struct {
+	*recordingAdmission
+	settlementMu sync.Mutex
+	settlements  []providerSettlement
+}
+
+func (a *settlingAdmission) SettleProviderInvocation(_ context.Context, request ProviderRequest, result ProviderInvocationResult) {
+	a.settlementMu.Lock()
+	defer a.settlementMu.Unlock()
+	a.settlements = append(a.settlements, providerSettlement{request: request, result: result})
+}
+
+func (a *settlingAdmission) snapshotSettlements() []providerSettlement {
+	a.settlementMu.Lock()
+	defer a.settlementMu.Unlock()
+	return slices.Clone(a.settlements)
+}
+
 func (a *recordingAdmission) AdmitProviderRequest(_ context.Context, request ProviderRequest) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -210,6 +233,33 @@ type streamLanguageModel struct {
 	objectStreamFn  func(context.Context) fantasy.ObjectStreamResponse
 	objectStreamErr error
 }
+
+type resultLanguageModel struct {
+	generateResponse       *fantasy.Response
+	generateErr            error
+	generateObjectResponse *fantasy.ObjectResponse
+	generateObjectErr      error
+}
+
+func (m *resultLanguageModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+	return m.generateResponse, m.generateErr
+}
+
+func (*resultLanguageModel) Stream(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+	return nil, nil
+}
+
+func (m *resultLanguageModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return m.generateObjectResponse, m.generateObjectErr
+}
+
+func (*resultLanguageModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, nil
+}
+
+func (*resultLanguageModel) Provider() string { return "test" }
+
+func (*resultLanguageModel) Model() string { return "test-model" }
 
 func (*streamLanguageModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
 	return &fantasy.Response{}, nil
@@ -637,4 +687,156 @@ func TestAdmittedStreamReleasesOnInnerStreamCreationError(t *testing.T) {
 	}
 	assertReleaseCount(t, limiter, 1)
 	assertNoDoubleRelease(t, limiter)
+}
+
+func TestAdmittedGenerateSettlesSuccessAndProviderError(t *testing.T) {
+	usage := fantasy.Usage{InputTokens: 11, CacheReadTokens: 2, CacheCreationTokens: 3, OutputTokens: 5, TotalTokens: 21}
+	tests := []struct {
+		name            string
+		model           *resultLanguageModel
+		invoke          func(fantasy.LanguageModel) error
+		wantOutcome     ProviderInvocationOutcome
+		wantObserved    bool
+		wantInputTokens int64
+	}{
+		{
+			name: "generate success", model: &resultLanguageModel{generateResponse: &fantasy.Response{Usage: usage}},
+			invoke: func(model fantasy.LanguageModel) error {
+				_, err := model.Generate(t.Context(), fantasy.Call{})
+				return err
+			},
+			wantOutcome: ProviderInvocationSuccess, wantObserved: true, wantInputTokens: 11,
+		},
+		{
+			name: "generate provider error", model: &resultLanguageModel{generateErr: errors.New("provider failed")},
+			invoke: func(model fantasy.LanguageModel) error {
+				_, err := model.Generate(t.Context(), fantasy.Call{})
+				return err
+			},
+			wantOutcome: ProviderInvocationProviderError,
+		},
+		{
+			name: "object success", model: &resultLanguageModel{generateObjectResponse: &fantasy.ObjectResponse{Usage: usage}},
+			invoke: func(model fantasy.LanguageModel) error {
+				_, err := model.GenerateObject(t.Context(), fantasy.ObjectCall{})
+				return err
+			},
+			wantOutcome: ProviderInvocationSuccess, wantObserved: true, wantInputTokens: 11,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+			wrapped := NewAdmittedLanguageModel("local/model", test.model, admission)
+			_ = test.invoke(wrapped)
+			settlements := admission.snapshotSettlements()
+			if len(settlements) != 1 {
+				t.Fatalf("settlements = %d, want one", len(settlements))
+			}
+			settlement := settlements[0]
+			if settlement.request.InvocationID == "" || settlement.result.Outcome != test.wantOutcome || settlement.result.ResponseObserved != test.wantObserved {
+				t.Fatalf("settlement = %#v", settlement)
+			}
+			if test.wantInputTokens == 0 {
+				if settlement.result.Usage != nil {
+					t.Fatalf("usage = %#v, want nil", settlement.result.Usage)
+				}
+			} else if settlement.result.Usage == nil || settlement.result.Usage.InputTokens != test.wantInputTokens {
+				t.Fatalf("usage = %#v, want input tokens %d", settlement.result.Usage, test.wantInputTokens)
+			}
+		})
+	}
+}
+
+func TestAdmittedStreamSettlesTerminalOutcomesExactlyOnce(t *testing.T) {
+	t.Run("exhausted success with usage", func(t *testing.T) {
+		admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+		model := &streamLanguageModel{streamFn: func(context.Context) fantasy.StreamResponse {
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, Usage: fantasy.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}})
+			}
+		}}
+		stream, err := NewAdmittedLanguageModel("local/model", model, admission).Stream(t.Context(), fantasy.Call{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+		}
+		settlements := admission.snapshotSettlements()
+		if len(settlements) != 1 || settlements[0].result.Outcome != ProviderInvocationSuccess || !settlements[0].result.ResponseObserved || settlements[0].result.Usage == nil || settlements[0].result.Usage.TotalTokens != 10 {
+			t.Fatalf("settlements = %#v", settlements)
+		}
+	})
+
+	t.Run("provider error part", func(t *testing.T) {
+		admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+		model := &streamLanguageModel{objectStreamFn: func(context.Context) fantasy.ObjectStreamResponse {
+			return func(yield func(fantasy.ObjectStreamPart) bool) {
+				yield(fantasy.ObjectStreamPart{Type: fantasy.ObjectStreamPartTypeError, Error: errors.New("decode failed")})
+			}
+		}}
+		stream, err := NewAdmittedLanguageModel("local/model", model, admission).StreamObject(t.Context(), fantasy.ObjectCall{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+		}
+		settlements := admission.snapshotSettlements()
+		if len(settlements) != 1 || settlements[0].result.Outcome != ProviderInvocationProviderError {
+			t.Fatalf("settlements = %#v", settlements)
+		}
+	})
+
+	t.Run("early stop", func(t *testing.T) {
+		admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+		model := &streamLanguageModel{streamFn: func(context.Context) fantasy.StreamResponse {
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta})
+			}
+		}}
+		stream, err := NewAdmittedLanguageModel("local/model", model, admission).Stream(t.Context(), fantasy.Call{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream(func(fantasy.StreamPart) bool { return false })
+		settlements := admission.snapshotSettlements()
+		if len(settlements) != 1 || settlements[0].result.Outcome != ProviderInvocationStreamAbandoned {
+			t.Fatalf("settlements = %#v", settlements)
+		}
+	})
+
+	t.Run("uniterated cancellation", func(t *testing.T) {
+		admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+		model := &streamLanguageModel{streamFn: func(context.Context) fantasy.StreamResponse {
+			return func(func(fantasy.StreamPart) bool) {}
+		}}
+		ctx, cancel := context.WithCancel(t.Context())
+		if _, err := NewAdmittedLanguageModel("local/model", model, admission).Stream(ctx, fantasy.Call{}); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(admission.snapshotSettlements()); got != 0 {
+			t.Fatalf("settlements before cancellation = %d, want zero", got)
+		}
+		cancel()
+		deadline := time.Now().Add(time.Second)
+		for len(admission.snapshotSettlements()) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		settlements := admission.snapshotSettlements()
+		if len(settlements) != 1 || settlements[0].result.Outcome != ProviderInvocationCancelled {
+			t.Fatalf("settlements = %#v", settlements)
+		}
+	})
+
+	t.Run("setup error", func(t *testing.T) {
+		admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+		model := &streamLanguageModel{streamErr: errors.New("setup failed")}
+		if _, err := NewAdmittedLanguageModel("local/model", model, admission).Stream(t.Context(), fantasy.Call{}); err == nil {
+			t.Fatal("stream setup succeeded")
+		}
+		settlements := admission.snapshotSettlements()
+		if len(settlements) != 1 || settlements[0].result.Outcome != ProviderInvocationProviderError {
+			t.Fatalf("settlements = %#v", settlements)
+		}
+	})
 }

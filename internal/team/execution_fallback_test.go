@@ -49,6 +49,7 @@ func TestClassifyProviderError(t *testing.T) {
 		{name: "dns", err: &net.DNSError{Err: "no such host", Name: "llm.invalid"}, want: ProviderUnavailable},
 		{name: "tls alert", err: tls.AlertError(40), want: ProviderUnavailable},
 		{name: "transport deadline", err: fmt.Errorf("post: %w", context.DeadlineExceeded), want: ProviderTransportTimeout},
+		{name: "cost admission wrapping deadline", err: &CostAdmissionError{Reason: "integrity_degraded", Cause: context.DeadlineExceeded}, want: ProviderOther},
 		{name: "not a provider error", err: errors.New("deliverable verification failed"), want: ProviderOther},
 	}
 	for _, tt := range tests {
@@ -92,6 +93,7 @@ func TestExecutionFallbackDecision(t *testing.T) {
 		{name: "context too large is never eligible", route: route(2), in: executionFallbackInput{Err: &fantasy.ProviderError{ContextTooLargeErr: true}, SideEffect: SideEffectNone}, denied: fallbackDeniedNotInFallbackOn},
 		{name: "a verification failure is not a provider failure", route: route(2), in: executionFallbackInput{Err: errors.New("deliverable verification failed: exit 1"), SideEffect: SideEffectNone}},
 		{name: "a semantic rejection is not a provider failure", route: route(2), in: executionFallbackInput{Err: withFailureClassOverride(errors.New("worker reported failed"), FailureExecution), SideEffect: SideEffectNone}},
+		{name: "a cost denial is not a provider failure", route: route(2), in: executionFallbackInput{Err: &CostAdmissionError{Reason: "budget_exceeded", Cause: context.DeadlineExceeded}, SideEffect: SideEffectNone}},
 		{name: "a task timeout is not a provider failure", route: route(2), in: executionFallbackInput{Err: context.DeadlineExceeded, AttemptContextErr: context.DeadlineExceeded, SideEffect: SideEffectNone}},
 		{name: "cancellation does not fall back", route: route(2), in: executionFallbackInput{Err: rateLimited, ParentContextErr: context.Canceled, SideEffect: SideEffectNone}, denied: fallbackDeniedCancelled},
 		{name: "no next candidate", route: route(1), in: executionFallbackInput{Err: rateLimited, SideEffect: SideEffectNone}},

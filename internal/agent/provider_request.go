@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
@@ -171,6 +172,7 @@ type admittedLanguageModel struct {
 	invocationLimiter   InvocationLimiter
 	admissionContext    ProviderAdmissionContext
 	invocationCommitter ProviderInvocationCommitter
+	invocationSettler   ProviderInvocationSettler
 }
 
 // RequestAdmission is the shared pre-provider admission contract.
@@ -183,6 +185,44 @@ type RequestAdmission interface {
 // Implementations must fail closed: a commit error prevents the provider call.
 type ProviderInvocationCommitter interface {
 	CommitProviderInvocation(context.Context, ProviderRequest) error
+}
+
+// ProviderInvocationOutcome is a bounded, provider-neutral terminal state.
+// It intentionally carries no raw provider error or response content.
+type ProviderInvocationOutcome string
+
+const (
+	ProviderInvocationSuccess         ProviderInvocationOutcome = "success"
+	ProviderInvocationProviderError   ProviderInvocationOutcome = "provider_error"
+	ProviderInvocationCancelled       ProviderInvocationOutcome = "cancelled"
+	ProviderInvocationStreamAbandoned ProviderInvocationOutcome = "stream_abandoned"
+)
+
+// ProviderInvocationUsage is the provider-neutral usage needed to settle a
+// committed invocation. A nil usage in ProviderInvocationResult means the
+// provider did not report complete enough data for an observed-cost charge.
+type ProviderInvocationUsage struct {
+	InputTokens         int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	OutputTokens        int64
+	TotalTokens         int64
+}
+
+// ProviderInvocationResult is emitted exactly once after a committed
+// provider invocation reaches a terminal state. ResponseObserved records
+// whether any response object or stream part crossed the transport boundary.
+type ProviderInvocationResult struct {
+	Usage            *ProviderInvocationUsage
+	Outcome          ProviderInvocationOutcome
+	ResponseObserved bool
+}
+
+// ProviderInvocationSettler is the optional terminal accounting boundary.
+// Settlement is observational: implementations must latch their own failures
+// and must not replace or retry the provider result already produced.
+type ProviderInvocationSettler interface {
+	SettleProviderInvocation(context.Context, ProviderRequest, ProviderInvocationResult)
 }
 
 // InvocationLimiter is an optional coordinator-owned boundary around the
@@ -209,7 +249,12 @@ func NewAdmittedLanguageModelWithContext(modelID string, inner fantasy.LanguageM
 	}
 	limiter, _ := admission.(InvocationLimiter)
 	committer, _ := admission.(ProviderInvocationCommitter)
-	return &admittedLanguageModel{modelID: modelID, inner: inner, admission: admission, invocationLimiter: limiter, admissionContext: context, invocationCommitter: committer}
+	settler, _ := admission.(ProviderInvocationSettler)
+	return &admittedLanguageModel{
+		modelID: modelID, inner: inner, admission: admission,
+		invocationLimiter: limiter, admissionContext: context,
+		invocationCommitter: committer, invocationSettler: settler,
+	}
 }
 
 func (m *admittedLanguageModel) acquireInvocation(ctx context.Context) (func(), error) {
@@ -219,15 +264,56 @@ func (m *admittedLanguageModel) acquireInvocation(ctx context.Context) (func(), 
 	return m.invocationLimiter.AcquireProviderInvocation(ctx, m.modelID)
 }
 
-func admittedStream[T any](stream iter.Seq[T], cancel context.CancelFunc, cleanup func(), stopCleanup func() bool) iter.Seq[T] {
+type providerStreamState struct {
+	mu               sync.Mutex
+	usage            *ProviderInvocationUsage
+	responseObserved bool
+	providerError    bool
+	abandoned        bool
+}
+
+func (s *providerStreamState) observe(usage *ProviderInvocationUsage, providerError bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.responseObserved = true
+	if usage != nil {
+		s.usage = usage
+	}
+	s.providerError = s.providerError || providerError
+}
+
+func (s *providerStreamState) abandon() {
+	s.mu.Lock()
+	s.abandoned = true
+	s.mu.Unlock()
+}
+
+func (s *providerStreamState) result(ctx context.Context) ProviderInvocationResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	outcome := ProviderInvocationSuccess
+	switch {
+	case ctx.Err() != nil:
+		outcome = ProviderInvocationCancelled
+	case s.abandoned:
+		outcome = ProviderInvocationStreamAbandoned
+	case s.providerError:
+		outcome = ProviderInvocationProviderError
+	}
+	return ProviderInvocationResult{Usage: s.usage, Outcome: outcome, ResponseObserved: s.responseObserved}
+}
+
+func admittedStream[T any](ctx context.Context, stream iter.Seq[T], state *providerStreamState, cancel context.CancelFunc, stopCancellation func() bool, finalize func(ProviderInvocationResult), observe func(T) (*ProviderInvocationUsage, bool)) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		defer func() {
-			stopCleanup()
-			cleanup()
+			stopCancellation()
+			finalize(state.result(ctx))
 		}()
 		stream(func(part T) bool {
+			state.observe(observe(part))
 			keepGoing := yield(part)
 			if !keepGoing {
+				state.abandon()
 				cancel()
 			}
 			return keepGoing
@@ -235,16 +321,22 @@ func admittedStream[T any](stream iter.Seq[T], cancel context.CancelFunc, cleanu
 	}
 }
 
-func (m *admittedLanguageModel) streamContext(ctx context.Context, release func()) (context.Context, context.CancelFunc, func(), func() bool) {
+func (m *admittedLanguageModel) streamContext(ctx context.Context, request ProviderRequest, state *providerStreamState, release func()) (context.Context, context.CancelFunc, func(ProviderInvocationResult), func() bool) {
 	streamCtx, cancel := context.WithCancel(ctx)
-	cleanup := sync.OnceFunc(func() {
-		cancel()
-		if release != nil {
-			release()
-		}
+	var once sync.Once
+	finalize := func(result ProviderInvocationResult) {
+		once.Do(func() {
+			cancel()
+			m.settleInvocation(ctx, request, result)
+			if release != nil {
+				release()
+			}
+		})
+	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		finalize(state.result(ctx))
 	})
-	stopCleanup := context.AfterFunc(ctx, cleanup)
-	return streamCtx, cancel, cleanup, stopCleanup
+	return streamCtx, cancel, finalize, stopCancellation
 }
 
 func (m *admittedLanguageModel) request(request ProviderRequest) ProviderRequest {
@@ -273,6 +365,37 @@ func (m *admittedLanguageModel) commitInvocation(ctx context.Context, request *P
 	return m.invocationCommitter.CommitProviderInvocation(ctx, *request)
 }
 
+func (m *admittedLanguageModel) settleInvocation(ctx context.Context, request ProviderRequest, result ProviderInvocationResult) {
+	if m.invocationSettler != nil {
+		m.invocationSettler.SettleProviderInvocation(ctx, request, result)
+	}
+}
+
+func providerInvocationOutcome(ctx context.Context, err error) ProviderInvocationOutcome {
+	if err == nil {
+		return ProviderInvocationSuccess
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return ProviderInvocationCancelled
+	}
+	return ProviderInvocationProviderError
+}
+
+func providerInvocationUsage(usage fantasy.Usage) *ProviderInvocationUsage {
+	return &ProviderInvocationUsage{
+		InputTokens: usage.InputTokens, CacheReadTokens: usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens, OutputTokens: usage.OutputTokens,
+		TotalTokens: usage.TotalTokens,
+	}
+}
+
+func reportedProviderInvocationUsage(usage fantasy.Usage) *ProviderInvocationUsage {
+	if usage.InputTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
+		return nil
+	}
+	return providerInvocationUsage(usage)
+}
+
 func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
 	request := m.request(ProviderRequest{Call: &call})
 	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
@@ -290,7 +413,13 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
-	return m.inner.Generate(ctx, call)
+	response, providerErr := m.inner.Generate(ctx, call)
+	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
+	if response != nil {
+		result.Usage = providerInvocationUsage(response.Usage)
+	}
+	m.settleInvocation(ctx, request, result)
+	return response, providerErr
 }
 
 func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
@@ -308,16 +437,19 @@ func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 		}
 		return nil, err
 	}
-	streamCtx, cancel, cleanup, stopCleanup := m.streamContext(ctx, release)
+	state := &providerStreamState{}
+	streamCtx, cancel, finalize, stopCancellation := m.streamContext(ctx, request, state, release)
 	// Keep the registered .Stream(ctx, chokepoint marker while passing the
 	// derived context required to own the stream's transport lifetime.
 	stream, err := m.inner.Stream(streamCtx, call)
 	if err != nil {
-		stopCleanup()
-		cleanup()
+		stopCancellation()
+		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
 		return nil, err
 	}
-	return admittedStream(stream, cancel, cleanup, stopCleanup), nil
+	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.StreamPart) (*ProviderInvocationUsage, bool) {
+		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.StreamPartTypeError
+	}), nil
 }
 
 func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
@@ -337,7 +469,13 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
-	return m.inner.GenerateObject(ctx, call)
+	response, providerErr := m.inner.GenerateObject(ctx, call)
+	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
+	if response != nil {
+		result.Usage = providerInvocationUsage(response.Usage)
+	}
+	m.settleInvocation(ctx, request, result)
+	return response, providerErr
 }
 
 func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
@@ -355,14 +493,17 @@ func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.O
 		}
 		return nil, err
 	}
-	streamCtx, cancel, cleanup, stopCleanup := m.streamContext(ctx, release)
+	state := &providerStreamState{}
+	streamCtx, cancel, finalize, stopCancellation := m.streamContext(ctx, request, state, release)
 	stream, err := m.inner.StreamObject(streamCtx, call)
 	if err != nil {
-		stopCleanup()
-		cleanup()
+		stopCancellation()
+		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
 		return nil, err
 	}
-	return admittedStream(stream, cancel, cleanup, stopCleanup), nil
+	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.ObjectStreamPart) (*ProviderInvocationUsage, bool) {
+		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.ObjectStreamPartTypeError
+	}), nil
 }
 
 func (m *admittedLanguageModel) Provider() string { return m.inner.Provider() }

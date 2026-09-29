@@ -147,6 +147,42 @@ func TestCostManagerSettlementReplacesReservationAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCostManagerSettlementKeepsConservativeBoundWithoutCompleteUsage(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage *cost.TokenUsage
+	}{
+		{name: "missing"},
+		{name: "incomplete", usage: new(cost.TokenUsage{InputTokens: 100_000, OutputTokens: 100_000, TotalTokens: 1})},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, _ := newTestCostManager(t, "2", "")
+			_, journal := newCostEventStore(t)
+			reservation, err := manager.Reserve(t.Context(), journal, costReservationRequest("provider-conservative", 500_000, 500_000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			settlement, err := manager.Settle(t.Context(), journal, CostSettlementRequest{
+				RunID: "run-cost", ProviderInvocationID: "provider-conservative", Usage: test.usage, Outcome: cost.OutcomeProviderError,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settlement.Usage != nil || settlement.EstimateSource != cost.EstimateAdmissionBound || settlement.FinalMicros == nil || reservation.ReservedMicros == nil || *settlement.FinalMicros != *reservation.ReservedMicros {
+				t.Fatalf("settlement = %#v, reservation = %#v", settlement, reservation)
+			}
+			summary, err := manager.Projection().Summary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if summary.Total.OpenReservationCount != 0 || summary.Total.KnownMicros == nil || *summary.Total.KnownMicros != *reservation.ReservedMicros {
+				t.Fatalf("cost total = %#v", summary.Total)
+			}
+		})
+	}
+}
+
 func TestCostManagerRehydrateKeepsOpenReservationCharged(t *testing.T) {
 	first, _ := newTestCostManager(t, "1.50", "")
 	store, journal := newCostEventStore(t)

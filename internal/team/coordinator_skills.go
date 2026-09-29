@@ -480,6 +480,7 @@ func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Si
 		s.SetPromptPreparer(c.prepareAuxiliaryPrompt)
 		s.SetProjectionPromptPreparer(c.prepareAuxiliaryProjectionPrompt)
 		s.SetRequestPreparer(func(ctx context.Context, purpose string, messages []fantasy.Message, tools []fantasy.AgentTool, reserved int) (context.Context, fantasy.PrepareStepResult, error) {
+			ctx = withProviderCostContext(ctx, providerCostContext{Agent: purpose, Role: "auxiliary", Purpose: providerCostPurpose(purpose)})
 			modelID := s.ModelID()
 			bound, ok := sidecar.InvocationAdmissionContextFromContext(ctx)
 			if !ok || !bound.IsBound() || !strings.EqualFold(bound.ModelID, modelID) {

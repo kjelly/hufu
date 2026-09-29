@@ -19,6 +19,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/memory"
@@ -63,6 +64,7 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	taskCtx = context.WithValue(taskCtx, hooks.AgentNameKey, resolvedName)
 	taskCtx = context.WithValue(taskCtx, hooks.TeamNameKey, c.session.Config.Name)
 	taskCtx = context.WithValue(taskCtx, hooks.TaskDescKey, task)
+	taskCtx = withProviderCostContext(taskCtx, providerCostContext{Agent: resolvedName, Role: agentDef.Role, Purpose: cost.PurposeDirectAgent})
 	if len(agentDef.Guard) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.GuardRulesKey, agentDef.Guard)
 	}
@@ -1323,6 +1325,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	defer cancel()
 	orchCtx = context.WithValue(orchCtx, todoIDKey{}, CoordTodoID)
 	orchCtx = context.WithValue(orchCtx, executionAttemptKey{}, executionAttempt)
+	orchCtx = withProviderCostContext(orchCtx, providerCostContext{Agent: orchDef.Name, Role: orchDef.Role, Purpose: cost.PurposeCoordinator})
 	// The coordinator's built-in tools are always permitted, independent of
 	// team.yaml: without this the permission gate denies the forced read-only
 	// tools and the coordinator is back to delegating every file read.

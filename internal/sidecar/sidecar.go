@@ -376,12 +376,12 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	if options.preparationMode == sidecarProjectionPreparation && preparer == nil {
 		return "", fmt.Errorf("sidecar projection prompt preparer is not configured")
 	}
+	purpose, _ := ctx.Value(purposeContextKey{}).(string)
+	if purpose == "" {
+		purpose = profilePurpose(profile)
+	}
 	if preparer != nil {
 		var err error
-		purpose, _ := ctx.Value(purposeContextKey{}).(string)
-		if purpose == "" {
-			purpose = profilePurpose(profile)
-		}
 		prompt, err = preparer(ctx, purpose, prompt)
 		if err != nil {
 			return "", fmt.Errorf("prepare sidecar context: %w", err)
@@ -404,7 +404,7 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 			if len(messages) == 0 && prompt != "" {
 				messages = []fantasy.Message{fantasy.NewUserMessage(prompt)}
 			}
-			return requestPreparer(prepareCtx, profilePurpose(profile), messages, nil, reserved)
+			return requestPreparer(prepareCtx, purpose, messages, nil, reserved)
 		}
 	}
 	result, err := invocationAgent.Generate(ctx, call)

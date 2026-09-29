@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
@@ -17,6 +19,13 @@ import (
 type providerRequestAdmission struct {
 	c *Coordinator
 }
+
+var (
+	_ agent.RequestAdmission            = providerRequestAdmission{}
+	_ agent.InvocationLimiter           = providerRequestAdmission{}
+	_ agent.ProviderInvocationCommitter = providerRequestAdmission{}
+	_ agent.ProviderInvocationSettler   = providerRequestAdmission{}
+)
 
 func (c *Coordinator) providerAdmission() agent.RequestAdmission {
 	if c == nil {
@@ -44,13 +53,7 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 	if err != nil {
 		return fmt.Errorf("count provider request for %q: %w", request.ModelID, err)
 	}
-	reserve := spec.MaxOutputTokens
-	if request.Call != nil && request.Call.MaxOutputTokens != nil && *request.Call.MaxOutputTokens > 0 {
-		reserve = int(*request.Call.MaxOutputTokens)
-	}
-	if request.ObjectCall != nil && request.ObjectCall.MaxOutputTokens != nil && *request.ObjectCall.MaxOutputTokens > 0 {
-		reserve = int(*request.ObjectCall.MaxOutputTokens)
-	}
+	reserve := providerRequestOutputReservation(request)
 	margin := spec.SafetyMarginTokens
 	available := spec.ContextWindow - reserve - margin
 	if available < 0 {
@@ -107,7 +110,61 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
 		return err
 	}
+	if a.c.costManager == nil {
+		return nil
+	}
+	requestTokens, err := defaultCounter.CountProviderRequest(ctx, request.ModelID, request)
+	if err != nil {
+		return fmt.Errorf("count provider request for cost reservation %q: %w", request.ModelID, err)
+	}
+	identity, err := a.c.providerCostIdentity(ctx, request.InvocationID)
+	if err != nil {
+		return err
+	}
+	target, err := a.c.resolveCanonicalTaskTarget(request.ModelID, "")
+	if err != nil {
+		return fmt.Errorf("resolve cost execution target %q: %w", request.ModelID, err)
+	}
+	_, err = a.c.costManager.Reserve(ctx, a.c.EventJournal(), CostReservationRequest{
+		Identity: identity, ExecutionTarget: target.String(),
+		EstimatedInputTokens: int64(requestTokens), ReservedOutputTokens: int64(providerRequestOutputReservation(request)),
+	})
+	if err != nil {
+		return err
+	}
 	return nil
+}
+
+// SettleProviderInvocation records terminal accounting without changing the
+// already-produced provider result. CostManager latches persistence failures
+// so subsequent reservations fail closed.
+func (a providerRequestAdmission) SettleProviderInvocation(ctx context.Context, request agent.ProviderRequest, result agent.ProviderInvocationResult) {
+	if a.c == nil || a.c.costManager == nil || request.InvocationID == "" {
+		return
+	}
+	var usage *cost.TokenUsage
+	if result.Usage != nil {
+		usage = &cost.TokenUsage{
+			InputTokens: result.Usage.InputTokens, CacheReadTokens: result.Usage.CacheReadTokens,
+			CacheCreationTokens: result.Usage.CacheCreationTokens, OutputTokens: result.Usage.OutputTokens,
+			TotalTokens: result.Usage.TotalTokens,
+		}
+	}
+	_, _ = a.c.costManager.Settle(ctx, a.c.EventJournal(), CostSettlementRequest{
+		RunID: strings.TrimSpace(a.c.executionRunID), ProviderInvocationID: request.InvocationID,
+		Usage: usage, Outcome: cost.Outcome(result.Outcome),
+	})
+}
+
+func providerRequestOutputReservation(request agent.ProviderRequest) int {
+	reserve := request.AdmissionContext.MaxOutputTokens
+	if request.Call != nil && request.Call.MaxOutputTokens != nil && *request.Call.MaxOutputTokens > 0 {
+		reserve = int(*request.Call.MaxOutputTokens)
+	}
+	if request.ObjectCall != nil && request.ObjectCall.MaxOutputTokens != nil && *request.ObjectCall.MaxOutputTokens > 0 {
+		reserve = int(*request.ObjectCall.MaxOutputTokens)
+	}
+	return reserve
 }
 
 func modelContextSpecForProviderRequest(request agent.ProviderRequest) ModelContextSpec {

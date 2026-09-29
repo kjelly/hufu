@@ -329,8 +329,13 @@ func TestGenerateRebindsCachedLanguageModelForInvocation(t *testing.T) {
 		}
 		return prompt, nil
 	})
+	var requestPurpose string
+	s.SetRequestPreparer(func(ctx context.Context, purpose string, messages []fantasy.Message, _ []fantasy.AgentTool, _ int) (context.Context, fantasy.PrepareStepResult, error) {
+		requestPurpose = purpose
+		return ctx, fantasy.PrepareStepResult{Messages: messages}, nil
+	})
 
-	if _, err := s.generate(t.Context(), "prompt", ClassifierProfile); err != nil {
+	if _, err := s.generate(WithPurpose(t.Context(), "skill_matcher"), "prompt", ClassifierProfile); err != nil {
 		t.Fatalf("generate() error = %v", err)
 	}
 	if underlying.calls != 1 {
@@ -341,6 +346,9 @@ func TestGenerateRebindsCachedLanguageModelForInvocation(t *testing.T) {
 	}
 	if len(admission.contexts) != 1 || admission.contexts[0] != b1 {
 		t.Fatalf("admission contexts = %#v, want one B1 context %#v", admission.contexts, b1)
+	}
+	if requestPurpose != "skill_matcher" {
+		t.Fatalf("request preparation purpose = %q, want exact invocation purpose", requestPurpose)
 	}
 }
 
