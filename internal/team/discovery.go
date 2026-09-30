@@ -12,6 +12,8 @@ type TeamRegistry struct {
 	teams       map[string]string
 }
 
+const defaultTeamDirectoryName = ".agent-teams"
+
 func NewTeamRegistry(searchPaths []string) *TeamRegistry {
 	expanded := make([]string, 0, len(searchPaths))
 	for _, p := range searchPaths {
@@ -39,16 +41,32 @@ func NewTeamRegistry(searchPaths []string) *TeamRegistry {
 }
 
 func DefaultSearchPaths() []string {
-	home, _ := os.UserHomeDir()
 	paths := []string{}
-	cwd, err := os.Getwd()
-	if err == nil {
-		paths = append(paths, filepath.Join(cwd, ".agent-teams"))
+	if projectRoot, err := DefaultProjectTeamRoot(); err == nil {
+		paths = append(paths, projectRoot)
 	}
-	if home != "" {
-		paths = append(paths, filepath.Join(home, ".agent-teams"))
+	if userRoot, err := DefaultUserTeamRoot(); err == nil {
+		paths = append(paths, userRoot)
 	}
 	return paths
+}
+
+// DefaultProjectTeamRoot returns the canonical project-local team root.
+func DefaultProjectTeamRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve current directory: %w", err)
+	}
+	return filepath.Join(cwd, defaultTeamDirectoryName), nil
+}
+
+// DefaultUserTeamRoot returns the canonical per-user team root.
+func DefaultUserTeamRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, defaultTeamDirectoryName), nil
 }
 
 func (r *TeamRegistry) Discover() error {

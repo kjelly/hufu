@@ -188,6 +188,29 @@ func TestInspectPackageRejectsStructurallyUnownedSource(t *testing.T) {
 	}
 }
 
+func TestInspectPackageReportsInvalidBundledSkill(t *testing.T) {
+	files := validPackageFiles(t)
+	files["skills/broken/SKILL.md"] = []byte("not valid skill frontmatter\n")
+	lockInputs := make(map[string][]byte, len(files)-1)
+	for path, data := range files {
+		if path != LockFilename {
+			lockInputs[path] = data
+		}
+	}
+	_, lock, err := buildLock(lockInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[LockFilename] = lock
+	report, err := inspectPackageBytes(archiveFromFiles(t, files), t.TempDir())
+	if err == nil {
+		t.Fatal("package with invalid bundled skill was accepted")
+	}
+	if !slices.Contains(report.Findings, Finding{Path: "skills/broken/SKILL.md", Field: "skill", Category: "invalid_skill"}) {
+		t.Fatalf("findings = %#v", report.Findings)
+	}
+}
+
 func TestRedactExternalURLRemovesCredentialsAndQuery(t *testing.T) {
 	got := redactExternalURL("https://user:password@example.test/mcp?token=secret#fragment")
 	if got != "https://example.test/mcp" {

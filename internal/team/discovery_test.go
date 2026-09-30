@@ -3,6 +3,7 @@ package team
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -56,16 +57,23 @@ func TestNewTeamRegistry(t *testing.T) {
 }
 
 func TestDefaultSearchPaths(t *testing.T) {
-	paths := DefaultSearchPaths()
-	if len(paths) == 0 {
-		t.Error("DefaultSearchPaths() returned empty slice")
-	}
+	project := t.TempDir()
+	home := t.TempDir()
+	t.Chdir(project)
+	t.Setenv("HOME", home)
 
-	// Check that paths contain .agent-teams
-	for _, p := range paths {
-		if filepath.Base(p) != ".agent-teams" {
-			t.Errorf("DefaultSearchPaths() path %q doesn't end with .agent-teams", p)
-		}
+	paths := DefaultSearchPaths()
+	projectRoot, err := DefaultProjectTeamRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userRoot, err := DefaultUserTeamRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{projectRoot, userRoot}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("DefaultSearchPaths() = %v, want %v", paths, want)
 	}
 }
 

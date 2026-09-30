@@ -140,6 +140,7 @@ func inspectPackageBytes(data []byte, scratchBase string) (report InspectionRepo
 		report.Findings = findingsFromError(err)
 		return report, err
 	}
+	report.Included, report.Findings = inspectIncluded(archive, nil)
 
 	scratch, err := os.MkdirTemp(scratchBase, "hufu-team-package-inspect-")
 	if err != nil {
@@ -170,7 +171,7 @@ func inspectPackageBytes(data []byte, scratchBase string) (report InspectionRepo
 	report.ManifestSchema = manifestSchema
 	report.NormalizedTeamName = spec.Name.Value
 	report.Agents = inspectAgents(spec.RuntimeSession())
-	report.Included = inspectIncluded(archive, spec.RuntimeSession())
+	report.Included, report.Findings = inspectIncluded(archive, spec.RuntimeSession())
 	report.External = inspectExternal(root, report.Included, spec.RuntimeSession())
 	report.Integrity = "verified"
 	report.Compile = CompileResult{Status: "passed"}
@@ -291,20 +292,29 @@ func inspectAgents(session *team.TeamSession) []InspectedAgent {
 	return result
 }
 
-func inspectIncluded(archive *Archive, session *team.TeamSession) IncludedAssets {
+func inspectIncluded(archive *Archive, session *team.TeamSession) (IncludedAssets, []Finding) {
 	result := IncludedAssets{}
-	for path, data := range archive.Files {
+	var findings []Finding
+	paths := make([]string, 0, len(archive.Files))
+	for path := range archive.Files {
 		if !strings.HasPrefix(path, "skills/") || !strings.HasSuffix(path, "/SKILL.md") {
 			continue
 		}
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		data := archive.Files[path]
 		definition, err := skill.ValidateSkill(data)
-		if err == nil {
-			result.Skills = append(result.Skills, IncludedSkill{Name: definition.Name, Path: path})
+		if err != nil {
+			findings = append(findings, Finding{Path: path, Field: "skill", Category: "invalid_skill"})
+			continue
 		}
+		result.Skills = append(result.Skills, IncludedSkill{Name: definition.Name, Path: path})
 	}
 	slices.SortFunc(result.Skills, func(a, b IncludedSkill) int { return strings.Compare(a.Name, b.Name) })
 	if session == nil {
-		return result
+		return result, findings
 	}
 	for path := range session.ResultContracts {
 		result.ResultSchemas = append(result.ResultSchemas, path)
@@ -316,7 +326,7 @@ func inspectIncluded(archive *Archive, session *team.TeamSession) IncludedAssets
 		}
 	}
 	slices.SortFunc(result.GoActions, func(a, b IncludedGoAction) int { return strings.Compare(a.Capability, b.Capability) })
-	return result
+	return result, findings
 }
 
 func inspectExternal(root string, included IncludedAssets, session *team.TeamSession) ExternalRequirements {

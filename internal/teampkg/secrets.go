@@ -126,6 +126,11 @@ func validateSourceFiles(teamManifest string, files map[string][]byte) error {
 		if err := scanSourceContent(path, files[path]); err != nil {
 			return err
 		}
+		if isAgentMarkdown(path) {
+			if err := scanAgentFrontmatterFields(path, files[path]); err != nil {
+				return err
+			}
+		}
 	}
 	manifest, exists := files[teamManifest]
 	if !exists {
@@ -165,6 +170,60 @@ func scanSourceContent(path string, data []byte) error {
 	for _, pattern := range highConfidenceTokenPatterns {
 		if pattern.Match(data) {
 			return validationError(path, "content", "known_token_prefix")
+		}
+	}
+	return nil
+}
+
+func isAgentMarkdown(path string) bool {
+	return !strings.Contains(path, "/") && strings.EqualFold(filepath.Ext(path), ".md") && !strings.EqualFold(path, "README.md")
+}
+
+func scanAgentFrontmatterFields(path string, data []byte) error {
+	if !bytes.HasPrefix(data, []byte("---\n")) {
+		return nil
+	}
+	rest := data[4:]
+	end := bytes.Index(rest, []byte("\n---\n"))
+	if end < 0 {
+		return nil
+	}
+	probe := rawTemplatePattern.ReplaceAll(rest[:end], []byte(rawTemplateMarker))
+	var document yaml.Node
+	if err := yaml.Unmarshal(probe, &document); err != nil {
+		return fmt.Errorf("scan agent frontmatter fields: %w", err)
+	}
+	if len(document.Content) == 0 {
+		return nil
+	}
+	requires := mappingValue(document.Content[0], "requires")
+	environment := mappingValue(requires, "environment")
+	if environment == nil || environment.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for index, entry := range environment.Content {
+		if entry.Kind != yaml.ScalarNode {
+			continue
+		}
+		name, value, assigned := strings.Cut(strings.TrimSpace(entry.Value), "=")
+		if !assigned || !secretEnvironmentKey.MatchString(strings.TrimSpace(name)) {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value != "" && value != rawTemplateMarker && !templatePlaceholder.MatchString(value) {
+			return validationError(path, fmt.Sprintf("requires.environment[%d]", index), "literal_environment_secret")
+		}
+	}
+	return nil
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1]
 		}
 	}
 	return nil

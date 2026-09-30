@@ -71,6 +71,31 @@ func TestScanManifestFieldsAllowsEnvironmentPlaceholders(t *testing.T) {
 	}
 }
 
+func TestValidateSourceFilesRejectsAgentEnvironmentLiteralWithoutEcho(t *testing.T) {
+	const literal = "do-not-echo-this-value"
+	files := map[string][]byte{
+		"team.yaml": []byte("name: safe\n"),
+		"worker.md": []byte("---\nrequires:\n  environment:\n    - API_TOKEN=" + literal + "\n---\nWork.\n"),
+	}
+	err := validateSourceFiles("team.yaml", files)
+	if err == nil || !strings.Contains(err.Error(), "literal_environment_secret") {
+		t.Fatalf("literal environment error = %v", err)
+	}
+	if strings.Contains(err.Error(), literal) {
+		t.Fatalf("diagnostic leaked secret: %v", err)
+	}
+}
+
+func TestValidateSourceFilesAllowsAgentEnvironmentNamesAndPlaceholders(t *testing.T) {
+	files := map[string][]byte{
+		"team.yaml": []byte("name: safe\n"),
+		"worker.md": []byte("---\nrequires:\n  environment:\n    - API_TOKEN\n    - ACCESS_TOKEN={@ ACCESS_TOKEN @}\n---\nWork.\n"),
+	}
+	if err := validateSourceFiles("team.yaml", files); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScanManifestFieldsDoesNotTreatArbitraryVarsAsCredentialConfig(t *testing.T) {
 	manifest := "name: safe\nvars:\n  provider-api-key: documentation-label\n  mcp-servers:\n    example:\n      environment:\n        ACCESS_TOKEN: documentation-label\n"
 	if err := scanManifestFields("team.yaml", []byte(manifest)); err != nil {
@@ -143,6 +168,11 @@ func TestPackRunsRawSecretAndAbsoluteReferencePreflight(t *testing.T) {
 			manifest: "name: portable-team\n",
 			worker:   "---\nrole: worker\n---\nsk-abcdefghijklmnopqrstuvwx\n",
 			want:     "known_token_prefix",
+		},
+		"agent environment literal": {
+			manifest: "name: portable-team\n",
+			worker:   "---\nrole: worker\nrequires:\n  environment:\n    - API_TOKEN=literal-value\n---\nWork.\n",
+			want:     "literal_environment_secret",
 		},
 		"absolute action": {
 			manifest: "name: portable-team\naction-providers:\n  transform:\n    runtime: golang\n    mode: trusted-static\n    source: /tmp/action\n",

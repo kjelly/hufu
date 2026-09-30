@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 // InstallOptions selects a local package and one of Hufu's canonical team
@@ -139,19 +141,20 @@ func ResolveInstallTarget(name string, global bool) (string, error) {
 	if err := ValidatePackageName(name); err != nil {
 		return "", err
 	}
-	var root string
+	var (
+		root string
+		err  error
+	)
 	if global {
-		home, err := os.UserHomeDir()
+		root, err = team.DefaultUserTeamRoot()
 		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
+			return "", err
 		}
-		root = filepath.Join(home, ".agent-teams")
 	} else {
-		cwd, err := os.Getwd()
+		root, err = team.DefaultProjectTeamRoot()
 		if err != nil {
-			return "", fmt.Errorf("resolve current directory: %w", err)
+			return "", err
 		}
-		root = filepath.Join(cwd, ".agent-teams")
 	}
 	return filepath.Join(root, name), nil
 }
