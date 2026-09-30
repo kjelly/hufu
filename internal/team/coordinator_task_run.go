@@ -3539,15 +3539,34 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	return result, nil
 }
 
-// lastToolCallEntry tracks the most recent tool call for deadloop detection.
-// Used by runAgentWithStatusAndHistory to detect stuck agents repeating the
-// same failing tool call.
+// lastToolCallEntry tracks the most recent logical tool call for deadloop
+// detection. The fingerprint canonicalizes JSON arguments so inconsequential
+// key ordering or whitespace cannot evade the circuit breaker.
 type lastToolCallEntry struct {
-	toolName string
-	input    string
+	toolName             string
+	inputFingerprint     string
+	consecutiveSuccesses int
 }
 
-const maxRepeatedSubmitResultFailures = 3
+const (
+	maxRepeatedSubmitResultFailures = 3
+	maxRepeatedSuccessfulToolCalls  = 3
+)
+
+func toolCallInputFingerprint(input string) string {
+	decoder := json.NewDecoder(strings.NewReader(input))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err == nil {
+		var trailing any
+		if err := decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+			if canonical, err := json.Marshal(value); err == nil {
+				return string(canonical)
+			}
+		}
+	}
+	return strings.TrimSpace(input)
+}
 
 // submitResultFailureFingerprint recognizes deterministic protocol rejections
 // emitted by submit_result. The model may vary its JSON between attempts, so
@@ -4253,15 +4272,20 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			loopDetectMu.Lock()
 			pendingToolInputs[tc.ToolCallID] = tc.Input
 			pendingToolStarted[tc.ToolCallID] = time.Now().UTC()
-			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.input == tc.Input {
+			inputFingerprint := toolCallInputFingerprint(tc.Input)
+			if lastToolCall != nil && lastToolCall.toolName == tc.ToolName && lastToolCall.inputFingerprint == inputFingerprint {
 				if consecutiveErrCount >= 2 {
 					loopDetectMu.Unlock()
 					return newToolLoopError(agentName, tc.ToolName, consecutiveErrCount)
 				}
+				if lastToolCall.consecutiveSuccesses >= maxRepeatedSuccessfulToolCalls {
+					loopDetectMu.Unlock()
+					return newSuccessfulToolLoopError(agentName, tc.ToolName, lastToolCall.consecutiveSuccesses)
+				}
 			} else {
 				lastToolCall = &lastToolCallEntry{
-					toolName: tc.ToolName,
-					input:    tc.Input,
+					toolName:         tc.ToolName,
+					inputFingerprint: inputFingerprint,
 				}
 				consecutiveErrCount = 0
 			}
@@ -4318,11 +4342,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			callStarted := pendingToolStarted[tr.ToolCallID]
 			delete(pendingToolInputs, tr.ToolCallID)
 			delete(pendingToolStarted, tr.ToolCallID)
-			if tracked && lastToolCall != nil && lastToolCall.toolName == tr.ToolName && lastToolCall.input == callInput {
+			if tracked && lastToolCall != nil && lastToolCall.toolName == tr.ToolName && lastToolCall.inputFingerprint == toolCallInputFingerprint(callInput) {
 				if isErrResult {
 					consecutiveErrCount++
+					lastToolCall.consecutiveSuccesses = 0
 				} else {
 					consecutiveErrCount = 0
+					lastToolCall.consecutiveSuccesses++
 				}
 			}
 			if isErrResult {

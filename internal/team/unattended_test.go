@@ -453,6 +453,45 @@ func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
 	}
 }
 
+func TestLoopDetection_StopsRepeatedSuccessfulToolCalls(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	c.session.Workspace = t.TempDir()
+	toolInputs := []string{
+		`{"pattern":"TODO","path":"internal/team"}`,
+		`{ "path": "internal/team", "pattern": "TODO" }`,
+		`{"pattern":"TODO","path":"internal/team"}`,
+		`{"path":"internal/team","pattern":"TODO"}`,
+	}
+
+	ag := &mockAgent{streamFunc: func(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		for attempt, input := range toolInputs {
+			callID := fmt.Sprintf("grep-%d", attempt)
+			if err := call.OnToolCall(fantasy.ToolCallContent{ToolCallID: callID, ToolName: "grep", Input: input}); err != nil {
+				return nil, err
+			}
+			if err := call.OnToolResult(fantasy.ToolResultContent{
+				ToolCallID: callID,
+				ToolName:   "grep",
+				Result:     fantasy.ToolResultOutputContentText{Text: "same evidence"},
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, errors.New("successful tool loop was not stopped")
+	}}
+
+	_, _, err := c.runAgentWithStatusAndHistory(withTestAuxiliaryInvocationContext(t.Context()), ag, "reviewer", "review changes", nil, &taskTiming{})
+	if err == nil || !strings.Contains(err.Error(), "stuck in a loop repeating the same successful tool call: grep after 3 completed call(s)") {
+		t.Fatalf("loop error = %v", err)
+	}
+	if strings.Contains(err.Error(), "TODO") || strings.Contains(err.Error(), "internal/team") {
+		t.Fatalf("successful loop error leaked model-controlled arguments: %v", err)
+	}
+	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureExecution {
+		t.Fatalf("successful tool loop class = %q, want %q", got, FailureExecution)
+	}
+}
+
 func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()

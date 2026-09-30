@@ -62,12 +62,16 @@ type toolLoopError struct {
 	agentName        string
 	toolName         string
 	rejectedAttempts int
+	successfulCalls  int
 	class            TaskFailureClass
 }
 
 func (e *toolLoopError) Error() string {
 	if e == nil {
 		return ""
+	}
+	if e.successfulCalls > 0 {
+		return fmt.Sprintf("agent %s is stuck in a loop repeating the same successful tool call: %s after %d completed call(s)", e.agentName, e.toolName, e.successfulCalls)
 	}
 	return fmt.Sprintf("agent %s is stuck in a loop executing the same failing command: %s after %d rejected attempt(s)", e.agentName, e.toolName, e.rejectedAttempts)
 }
@@ -89,6 +93,15 @@ func newToolLoopError(agentName, toolName string, rejectedAttempts int) error {
 		toolName:         toolName,
 		rejectedAttempts: rejectedAttempts,
 		class:            class,
+	}
+}
+
+func newSuccessfulToolLoopError(agentName, toolName string, successfulCalls int) error {
+	return &toolLoopError{
+		agentName:       agentName,
+		toolName:        toolName,
+		successfulCalls: successfulCalls,
+		class:           FailureExecution,
 	}
 }
 
