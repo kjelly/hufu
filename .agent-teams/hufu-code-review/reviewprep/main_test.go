@@ -434,6 +434,31 @@ func TestReviewerPromptDefersToRuntimeResultProtocol(t *testing.T) {
 	}
 }
 
+func TestReviewWorkerPromptsRequireArtifactOnlySourceEvidence(t *testing.T) {
+	for _, filename := range []string{"reviewer.md", "critic.md", "documentation-reviewer.md"} {
+		t.Run(filename, func(t *testing.T) {
+			prompt, err := os.ReadFile(filepath.Join("..", filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(prompt)
+			for _, required := range []string{
+				"tools: view\n",
+				"reviewed-source snapshot",
+				"never use `file_path`",
+				"live checkout",
+			} {
+				if !strings.Contains(text, required) {
+					t.Fatalf("%s omitted artifact-only instruction %q", filename, required)
+				}
+			}
+			if strings.Contains(text, "tools: view,grep") {
+				t.Fatalf("%s still grants live repository search tools", filename)
+			}
+		})
+	}
+}
+
 func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "cmd/hufu/main.go", "package main\n\nfunc main() {}\n", "boundary change", "2025-01-02T00:00:00Z")
@@ -466,8 +491,8 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	}
 	got := goldenSummary{SchemaVersion: manifest.SchemaVersion, CommitCount: manifest.Range.CommitCount, ChangedFiles: manifest.ChangedFiles}
 	for _, entry := range manifest.Items {
-		if len(entry.Inputs) != 1 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" {
-			t.Fatalf("item %s lacks opaque diff input artifact: %#v", entry.Key, entry.Inputs)
+		if len(entry.Inputs) != 2 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" || entry.Inputs[1].Kind != "review_source_snapshot" {
+			t.Fatalf("item %s lacks opaque diff and source-snapshot inputs: %#v", entry.Key, entry.Inputs)
 		}
 		got.Items = append(got.Items, goldenItem{Key: entry.Key, Lens: entry.Lens, Paths: entry.TouchedPaths, DiffPath: entry.DiffPath})
 		patch, err := os.ReadFile(filepath.Join(repo, "out", filepath.FromSlash(entry.DiffPath)))
@@ -571,8 +596,8 @@ func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
 	assertManifestPaths(t, primary, []string{"docs/architecture/execution.md", "internal/team/runtime.go"})
 	assertManifestPaths(t, documentation, []string{"README.md", "docs/tutorials/start.md"})
 	assertManifestPaths(t, escalation, []string{"docs/architecture/execution.md"})
-	if escalation.Items[0].Lens != "documentation-risk" || len(escalation.Items[0].Inputs) != 2 {
-		t.Fatalf("escalation item = %#v, want risk lens plus diff and verifier inputs", escalation.Items[0])
+	if escalation.Items[0].Lens != "documentation-risk" || len(escalation.Items[0].Inputs) != 3 {
+		t.Fatalf("escalation item = %#v, want risk lens plus diff, source snapshot, and verifier inputs", escalation.Items[0])
 	}
 	for route, value := range map[string]manifest{"primary": primary, "documentation": documentation, "documentation-escalation": escalation} {
 		for _, entry := range value.Items {
@@ -939,6 +964,65 @@ func TestPrepareDoesNotIncludeDirtyWorkingTree(t *testing.T) {
 	}
 }
 
+func TestPrepareSourceSnapshotPinsChangedSourceCallerAndFocusedTest(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "internal/team/api.go"), "package team\n\nfunc ReviewedTarget() int { return 0 }\n")
+	writeFile(t, filepath.Join(repo, "internal/team/caller.go"), "package team\n\nfunc Caller() int { return ReviewedTarget() }\n")
+	writeFile(t, filepath.Join(repo, "internal/team/api_test.go"), "package team\n\nimport \"testing\"\n\nfunc TestReviewedTarget(t *testing.T) { if ReviewedTarget() < 0 { t.Fatal(\"negative\") } }\n")
+	commit(t, repo, "baseline reviewed API", "2025-01-02T00:00:00Z")
+	writeAndCommit(t, repo, "internal/team/api.go", "package team\n\nfunc ReviewedTarget() int { return 1 }\n", "change reviewed API", "2025-01-03T00:00:00Z")
+
+	writeFile(t, filepath.Join(repo, "internal/team/api.go"), "package team\n\nfunc ReviewedTarget() int { return 99 } // dirty checkout\n")
+	writeFile(t, filepath.Join(repo, "internal/team/caller.go"), "package team\n\nfunc Caller() int { return 99 } // dirty checkout\n")
+	writeFile(t, filepath.Join(repo, "internal/team/api_test.go"), "package team\n\n// dirty checkout\n")
+
+	config := fixtureConfig(repo, "out")
+	config.Scope = resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
+	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 2 {
+		t.Fatalf("source snapshot inputs = %#v", manifest.Items)
+	}
+	snapshot := manifest.Items[0].Inputs[1]
+	if snapshot.Kind != "review_source_snapshot" || manifest.Items[0].Bindings["review_revision"] != manifest.Range.End {
+		t.Fatalf("snapshot identity = %#v bindings=%#v range=%#v", snapshot, manifest.Items[0].Bindings, manifest.Range)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(snapshot.Path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"review_revision: " + manifest.Range.End,
+		"## internal/team/api.go",
+		"func ReviewedTarget() int { return 1 }",
+		"## internal/team/caller.go",
+		"return ReviewedTarget()",
+		"## internal/team/api_test.go",
+		"func TestReviewedTarget",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("source snapshot omitted %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "dirty checkout") || strings.Contains(text, "return 99") {
+		t.Fatalf("source snapshot observed live checkout instead of reviewed revision:\n%s", text)
+	}
+	declared := false
+	for _, ref := range result.Artifacts {
+		if ref.ID == snapshot.ID {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		t.Fatalf("source snapshot %q was not declared in action artifacts: %#v", snapshot.ID, result.Artifacts)
+	}
+}
+
 func TestGenericWorksetShadowProjectionPreservesKeysDigestsAndOrdering(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "internal/team/one.go", "package team\n\nfunc One() {}\n", "one", "2025-01-02T00:00:00Z")
@@ -958,8 +1042,8 @@ func TestGenericWorksetShadowProjectionPreservesKeysDigestsAndOrdering(t *testin
 	}
 	rows := make([]shadowRow, 0, len(manifest.Items))
 	for _, entry := range manifest.Items {
-		if len(entry.Inputs) != 1 {
-			t.Fatalf("item %s has %d inputs, want one", entry.Key, len(entry.Inputs))
+		if len(entry.Inputs) != 2 || entry.Inputs[1].Kind != "review_source_snapshot" {
+			t.Fatalf("item %s inputs = %#v, want diff plus reviewed source snapshot", entry.Key, entry.Inputs)
 		}
 		rows = append(rows, shadowRow{Key: entry.Key, Lens: entry.Lens, Digest: entry.Inputs[0].SHA256})
 	}
@@ -988,11 +1072,14 @@ func TestPrepareArtifactRootMatchesRuntimeWorkspace(t *testing.T) {
 		t.Fatalf("manifest_path = %v, want runtime-workspace-relative path", result.Outputs["manifest_path"])
 	}
 	manifest := readManifest(t, filepath.Join(repo, "workspace", filepath.FromSlash(manifestPath)))
-	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 1 {
-		t.Fatalf("manifest items = %#v, want one opaque input", manifest.Items)
+	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 2 {
+		t.Fatalf("manifest items = %#v, want diff and source snapshot inputs", manifest.Items)
 	}
 	if got := manifest.Items[0].Inputs[0].Path; got != "hufu-code-review/workset/batches/unit-0000/diff.patch" {
 		t.Fatalf("input artifact path = %q, want path relative to runtime workspace", got)
+	}
+	if got := manifest.Items[0].Inputs[1].Path; got != "hufu-code-review/workset/batches/unit-0000/source-snapshot.txt" {
+		t.Fatalf("source snapshot artifact path = %q, want path relative to runtime workspace", got)
 	}
 }
 

@@ -2,7 +2,7 @@
 name: reviewer
 description: Read-only reviewer for every bounded workset item across runtime, CLI, TUI, and security lenses
 role: worker
-tools: view,grep,glob,ls
+tools: view
 temperature: "0.15"
 max-tokens: "32768"
 reasoning-effort: high
@@ -17,11 +17,13 @@ max-retries: 1
 
 Review only the assigned immutable workset item. The runtime supplies the item
 key, lens, source identity, and opaque input artifact references in the task
-context. Read the assigned diff artifact first with `view` using its artifact
-reference; then inspect only the precise changed source, caller, and focused
-test evidence needed to support a conclusion. Do not use shell, write files,
-run a repository-wide review, infer a range from Git, or call `load_skill`; the
-assigned review does not need dynamic skill loading.
+context. Read the assigned diff artifact first with `view` using its
+`artifact_ref`, then read the supplied immutable reviewed-source snapshot for
+the precise changed source, caller, and focused-test evidence needed to support
+a conclusion. Use `view` only with `artifact_ref`; never use `file_path` or the
+live checkout. Do not use shell, write files, run a repository-wide review,
+infer a range from Git, or call `load_skill`; the assigned review does not need
+dynamic skill loading.
 
 If the assigned lens is `noop`, read the supplied no-op diff artifact and
 immediately submit a minimal successful result with no findings. Do not inspect
@@ -33,22 +35,21 @@ report. A zero counter means no eligible reference was detected, not
 comprehensive coverage. Do not replace covered evidence with guessed source
 line citations; still inspect semantic accuracy and references outside the
 reported coverage.
-The report's `reviewed_revision` is the commit its checks ran against. When
-it is a commit rather than the working tree, the checkout you can read may be
-later than the reviewed state, so a file or symbol that is missing or
-different there is not by itself a finding against the reviewed commits.
+The report's `reviewed_revision` is the commit its checks ran against and must
+agree with the workset's `review_revision` binding. The reviewed-source
+snapshot—not the current checkout—is the source authority for that revision.
 `forward_references` are references missing at `reviewed_revision` that a
 later commit (`reference_tip`) provides; a plan that names work it has not
 done yet produces them, and they are not findings on their own.
 
-The assigned diff artifact is the complete immutable boundary of this workset
-item. Treat artifact EOF as the end of the assigned batch, not as evidence that
-the artifact was truncated merely because the surrounding source file
-continues. Do not request offsets beyond EOF or read every touched path as a
-completeness exercise. Before reading repository source beyond the artifact,
-name the specific suspected finding, invariant, caller/callee, or focused test
-that requires it; stop exploring once that evidence is sufficient and preserve
-enough budget for the final structured result.
+The assigned diff and reviewed-source snapshot artifacts are the complete
+immutable evidence boundary of this workset item. Treat artifact EOF as the end
+of the assigned object. The source snapshot labels primary and related files
+and explicitly marks truncation, binary omission, symlinks, or absence. If it
+does not contain evidence required to prove a suspected finding or invariant,
+record a coverage gap or open question; do not consult repository paths to fill
+it. Stop once the bounded evidence is sufficient and preserve enough budget for
+the final structured result.
 
 Apply the checklist selected by the lens:
 

@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	manifestSchemaVersion = 2
+	manifestSchemaVersion = 3
 	scopeResolverVersion  = "semantic-validator-3"
 )
 
@@ -37,6 +37,8 @@ const (
 	defaultMaxChangedPaths   = 256
 	defaultMaxWorksetItems   = 64
 	routingDocumentation     = "documentation"
+	maxSnapshotContentBytes  = 2 * 1024 * 1024
+	maxSnapshotRelatedPaths  = 24
 )
 
 type actionRequest struct {
@@ -231,6 +233,20 @@ type routedWorkset struct {
 	paths       []string
 	batches     []*batch
 	extraInputs []artifact
+}
+
+type reviewSourceSnapshot struct {
+	root         string
+	revision     string
+	baseRevision string
+	goIndex      []goSnapshotIndexEntry
+	goIndexErr   error
+	goIndexReady bool
+}
+
+type goSnapshotIndexEntry struct {
+	path        string
+	identifiers map[string]struct{}
 }
 
 type listedGoPackage struct {
@@ -542,8 +558,13 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	if len(paths) == 0 {
 		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no changed paths", compactScope(config.Scope))
 	}
+	snapshot, err := createReviewSourceSnapshot(ctx, repo, reviewRangeValue, paths)
+	if err != nil {
+		return actionResult{}, err
+	}
+	defer snapshot.Close()
 	if config.Routing == routingDocumentation {
-		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, diffPlan, config)
+		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, diffPlan, snapshot, config)
 	}
 	batches, err := buildBatches(ctx, repo, reviewRangeValue, diffPlan, paths, config)
 	if err != nil {
@@ -568,7 +589,7 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
 	}
-	items, err := writeItems(artifactRoot, outputDir, batches)
+	items, err := writeItems(artifactRoot, outputDir, batches, snapshot)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -590,13 +611,11 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	manifestArtifact.Description = "workset manifest"
 	artifacts := []artifact{manifestArtifact}
 	for _, entry := range items {
-		path := filepath.Join(outputDir, filepath.FromSlash(entry.DiffPath))
-		diffArtifact, err := fileArtifact(artifactRoot, path, "review_diff")
-		if err != nil {
-			return actionResult{}, err
+		for _, input := range entry.Inputs {
+			if input.Kind == "review_diff" || input.Kind == "review_source_snapshot" {
+				artifacts = append(artifacts, input)
+			}
 		}
-		diffArtifact.Description = "bounded workset diff"
-		artifacts = append(artifacts, diffArtifact)
 	}
 	return actionResult{Outputs: map[string]any{
 		"manifest_path":    manifestArtifact.Path,
@@ -611,7 +630,7 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	}, Artifacts: artifacts}, nil
 }
 
-func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, config Config) (actionResult, error) {
+func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {
 	r := resolution.Range
 	documentationPaths := make([]string, 0)
 	primaryPaths := make([]string, 0)
@@ -716,7 +735,7 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		if len(current.batches) == 0 {
 			current.batches = []*batch{noopBatch(current.name)}
 		}
-		manifestArtifact, worksetArtifacts, itemCount, writeErr := writeRoutedWorkset(artifactRoot, outputDir, r, scope, *current)
+		manifestArtifact, worksetArtifacts, itemCount, writeErr := writeRoutedWorkset(artifactRoot, outputDir, r, scope, *current, snapshot)
 		if writeErr != nil {
 			return actionResult{}, writeErr
 		}
@@ -733,9 +752,9 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	return actionResult{Outputs: outputs, Artifacts: artifacts}, nil
 }
 
-func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope scopeAttestation, workset routedWorkset) (artifact, []artifact, int, error) {
+func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope scopeAttestation, workset routedWorkset, snapshot *reviewSourceSnapshot) (artifact, []artifact, int, error) {
 	worksetDir := filepath.Join(outputDir, workset.name)
-	items, err := writeItems(artifactRoot, worksetDir, workset.batches)
+	items, err := writeItems(artifactRoot, worksetDir, workset.batches, snapshot)
 	if err != nil {
 		return artifact{}, nil, 0, err
 	}
@@ -763,15 +782,13 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 		return artifact{}, nil, 0, err
 	}
 	manifestArtifact.Description = workset.description
-	artifacts := make([]artifact, 0, len(items))
+	artifacts := make([]artifact, 0, len(items)*2)
 	for _, entry := range items {
-		path := filepath.Join(worksetDir, filepath.FromSlash(entry.DiffPath))
-		diffArtifact, artifactErr := fileArtifact(artifactRoot, path, "review_diff")
-		if artifactErr != nil {
-			return artifact{}, nil, 0, artifactErr
+		for _, input := range entry.Inputs {
+			if input.Kind == "review_diff" || input.Kind == "review_source_snapshot" {
+				artifacts = append(artifacts, input)
+			}
 		}
-		diffArtifact.Description = "bounded workset diff"
-		artifacts = append(artifacts, diffArtifact)
 	}
 	itemCount := len(items)
 	return manifestArtifact, artifacts, itemCount, nil
@@ -2239,6 +2256,381 @@ func createArchivedSymlink(target, name, linkname string) error {
 	return nil
 }
 
+func createReviewSourceSnapshot(ctx context.Context, repo string, r reviewRange, changed []string) (*reviewSourceSnapshot, error) {
+	directory, err := os.MkdirTemp("", "hufu-reviewprep-source-*")
+	if err != nil {
+		return nil, fmt.Errorf("create reviewed source snapshot: %w", err)
+	}
+	revision := r.End
+	archiveRevision := r.End
+	if r.isWorkingTree() {
+		revision = "working tree"
+		archiveRevision = r.Start
+	}
+	if err := archiveGitRevision(ctx, repo, archiveRevision, directory); err != nil {
+		_ = os.RemoveAll(directory)
+		return nil, fmt.Errorf("create reviewed source snapshot: %w", err)
+	}
+	if r.isWorkingTree() {
+		for _, changedPath := range changed {
+			if err := overlayWorktreeSnapshotPath(repo, directory, changedPath); err != nil {
+				_ = os.RemoveAll(directory)
+				return nil, fmt.Errorf("snapshot working-tree path %q: %w", changedPath, err)
+			}
+		}
+	}
+	return &reviewSourceSnapshot{root: directory, revision: revision, baseRevision: archiveRevision}, nil
+}
+
+func (s *reviewSourceSnapshot) Close() {
+	if s != nil && s.root != "" {
+		_ = os.RemoveAll(s.root)
+	}
+}
+
+func cleanSnapshotPath(value string) (string, error) {
+	if value == "" || filepath.IsAbs(filepath.FromSlash(value)) {
+		return "", fmt.Errorf("snapshot path %q is not repository-relative", value)
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(value))
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("snapshot path %q escapes the repository", value)
+	}
+	return cleaned, nil
+}
+
+func overlayWorktreeSnapshotPath(repo, snapshotRoot, changedPath string) error {
+	relative, err := cleanSnapshotPath(changedPath)
+	if err != nil {
+		return err
+	}
+	source := filepath.Join(repo, relative)
+	destination := filepath.Join(snapshotRoot, relative)
+	info, err := os.Lstat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.RemoveAll(destination)
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		return err
+	}
+	switch {
+	case info.Mode().IsRegular():
+		data, readErr := os.ReadFile(source)
+		if readErr != nil {
+			return readErr
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, info.Mode().Perm())
+	case info.Mode()&os.ModeSymlink != 0:
+		target, readErr := os.Readlink(source)
+		if readErr != nil {
+			return readErr
+		}
+		return createArchivedSymlink(destination, relative, filepath.ToSlash(target))
+	case info.IsDir():
+		return os.MkdirAll(destination, info.Mode().Perm())
+	default:
+		return fmt.Errorf("unsupported worktree file mode %s", info.Mode())
+	}
+}
+
+func (s *reviewSourceSnapshot) writeBundleArtifact(artifactRoot, directory string, primaryPaths []string) (artifact, error) {
+	if s == nil || s.root == "" {
+		return artifact{}, errors.New("reviewed source snapshot is unavailable")
+	}
+	relatedPaths, err := s.relatedGoPaths(primaryPaths)
+	if err != nil {
+		return artifact{}, err
+	}
+	primarySet := make(map[string]struct{}, len(primaryPaths))
+	ordered := make([]string, 0, len(primaryPaths)+len(relatedPaths))
+	for _, current := range primaryPaths {
+		if _, exists := primarySet[current]; exists {
+			continue
+		}
+		primarySet[current] = struct{}{}
+		ordered = append(ordered, current)
+	}
+	ordered = append(ordered, relatedPaths...)
+	partition, err := filepath.Rel(artifactRoot, directory)
+	if err != nil {
+		return artifact{}, fmt.Errorf("identify source snapshot partition: %w", err)
+	}
+
+	var bundle strings.Builder
+	fmt.Fprintf(&bundle, "# Immutable reviewed source snapshot\nreview_revision: %s\nreview_base_revision: %s\nworkset_partition: %s\n", s.revision, s.baseRevision, filepath.ToSlash(partition))
+	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\n")
+	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\ncontent_budget_bytes: %d\n", len(primarySet), len(relatedPaths), maxSnapshotContentBytes)
+	remaining := maxSnapshotContentBytes
+	for _, current := range ordered {
+		role := "related"
+		if _, primary := primarySet[current]; primary {
+			role = "primary"
+		}
+		used, writeErr := s.writeBundleSection(&bundle, current, role, remaining)
+		if writeErr != nil {
+			return artifact{}, writeErr
+		}
+		remaining -= used
+	}
+
+	path := filepath.Join(directory, "source-snapshot.txt")
+	if err := os.WriteFile(path, []byte(bundle.String()), 0o644); err != nil {
+		return artifact{}, err
+	}
+	result, err := fileArtifact(artifactRoot, path, "review_source_snapshot")
+	if err != nil {
+		return artifact{}, err
+	}
+	result.Description = "immutable reviewed-revision source, caller, and focused-test snapshot"
+	return result, nil
+}
+
+func (s *reviewSourceSnapshot) writeBundleSection(bundle *strings.Builder, repositoryPath, role string, remaining int) (int, error) {
+	relative, err := cleanSnapshotPath(repositoryPath)
+	if err != nil {
+		return 0, err
+	}
+	fullPath := filepath.Join(s.root, relative)
+	info, err := os.Lstat(fullPath)
+	bundle.WriteString("\n## " + filepath.ToSlash(relative) + "\n")
+	bundle.WriteString("role: " + role + "\n")
+	if errors.Is(err, os.ErrNotExist) {
+		bundle.WriteString("status: absent_at_review_revision\n")
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, readErr := os.Readlink(fullPath)
+		if readErr != nil {
+			return 0, readErr
+		}
+		fmt.Fprintf(bundle, "status: symlink\ntarget: %s\n", filepath.ToSlash(target))
+		return 0, nil
+	}
+	if !info.Mode().IsRegular() {
+		fmt.Fprintf(bundle, "status: unsupported_mode\nmode: %s\n", info.Mode())
+		return 0, nil
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Fprintf(bundle, "status: present\nbytes: %d\nsha256: %s\n", len(data), sha256Hex(data))
+	if bytes.IndexByte(data, 0) >= 0 {
+		bundle.WriteString("content: binary_omitted\n")
+		return 0, nil
+	}
+	content := data
+	if len(content) > remaining {
+		allowed := remaining
+		if allowed < 0 {
+			allowed = 0
+		}
+		content = content[:allowed]
+		fmt.Fprintf(bundle, "content_truncated: true\nomitted_bytes: %d\n", len(data)-len(content))
+	}
+	bundle.WriteString("```text\n")
+	_, _ = bundle.Write(content)
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		bundle.WriteByte('\n')
+	}
+	bundle.WriteString("```\n")
+	return len(content), nil
+}
+
+func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, error) {
+	primary := make(map[string]struct{}, len(primaryPaths))
+	symbols := make(map[string]struct{})
+	paired := make(map[string]struct{})
+	primaryDirs := make(map[string]struct{})
+	for _, repositoryPath := range primaryPaths {
+		repositoryPath = filepath.ToSlash(repositoryPath)
+		primary[repositoryPath] = struct{}{}
+		if filepath.Ext(repositoryPath) != ".go" {
+			continue
+		}
+		primaryDirs[path.Dir(repositoryPath)] = struct{}{}
+		if strings.HasSuffix(repositoryPath, "_test.go") {
+			paired[strings.TrimSuffix(repositoryPath, "_test.go")+".go"] = struct{}{}
+		} else {
+			paired[strings.TrimSuffix(repositoryPath, ".go")+"_test.go"] = struct{}{}
+		}
+		data, err := s.readRegularFile(repositoryPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		for symbol := range declaredGoSymbols(repositoryPath, data) {
+			symbols[symbol] = struct{}{}
+		}
+	}
+	if len(symbols) == 0 && len(paired) == 0 {
+		return nil, nil
+	}
+
+	type candidate struct {
+		path     string
+		priority int
+	}
+	if err := s.ensureGoIndex(); err != nil {
+		return nil, err
+	}
+	var candidates []candidate
+	for _, indexed := range s.goIndex {
+		repositoryPath := indexed.path
+		if _, changed := primary[repositoryPath]; changed {
+			continue
+		}
+		priority := 4
+		if _, exactPair := paired[repositoryPath]; exactPair {
+			priority = 0
+		} else {
+			if !identifierSetsIntersect(indexed.identifiers, symbols) {
+				continue
+			}
+			_, sameDirectory := primaryDirs[path.Dir(repositoryPath)]
+			switch {
+			case sameDirectory && strings.HasSuffix(repositoryPath, "_test.go"):
+				priority = 1
+			case sameDirectory:
+				priority = 2
+			case strings.HasSuffix(repositoryPath, "_test.go"):
+				priority = 3
+			}
+		}
+		candidates = append(candidates, candidate{path: repositoryPath, priority: priority})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].priority != candidates[j].priority {
+			return candidates[i].priority < candidates[j].priority
+		}
+		return candidates[i].path < candidates[j].path
+	})
+	limit := len(candidates)
+	if limit > maxSnapshotRelatedPaths {
+		limit = maxSnapshotRelatedPaths
+	}
+	result := make([]string, 0, limit)
+	for _, current := range candidates[:limit] {
+		result = append(result, current.path)
+	}
+	return result, nil
+}
+
+func (s *reviewSourceSnapshot) ensureGoIndex() error {
+	if s.goIndexReady {
+		return s.goIndexErr
+	}
+	s.goIndexReady = true
+	s.goIndexErr = filepath.WalkDir(s.root, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		relative, err := filepath.Rel(s.root, current)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(current)
+		if err != nil {
+			return err
+		}
+		s.goIndex = append(s.goIndex, goSnapshotIndexEntry{
+			path:        filepath.ToSlash(relative),
+			identifiers: goFileIdentifiers(filepath.ToSlash(relative), data),
+		})
+		return nil
+	})
+	return s.goIndexErr
+}
+
+func (s *reviewSourceSnapshot) readRegularFile(repositoryPath string) ([]byte, error) {
+	relative, err := cleanSnapshotPath(repositoryPath)
+	if err != nil {
+		return nil, err
+	}
+	fullPath := filepath.Join(s.root, relative)
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("snapshot path %q is not a regular file", repositoryPath)
+	}
+	return os.ReadFile(fullPath)
+}
+
+func declaredGoSymbols(filename string, data []byte) map[string]struct{} {
+	result := make(map[string]struct{})
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.SkipObjectResolution)
+	if err != nil {
+		return result
+	}
+	add := func(name string) {
+		if name != "_" && len([]rune(name)) >= 4 {
+			result[name] = struct{}{}
+		}
+	}
+	for _, declaration := range parsed.Decls {
+		switch current := declaration.(type) {
+		case *ast.FuncDecl:
+			add(current.Name.Name)
+		case *ast.GenDecl:
+			for _, spec := range current.Specs {
+				switch value := spec.(type) {
+				case *ast.TypeSpec:
+					add(value.Name.Name)
+				case *ast.ValueSpec:
+					for _, name := range value.Names {
+						add(name.Name)
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+func goFileIdentifiers(filename string, data []byte) map[string]struct{} {
+	identifiers := make(map[string]struct{})
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.SkipObjectResolution)
+	if err != nil {
+		return identifiers
+	}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if len([]rune(identifier.Name)) >= 4 {
+			identifiers[identifier.Name] = struct{}{}
+		}
+		return true
+	})
+	return identifiers
+}
+
+func identifierSetsIntersect(first, second map[string]struct{}) bool {
+	for identifier := range first {
+		if _, ok := second[identifier]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func offlineGoEnvironment() []string {
 	environment := replaceEnvironmentValue(os.Environ(), "GOPROXY", "off")
 	environment = replaceEnvironmentValue(environment, "GOSUMDB", "off")
@@ -2466,7 +2858,7 @@ func reviewDiff(ctx context.Context, repo string, r reviewRange, diffPlan select
 	return diff, nil
 }
 
-func writeItems(artifactRoot, outputDir string, batches []*batch) ([]item, error) {
+func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *reviewSourceSnapshot) ([]item, error) {
 	items := make([]item, 0, len(batches))
 	for index, current := range batches {
 		key := fmt.Sprintf("unit-%04d", index)
@@ -2487,11 +2879,15 @@ func writeItems(artifactRoot, outputDir string, batches []*batch) ([]item, error
 			return nil, fmt.Errorf("describe batch diff %q: %w", key, err)
 		}
 		diffArtifact.Description = "bounded workset diff"
+		snapshotArtifact, err := snapshot.writeBundleArtifact(artifactRoot, dir, current.paths)
+		if err != nil {
+			return nil, fmt.Errorf("write batch source snapshot %q: %w", key, err)
+		}
 		items = append(items, item{
 			Key: key, Lens: current.lens,
-			Bindings:     map[string]string{"key": key, "lens": current.lens},
+			Bindings:     map[string]string{"key": key, "lens": current.lens, "review_revision": snapshot.revision},
 			TouchedPaths: append([]string(nil), current.paths...),
-			Inputs:       []artifact{diffArtifact},
+			Inputs:       []artifact{diffArtifact, snapshotArtifact},
 			DiffPath:     filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
 			DiffSHA:      sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
 		})
