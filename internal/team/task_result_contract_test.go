@@ -222,6 +222,19 @@ func TestTaskResultPromptToolDecoderParity(t *testing.T) {
 	if _, err := decodeSubmitResultInput([]byte(`{"status":"success","summary":"done","files_read":[{"path":"sha256-diff"}]}`), contract); err != nil {
 		t.Fatalf("decoder rejected schema-valid input: %v", err)
 	}
+	examplePrefix := "Schema-valid submit_result payload example: `"
+	start := strings.Index(prompt, examplePrefix)
+	if start < 0 {
+		t.Fatalf("worker prompt omitted a schema-valid example: %s", prompt)
+	}
+	start += len(examplePrefix)
+	end := strings.Index(prompt[start:], "`.")
+	if end < 0 {
+		t.Fatalf("worker prompt has an unterminated payload example: %s", prompt)
+	}
+	if err := validateToolArguments(prompt[start:start+end], info); err != nil {
+		t.Fatalf("worker prompt example is not valid against its advertised schema: %v", err)
+	}
 }
 
 func TestInvariantResultProtocolStatesConditionalFieldContract(t *testing.T) {

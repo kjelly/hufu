@@ -77,7 +77,7 @@ func TestSplitLeadingJSONValue(t *testing.T) {
 }
 
 func TestRepairConcatenatedToolCall(t *testing.T) {
-	t.Run("recovers the first tool call from a concatenated pair", func(t *testing.T) {
+	t.Run("rejects a concatenated pair without selecting either tool call", func(t *testing.T) {
 		original := fantasy.ToolCallContent{
 			ToolCallID: "call_1",
 			ToolName:   "view",
@@ -88,20 +88,11 @@ func TestRepairConcatenatedToolCall(t *testing.T) {
 			OriginalToolCall: original,
 			ValidationError:  errors.New("invalid JSON input: invalid character '{' after top-level value"),
 		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, errMultipleToolCallValues) {
+			t.Fatalf("error = %v, want %v", err, errMultipleToolCallValues)
 		}
-		if got == nil {
-			t.Fatal("expected a repaired tool call, got nil")
-		}
-		if got.Input != `{"file_path":"a.go"}` {
-			t.Errorf("Input = %q, want the first concatenated object only", got.Input)
-		}
-		if got.ToolName != original.ToolName || got.ToolCallID != original.ToolCallID {
-			t.Errorf("repaired call changed identity: got %+v", got)
-		}
-		if got.Invalid {
-			t.Errorf("repaired call should not still be marked Invalid")
+		if got != nil {
+			t.Fatalf("concatenated input returned a tool call: %+v", got)
 		}
 	})
 

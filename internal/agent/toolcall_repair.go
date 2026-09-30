@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/jsonrepair"
 )
 
-// errToolCallNotRepairable signals that neither the concatenated-JSON split
-// nor the jsonrepair fallback could recover a tool call. Fantasy treats any
-// non-nil error the same way (repair failed, keep the original validation
-// error), so the message only matters for anyone reading logs.
+// errToolCallNotRepairable signals that the jsonrepair fallback could not
+// recover a single malformed JSON value. Fantasy treats any non-nil error the
+// same way (repair failed, keep the original validation error), so the message
+// only matters for anyone reading logs.
 var errToolCallNotRepairable = errors.New("tool call input is not a repairable JSON payload")
+
+// errMultipleToolCallValues is deliberately terminal. A second top-level
+// value may belong to another tool call, so selecting either value would
+// silently change the model's request and could execute the wrong operation.
+var errMultipleToolCallValues = errors.New("tool call input contains multiple JSON values")
 
 // RepairConcatenatedToolCall is a fantasy.RepairToolCallFunction. Some
 // OpenAI-compatible streaming backends key parallel tool-call argument deltas
@@ -27,23 +31,15 @@ var errToolCallNotRepairable = errors.New("tool call input is not a repairable J
 // multiple top-level values into a JSON array, which still fails to
 // unmarshal into the expected object — so neither recovers the call.
 //
-// This recovers the first complete top-level JSON value (the arguments that
-// actually belong to the declared ToolName) and discards the orphaned
-// remainder, logging what was dropped so the loss stays observable instead
-// of silent. When the input isn't shaped like that specific corruption, it
-// falls back to fantasy's own jsonrepair so we don't regress whatever that
-// default fallback used to fix before a custom repair function was wired in.
+// Concatenated top-level values are rejected rather than repaired: the tool
+// boundary cannot prove which object belongs to the declared ToolName. When
+// the input is a single malformed JSON value, the function still falls back
+// to fantasy's jsonrepair for its bounded syntax-only repairs.
 func RepairConcatenatedToolCall(_ context.Context, opts fantasy.ToolCallRepairOptions) (*fantasy.ToolCallContent, error) {
 	original := opts.OriginalToolCall
 
-	if head, trailing, ok := splitLeadingJSONValue(original.Input); ok {
-		log.Printf("warning: tool call %q (%s) arguments had a second tool call's JSON concatenated onto them; recovered the first %d bytes and dropped %d trailing bytes: %.200q",
-			original.ToolCallID, original.ToolName, len(head), len(trailing), trailing)
-		repaired := original
-		repaired.Input = head
-		repaired.Invalid = false
-		repaired.ValidationError = nil
-		return &repaired, nil
+	if _, _, ok := splitLeadingJSONValue(original.Input); ok {
+		return nil, errMultipleToolCallValues
 	}
 
 	if repaired, err := jsonrepair.RepairJSON(original.Input); err == nil && repaired != original.Input {
@@ -62,9 +58,8 @@ func RepairConcatenatedToolCall(_ context.Context, opts fantasy.ToolCallRepairOp
 // value with no separator between them — the exact signature left behind
 // when a streaming provider concatenates two (or more) parallel tool calls'
 // argument deltas into one buffer. On success it returns the first value's
-// raw substring (byte-for-byte, so no re-encoding risk) and the trailing
-// substring that was discarded, which may itself contain further
-// concatenated values.
+// raw substring and the trailing substring. Callers must reject the whole
+// payload; the split is detection only and never authorizes either value.
 func splitLeadingJSONValue(input string) (head string, trailing string, ok bool) {
 	dec := json.NewDecoder(strings.NewReader(input))
 	var first any

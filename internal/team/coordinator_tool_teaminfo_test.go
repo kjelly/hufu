@@ -30,6 +30,20 @@ func TestTeamInfoTaskResultSelectorDisambiguatesCompletedTasks(t *testing.T) {
 	}
 }
 
+func TestTeamInfoRejectsMultipleJSONValues(t *testing.T) {
+	tool := &teamInfoTool{}
+	response, err := tool.Run(t.Context(), fantasy.ToolCall{
+		Name:  "team_info",
+		Input: `{"action":"list_agents"}{"action":"session_summary"}`,
+	})
+	if err != nil {
+		t.Fatalf("team_info returned runtime error: %v", err)
+	}
+	if !response.IsError || !strings.Contains(response.Content, "multiple JSON values") {
+		t.Fatalf("team_info response = %#v, want a multiple-value rejection", response)
+	}
+}
+
 func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
 	workspace := t.TempDir()
 	first := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: NewSession(), taskTracker: NewTaskTracker()}

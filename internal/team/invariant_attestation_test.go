@@ -205,6 +205,27 @@ func TestSubmitResultInvariantClaimSchemaIsModeAware(t *testing.T) {
 	}
 }
 
+func TestSubmitResultLocallyRejectsMissingInvariantID(t *testing.T) {
+	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
+	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport, definition)
+	ctx := withInvocationMetadata(occurrenceTestContext(c, item.ID, 1), invocationMetadataFromManifest(&manifest))
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{
+		Name:  submitResultToolName,
+		Input: `{"status":"success","summary":"checked","invariant_assessments":[{"status":"preserved","summary":"preserved"}]}`,
+	})
+	if err != nil {
+		t.Fatalf("submit_result returned runtime error: %v", err)
+	}
+	for _, want := range []string{"$.invariant_assessments[0].invariant_id", "required property", "Valid example", `"invariant_id":"value"`} {
+		if !response.IsError || !strings.Contains(response.Content, want) {
+			t.Fatalf("submit_result response = %#v, want %q", response, want)
+		}
+	}
+	if stored := c.GetTaskResult(item.ID); stored != nil {
+		t.Fatalf("schema-invalid result was persisted: %#v", stored)
+	}
+}
+
 func TestSubmitResultAttestsBeforePublishing(t *testing.T) {
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport, definition)

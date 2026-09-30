@@ -424,7 +424,10 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		if strings.Contains(err.Error(), `unknown field "outputs"`) {
 			return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
 		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v", err)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. Valid example: %s", err, compactToolExampleJSON(t.Info()))), nil
+	}
+	if validationErr := validateToolArguments(string(normalizeSubmitResultInput([]byte(call.Input))), t.Info()); validationErr != nil {
+		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.Info())), nil
 	}
 	res := input.taskResult()
 	if res.Summary == "" {

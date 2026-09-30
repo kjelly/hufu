@@ -5073,6 +5073,10 @@ func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]b
 		slices.Sort(required)
 		fmt.Fprintf(b, "- Required submit_result fields for this task: `%s`.\n", strings.Join(required, "`, `"))
 	}
+	fmt.Fprintf(b, "- Schema-valid submit_result payload example: `%s`.\n", compactToolExampleJSON(info))
+	if contract.InvariantVerification != "" {
+		b.WriteString("- In that example, replace the placeholder `invariant_id` value with each exact invariant ID injected into this task.\n")
+	}
 	if contract.FilesReadMinItems > 0 {
 		fmt.Fprintf(b, "- A successful result must include `files_read` with at least %d object(s), each containing a non-empty `path`; use `files_read`, not evidence, for observed inputs.\n", contract.FilesReadMinItems)
 	}

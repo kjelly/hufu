@@ -33,8 +33,8 @@ func (a *repairWiringCaptureAgent) Stream(ctx context.Context, call fantasy.Agen
 // in agent.CreateAgent's NewAgent options. If a future edit to
 // coordinator_task_run.go drops the field from the streamCall literal, tool
 // calls corrupted by a streaming provider concatenating two parallel tool
-// calls' JSON deltas would go unrepaired again with no compiler or test
-// signal — this test is that signal.
+// calls' JSON deltas would bypass the local rejection boundary with no
+// compiler or test signal — this test is that signal.
 func TestCoordinatorWiresRepairToolCallOntoStreamingCall(t *testing.T) {
 	worker := &repairWiringCaptureAgent{}
 	c, _ := newWP08TestCoordinator(t, worker, 0)
@@ -54,8 +54,9 @@ func TestCoordinatorWiresRepairToolCallOntoStreamingCall(t *testing.T) {
 		t.Fatal("AgentStreamCall.RepairToolCall is nil: the coordinator's streaming call must set this field directly, since fantasy's streaming loop never falls back to the agent-level WithRepairToolCall default")
 	}
 
-	// Prove it is actually a working repair function, not merely non-nil,
-	// by feeding it the exact corruption shape this was written to recover.
+	// Prove it is the fail-closed repair function, not merely non-nil, by
+	// feeding it the exact corruption shape that must never be truncated into
+	// an executable first call.
 	repaired, err := worker.captured.RepairToolCall(context.Background(), fantasy.ToolCallRepairOptions{
 		OriginalToolCall: fantasy.ToolCallContent{
 			ToolCallID: "call_1",
@@ -63,10 +64,10 @@ func TestCoordinatorWiresRepairToolCallOntoStreamingCall(t *testing.T) {
 			Input:      `{"file_path":"a.go"}{"pattern":"b","path":"c"}`,
 		},
 	})
-	if err != nil {
-		t.Fatalf("wired RepairToolCall returned an error on a recoverable concatenated payload: %v", err)
+	if err == nil {
+		t.Fatal("wired RepairToolCall accepted concatenated JSON")
 	}
-	if repaired == nil || repaired.Input != `{"file_path":"a.go"}` {
-		t.Fatalf("wired RepairToolCall did not recover the first concatenated JSON value: %+v", repaired)
+	if repaired != nil {
+		t.Fatalf("wired RepairToolCall selected one value from concatenated JSON: %+v", repaired)
 	}
 }

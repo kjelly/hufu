@@ -170,12 +170,20 @@ func protocolRepairIdentity(ctx context.Context) (model, provider string) {
 }
 
 func buildProtocolRepairPrompt(toolName string, violation *toolArgumentSchemaError, info fantasy.ToolInfo) string {
+	return buildToolSchemaValidationPrompt(toolName, violation, info) + "\nRegenerate the complete argument object without commentary."
+}
+
+func buildToolSchemaValidationPrompt(toolName string, violation *toolArgumentSchemaError, info fantasy.ToolInfo) string {
+	return fmt.Sprintf("Tool %q arguments are invalid at %s: expected %s, got %s. Valid example: %s",
+		toolName, violation.Path, violation.Expected, violation.Actual, compactToolExampleJSON(info))
+}
+
+func compactToolExampleJSON(info fantasy.ToolInfo) string {
 	exampleJSON, err := json.Marshal(generateCompactToolExample(info))
 	if err != nil {
-		exampleJSON = []byte("{}")
+		return "{}"
 	}
-	return fmt.Sprintf("Tool %q arguments are invalid at %s: expected %s, got %s. Valid example: %s\nRegenerate the complete argument object without commentary.",
-		toolName, violation.Path, violation.Expected, violation.Actual, exampleJSON)
+	return string(exampleJSON)
 }
 
 func generateCompactToolExample(info fantasy.ToolInfo) map[string]any {
@@ -201,6 +209,9 @@ func generateCompactExample(raw any) any {
 	schema, _ := raw.(map[string]any)
 	if schema == nil {
 		return nil
+	}
+	if alternatives, ok := schema["oneOf"].([]any); ok && len(alternatives) > 0 {
+		return generateCompactExample(alternatives[0])
 	}
 	if enum, ok := schema["enum"].([]string); ok && len(enum) > 0 {
 		return enum[0]

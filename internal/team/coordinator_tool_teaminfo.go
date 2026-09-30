@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -24,6 +23,7 @@ func (t *teamInfoTool) Info() fantasy.ToolInfo {
 		Parameters: map[string]any{
 			"action": map[string]any{
 				"type":        "string",
+				"enum":        []string{"list_agents", "agent_info", "task_history", "task_result", "todo_status", "session_summary"},
 				"description": "Action: list_agents, agent_info, task_history, task_result, todo_status, session_summary. Use task_result to read the full output of another agent's most recently completed task.",
 			},
 			"agent": map[string]any{
@@ -56,7 +56,7 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		TaskID       string `json:"task_id"`
 		Limit        int    `json:"limit"`
 	}
-	if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
+	if err := decodeStrictJSON([]byte(call.Input), &args); err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 	if args.Limit <= 0 || args.Limit > 50 {
