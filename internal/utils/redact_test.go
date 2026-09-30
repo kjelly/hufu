@@ -136,6 +136,33 @@ func TestRedactJSONPreservesNumericTelemetryWithSecretLikeKey(t *testing.T) {
 	}
 }
 
+func TestRedactJSONPreservesCostReservationTokenBounds(t *testing.T) {
+	input := []byte(`{"estimated_input_tokens":321,"reserved_output_tokens":654,"invalid":{"estimated_input_tokens":"credential-like","reserved_output_tokens":true}}`)
+	got, err := RedactJSON(input)
+	if err != nil {
+		t.Fatalf("RedactJSON: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("unmarshal redacted output: %v", err)
+	}
+	for key, want := range map[string]float64{
+		"estimated_input_tokens": 321,
+		"reserved_output_tokens": 654,
+	} {
+		if value, ok := decoded[key].(float64); !ok || value != want {
+			t.Fatalf("%s changed type or value: %#v", key, decoded[key])
+		}
+		if IsRedactedJSONKey(key) {
+			t.Fatalf("%s is incorrectly classified as always redacted", key)
+		}
+	}
+	invalid, ok := decoded["invalid"].(map[string]any)
+	if !ok || invalid["estimated_input_tokens"] != redactedSecret || invalid["reserved_output_tokens"] != redactedSecret {
+		t.Fatalf("non-numeric reservation bounds were not redacted: %#v", decoded["invalid"])
+	}
+}
+
 func TestRedactJSONPreservesManifestTokenCount(t *testing.T) {
 	// A memory injection manifest's per-item token estimate must survive
 	// session redaction; redacting it corrupts session.json and makes the
