@@ -111,6 +111,36 @@ func TestTeamPackageInspectCommandRendersFindingBeforeFailure(t *testing.T) {
 	}
 }
 
+func TestRenderTeamPackageTextSanitizesArchiveDerivedFields(t *testing.T) {
+	control := "\x1b]8;;https://evil.example\x07spoof\x1b]8;;\x07\x1b[2J\r\n"
+	report := teampkg.InspectionReport{
+		Name:  control + "package",
+		Files: []teampkg.PackageFile{{Path: control + "worker.md"}},
+		Compile: teampkg.CompileResult{
+			Status:  "failed",
+			Message: control + "compile failed",
+		},
+		Findings: []teampkg.Finding{{
+			Category: "invalid",
+			Path:     control + "team.yaml",
+			Field:    control + "name",
+		}},
+	}
+	output := new(bytes.Buffer)
+	if err := renderTeamPackageText(output, report); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if strings.ContainsAny(got, "\x1b\x07\r") {
+		t.Fatalf("text report contains terminal controls: %q", got)
+	}
+	for _, want := range []string{"spoof package", "spoof worker.md", "spoof compile failed", "spoof team.yaml", "spoof name"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("text report %q missing sanitized field %q", got, want)
+		}
+	}
+}
+
 func TestTeamInstallCommandDryRunThenPublishes(t *testing.T) {
 	project := t.TempDir()
 	t.Chdir(project)

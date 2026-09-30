@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/teampkg"
 )
 
@@ -111,54 +112,54 @@ func renderTeamPackageText(writer io.Writer, report teampkg.InspectionReport) er
 	lines := []string{
 		"Package",
 		fmt.Sprintf("  schema: %d", report.PackageSchema),
-		"  name: " + report.Name,
-		"  version: " + report.Version,
-		"  authenticity: " + report.Authenticity,
-		"  integrity: " + report.Integrity,
-		"  archive_sha256: " + report.ArchiveSHA256,
-		"  team_digest: " + report.TeamDigest,
-		"  team_manifest: " + report.TeamManifest,
-		"  manifest_schema: " + report.ManifestSchema,
+		"  name: " + safeTeamPackageText(report.Name),
+		"  version: " + safeTeamPackageText(report.Version),
+		"  authenticity: " + safeTeamPackageText(report.Authenticity),
+		"  integrity: " + safeTeamPackageText(report.Integrity),
+		"  archive_sha256: " + safeTeamPackageText(report.ArchiveSHA256),
+		"  team_digest: " + safeTeamPackageText(report.TeamDigest),
+		"  team_manifest: " + safeTeamPackageText(report.TeamManifest),
+		"  manifest_schema: " + safeTeamPackageText(report.ManifestSchema),
 		fmt.Sprintf("  files: %d", report.FileCount),
 		fmt.Sprintf("  archive_bytes: %d", report.ArchiveBytes),
 		fmt.Sprintf("  uncompressed_bytes: %d", report.TotalUncompressedBytes),
 		"Compile",
-		"  status: " + report.Compile.Status,
+		"  status: " + safeTeamPackageText(report.Compile.Status),
 	}
 	if report.Compile.ErrorCategory != "" {
-		lines = append(lines, "  error_category: "+report.Compile.ErrorCategory)
+		lines = append(lines, "  error_category: "+safeTeamPackageText(report.Compile.ErrorCategory))
 	}
 	if report.Compile.Message != "" {
-		lines = append(lines, "  message: "+report.Compile.Message)
+		lines = append(lines, "  message: "+safeTeamPackageText(report.Compile.Message))
 	}
-	lines = append(lines, "Team", "  normalized_name: "+report.NormalizedTeamName, "  agents:")
+	lines = append(lines, "Team", "  normalized_name: "+safeTeamPackageText(report.NormalizedTeamName), "  agents:")
 	for _, item := range report.Agents {
-		lines = append(lines, fmt.Sprintf("    - %s (%s)", item.Name, item.Role))
+		lines = append(lines, fmt.Sprintf("    - %s (%s)", safeTeamPackageText(item.Name), safeTeamPackageText(item.Role)))
 	}
 	lines = append(lines,
 		"Files",
 	)
 	for _, item := range report.Files {
-		lines = append(lines, fmt.Sprintf("  - %s (%d bytes, %s)", item.Path, item.Size, item.SHA256))
+		lines = append(lines, fmt.Sprintf("  - %s (%d bytes, %s)", safeTeamPackageText(item.Path), item.Size, safeTeamPackageText(item.SHA256)))
 	}
 	lines = append(lines,
 		"Included",
 		fmt.Sprintf("  skills: %d", len(report.Included.Skills)),
 	)
 	for _, item := range report.Included.Skills {
-		lines = append(lines, fmt.Sprintf("    - %s (%s)", item.Name, item.Path))
+		lines = append(lines, fmt.Sprintf("    - %s (%s)", safeTeamPackageText(item.Name), safeTeamPackageText(item.Path)))
 	}
 	lines = append(lines, fmt.Sprintf("  result_schemas: %d", len(report.Included.ResultSchemas)))
 	for _, item := range report.Included.ResultSchemas {
-		lines = append(lines, "    - "+item)
+		lines = append(lines, "    - "+safeTeamPackageText(item))
 	}
 	lines = append(lines, fmt.Sprintf("  go_actions: %d", len(report.Included.GoActions)))
 	for _, item := range report.Included.GoActions {
-		lines = append(lines, fmt.Sprintf("    - %s (%s)", item.Capability, item.Source))
+		lines = append(lines, fmt.Sprintf("    - %s (%s)", safeTeamPackageText(item.Capability), safeTeamPackageText(item.Source)))
 	}
 	lines = append(lines, "External requirements", fmt.Sprintf("  executables: %d", len(report.External.Executables)))
 	for _, item := range report.External.Executables {
-		lines = append(lines, fmt.Sprintf("    - %s: %s", item.Owner, item.Command))
+		lines = append(lines, fmt.Sprintf("    - %s: %s", safeTeamPackageText(item.Owner), safeTeamPackageText(item.Command)))
 	}
 	lines = append(lines, fmt.Sprintf("  mcp: %d", len(report.External.MCP)))
 	for _, item := range report.External.MCP {
@@ -166,11 +167,11 @@ func renderTeamPackageText(writer io.Writer, report teampkg.InspectionReport) er
 		if detail == "" {
 			detail = item.URL
 		}
-		lines = append(lines, fmt.Sprintf("    - %s (%s): %s", item.Name, item.Type, detail))
+		lines = append(lines, fmt.Sprintf("    - %s (%s): %s", safeTeamPackageText(item.Name), safeTeamPackageText(item.Type), safeTeamPackageText(detail)))
 	}
 	lines = append(lines, fmt.Sprintf("  project_resources: %d", len(report.External.ProjectResources)))
 	for _, item := range report.External.ProjectResources {
-		lines = append(lines, fmt.Sprintf("    - %s (%s): %s", item.Name, item.Kind, item.Path))
+		lines = append(lines, fmt.Sprintf("    - %s (%s): %s", safeTeamPackageText(item.Name), safeTeamPackageText(string(item.Kind)), safeTeamPackageText(item.Path)))
 	}
 	lines = append(lines, fmt.Sprintf("  skills: %d", len(report.External.Skills)))
 	for _, item := range report.External.Skills {
@@ -178,18 +179,23 @@ func renderTeamPackageText(writer io.Writer, report teampkg.InspectionReport) er
 		if name == "" {
 			name = item.Reference
 		}
-		lines = append(lines, fmt.Sprintf("    - %s (available=%t)", name, item.Available))
+		lines = append(lines, fmt.Sprintf("    - %s (available=%t)", safeTeamPackageText(name), item.Available))
 	}
 	lines = append(lines, fmt.Sprintf("  paths: %d", len(report.External.Paths)))
 	for _, item := range report.External.Paths {
-		lines = append(lines, fmt.Sprintf("    - %s: %s", item.Owner, item.Path))
+		lines = append(lines, fmt.Sprintf("    - %s: %s", safeTeamPackageText(item.Owner), safeTeamPackageText(item.Path)))
 	}
 	lines = append(lines, fmt.Sprintf("Findings: %d", len(report.Findings)))
 	for _, finding := range report.Findings {
-		lines = append(lines, fmt.Sprintf("  - category=%s path=%s field=%s", finding.Category, finding.Path, finding.Field))
+		lines = append(lines, fmt.Sprintf("  - category=%s path=%s field=%s",
+			safeTeamPackageText(finding.Category), safeTeamPackageText(finding.Path), safeTeamPackageText(finding.Field)))
 	}
 	_, err := fmt.Fprintln(writer, strings.Join(lines, "\n"))
 	return err
+}
+
+func safeTeamPackageText(value string) string {
+	return operatorpkg.SafeDisplayText(value, 1000)
 }
 
 func init() {
