@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 
@@ -398,6 +399,19 @@ func validateSchemaValue(value any, schema map[string]any, path string) *toolArg
 		if maximum, ok := schemaFloat(schema["maximum"]); ok && parsed > maximum {
 			return &toolArgumentSchemaError{Path: path, Expected: fmt.Sprintf("%s <= %v", expected, maximum), Actual: number.String()}
 		}
+	case "string":
+		return validateStringSchema(value.(string), schema, path)
+	}
+	return nil
+}
+
+func validateStringSchema(value string, schema map[string]any, path string) *toolArgumentSchemaError {
+	length := utf8.RuneCountInString(value)
+	if minimum, ok := schemaInt(schema["minLength"]); ok && length < minimum {
+		return &toolArgumentSchemaError{Path: path, Expected: fmt.Sprintf("string with at least %d runes", minimum), Actual: fmt.Sprintf("string with %d runes", length)}
+	}
+	if maximum, ok := schemaInt(schema["maxLength"]); ok && length > maximum {
+		return &toolArgumentSchemaError{Path: path, Expected: fmt.Sprintf("string with at most %d runes", maximum), Actual: fmt.Sprintf("string with %d runes", length)}
 	}
 	return nil
 }

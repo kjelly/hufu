@@ -216,7 +216,7 @@ func TestSubmitResultLocallyRejectsMissingInvariantID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit_result returned runtime error: %v", err)
 	}
-	for _, want := range []string{"$.invariant_assessments[0].invariant_id", "required property", "Valid example", `"invariant_id":"value"`} {
+	for _, want := range []string{"$.invariant_assessments[0].invariant_id", "at least 1 runes", "Valid example", `"invariant_id":"value"`} {
 		if !response.IsError || !strings.Contains(response.Content, want) {
 			t.Fatalf("submit_result response = %#v, want %q", response, want)
 		}

@@ -234,7 +234,7 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 						"choice": map[string]any{"type": "string"},
 						"reason": map[string]any{"type": "string"},
 					},
-					"required": []string{"topic", "choice"},
+					"required": []string{"choice"},
 				},
 			},
 			"evidence": map[string]any{
@@ -250,7 +250,7 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 						"value":       map[string]any{"type": "string"},
 						"system_hmac": map[string]any{"type": "string", "description": "Compatibility field ignored by the runtime; workers cannot authorize evidence with it."},
 					},
-					"required":             []string{"type", "description"},
+					"required":             []string{"type"},
 					"additionalProperties": false,
 				},
 			},
@@ -426,7 +426,17 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. Valid example: %s", err, compactToolExampleJSON(t.Info()))), nil
 	}
-	if validationErr := validateToolArguments(string(normalizeSubmitResultInput([]byte(call.Input))), t.Info()); validationErr != nil {
+	validationInfo := t.Info()
+	// Top-level presence has task-specific semantic handling below (including
+	// stable result-contract error codes and runtime defaults). Validate the
+	// decoder's canonical DTO here so losslessly normalized shorthand remains
+	// accepted while nested object schemas still reject missing/extra fields.
+	validationInfo.Required = nil
+	canonicalInput, marshalErr := json.Marshal(input)
+	if marshalErr != nil {
+		return fantasy.NewTextErrorResponse("invalid submit_result arguments: canonicalize decoded input"), nil
+	}
+	if validationErr := validateToolArguments(string(canonicalInput), validationInfo); validationErr != nil {
 		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.Info())), nil
 	}
 	res := input.taskResult()
