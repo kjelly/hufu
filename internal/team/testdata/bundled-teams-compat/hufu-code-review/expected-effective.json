@@ -148,7 +148,7 @@
     {
       "name": "critic",
       "role": "worker",
-      "tools": "view,grep,glob,ls",
+      "tools": "view",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": 1,
@@ -157,7 +157,7 @@
     {
       "name": "documentation-reviewer",
       "role": "worker",
-      "tools": "view,grep,glob,ls",
+      "tools": "view",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": 1,
@@ -172,7 +172,7 @@
     {
       "name": "reviewer",
       "role": "worker",
-      "tools": "view,grep,glob,ls",
+      "tools": "view",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": 1,
