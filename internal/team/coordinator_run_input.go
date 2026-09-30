@@ -147,8 +147,12 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 		if err != nil {
 			return nil, err
 		}
+		var semanticFailure error
 		if allowSemantic && resolver.Mode == runInputResolverModeSemanticJSON {
 			assignment, matched, err := c.resolveValidatedSemanticRunInput(ctx, prompt, explicit[definition.Name], definition, resolver, resolverProvider, schemaHash, runID)
+			if errors.Is(err, errSemanticRunInputFailed) {
+				semanticFailure, err = err, nil
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -167,6 +171,14 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 		}
 		if matched {
 			assignments = append(assignments, assignment)
+			continue
+		}
+		if semanticFailure != nil && len(explicit[definition.Name]) == 0 {
+			// The deterministic resolver only parses literal syntax, so its
+			// no_match says nothing about prose. Without the semantic answer
+			// the team default would silently replace whatever the request
+			// asked for, as when "the last 22 commits" became the default 10.
+			return nil, fmt.Errorf("input_resolver_failed: %s: the request could not be translated and the deterministic resolver found no value, so the default would be a guess: %w; pass the value explicitly with --input %s=<json>, or retry", definition.Name, semanticFailure, definition.Name)
 		}
 	}
 	return assignments, nil
@@ -254,6 +266,9 @@ func (c *Coordinator) resolveValidatedSemanticRunInput(ctx context.Context, prom
 	repaired := false
 	validationAttempt := 0
 	for {
+		if candidate.status == "failed" {
+			return RunInputAssignment{}, false, fmt.Errorf("%w: %s", errSemanticRunInputFailed, utils.TruncateRunes(utils.RedactSecrets(candidate.diagnostic), maxSemanticRepairDiagnosticRunes))
+		}
 		if candidate.status == "invalid" {
 			if repaired {
 				return RunInputAssignment{}, false, fmt.Errorf("input_invalid: %s: semantic candidate remained invalid after one repair: %s", definition.Name, utils.RedactSecrets(candidate.diagnostic))
@@ -301,20 +316,26 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 	if semanticResolver == nil {
 		return semanticRunInputCandidate{status: "no_match"}
 	}
-	resolverCtx := ctx
-	var cancel context.CancelFunc
-	if resolver.Timeout > 0 {
-		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
-	}
-	raw, err := semanticResolver.Resolve(resolverCtx, SemanticRunInputRequest{
+	request := SemanticRunInputRequest{
 		InputName: definition.Name, Prompt: prompt, Schema: definition.Schema, SchemaHash: schemaHash,
 		ResolverID: resolver.ID, ExplicitValue: slices.Clone(explicit), Guidance: resolver.SemanticGuidance,
 		PreviousValue: slices.Clone(previous), Diagnostic: diagnostic,
-	})
-	if cancel != nil {
-		cancel()
 	}
-	if err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	raw, err := resolveSemanticRunInputOnce(ctx, semanticResolver, resolver, request)
+	if err != nil && !errors.Is(err, errSemanticRunInputUnavailable) && ctx.Err() == nil {
+		// A provider hiccup, a timeout, or a truncated answer is usually
+		// transient, and failing here fails the whole run.
+		raw, err = resolveSemanticRunInputOnce(ctx, semanticResolver, resolver, request)
+	}
+	if errors.Is(err, errSemanticRunInputUnavailable) {
+		// No semantic resolver is configured; only the deterministic resolver
+		// and the default apply, which is the team's declared behavior.
+		return semanticRunInputCandidate{status: "no_match"}
+	}
+	if err != nil {
+		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "failed", diagnostic: err.Error()}
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "no_match"}
 	}
 	canonical, err := validateAndCanonicalizeRunInput(definition.Schema, raw)
@@ -332,6 +353,16 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 			Evidence: []InputEvidence{{Source: RunInputSourceResolver, Location: "invocation_prompt", Kind: "semantic_json"}},
 		},
 	}
+}
+
+func resolveSemanticRunInputOnce(ctx context.Context, semanticResolver SemanticRunInputResolver, resolver *RunInputResolverSpec, request SemanticRunInputRequest) (json.RawMessage, error) {
+	resolverCtx := ctx
+	if resolver.Timeout > 0 {
+		var cancel context.CancelFunc
+		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
+		defer cancel()
+	}
+	return semanticResolver.Resolve(resolverCtx, request)
 }
 
 func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*RunInputSnapshot, error) {

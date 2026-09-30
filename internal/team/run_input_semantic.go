@@ -37,6 +37,11 @@ type SemanticRunInputResolver interface {
 
 var errSemanticRunInputUnavailable = errors.New("semantic run input resolver unavailable")
 
+// errSemanticRunInputFailed marks a semantic translation that errored, as
+// opposed to one that answered null because the request did not name the
+// input.
+var errSemanticRunInputFailed = errors.New("semantic run input translation failed")
+
 const maxSemanticRepairDiagnosticRunes = 2048
 
 type coordinatorSemanticRunInputResolver struct {

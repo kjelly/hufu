@@ -423,8 +423,14 @@ type Coordinator struct {
 	// this lock their read-modify-write plus json.Marshal in SaveSession races.
 	// It is distinct from c.mu: c.mu also guards sub-service pointers and is
 	// reentered via SessionStore(), so it cannot be held across SaveSession.
-	sessionMu   sync.RWMutex
-	taskTracker *TaskTracker
+	sessionMu sync.RWMutex
+	// branchStateMu serializes updateBranchState's session-tree
+	// load-modify-save. branchStateFingerprint identifies the branch state
+	// last written, so a checkpoint that changes nothing it records skips the
+	// rewrite.
+	branchStateMu          sync.Mutex
+	branchStateFingerprint string
+	taskTracker            *TaskTracker
 	// restoredTodoIDs identifies task occurrences loaded from a persisted
 	// session/event projection. It is intentionally independent of the current
 	// journal attachment: a restored task keeps its canonical execution model
@@ -802,6 +808,10 @@ type Coordinator struct {
 	noProgressUsageNamespace string
 	rollbackCmd              string // optional shell command run on acceptance failure
 	selfHealingAttempts      int
+	// finishRejections counts the finish calls the runtime refused, with the
+	// last reason and submitted report, for the terminal summary.
+	finishRejectionMu sync.Mutex
+	finishRejections  finishRejection
 	// acceptanceRecovery permits the bounded repair turns requested after a
 	// blocking acceptance failure.  A run may already be in wrap-up because a
 	// round/budget circuit breaker fired; refusing every new delegation there
@@ -1819,6 +1829,9 @@ func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
 	}
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
+	c.finishRejectionMu.Lock()
+	c.finishRejections = finishRejection{}
+	c.finishRejectionMu.Unlock()
 	c.continuationInterrupted.Store(false)
 	c.initialToolCorrections.Store(0)
 	c.delegatedTasksMu.Lock()

@@ -50,11 +50,16 @@ spec:
           type: string
           min-length: 1
           max-length: 160
+        # An empty base or since would be frozen verbatim while the producer
+        # omits it, so equals_input could never pass; min-length sends such a
+        # candidate back for repair instead.
         base:
           type: string
+          min-length: 1
           max-length: 160
         since:
           type: string
+          min-length: 1
           max-length: 80
         commit_type:
           type: string
@@ -77,6 +82,8 @@ spec:
           A YYYY-MM-DD lower bound means kind=since with since set to that date.
           kind=working_tree is only for staged, unstaged, or untracked changes, always uses head=HEAD, and never carries count, base, since, or commit_type.
           Never use kind=working_tree for a named commit, commit hash, committed revision, or commit history.
+          Set commit_type only when the request explicitly limits the review to commits of that type, such as "feat commits".
+          Omit every property the request does not state; never set a property to an empty string.
           Return null when the scope remains ambiguous.
 
   # No agent selects codex by default. This configures the codex backend for

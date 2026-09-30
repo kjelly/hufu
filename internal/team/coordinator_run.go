@@ -1533,8 +1533,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		// from the durable task outputs rather than reporting a false unresolved
 		// run. Failed, blocked, pending, or in-progress tasks never enter this
 		// path and therefore retain the usual fail-closed behavior.
-		result = c.completedTasksSummary()
-		continuationReason = "coordinator omitted finish after all tasks completed; deterministic summary used"
+		rejection := c.finishRejectionSnapshot()
+		result = c.completedTasksSummary(rejection)
+		continuationReason = deterministicFinishReason(rejection)
 		c.finishCalled.Store(true)
 		c.report(c.newEvent("wrap_up_phase").withMessage(continuationReason).withTodoID(CoordTodoID))
 	}
@@ -1625,12 +1626,12 @@ func (c *Coordinator) canDeterministicallyFinishCompletedTasks(ctx context.Conte
 	return c != nil && !c.finishCalled.Load() && ctx.Err() == nil && c.allTasksCompletedSuccessfully()
 }
 
-func (c *Coordinator) completedTasksSummary() string {
+func (c *Coordinator) completedTasksSummary(rejection finishRejection) string {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("All delegated tasks completed. The coordinator did not call finish, so this report was assembled from durable task outputs.\n")
+	b.WriteString(completedTasksSummaryHeader(rejection))
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item == nil || item.Status != TaskDone {
 			continue

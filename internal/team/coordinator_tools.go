@@ -358,6 +358,14 @@ func (t *finishTool) Info() fantasy.ToolInfo {
 }
 
 func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	response, err := t.run(ctx, call)
+	if err == nil && response.IsError {
+		t.coordinator.recordFinishRejection(call.Input, response.Content)
+	}
+	return response, err
+}
+
+func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Response               string `json:"response"`
 		AcknowledgeFailedTasks bool   `json:"acknowledge_failed_tasks"`
@@ -501,39 +509,9 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
 	}
 	if accErr != nil {
-		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
-			if t.coordinator.selfHealingAttempts < 2 {
-				t.coordinator.selfHealingAttempts++
-				// A previous round/budget guard may have put the coordinator in
-				// wrap-up before finish discovered the acceptance failure.  Allow
-				// only these two bounded repair turns to delegate work; otherwise
-				// self-healing deadlocks at "refusing to start new tasks".
-				t.coordinator.acceptanceRecovery.Store(true)
-				msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr)), nil
-			}
-			if t.coordinator.IsUnattended() {
-				msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
-				if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
-					rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
-					t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
-					response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
-				} else {
-					t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
-					response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
-				}
-			}
-			if prof.AcceptanceMode == AcceptanceBlocking {
-				t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed (blocking): " + accErr.Error()))
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed (blocking): %v", accErr)), nil
-			}
-		} else {
-			// Interactive mode: preserve standard behavior
-			note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
-			response += note
-			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
+		var refusal *fantasy.ToolResponse
+		if response, refusal = t.handleAcceptanceFailure(ctx, prof, accErr, response); refusal != nil {
+			return *refusal, nil
 		}
 	}
 	// A successful finish ends any previously enabled bounded recovery window.
@@ -564,6 +542,57 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	t.coordinator.finishCalled.Store(true)
 	t.coordinator.coordinatorPolicyRepairPending.Store(false)
 	return fantasy.NewTextResponse(fmt.Sprintf("FINISHED:%s", response)), nil
+}
+
+// handleAcceptanceFailure applies the acceptance failure policy to a finish
+// call. It returns a refusal when finish must not proceed, and otherwise the
+// response to finish with, annotated with the failure.
+func (t *finishTool) handleAcceptanceFailure(ctx context.Context, prof ExecutionProfile, accErr error, response string) (string, *fantasy.ToolResponse) {
+	if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
+		repairUnavailable := t.coordinator.acceptanceRepairUnavailableReason()
+		if repairUnavailable == "" && t.coordinator.selfHealingAttempts < 2 {
+			t.coordinator.selfHealingAttempts++
+			// A previous round/budget guard may have put the coordinator in
+			// wrap-up before finish discovered the acceptance failure.  Allow
+			// only these two bounded repair turns to delegate work; otherwise
+			// self-healing deadlocks at "refusing to start new tasks".
+			t.coordinator.acceptanceRecovery.Store(true)
+			msg := fmt.Sprintf("Acceptance check failed (attempt %d/2). Initiating self-healing. Error: %v", t.coordinator.selfHealingAttempts, accErr)
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
+			refusal := fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr))
+			return response, &refusal
+		}
+		if t.coordinator.IsUnattended() {
+			msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
+			if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
+				rollMsg := fmt.Sprintf("Rollback failed: %v", rollErr)
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage(rollMsg))
+				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n⚠️ ROLLBACK FAILED: %v", accErr, rollErr)
+			} else {
+				t.coordinator.report(t.coordinator.newEvent("error").withMessage("Workspace rolled back successfully due to acceptance check failure."))
+				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
+			}
+		}
+		if prof.AcceptanceMode == AcceptanceBlocking {
+			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed (blocking): " + accErr.Error()))
+			if repairUnavailable == "" {
+				refusal := fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed (blocking): %v", accErr))
+				return response, &refusal
+			}
+			// Nothing the coordinator can still do changes the result, so a
+			// refused finish would only be retried until the error limit
+			// aborts the run. Finish with the failed acceptance instead: the
+			// outcome is partial and never reported as success.
+			response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\nThe run ends without success because %s.", accErr, repairUnavailable)
+		}
+	} else {
+		// Interactive mode: preserve standard behavior
+		note := fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
+		response += note
+		t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed: " + accErr.Error()))
+	}
+	return response, nil
 }
 
 func (t *finishTool) prepareTerminalFinish(ctx context.Context, acknowledgeFailedTasks bool, evaluated *RunResult, acceptance *AcceptanceResult) (fantasy.ToolResponse, bool) {

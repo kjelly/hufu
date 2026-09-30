@@ -1477,6 +1477,13 @@ retryLoop:
 
 						{
 							repairEvidence := utils.TruncateRunes(output, 12000)
+							rejectedSubmission := protocolRepairRejectedSubmission(attemptEvidence, steps)
+							repairEvidence += rejectedSubmission
+							// A repair turn can only restate evidence it is given. With
+							// neither output text nor a submission, a completed_with_gaps
+							// result reports only that the evidence was missing, so it is
+							// not accepted as a completion below.
+							noRepairEvidence := strings.TrimSpace(output) == "" && rejectedSubmission == ""
 							finalizationBinding := c.taskFinalizationBinding(todoID)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if resultProtocolLoop {
@@ -1601,10 +1608,10 @@ retryLoop:
 							repairDiagnostic := repairValidationError(repairSteps)
 							// §7: classify the repair failure sub-reason so the next-step
 							// disposition is driven by evidence rather than a generic
-							// "protocol failed" message. progress_not_final reclassifies
-							// the task as an execution failure (the worker reported a
-							// progress update, not a final outcome) and must not count
-							// toward protocol repair statistics.
+							// "protocol failed" message. progress_not_final and
+							// no_evidence reclassify the task as an execution failure
+							// (the worker reported a progress update, or nothing at all)
+							// and must not count toward protocol repair statistics.
 							var repairReason RepairFailureReason
 							var reclassifyExecution bool
 							if repairErr != nil {
@@ -1612,11 +1619,15 @@ retryLoop:
 							} else {
 								repairReason, reclassifyExecution = classifyRepairFailure(repairSteps, typedRes)
 							}
+							if repairSuccess && noRepairEvidence && typedRes.Status == TaskResultStatusCompletedWithGaps {
+								repairSuccess = false
+								repairReason, reclassifyExecution = RepairFailureNoEvidence, true
+							}
 							repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 								Attempt:         1,
 								InvocationRunID: c.executionRunID,
 								Success:         repairSuccess,
-								Prompt:          repairPrompt,
+								Prompt:          omitRejectedSubmission(repairPrompt, rejectedSubmission),
 								SubmittedResult: typedRes,
 								FailureReason:   repairReason,
 								Error:           repairDiagnostic,
@@ -1637,11 +1648,15 @@ retryLoop:
 								} else {
 									repairReason, reclassifyExecution = classifyRepairFailure(schemaRepairSteps, typedRes)
 								}
+								if repairSuccess && noRepairEvidence && typedRes.Status == TaskResultStatusCompletedWithGaps {
+									repairSuccess = false
+									repairReason, reclassifyExecution = RepairFailureNoEvidence, true
+								}
 								repairAttempts = append(repairAttempts, RepairAttemptProvenance{
 									Attempt:         2,
 									InvocationRunID: c.executionRunID,
 									Success:         repairSuccess,
-									Prompt:          schemaRepairPrompt,
+									Prompt:          omitRejectedSubmission(schemaRepairPrompt, rejectedSubmission),
 									SubmittedResult: typedRes,
 									FailureReason:   repairReason,
 									Error:           repairValidationError(schemaRepairSteps),
@@ -1707,10 +1722,17 @@ retryLoop:
 									// protocol repair statistics.
 									protocolFailure = false
 									receipt.SubmittedResult = typedRes
-									err = withFailureClassOverride(
-										fmt.Errorf("execution failure (reclassified from protocol repair: worker reported status %q via submit_result; task is not complete) for task %s (%s)", submittedStatus, todoID, agentName),
-										FailureExecution,
-									)
+									if repairReason == RepairFailureNoEvidence {
+										err = withFailureClassOverride(
+											fmt.Errorf("execution failure (reclassified from protocol repair: the worker left neither output text nor a submit_result call, so the repaired %q result reports missing evidence rather than the task outcome) for task %s (%s)", submittedStatus, todoID, agentName),
+											FailureExecution,
+										)
+									} else {
+										err = withFailureClassOverride(
+											fmt.Errorf("execution failure (reclassified from protocol repair: worker reported status %q via submit_result; task is not complete) for task %s (%s)", submittedStatus, todoID, agentName),
+											FailureExecution,
+										)
+									}
 									receipt.RepairProvenance.Error = err.Error()
 								} else {
 									// Preserve the worker's original output as a low-confidence,
@@ -2539,6 +2561,14 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", err
 		}
+	}
+	if preflightErr := c.preflightActionAcceptance(todoID, runtimeOutputs); preflightErr != nil {
+		err := fmt.Errorf("structured action verification failed: %w", preflightErr)
+		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
+		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
+		return "", err
 	}
 	typedResult := &TaskResult{
 		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
@@ -3615,6 +3645,11 @@ type toolCallEvidence struct {
 	toolInput  string // redacted, bounded to 500 runes
 	resultText string // redacted, bounded to 500 runes
 	resultErr  bool
+	// rejectedSubmitInput and rejectedSubmitError keep the attempt's last
+	// submit_result call that the runtime rejected, for result-only repair.
+	// An accepted call clears them. Guarded by the stream's loopDetectMu.
+	rejectedSubmitInput string
+	rejectedSubmitError string
 }
 
 // toolCallEvidenceKey is a context key for per-attempt tool call evidence.
@@ -4351,6 +4386,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					lastToolCall.consecutiveSuccesses++
 				}
 			}
+			if tr.ToolName == submitResultToolName && tracked {
+				if ev, _ := ctx.Value(toolCallEvidenceKey{}).(*toolCallEvidence); ev != nil {
+					if isErrResult {
+						ev.rejectedSubmitInput, ev.rejectedSubmitError = callInput, resultPreview
+					} else {
+						ev.rejectedSubmitInput, ev.rejectedSubmitError = "", ""
+					}
+				}
+			}
 			if isErrResult {
 				if fingerprint, deterministic := submitResultFailureFingerprint(tr.ToolName, resultPreview); deterministic {
 					submitResultFailures[fingerprint]++
@@ -4429,7 +4473,12 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 
-			c.saveCheckpoint()
+			// No checkpoint here. A tool result does not change task state:
+			// every TodoList mutation already checkpoints through onChange, and
+			// the step receipt recorded above lives in the in-memory receipt
+			// registry, which checkpoints do not persist. Checkpointing each
+			// result rewrote session.json and the session tree hundreds of times
+			// per run.
 			return nil
 		},
 		OnTextDelta: func(id, text string) error {

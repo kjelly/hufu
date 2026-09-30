@@ -41,16 +41,16 @@ func NewGrepTool(opts ...ToolOption) fantasy.AgentTool {
 		artifactPathPolicySafe: true,
 		info: fantasy.ToolInfo{
 			Name:        "grep",
-			Description: "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Hufu workspace execution records (session/journal files and logs under the workspace directory) are excluded unless the search path points inside the workspace. Output truncated to 100 matches or 50KB.",
+			Description: "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Hufu workspace execution records (session/journal files and logs under the workspace directory) are excluded unless the search path points inside the workspace. Output truncated to limit matching lines (default 100) or 50KB.",
 			Parameters: map[string]any{
 				"pattern":      map[string]any{"type": "string", "description": "The regex pattern to search for in file contents"},
 				"path":         map[string]any{"type": "string", "description": "Directory or file to search in (default: current directory)"},
-				"include":      map[string]any{"type": "string", "description": "File pattern to include (e.g. '*.go', '*.{ts,tsx}')"},
-				"glob":         map[string]any{"type": "string", "description": "File pattern to include (alias for include)"},
+				"include":      map[string]any{"type": "string", "description": "File glob to search (e.g. '*.go', '*.{ts,tsx}'); a leading '!' excludes matching files (e.g. '!*_test.go')"},
+				"glob":         map[string]any{"type": "string", "description": "Another file glob, applied together with include (e.g. include '*.go' with glob '!*_test.go' searches Go files except tests)"},
 				"ignore_case":  map[string]any{"type": "boolean", "description": "Case-insensitive search (default: false)"},
 				"literal_text": map[string]any{"type": "boolean", "description": "Treat pattern as literal text instead of regex (default: false)"},
 				"context":      map[string]any{"type": "number", "description": "Number of context lines before and after each match (default: 0)"},
-				"limit":        map[string]any{"type": "number", "description": "Maximum number of matches to return (default: 100)"},
+				"limit":        map[string]any{"type": "number", "description": "Maximum number of matching lines to return (default: 100). Context lines do not count toward it"},
 			},
 			Required: []string{"pattern"},
 			Parallel: true,
@@ -76,17 +76,14 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid path: %v", err)), nil
 	}
-	globPattern := args.Include
-	if globPattern == "" {
-		globPattern = args.Glob
-	}
+	globs := grepGlobPatterns(args)
 	// A file supplied as the explicit operand is searched directly by ripgrep,
 	// even when the caller also supplied a recursive include filter. Keep the
 	// parsed filter for the GNU fallback, whose native direct-operand behavior
 	// still applies it.
-	nativeGlobPattern := globPattern
+	nativeGlobs := globs
 	if !isDirectory(searchPath) {
-		nativeGlobPattern = ""
+		nativeGlobs = nil
 	}
 	wsName := workspaceDirName(cfg)
 	excludeRecords := !pathHasComponent(searchPath, wsName)
@@ -96,7 +93,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	// No policy and exact-file searches retain the backend's direct operand
 	// semantics. resolveSearchRoot has already enforced an exact path.
 	if !policyActive || !isDirectory(searchPath) {
-		result, err := grepWithRg(ctx, args, searchPath, nativeGlobPattern, limit, wsName, excludeRecords)
+		result, err := grepWithRg(ctx, args, searchPath, nativeGlobs, limit, wsName, excludeRecords)
 		if err == nil {
 			return result, nil
 		}
@@ -105,7 +102,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 
 	// Artifact authorization subtracts from rg's native directory selection;
 	// it must not replace that selection with a filepath.Walk.
-	candidates, rgAvailable, err := collectNativeRgCandidates(ctx, searchPath, globPattern, wsName, excludeRecords, args.Path != "", policy)
+	candidates, rgAvailable, err := collectNativeRgCandidates(ctx, searchPath, globs, wsName, excludeRecords, args.Path != "", policy)
 	if err != nil && rgAvailable {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("grep failed: %v", err)), nil
 	}
@@ -114,10 +111,10 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("grep failed: %v", err)), nil
 		}
-		return grepFallbackCandidates(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords, candidates)
+		return grepFallbackCandidates(ctx, args, searchPath, globs, limit, wsName, excludeRecords, candidates)
 	}
 
-	result, err := grepWithRgCandidates(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords, candidates)
+	result, err := grepWithRgCandidates(ctx, args, searchPath, globs, limit, wsName, excludeRecords, candidates)
 	if errors.Is(err, errGrepBackendUnavailable) {
 		// GNU grep has different recursive, hidden, ignored, and include
 		// semantics, so do not reuse the rg candidate set on fallback.
@@ -125,7 +122,7 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("grep failed: %v", err)), nil
 		}
-		return grepFallbackCandidates(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords, candidates)
+		return grepFallbackCandidates(ctx, args, searchPath, globs, limit, wsName, excludeRecords, candidates)
 	}
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("grep failed: %v", err)), nil
@@ -133,15 +130,18 @@ func executeGrep(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	return result, nil
 }
 
-func grepWithRg(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int, wsName string, excludeRecords bool) (fantasy.ToolResponse, error) {
-	return grepWithRgCandidates(ctx, args, searchPath, globPattern, limit, wsName, excludeRecords, nil)
+func grepWithRg(ctx context.Context, args grepArgs, searchPath string, globs []string, limit int, wsName string, excludeRecords bool) (fantasy.ToolResponse, error) {
+	return grepWithRgCandidates(ctx, args, searchPath, globs, limit, wsName, excludeRecords, nil)
 }
 
-func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int, wsName string, excludeRecords bool, candidates []string) (fantasy.ToolResponse, error) {
+func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath string, globs []string, limit int, wsName string, excludeRecords bool, candidates []string) (fantasy.ToolResponse, error) {
 	if candidates != nil && len(candidates) == 0 {
 		return fantasy.NewTextResponse("No matches found."), nil
 	}
-	baseArgs := []string{"--line-number", "--no-heading", "--color=never", "--max-count=" + strconv.Itoa(limit)}
+	// --null ends each printed path at a NUL byte so matching and context
+	// lines can be told apart. One match past the limit per file shows that
+	// the file has more.
+	baseArgs := []string{"--line-number", "--no-heading", "--color=never", "--null", "--max-count=" + strconv.Itoa(limit+1)}
 	if candidates != nil {
 		baseArgs = append(baseArgs, "--with-filename")
 	}
@@ -154,8 +154,8 @@ func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath, globPa
 	if args.Context > 0 {
 		baseArgs = append(baseArgs, fmt.Sprintf("--context=%d", args.Context))
 	}
-	if globPattern != "" {
-		baseArgs = append(baseArgs, "--glob="+globPattern)
+	for _, glob := range globs {
+		baseArgs = append(baseArgs, "--glob="+glob)
 	}
 	if excludeRecords {
 		for _, g := range workspaceRecordRgGlobs(wsName) {
@@ -202,21 +202,16 @@ func grepWithRgCandidates(ctx context.Context, args grepArgs, searchPath, globPa
 	if outputText == "" {
 		return fantasy.NewTextResponse("No matches found."), nil
 	}
-	lines := strings.Split(outputText, "\n")
-	for i, line := range lines {
-		lines[i] = truncateLine(line, grepMaxLineLen)
-	}
-	tr := truncateHead(strings.Join(lines, "\n"), limit, defaultMaxBytes)
-	return fantasy.NewTextResponse(tr.Content + formatTruncationNotice(tr)), nil
+	return fantasy.NewTextResponse(finishGrepOutput(outputText, limit)), nil
 }
 
-func collectNativeRgCandidates(ctx context.Context, searchPath, globPattern, wsName string, excludeRecords, explicitRoot bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
+func collectNativeRgCandidates(ctx context.Context, searchPath string, globs []string, wsName string, excludeRecords, explicitRoot bool, policy *ArtifactPathPolicy) ([]string, bool, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		return nil, false, nil
 	}
 	rgArgs := []string{"--files", "--null"}
-	if globPattern != "" {
-		rgArgs = append(rgArgs, "--glob", globPattern)
+	for _, glob := range globs {
+		rgArgs = append(rgArgs, "--glob", glob)
 	}
 	if excludeRecords {
 		for _, g := range workspaceRecordRgGlobs(wsName) {
@@ -405,14 +400,15 @@ func grepFixedArgumentBytes(baseArgs []string, pattern string) int {
 }
 
 func grepFallback(ctx context.Context, args grepArgs, searchPath string, limit int, wsName string, excludeRecords bool) (fantasy.ToolResponse, error) {
-	return grepFallbackCandidates(ctx, args, searchPath, "", limit, wsName, excludeRecords, nil)
+	return grepFallbackCandidates(ctx, args, searchPath, grepGlobPatterns(args), limit, wsName, excludeRecords, nil)
 }
 
-func grepFallbackCandidates(ctx context.Context, args grepArgs, searchPath, globPattern string, limit int, wsName string, excludeRecords bool, candidates []string) (fantasy.ToolResponse, error) {
+func grepFallbackCandidates(ctx context.Context, args grepArgs, searchPath string, globs []string, limit int, wsName string, excludeRecords bool, candidates []string) (fantasy.ToolResponse, error) {
 	if candidates != nil && len(candidates) == 0 {
 		return fantasy.NewTextResponse("No matches found."), nil
 	}
-	baseArgs := []string{"-rn", "--color=never"}
+	// -Z is GNU grep's --null; -m mirrors ripgrep's per-file cap.
+	baseArgs := []string{"-rn", "-Z", "-m", strconv.Itoa(limit + 1), "--color=never"}
 	if candidates != nil {
 		baseArgs = append(baseArgs, "-H")
 	}
@@ -425,15 +421,7 @@ func grepFallbackCandidates(ctx context.Context, args grepArgs, searchPath, glob
 	if args.Context > 0 {
 		baseArgs = append(baseArgs, fmt.Sprintf("-C%d", args.Context))
 	}
-	if globPattern == "" {
-		globPattern = args.Include
-		if globPattern == "" {
-			globPattern = args.Glob
-		}
-	}
-	if globPattern != "" {
-		baseArgs = append(baseArgs, "--include="+globPattern)
-	}
+	baseArgs = append(baseArgs, gnuGrepGlobArgs(globs)...)
 	operands := []string{searchPath}
 	if candidates != nil {
 		operands = candidates
@@ -460,6 +448,5 @@ func grepFallbackCandidates(ctx context.Context, args grepArgs, searchPath, glob
 	if strings.TrimSpace(outputText) == "" {
 		return fantasy.NewTextResponse("No matches found."), nil
 	}
-	tr := truncateHead(outputText, limit, defaultMaxBytes)
-	return fantasy.NewTextResponse(tr.Content + formatTruncationNotice(tr)), nil
+	return fantasy.NewTextResponse(finishGrepOutput(outputText, limit)), nil
 }

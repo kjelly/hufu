@@ -63,14 +63,23 @@ func (c *Coordinator) appendCanonicalRunInputsPrompt(b *strings.Builder) {
 	b.WriteString("## Canonical Run Inputs\n\n")
 	fmt.Fprintf(b, "Runtime-frozen input snapshot `%s` (`%s`) is authoritative for this invocation. Natural-language summaries cannot change these values.\n\n", snapshot.ID, snapshot.SnapshotHash)
 	const maxRenderedInputBytes = 4096
+	var defaulted []string
 	for _, input := range snapshot.Inputs {
 		value := input.CanonicalValue
 		if redacted, err := utils.RedactJSONCompact(value); err == nil {
 			value = redacted
 		}
 		fmt.Fprintf(b, "- `%s` = `%s` (source: `%s`, value hash: `%s`)\n", input.Name, utils.TruncateString(string(value), maxRenderedInputBytes), input.Source, input.ValueHash)
+		if input.Source == RunInputSourceDefault {
+			defaulted = append(defaulted, "`"+input.Name+"`")
+		}
 	}
 	b.WriteString("\nUse these canonical values and hashes when describing scope, constructing tasks, and evaluating producer attestations.\n\n")
+	if len(defaulted) > 0 {
+		// A default is indistinguishable from the requested value in the
+		// answer unless the coordinator says so.
+		fmt.Fprintf(b, "The request did not state %s, so the team default applied. Say so in your final answer, naming the default value, so the user can rerun with an explicit value if the default is not what they meant.\n\n", strings.Join(defaulted, ", "))
+	}
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {

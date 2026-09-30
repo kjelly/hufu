@@ -66,7 +66,7 @@ func TestArtifactScopeFallbackTraversalMatchesPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := grepFallbackCandidates(context.Background(), grepArgs{Pattern: "ordinary-unique-content", Literal: true}, root, "", defaultGrepLimit, "workspace", false, candidates)
+	response, err := grepFallbackCandidates(context.Background(), grepArgs{Pattern: "ordinary-unique-content", Literal: true}, root, nil, defaultGrepLimit, "workspace", false, candidates)
 	if err != nil || response.IsError || !strings.Contains(response.Content, "ordinary.go") || strings.Contains(response.Content, "blocked-unique") {
 		t.Fatalf("grep fallback response=%#v err=%v", response, err)
 	}
@@ -415,10 +415,10 @@ func TestGrepEmptyAuthorizedCandidatesNeverSearchesRoot(t *testing.T) {
 		run  func() (fantasy.ToolResponse, error)
 	}{
 		{name: "rg", run: func() (fantasy.ToolResponse, error) {
-			return grepWithRgCandidates(context.Background(), args, root, args.Include, defaultGrepLimit, "workspace", false, empty)
+			return grepWithRgCandidates(context.Background(), args, root, grepGlobPatterns(args), defaultGrepLimit, "workspace", false, empty)
 		}},
 		{name: "fallback", run: func() (fantasy.ToolResponse, error) {
-			return grepFallbackCandidates(context.Background(), args, root, args.Include, defaultGrepLimit, "workspace", false, empty)
+			return grepFallbackCandidates(context.Background(), args, root, grepGlobPatterns(args), defaultGrepLimit, "workspace", false, empty)
 		}},
 	} {
 		t.Run(backend.name, func(t *testing.T) {

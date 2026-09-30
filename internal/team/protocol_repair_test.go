@@ -269,12 +269,28 @@ func TestSubmitResultLoopUsesResultOnlyRepairWithoutWorkerReplay(t *testing.T) {
 	if len(repairPrompts) != 1 || !strings.Contains(repairPrompts[0], "Runtime validation error") || !strings.Contains(repairPrompts[0], "summary must contain 1-1000 runes") {
 		t.Fatalf("repair prompt did not preserve the bounded validation diagnostic: %#v", repairPrompts)
 	}
-	if strings.Contains(repairPrompts[0], "secret-marker") {
-		t.Fatalf("repair prompt leaked rejected submit_result arguments: %q", repairPrompts[0])
+	// The repair turn gets the worker's own rejected arguments back so it can
+	// resubmit the result instead of inventing one. Runtime records keep
+	// those model-controlled arguments out.
+	if !strings.Contains(repairPrompts[0], "## Last rejected submit_result") || !strings.Contains(repairPrompts[0], "secret-marker") {
+		t.Fatalf("repair prompt lacks the rejected submit_result arguments: %q", repairPrompts[0])
 	}
 	got := c.todoItemByID(item.ID)
 	if got.Status != TaskDone || got.ExecutionReceipt == nil || got.ExecutionReceipt.RepairProvenance == nil || !got.ExecutionReceipt.RepairProvenance.Success {
 		t.Fatalf("task result-only repair projection = %#v", got)
+	}
+	provenance := got.ExecutionReceipt.RepairProvenance
+	recorded := []string{provenance.Prompt}
+	for _, attempt := range provenance.History {
+		recorded = append(recorded, attempt.Prompt)
+	}
+	for _, prompt := range recorded {
+		if strings.Contains(prompt, "secret-marker") {
+			t.Fatalf("receipt persisted rejected submit_result arguments: %q", prompt)
+		}
+	}
+	if !strings.Contains(provenance.Prompt, "arguments were given to the repair turn and are omitted") {
+		t.Fatalf("receipt prompt does not mark the omitted arguments: %q", provenance.Prompt)
 	}
 }
 

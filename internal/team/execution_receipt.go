@@ -25,13 +25,25 @@ import (
 //   - progress_not_final — the submitted result is a progress update
 //     (status partial/failed/blocked) rather than a final outcome; the
 //     task is reclassified as FailureExecution, not a protocol failure.
+//   - no_evidence        — the worker left neither output text nor a
+//     submit_result call, and the repair turn could only submit
+//     completed_with_gaps; like progress_not_final the task is reclassified
+//     as FailureExecution.
 type RepairFailureReason string
 
 const (
 	RepairFailureNoToolCall       RepairFailureReason = "no_tool_call"
 	RepairFailureInvalidSchema    RepairFailureReason = "invalid_schema"
 	RepairFailureProgressNotFinal RepairFailureReason = "progress_not_final"
+	RepairFailureNoEvidence       RepairFailureReason = "no_evidence"
 )
+
+// ReclassifiesAsExecution reports whether the reason turns the protocol
+// failure into an execution failure, which is retried rather than counted as
+// a protocol repair.
+func (r RepairFailureReason) ReclassifiesAsExecution() bool {
+	return r == RepairFailureProgressNotFinal || r == RepairFailureNoEvidence
+}
 
 // IsProtocolRepairFailure reports whether reason is one of the §7 repair
 // failure sub-reasons. progress_not_final is excluded because it is

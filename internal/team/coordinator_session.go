@@ -827,38 +827,6 @@ func (c *Coordinator) worksetReceiptsFromTasks(tasks []*TodoItem) ([]WorksetExpa
 	return receipts, nil
 }
 
-// updateBranchState snapshots the coordinator's live state (task plan, active
-// model, selected team, latest compaction summary) into the active session
-// branch, so `hufu session` checkout/time-travel can restore it later (§8).
-// Best-effort: any failure leaves the checkpoint path unaffected. The task
-// plan is read from a session snapshot so a concurrent checkpoint cannot race
-// the read.
-func (c *Coordinator) updateBranchState() {
-	st, err := LoadSessionTree(c.session.Workspace)
-	if err != nil {
-		return
-	}
-	b := st.Branches[st.ActiveBranch]
-	if b == nil {
-		return
-	}
-	c.viewSessionData(func(sd *SessionData) {
-		if len(sd.Tasks) > 0 {
-			plan := make([]*TodoItem, len(sd.Tasks))
-			for i, t := range sd.Tasks {
-				plan[i] = cloneTodoItem(t)
-			}
-			b.State.TaskPlan = plan
-		}
-	})
-	b.State.ActiveModel = c.session.Config.Generation.Model
-	b.State.SelectedTeam = c.session.Config.Name
-	if c.lastCompactionSummary != nil {
-		b.State.Compaction = cloneStructuredSummary(c.lastCompactionSummary)
-	}
-	_ = SaveSessionTree(c.session.Workspace, st)
-}
-
 // isInterruptedStatus reports whether a restored task status indicates the task
 // was left incomplete by an interrupted (crashed/killed) run and needs resume
 // handling. TaskProtocolIncomplete is included for selection, but it is

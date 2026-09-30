@@ -131,7 +131,13 @@ func filterWorkspaceRecordLines(output, wsName string) string {
 	lines := strings.Split(output, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		if m := grepOutputPathRe.FindStringSubmatch(line); m != nil && isWorkspaceRecordPath(m[1], wsName) {
+		// Output produced with --null ends the path at a NUL byte, which
+		// names it exactly; the pattern is the fallback for plain output.
+		if parsed, ok := parseGrepOutputLine(line); ok && parsed.hasPath {
+			if isWorkspaceRecordPath(parsed.path, wsName) {
+				continue
+			}
+		} else if m := grepOutputPathRe.FindStringSubmatch(line); m != nil && isWorkspaceRecordPath(m[1], wsName) {
 			continue
 		}
 		kept = append(kept, line)

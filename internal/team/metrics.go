@@ -385,14 +385,15 @@ func accumulateProtocolRepairFailureReasons(metrics *RunMetrics, provenance *Rep
 }
 
 // protocolRepairAttemptCount counts only repair turns that remain protocol
-// failures. A progress_not_final turn is execution evidence and is excluded,
-// even when it follows an earlier invalid_schema repair in the same receipt.
+// failures. A progress_not_final or no_evidence turn is execution evidence and
+// is excluded, even when it follows an earlier invalid_schema repair in the
+// same receipt.
 func protocolRepairAttemptCount(provenance *RepairProvenance) int {
 	if provenance == nil || !provenance.Attempted {
 		return 0
 	}
 	if len(provenance.History) == 0 {
-		if provenance.FailureReason == RepairFailureProgressNotFinal {
+		if provenance.FailureReason.ReclassifiesAsExecution() {
 			return 0
 		}
 		attempts := provenance.RepairAttempts
@@ -403,7 +404,7 @@ func protocolRepairAttemptCount(provenance *RepairProvenance) int {
 	}
 	count := 0
 	for _, attempt := range provenance.History {
-		if attempt.FailureReason != RepairFailureProgressNotFinal {
+		if !attempt.FailureReason.ReclassifiesAsExecution() {
 			count++
 		}
 	}

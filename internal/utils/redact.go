@@ -59,6 +59,44 @@ var (
 	secretKeyNameRe = regexp.MustCompile(`(?i)(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)`)
 )
 
+// secretKeyNameLiterals spells out every lowercase string secretKeyNameRe
+// accepts. Each credential pattern above requires one of them, so text that
+// contains none cannot match and the patterns can be skipped.
+var secretKeyNameLiterals = []string{
+	"password", "passwd", "secret", "token", "credential",
+	"apikey", "api_key", "api-key",
+	"accesskey", "access_key", "access-key",
+	"privatekey", "private_key", "private-key",
+}
+
+// containsSecretKeyName reports whether secretKeyNameRe matches content. The
+// case-insensitive alternation has no literal prefix, so RE2 walks it at every
+// input position; persisting session state runs it over megabytes of task
+// output on every checkpoint. A substring search rejects most text first, and
+// the regex decides the rest.
+func containsSecretKeyName(content string) bool {
+	return mayContainSecretKeyName(content) && secretKeyNameRe.MatchString(content)
+}
+
+// mayContainSecretKeyName is false only when secretKeyNameRe cannot match.
+// RE2's (?i) folds ASCII case, U+212A KELVIN SIGN (to k), and U+017F LATIN
+// SMALL LETTER LONG S (to s) onto the key-name letters. strings.ToLower maps
+// the Kelvin sign to k but leaves the long s alone, so input containing it is
+// passed on. ToLower also maps a few runes the regex does not fold, such as
+// U+0130 to i; those only pass extra input on to the regex.
+func mayContainSecretKeyName(content string) bool {
+	if strings.ContainsRune(content, 'ſ') {
+		return true
+	}
+	lower := strings.ToLower(content)
+	for _, literal := range secretKeyNameLiterals {
+		if strings.Contains(lower, literal) {
+			return true
+		}
+	}
+	return false
+}
+
 // Numeric token counters are telemetry, not credentials. Keep this exception
 // explicit: every other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
@@ -282,7 +320,7 @@ func isLearnableSecret(value string) bool {
 // their values. The cheap key-name pre-filter keeps this off the hot path for
 // the overwhelming majority of content, which mentions no credential at all.
 func learnSecretsFrom(content string) {
-	if !secretKeyNameRe.MatchString(content) && !strings.Contains(strings.ToLower(content), "authorization") {
+	if !mayContainSecretKeyName(content) && !strings.Contains(strings.ToLower(content), "authorization") {
 		return
 	}
 	for _, re := range []*regexp.Regexp{secretKeyValueRe, secretJSONRe, secretEnvRe, secretAuthorizationRe} {
@@ -338,14 +376,36 @@ func learnedSecretProbe(value string) string {
 // persisted to workspace logs or session state. It intentionally preserves
 // keys and surrounding prose so diagnostics remain useful.
 func RedactSecrets(content string) string {
+	return redactSecretsText(content, true)
+}
+
+// redactSecretsText is RedactSecrets with the learning pass optional. The JSON
+// walk learns from every string in discoverJSONSecrets before it redacts any,
+// so learning again from each string would only repeat that work.
+func redactSecretsText(content string, learn bool) string {
+	// Every key-based pattern below requires a credential key name, and the
+	// authorization pattern requires its header name. Checking for those
+	// literals once skips the patterns for the ordinary text that has neither.
+	// The replacements only ever insert redactedSecret, so an earlier pass
+	// cannot introduce a match for a later one.
+	hasKeyName := mayContainSecretKeyName(content)
+	hasAuthorization := strings.Contains(strings.ToLower(content), "authorization")
 	// Learn before redacting: the passes below destroy the very values that a
 	// later bare occurrence has to be matched against.
-	learnSecretsFrom(content)
-	content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
-	content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
-	content = secretJSONRe.ReplaceAllStringFunc(content, redactJSONKeyValue)
-	content = secretKeyValueRe.ReplaceAllStringFunc(content, redactKeyValue)
-	content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	if learn && (hasKeyName || hasAuthorization) {
+		learnSecretsFrom(content)
+	}
+	if strings.Contains(content, "PRIVATE KEY-----") {
+		content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
+	}
+	if hasAuthorization {
+		content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	}
+	if hasKeyName {
+		content = secretJSONRe.ReplaceAllStringFunc(content, redactJSONKeyValue)
+		content = secretKeyValueRe.ReplaceAllStringFunc(content, redactKeyValue)
+		content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
+	}
 	content = redactLearnedSecrets(content)
 	processRedactors.RLock()
 	redactors := append([]SecretRedactor(nil), processRedactors.items...)
@@ -462,7 +522,7 @@ func jsonSemanticEqual(a, b []byte) bool {
 // string values are redacted. This keeps learned-secret behavior independent
 // of the unspecified iteration order of decoded JSON objects.
 func discoverJSONSecrets(value any, key string) {
-	if key != "" && secretKeyNameRe.MatchString(key) {
+	if key != "" && containsSecretKeyName(key) {
 		if safeSecretMetadataValue(key, value) {
 			return
 		}
@@ -500,7 +560,7 @@ func discoverJSONSecrets(value any, key string) {
 // keep a JSON document byte-stable across event redaction use it to reject
 // such keys up front.
 func IsRedactedJSONKey(key string) bool {
-	if key == "" || !secretKeyNameRe.MatchString(key) {
+	if key == "" || !containsSecretKeyName(key) {
 		return false
 	}
 	_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
@@ -508,7 +568,7 @@ func IsRedactedJSONKey(key string) bool {
 }
 
 func redactJSONValue(value any, key string) any {
-	if key != "" && secretKeyNameRe.MatchString(key) {
+	if key != "" && containsSecretKeyName(key) {
 		if safeSecretMetadataValue(key, value) {
 			return value
 		}
@@ -530,7 +590,7 @@ func redactJSONValue(value any, key string) any {
 	}
 	switch v := value.(type) {
 	case string:
-		return RedactSecrets(v)
+		return redactSecretsText(v, false)
 	case []any:
 		for i := range v {
 			v[i] = redactJSONValue(v[i], "")
