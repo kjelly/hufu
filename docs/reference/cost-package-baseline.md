@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5665cc34e4eef23c6af93e370f1672f5168dc43c`
+> Verified-Commit: `bd42062e144750dca0d411e63bbe492524a14c5a`
 > Supersedes: —
 > Superseded-By: —
 
@@ -25,14 +25,14 @@ provider, external service, package registry, or Paperclip checkout.
 
 | Boundary | Existing or extended evidence |
 | --- | --- |
-| `ExecutionUsage` JSON, including cache read/write | `TestExecutionUsageJSONCompatibility`, `TestNormalizeExecutionUsageCacheSemantics`, `TestExecutionUsagePromptTokens` |
+| `ExecutionUsage` JSON, including cache read/write | `TestUsageFromStepsSumsCacheTokens`, `TestExecutionUsageJSONOmitsZeroCacheFields`, `TestExecutionUsagePromptTokens` |
 | Concurrent token reservations | `TestTokenBudgetConcurrentStepReservationsBoundOvershoot` |
 | Token-budget ownership across extra-model coordinators | `TestTokenBudgetSharedRootAdmissionAcrossExtraModels` |
 | Admission and durable commit precede all four Fantasy transports | `TestBoundAdmissionContextCoversAllLanguageModelMethods` (extended in CP-000 with an ordered trace) |
 | Stream slot release and cancellation | `TestAdmittedStreamHoldsProviderSlotUntilExhaustion`, `TestAdmittedStreamObjectHoldsProviderSlotUntilExhaustion`, `TestAdmittedStreamCancellationReleasesUniteratedSlot`, `TestAdmittedStreamEarlyBreakCancelsBeforeRelease` |
 | EventStore interprocess append and idempotency | `TestEventStoreAppendSeesAnotherWritersIdempotencyKey`, `TestEventStoreAppendMergesAnotherWritersTail`, `TestEventStoreIdempotencyIsScopedToBranch` |
 | EventStore corrupt tail, replacement, write and sync failures | `TestCoordinatorStartupMarksCorruptEventStoreForRecovery`, `TestEventStoreAppendRefusesReplacedLog`, `TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent`, `TestEventStoreSyncFailureIsObservable` |
-| Execution-policy v4 compatibility and drift | `TestExecutionPolicySnapshotV4OmitsLegacyProviderAndReadsV3`, `TestExecutionPolicySnapshotBlocksResumeOnPersistedConfigurationDrift`, `TestOMPCharacterizePolicySnapshotGolden` |
+| Execution-policy v5 compatibility and drift | `TestExecutionPolicySnapshotV5OmitsLegacyProviderAndReadsV4AndV3`, `TestExecutionPolicySnapshotBlocksResumeOnPersistedConfigurationDrift`, `TestOMPCharacterizePolicySnapshotGolden` |
 | Read-only event inspection | `TestOpenEventStoreReadOnlyDoesNotCreateAndRejectsAppend`, `TestInspectStorageMissingDatabaseUsesIntegrityExitAndCreatesNothing`, `TestInspectCommandRunJSON` |
 | Legacy and v1alpha1 normalization | `TestLegacyAndV1Alpha1NormalizeIdentically` |
 | Top-level agent Markdown | `TestLoadTeam_NoYAMLDirName`, `TestLoadTeamExcludesREADMEFromAgentDiscovery` |
