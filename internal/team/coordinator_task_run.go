@@ -1638,7 +1638,7 @@ retryLoop:
 							// and never replays the worker execution (§7).
 							if !repairSuccess && repairReason == RepairFailureInvalidSchema {
 								typedRes = nil
-								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response.\n\n## Runtime validation error\n%s\n\n## Bounded execution evidence\n%s%s", utils.TruncateRunes(task.Goal, 4000), schemaRepairDiagnostic(repairDiagnostic), repairEvidence, finalizationBinding)
+								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response.\n\n## Runtime validation error\n%s\n%s\n## Bounded execution evidence\n%s%s", utils.TruncateRunes(task.Goal, 4000), schemaRepairDiagnostic(repairDiagnostic), schemaRepairRejectionNote(rejectedSubmission), repairEvidence, finalizationBinding)
 								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt)
 								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 								if schemaRepairErr != nil {

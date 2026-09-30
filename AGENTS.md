@@ -976,6 +976,12 @@ execution contracts that are easy to break with an apparently local change.
 - **Keep protocol repair side-effect free.** Repair may fix result, schema, or
   argument state, but must not silently replay a completed external or
   infrastructure mutation. Preserve the original transcript and receipt.
+- **Fence rejected results that re-enter a repair prompt.** Result-only repair
+  restates the worker's last rejected `submit_result` arguments (redacted;
+  receipts keep a placeholder), because without them the repair turn has
+  nothing to restate. A tool call becomes user-prompt text there, so wrap it
+  with `fenceUntrusted` and label it as data. Failure classification and
+  failure summaries still exclude model-controlled arguments.
 - **Preserve receipt immutability across redaction.** Runtime outputs are
   normalized, redacted, and hashed at `CanonicalizeRuntimeOutputs`. Subsequent
   persistence sinks (session persistence, event payloads, task transitions)
