@@ -101,7 +101,7 @@ spec:
     allow_phase_skip: true
     fail_fast: true
   capabilities:
-    required: [produce-workset]
+    required: [produce-workset, verify-review-tests]
   verification:
     required: true
   retry:
@@ -121,6 +121,11 @@ spec:
       source: ./reviewprep
       mode: trusted-static
       timeout: 300
+    verify-review-tests:
+      runtime: golang
+      source: ./reviewprep
+      mode: trusted-static
+      timeout: 1200
 
   delegation:
     bind-task-goal-contracts: true
@@ -139,6 +144,18 @@ spec:
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
           - { pointer: /observed_budget/changed_paths, op: minimum, value: 1 }
+      - type: task_output_assert
+        source-task: verify-targeted-go-tests
+        output: scope
+        assertions:
+          - { pointer: /requested, op: equals_input, input: review.scope }
+          - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
+          - { pointer: /satisfied, op: equals, value: true }
+      - type: task_output_assert
+        source-task: verify-targeted-go-tests
+        output: targeted_go_tests
+        assertions:
+          - { pointer: /passed, op: equals, value: true }
       - type: task_output_assert
         source-task: produce-workset
         output: documentation_verification
@@ -160,8 +177,9 @@ spec:
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
 
-  # The producer and all three routed worksets are blocking. A second critic
-  # pass over a typed primary finding remains optional.
+  # The producer, snapshot-pinned Go verifier, and all three routed worksets
+  # are blocking. A second critic pass over a typed primary finding remains
+  # optional.
   tasks:
     - id: produce-workset
       agent: reviewer
@@ -173,6 +191,20 @@ spec:
         type: prepare_review_workset
         payload: >-
           {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32}
+        input-bindings:
+          - input: review.scope
+            target: /scope
+
+    - id: verify-targeted-go-tests
+      agent: reviewer
+      phase: prepare
+      side_effect: none
+      recovery: retry
+      action:
+        capability: verify-review-tests
+        type: verify_review_tests
+        payload: >-
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}
         input-bindings:
           - input: review.scope
             target: /scope

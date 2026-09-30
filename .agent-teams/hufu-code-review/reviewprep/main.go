@@ -39,6 +39,7 @@ const (
 	routingDocumentation     = "documentation"
 	maxSnapshotContentBytes  = 2 * 1024 * 1024
 	maxSnapshotRelatedPaths  = 24
+	maxGoTestOutputBytes     = 128 * 1024
 )
 
 type actionRequest struct {
@@ -128,6 +129,59 @@ type actionResult struct {
 	Outputs   map[string]any `json:"outputs"`
 	Artifacts []artifact     `json:"artifacts"`
 }
+
+type goTestVerification struct {
+	Passed           bool     `json:"passed"`
+	ReviewedRevision string   `json:"reviewed_revision"`
+	BaseRevision     string   `json:"base_revision"`
+	Packages         []string `json:"packages"`
+	Command          []string `json:"command"`
+	ExitCode         int      `json:"exit_code"`
+	TimedOut         bool     `json:"timed_out"`
+	OutputSHA256     string   `json:"output_sha256"`
+	OutputBytes      int      `json:"output_bytes"`
+	OutputTruncated  bool     `json:"output_truncated"`
+	Diagnostic       string   `json:"-"`
+}
+
+type goTestReceipt struct {
+	Passed             bool     `json:"passed"`
+	ReviewedRevision   string   `json:"reviewed_revision"`
+	BaseRevision       string   `json:"base_revision"`
+	Packages           []string `json:"packages"`
+	Command            []string `json:"command"`
+	ExitCode           int      `json:"exit_code"`
+	TimedOut           bool     `json:"timed_out"`
+	OutputTruncated    bool     `json:"output_truncated"`
+	Diagnostic         string   `json:"diagnostic,omitempty"`
+	ArtifactID         string   `json:"artifact_id"`
+	ArtifactSHA256     string   `json:"artifact_sha256"`
+	RequestedInputHash string   `json:"requested_input_hash"`
+}
+
+type cappedBuffer struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(value []byte) (int, error) {
+	originalLength := len(value)
+	remaining := b.limit - b.buffer.Len()
+	// The trusted-static Go interpreter does not yet implement the Go 1.21
+	// min/max built-ins even though the repository toolchain does.
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		b.truncated = true
+	}
+	_, _ = b.buffer.Write(value)
+	return originalLength, nil
+}
+
+func (b *cappedBuffer) String() string { return b.buffer.String() }
 
 type artifact struct {
 	ID          string `json:"id"`
@@ -324,14 +378,19 @@ func run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err := decodeStrictJSON(raw, &request); err != nil {
 		return fmt.Errorf("decode action request: %w", err)
 	}
-	if request.Type != "prepare_review_workset" && request.Type != "prepare" {
-		return fmt.Errorf("unsupported action type %q", request.Type)
-	}
 	config, err := decodeWireConfig(request.Payload)
 	if err != nil {
 		return fmt.Errorf("decode action payload: %w", err)
 	}
-	result, err := Prepare(ctx, config)
+	var result actionResult
+	switch request.Type {
+	case "prepare_review_workset", "prepare":
+		result, err = Prepare(ctx, config)
+	case "verify_review_tests":
+		result, err = VerifyReviewTests(ctx, config)
+	default:
+		return fmt.Errorf("unsupported action type %q", request.Type)
+	}
 	if err != nil {
 		return err
 	}
@@ -628,6 +687,187 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 		"total_diff_bytes": observed.TotalDiffBytes,
 		"total_diff_lines": observed.TotalDiffLines,
 	}, Artifacts: artifacts}, nil
+}
+
+// VerifyReviewTests executes Go tests only inside an immutable snapshot of the
+// requested review scope. It returns a sealed artifact even when tests fail;
+// the team's blocking task_output_assert decides whether the run may pass.
+func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error) {
+	outputWasEmpty := strings.TrimSpace(config.OutputDir) == ""
+	applyConfigDefaults(&config)
+	if outputWasEmpty {
+		config.OutputDir = filepath.Join(config.ArtifactRoot, "verification")
+	}
+	if err := validateConfig(config); err != nil {
+		return actionResult{}, err
+	}
+	repo, err := resolveRepository(ctx, config.Repository)
+	if err != nil {
+		return actionResult{}, err
+	}
+	artifactRoot, err := resolveArtifactRoot(repo, config.ArtifactRoot)
+	if err != nil {
+		return actionResult{}, err
+	}
+	outputDir, err := resolveOutputDir(repo, config.OutputDir)
+	if err != nil {
+		return actionResult{}, err
+	}
+	if err := ensureEmptyOutputDir(outputDir); err != nil {
+		return actionResult{}, err
+	}
+	if !pathWithin(artifactRoot, outputDir) {
+		return actionResult{}, fmt.Errorf("output_dir %q must be beneath artifact_root %q", config.OutputDir, config.ArtifactRoot)
+	}
+	if err := rejectGitAdministrativeOutput(ctx, repo, outputDir); err != nil {
+		return actionResult{}, err
+	}
+	resolution, err := resolveRequestedRange(ctx, repo, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	reviewRangeValue := resolution.Range
+	if reviewRangeValue.CommitCount == 0 && !reviewRangeValue.isWorkingTree() {
+		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no commits", compactScope(config.Scope))
+	}
+	diffPlan, err := prepareSelectedCommitDiffPlan(ctx, repo, reviewRangeValue)
+	if err != nil {
+		return actionResult{}, err
+	}
+	paths, err := changedPaths(ctx, repo, reviewRangeValue, diffPlan)
+	if err != nil {
+		return actionResult{}, err
+	}
+	if len(paths) == 0 {
+		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no changed paths", compactScope(config.Scope))
+	}
+	snapshot, err := createReviewSourceSnapshot(ctx, repo, reviewRangeValue, paths)
+	if err != nil {
+		return actionResult{}, err
+	}
+	defer snapshot.Close()
+
+	packages := targetedGoTestPackages(snapshot.root, paths)
+	verification := runSnapshotGoTests(ctx, snapshot, packages)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
+	}
+	report, err := json.MarshalIndent(verification, "", "  ")
+	if err != nil {
+		return actionResult{}, fmt.Errorf("encode Go test verification: %w", err)
+	}
+	report = append(report, '\n')
+	reportPath := filepath.Join(outputDir, "targeted-go-tests.json")
+	if err := os.WriteFile(reportPath, report, 0o644); err != nil {
+		return actionResult{}, fmt.Errorf("write Go test verification: %w", err)
+	}
+	reportArtifact, err := fileArtifact(artifactRoot, reportPath, "go_test_verification")
+	if err != nil {
+		return actionResult{}, err
+	}
+	reportArtifact.Description = "Go test evidence from the immutable reviewed-revision snapshot"
+	receipt := goTestReceipt{
+		Passed: verification.Passed, ReviewedRevision: verification.ReviewedRevision,
+		BaseRevision: verification.BaseRevision, Packages: verification.Packages,
+		Command: verification.Command, ExitCode: verification.ExitCode,
+		TimedOut: verification.TimedOut, OutputTruncated: verification.OutputTruncated,
+		ArtifactID: reportArtifact.ID, ArtifactSHA256: reportArtifact.SHA256,
+		RequestedInputHash: scopeInputDigest(config.Scope),
+	}
+	if !verification.Passed {
+		receipt.Diagnostic = verification.Diagnostic
+	}
+	return actionResult{Outputs: map[string]any{
+		"scope": scopeAttestation{
+			Requested: config.Scope, RequestedInputHash: receipt.RequestedInputHash,
+			Resolved: resolvedScope{
+				Base: reviewRangeValue.Start, Head: reviewRangeValue.End,
+				SelectedCommitCount: reviewRangeValue.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
+				HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
+			},
+			ObservedBudget: observedBudget{ChangedPaths: len(paths)}, Satisfied: true,
+		},
+		"targeted_go_tests": receipt,
+	}, Artifacts: []artifact{reportArtifact}}, nil
+}
+
+func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
+	packages := make(map[string]struct{})
+	for _, changedPath := range changed {
+		cleaned := filepath.ToSlash(filepath.Clean(changedPath))
+		switch path.Base(cleaned) {
+		case "go.mod", "go.sum", "go.work", "go.work.sum":
+			return []string{"./..."}
+		}
+		if path.Ext(cleaned) != ".go" {
+			continue
+		}
+		directory := path.Dir(cleaned)
+		if directory == "." {
+			packages["."] = struct{}{}
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(snapshotRoot, filepath.FromSlash(directory))); err != nil || !info.IsDir() {
+			return []string{"./..."}
+		}
+		packages["./"+directory] = struct{}{}
+	}
+	if len(packages) == 0 {
+		return []string{"./..."}
+	}
+	result := make([]string, 0, len(packages))
+	for packagePath := range packages {
+		result = append(result, packagePath)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, packages []string) goTestVerification {
+	arguments := append([]string{"test", "-mod=readonly", "-count=1"}, packages...)
+	command := exec.CommandContext(ctx, "go", arguments...)
+	command.Dir = snapshot.root
+	command.Env = sanitizedGoTestEnvironment()
+	output := &cappedBuffer{limit: maxGoTestOutputBytes}
+	command.Stdout = output
+	command.Stderr = output
+	runErr := command.Run()
+	exitCode := 0
+	if runErr != nil {
+		exitCode = -1
+		// The trusted-static Go interpreter does not yet expose errors.AsType.
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+	return goTestVerification{
+		Passed: runErr == nil, ReviewedRevision: snapshot.revision,
+		BaseRevision: snapshot.baseRevision, Packages: packages,
+		Command: append([]string{"go"}, arguments...), ExitCode: exitCode,
+		TimedOut:     errors.Is(ctx.Err(), context.DeadlineExceeded),
+		OutputSHA256: sha256Hex([]byte(output.String())), OutputBytes: output.buffer.Len(),
+		OutputTruncated: output.truncated, Diagnostic: output.String(),
+	}
+}
+
+func sanitizedGoTestEnvironment() []string {
+	env := make([]string, 0, 16)
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "GOCACHE", "GOMODCACHE", "GOPATH", "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR":
+			env = append(env, entry)
+		default:
+			if strings.HasPrefix(key, "LC_") {
+				env = append(env, entry)
+			}
+		}
+	}
+	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local")
 }
 
 func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {

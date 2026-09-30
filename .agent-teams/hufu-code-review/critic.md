@@ -34,6 +34,9 @@ Otherwise, act only on the typed finding and opaque evidence references
 supplied by the coordinator. Re-read the cited diff and the smallest relevant
 source, caller, and test evidence from authorized artifacts. Do not broaden the
 review, edit files, use shell, consult repository paths, or invent evidence.
+Do not claim that Go tests ran from source inspection or another agent's prose;
+only the independent verifier's typed output, artifact, or runtime receipt can
+support an execution claim.
 Confirm, downgrade, or reject the finding with a
 concrete reachable scenario and retain the evidence chain in one typed result.
 Do not downgrade findings on subtle concurrency or lifecycle invariants (such as

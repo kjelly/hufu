@@ -42,11 +42,13 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	if string(definition.Default) != `{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}` {
 		t.Fatalf("review scope default = %s", definition.Default)
 	}
-	var producer *TaskDef
+	var producer, verifier *TaskDef
 	for i := range session.ContractTasks {
-		if session.ContractTasks[i].ID == "produce-workset" {
+		switch session.ContractTasks[i].ID {
+		case "produce-workset":
 			producer = &session.ContractTasks[i]
-			break
+		case "verify-targeted-go-tests":
+			verifier = &session.ContractTasks[i]
 		}
 	}
 	if producer == nil || producer.Action == nil {
@@ -68,13 +70,21 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	if len(producer.Action.InputBindings) != 1 || producer.Action.InputBindings[0] != (ActionInputBinding{Input: "review.scope", Target: "/scope"}) {
 		t.Fatalf("producer input bindings = %#v", producer.Action.InputBindings)
 	}
+	if verifier == nil || verifier.Action == nil || verifier.Phase != PhasePrepare || verifier.Action.Capability != "verify-review-tests" {
+		t.Fatalf("snapshot Go verifier contract = %#v", verifier)
+	}
+	if len(verifier.Action.InputBindings) != 1 || verifier.Action.InputBindings[0] != (ActionInputBinding{Input: "review.scope", Target: "/scope"}) {
+		t.Fatalf("verifier input bindings = %#v", verifier.Action.InputBindings)
+	}
 	acceptance := session.Config.AcceptanceSpec
-	if acceptance == nil || len(acceptance.Verifications) != 5 ||
+	if acceptance == nil || len(acceptance.Verifications) != 7 ||
 		acceptance.Verifications[0].Type != VerifyTaskOutputAssert ||
 		acceptance.Verifications[1].Type != VerifyTaskOutputAssert ||
-		acceptance.Verifications[2].Type != VerifyWorksetComplete ||
-		acceptance.Verifications[3].Type != VerifyWorksetComplete ||
-		acceptance.Verifications[4].Type != VerifyWorksetComplete {
+		acceptance.Verifications[2].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[3].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[4].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[5].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[6].Type != VerifyWorksetComplete {
 		t.Fatalf("acceptance wiring = %#v", acceptance)
 	}
 	if coordinator := session.Agents["coordinator"]; coordinator == nil || strings.Contains(coordinator.System, "Natural-language scope text cannot override") {
@@ -84,7 +94,7 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 
 func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
-	for _, capability := range []string{"resolve-review-scope", "produce-workset"} {
+	for _, capability := range []string{"resolve-review-scope", "produce-workset", "verify-review-tests"} {
 		config := session.Config.ActionProviders[capability]
 		if config.Runtime != "golang" || config.Mode != "trusted-static" || config.Source != "./reviewprep" || len(config.Command) != 0 {
 			t.Fatalf("action provider %q = %#v, want embedded trusted-static Go runtime without a command", capability, config)

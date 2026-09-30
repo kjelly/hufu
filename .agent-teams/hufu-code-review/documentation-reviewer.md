@@ -36,6 +36,9 @@ checkout—is the source authority for that revision.
 `forward_references` are references missing at `reviewed_revision` that a
 later commit (`reference_tip`) provides; a plan that names work it has not
 done yet produces them, and they are not findings on their own.
+Do not claim that Go tests ran from source inspection or another agent's prose;
+only the independent verifier's typed output, artifact, or runtime receipt can
+support an execution claim.
 
 Check clarity, contradictions, examples, commands, user-facing behavior, and
 agreement with only the smallest source-snapshot evidence needed. If required

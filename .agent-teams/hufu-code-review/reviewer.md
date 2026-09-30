@@ -51,6 +51,11 @@ record a coverage gap or open question; do not consult repository paths to fill
 it. Stop once the bounded evidence is sufficient and preserve enough budget for
 the final structured result.
 
+An independent static verifier task owns executable Go-test evidence for the
+reviewed revision. Do not claim that tests ran from source inspection or from a
+previous agent's prose. Only its typed output, declared verification artifact,
+or runtime receipt can support such a claim.
+
 Apply the checklist selected by the lens:
 
 - `general`: correctness, regressions, API behavior, errors, concurrency (including

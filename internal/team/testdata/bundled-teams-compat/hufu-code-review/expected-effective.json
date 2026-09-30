@@ -46,6 +46,40 @@
           "type": "task_output_assert",
           "assertions": [
             {
+              "pointer": "/requested",
+              "op": "equals_input",
+              "input": "review.scope"
+            },
+            {
+              "pointer": "/requested_input_hash",
+              "op": "equals_input_hash",
+              "input": "review.scope"
+            },
+            {
+              "pointer": "/satisfied",
+              "op": "equals",
+              "value": true
+            }
+          ],
+          "source_task": "verify-targeted-go-tests",
+          "output": "scope"
+        },
+        {
+          "type": "task_output_assert",
+          "assertions": [
+            {
+              "pointer": "/passed",
+              "op": "equals",
+              "value": true
+            }
+          ],
+          "source_task": "verify-targeted-go-tests",
+          "output": "targeted_go_tests"
+        },
+        {
+          "type": "task_output_assert",
+          "assertions": [
+            {
               "pointer": "/passed",
               "op": "equals",
               "value": true
@@ -101,7 +135,8 @@
     },
     "capabilities": {
       "required": [
-        "produce-workset"
+        "produce-workset",
+        "verify-review-tests"
       ]
     },
     "verification": {
@@ -182,6 +217,13 @@
   "tasks": [
     {
       "id": "produce-workset",
+      "agent": "reviewer",
+      "phase": "PREPARE",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "verify-targeted-go-tests",
       "agent": "reviewer",
       "phase": "PREPARE",
       "side_effect": "none",

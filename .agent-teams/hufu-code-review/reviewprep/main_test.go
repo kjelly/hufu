@@ -66,6 +66,110 @@ func TestRunAcceptsCanonicalPrepareReviewWorksetAction(t *testing.T) {
 	}
 }
 
+func TestVerifyReviewTestsRunsTargetedPackageInReviewedRevisionSnapshot(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(repo, "calc", "calc.go"), "package calc\n\nfunc Value() int { return 1 }\n")
+	writeFile(t, filepath.Join(repo, "calc", "calc_test.go"), "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 1 { t.Fatal(Value()) } }\n")
+	commit(t, repo, "module baseline", "2025-01-02T00:00:00Z")
+	writeFile(t, filepath.Join(repo, "calc", "calc.go"), "package calc\n\nfunc Value() int { return 2 }\n")
+	writeFile(t, filepath.Join(repo, "calc", "calc_test.go"), "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 2 { t.Fatal(Value()) } }\n")
+	commit(t, repo, "change calc", "2025-01-03T00:00:00Z")
+	writeFile(t, filepath.Join(repo, "calc", "calc_test.go"), "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 99 { t.Fatal(Value()) } }\n")
+
+	config := fixtureConfig(repo, "verification")
+	config.Scope = resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
+	config.Since = ""
+	result, err := VerifyReviewTests(t.Context(), config)
+	if err != nil {
+		t.Fatalf("VerifyReviewTests: %v", err)
+	}
+	receipt, ok := result.Outputs["targeted_go_tests"].(goTestReceipt)
+	if !ok {
+		t.Fatalf("targeted_go_tests output = %#v", result.Outputs["targeted_go_tests"])
+	}
+	if !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
+		t.Fatalf("targeted Go test receipt = %#v", receipt)
+	}
+	if len(result.Artifacts) != 1 || result.Artifacts[0].ID != receipt.ArtifactID || result.Artifacts[0].SHA256 != receipt.ArtifactSHA256 {
+		t.Fatalf("verification artifacts = %#v, receipt = %#v", result.Artifacts, receipt)
+	}
+	reportData, err := os.ReadFile(filepath.Join(repo, result.Artifacts[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report goTestVerification
+	if err := json.Unmarshal(reportData, &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.Passed || report.ReviewedRevision == "working tree" || report.BaseRevision == "" {
+		t.Fatalf("verification report = %#v", report)
+	}
+	if bytes.Contains(reportData, []byte(`"output":`)) || report.OutputSHA256 == "" || report.OutputBytes == 0 {
+		t.Fatalf("verification artifact must hash test output without persisting it: %s", reportData)
+	}
+
+	live := exec.CommandContext(t.Context(), "go", "test", "./calc")
+	live.Dir = repo
+	if output, err := live.CombinedOutput(); err == nil {
+		t.Fatalf("live checkout unexpectedly passed; snapshot isolation was not exercised: %s", output)
+	}
+}
+
+func TestRunVerifyReviewTestsReturnsFailedEvidenceWithoutActionFailure(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(repo, "broken", "broken.go"), "package broken\n\nfunc Value() int { return 1 }\n")
+	writeFile(t, filepath.Join(repo, "broken", "broken_test.go"), "package broken\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 2 { t.Fatal(Value()) } }\n")
+	commit(t, repo, "add failing package", "2025-01-02T00:00:00Z")
+
+	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
+	payload, err := json.Marshal(wireConfig{Repository: repo, OutputDir: "verification", ArtifactRoot: repo, Scope: &scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(actionRequest{Type: "verify_review_tests", Payload: string(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run(t.Context(), bytes.NewReader(request), &output); err != nil {
+		t.Fatalf("run verifier action: %v", err)
+	}
+	var result actionResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	receiptJSON, err := json.Marshal(result.Outputs["targeted_go_tests"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt goTestReceipt
+	if err := json.Unmarshal(receiptJSON, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
+		t.Fatalf("failed verifier evidence = %#v, artifacts = %#v", receipt, result.Artifacts)
+	}
+}
+
+func TestTargetedGoTestPackagesFallsBackWhenScopeCannotBeNarrowed(t *testing.T) {
+	snapshot := t.TempDir()
+	for _, directory := range []string{"cmd/hufu", "internal/team"} {
+		if err := os.MkdirAll(filepath.Join(snapshot, filepath.FromSlash(directory)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := targetedGoTestPackages(snapshot, []string{"internal/team/a.go", "cmd/hufu/main.go", "internal/team/b.go"}); !slices.Equal(got, []string{"./cmd/hufu", "./internal/team"}) {
+		t.Fatalf("targeted packages = %v", got)
+	}
+	for _, changed := range [][]string{{"go.mod"}, {"docs/guide.md"}, {"deleted/package/file.go"}} {
+		if got := targetedGoTestPackages(snapshot, changed); !slices.Equal(got, []string{"./..."}) {
+			t.Fatalf("fallback packages for %v = %v", changed, got)
+		}
+	}
+}
+
 func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "README.md"), "See the [runtime documentation](docs/architecture/runtime.md).\n")

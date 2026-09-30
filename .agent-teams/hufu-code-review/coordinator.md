@@ -22,9 +22,13 @@ claim a range that differs from those canonical values.
 
 Run the runtime phases in order:
 
-1. Dispatch `reviewer` with `contract_id="produce-workset"`. This is a static
-   ActionProvider contract. Do not run shell, reconstruct Git ranges, inspect
-   its output, or rewrite any path/digest yourself.
+1. In one delegation batch, dispatch `reviewer` with both
+   `contract_id="produce-workset"` and
+   `contract_id="verify-targeted-go-tests"`. These are independent static
+   ActionProvider contracts over the same canonical review scope. Do not run
+   shell, reconstruct Git ranges, inspect their output, or rewrite any
+   path/digest yourself. The call must be structurally equivalent to:
+   `{"tasks":[{"agent":"reviewer","contract_id":"produce-workset","goal":"Produce the immutable review worksets."},{"agent":"reviewer","contract_id":"verify-targeted-go-tests","goal":"Run the snapshot-pinned targeted Go verifier."}]}`.
 2. In one delegation batch, dispatch these exact contracts:
    - `reviewer`: `contract_id="review-primary-workset"`;
    - `documentation-reviewer`: `contract_id="review-documentation-workset"`;
@@ -33,13 +37,19 @@ Run the runtime phases in order:
    `{"tasks":[{"agent":"reviewer","contract_id":"review-primary-workset","goal":"Review the primary workset."},{"agent":"documentation-reviewer","contract_id":"review-documentation-workset","goal":"Review the documentation workset."},{"agent":"critic","contract_id":"review-documentation-escalation","goal":"Review the documentation escalation workset."}]}`.
    Do not replace either specialized agent with `reviewer`. The initial
    phase-scoped Available Agents summary may list only the PREPARE worker; the
-   static VERIFY contracts above become available after `produce workset`.
-   Make this call immediately after producer success; do not call `view` or
+   static VERIFY contracts above become available after both PREPARE actions.
+   Make this call immediately after both actions succeed; do not call `view` or
    `team_info`, copy artifact IDs into constraints, or inspect manifests.
    The runtime expands each immutable manifest into its children. A `noop`
    child is intentional evidence that the route was empty; never omit a route,
    count items yourself, or substitute filesystem paths for artifact refs.
-3. Read typed results. Routine README/tutorial/guide/release-note items are
+3. Treat only the `verify-targeted-go-tests` typed output, its declared
+   `go_test_verification` artifact, and the runtime action receipt as evidence
+   that Go tests ran. The verifier executes in the immutable reviewed-revision
+   snapshot. Never reuse or repeat a prior full-suite claim from prose; prior
+   test evidence is admissible only when it arrives as an explicit artifact or
+   receipt bound to the reviewed revision.
+4. Read typed results. Routine README/tutorial/guide/release-note items are
    owned by the low-cost documentation reviewer. Code plus normative,
    architecture, security, safety, threat-model, and runtime-contract docs are
    routed to the high-reasoning reviewer; risky documentation is also routed
@@ -49,11 +59,11 @@ Run the runtime phases in order:
    was detected, not that the category was comprehensively checked. Never
    bypass a producer failure or ask a worker to guess references; reviewers
    still own semantic correctness and references outside the reported coverage.
-4. Dispatch `contract_id="critic-review"` only when a primary result contains a blocker, a
+5. Dispatch `contract_id="critic-review"` only when a primary result contains a blocker, a
    security concern, or a material disagreement that was not already covered
    by documentation escalation. Give the critic only the completed typed
    finding and its opaque evidence refs.
-5. Call `finish` only after all required children are terminal and every
+6. Call `finish` only after all required children are terminal and every
    blocking `task_output_assert` and `workset_complete` acceptance check has
    passed.
 
