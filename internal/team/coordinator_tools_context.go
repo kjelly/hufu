@@ -239,11 +239,31 @@ func compileRoutedContextForTool(ctx context.Context, c *Coordinator, request Co
 	return c.ContextCompiler().CompileWorkerContext(ctx, input)
 }
 
-func (c *Coordinator) prepareToolFailureRecovery(ctx context.Context, agentName, toolCallID, toolName, toolInput string) (string, error) {
-	goal := "Recover from the failed tool call without replaying completed side effects."
-	if snapshot := c.current.Load(); snapshot != nil && strings.TrimSpace(snapshot.Task) != "" {
-		goal = snapshot.Task
+func (c *Coordinator) toolFailureRecoveryGoal(ctx context.Context) string {
+	const fallback = "Recover from the failed tool call without replaying completed side effects."
+	taskID := ""
+	if metadata, ok := invocationMetadataFromContext(ctx); ok {
+		taskID = strings.TrimSpace(metadata.TaskID)
 	}
+	if taskID == "" {
+		taskID, _ = ctx.Value(todoIDKey{}).(string)
+		taskID = strings.TrimSpace(taskID)
+	}
+	item := c.todoItemByID(taskID)
+	if item == nil {
+		return fallback
+	}
+	if goal := strings.TrimSpace(item.Goal); goal != "" {
+		return goal
+	}
+	if desc := strings.TrimSpace(item.Desc); desc != "" {
+		return desc
+	}
+	return fallback
+}
+
+func (c *Coordinator) prepareToolFailureRecovery(ctx context.Context, agentName, toolCallID, toolName, toolInput string) (string, error) {
+	goal := c.toolFailureRecoveryGoal(ctx)
 	failure := &ContextFailure{Class: FailureExecution, ErrorClass: "tool_error", ToolName: toolName, ToolInputHash: hashContentKey(utils.RedactSecrets(toolInput)), EvidenceRefs: []string{toolCallID}}
 	request := c.contextToolRequest(ctx, goal, ContextTriggerToolFailure, failure)
 	request.AgentName = agentName

@@ -14,6 +14,16 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
+type recordingRecoveryCompiler struct {
+	ContextCompiler
+	goal string
+}
+
+func (c *recordingRecoveryCompiler) CompileWorkerContext(_ context.Context, input WorkerContextInput) (CompiledContext, error) {
+	c.goal = input.Goal
+	return CompiledContext{}, nil
+}
+
 func TestContextQueryToolUsesBoundInvocationModelContext(t *testing.T) {
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	compileErr := errors.New("stop after recording bound model context")
@@ -148,6 +158,39 @@ func TestToolFailureRecoveryPreservesDispatchInvariantApplicability(t *testing.T
 	}
 	if recovery.ParentManifestFingerprint != primary.Fingerprint || recoveredInvariant == nil || recoveredInvariant.Included || recoveredInvariant.Reason != ContextOmittedNotApplicable {
 		t.Fatalf("recovery invariant applicability = %#v, parent=%q", recovery.Items, recovery.ParentManifestFingerprint)
+	}
+}
+
+func TestToolFailureRecoveryUsesInvocationBoundTaskGoal(t *testing.T) {
+	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
+	c.executionRunID = "run-parallel-review"
+	c.taskTracker = NewTaskTracker()
+	c.sessionData = NewSession()
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "reviewer", Desc: "review unit-0002", Goal: "review runtime-integrity unit-0002"},
+		{Agent: "reviewer", Desc: "review unit-0000", Goal: "review boundary-tui unit-0000"},
+	})
+	c.current.Store(&currentSnapshot{TodoID: items[1].ID, Task: items[1].Goal})
+	recorder := &recordingRecoveryCompiler{ContextCompiler: c.ContextCompiler()}
+	c.SetContextCompiler(recorder)
+
+	metadata := InvocationMetadata{
+		RunID: "run-parallel-review", TaskID: items[0].ID, AgentName: "reviewer", AgentRole: "worker",
+		ModelExecutionID: "model-execution-unit-0002", Attempt: 1, Phase: PhaseVerify, Trigger: ContextTriggerTaskDispatch,
+	}
+	ctx := withInvocationMetadata(withTestAuxiliaryInvocationContext(t.Context()), metadata)
+	if _, err := c.prepareToolFailureRecovery(ctx, "reviewer", "call-1", submitResultToolName, `{"status":"success"}`); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.goal != items[0].Goal {
+		t.Fatalf("recovery goal = %q, want invocation-bound goal %q", recorder.goal, items[0].Goal)
+	}
+	if recorder.goal == items[1].Goal {
+		t.Fatalf("recovery goal leaked concurrent current task %q", items[1].Goal)
+	}
+	manifests := c.todoItemByID(items[0].ID).ContextManifests
+	if len(manifests) != 1 || manifests[0].TaskID != items[0].ID {
+		t.Fatalf("recovery manifests = %#v, want one manifest bound to %q", manifests, items[0].ID)
 	}
 }
 
