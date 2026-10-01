@@ -399,6 +399,7 @@ func reportedProviderInvocationUsage(usage fantasy.Usage) *ProviderInvocationUsa
 }
 
 func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	call.Prompt = sanitizeToolCallHistory(call.Prompt)
 	request := m.request(ProviderRequest{Call: &call})
 	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
@@ -425,6 +426,7 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 }
 
 func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	call.Prompt = sanitizeToolCallHistory(call.Prompt)
 	request := m.request(ProviderRequest{Call: &call})
 	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
@@ -455,6 +457,7 @@ func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 }
 
 func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	call.Prompt = sanitizeToolCallHistory(call.Prompt)
 	request := m.request(ProviderRequest{ObjectCall: &call})
 	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
@@ -481,6 +484,7 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 }
 
 func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	call.Prompt = sanitizeToolCallHistory(call.Prompt)
 	request := m.request(ProviderRequest{ObjectCall: &call})
 	if err := m.admission.AdmitProviderRequest(ctx, request); err != nil {
 		return nil, err
