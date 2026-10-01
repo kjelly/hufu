@@ -101,7 +101,8 @@ control-decisions:
 - `hufu report` 的 **Control Decisions** 區段與 `--output json` 的 `control_decisions`
   顯示本次 lineage 的統計。
 - `hufu inspect control-decisions [run-id] --workspace <dir>` 驗證 event chain 後彙整
-  整個 branch lineage（或單一 run）的統計：
+  目前 branch lineage（或單一 run）的統計。每次 `--new` 都會開新的 branch，所以要
+  累積多次執行的資料時請加 `--all-branches`，彙整該 workspace 的所有 branch。統計內容：
   - calls 與一致數／可比較數；
   - 低於門檻的次數，也就是 active 時會走安全結果的次數；
   - 錯誤分類；

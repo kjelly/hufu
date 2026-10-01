@@ -114,7 +114,7 @@ hufu chat --default    # interactive REPL with the built-in team
 hufu workspace path                            # print the active managed control root
 hufu inspect run run-123                       # inspect persisted run facts
 hufu inspect cost run-123                      # inspect generation-cost projection
-hufu inspect control-decisions                 # shadow/active control decision statistics
+hufu inspect control-decisions --all-branches  # shadow/active control decision statistics
 ```
 
 ### 1. Start Ollama

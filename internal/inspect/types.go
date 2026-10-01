@@ -59,11 +59,18 @@ type InspectQuery struct {
 	ProjectID string `json:"project_id,omitempty"`
 	TeamID    string `json:"team_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
+	// AllBranches widens a control-decisions query from the selected branch
+	// lineage to every branch in the workspace's validated event chain. No
+	// other kind accepts it; sibling branches are never searched implicitly.
+	AllBranches bool `json:"all_branches,omitempty"`
 }
 
 func (q InspectQuery) Validate(kind Kind) error {
 	if q.Attempt < 0 {
 		return fmt.Errorf("%w: attempt must not be negative", ErrInvalidQuery)
+	}
+	if q.AllBranches && kind != KindControlDecisions {
+		return fmt.Errorf("%w: all-branches is valid only for control-decisions", ErrInvalidQuery)
 	}
 	switch kind {
 	case KindRun, KindEvidence, KindReplay:
@@ -112,6 +119,9 @@ func (q InspectQuery) Validate(kind Kind) error {
 }
 
 func (q InspectQuery) validateControlDecisions() error {
+	if q.AllBranches && strings.TrimSpace(q.BranchID) != "" {
+		return fmt.Errorf("%w: all-branches cannot be combined with a branch", ErrInvalidQuery)
+	}
 	if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" ||
 		strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
 		return fmt.Errorf("%w: control-decisions accepts only workspace, run, branch, and session", ErrInvalidQuery)

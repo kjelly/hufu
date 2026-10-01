@@ -9,14 +9,18 @@ import (
 )
 
 // ControlDecisionsData summarizes runtime control decision observations
-// (docs/architecture/decision-primitive.md §59) per point and mode.
+// (docs/architecture/decision-primitive.md §59) per point and mode. Scope is
+// "branch" for the selected branch lineage or "all_branches".
 type ControlDecisionsData struct {
+	Scope     string                        `json:"scope"`
 	Summaries []team.ControlDecisionSummary `json:"summaries"`
 }
 
 // InspectControlDecisions aggregates control decision observations across
-// every run in the selected branch lineage, or for one run when RunID is set.
-// The whole event chain is validated first; nothing is executed.
+// every run in the selected branch lineage, across every branch when
+// AllBranches is set (each --new run starts a new branch), or for one run
+// when RunID is set. The whole event chain is validated first; nothing is
+// executed.
 func InspectControlDecisions(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err := query.Validate(KindControlDecisions); err != nil {
 		return nil, err
@@ -31,9 +35,13 @@ func InspectControlDecisions(ctx context.Context, query InspectQuery) (*Envelope
 	if err != nil {
 		return nil, err
 	}
-	events := make([]team.RunEvent, 0, len(lineage.Events))
+	source, scope := lineage.Events, "branch"
+	if resolved.AllBranches {
+		source, scope = lineage.GlobalEvents, "all_branches"
+	}
+	events := make([]team.RunEvent, 0, len(source))
 	runFound := resolved.RunID == ""
-	for _, indexed := range lineage.Events {
+	for _, indexed := range source {
 		if resolved.SessionID != "" && indexed.Event.SessionID != resolved.SessionID {
 			continue
 		}
@@ -50,5 +58,9 @@ func InspectControlDecisions(ctx context.Context, query InspectQuery) (*Envelope
 	if summaries == nil {
 		summaries = []team.ControlDecisionSummary{}
 	}
-	return envelope(KindControlDecisions, resolved, lineage.BranchID, ControlDecisionsData{Summaries: summaries}), nil
+	branchID := lineage.BranchID
+	if resolved.AllBranches {
+		branchID = ""
+	}
+	return envelope(KindControlDecisions, resolved, branchID, ControlDecisionsData{Scope: scope, Summaries: summaries}), nil
 }

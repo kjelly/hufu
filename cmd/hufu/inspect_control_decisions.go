@@ -11,11 +11,13 @@ import (
 )
 
 func newInspectControlDecisionsCommand(options *inspectCLIOptions) *cobra.Command {
-	return &cobra.Command{
+	var allBranches bool
+	command := &cobra.Command{
 		Use:   "control-decisions [run-id]",
 		Short: "Summarize runtime control decision observations (shadow agreement, abstentions, latency)",
 		Long: `Summarize control_decision_observed events per point and mode across every
-run in the branch lineage, or for one run. Use it to decide whether a point can
+run in the branch lineage, every branch (--all-branches; each --new run starts
+a new branch), or one run. Use it to decide whether a point can
 move from shadow to active: agreement with the existing path, how often the
 decision model would abstain under the point's threshold, errors, and latency.
 Confidence is the decision model's raw probability, not a calibrated accuracy.`,
@@ -33,10 +35,13 @@ Confidence is the decision model's raw probability, not a calibrated accuracy.`,
 			if len(args) == 1 {
 				query.RunID = args[0]
 			}
+			query.AllBranches = allBranches
 			envelope, inspectErr := inspectpkg.InspectControlDecisions(command.Context(), query)
 			return finishInspect(command, format, envelope, inspectErr)
 		},
 	}
+	command.Flags().BoolVar(&allBranches, "all-branches", false, "Aggregate every branch in the workspace, including earlier --new sessions")
+	return command
 }
 
 func renderInspectControlDecisionsText(writer io.Writer, query inspectpkg.InspectQuery, data inspectpkg.ControlDecisionsData) error {
@@ -44,7 +49,11 @@ func renderInspectControlDecisionsText(writer io.Writer, query inspectpkg.Inspec
 	if query.RunID != "" {
 		scope = "run " + safeOverviewValue(query.RunID)
 	}
-	if _, err := fmt.Fprintf(writer, "Control decisions (%s, branch %s)\n", scope, safeOverviewValue(valueOrUnavailable(query.BranchID))); err != nil {
+	branch := "branch " + safeOverviewValue(valueOrUnavailable(query.BranchID))
+	if data.Scope == "all_branches" {
+		branch = "all branches"
+	}
+	if _, err := fmt.Fprintf(writer, "Control decisions (%s, %s)\n", scope, branch); err != nil {
 		return err
 	}
 	if len(data.Summaries) == 0 {

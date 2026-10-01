@@ -86,6 +86,13 @@ func TestInspectControlDecisionsAggregatesTheLineage(t *testing.T) {
 			t.Fatalf("text missing %q:\n%s", want, text)
 		}
 	}
+	all, err := runInspectControlDecisions(t, "--workspace", workspace, "control-decisions", "--all-branches")
+	if err != nil || !strings.Contains(all, "Control decisions (all runs, all branches)") {
+		t.Fatalf("all-branches text = %q, %v", all, err)
+	}
+	if _, err := runInspectControlDecisions(t, "--workspace", workspace, "--branch", "main", "control-decisions", "--all-branches"); err == nil {
+		t.Fatal("--all-branches with --branch was accepted")
+	}
 	if _, err := runInspectControlDecisions(t, "--workspace", workspace, "control-decisions", "run-missing"); err == nil {
 		t.Fatal("an unknown run was accepted")
 	}
