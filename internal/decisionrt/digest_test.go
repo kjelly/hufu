@@ -2,6 +2,7 @@ package decisionrt_test
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/decisionrt"
@@ -77,5 +78,28 @@ func TestDigestTreatsNilAndEmptyCollectionsEqually(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("nil digest %s != empty digest %s", first, second)
+	}
+}
+
+// TestDigestIsStable pins one digest so that changes to context
+// canonicalization cannot silently change existing request digests.
+func TestDigestIsStable(t *testing.T) {
+	request := decisionrt.Request{
+		Purpose: "size@v1",
+		Spec: decisionrt.Spec{
+			ID: "size", Version: "v1", Kind: decisionrt.KindChoice, Question: "Choose.",
+			Options: []decisionrt.Option{{ID: "small", Description: "Small"}, {ID: "large"}},
+		},
+		Context: map[string]any{
+			"s": "text", "b": false, "i": int64(-7), "u": uint32(9), "f": 2.5, "n": json.Number("1e2"), "z": math.Copysign(0, -1),
+		},
+	}
+	digest, err := decisionrt.Digest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "sha256:5772620faaa7aeb75aac594856d9592c3db0fd43ac81d6a62c022fa7f91e5959"
+	if digest != want {
+		t.Fatalf("digest = %s, want %s", digest, want)
 	}
 }

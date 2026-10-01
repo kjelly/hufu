@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -104,7 +103,10 @@ func buildPrompt(request decisionrt.Request) (string, map[string]decisionrt.Valu
 		return "", nil, err
 	}
 	candidates, mapping := candidateMapping(request.Spec)
-	contextValues := canonicalPromptContext(request.Context)
+	contextValues, err := decisionrt.CanonicalContextValues(request.Context)
+	if err != nil {
+		return "", nil, err
+	}
 	input := promptInput{
 		Purpose:     request.Purpose,
 		SpecID:      request.Spec.ID,
@@ -120,46 +122,6 @@ func buildPrompt(request decisionrt.Request) (string, map[string]decisionrt.Valu
 	prompt := "Choose exactly one candidate token from this JSON input.\nInput:\n" + string(encoded) +
 		"\n\nReturn only one JSON object. TOKEN must be replaced by exactly one candidate token:\n{\"token\":\"TOKEN\"}"
 	return prompt, mapping, nil
-}
-
-func canonicalPromptContext(values map[string]any) map[string]any {
-	canonical := make(map[string]any, len(values))
-	for key, value := range values {
-		if number, ok := value.(json.Number); ok {
-			canonical[key] = canonicalPromptJSONNumber(number)
-			continue
-		}
-		reflected := reflect.ValueOf(value)
-		switch reflected.Kind() {
-		case reflect.String:
-			canonical[key] = reflected.String()
-		case reflect.Bool:
-			canonical[key] = reflected.Bool()
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			canonical[key] = json.Number(strconv.FormatInt(reflected.Int(), 10))
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-			canonical[key] = json.Number(strconv.FormatUint(reflected.Uint(), 10))
-		case reflect.Float32, reflect.Float64:
-			canonical[key] = canonicalPromptFloat(reflected.Float())
-		}
-	}
-	return canonical
-}
-
-func canonicalPromptJSONNumber(number json.Number) json.Number {
-	if integer, err := number.Int64(); err == nil {
-		return json.Number(strconv.FormatInt(integer, 10))
-	}
-	value, _ := strconv.ParseFloat(number.String(), 64)
-	return canonicalPromptFloat(value)
-}
-
-func canonicalPromptFloat(value float64) json.Number {
-	const upperInt64Bound = float64(uint64(1) << 63)
-	if math.Trunc(value) == value && value >= math.MinInt64 && value < upperInt64Bound {
-		return json.Number(strconv.FormatInt(int64(value), 10))
-	}
-	return json.Number(strconv.FormatFloat(value, 'g', -1, 64))
 }
 
 func candidateMapping(spec decisionrt.Spec) ([]promptCandidate, map[string]decisionrt.Value) {

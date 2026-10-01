@@ -24,6 +24,14 @@ const (
 	maxModelBytes          = 256
 )
 
+// Context value types recorded in the canonical context entries that Digest
+// hashes. CanonicalContextValues maps each type back to a JSON value.
+const (
+	contextTypeString = "string"
+	contextTypeBool   = "bool"
+	contextTypeNumber = "number"
+)
+
 var machineIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$`)
 var backendNamePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
 
@@ -116,13 +124,38 @@ func canonicalizeContext(values map[string]any) ([]canonicalContextEntry, error)
 	return entries, nil
 }
 
+// CanonicalContextValues returns a new map with the same keys as values,
+// where every value is a plain string, bool, or json.Number holding the
+// canonical form used by Digest. Backends use it to send context to a model,
+// so equivalent inputs such as int(3), 3.0, and json.Number("3.0") reach the
+// model identically. Invalid context returns the same error as
+// Request.Validate.
+func CanonicalContextValues(values map[string]any) (map[string]any, error) {
+	entries, err := canonicalizeContext(values)
+	if err != nil {
+		return nil, err
+	}
+	canonical := make(map[string]any, len(entries))
+	for _, entry := range entries {
+		switch entry.Type {
+		case contextTypeString:
+			canonical[entry.Key] = entry.Value
+		case contextTypeBool:
+			canonical[entry.Key] = entry.Value == "true"
+		default:
+			canonical[entry.Key] = json.Number(entry.Value)
+		}
+	}
+	return canonical, nil
+}
+
 func canonicalContextValue(value any) (string, string, error) {
 	if value == nil {
 		return "", "", runtimeError(ErrorInvalidRequest, "", fmt.Errorf("nil context value"))
 	}
 	if number, ok := value.(json.Number); ok {
 		encoded, err := canonicalJSONNumber(number)
-		return "number", encoded, err
+		return contextTypeNumber, encoded, err
 	}
 
 	reflected := reflect.ValueOf(value)
@@ -132,17 +165,17 @@ func canonicalContextValue(value any) (string, string, error) {
 		if !utf8.ValidString(text) || len(text) > maxContextStringBytes {
 			return "", "", runtimeError(ErrorInvalidRequest, "", fmt.Errorf("invalid context string"))
 		}
-		return "string", text, nil
+		return contextTypeString, text, nil
 	case reflect.Bool:
-		return "bool", strconv.FormatBool(reflected.Bool()), nil
+		return contextTypeBool, strconv.FormatBool(reflected.Bool()), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return "number", strconv.FormatInt(reflected.Int(), 10), nil
+		return contextTypeNumber, strconv.FormatInt(reflected.Int(), 10), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		unsigned := reflected.Uint()
 		if unsigned > math.MaxInt64 {
 			return "", "", runtimeError(ErrorInvalidRequest, "", fmt.Errorf("context integer exceeds int64"))
 		}
-		return "number", strconv.FormatInt(int64(unsigned), 10), nil
+		return contextTypeNumber, strconv.FormatInt(int64(unsigned), 10), nil
 	case reflect.Float32, reflect.Float64:
 		return canonicalFloat(reflected.Float())
 	default:
@@ -172,9 +205,9 @@ func canonicalFloat(value float64) (string, string, error) {
 	}
 	const upperInt64Bound = float64(uint64(1) << 63)
 	if math.Trunc(value) == value && value >= math.MinInt64 && value < upperInt64Bound {
-		return "number", strconv.FormatInt(int64(value), 10), nil
+		return contextTypeNumber, strconv.FormatInt(int64(value), 10), nil
 	}
-	return "number", strconv.FormatFloat(value, 'g', -1, 64), nil
+	return contextTypeNumber, strconv.FormatFloat(value, 'g', -1, 64), nil
 }
 
 func validateBackendResult(spec Spec, result BackendResult) error {
