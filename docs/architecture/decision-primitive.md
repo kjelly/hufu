@@ -1112,8 +1112,9 @@ Request mapping：
 - 以下 local limits 在 HTTP 前回 `ErrorBackendFailure` 且不送出 request：單值
   integer range（`Min == Max`；Ollama 對只有一個 criterion 的 choice 回 HTTP
   400），以及 encoded request body 超過 64 KiB（hufu 自己的上限，非 provider
-  文件規定）。不得在本地自行決定，也不得補假候選。與 sidecar 的 prompt
-  上限一致，Go caller 自行設定的 fallback 仍可接手。
+  文件規定）。不得在本地自行決定，也不得補假候選。錯誤類型與 sidecar 超過
+  prompt 上限（8000 runes）時相同；兩者的上限數值不同。因為這個錯誤類型會觸發
+  fallback，Go caller 自行設定的 fallback 仍可接手。
 
 Response：
 
