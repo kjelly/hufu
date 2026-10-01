@@ -26,3 +26,8 @@ cases:
       tasks:
         - agent: inherited
           status: blocked
+          # A worker that reports its task blocked is not replayed: a retry
+          # would run under a "change your approach" hint, which is how a
+          # denied action gets worked around.
+          attempts: 1
+          retry-disposition: none

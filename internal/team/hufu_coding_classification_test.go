@@ -51,9 +51,16 @@ func (p *classificationTestBackend) ServeHTTP(w http.ResponseWriter, r *http.Req
 // hufu-local SubagentProvider exactly like production.
 func newClassificationTestCoordinator(t *testing.T, argsJSON string) (*Coordinator, *agent.AgentDef) {
 	t.Helper()
+	return newClassificationTestCoordinatorWithBackend(t, &classificationTestBackend{argsJSON: argsJSON})
+}
+
+// newClassificationTestCoordinatorWithBackend is newClassificationTestCoordinator
+// with a caller-supplied provider backend, for tests that observe worker turns.
+func newClassificationTestCoordinatorWithBackend(t *testing.T, backend http.Handler) (*Coordinator, *agent.AgentDef) {
+	t.Helper()
 	modelID := "classification-test-model"
 	GlobalModelSpecRegistry().RegisterSpec(ModelContextSpec{ModelID: modelID, ContextWindow: 8192, MaxOutputTokens: 128, SafetyMarginTokens: 32})
-	server := newIPv4TestServer(t, &classificationTestBackend{argsJSON: argsJSON})
+	server := newIPv4TestServer(t, backend)
 	t.Cleanup(server.Close)
 
 	workspace := t.TempDir()

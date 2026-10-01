@@ -20,15 +20,6 @@
         "name": "submit_result",
         "arguments": "{\"status\": \"blocked\", \"summary\": \"bash is not available to this worker.\"}"
       }
-    },
-    {
-      "tool_call": {
-        "name": "finish",
-        "arguments": "{\"response\": \"Done.\", \"acknowledge_failed_tasks\": true}"
-      }
-    },
-    {
-      "content": "(run ends here)"
     }
   ]
 }

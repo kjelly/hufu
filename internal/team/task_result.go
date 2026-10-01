@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -398,8 +399,29 @@ func validateCompletedTaskResult(result *TaskResult) error {
 	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps:
 		return nil
 	default:
-		return fmt.Errorf("worker reported incomplete task status %q: %s", result.Status, strings.TrimSpace(result.Summary))
+		return &incompleteTaskResultError{status: result.Status, summary: strings.TrimSpace(result.Summary)}
 	}
+}
+
+// incompleteTaskResultError is a worker's own, schema-valid report that the
+// assigned work was not completed. The retry loop reads its status
+// structurally instead of parsing the message.
+type incompleteTaskResultError struct {
+	status  string
+	summary string
+}
+
+func (e *incompleteTaskResultError) Error() string {
+	return fmt.Sprintf("worker reported incomplete task status %q: %s", e.status, e.summary)
+}
+
+// workerReportedBlocked reports whether err carries a worker's own blocked
+// result. A blocked worker has stated that something outside its control
+// (a denial, a missing capability, or a decision it may not make) stops the
+// task, so replaying it unchanged can only invite a workaround.
+func workerReportedBlocked(err error) bool {
+	incomplete, ok := errors.AsType[*incompleteTaskResultError](err)
+	return ok && incomplete.status == TaskResultStatusBlocked
 }
 
 // FormatForContext formats the typed result into a human-readable string suitable

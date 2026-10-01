@@ -137,3 +137,14 @@ func isPermissionBlockedFailureDetail(detail string) bool {
 		strings.Contains(s, "permission denied") ||
 		strings.Contains(s, "guard rule")
 }
+
+// isSafetyDenialFailureDetail reports hufu's own path-consent and read-only
+// policy denials. Unlike a permission block, they do not stop the run for a
+// human, but replaying the task would only invite a workaround, so it is not
+// retried and the coordinator decides what happens next.
+func isSafetyDenialFailureDetail(detail string) bool {
+	s := strings.ToLower(detail)
+	return strings.Contains(s, "is outside allowed paths") ||
+		strings.Contains(s, "access denied by user") ||
+		strings.Contains(s, "read-only bash policy denied")
+}

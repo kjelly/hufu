@@ -2113,9 +2113,19 @@ retryLoop:
 		// Permission/capability denial is a deterministic human gate. Keep this
 		// operational decision ahead of the retry switch; packet persistence must
 		// not merely record a block after a worker has already been re-dispatched.
+		replayAvoided := false
 		if isPermissionBlockedFailureDetail(c.FailureDetail(err, "error")) {
 			disposition = NeedsHuman
 			reason = "capability or permission is unavailable"
+		} else if disposition == RetryWorker && (workerReportedBlocked(err) || isSafetyDenialFailureDetail(c.FailureDetail(err, "error"))) {
+			// Do not replay a task its worker reported blocked, or one stopped
+			// by a path-consent or read-only policy denial: a retry runs under
+			// a hint to change approach, which is exactly how a denied action
+			// gets worked around. Stop here, keep the worker's own status, and
+			// let the run continue so the coordinator decides what is next.
+			disposition = RetryNone
+			reason = "worker reported the task blocked or was denied by policy"
+			replayAvoided = true
 		}
 		if isAttemptWorkspaceApplyIncomplete(err) {
 			disposition = NeedsHuman
@@ -2241,6 +2251,16 @@ retryLoop:
 			// Cancelled (§5.3) or retry budget exhausted. Persist the
 			// failure and stop.
 			lastErr = err
+			if replayAvoided {
+				status := TaskError
+				if workerReportedBlocked(err) {
+					status = TaskBlocked
+				}
+				c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
+				c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass, status, output)
+				closeTranscript()
+				break retryLoop
+			}
 			if isTaskTimeout(err) {
 				duration, modelTime, toolTime := timing.snapshot()
 				c.report(c.newEvent("task_timeout").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d timed out after %s", attempt, duration.Round(time.Second))).withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
@@ -5265,7 +5285,7 @@ func retryPartialOutput(output, previousOutput string) string {
 }
 
 func buildFailureReflectionPrompt(agentName, goal, lastErr string) string {
-	return fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid.",
+	return fmt.Sprintf("Agent %q failed to achieve goal: %q\nError: %s\n\nAnalyze the error and provide a concise hint (max 100 words) for the next attempt. Focus on what to change or avoid. If the error is a guard, permission, path-consent, or policy denial, the denial is final: tell the agent to report the task as blocked, and never suggest another command, tool, path, or method that reaches the denied outcome.",
 		agentName, goal, redactRetryText(lastErr, 500))
 }
 
@@ -5321,8 +5341,9 @@ func localFailureHint(lastErr string) string {
 		return "The previous attempt timed out. Work in smaller steps, avoid long-running or interactive commands, and prioritize the core of the goal first."
 	case strings.Contains(e, "no such file") || strings.Contains(e, "not found") || strings.Contains(e, "enoent"):
 		return "A file or command was not found last time. Verify the path exists with ls/glob before using it, and use absolute paths under the workspace."
-	case strings.Contains(e, "permission denied") || strings.Contains(e, "not permitted") || strings.Contains(e, "guard rule"):
-		return "The previous attempt was blocked by a permission or guard rule. Use only the tools and paths you are allowed; do not retry the exact blocked action — find a permitted alternative."
+	case strings.Contains(e, "permission denied") || strings.Contains(e, "not permitted") || strings.Contains(e, "guard rule") ||
+		strings.Contains(e, "outside allowed paths") || strings.Contains(e, "policy denied"):
+		return "The previous attempt was denied by a permission, guard, path, or policy rule. That denial is final for this task: do not try to reach the same outcome with another command, tool, path, or method. Do the parts of the task that do not need the denied action, and report the task as blocked with the denial message."
 	case strings.Contains(e, "step budget exhausted"):
 		// Truncation is not a wrong approach. The prior attempt's conversation
 		// is carried into this one, so the correct instruction is to resume —
