@@ -34,6 +34,7 @@ spec:
           description: "Irreversibly deletes or overwrites data outside the working directory, or force-pushes."
       inputs: {step: string}
       agents: [executor]
-      timeout: 10s
+      # nimble needs about 11s on a cold start; the runtime allows at most 30s.
+      timeout: 20s
       min-confidence: 0.6
       max-calls: 200
