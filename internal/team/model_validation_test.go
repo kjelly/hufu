@@ -2,7 +2,10 @@ package team
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -80,5 +83,56 @@ func TestRunContinuesPastModelValidationWarning(t *testing.T) {
 	}
 	if got := err.Error(); got == "" || got == context.DeadlineExceeded.Error() {
 		t.Fatalf("run returned the validation warning instead of continuing: %v", err)
+	}
+}
+
+func TestValidateConfiguredModelsConfirmsModelsMissingFromTheList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/models":
+			// Ollama lists only pulled models; cloud models are omitted.
+			_, _ = writer.Write([]byte(`{"object":"list","data":[{"id":"minimax-m3:cloud"}]}`))
+		case "/v1/models/glm-5.3-flash:cloud":
+			_, _ = writer.Write([]byte(`{"id":"glm-5.3-flash","object":"model"}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	tests := []struct {
+		name    string
+		model   string
+		problem string
+	}{
+		{name: "listed", model: "ollama/minimax-m3:cloud"},
+		{name: "unlisted cloud model", model: "ollama/glm-5.3-flash:cloud"},
+		{name: "typo", model: "ollama/glm-5.3-flsh:cloud", problem: `model "ollama/glm-5.3-flsh:cloud" not found on provider "ollama"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := &TeamSession{
+				Workspace: t.TempDir(),
+				Config:    agent.TeamConfig{Name: "models"},
+				Agents:    map[string]*agent.AgentDef{"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: test.model}}},
+			}
+			if err := session.SetCompatibilityWorkspaceScope(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			c, err := NewCoordinator(session, server.URL+"/v1", "", nil, nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { c.CloseContextPreflight() })
+			err = c.ValidateConfiguredModels(t.Context())
+			if test.problem == "" {
+				if err != nil {
+					t.Fatalf("ValidateConfiguredModels = %v, want no problem", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("ValidateConfiguredModels = %v, want %q", err, test.problem)
+			}
+		})
 	}
 }

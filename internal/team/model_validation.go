@@ -3,7 +3,8 @@ package team
 // Startup validation of configured model names. A typo like
 // "ollama/glm-5.2cloud" (missing colon) previously surfaced only mid-run as a
 // silently-lost request; this checks every configured model against the
-// provider's /models list before the first delegation.
+// provider's /models list before the first delegation, and confirms a model
+// the list omits with GET /models/{model}.
 
 import (
 	"context"
@@ -113,6 +114,14 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 		}
 		if modelAvailableOnProvider(id, key, pm.names) {
 			continue
+		}
+		// The listing can omit a usable model (Ollama lists only pulled models,
+		// not cloud ones), so confirm a miss with a single-model lookup. Only a
+		// confirmed match clears it; an error keeps the warning.
+		if lookup, ok := backend.(ModelLookupBackend); ok {
+			if exists, err := lookup.ModelExists(listCtx, target, target.Model); err == nil && exists {
+				continue
+			}
 		}
 		bare := strings.TrimPrefix(id, key+"/")
 		problem := fmt.Sprintf("model %q not found on provider %q", id, key)

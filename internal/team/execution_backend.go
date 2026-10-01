@@ -37,6 +37,12 @@ type ModelCatalogBackend interface {
 	ListModelNames(context.Context, execution.ExecutionTarget) ([]string, error)
 }
 
+// ModelLookupBackend confirms one model that a catalog listing omits, such as
+// an Ollama cloud model that is usable without being pulled.
+type ModelLookupBackend interface {
+	ModelExists(context.Context, execution.ExecutionTarget, string) (bool, error)
+}
+
 // GatedAgentBackend is the private worker-runtime capability required to
 // construct a Fantasy worker. It keeps direct/nested worker creation behind
 // the same canonical LLM backend selected by ExecutionRegistry.
@@ -130,6 +136,14 @@ func (b *LLMExecutionBackend) ListModelNames(ctx context.Context, target executi
 		return nil, err
 	}
 	return provider.ListModelNames(ctx)
+}
+
+func (b *LLMExecutionBackend) ModelExists(ctx context.Context, target execution.ExecutionTarget, model string) (bool, error) {
+	provider, err := b.AgentProvider(ctx, target)
+	if err != nil {
+		return false, err
+	}
+	return provider.ModelExists(ctx, model)
 }
 
 // AgentProvider exposes the existing gated-agent constructor dependency only

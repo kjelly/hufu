@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -1155,6 +1156,45 @@ func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string
 		}
 	}
 	return names, nil
+}
+
+// ModelExists asks the provider's OpenAI-compatible GET /models/{model}
+// endpoint whether it serves one model. Ollama answers it for cloud models
+// (for example "glm-5.3-flash:cloud") that are usable but not pulled, which
+// the /models list omits. Only an explicit 404 reports false; any other
+// failure is an error, which callers treat as "cannot validate".
+func (p *OpenAICompatibleProvider) ModelExists(ctx context.Context, model string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	baseURL, boundaryClient, _ := p.effectiveBaseURL()
+	endpoint := strings.TrimRight(baseURL, "/") + "/models/" + url.PathEscape(model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, fmt.Errorf("build model request: %w", err)
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	client := boundaryClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("query model %q: %w", model, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("query model %q: status %s", model, resp.Status)
+	}
 }
 
 // ProviderContextProbeTimeout bounds a single model metadata probe so an
