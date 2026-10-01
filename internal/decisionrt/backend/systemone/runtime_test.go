@@ -1,7 +1,9 @@
 package systemone_test
 
 import (
+	"errors"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/decisionrt"
@@ -59,5 +61,32 @@ func TestRuntimeAcceptsMappedResults(t *testing.T) {
 				t.Fatalf("receipt = %#v", receipt)
 			}
 		})
+	}
+}
+
+func TestConcurrentUse(t *testing.T) {
+	keys := opaqueKeys("o", 3)
+	server := newRecordingServer(t, http.StatusOK, choiceResponse(keys, keys[0], 0.8, 0.5))
+	backend := mustNew(t, systemone.Config{Endpoint: server.endpoint()})
+	errorsChannel := make(chan error, 32)
+	var wait sync.WaitGroup
+	for range 32 {
+		wait.Go(func() {
+			result, err := backend.Decide(t.Context(), choiceRequest(3))
+			if err == nil && (result.Value.Choice != "opt-a" || len(result.Candidates) != 3) {
+				err = errors.New("unexpected decision")
+			}
+			errorsChannel <- err
+		})
+	}
+	wait.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(server.recorded()) != 32 {
+		t.Fatalf("requests = %d", len(server.recorded()))
 	}
 }
