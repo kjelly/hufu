@@ -278,6 +278,10 @@ spec:
       execution:
         requires-result: true
         requires-grounded-result: true
+        # The critic checks one completed review's finding. Without
+        # evidence_from it has neither the finding nor the diff and snapshot
+        # artifacts that review was given.
+        requires-evidence: true
       verify-spec:
         type: task_result_assert
         task-result-assertions:

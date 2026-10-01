@@ -139,6 +139,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			return "", c.rejectDelegationPolicy(err.Error())
 		}
 	}
+	tasks, err = c.bindEvidenceSources(tasks)
+	if err != nil {
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
 	// A configured delegation policy is checked before workspace validation,
 	// resource locking, TODO creation, or worker startup. It therefore leaves
 	// previously successful independent work untouched on rejection.
@@ -399,6 +403,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 			Execution:                     cloneExecutionContract(t.Execution),
 			Optional:                      t.Optional,
 			ResourceClaims:                append([]string(nil), t.ResourceClaims...),
+			EvidenceFrom:                  append([]string(nil), t.EvidenceFrom...),
 			Resources:                     append([]ResourceClaim(nil), t.Resources...),
 			DecisionProfile:               t.DecisionProfile,
 			DecisionOptions:               append([]DecisionOption(nil), t.DecisionOptions...),

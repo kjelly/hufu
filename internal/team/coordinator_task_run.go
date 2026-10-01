@@ -250,18 +250,25 @@ func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
 			break
 		}
 	}
-	if currentTodo == nil || len(currentTodo.DependsOn) == 0 {
+	dependencies := resultDependencyIDs(currentTodo)
+	if len(dependencies) == 0 {
 		return nil
 	}
-	depSet := make(map[string]bool, len(currentTodo.DependsOn))
-	for _, depID := range currentTodo.DependsOn {
+	depSet := make(map[string]bool, len(dependencies))
+	for _, depID := range dependencies {
 		depSet[depID] = true
 	}
 	var depResults []TaskResult
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if depSet[item.ID] && item.Status == TaskDone {
 			if res := c.GetTaskResult(item.ID); res != nil {
-				depResults = append(depResults, projectDependencyResultForWorker(res, currentTodo.WorksetBinding))
+				projected := projectDependencyResultForWorker(res, currentTodo.WorksetBinding)
+				if currentTodo.WorksetBinding == nil && slices.Contains(currentTodo.EvidenceFrom, item.ID) {
+					// Name the inputs the evidence task reviewed so the worker
+					// can open them by artifact_ref; its scope authorizes them.
+					projected.Artifacts = appendMissingArtifactRefs(projected.Artifacts, c.dependencyReviewedInputs(item))
+				}
+				depResults = append(depResults, projected)
 			}
 		}
 	}

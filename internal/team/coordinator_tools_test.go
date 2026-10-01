@@ -269,6 +269,9 @@ func TestRunAgentsToolInfoCompactsRuntimeWorkflowSchema(t *testing.T) {
 			t.Fatalf("workflow schema omitted required field %q", required)
 		}
 	}
+	if _, exists := properties["evidence_from"]; !exists {
+		t.Fatal("workflow schema omitted evidence_from; a critic dispatched in a runtime workflow could not name the review it checks")
+	}
 	for _, forbidden := range []string{"execution", "verify_spec", "fan_out", "fact_refs", "context_files"} {
 		if _, exists := properties[forbidden]; exists {
 			t.Fatalf("workflow schema exposed recursive runtime field %q", forbidden)

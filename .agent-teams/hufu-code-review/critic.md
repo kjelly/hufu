@@ -31,7 +31,10 @@ later commit (`reference_tip`) provides; a plan that names work it has not
 done yet produces them, and they are not findings on their own.
 
 Otherwise, act only on the typed finding and opaque evidence references
-supplied by the coordinator. Re-read the cited diff and the smallest relevant
+supplied by the coordinator. They are in "Task Dependency Results": the
+review's findings, and under its Artifacts the diff and source-snapshot refs
+it was given. Open those with `view` and `artifact_ref`; if they are missing,
+submit a truthful `blocked` result instead of searching elsewhere. Re-read the cited diff and the smallest relevant
 source, caller, and test evidence from authorized artifacts. Do not broaden the
 review, edit files, use shell, consult repository paths, or invent evidence.
 Do not claim that Go tests ran from source inspection or another agent's prose;

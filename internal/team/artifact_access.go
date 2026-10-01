@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -243,8 +244,15 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 		if input, producerID, ok := c.authorizedWorksetInput(consumer, id); ok {
 			return input, producerID, true
 		}
-		for _, dependency := range consumer.DependsOn {
+		for _, dependency := range resultDependencyIDs(consumer) {
 			allowedProducers[dependency] = true
+		}
+		for _, source := range consumer.EvidenceFrom {
+			for _, input := range c.dependencyReviewedInputs(c.todoItemByID(source)) {
+				if input.ID == id {
+					return input, input.TaskID, true
+				}
+			}
 		}
 	}
 
@@ -317,7 +325,7 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals
 		}
 	}
 
-	for _, dependencyID := range item.DependsOn {
+	for _, dependencyID := range resultDependencyIDs(item) {
 		dependency := c.todoItemByID(dependencyID)
 		if dependency == nil || dependency.Status != TaskDone || dependency.TypedResult == nil || !taskResultStatusIsSuccessful(dependency.TypedResult.Status) {
 			continue
@@ -330,6 +338,12 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals
 			}
 			addUnique(&scope.DeniedRefs, ref)
 			if item.WorksetBinding == nil {
+				addUnique(&scope.AuthorizedRefs, ref)
+			}
+		}
+		if item.WorksetBinding == nil && slices.Contains(item.EvidenceFrom, dependency.ID) {
+			for _, ref := range c.dependencyReviewedInputs(dependency) {
+				addUnique(&scope.DeniedRefs, ref)
 				addUnique(&scope.AuthorizedRefs, ref)
 			}
 		}

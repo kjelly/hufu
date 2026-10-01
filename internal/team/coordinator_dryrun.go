@@ -279,6 +279,9 @@ func cloneTaskDef(td TaskDef) TaskDef {
 		clone.Requires = make([]string, len(td.Requires))
 		copy(clone.Requires, td.Requires)
 	}
+	if td.EvidenceFrom != nil {
+		clone.EvidenceFrom = append([]string(nil), td.EvidenceFrom...)
+	}
 	if td.ResourceClaims != nil {
 		clone.ResourceClaims = append([]string(nil), td.ResourceClaims...)
 	}

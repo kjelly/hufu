@@ -213,7 +213,13 @@ type TaskDef struct {
 	// submit_result, resolved by the runtime before dispatch. This exists so
 	// a coordinator never retypes a value another task already discovered
 	// (a list, a computed count, a resolved path) into a later task's prose.
-	FactRefs       []FactRef                `json:"fact_refs,omitempty" yaml:"fact_refs,omitempty"`
+	FactRefs []FactRef `json:"fact_refs,omitempty" yaml:"fact_refs,omitempty"`
+	// EvidenceFrom names completed tasks of this run whose typed results
+	// this task needs as evidence, such as the review whose finding a critic
+	// checks. The worker receives their results and may read the workset
+	// inputs each was given. Unlike the batch-relative depends_on it can name
+	// a task from an earlier batch, and it never orders scheduling.
+	EvidenceFrom   []string                 `json:"evidence_from,omitempty" yaml:"-"`
 	WorksetBinding *WorksetBinding          `json:"workset_binding,omitempty"`
 	WorksetReceipt *WorksetExpansionReceipt `json:"workset_receipt,omitempty"`
 	// FanOut, when set, replaces this single submitted task with one task per
@@ -2039,6 +2045,11 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		"output_mode":   map[string]any{"type": "string", "enum": []string{"summary", "verbatim"}, "description": "Output contract. Use verbatim when complete tool output is required: hufu captures a transcript artifact and returns its compact manifest instead of asking the worker to reproduce raw output."},
 		"sidecar":       map[string]any{"type": "boolean", "description": "If true, execute this task directly via the sidecar model instead of an agent. Use for simple, tool-free tasks that need a quick response."},
 		"context_files": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": contextFilesDesc},
+		"evidence_from": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "IDs of completed tasks from earlier batches whose results this task checks, such as the review that reported the finding a critic confirms. The worker receives those results and may read the artifacts those tasks were given.",
+		},
 		"depends_on": map[string]any{
 			"type":        "array",
 			"items":       map[string]any{"type": "integer"},

@@ -1253,6 +1253,10 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 71. **Agent auto-discovery excludes `README.md`** — Minimal agent discovery treats any `.md` file without frontmatter as a worker agent named after the filename. `README.md` is explicitly excluded to prevent phantom "README" workers from being instantiated in bundled or custom teams.
 
+72. **Cross-batch evidence uses `evidence_from`, never `depends_on`** — `depends_on` is batch-relative, and the scheduler requires every durable `TodoItem.DependsOn` ID to be in the same batch. A task that checks an earlier task's result (a critic confirming a finding) names it in `evidence_from`; `bindEvidenceSources` requires each ID to be a completed task with a successful result, `TodoItem.EvidenceFrom` persists it through `task_created`, and the worker receives that task's result plus the workset inputs it was given (`dependencyReviewedInputs`, re-authorized against its receipt). A contract with `execution.requires-evidence: true` rejects a dispatch without one.
+
+73. **Implicit tools follow the attempt's artifact policy** — Every worker attempt runs under an artifact policy: bound tasks allow only path-enforcing tools, unbound tasks refuse non-built-in tools other than declared shell tools (`workerArtifactPathPolicy`). `filterImplicitArtifactPolicyDeniedTools` hides the always-included tools (`memory_query`, `team_info`, `todo`, `request_agent`) that policy would refuse, so a worker is never shown a tool every call fails; explicitly declared tools stay visible so the contract error surfaces.
+
 
 ## Model Configuration Priority
 

@@ -110,7 +110,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 
 func providerSafeWorkflowTaskProperties(properties map[string]any) map[string]any {
 	compact := make(map[string]any, 4)
-	for _, name := range []string{"agent", "goal", "constraints", "contract_id"} {
+	for _, name := range []string{"agent", "goal", "constraints", "contract_id", "evidence_from"} {
 		if value, ok := properties[name]; ok {
 			compact[name] = value
 		}
@@ -159,6 +159,7 @@ var portableProviderTaskFields = []string{
 	"requires",
 	"model",
 	"escalate",
+	"evidence_from",
 }
 
 func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {

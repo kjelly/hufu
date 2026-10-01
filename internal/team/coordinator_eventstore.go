@@ -1586,6 +1586,11 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		payload["verify"] = item.Verify
 		payload["verify_mode"] = item.VerifyMode
 	}
+	if len(item.EvidenceFrom) > 0 {
+		// Written only when used, so every other task's payload and
+		// transition key stay byte-identical.
+		payload["evidence_from"] = append([]string(nil), item.EvidenceFrom...)
+	}
 	if item.VerifySpec != nil {
 		payload["verify_spec"] = item.VerifySpec
 	}

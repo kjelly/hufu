@@ -281,7 +281,7 @@ func matchesInitialContractBatch(tasks []TaskDef, policy agent.DelegationPolicy)
 }
 
 func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
-	if len(got.Steps) == 0 && len(got.ToolSequence) == 0 && got.Kind == "" && !got.RequiresResult && !got.RequiresVerification && got.AllowsReplay == nil && !got.ForbidArtifacts && len(got.ToolInputSequence) == 0 && len(got.ToolInputCanonicalSequence) == 0 && len(got.ToolInputTransformSequence) == 0 && got.ToolInputField == "" && len(got.ToolInputValueSequence) == 0 && len(got.ToolExpectedExitCodes) == 0 {
+	if len(got.Steps) == 0 && len(got.ToolSequence) == 0 && got.Kind == "" && !got.RequiresResult && !got.RequiresVerification && got.AllowsReplay == nil && !got.ForbidArtifacts && !got.RequiresEvidence && len(got.ToolInputSequence) == 0 && len(got.ToolInputCanonicalSequence) == 0 && len(got.ToolInputTransformSequence) == 0 && got.ToolInputField == "" && len(got.ToolInputValueSequence) == 0 && len(got.ToolExpectedExitCodes) == 0 {
 		return true
 	}
 	left, leftErr := json.Marshal(got)

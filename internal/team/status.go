@@ -358,7 +358,11 @@ type TodoItem struct {
 	Execution           ExecutionContract    `json:"execution,omitempty"`
 	Optional            bool                 `json:"optional,omitempty"`
 	ResourceClaims      []string             `json:"resource_claims,omitempty"`
-	Resources           []ResourceClaim      `json:"resources,omitempty"`
+	// EvidenceFrom names completed tasks whose results this task checks. Unlike
+	// DependsOn it may name tasks from earlier batches and never orders
+	// scheduling; it grants the worker their results and reviewed inputs.
+	EvidenceFrom []string        `json:"evidence_from,omitempty"`
+	Resources    []ResourceClaim `json:"resources,omitempty"`
 	// Decision admission is immutable task-contract state. It is persisted on
 	// the todo before execution so crash recovery cannot silently downgrade a
 	// configured decision task to the off-profile path.
@@ -500,6 +504,7 @@ type TodoSpec struct {
 	Execution           ExecutionContract
 	Optional            bool
 	ResourceClaims      []string
+	EvidenceFrom        []string
 	Resources           []ResourceClaim
 	DecisionProfile     string
 	DecisionOptions     []DecisionOption
@@ -623,6 +628,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		Execution:                     cloneExecutionContract(item.Execution),
 		Optional:                      item.Optional,
 		ResourceClaims:                append([]string(nil), item.ResourceClaims...),
+		EvidenceFrom:                  append([]string(nil), item.EvidenceFrom...),
 		Resources:                     append([]ResourceClaim(nil), item.Resources...),
 		DecisionProfile:               item.DecisionProfile,
 		DecisionOptions:               append([]DecisionOption(nil), item.DecisionOptions...),
@@ -1373,6 +1379,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Execution:                     cloneExecutionContract(item.Execution),
 		Optional:                      item.Optional,
 		ResourceClaims:                append([]string(nil), item.ResourceClaims...),
+		EvidenceFrom:                  append([]string(nil), item.EvidenceFrom...),
 		Resources:                     append([]ResourceClaim(nil), item.Resources...),
 		DecisionProfile:               item.DecisionProfile,
 		DecisionOptions:               append([]DecisionOption(nil), item.DecisionOptions...),
@@ -1536,6 +1543,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.Execution = cloneExecutionContract(src.Execution)
 	dst.Optional = src.Optional
 	dst.ResourceClaims = append([]string(nil), src.ResourceClaims...)
+	dst.EvidenceFrom = append([]string(nil), src.EvidenceFrom...)
 	dst.Resources = append([]ResourceClaim(nil), src.Resources...)
 	dst.RecoveryHypothesis = cloneRecoveryHypothesis(src.RecoveryHypothesis)
 	dst.DecisionProfile = src.DecisionProfile

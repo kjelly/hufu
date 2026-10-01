@@ -669,6 +669,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			Execution                     ExecutionContract           `json:"execution"`
 			Optional                      bool                        `json:"optional"`
 			ResourceClaims                []string                    `json:"resource_claims"`
+			EvidenceFrom                  []string                    `json:"evidence_from"`
 			Resources                     []ResourceClaim             `json:"resources"`
 			RecoveryHypothesis            *RecoveryHypothesis         `json:"recovery_hypothesis"`
 			SideEffect                    SideEffectClass             `json:"side_effect"`
@@ -785,6 +786,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				Execution:                     cloneExecutionContract(payload.Execution),
 				Optional:                      payload.Optional,
 				ResourceClaims:                append([]string(nil), payload.ResourceClaims...),
+				EvidenceFrom:                  append([]string(nil), payload.EvidenceFrom...),
 				Resources:                     append([]ResourceClaim(nil), payload.Resources...),
 				RecoveryHypothesis:            cloneRecoveryHypothesis(payload.RecoveryHypothesis),
 				SideEffect:                    payload.SideEffect,

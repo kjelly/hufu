@@ -628,6 +628,9 @@ func FormatDependencyResults(results []TaskResult) string {
 			sb.WriteString("\n**Findings:**\n")
 			for _, finding := range res.Findings {
 				fmt.Fprintf(&sb, "- [%s] %s", finding.Category, finding.Summary)
+				if finding.Severity != "" {
+					fmt.Fprintf(&sb, " (severity: %s)", finding.Severity)
+				}
 				if finding.Detail != "" {
 					fmt.Fprintf(&sb, ": %s", finding.Detail)
 				}

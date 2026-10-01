@@ -376,6 +376,7 @@ type canonicalTaskShadow struct {
 	Execution                     ExecutionContract           `json:"execution,omitempty"`
 	Optional                      bool                        `json:"optional,omitempty"`
 	ResourceClaims                []string                    `json:"resource_claims,omitempty"`
+	EvidenceFrom                  []string                    `json:"evidence_from,omitempty"`
 	Resources                     []ResourceClaim             `json:"resources,omitempty"`
 	DecisionProfile               string                      `json:"decision_profile,omitempty"`
 	DecisionOptions               []DecisionOption            `json:"decision_options,omitempty"`
@@ -488,6 +489,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		Execution:                     cloneExecutionContract(item.Execution),
 		Optional:                      item.Optional,
 		ResourceClaims:                normalizeStringSlice(item.ResourceClaims),
+		EvidenceFrom:                  normalizeStringSlice(item.EvidenceFrom),
 		Resources:                     append([]ResourceClaim(nil), item.Resources...),
 		DecisionProfile:               item.DecisionProfile,
 		DecisionOptions:               append([]DecisionOption(nil), item.DecisionOptions...),

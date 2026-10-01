@@ -644,6 +644,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		"ToolInputValueSequence":     true,
 		"ToolExpectedExitCodes":      true,
 		"ForbidArtifacts":            true,
+		"RequiresEvidence":           true,
 		"Steps":                      true,
 	}
 
@@ -692,6 +693,9 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	}
 	if _, exposed := execSubProps["template_tool_grants"]; exposed {
 		t.Error("execution schema unexpectedly exposes template_tool_grants to coordinator delegation")
+	}
+	if _, exposed := execSubProps["requires_evidence"]; exposed {
+		t.Error("execution schema unexpectedly exposes requires_evidence, a static contract requirement, to coordinator delegation")
 	}
 
 	toolSequenceDescription := execSubProps["tool_sequence"].(map[string]any)["description"].(string)

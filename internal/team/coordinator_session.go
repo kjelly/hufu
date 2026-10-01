@@ -1280,7 +1280,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		OnFailureClasses: append([]TaskFailureClass(nil), it.OnFailureClasses...),
 		Escalate:         it.Escalate, AdversarialVerify: it.AdversarialVerify,
 		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: cloneExecutionContract(it.Execution),
-		Optional: it.Optional, ResourceClaims: append([]string(nil), it.ResourceClaims...), Resources: append([]ResourceClaim(nil), it.Resources...),
+		Optional: it.Optional, ResourceClaims: append([]string(nil), it.ResourceClaims...), EvidenceFrom: append([]string(nil), it.EvidenceFrom...), Resources: append([]ResourceClaim(nil), it.Resources...),
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),
 		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis), WorksetBinding: cloneWorksetBinding(it.WorksetBinding),
 		DecisionProfile: it.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), it.DecisionOptions...),

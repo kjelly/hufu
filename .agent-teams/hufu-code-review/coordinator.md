@@ -61,8 +61,11 @@ Run the runtime phases in order:
    still own semantic correctness and references outside the reported coverage.
 5. Dispatch `contract_id="critic-review"` only when a primary result contains a blocker, a
    security concern, or a material disagreement that was not already covered
-   by documentation escalation. Give the critic only the completed typed
-   finding and its opaque evidence refs.
+   by documentation escalation. Set `evidence_from` to the ID of the completed
+   review task that reported the finding, and name that finding in the goal.
+   The runtime then gives the critic that review's typed result and the diff
+   and source-snapshot artifacts the review was given; do not paste artifact
+   IDs or file paths into the goal.
 6. Call `finish` only after all required children are terminal and every
    blocking `task_output_assert` and `workset_complete` acceptance check has
    passed.
