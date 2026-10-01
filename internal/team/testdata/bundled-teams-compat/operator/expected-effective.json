@@ -18,7 +18,7 @@
     {
       "name": "executor",
       "role": "worker",
-      "tools": "read,write,edit,bash,grep,glob,ls,wait_for",
+      "tools": "read,write,edit,bash,grep,glob,ls,decision_primitive,wait_for",
       "max_retries": -1
     },
     {

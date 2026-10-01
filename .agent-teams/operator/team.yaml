@@ -9,3 +9,31 @@ spec:
   timeout: 1800
   temperature: "0.2"
   max-tokens: "4096"
+  # The System One decision endpoint; override per machine with a hufu.yaml
+  # `vars:` entry or --var systemone_endpoint=...
+  vars:
+    systemone_endpoint: http://127.0.0.1:11434/v1/systemone
+  # Bounded helper decisions the executor asks before acting
+  # (docs/reference/decision-primitives.md).
+  decision-primitives:
+    step-risk:
+      backend: systemone
+      endpoint: "{@ .systemone_endpoint @}"
+      model: nimble
+      version: "1"
+      kind: choice
+      question: "Classify the risk of carrying out the plan step described in state.step."
+      options:
+        - id: read-only
+          description: "Only reads or inspects files, the repository, or system state."
+        - id: workspace-write
+          description: "Creates, edits, or deletes files inside the current working directory."
+        - id: system-change
+          description: "Changes state outside the working directory: packages, services, system configuration, or other files."
+        - id: destructive
+          description: "Irreversibly deletes or overwrites data outside the working directory, or force-pushes."
+      inputs: {step: string}
+      agents: [executor]
+      timeout: 10s
+      min-confidence: 0.6
+      max-calls: 200
