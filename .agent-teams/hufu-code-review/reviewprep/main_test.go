@@ -1686,3 +1686,33 @@ func mustJSON(t *testing.T, value any) []byte {
 	}
 	return data
 }
+
+func TestSnapshotGoBuildIgnoresEnclosingVCSDirectory(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain unavailable")
+	}
+	// An empty .git above the snapshot, as /tmp/.git was, makes Go stamp VCS
+	// information by running git status, which fails.
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(root, "snapshot")
+	if err := os.MkdirAll(module, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/snapshot\n\ngo 1.21\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(module, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(root, "snapshot-bin"), ".")
+	build.Dir = module
+	build.Env = sanitizedGoTestEnvironment()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build under an enclosing .git: %v\n%s", err, output)
+	}
+}

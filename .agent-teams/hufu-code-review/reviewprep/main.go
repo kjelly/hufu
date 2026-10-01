@@ -867,7 +867,12 @@ func sanitizedGoTestEnvironment() []string {
 			}
 		}
 	}
-	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local")
+	// The snapshot has no .git, but Go stamps VCS information whenever any
+	// parent directory has one: an empty /tmp/.git made every go build under
+	// the snapshot run git status, fail with exit 128, and fail the tests
+	// that build the CLI. Snapshot tests must not depend on what encloses
+	// the temporary directory.
+	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false")
 }
 
 func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {
