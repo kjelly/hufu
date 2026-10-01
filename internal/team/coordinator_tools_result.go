@@ -89,7 +89,10 @@ func (input SubmitResultInput) taskResult() TaskResult {
 
 func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) (SubmitResultInput, error) {
 	var input SubmitResultInput
-	normalized := normalizeSubmitResultInput(raw)
+	normalized, err := normalizeSubmitResultInput(raw)
+	if err != nil {
+		return SubmitResultInput{}, err
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(normalized, &fields); err == nil {
 		if !contract.AllowEvidence {
@@ -628,10 +631,15 @@ func (t *submitResultTool) forbidsArtifacts() bool {
 // schema expects objects. These fields are result evidence, not mutation
 // instructions, so the scalar forms can be losslessly promoted instead of
 // turning an otherwise valid terminal result into a schema-repair loop.
-func normalizeSubmitResultInput(input []byte) []byte {
+//
+// A string that holds serialized JSON is not that shorthand: the model
+// encoded the array or object twice. It is decoded when it parses and
+// rejected when it does not. Promoting it to a single summary hid every
+// severity inside one string, so a blocker read as a finding with none.
+func normalizeSubmitResultInput(input []byte) ([]byte, error) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(input, &object); err != nil {
-		return input
+		return input, nil
 	}
 	objectFields := map[string]string{
 		"files_read":           "path",
@@ -646,6 +654,19 @@ func normalizeSubmitResultInput(input []byte) []byte {
 		if !ok {
 			continue
 		}
+		decoded, serialized, err := decodeSerializedJSONText(field, raw)
+		if err != nil {
+			return nil, err
+		}
+		if serialized {
+			if jsonObject(decoded) {
+				// One serialized entry: the same one-entry collapse as a
+				// scalar string, so it becomes a one-entry array.
+				decoded = json.RawMessage("[" + string(decoded) + "]")
+			}
+			raw = decoded
+			object[field] = decoded
+		}
 		entries, ok := normalizedStringEntries(raw)
 		if !ok {
 			continue
@@ -653,6 +674,18 @@ func normalizeSubmitResultInput(input []byte) []byte {
 		normalized := make([]json.RawMessage, 0, len(entries))
 		changed := false
 		for _, entry := range entries {
+			decoded, serialized, err := decodeSerializedJSONText(field, entry)
+			if err != nil {
+				return nil, err
+			}
+			if serialized {
+				if !jsonObject(decoded) {
+					return nil, fmt.Errorf("%s entry holds serialized JSON that is not an object; send each %s entry as a JSON object", field, field)
+				}
+				normalized = append(normalized, decoded)
+				changed = true
+				continue
+			}
 			var value string
 			if err := json.Unmarshal(entry, &value); err != nil || strings.TrimSpace(value) == "" {
 				normalized = append(normalized, entry)
@@ -660,7 +693,7 @@ func normalizeSubmitResultInput(input []byte) []byte {
 			}
 			ref, err := json.Marshal(map[string]string{key: value})
 			if err != nil {
-				return input
+				return input, nil
 			}
 			normalized = append(normalized, ref)
 			changed = true
@@ -668,7 +701,7 @@ func normalizeSubmitResultInput(input []byte) []byte {
 		if changed {
 			encoded, err := json.Marshal(normalized)
 			if err != nil {
-				return input
+				return input, nil
 			}
 			object[field] = encoded
 		}
@@ -679,9 +712,47 @@ func normalizeSubmitResultInput(input []byte) []byte {
 	// the same validation and canonical representation.
 	normalized, err := json.Marshal(object)
 	if err != nil {
-		return input
+		return input, nil
 	}
-	return normalized
+	return normalized, nil
+}
+
+// decodeSerializedJSONText reports whether raw is a JSON string whose text is
+// itself a JSON object or array, and returns that inner value. Only text that
+// opens like JSON is considered, so prose such as "[security] ..." stays a
+// summary. Text that opens like JSON but does not parse is an error.
+func decodeSerializedJSONText(field string, raw json.RawMessage) (json.RawMessage, bool, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil || !opensLikeJSON(text) {
+		return nil, false, nil
+	}
+	var inner json.RawMessage
+	if err := json.Unmarshal([]byte(text), &inner); err != nil {
+		return nil, false, fmt.Errorf("%s was sent as a string holding malformed JSON (%v); send %s as a JSON array of objects, not as a string", field, err, field)
+	}
+	return inner, true, nil
+}
+
+// opensLikeJSON is true for text that starts like a serialized object or
+// array: `{"`, `{}`, or `[` followed by an object, string, array, or `]`.
+func opensLikeJSON(text string) bool {
+	text = strings.TrimSpace(text)
+	if len(text) < 2 || (text[0] != '{' && text[0] != '[') {
+		return false
+	}
+	next := strings.TrimLeft(text[1:], " \t\r\n")
+	if next == "" {
+		return false
+	}
+	if text[0] == '{' {
+		return next[0] == '"' || next[0] == '}'
+	}
+	return strings.ContainsRune(`{"[]`, rune(next[0]))
+}
+
+func jsonObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{'
 }
 
 func normalizedStringEntries(raw json.RawMessage) ([]json.RawMessage, bool) {

@@ -1259,6 +1259,8 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 74. **Learn a credential only when its value looks like one** — `learnSecretsFrom` sees every line an agent reads or writes, including reviewed source code and model reasoning, so a value beside a credential-named key is often not a credential: `token = filepath.ToSlash(token)`, `token: "team.yaml"`, `secretKeyValueRe: requires`. `isLearnableSecret` rejects words, identifiers, call/index/selector expressions, concatenation operands, numbers, file names, relative paths, and URLs. A learned word is redacted from every later durable record, and that rewrite changes the task event's idempotency key, so an unchanged task is appended again. The key/value pass still redacts such a value where its key is; only the bare-value rule is narrowed.
 
+75. **A `submit_result` array sent as JSON text is decoded or rejected, never summarized** — `normalizeSubmitResultInput` promotes a plain string to a one-entry array (`"findings":"one finding"`), but a string that opens like JSON is the array encoded twice. It is decoded when it parses and rejected with a resend instruction when it does not. Wrapping it as one finding's summary hid every severity inside the string, so a blocker read as a finding with none.
+
 
 ## Model Configuration Priority
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -467,6 +468,81 @@ func TestSubmitResultToolPromotesScalarDescriptiveArrays(t *testing.T) {
 	stored := c.GetTaskResult(items[0].ID)
 	if stored == nil || len(stored.Findings) != 1 || stored.Findings[0].Summary != "one finding" || len(stored.OpenQuestions) != 1 || stored.OpenQuestions[0] != "one question" {
 		t.Fatalf("descriptive arrays were not normalized: result=%+v", stored)
+	}
+}
+
+// TestSubmitResultToolDecodesSerializedFindings covers a model that encodes
+// the findings array as JSON text. Promoting that text to one summary hid
+// every severity inside a string, so a blocker would read as a finding with
+// none; it is decoded when it parses and rejected when it does not.
+func TestSubmitResultToolDecodesSerializedFindings(t *testing.T) {
+	tests := []struct {
+		name      string
+		findings  string
+		wantError string
+		want      []Finding
+	}{
+		{
+			name:     "serialized array",
+			findings: `"[{\"severity\":\"error\",\"summary\":\"nil map write\"},{\"severity\":\"info\",\"summary\":\"naming\"}]"`,
+			want:     []Finding{{Severity: FindingSeverityError, Summary: "nil map write"}, {Severity: FindingSeverityInfo, Summary: "naming"}},
+		},
+		{
+			name:     "serialized object",
+			findings: `"{\"severity\":\"warning\",\"summary\":\"stale header\"}"`,
+			want:     []Finding{{Severity: FindingSeverityWarning, Summary: "stale header"}},
+		},
+		{
+			name:     "serialized entries",
+			findings: `["{\"severity\":\"error\",\"summary\":\"race\"}","plain note"]`,
+			want:     []Finding{{Severity: FindingSeverityError, Summary: "race"}, {Summary: "plain note"}},
+		},
+		{
+			name:     "bracketed prose stays a summary",
+			findings: `"[security] input is trusted"`,
+			want:     []Finding{{Summary: "[security] input is trusted"}},
+		},
+		{
+			// The shape a reviewer actually sent: inner quotes left unescaped.
+			name:      "malformed serialized array",
+			findings:  `"[{\"category\": \"security-tool\", \"detail\": \"Previously {\"include\":\"*.go\"} dropped glob\", \"severity\": \"info\"}]"`,
+			wantError: "findings was sent as a string holding malformed JSON",
+		},
+		{
+			name:      "serialized entry that is not an object",
+			findings:  `["[\"nested\"]"]`,
+			wantError: "findings entry holds serialized JSON that is not an object",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Coordinator{taskTracker: NewTaskTracker()}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "serialized findings"}})[0]
+			tool := &submitResultTool{coordinator: c, todoID: item.ID}
+			response, err := tool.Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{
+				Name:  "submit_result",
+				Input: `{"status":"success","summary":"done","findings":` + tc.findings + `}`,
+			})
+			if err != nil {
+				t.Fatalf("tool.Run unexpected error: %v", err)
+			}
+			stored := c.GetTaskResult(item.ID)
+			if tc.wantError != "" {
+				if !response.IsError || !strings.Contains(response.Content, tc.wantError) {
+					t.Fatalf("response = %#v, want error containing %q", response, tc.wantError)
+				}
+				if stored != nil {
+					t.Fatalf("rejected result was stored: %#v", stored)
+				}
+				return
+			}
+			if response.IsError {
+				t.Fatalf("serialized findings rejected: %#v", response)
+			}
+			if stored == nil || !reflect.DeepEqual(stored.Findings, tc.want) {
+				t.Fatalf("stored findings = %#v, want %#v", stored, tc.want)
+			}
+		})
 	}
 }
 
