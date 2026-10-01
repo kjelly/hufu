@@ -97,7 +97,7 @@ Non-goals:
 - **D9 — hufu.yaml and team.yaml.** The same `control-decisions:` block is
   accepted in both. Each field resolves team value, then hufu.yaml value, then
   default. Per-point fields resolve the same way. This lets a user turn on shadow
-  for every team from `~/.config/hufu/hufu.yaml` while a team can still pin its
+  for every team from the user-level hufu.yaml while a team can still pin its
   own policy.
 - **D10 — not under `--no-net` restrictions.** These are runtime model calls,
   like sidecar calls. They are not agent tools, so `--no-net` and `--force-mcp`

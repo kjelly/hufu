@@ -45,8 +45,9 @@ decision model（例如 Ollama 上的 `nimble`），而不是只靠 sidecar 回�
 
 ## 設定
 
-`control-decisions:` 可以寫在 `~/.config/hufu/hufu.yaml`、`./hufu.yaml` 與 team.yaml。
-每個欄位依 team.yaml → `./hufu.yaml` → `~/.config/hufu/hufu.yaml` → 預設值解析；
+`control-decisions:` 可以寫在使用者層級的 hufu.yaml（~/.config/hufu/hufu.yaml）、
+專案目錄的 hufu.yaml 與 team.yaml。每個欄位依 team.yaml → 專案 hufu.yaml → 使用者
+hufu.yaml → 預設值解析；
 `points` 下的欄位也逐點、逐欄位解析。因此可以在個人 hufu.yaml 讓所有 team 跑
 shadow，再由個別 team 固定自己的 active 設定。
 
