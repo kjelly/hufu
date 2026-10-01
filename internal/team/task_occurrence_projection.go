@@ -50,6 +50,7 @@ type TaskOccurrenceProjection struct {
 	Source                        string
 	ParentID                      string
 	DependsOn                     []string
+	OrderAfter                    []string
 	OnFailure                     string
 	Verify                        string
 	VerifyMode                    string
@@ -129,7 +130,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		ExecutionTarget: item.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(item.ExecutionTopology),
 		Sidecar: item.Sidecar, Summarize: item.Summarize, OutputMode: item.OutputMode,
 		ContextFiles: append([]string(nil), item.ContextFiles...), Requires: append([]string(nil), item.Requires...),
-		DependsOn: append([]string(nil), item.DependsOn...), OnFailure: item.OnFailure,
+		DependsOn: append([]string(nil), item.DependsOn...), OrderAfter: append([]string(nil), item.OrderAfter...), OnFailure: item.OnFailure,
 		Verify: item.Verify, VerifyMode: item.VerifyMode, VerifySpec: cloneVerificationSpecPtr(item.VerifySpec),
 		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
@@ -230,6 +231,14 @@ func compareTaskDefWithTodoOccurrence(task TaskDef, item *TodoItem, indexByID ma
 		}
 		want.DependsOn = append(want.DependsOn, depIndex)
 	}
+	want.OrderAfter = nil
+	for _, predecessorID := range item.OrderAfter {
+		predecessorIndex, ok := indexByID[predecessorID]
+		if !ok {
+			return fmt.Errorf("task %s durable ordering predecessor %q is not in the scheduler batch", item.ID, predecessorID)
+		}
+		want.OrderAfter = append(want.OrderAfter, predecessorIndex)
+	}
 	if item.OnFailure != "" {
 		failureIndex, ok := indexByID[item.OnFailure]
 		if !ok {
@@ -303,6 +312,13 @@ func (c *Coordinator) reconstructSchedulerTaskDefs(tasks []TaskDef, items []*Tod
 				return nil, fmt.Errorf("task %s durable dependency %q is not in the scheduler batch", canonical.ID, depID)
 			}
 			reconstructed[i].DependsOn = append(reconstructed[i].DependsOn, depIndex)
+		}
+		for _, predecessorID := range canonical.OrderAfter {
+			predecessorIndex, ok := indexByID[predecessorID]
+			if !ok {
+				return nil, fmt.Errorf("task %s durable ordering predecessor %q is not in the scheduler batch", canonical.ID, predecessorID)
+			}
+			reconstructed[i].OrderAfter = append(reconstructed[i].OrderAfter, predecessorIndex)
 		}
 		if canonical.OnFailure != "" {
 			failureIndex, ok := indexByID[canonical.OnFailure]

@@ -152,6 +152,12 @@ scheduler may run disjoint bounded writers concurrently; malformed, unknown,
 or unenforceable scopes fail closed or retain the conservative whole-root
 claim instead of claiming unsafe parallelism.
 
+Mutations in one batch whose claims conflict run in batch order. The runtime
+records that order on each task as `order_after`, separate from `depends_on`.
+A task waits until every task in its `order_after` has finished, whatever the
+outcome. Only a declared `depends_on` blocks a task when its producer fails or
+is blocked.
+
 For eligible local file tools, an authored artifact-backed workset can derive
 bounded read/write paths. Those paths are installed from the frozen envelope
 at every leaf entrypoint. On supported platforms the file operations use an

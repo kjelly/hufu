@@ -234,6 +234,7 @@ func TestRCA20DigestBindsEveryImmutableProjectionFieldExceptPlanID(t *testing.T)
 		{"Source", func(p *TaskOccurrenceProjection) { p.Source = TaskSourceAgent }},
 		{"ParentID", func(p *TaskOccurrenceProjection) { p.ParentID = "other-parent" }},
 		{"DependsOn", func(p *TaskOccurrenceProjection) { p.DependsOn = []string{"other"} }},
+		{"OrderAfter", func(p *TaskOccurrenceProjection) { p.OrderAfter = []string{"other"} }},
 		{"OnFailure", func(p *TaskOccurrenceProjection) { p.OnFailure = "other-failure" }},
 		{"Verify", func(p *TaskOccurrenceProjection) { p.Verify = "false" }},
 		{"VerifyMode", func(p *TaskOccurrenceProjection) { p.VerifyMode = "observation" }},

@@ -347,6 +347,7 @@ type canonicalTaskShadow struct {
 	Source                        string                      `json:"source,omitempty"`
 	ParentID                      string                      `json:"parent_id,omitempty"`
 	DependsOn                     []string                    `json:"depends_on,omitempty"`
+	OrderAfter                    []string                    `json:"order_after,omitempty"`
 	MaxRetries                    int                         `json:"max_retries,omitempty"`
 	Retries                       int                         `json:"retries,omitempty"`
 	OnFailure                     string                      `json:"on_failure,omitempty"`
@@ -454,6 +455,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		Source:                        item.Source,
 		ParentID:                      item.ParentID,
 		DependsOn:                     normalizeStringSlice(item.DependsOn),
+		OrderAfter:                    normalizeStringSlice(item.OrderAfter),
 		MaxRetries:                    item.MaxRetries,
 		Retries:                       item.Retries,
 		OnFailure:                     item.OnFailure,

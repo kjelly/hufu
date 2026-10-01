@@ -477,6 +477,11 @@ func (c *Coordinator) serializeMutationTasks(tasks []TaskDef) []TaskDef {
 	return out
 }
 
+// serializeConflictingMutationTasks keeps mutations whose effective claims
+// conflict in batch order. The added edges are OrderAfter, not DependsOn: a
+// task waits for each conflicting earlier mutation to finish, but that
+// mutation failing or being blocked does not block it. Only dependencies the
+// coordinator declared carry a failure to their dependents.
 func serializeConflictingMutationTasks(tasks []TaskDef, envelopes []TaskExecutionEnvelope) []TaskDef {
 	out := make([]TaskDef, len(tasks))
 	copy(out, tasks)
@@ -484,13 +489,13 @@ func serializeConflictingMutationTasks(tasks []TaskDef, envelopes []TaskExecutio
 		if !isMutationSideEffect(out[current].SideEffect) {
 			continue
 		}
-		out[current].DependsOn = slices.Clone(out[current].DependsOn)
+		out[current].OrderAfter = slices.Clone(out[current].OrderAfter)
 		for earlier := range current {
 			if !isMutationSideEffect(out[earlier].SideEffect) || !claimsConflict(envelopes[current].ResourceScope.Claims, envelopes[earlier].ResourceScope.Claims) {
 				continue
 			}
-			if !containsInt(out[current].DependsOn, earlier) {
-				out[current].DependsOn = append(out[current].DependsOn, earlier)
+			if !containsInt(out[current].DependsOn, earlier) && !containsInt(out[current].OrderAfter, earlier) {
+				out[current].OrderAfter = append(out[current].OrderAfter, earlier)
 			}
 		}
 	}

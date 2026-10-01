@@ -309,6 +309,7 @@ type TodoItem struct {
 	Source            string
 	ParentID          string
 	DependsOn         []string                 // IDs of tasks that must complete before this one starts
+	OrderAfter        []string                 `json:"order_after,omitempty"` // IDs of tasks that must finish, with any outcome, before this one starts
 	Verify            string                   // Command to run to verify the task
 	VerifyMode        string                   // success, expected_failure, or observation
 	VerifySpec        *VerificationSpec        `json:"verify_spec,omitempty"`
@@ -494,6 +495,7 @@ type TodoSpec struct {
 	Escalate            bool
 	AdversarialVerify   int
 	DependsOn           []string
+	OrderAfter          []string
 	SideEffect          SideEffectClass
 	Recovery            RecoveryPolicy
 	ReconcileTool       string
@@ -617,6 +619,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		Escalate:                      item.Escalate,
 		AdversarialVerify:             item.AdversarialVerify,
 		DependsOn:                     append([]string(nil), item.DependsOn...),
+		OrderAfter:                    append([]string(nil), item.OrderAfter...),
 		SideEffect:                    item.SideEffect,
 		Recovery:                      item.Recovery,
 		ReconcileTool:                 item.ReconcileTool,
@@ -1338,6 +1341,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Source:                        item.Source,
 		ParentID:                      item.ParentID,
 		DependsOn:                     dependsOn,
+		OrderAfter:                    append([]string(nil), item.OrderAfter...),
 		Verify:                        item.Verify,
 		VerifyMode:                    item.VerifyMode,
 		VerifySpec:                    verifySpec,
@@ -1519,6 +1523,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.Source = src.Source
 	dst.ParentID = src.ParentID
 	dst.DependsOn = append([]string(nil), src.DependsOn...)
+	dst.OrderAfter = append([]string(nil), src.OrderAfter...)
 	dst.Verify = src.Verify
 	dst.VerifyMode = src.VerifyMode
 	dst.VerifySpec = cloneVerificationSpecPtr(src.VerifySpec)

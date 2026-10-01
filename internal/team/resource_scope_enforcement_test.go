@@ -167,8 +167,8 @@ func TestDerivedDisjointWriterScopesRemainConcurrent(t *testing.T) {
 		envelopes[i] = TaskExecutionEnvelope{ResourceScope: effective}
 	}
 	normalized := serializeConflictingMutationTasks(tasks, envelopes)
-	if len(normalized[1].DependsOn) != 0 {
-		t.Fatalf("disjoint bounded writers were serialized: %v", normalized[1].DependsOn)
+	if len(normalized[1].DependsOn) != 0 || len(normalized[1].OrderAfter) != 0 {
+		t.Fatalf("disjoint bounded writers were serialized: %v/%v", normalized[1].DependsOn, normalized[1].OrderAfter)
 	}
 }
 

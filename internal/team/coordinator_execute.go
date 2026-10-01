@@ -510,6 +510,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 				todoBatch[i].DependsOn = append(todoBatch[i].DependsOn, ids[depIdx])
 			}
 		}
+		todoBatch[i].OrderAfter = nil
+		for _, predecessor := range tasks[i].OrderAfter {
+			if predecessor >= 0 && predecessor < len(ids) && predecessor != i {
+				todoBatch[i].OrderAfter = append(todoBatch[i].OrderAfter, ids[predecessor])
+			}
+		}
 	}
 	envelopes, envelopeErr = c.prepareNewTaskExecutionEnvelopes(ctx, tasks, todoBatch, ids, false)
 	if envelopeErr != nil {

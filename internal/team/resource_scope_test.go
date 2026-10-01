@@ -100,15 +100,17 @@ func TestSerializeConflictingMutationTasksUsesEnvelopeClaims(t *testing.T) {
 		{ResourceScope: EffectiveTaskResourceScope{Claims: []ResourceClaim{left}}},
 		{ResourceScope: EffectiveTaskResourceScope{Claims: []ResourceClaim{right}}},
 	})
-	if len(disjoint[1].DependsOn) != 0 {
-		t.Fatalf("disjoint dependencies = %v", disjoint[1].DependsOn)
+	if len(disjoint[1].DependsOn) != 0 || len(disjoint[1].OrderAfter) != 0 {
+		t.Fatalf("disjoint edges = %v/%v", disjoint[1].DependsOn, disjoint[1].OrderAfter)
 	}
 	conflicting := serializeConflictingMutationTasks(tasks, []TaskExecutionEnvelope{
 		{ResourceScope: EffectiveTaskResourceScope{Claims: []ResourceClaim{left}}},
 		{ResourceScope: EffectiveTaskResourceScope{Claims: []ResourceClaim{overlap}}},
 	})
-	if !slices.Equal(conflicting[1].DependsOn, []int{0}) {
-		t.Fatalf("conflicting dependencies = %v", conflicting[1].DependsOn)
+	// A conflict orders the writers without making the later one inherit
+	// the earlier one's failure.
+	if !slices.Equal(conflicting[1].OrderAfter, []int{0}) || len(conflicting[1].DependsOn) != 0 {
+		t.Fatalf("conflicting edges = depends_on %v order_after %v, want order_after [0]", conflicting[1].DependsOn, conflicting[1].OrderAfter)
 	}
 }
 

@@ -157,6 +157,11 @@ type TaskDef struct {
 	PlanFirst    bool     `json:"plan_first,omitzero"`
 	PlanID       string   `json:"plan_id,omitempty"`
 	DependsOn    []int    `json:"depends_on,omitempty" yaml:"depends-on,omitempty"` // 0-based indices into the tasks array for this call
+	// OrderAfter holds runtime-added ordering edges (0-based indices). A task
+	// waits until each of these tasks has finished, whatever its outcome, but a
+	// failure never blocks it. Resource serialization fills it for mutations
+	// whose claims conflict; it is never read from model input.
+	OrderAfter []int `json:"-" yaml:"-"`
 	// Pipeline is shorthand for depends_on:[i-1]: the task waits for the
 	// immediately preceding task in the same batch. Ignored on the first task.
 	Pipeline bool `json:"pipeline,omitempty"`

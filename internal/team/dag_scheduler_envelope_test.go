@@ -104,6 +104,11 @@ func testTodoItemFromTask(task TaskDef, id string, ids []string) *TodoItem {
 			item.DependsOn = append(item.DependsOn, ids[dep])
 		}
 	}
+	for _, predecessor := range task.OrderAfter {
+		if predecessor >= 0 && predecessor < len(ids) {
+			item.OrderAfter = append(item.OrderAfter, ids[predecessor])
+		}
+	}
 	if task.OnFailure != nil && *task.OnFailure >= 0 && *task.OnFailure < len(ids) {
 		item.OnFailure = ids[*task.OnFailure]
 	}

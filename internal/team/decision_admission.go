@@ -139,6 +139,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		ContextFiles, Requires                                               []string
 		ParentID, OnFailure                                                  string
 		DependsOn                                                            []string
+		OrderAfter                                                           []string `json:"order_after,omitempty"`
 		Action                                                               *Action
 		ContractID, ContractHash                                             string
 		ContractRevision                                                     int
@@ -175,7 +176,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 	}{
 		ID: task.ID, PlanTaskID: task.PlanTaskID, Phase: string(task.Phase), Agent: task.Agent, Desc: task.Desc, Goal: task.Goal, Constraints: task.Constraints, Model: task.Model, Source: task.Source, PlanFirst: task.PlanFirst, ModelTopology: task.ModelTopology,
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
-		ParentID: task.ParentID, OnFailure: task.OnFailure, DependsOn: task.DependsOn,
+		ParentID: task.ParentID, OnFailure: task.OnFailure, DependsOn: task.DependsOn, OrderAfter: task.OrderAfter,
 		Action: task.Action, ContractID: task.ContractID, ContractHash: task.ContractHash, ContractRevision: task.ContractRevision,
 		MaxRetries: task.MaxRetries, OnFailureClasses: task.OnFailureClasses, Verify: task.Verify, VerifyMode: task.VerifyMode, VerifySpec: task.VerifySpec, SideEffect: sideEffect, Escalate: task.Escalate, AdversarialVerify: task.AdversarialVerify, Recovery: task.Recovery,
 		ReconcileTool: task.ReconcileTool, Execution: cloneExecutionContract(task.Execution), Optional: task.Optional, ResourceClaims: task.ResourceClaims, Resources: task.Resources, WorksetBinding: task.WorksetBinding, WorksetReceipt: task.WorksetReceipt, Kind: task.Kind, Advances: task.Advances, ExpectedStateChange: task.ExpectedStateChange,

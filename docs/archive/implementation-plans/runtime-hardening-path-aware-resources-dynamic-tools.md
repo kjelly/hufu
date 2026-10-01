@@ -1162,6 +1162,11 @@ mutations while allowing the scheduler to overlap genuinely disjoint bounded
 writers. Read/write conflicts are scheduler leases, not new failure-dependency
 edges, because the existing normalization only orders mutation tasks.
 
+> Superseded 2026-10-01: the implicit edges are now recorded as `order_after`,
+> not `depends_on`. They keep the durable batch order, but a failed or blocked
+> earlier mutation no longer blocks the later one. See
+> `docs/architecture/execution-runtime.md`.
+
 ### A6.1 Preflight failure semantics
 
 Preflight is an admission boundary, not a worker failure:

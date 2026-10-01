@@ -271,17 +271,7 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		if s.dispatchStopped || (s.running && ctx.Err() != nil) {
 			return
 		}
-		if s.states[i] != TaskPending {
-			continue
-		}
-		ready := true
-		for _, depIdx := range t.DependsOn {
-			if depIdx >= 0 && depIdx < len(s.tasks) && s.states[depIdx] != TaskDone {
-				ready = false
-				break
-			}
-		}
-		if !ready {
+		if s.states[i] != TaskPending || !s.readyToLaunch(i) {
 			continue
 		}
 		if s.resourceConflict(i) {
@@ -364,6 +354,10 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if _, blocked := isCapabilityBlockedError(res.err); blocked {
 		s.results[idx] = res
 		s.states[idx] = TaskBlocked
+		// A finished task frees its slot and resource claims, and settles
+		// the tasks ordered after it. Its own dependents stay pending until
+		// markStranded blocks them.
+		s.launchReady(ctx)
 		return
 	}
 
@@ -404,6 +398,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		maxRetries = s.coord.phaseWorkflow.repairRetryLimit(maxRetries)
 	}
 	if s.tasks[idx].OnFailure == nil || s.retries[idx] >= maxRetries {
+		s.launchReady(ctx)
 		return
 	}
 	if classes := s.tasks[idx].OnFailureClasses; len(classes) > 0 {
@@ -428,6 +423,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 			// for exactly this failure.
 			if !selfHealEligible(s.todoItems[idx]) {
 				c.report(c.newEvent("step").withMessage(fmt.Sprintf("task %q failed with class %q; not retrying in place (fail-closed per spec.md §10.1) and not resetting task %q", s.tasks[idx].Agent, class, s.tasks[*s.tasks[idx].OnFailure].Agent)))
+				s.launchReady(ctx)
 				return
 			}
 			s.retries[idx]++
@@ -442,6 +438,7 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	}
 	if s.coord.phaseWorkflow != nil && !s.coord.phaseWorkflow.permitRepairRetry(s.tasks[idx], res.err) {
 		c.report(c.newEvent("step").withMessage(fmt.Sprintf("repair retry for task %q blocked by failure-signature limit", s.tasks[idx].Agent)))
+		s.launchReady(ctx)
 		return
 	}
 	s.retries[idx]++
@@ -465,6 +462,51 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	s.launchReady(ctx)
+}
+
+// readyToLaunch reports whether every declared dependency of candidate is done
+// and every task it is ordered after has settled.
+func (s *dagScheduler) readyToLaunch(candidate int) bool {
+	for _, dep := range s.tasks[candidate].DependsOn {
+		if dep >= 0 && dep < len(s.tasks) && s.states[dep] != TaskDone {
+			return false
+		}
+	}
+	return s.orderPredecessorsSettled(candidate)
+}
+
+// orderPredecessorsSettled reports whether every task that candidate is
+// ordered after has finished, with any outcome, or can no longer start in this
+// batch because a declared dependency of it did not complete.
+func (s *dagScheduler) orderPredecessorsSettled(candidate int) bool {
+	for _, predecessor := range s.tasks[candidate].OrderAfter {
+		if predecessor < 0 || predecessor >= len(s.tasks) || predecessor == candidate {
+			continue
+		}
+		if !isTerminalTaskStatus(s.states[predecessor]) && !s.cannotStart(predecessor, make(map[int]bool)) {
+			return false
+		}
+	}
+	return true
+}
+
+// cannotStart reports whether a pending task waits on a declared dependency
+// that failed, was blocked or skipped, or itself cannot start. markStranded
+// blocks such a task once the batch drains.
+func (s *dagScheduler) cannotStart(idx int, visited map[int]bool) bool {
+	if s.states[idx] != TaskPending || visited[idx] {
+		return false
+	}
+	visited[idx] = true
+	for _, dep := range s.tasks[idx].DependsOn {
+		if dep < 0 || dep >= len(s.tasks) || dep == idx || s.states[dep] == TaskDone {
+			continue
+		}
+		if isTerminalTaskStatus(s.states[dep]) || s.cannotStart(dep, visited) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *dagScheduler) resourceConflict(candidate int) bool {
@@ -1091,7 +1133,8 @@ func selfHealEligible(item *TodoItem) bool {
 	return CanAutomaticallyReplay(taskDefFromTodoItem(item))
 }
 
-// detectTaskCycle returns true if the DependsOn indices form a cycle.
+// detectTaskCycle returns true if the DependsOn and OrderAfter indices form a
+// cycle.
 func detectTaskCycle(tasks []TaskDef) bool {
 	n := len(tasks)
 	state := make([]int, n) // 0=unvisited, 1=visiting, 2=done
@@ -1104,7 +1147,7 @@ func detectTaskCycle(tasks []TaskDef) bool {
 			return false
 		}
 		state[i] = 1
-		for _, dep := range tasks[i].DependsOn {
+		for _, dep := range slices.Concat(tasks[i].DependsOn, tasks[i].OrderAfter) {
 			// Check for self-loop (task depends on itself)
 			if dep == i {
 				return true
