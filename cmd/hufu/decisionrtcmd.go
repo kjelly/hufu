@@ -274,8 +274,8 @@ func executeDecisionRT(command *cobra.Command, deps decisionRTDeps, request deci
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	if options.timeout <= 0 || options.timeout > 10*time.Second {
-		return decisionRTInvalidRequest("--timeout must be within (0,10s]")
+	if options.timeout <= 0 || options.timeout > decisionrt.MaxTimeout {
+		return decisionRTInvalidRequest(fmt.Sprintf("--timeout must be within (0,%s]", decisionrt.MaxTimeout))
 	}
 	if command.Flags().Changed("min-confidence") && (math.IsNaN(options.minConfidence) || math.IsInf(options.minConfidence, 0) || options.minConfidence < 0 || options.minConfidence > 1) {
 		return decisionRTInvalidRequest("--min-confidence must be within [0,1]")
@@ -336,7 +336,7 @@ func bindDecisionRTSpecFlags(command *cobra.Command, options *decisionRTSpecOpti
 func bindDecisionRTExecutionFlags(command *cobra.Command, options *decisionRTExecutionOptions) {
 	flags := command.Flags()
 	flags.StringVar(&options.backend, "backend", "rule", "Decision backend: rule or sidecar")
-	flags.DurationVar(&options.timeout, "timeout", 2*time.Second, "Per-attempt timeout")
+	flags.DurationVar(&options.timeout, "timeout", decisionrt.DefaultTimeout, "Per-attempt timeout")
 	flags.Float64Var(&options.minConfidence, "min-confidence", 0, "Minimum accepted confidence")
 	flags.BoolVar(&options.requireCalibrated, "require-calibrated", false, "Require calibrated confidence")
 	flags.BoolVar(&options.noFallback, "no-fallback", false, "Disable the sidecar-to-rule fallback")

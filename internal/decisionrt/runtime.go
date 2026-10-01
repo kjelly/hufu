@@ -12,8 +12,14 @@ import (
 )
 
 const (
-	defaultDecisionTimeout = 2 * time.Second
-	maximumDecisionTimeout = 10 * time.Second
+	// DefaultTimeout is the per-attempt timeout used when
+	// RuntimeConfig.Timeout is zero.
+	DefaultTimeout = 5 * time.Second
+	// MaxTimeout is the largest per-attempt timeout NewRuntime accepts.
+	MaxTimeout = 30 * time.Second
+)
+
+const (
 	receiptSchemaVersion   = 1
 	lowConfidenceReason    = "low_confidence"
 	backendAbstainedReason = "backend_abstained"
@@ -38,9 +44,9 @@ func NewRuntime(config RuntimeConfig) (Runtime, error) {
 	}
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = defaultDecisionTimeout
+		timeout = DefaultTimeout
 	}
-	if timeout < 0 || timeout > maximumDecisionTimeout {
+	if timeout < 0 || timeout > MaxTimeout {
 		return nil, runtimeError(ErrorConfiguration, "", fmt.Errorf("invalid decision timeout"))
 	}
 	if config.Policy.MinConfidence != nil {

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -365,6 +366,52 @@ func TestDecisionRTDefaultsSelectRuleWithoutFallback(t *testing.T) {
 	}
 	if result.Backend != "rule" || result.FallbackUsed || result.ReasonCode != "backend_abstained" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestDecisionRTTimeoutFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		want     time.Duration
+		wantCode int
+	}{
+		{name: "default", want: decisionrt.DefaultTimeout},
+		{name: "maximum", args: []string{"--timeout", "30s"}, want: decisionrt.MaxTimeout},
+		{name: "above maximum", args: []string{"--timeout", "31s"}, wantCode: 2},
+		{name: "zero", args: []string{"--timeout", "0s"}, wantCode: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var remaining time.Duration
+			fixture := newDecisionRTCommandFixture(decisionRTFakeBackend{name: "rule", decide: func(ctx context.Context, _ decisionrt.Request) (decisionrt.BackendResult, error) {
+				if deadline, ok := ctx.Deadline(); ok {
+					remaining = time.Until(deadline)
+				}
+				return decidedDecisionRTChoice("small"), nil
+			}})
+			err := fixture.execute(append(validDecisionRTChoiceArgs(), test.args...)...)
+			assertDecisionRTExitCode(t, err, test.wantCode)
+			if test.wantCode != 0 {
+				if fixture.registry.resolveCalls != 0 {
+					t.Fatalf("resolve calls = %d", fixture.registry.resolveCalls)
+				}
+				return
+			}
+			if remaining > test.want || remaining < test.want-time.Second {
+				t.Fatalf("remaining = %s, want about %s", remaining, test.want)
+			}
+		})
+	}
+}
+
+func TestDecisionRTTimeoutRangeMessage(t *testing.T) {
+	fixture := newDecisionRTCommandFixture(nil)
+	err := fixture.execute(append(validDecisionRTChoiceArgs(), "--timeout", "31s")...)
+	assertDecisionRTExitCode(t, err, 2)
+	typed, ok := errors.AsType[*decisionrt.RuntimeError](err)
+	if !ok || typed.Kind != decisionrt.ErrorInvalidRequest || typed.Err == nil || typed.Err.Error() != "--timeout must be within (0,30s]" {
+		t.Fatalf("err = %#v", err)
 	}
 }
 

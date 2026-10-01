@@ -269,7 +269,7 @@ func TestRuntimeConfigurationValidation(t *testing.T) {
 		{Primary: fixedBackend("Not Valid", decidedChoice("small"))},
 		{Primary: valid, Fallback: fixedBackend("primary", decidedChoice("large"))},
 		{Primary: valid, Timeout: -time.Second},
-		{Primary: valid, Timeout: 11 * time.Second},
+		{Primary: valid, Timeout: decisionrt.MaxTimeout + time.Nanosecond},
 		{Primary: valid, Policy: decisionrt.AcceptancePolicy{MinConfidence: &minimum}},
 	}
 	for _, config := range tests {
@@ -397,6 +397,41 @@ func TestRuntimeAttemptTimeoutFallsBack(t *testing.T) {
 	result, _, err := runtime.Decide(t.Context(), validChoiceRequest())
 	if err != nil || result.Backend != "fallback" {
 		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+}
+
+func TestRuntimeAttemptTimeoutBounds(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "zero uses the default", timeout: 0, want: decisionrt.DefaultTimeout},
+		{name: "explicit", timeout: 7 * time.Second, want: 7 * time.Second},
+		{name: "maximum", timeout: decisionrt.MaxTimeout, want: decisionrt.MaxTimeout},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var remaining time.Duration
+			primary := fakeBackend{name: "primary", decide: func(ctx context.Context, _ decisionrt.Request) (decisionrt.BackendResult, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("attempt context has no deadline")
+				}
+				remaining = time.Until(deadline)
+				return decidedChoice("small"), nil
+			}}
+			runtime := mustRuntime(t, decisionrt.RuntimeConfig{Primary: primary, Timeout: test.timeout})
+			if _, _, err := runtime.Decide(context.Background(), validChoiceRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if remaining > test.want || remaining < test.want-time.Second {
+				t.Fatalf("remaining = %s, want about %s", remaining, test.want)
+			}
+		})
+	}
+	if decisionrt.DefaultTimeout != 5*time.Second || decisionrt.MaxTimeout != 30*time.Second {
+		t.Fatalf("default=%s max=%s", decisionrt.DefaultTimeout, decisionrt.MaxTimeout)
 	}
 }
 
