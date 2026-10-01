@@ -35,6 +35,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team --profile coding-balanced -- "implement feature X"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu inspect control-decisions --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Progress and recovery", Argv: `hufu explain --ai "why did the task fail?" --model local/qwen3:8b`},
 	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},
