@@ -70,6 +70,14 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 	session := NewSession()
 	for _, e := range events {
 		switch e.Type {
+		case string(EventDecisionPrimitiveSettled):
+			var payload decisionPrimitivePayload
+			if err := validateDecisionPrimitiveEvent(e); err == nil && decodeStrictDecisionPayload(e.Payload, &payload) == nil {
+				session.DecisionPrimitiveResults = append(session.DecisionPrimitiveResults, decisionPrimitiveRecord(e, payload))
+			} else {
+				session.RecoveryRequired = true
+				session.RecoveryReason = "invalid decision primitive event"
+			}
 		case "run_started":
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp

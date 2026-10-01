@@ -89,6 +89,8 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 	for _, name := range candidates {
 		status := ToolAvailable
 		switch {
+		case name == decisionPrimitiveToolName && !staticDecisionPrimitiveGrant(input.Session, input.Agent, input.Policy):
+			status = ToolDenied
 		case isCoordinatorOnlyWorkerTool(name):
 			status = ToolDenied
 		case isLegacyMemoryMutationTool(name) && !staticLegacyMemoryToolGranted(input, name):

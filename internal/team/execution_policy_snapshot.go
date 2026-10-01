@@ -52,6 +52,9 @@ type ExecutionPolicySnapshot struct {
 	// ActionCatalogHash pins the team's action catalog, including each entry's
 	// provider identity. It is omitted when a team declares no catalog.
 	ActionCatalogHash string `json:"action_catalog_hash,omitempty"`
+	// DecisionPrimitiveHash pins decision contracts, grants, transport, and
+	// credential revisions without storing credentials or endpoint values.
+	DecisionPrimitiveHash string `json:"decision_primitive_hash,omitempty"`
 	// MCPActionProviders pins every MCP action provider's server, tool, and
 	// bound descriptor. It is omitted when a team declares none.
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
@@ -266,6 +269,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		TeamMaxConcurrent: c.maxConcurrent,
 		DefaultLLMBackend: defaultBackend,
 	}
+	snapshot.DecisionPrimitiveHash = c.decisionPrimitives.Hash()
 	if version >= executionPolicyPreviousSnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
 		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
 		if err != nil {
@@ -587,6 +591,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
+	}
+	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
+		return fmt.Errorf("invalid decision primitive policy hash")
 	}
 	if len(snapshot.Backends) == 0 {
 		return fmt.Errorf("execution policy snapshot has no backends")

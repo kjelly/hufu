@@ -157,6 +157,7 @@ func (c *Coordinator) initEventStore() {
 		c.markSessionRecovery("event-store telemetry hydration read failed: " + utils.RedactSecrets(readErr.Error()))
 	} else {
 		branchEvents := FilterEventsForBranch(events, st, activeBranch)
+		c.hydrateDecisionPrimitiveResults(branchEvents)
 		c.hydrateContextWindowTelemetry(branchEvents)
 		c.rebuildTeamActionProposals(branchEvents)
 		if c.costManager != nil {
@@ -181,6 +182,18 @@ func (c *Coordinator) initEventStore() {
 	c.hydrateEmittedEventKeys(st, activeBranch)
 	c.checkCanonicalProjectionShadow(st, activeBranch)
 	c.repairMemoryLearningGaps(st, activeBranch)
+}
+
+func (c *Coordinator) hydrateDecisionPrimitiveResults(events []RunEvent) {
+	records, err := projectDecisionPrimitiveResults(events)
+	if err != nil {
+		c.markSessionRecovery("decision primitive hydration failed: " + utils.RedactSecrets(err.Error()))
+		return
+	}
+	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.DecisionPrimitiveResults = records
+		return nil
+	})
 }
 
 // reconcilePendingTerminalCommit is the only restart repair for an uncertain

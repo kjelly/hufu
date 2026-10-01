@@ -10,8 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/decisionrt"
-	"github.com/kjelly/hufu/internal/decisionrt/backend/rule"
-	decisionrtsidecar "github.com/kjelly/hufu/internal/decisionrt/backend/sidecar"
+	"github.com/kjelly/hufu/internal/decisionrt/backend"
 	"github.com/kjelly/hufu/internal/decisionrt/backend/systemone"
 	hufusidecar "github.com/kjelly/hufu/internal/sidecar"
 )
@@ -48,7 +47,7 @@ func NewDefaultRegistry(options RegistryOptions) BackendRegistry {
 func (r *defaultDecisionRTRegistry) Resolve(ctx context.Context, name string) (decisionrt.Backend, error) {
 	switch name {
 	case "rule":
-		return rule.AlwaysAbstain(), nil
+		return backend.New(backend.Config{Name: "rule"})
 	case "sidecar":
 		if reason := sidecarAvailabilityReason(r.options); reason != "" {
 			return nil, decisionRTBackendUnavailable(reason, nil)
@@ -61,13 +60,13 @@ func (r *defaultDecisionRTRegistry) Resolve(ctx context.Context, name string) (d
 		if err != nil {
 			return nil, decisionRTBackendUnavailable("sidecar_initialization_failed", err)
 		}
-		backend, err := decisionrtsidecar.New(generator)
+		backend, err := backend.New(backend.Config{Name: "sidecar", Generator: generator})
 		if err != nil {
 			return nil, decisionRTBackendUnavailable("sidecar_adapter_unavailable", err)
 		}
 		return backend, nil
 	case "systemone":
-		backend, err := systemone.New(systemone.Config{
+		backend, err := backend.New(backend.Config{Name: "systemone",
 			Endpoint: r.options.SystemOneURL, APIKey: r.options.SystemOneAPIKey, Model: r.options.SystemOneModel,
 		})
 		if err != nil {

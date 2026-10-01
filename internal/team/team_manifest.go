@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
@@ -182,6 +183,7 @@ type teamManifestSpecFields struct {
 	Verification       agent.VerificationConfig              `yaml:"verification,omitempty"`
 	Retry              agent.RetryConfig                     `yaml:"retry,omitempty"`
 	Decision           DecisionAuthoringConfig               `yaml:"decision,omitempty"`
+	DecisionPrimitives map[string]catalog.Entry              `yaml:"decision-primitives,omitempty"`
 	Request            RequestAuthoringConfig                `yaml:"request,omitempty"`
 	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry,omitempty"`
 	RoutingPolicy      agent.RoutingPolicyConfig             `yaml:"routing-policy,omitempty"`

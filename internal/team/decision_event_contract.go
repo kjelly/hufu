@@ -23,6 +23,7 @@ var (
 func isDecisionCorrectnessEvent(eventType string) bool {
 	switch EventType(eventType) {
 	case EventDecisionRunOpened, EventDecisionRunAttached,
+		EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled,
 		EventPrimaryDecisionPrepared, EventPrimaryDecisionAdmitted,
 		EventDecisionRoleCallStarted, EventDecisionRoleCallUnconfirmed,
 		EventDecisionRoleCallSettled, EventPrimaryDecisionBlocked,
@@ -36,6 +37,8 @@ func isDecisionCorrectnessEvent(eventType string) bool {
 func validateDecisionCorrectnessEvent(event RunEvent) error {
 	var err error
 	switch EventType(event.Type) {
+	case EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled:
+		err = validateDecisionPrimitiveEvent(event)
 	case EventDecisionRunOpened:
 		err = validateDecisionRunOpenedEvent(event)
 	case EventDecisionRunAttached:

@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/audit"
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
@@ -407,22 +408,24 @@ type backendSemaphoreState struct {
 }
 
 type Coordinator struct {
-	mu                 sync.RWMutex
-	closeOnce          sync.Once
-	closeErr           error
-	session            *TeamSession
-	providerManager    *agent.ProviderManager
-	mcpManager         *mcp.MCPToolManager
-	coreTools          []fantasy.AgentTool
-	agentCache         map[string]fantasy.Agent
-	agentToolNameCache map[string][]string
-	agentCacheMu       sync.RWMutex
-	round              int
-	baseRounds         int // rounds completed before the last round-state reset (resume/continue)
-	verbose            bool
-	think              bool
-	reportStatus       StatusReporter
-	sessionData        *SessionData
+	mu                    sync.RWMutex
+	closeOnce             sync.Once
+	closeErr              error
+	session               *TeamSession
+	providerManager       *agent.ProviderManager
+	mcpManager            *mcp.MCPToolManager
+	coreTools             []fantasy.AgentTool
+	decisionPrimitives    *catalog.Service
+	decisionPrimitiveGate chan struct{}
+	agentCache            map[string]fantasy.Agent
+	agentToolNameCache    map[string][]string
+	agentCacheMu          sync.RWMutex
+	round                 int
+	baseRounds            int // rounds completed before the last round-state reset (resume/continue)
+	verbose               bool
+	think                 bool
+	reportStatus          StatusReporter
+	sessionData           *SessionData
 	// sessionMu guards all reads and writes of sessionData. Parallel task
 	// goroutines (dag_scheduler -> executeTask) concurrently mutate the shared
 	// sessionData through persistContextManifest and saveCheckpoint; without
@@ -1340,6 +1343,7 @@ type RoleModels struct {
 }
 
 type coordinatorParams struct {
+	DecisionPrimitives    *catalog.Service
 	Session               *TeamSession
 	DefaultProviderURL    string
 	DefaultProviderAPIKey string
@@ -1381,6 +1385,14 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	if err := ensureCoordinatorWorkspaceScope(params.Session); err != nil {
 		return nil, err
 	}
+	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDecisionPrimitiveGrants(params.Session); err != nil {
+		return nil, err
+	}
+	params.DecisionPrimitives = primitiveService
 	return newScopedCoordinator(params, services)
 }
 
@@ -1441,6 +1453,8 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		session:                   session,
 		mcpManager:                mcpManager,
 		coreTools:                 coreTools,
+		decisionPrimitives:        params.DecisionPrimitives,
+		decisionPrimitiveGate:     make(chan struct{}, 1),
 		agentCache:                make(map[string]fantasy.Agent),
 		agentToolNameCache:        make(map[string][]string),
 		retrySuppressionsByReason: make(map[string]int),
@@ -1640,6 +1654,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		&terminalReconcileTool{coordinator: c},
 		&reconcileTaskTool{coordinator: c},
 	)
+	c.coreTools = append(c.coreTools, c.decisionPrimitiveTools()...)
 
 	// MemoryStore is a legacy migration adapter only. The model-facing memory
 	// tools are backed by context.sqlite whenever it is available, so enabling
@@ -1782,6 +1797,11 @@ func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSessio
 			Source:     "team provider configuration",
 			ExactValue: provider.ProviderAPIKey,
 		})
+	}
+	for name, primitive := range session.Config.DecisionPrimitives {
+		if primitive.APIKeyEnv != "" {
+			_ = registry.Register(tools.SecretRef{Name: "decision." + name + ".api_key", Source: "decision credential environment", ExactValue: os.Getenv(primitive.APIKeyEnv)})
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
@@ -1185,6 +1186,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	// authoring normalizer has already validated and materialized this config;
 	// an absent block leaves it at the reserved "off" profile.
 	cfg.Decision = decision
+	if _, err := catalog.New(yc.DecisionPrimitives); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
+	cfg.DecisionPrimitives = yc.DecisionPrimitives
 	cfg.RequestContract = requestContract
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the
@@ -1705,6 +1710,9 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		}
 	}
 	session.Skills = skill.ExpandSkillDependenciesForSet(session.Skills, allSkills, excludeSkills)
+	if err := validateDecisionPrimitiveGrants(session); err != nil {
+		return nil, err
+	}
 
 	return session, nil
 }

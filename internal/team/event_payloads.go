@@ -82,8 +82,13 @@ func ValidateEventPayload(event RunEvent) error {
 	if event.SchemaVersion == eventStoreLegacySchemaVersion {
 		return nil
 	}
+	return validateCurrentEventPayload(event)
+}
 
+func validateCurrentEventPayload(event RunEvent) error {
 	switch EventType(event.Type) {
+	case EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled:
+		return validateDecisionPrimitiveEvent(event)
 	case EventWrapUpPhase, EventRunCancellationRequested:
 		return validateRunLifecycleControlPayload(event)
 	case EventUserMessageAdded, EventAssistantMessageAdded:

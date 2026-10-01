@@ -99,7 +99,7 @@ func ReadOnlyMutationDenied(ctx context.Context, toolName string) (fantasy.ToolR
 // IsReadOnlyBashCommand to validate its input against the strict grammar.
 func IsReadOnlyObservationTool(toolName string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "view", "grep", "glob", "ls", "math", "random", "team_info", "context_query", "team_action_list", "team_action_get":
+	case "bash", "view", "grep", "glob", "ls", "math", "random", "team_info", "context_query", "team_action_list", "team_action_get", "decision_primitive":
 		return true
 	default:
 		return false

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -606,6 +607,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 			ExecutionPolicySnapshot:     cloneExecutionPolicySnapshot(orig.sessionData.ExecutionPolicySnapshot),
 			Entries:                     entriesCopy,
 			CoordinatorContextManifests: cloneContextInjectionManifests(orig.sessionData.CoordinatorContextManifests),
+			DecisionPrimitiveResults:    slices.Clone(orig.sessionData.DecisionPrimitiveResults),
 		}
 	}
 
@@ -648,6 +650,8 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		providerManager:                    orig.providerManager,
 		mcpManager:                         orig.mcpManager,
 		coreTools:                          coreToolsClone,
+		decisionPrimitives:                 orig.decisionPrimitives,
+		decisionPrimitiveGate:              orig.decisionPrimitiveGate,
 		agentCache:                         agentCacheClone,
 		agentToolNameCache:                 agentToolNameCacheClone,
 		round:                              orig.round,

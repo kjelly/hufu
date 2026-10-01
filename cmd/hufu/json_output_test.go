@@ -35,6 +35,58 @@ func (j jsonOutputEventJournal) VerifyHashChain(ctx context.Context) error {
 	return j.store.VerifyHashChain()
 }
 
+func TestDecisionPrimitiveJSONAndReportProjection(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "helper-json"}}
+	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	store, err := team.NewEventStore(workspace, "run-helper", "session-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	hash := strings.Repeat("a", 64)
+	payload, err := json.Marshal(map[string]any{"version": 1, "name": "classify", "scope": hash, "catalog_hash": hash, "request_digest": "sha256:" + hash, "call_id": "call-helper", "error_code": "decision_backend_failure"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendPersisted(team.RunEvent{Type: string(team.EventDecisionPrimitiveSettled), BranchID: "main", RunID: "run-helper", TaskID: "1", Actor: "helper", Attempt: 1, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	c.SetEventJournal(jsonOutputEventJournal{store: store})
+	tc := &teamContext{teamName: "helper-json", session: session, coordinator: c}
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"helper-json": tc}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Teams) != 1 || len(out.Teams[0].DecisionPrimitives) != 1 || out.Teams[0].DecisionPrimitives[0].ErrorCode != "decision_backend_failure" {
+		t.Fatalf("JSON lost helper outcome: %#v", out.Teams)
+	}
+	data := gatherReportData(tc, "helper-json")
+	report := buildReportMD(data, "helper-json", "done")
+	for _, want := range []string{"Helper Decisions", "classify", "helper", "error"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report omitted %q: %s", want, report)
+		}
+	}
+}
+
 func TestMultiTeamJSONOutputAggregation(t *testing.T) {
 	// Test 2 teams in both lexical orders:
 	// Team A (partial due to acceptance failure) + Team B (completed)

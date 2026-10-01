@@ -138,6 +138,7 @@ type reportData struct {
 	DeprecatedMemory      []team.DeprecatedMemoryToolUsage
 	ContextRouting        team.ContextManifestSummary
 	Decisions             []team.DecisionIndexEntry
+	DecisionPrimitives    []team.DecisionPrimitiveRecord
 	RuntimeWorksets       *team.RuntimeWorksetProjection
 	RuntimeWorksetError   string
 	CanonicalRunError     string
@@ -274,6 +275,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
 		d.ContextRouting = tc.coordinator.ContextManifestReport()
 		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		d.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
 		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)
 	}
 	if tc.session != nil {
@@ -795,6 +797,13 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		b.WriteString("- **Scope assertion:** `core_bound`\n")
 		fmt.Fprintf(&b, "- **Satisfied:** %t\n", scope.Satisfied)
 		fmt.Fprintf(&b, "- **Requested input hash:** `%s`\n\n", reportSafeMetadata(scope.RequestedInputHash, 160))
+	}
+	if len(data.DecisionPrimitives) > 0 {
+		b.WriteString("## Helper Decisions\n\n| Decision | Agent | Task | Status | Backend | Duration (ms) |\n| --- | --- | --- | --- | --- | --- |\n")
+		for _, record := range data.DecisionPrimitives {
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d |\n", reportSafeMetadata(record.Name, 120), reportSafeMetadata(record.Agent, 120), reportSafeMetadata(record.TaskID, 120), reportSafeMetadata(record.Status, 80), reportSafeMetadata(record.Backend, 80), record.DurationMS)
+		}
+		b.WriteString("\n")
 	}
 	if len(data.Decisions) > 0 {
 		b.WriteString("## Decision State\n\n")

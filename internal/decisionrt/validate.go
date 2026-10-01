@@ -210,6 +210,24 @@ func canonicalFloat(value float64) (string, string, error) {
 	return contextTypeNumber, strconv.FormatFloat(value, 'g', -1, 64), nil
 }
 
+// ValidateResult validates a persisted result against its original contract.
+// It performs no inference or side effects.
+func ValidateResult(spec Spec, result Result) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	if !backendNamePattern.MatchString(result.Backend) {
+		return invalidBackendOutput("invalid result backend")
+	}
+	if result.Status == StatusDecided && result.ReasonCode != "" {
+		return invalidBackendOutput("decided result has a reason code")
+	}
+	if result.Status == StatusAbstained && result.ReasonCode != lowConfidenceReason && result.ReasonCode != backendAbstainedReason {
+		return invalidBackendOutput("invalid abstention reason")
+	}
+	return validateBackendResult(spec, BackendResult{Status: result.Status, Value: result.Value, Candidates: result.Candidates, Confidence: result.Confidence, ConfidenceSemantics: result.ConfidenceSemantics, Model: result.Model})
+}
+
 func validateBackendResult(spec Spec, result BackendResult) error {
 	if err := validateModel(result.Model); err != nil {
 		return err

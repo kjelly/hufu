@@ -1177,8 +1177,9 @@ var coordinatorCoreToolNames = map[string]bool{
 	"modify_plan":    true,
 	"reject_plan":    true,
 	// Added only when the team declares an action catalog.
-	teamActionListToolName: true,
-	teamActionGetToolName:  true,
+	teamActionListToolName:    true,
+	teamActionGetToolName:     true,
+	decisionPrimitiveToolName: true,
 }
 
 // coordinatorAllowedToolNames is retained for policy tests and static
@@ -1207,6 +1208,9 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 		orchTools = append(orchTools, c.coordinatorTeamActionTools()...)
 		for _, t := range c.coreTools {
 			name := t.Info().Name
+			if name == decisionPrimitiveToolName && !c.coordinatorDecisionPrimitiveGranted() {
+				continue
+			}
 			if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
 				orchTools = append(orchTools, t)
 				continue
@@ -1228,6 +1232,9 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 	orchTools = append(orchTools, c.coordinatorTeamActionTools()...)
 	for _, t := range c.coreTools {
 		name := t.Info().Name
+		if name == decisionPrimitiveToolName && !c.coordinatorDecisionPrimitiveGranted() {
+			continue
+		}
 		if (name == "stm_write" || name == "ltm_update") && c.legacyMemoryToolGranted(orchDef, name) {
 			orchTools = append(orchTools, t)
 			continue

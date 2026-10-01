@@ -9,8 +9,10 @@
 > Baseline repository: `kjelly/hufu`
 > Baseline branch: `main`
 > Baseline commit: `e02a7ef`
-> Scope: small, backend-agnostic typed decision primitive covering Phase 0–4
-> below only (core, sidecar adapter, standalone CLI, System One adapter).
+> Scope: small, backend-agnostic typed decision primitive covering Phase 0–5
+> (core, sidecar adapter, standalone CLI, System One adapter, native team tool).
+> Phase 5 (§58) supersedes prior Phase 0–4 restrictions on team callers and
+> team-owned persistence only; the core layering and DecisionEngine boundary remain.
 > Non-goal: reimplement any specific third-party logits-based decision
 > technique, or replace hufu's existing DecisionEngine
 > Relationship: distinct from and does not modify
@@ -2874,3 +2876,53 @@ supports machine-readable input/output,
 distinguishes decision abstention from technical failure,
 and never converts a model decision into an implicit side effect.
 ```
+
+---
+
+## 58. Phase 5 — Native agent-team integration
+
+依使用者要求，DecisionPrimitive 不再只有 standalone CLI caller。
+此節明確取代 §35–39 中禁止 coordinator integration、team config 與持久化的
+Phase 0–4 scope 限制；CLI 仍維持 §40–57 的獨立設定與行為。
+既有 DecisionEngine、DecisionRecord、evidence/judge/finalization 語意不變。
+
+分層：
+
+```text
+team.yaml trusted catalog + explicit agent grants
+                 ↓
+internal/team native decision_primitive tool + central policy gate
+                 ↓
+internal/decisionrt/catalog immutable contract service
+                 ↓
+shared backend factory → existing DecisionPrimitive core/backends
+```
+
+core 仍不得依賴 team、agent、session 或 event store。catalog 與 backend factory
+屬 consumer adapter layer；durability、branch scope、task identity、projection
+與 admission 屬 `internal/team`。不得透過 bash 或額外 CLI launcher 呼叫本功能。
+不得為特定 team 名稱加入分支、domain vocabulary 或文字 semantic parser。
+
+contract 與 policy：
+
+1. team 維護者定義 spec、必填 scalar context、backend/model、timeout、confidence
+   與 per-entry call limit；agent 僅能提交 catalog name/context。
+2. worker 需 catalog agent grant **以及** frontmatter 明訂工具；`all` 不授權。
+   coordinator 需 catalog 的 `coordinator` grant。中央 phase/allowlist/denylist
+   仍生效；no-net/force-mcp 禁止工具，result-only repair 不取得它。
+3. tool 提供 `decided` / `abstained` 與原有 receipt；technical error 分離。
+   不自動 dispatch、approve、retry、finalize 或執行 action。
+4. team 版支援 systemone/rule；rule 永遠 abstain，fallback 必須明訂。
+   confidence 維持 raw semantics，不承諾第三方 Jev API compatibility 或 calibration。
+5. 開始與結果各有 durable event；settlement 成功之前不發布結果。receipt replay
+   驗證 frozen spec/policy、request digest 與 backend identity。
+6. 相同 branch/actor/durable task/catalog/input 已提交結果跨 retry/resume 重用。
+   coordinator scope 僅同 run；無 settlement 的 crash 允許新 attempt，仍計入限額。
+   並行呼叫共用限額且序列化；不宣稱跨 provider/journal transaction exactly-once。
+7. catalog 與 credential revision hash 綁入 execution policy snapshot；設定漂移
+   fail closed。原始 context/credential 不寫入 helper event 或 metadata projection。
+8. started/settled event、session reducer、checkpoint、JSON 與 report 一致更新。
+   helper calls 遵守 run budget/cancellation，加上專用 max-calls/timeout；protocol
+   沒有可靠 token usage 時不偽造 accounting。
+
+完整設定與限制見 [Agent-team DecisionPrimitives](../reference/decision-primitives.md)。

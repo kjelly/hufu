@@ -13,6 +13,7 @@ import (
 var offlineRuntimeToolNames = []string{
 	"context_query", "context_get", "load_skill",
 	"stm_write", "ltm_update", "memory_save",
+	decisionPrimitiveToolName,
 }
 
 var offlineProtocolToolNames = []string{"submit_plan", "submit_result"}

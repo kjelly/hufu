@@ -50,6 +50,10 @@ type GenerationParams struct {
 
 ## TeamConfig
 
+team.yaml 可選用 `decision-primitives:` catalog，並在 worker `tools` 明訂
+`decision_primitive`。設定、授權及恢復規則見
+[Agent-team DecisionPrimitives](decision-primitives.md)。這不改變既有 `decision:` contract。
+
 ```go
 type TeamConfig struct {
     Name          string

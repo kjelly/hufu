@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -48,6 +49,7 @@ type jsonRunTeam struct {
 	DeprecatedMemory     []team.DeprecatedMemoryToolUsage  `json:"deprecated_memory_tools,omitempty"`
 	ContextRouting       team.ContextManifestSummary       `json:"context_routing"`
 	Decisions            []team.DecisionIndexEntry         `json:"decisions,omitempty"`
+	DecisionPrimitives   []team.DecisionPrimitiveRecord    `json:"decision_primitives,omitempty"`
 	RunInputs            *jsonRunInputs                    `json:"run_inputs,omitempty"`
 	InputBoundAssertions []team.InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 }
@@ -133,6 +135,7 @@ func printResultJSONForInvocation(result string, loadedTeams map[string]*teamCon
 			jt.InputBoundAssertions = slices.Clone(lastRes.InputBoundAssertions)
 		}
 		jt.Decisions, _ = tc.coordinator.DecisionIndexEntries()
+		jt.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
 		jt.Decisions = team.RedactedDecisionIndexEntries(jt.Decisions)
 		var items []*team.TodoItem
 		if tracker := tc.coordinator.TaskTracker(); tracker != nil && tracker.TodoList() != nil {
