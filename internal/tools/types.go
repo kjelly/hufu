@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -163,6 +164,11 @@ type AskUserResponse struct {
 	Answers []string `json:"answers"`
 	Free    string   `json:"free_text,omitempty"`
 }
+
+// ErrAskUserAbstained is returned by an AskUserChoiceSelector that declines
+// to pick an option. ask_user then notifies a human and tells the agent to
+// proceed on its own judgement instead of guessing the first option.
+var ErrAskUserAbstained = errors.New("ask_user selector abstained")
 
 // AskUserChoiceSelector chooses an unattended answer for ask_user when the
 // prompt includes options. It should return a normalized response.

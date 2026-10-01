@@ -14,7 +14,6 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -261,36 +260,6 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
 	return fantasy.NewTextResponse(output), nil
-}
-
-func (c *Coordinator) selectAgentForGoal(ctx context.Context, goal string) (string, error) {
-	s := c.AgentPool().Sidecar()
-	workers := c.uniqueWorkerDefs()
-	if len(workers) == 0 {
-		return "", fmt.Errorf("no workers available")
-	}
-	if len(workers) == 1 {
-		return workers[0].Name, nil
-	}
-
-	if s == nil {
-		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "fail_closed")
-		return "", fmt.Errorf("cannot select among multiple workers without a structured agent resolver; specify agent explicitly")
-	}
-	candidates := make([]sidecar.TeamSummary, 0, len(workers))
-	for _, w := range workers {
-		candidates = append(candidates, sidecar.TeamSummary{Name: w.Name, Description: w.Description})
-	}
-	selection, err := s.SelectAgent(sidecar.WithPurpose(ctx, "agent_matcher"), goal, candidates)
-	if err != nil {
-		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "fail_closed")
-		return "", fmt.Errorf("structured agent selection failed: %w", err)
-	}
-	if selection.Agent == "" {
-		_ = c.recordAuxiliaryFallback(ctx, "agent_matcher", "abstained")
-		return "", fmt.Errorf("structured agent selection was ambiguous; specify agent explicitly")
-	}
-	return selection.Agent, nil
 }
 
 func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (string, error) {

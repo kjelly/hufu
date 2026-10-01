@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -281,6 +282,10 @@ func unattendedAskUserResponse(ctx context.Context, args askUserArgs, questionTy
 		}
 		if selector, ok := ctx.Value(AskUserChoiceSelectorKey).(AskUserChoiceSelector); ok && selector != nil {
 			resp, err := selector(ctx, args.Question, questionType, toTUIOptions(args.Options), args.AllowAny)
+			if errors.Is(err, ErrAskUserAbstained) {
+				NotifyNeedsHuman(args.Question)
+				return fantasy.NewTextErrorResponse("ask_user unavailable: running unattended and no option could be chosen with enough confidence. Proceed using your best judgement and reasonable defaults; do not ask again."), nil
+			}
 			if err == nil {
 				if normalized, ok := normalizeAskUserResponse(resp, args, questionType); ok {
 					return marshalAskUserResponse(normalized)

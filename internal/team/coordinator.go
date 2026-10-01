@@ -1217,14 +1217,6 @@ func (c *Coordinator) annotateRunCompletionSemantics(res *RunResult) {
 // SetRollback sets an optional shell command run on acceptance failure in unattended mode.
 func (c *Coordinator) SetRollback(cmd string) { c.rollbackCmd = cmd }
 
-func (c *Coordinator) chooseAskUserResponse(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
-	s := c.AgentPool().Sidecar()
-	if s == nil {
-		return tools.AskUserResponse{}, fmt.Errorf("no sidecar configured")
-	}
-	return s.ChooseAskUserResponse(ctx, question, qtype, opts, allowAny)
-}
-
 // tokenBudgetRoot returns the coordinator that owns the run-wide token ledger.
 // Extra-model coordinators share the parent run's budget, while ordinary test
 // and direct coordinators remain self-owned.
@@ -1675,41 +1667,8 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		)
 	}
 
-	guardReviewer := func(ctx context.Context, toolName, args string, rules []string) (bool, string, error) {
-		s := c.AgentPool().GuardSidecar()
-		prof := c.ExecutionProfile()
-		if s == nil {
-			if err := c.recordAuxiliaryFallback(ctx, "guard_reviewer", "no_model_fallback"); err != nil {
-				return false, "", err
-			}
-			if prof.PolicyFailureMode == PolicyFailClosed || prof.StrictPolicy {
-				return false, "guard reviewer unavailable under PolicyFailClosed policy", fmt.Errorf("guard reviewer unavailable")
-			}
-			return true, "", nil
-		}
-		agentName, _ := ctx.Value(tools.AgentNameKey).(string)
-		result, err := s.ReviewToolCall(sidecar.WithPurpose(ctx, "guard_reviewer"), agentName, toolName, args, rules)
-		if err != nil {
-			if prof.PolicyFailureMode == PolicyFailOpen {
-				return true, "", nil
-			}
-			return false, "", err
-		}
-		return result.Approved, result.Reason, nil
-	}
-	tools.SetGuardReviewer(c.coreTools, guardReviewer)
-
-	pathReviewer := func(ctx context.Context, command string, path string) (bool, error) {
-		s := c.AgentPool().Sidecar()
-		if s == nil {
-			if err := c.recordAuxiliaryFallback(ctx, "path_reviewer", "no_model_fallback"); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-		return s.ReviewPathAccess(sidecar.WithPurpose(ctx, "path_reviewer"), command, path)
-	}
-	tools.SetPathReviewer(c.coreTools, pathReviewer)
+	tools.SetGuardReviewer(c.coreTools, c.reviewGuardCall)
+	tools.SetPathReviewer(c.coreTools, c.reviewPathAccess)
 
 	canonicalCompaction := initializeCoordinatorCompaction(c, session)
 	if !planMode && !canonicalCompaction {

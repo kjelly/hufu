@@ -79,7 +79,9 @@ func TestModelCallChokepointInventoryIsComplete(t *testing.T) {
 	// generation or construct a sidecar outside an existing stream. A new one
 	// must be consciously registered with an owner, purpose, and boundary
 	// classification before it can land.
-	for _, target := range []string{"cmd/hufu", "internal/agent", "internal/promotion", "internal/sidecar", "internal/team"} {
+	// systemone.New is the only constructor of the System One decision-model
+	// transport; the team runtime must reach it through internal/decisionrt.
+	for _, target := range []string{"cmd/hufu", "internal/agent", "internal/decisionrt", "internal/promotion", "internal/sidecar", "internal/team"} {
 		err := filepath.WalkDir(filepath.Join(root, target), func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -95,7 +97,7 @@ func TestModelCallChokepointInventoryIsComplete(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			for _, marker := range []string{"sidecar.NewSidecar(", ".Generate(ctx,", ".Stream(ctx,", `exec.CommandContext(ctx2, "ollama", "run"`} {
+			for _, marker := range []string{"sidecar.NewSidecar(", ".Generate(ctx,", ".Stream(ctx,", `exec.CommandContext(ctx2, "ollama", "run"`, "systemone.New("} {
 				if count := strings.Count(string(data), marker); count != registeredMarkerCount(entries, rel, marker) {
 					return &unregisteredModelChokepointError{path: rel, marker: marker}
 				}

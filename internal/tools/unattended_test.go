@@ -172,3 +172,26 @@ func TestExecuteAskUser_InteractiveAbortShortCircuits(t *testing.T) {
 		t.Fatalf("expected shutdown cancellation message, got %q", resp.Content)
 	}
 }
+
+func TestUnattendedAskUserResponse_SelectorAbstentionAsksForHuman(t *testing.T) {
+	notified := ""
+	SetOnNeedsHuman(func(question string) { notified = question })
+	defer SetOnNeedsHuman(nil)
+	ctx := context.WithValue(context.Background(), AskUserChoiceSelectorKey, AskUserChoiceSelector(func(context.Context, string, string, []AskUserTUIOption, bool) (AskUserResponse, error) {
+		return AskUserResponse{}, ErrAskUserAbstained
+	}))
+	args := askUserArgs{
+		Question: "deploy now?",
+		Options:  []askOption{{Label: "Deploy", Value: "deploy"}, {Label: "Wait", Value: "wait"}},
+	}
+	resp, err := unattendedAskUserResponse(ctx, args, "single_choice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsError || strings.Contains(resp.Content, "deploy\"") || !strings.Contains(resp.Content, "best judgement") {
+		t.Fatalf("abstention must not guess an option, got %#v", resp)
+	}
+	if notified != "deploy now?" {
+		t.Fatalf("needs-human question = %q", notified)
+	}
+}
