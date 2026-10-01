@@ -196,3 +196,27 @@ func TestDeterministicFinishTextNamesRejections(t *testing.T) {
 		})
 	}
 }
+
+func TestPreflightFailureEvidenceKeepsBoundedRedactedOutput(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		want    string
+		notWant string
+	}{
+		{name: "test log", output: `{"targeted_go_tests":{"passed":false,"diagnostic":"--- FAIL: TestX"}}`, want: "--- FAIL: TestX"},
+		{name: "secret", output: "api_token=abcdef123456 --- FAIL", want: "[REDACTED]", notWant: "abcdef123456"},
+		{name: "oversized", output: strings.Repeat("x", maxPreflightEvidenceRunes+100), want: "action output: "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := preflightFailureEvidence(tc.output)
+			if !strings.Contains(got, tc.want) || (tc.notWant != "" && strings.Contains(got, tc.notWant)) {
+				t.Fatalf("evidence = %.200q", got)
+			}
+			if runes := len([]rune(got)); runes > maxPreflightEvidenceRunes+len("action output: ")+3 {
+				t.Fatalf("evidence has %d runes, want at most %d", runes, maxPreflightEvidenceRunes)
+			}
+		})
+	}
+}

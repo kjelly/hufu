@@ -2565,6 +2565,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if preflightErr := c.preflightActionAcceptance(todoID, runtimeOutputs); preflightErr != nil {
 		err := fmt.Errorf("structured action verification failed: %w", preflightErr)
 		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+		runtimeErr.Evidence = append(runtimeErr.Evidence, preflightFailureEvidence(output))
 		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)

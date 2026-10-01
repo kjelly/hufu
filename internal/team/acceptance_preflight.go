@@ -3,7 +3,13 @@ package team
 import (
 	"fmt"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
+
+// maxPreflightEvidenceRunes bounds the action output kept with a preflight
+// failure. A failed Go test run reports about 26 KB of output.
+const maxPreflightEvidenceRunes = 32000
 
 // preflightActionAcceptance checks the blocking acceptance assertions that read
 // a runtime action's outputs before the action is marked done.
@@ -90,4 +96,11 @@ func taskReferenceNamesItem(reference string, item *TodoItem) bool {
 		}
 	}
 	return false
+}
+
+// preflightFailureEvidence keeps the action's output with its runtime error.
+// A preflight failure discards the attempt's result, and with it the output
+// that explains the failure, such as the go test log behind passed=false.
+func preflightFailureEvidence(output string) string {
+	return "action output: " + utils.TruncateRunes(utils.RedactSecrets(output), maxPreflightEvidenceRunes)
 }

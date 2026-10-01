@@ -615,24 +615,24 @@ type Coordinator struct {
 	// failed, so the team default applied, to the redacted reason. Guarded
 	// by mu; reset for each invocation's input resolution.
 	runInputResolutionFailures map[string]string
-	sidecarInst                      *sidecar.Sidecar
-	sidecarInitMu                    sync.Mutex
-	sidecarInit                      bool
-	guardModel                       string
-	guardInst                        *sidecar.Sidecar
-	guardInitMu                      sync.Mutex
-	guardInit                        bool
-	judgeModel                       string
-	judgeInst                        *sidecar.Sidecar
-	judgeInitMu                      sync.Mutex
-	judgeInit                        bool
-	planReviewerModel                string
-	cachedWorkerContext              string
-	workerCtxOnce                    sync.Once
-	autoLoadedSkills                 []*skill.SkillDef
-	autoLoadedSkillsMu               sync.RWMutex
-	forcedSkillNames                 map[string]bool // set of skill names specified via --skill
-	maxConcurrent                    int
+	sidecarInst                *sidecar.Sidecar
+	sidecarInitMu              sync.Mutex
+	sidecarInit                bool
+	guardModel                 string
+	guardInst                  *sidecar.Sidecar
+	guardInitMu                sync.Mutex
+	guardInit                  bool
+	judgeModel                 string
+	judgeInst                  *sidecar.Sidecar
+	judgeInitMu                sync.Mutex
+	judgeInit                  bool
+	planReviewerModel          string
+	cachedWorkerContext        string
+	workerCtxOnce              sync.Once
+	autoLoadedSkills           []*skill.SkillDef
+	autoLoadedSkillsMu         sync.RWMutex
+	forcedSkillNames           map[string]bool // set of skill names specified via --skill
+	maxConcurrent              int
 	// executionPolicy is constructed once after all execution backends have
 	// been registered. Its public snapshot is persisted at run admission; all
 	// scheduler and backend semaphores consume this immutable state instead of
