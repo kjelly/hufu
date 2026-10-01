@@ -1,17 +1,17 @@
 # DecisionPrimitive control decisions implementation plan
 
-> Status: draft — implementation in progress on branch feat/decisionrt-team-points
-> Authority: reference (implementation plan; current behavior is defined by [DecisionPrimitive](decision-primitive.md) once §59 lands)
-> Verified-Commit: 6cc76da
+> Status: implemented — archived 2026-10-01; implemented on branch feat/decisionrt-team-points (see Implementation record)
+> Authority: reference (implementation record; current behavior is defined by [DecisionPrimitive](../../architecture/decision-primitive.md) §59 and [Runtime control decisions](../../reference/control-decisions.md))
+> Verified-Commit: 2026-10-01
 > Supersedes: —
-> Superseded-By: —
+> Superseded-By: [DecisionPrimitive](../../architecture/decision-primitive.md) §59
 
 ## 1. Context
 
 DecisionPrimitive has three backends (`rule`, `sidecar`, `systemone`). It has two
 callers today:
 
-- the standalone `hufu decisionrt` CLI (§40–§57 of [DecisionPrimitive](decision-primitive.md));
+- the standalone `hufu decisionrt` CLI (§40–§57 of [DecisionPrimitive](../../architecture/decision-primitive.md));
 - the agent-facing `decision_primitive` tool from §58 (commit `6cc76da`). Team
   maintainers declare a catalog; an agent calls it and decides itself what to do
   with the answer.
@@ -66,7 +66,7 @@ Non-goals:
 - **D2 — systemone only.** The backend is always `systemone`, so config has no
   `backend` key.
 - **D3 — off | shadow | active.** This follows the precedent in
-  [memory learning](memory-learning.md) §6. There is no `observe` mode, because
+  [memory learning](../../architecture/memory-learning.md) §6. There is no `observe` mode, because
   every non-off mode has to call the model.
 - **D4 — outages degrade to the existing path.** In active mode, a technical
   failure (backend failure, timeout, invalid output, unavailable backend) runs
@@ -173,7 +173,7 @@ internal/team   modes, shadow orchestration, durable events, snapshot, report
 ## 7. Work packages (one commit each)
 
 1. **WP-1 docs.** This plan, and the amendment adding §59 to
-   [DecisionPrimitive](decision-primitive.md).
+   [DecisionPrimitive](../../architecture/decision-primitive.md).
 2. **WP-2 control package.**
    - Contents: config types, validation, merge, point specs and request
      builders, typed outcomes, and hash.
@@ -218,3 +218,96 @@ internal/team   modes, shadow orchestration, durable events, snapshot, report
   for both a disagreeing and an agreeing model.
 - Active-mode outages produce the existing outcome.
 - Active-mode abstentions produce the safe outcome in §5.
+
+## Implementation record
+
+Implemented on feat/decisionrt-team-points, one commit per work package, in a
+separate git worktree because another agent session was working in the main
+checkout. Two pre-existing bugs found by the 2026-10-01 evaluation were fixed
+first, at the user's request. The plan was a tracked draft in
+docs/architecture/ during implementation and moved here once every work package
+had landed.
+
+| Commit | Work package | Content |
+| --- | --- | --- |
+| `c7b0194` | bug fix | A failed path review no longer drops the path from the bash consent check. Before this, a sidecar error made the path skip consent, even in unattended runs that auto-deny. |
+| `9abf5b0` | bug fix | The top-level `provider-api-key` in hufu.yaml is merged (it was declared and read but never copied from either file). |
+| `05c87ca` | WP-1 | This plan and DecisionPrimitive §59. |
+| `079e405` | WP-2 | `internal/decisionrt/control`: config, merge, validation, the four point contracts, `Decide`, and the active-only hash. |
+| `4726eb4` | WP-3 | hufu.yaml and team.yaml blocks, session and coordinator wiring, secret registration, and `ControlDecisionHash`. |
+| `15fabdf` | WP-4 | Shadow and active orchestration for the four points, the `control_decision_observed` event, `ErrAskUserAbstained`, and the model-call audit extension. |
+| `fdc1ff3` | WP-5 | `SummarizeControlDecisions`, the report section, `--output json`, and `hufu inspect control-decisions`. |
+| `53b371a` | WP-6 | The reference page and links from §59, both READMEs, the agent-format reference, the operator command reference, and the docs index. |
+| `3f5a1e3` | WP-6 fix | The inspect example registered in `canonicalExamples` and the operator command reference regenerated. |
+
+Baseline at `6cc76da`: `go test ./...` passed (EXIT 0). `bin/check-docs`
+already failed because docs/reference/performance-gate.md has no lifecycle
+header. This change leaves that file alone; with it skipped, every other header
+and link passes.
+
+After implementation:
+
+- `go vet ./...` passes and `golangci-lint run ./...` reports 0 issues.
+- The first full `go test ./...` passed 49 of 50 packages. cmd/hufu failed
+  `TestGeneratedOperatorCommandReferenceIsCurrent`, because 53b371a hand-edited
+  the generated operator command reference. `3f5a1e3` registers the example in
+  `canonicalExamples` and regenerates the page, and cmd/hufu passes again.
+- `bin/check-docs` passes with performance-gate.md skipped.
+
+### Live smoke test
+
+Two `hufu` runs drove a one-worker scratch team (bash and one natural-language
+guard rule) against Ollama 0.35.0 with nimble on a LAN GPU host. The existing
+path used the configured sidecar model. The smoke test is not an acceptance
+dependency, and fifteen observations are not accuracy evidence.
+
+| Run | Point | Calls | Result |
+| --- | --- | --- | --- |
+| shadow | guard-reviewer | 5 | 5/5 agreed with the sidecar; mean raw confidence 0.94; one answer (0.863) was below the 0.90 threshold; nimble 1.0–1.2 s, sidecar 1.1–1.8 s |
+| shadow | path-reviewer | 2 | 2/2 agreed; 0.991; nimble 1.1 s, sidecar 1.1–6.0 s |
+| active | guard-reviewer | 5 | `rm` of the scratch file denied twice (false, 0.999–1.0) with "the decision model judged that this call violates a guard rule"; reads approved (0.94–0.95); the file survived |
+| active | path-reviewer | 3 | every path kept (true, 0.98–0.994), so unattended consent denied them as before; `echo <path> \| sed …` was also judged a file access (0.98), the conservative direction |
+
+`hufu report` and `hufu inspect control-decisions --workspace <dir>` showed the
+same aggregates. Both runs exited 7 (`acceptance_not_configured`), as expected
+for a team without acceptance.
+
+### Deviations from the plan
+
+- **Per-file and merged validation are split.** `Config.Validate` checks one
+  block (modes, points, thresholds, timeout range, variable name) when
+  hufu.yaml or team.yaml is loaded. `control.New` validates the merged block
+  completely (model, endpoint, credential) when the coordinator is built,
+  because the model can come from another file.
+- **The threshold is applied by the control layer.** It is not
+  `AcceptancePolicy.MinConfidence`, because a low-confidence runtime abstention
+  drops the confidence, and shadow records need the raw value of an answer that
+  active mode would reject.
+- **The agent matcher sorts workers by name** on the non-off path.
+  `uniqueWorkerDefs` follows map order, so without sorting the request and its
+  option indexes would not be reproducible. The off path is unchanged.
+- **Recording is best effort.** A journal failure only warns. Unlike route A's
+  settlement, an observation never decides whether an answer is published.
+- **`hufu inspect control-decisions` was added** next to the report and JSON
+  projections. It aggregates every run in the branch lineage, which is the
+  evidence needed before switching a point to active.
+- **The model-call audit now scans internal/decisionrt.** It registers every
+  `systemone.New(` call site and the systemone transport, so the team runtime
+  cannot construct the transport directly.
+- **`renderInspectText` lost its task case to a helper.** The case moved to
+  `renderInspectTaskText` to stay under the gocyclo limit, and
+  `InspectQuery.Validate` gained a helper for the same reason. Both are pure
+  moves.
+
+### Not done
+
+- SimilarTask, the skill matcher, the run-input resolver, and the text
+  heuristics in failure classification remain non-goals (see Section 2).
+- Systemone calls have no concurrency limit, provider admission, or cost
+  accounting; only the attempt timeout bounds them. Queueing on a single GPU
+  shows up as latency or `timeout` errors in the summary.
+- Every shadow or active call appends one event; the path reviewer can run
+  several times per bash command.
+- Aggregation is per workspace lineage; there is no cross-workspace view.
+- No point has accuracy evidence beyond the smoke test above, and confidence
+  remains raw.

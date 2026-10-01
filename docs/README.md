@@ -40,9 +40,6 @@ to re-create an abstraction that already exists in the runtime.
   decisions, backend contracts, strict sidecar mapping, the System One
   decision-model adapter, the standalone `hufu decisionrt` CLI, native
   agent-team tools, and runtime control decisions.
-- [DecisionPrimitive control decisions implementation plan](architecture/decision-primitive-control-decisions.md)
-  — draft plan for running the agent matcher, unattended `ask_user`, path
-  reviewer, and guard reviewer on `systemone` in shadow or active mode.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
@@ -131,7 +128,8 @@ to re-create an abstraction that already exists in the runtime.
   the [managed workspace registry implementation record](archive/implementation-plans/hufu-workspace-registry-improvement-plan.md),
   the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md),
   the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md),
-  and the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md).
+  the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md),
+  and the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

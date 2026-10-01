@@ -2975,4 +2975,4 @@ shadow 協調、事件、snapshot 與 report 屬 `internal/team`。
 
 設定、觀測與 `hufu inspect control-decisions` 見
 [Runtime control decisions](../reference/control-decisions.md)；實作計畫見
-[DecisionPrimitive control decisions implementation plan](decision-primitive-control-decisions.md)。
+[DecisionPrimitive control decisions implementation record](../archive/implementation-plans/decision-primitive-control-decisions.md)。
