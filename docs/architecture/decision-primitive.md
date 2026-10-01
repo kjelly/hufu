@@ -2973,4 +2973,6 @@ spec ID 為 `hufu.<point>`、version `v1`；team 設定不能改變問題）：
 `internal/team`、`internal/agent`、`internal/sidecar` 或 `cmd/hufu`；mode、
 shadow 協調、事件、snapshot 與 report 屬 `internal/team`。
 
-實作計畫見 [DecisionPrimitive control decisions implementation plan](decision-primitive-control-decisions.md)。
+設定、觀測與 `hufu inspect control-decisions` 見
+[Runtime control decisions](../reference/control-decisions.md)；實作計畫見
+[DecisionPrimitive control decisions implementation plan](decision-primitive-control-decisions.md)。

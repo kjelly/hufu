@@ -51,6 +51,7 @@ hufu run --team dev-team --profile coding-balanced -- "implement feature X"
 
 ```sh
 hufu inspect overview --workspace ./workspace/dev-team
+hufu inspect control-decisions --workspace ./workspace/dev-team
 ```
 
 ```sh

@@ -82,6 +82,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted
   catalogs, explicit grants, bounded tool calls, and durable replay.
+- [Runtime control decisions](reference/control-decisions.md) — off, shadow, and
+  active `systemone` modes for the agent matcher, unattended `ask_user`, path
+  reviewer, and guard reviewer, and how to read their evidence.
 - [Read-only runtime inspection](guides/inspect.md)
 - [Managed workspace migration](guides/workspace-migration.md)
 - [Operator journeys](guides/operator-journeys.md)

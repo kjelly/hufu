@@ -54,6 +54,10 @@ team.yaml 可選用 `decision-primitives:` catalog，並在 worker `tools` 明�
 `decision_primitive`。設定、授權及恢復規則見
 [Agent-team DecisionPrimitives](decision-primitives.md)。這不改變既有 `decision:` contract。
 
+team.yaml 也可選用 `control-decisions:`，讓 runtime 的 agent matcher、unattended
+`ask_user`、path reviewer 與 guard reviewer 以 shadow 或 active 模式詢問 `systemone`
+decision model；agent 不會取得新工具。見 [Runtime control decisions](control-decisions.md)。
+
 ```go
 type TeamConfig struct {
     Name          string

@@ -114,6 +114,7 @@ hufu chat --default    # interactive REPL with the built-in team
 hufu workspace path                            # print the active managed control root
 hufu inspect run run-123                       # inspect persisted run facts
 hufu inspect cost run-123                      # inspect generation-cost projection
+hufu inspect control-decisions                 # shadow/active control decision statistics
 ```
 
 ### 1. Start Ollama
@@ -385,6 +386,30 @@ Use `hufu decisionrt validate`, `run`, or `backends` for JSON validation,
 generic requests, and backend diagnostics. Stable exit codes distinguish the
 outcomes: `0` decided, `2` invalid request/usage, `3` abstained, `4` technical
 backend/runtime failure, and `5` configuration/backend unavailable.
+
+### Runtime control decisions
+
+Four of hufu's own runtime decisions can also ask a `systemone` decision
+model: the agent matcher, the unattended `ask_user` selector, the bash path
+reviewer, and the guard reviewer. Add a `control-decisions:` block to
+hufu.yaml or team.yaml:
+
+```yaml
+control-decisions:
+  endpoint: http://gpu-host:11434/v1/systemone
+  model: nimble
+  mode: shadow          # off (default) | shadow | active
+  points:
+    path-reviewer: {mode: active, min-confidence: 0.95}
+```
+
+`shadow` runs the model next to the existing sidecar path, always keeps the
+existing outcome, and records whether the two agreed. `active` applies a
+confident answer and takes a safe outcome on a low-confidence one, such as
+denying a guarded call. On any model failure it falls back to the existing
+path. Check the evidence with `hufu inspect control-decisions` or the report's
+Control Decisions section before switching a point to `active`. See
+[Runtime control decisions](docs/reference/control-decisions.md).
 
 ---
 
@@ -859,6 +884,11 @@ sidecar-model: qwen3:1b          # Lightweight model for skill matching
 guard-model: qwen3:8b            # Model for guard / review tasks
 judge-model: qwen3:1b            # Model for multi-model result selection (defaults to sidecar)
 plan-reviewer-model: qwen3:8b   # Model for plan review tasks
+
+# === Runtime control decisions (systemone decision model) ===
+control-decisions:
+  model: nimble                  # endpoint defaults to http://127.0.0.1:11434/v1/systemone
+  mode: shadow                   # off (default) | shadow | active, per point under points:
 
 # === Escalation ===
 escalate-on-retry: false        # Escalate to next stronger model on retry (requires model-list)

@@ -225,6 +225,35 @@ request 與 backend diagnostics。穩定的 exit code 可區分結果：`0` 已�
 `2` 無效 request/usage、`3` abstained、`4` backend/runtime 技術失敗、`5`
 設定錯誤或 backend unavailable。
 
+### Runtime control decisions
+
+hufu runtime 自己的四個決策點也可以改問 `systemone` decision model：
+
+- agent matcher
+- unattended `ask_user` 選項
+- bash path reviewer
+- guard reviewer
+
+在 hufu.yaml 或 team.yaml 加上 `control-decisions:`：
+
+```yaml
+control-decisions:
+  endpoint: http://gpu-host:11434/v1/systemone
+  model: nimble
+  mode: shadow          # off（預設）| shadow | active
+  points:
+    path-reviewer: {mode: active, min-confidence: 0.95}
+```
+
+兩種模式：
+
+- `shadow`：與既有 sidecar 路徑並行執行，一律採用既有結果，只記錄兩者是否一致。
+- `active`：信心足夠才採用模型答案；信心不足時採用安全結果（例如 guard 直接 deny）；
+  模型失敗時退回既有路徑。
+
+改成 `active` 前，先用 `hufu inspect control-decisions` 或 report 的 Control Decisions
+區段檢查資料。詳見 [Runtime control decisions](docs/reference/control-decisions.md)。
+
 ---
 
 ## CLI Flags 參考
@@ -573,6 +602,11 @@ model-list:
 # === Sidecar / Guard 模型 ===
 sidecar-model: qwen3:1b          # 輕量模型，用於技能比對
 guard-model: qwen3:8b            # Guard / 審核用模型
+
+# === Runtime control decisions（systemone decision model）===
+control-decisions:
+  model: nimble                  # endpoint 預設 http://127.0.0.1:11434/v1/systemone
+  mode: shadow                   # off（預設）| shadow | active，可在 points: 逐點設定
 
 # === Skills ===
 skills: code-review,git-commit  # 要包含的 skills
