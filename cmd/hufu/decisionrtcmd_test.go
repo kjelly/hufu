@@ -505,7 +505,7 @@ func TestDefaultDecisionRTRegistryAvailability(t *testing.T) {
 	}
 	for _, test := range tests {
 		infos := NewDefaultRegistry(test.options).List()
-		if len(infos) != 2 || infos[0].Name != "rule" || infos[1].Name != "sidecar" || infos[1].Reason != test.reason || infos[1].Available != (test.reason == "") {
+		if len(infos) != 3 || infos[0].Name != "rule" || infos[1].Name != "sidecar" || infos[1].Reason != test.reason || infos[1].Available != (test.reason == "") {
 			t.Fatalf("options=%#v infos=%#v", test.options, infos)
 		}
 	}
@@ -515,6 +515,101 @@ func TestDefaultDecisionRTRegistryAvailability(t *testing.T) {
 			t.Fatalf("Resolve(%q) error = %#v", name, err)
 		}
 	}
+}
+
+func TestDefaultDecisionRTRegistrySystemOneAvailability(t *testing.T) {
+	tests := []struct {
+		name    string
+		options RegistryOptions
+		reason  string
+	}{
+		{name: "missing model", options: RegistryOptions{SystemOneURL: "ftp://host"}, reason: "missing_systemone_model"},
+		{name: "invalid model", options: RegistryOptions{SystemOneModel: " nimble", SystemOneURL: "ftp://host"}, reason: "invalid_systemone_model"},
+		{name: "invalid URL", options: RegistryOptions{SystemOneModel: "nimble", SystemOneURL: "http://host/v1/systemone?x=1"}, reason: "invalid_systemone_url"},
+		{name: "key is not read", options: RegistryOptions{SystemOneModel: "nimble", SystemOneURL: decisionRTDefaultSystemOneURL, SystemOneAPIKey: "bad\nkey"}},
+		{name: "available", options: RegistryOptions{SystemOneModel: "nimble", SystemOneURL: decisionRTDefaultSystemOneURL}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			infos := NewDefaultRegistry(test.options).List()
+			want := BackendInfo{Name: "systemone", Available: test.reason == "", Type: "decision-native", Reason: test.reason}
+			if len(infos) != 3 || infos[2] != want {
+				t.Fatalf("infos = %#v, want systemone row %#v", infos, want)
+			}
+		})
+	}
+	if decisionRTDefaultSystemOneURL != "http://127.0.0.1:11434/v1/systemone" {
+		t.Fatalf("default URL = %q", decisionRTDefaultSystemOneURL)
+	}
+}
+
+func TestDefaultDecisionRTRegistryResolvesSystemOne(t *testing.T) {
+	backend, err := NewDefaultRegistry(RegistryOptions{SystemOneModel: "nimble", SystemOneURL: "http://127.0.0.1:1/v1/systemone"}).Resolve(t.Context(), "systemone")
+	if err != nil || backend.Name() != "systemone" {
+		t.Fatalf("backend=%v err=%v", backend, err)
+	}
+	for _, options := range []RegistryOptions{
+		{SystemOneURL: decisionRTDefaultSystemOneURL},
+		{SystemOneModel: "nimble", SystemOneURL: "not a url"},
+		{SystemOneModel: "nimble", SystemOneURL: decisionRTDefaultSystemOneURL, SystemOneAPIKey: "bad\r\nkey"},
+	} {
+		_, err := NewDefaultRegistry(options).Resolve(t.Context(), "systemone")
+		if typed, ok := errors.AsType[*decisionrt.RuntimeError](err); !ok || typed.Kind != decisionrt.ErrorBackendUnavailable {
+			t.Fatalf("options=%#v error = %#v", options, err)
+		}
+	}
+}
+
+func TestDecisionRTSystemOneFlagsReachTheRegistry(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		env  string
+		want RegistryOptions
+	}{
+		{
+			name: "defaults",
+			args: validDecisionRTChoiceArgs(),
+			want: RegistryOptions{ProviderURL: decisionRTDefaultProviderURL, SystemOneURL: decisionRTDefaultSystemOneURL},
+		},
+		{
+			name: "environment key",
+			args: append(validDecisionRTChoiceArgs(), "--systemone-model", "nimble", "--systemone-url", "http://gpu:11434/v1/systemone"),
+			env:  "env-key",
+			want: RegistryOptions{ProviderURL: decisionRTDefaultProviderURL, SystemOneModel: "nimble", SystemOneURL: "http://gpu:11434/v1/systemone", SystemOneAPIKey: "env-key"},
+		},
+		{
+			name: "flag key wins",
+			args: append(validDecisionRTChoiceArgs(), "--systemone-model", "nimble", "--systemone-api-key", "flag-key"),
+			env:  "env-key",
+			want: RegistryOptions{ProviderURL: decisionRTDefaultProviderURL, SystemOneModel: "nimble", SystemOneURL: decisionRTDefaultSystemOneURL, SystemOneAPIKey: "flag-key"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDecisionRTCommandFixture(abstainedDecisionRTBackend("rule"))
+			if test.env != "" {
+				fixture.environment["HUFU_SYSTEMONE_API_KEY"] = test.env
+			}
+			assertDecisionRTExitCode(t, fixture.execute(test.args...), 3)
+			if fixture.registryOpts != test.want {
+				t.Fatalf("options = %#v, want %#v", fixture.registryOpts, test.want)
+			}
+		})
+	}
+}
+
+func TestDecisionRTBackendsAcceptsSystemOneInspectionFlags(t *testing.T) {
+	fixture := newDecisionRTCommandFixture(nil)
+	fixture.environment["HUFU_SYSTEMONE_API_KEY"] = "env-key"
+	if err := fixture.execute("backends", "--systemone-model", "nimble", "--systemone-url", "http://gpu:11434/v1/systemone"); err != nil {
+		t.Fatal(err)
+	}
+	want := RegistryOptions{ProviderURL: decisionRTDefaultProviderURL, SystemOneModel: "nimble", SystemOneURL: "http://gpu:11434/v1/systemone"}
+	if fixture.registryOpts != want {
+		t.Fatalf("options = %#v, want %#v", fixture.registryOpts, want)
+	}
+	assertDecisionRTExitCode(t, newDecisionRTCommandFixture(nil).execute("backends", "--systemone-api-key", "key"), 2)
 }
 
 func TestDecisionRTProcessExitCodes(t *testing.T) {

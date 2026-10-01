@@ -12,6 +12,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/backend/rule"
 	decisionrtsidecar "github.com/kjelly/hufu/internal/decisionrt/backend/sidecar"
+	"github.com/kjelly/hufu/internal/decisionrt/backend/systemone"
 	hufusidecar "github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -21,9 +22,12 @@ type BackendRegistry interface {
 }
 
 type RegistryOptions struct {
-	SidecarModel   string
-	ProviderURL    string
-	ProviderAPIKey string
+	SidecarModel    string
+	ProviderURL     string
+	ProviderAPIKey  string
+	SystemOneModel  string
+	SystemOneURL    string
+	SystemOneAPIKey string
 }
 
 type BackendInfo struct {
@@ -62,16 +66,51 @@ func (r *defaultDecisionRTRegistry) Resolve(ctx context.Context, name string) (d
 			return nil, decisionRTBackendUnavailable("sidecar_adapter_unavailable", err)
 		}
 		return backend, nil
+	case "systemone":
+		backend, err := systemone.New(systemone.Config{
+			Endpoint: r.options.SystemOneURL, APIKey: r.options.SystemOneAPIKey, Model: r.options.SystemOneModel,
+		})
+		if err != nil {
+			return nil, decisionRTBackendUnavailable(systemOneUnavailableReason(err), err)
+		}
+		return backend, nil
 	default:
 		return nil, decisionRTBackendUnavailable("unknown_backend", nil)
 	}
 }
 
 func (r *defaultDecisionRTRegistry) List() []BackendInfo {
-	reason := sidecarAvailabilityReason(r.options)
+	sidecarReason := sidecarAvailabilityReason(r.options)
+	systemOneReason := systemOneAvailabilityReason(r.options)
 	return []BackendInfo{
 		{Name: "rule", Available: true, Type: "deterministic"},
-		{Name: "sidecar", Available: reason == "", Type: "generative", Reason: reason},
+		{Name: "sidecar", Available: sidecarReason == "", Type: "generative", Reason: sidecarReason},
+		{Name: "systemone", Available: systemOneReason == "", Type: "decision-native", Reason: systemOneReason},
+	}
+}
+
+// systemOneAvailabilityReason reuses the adapter's own configuration checks.
+// Constructing the adapter performs no network I/O, and listing never needs
+// the API key.
+func systemOneAvailabilityReason(options RegistryOptions) string {
+	_, err := systemone.New(systemone.Config{Endpoint: options.SystemOneURL, Model: options.SystemOneModel})
+	return systemOneUnavailableReason(err)
+}
+
+func systemOneUnavailableReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, systemone.ErrMissingModel):
+		return "missing_systemone_model"
+	case errors.Is(err, systemone.ErrInvalidModel):
+		return "invalid_systemone_model"
+	case errors.Is(err, systemone.ErrInvalidEndpoint):
+		return "invalid_systemone_url"
+	case errors.Is(err, systemone.ErrInvalidAPIKey):
+		return "invalid_systemone_api_key"
+	default:
+		return "systemone_adapter_unavailable"
 	}
 }
 

@@ -20,6 +20,10 @@ import (
 
 const decisionRTDefaultProviderURL = config.DefaultProviderURL
 
+// decisionRTDefaultSystemOneURL is Ollama's native decision endpoint on the
+// default local provider.
+const decisionRTDefaultSystemOneURL = config.DefaultLocalProviderURL + "/systemone"
+
 type decisionRTDeps struct {
 	registryFactory func(RegistryOptions) BackendRegistry
 	stdin           io.Reader
@@ -56,6 +60,9 @@ type decisionRTExecutionOptions struct {
 	sidecarModel      string
 	providerURL       string
 	providerAPIKey    string
+	systemOneModel    string
+	systemOneURL      string
+	systemOneAPIKey   string
 	jsonOutput        bool
 	receipt           bool
 }
@@ -237,7 +244,7 @@ func newDecisionRTValidateCommand(deps decisionRTDeps) *cobra.Command {
 }
 
 func newDecisionRTBackendsCommand(deps decisionRTDeps) *cobra.Command {
-	options := RegistryOptions{ProviderURL: decisionRTDefaultProviderURL}
+	options := RegistryOptions{ProviderURL: decisionRTDefaultProviderURL, SystemOneURL: decisionRTDefaultSystemOneURL}
 	var jsonOutput bool
 	command := newDecisionRTLeaf(deps, "backends", func(*cobra.Command) error {
 		registry := deps.registryFactory(options)
@@ -245,6 +252,8 @@ func newDecisionRTBackendsCommand(deps decisionRTDeps) *cobra.Command {
 	})
 	command.Flags().StringVar(&options.SidecarModel, "sidecar-model", "", "Sidecar model ID")
 	command.Flags().StringVar(&options.ProviderURL, "provider-url", decisionRTDefaultProviderURL, "OpenAI-compatible provider URL")
+	command.Flags().StringVar(&options.SystemOneModel, "systemone-model", "", "System One decision model ID")
+	command.Flags().StringVar(&options.SystemOneURL, "systemone-url", decisionRTDefaultSystemOneURL, "Exact System One decision endpoint URL")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "Write JSON to stdout")
 	return command
 }
@@ -285,8 +294,13 @@ func executeDecisionRT(command *cobra.Command, deps decisionRTDeps, request deci
 	if apiKey == "" {
 		apiKey = deps.getenv("HUFU_PROVIDER_API_KEY")
 	}
+	systemOneAPIKey := options.systemOneAPIKey
+	if systemOneAPIKey == "" {
+		systemOneAPIKey = deps.getenv("HUFU_SYSTEMONE_API_KEY")
+	}
 	registry := deps.registryFactory(RegistryOptions{
 		SidecarModel: options.sidecarModel, ProviderURL: options.providerURL, ProviderAPIKey: apiKey,
+		SystemOneModel: options.systemOneModel, SystemOneURL: options.systemOneURL, SystemOneAPIKey: systemOneAPIKey,
 	})
 	primary, err := registry.Resolve(command.Context(), options.backend)
 	if err != nil {
@@ -335,7 +349,7 @@ func bindDecisionRTSpecFlags(command *cobra.Command, options *decisionRTSpecOpti
 
 func bindDecisionRTExecutionFlags(command *cobra.Command, options *decisionRTExecutionOptions) {
 	flags := command.Flags()
-	flags.StringVar(&options.backend, "backend", "rule", "Decision backend: rule or sidecar")
+	flags.StringVar(&options.backend, "backend", "rule", "Decision backend: rule, sidecar, or systemone")
 	flags.DurationVar(&options.timeout, "timeout", decisionrt.DefaultTimeout, "Per-attempt timeout")
 	flags.Float64Var(&options.minConfidence, "min-confidence", 0, "Minimum accepted confidence")
 	flags.BoolVar(&options.requireCalibrated, "require-calibrated", false, "Require calibrated confidence")
@@ -343,6 +357,9 @@ func bindDecisionRTExecutionFlags(command *cobra.Command, options *decisionRTExe
 	flags.StringVar(&options.sidecarModel, "sidecar-model", "", "Sidecar model ID")
 	flags.StringVar(&options.providerURL, "provider-url", decisionRTDefaultProviderURL, "OpenAI-compatible provider URL")
 	flags.StringVar(&options.providerAPIKey, "provider-api-key", "", "Provider API key")
+	flags.StringVar(&options.systemOneModel, "systemone-model", "", "System One decision model ID")
+	flags.StringVar(&options.systemOneURL, "systemone-url", decisionRTDefaultSystemOneURL, "Exact System One decision endpoint URL")
+	flags.StringVar(&options.systemOneAPIKey, "systemone-api-key", "", "System One API key")
 	flags.BoolVar(&options.jsonOutput, "json", false, "Write JSON to stdout")
 	flags.BoolVar(&options.receipt, "receipt", false, "Write a JSON result and receipt envelope")
 }
