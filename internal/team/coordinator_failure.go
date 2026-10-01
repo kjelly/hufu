@@ -268,7 +268,21 @@ func (c *Coordinator) persistFailure(agentName, taskDesc, todoID, detail string,
 	c.persistFailureWithOutput(agentName, taskDesc, todoID, detail, disposition, class, forcedStatus, "")
 }
 
+// persistStrandedDependent blocks a dependent whose producer did not complete.
+// No worker started for it, so unlike a blocked worker it leaves delegation
+// open: when the producer failed with an ordinary error, the coordinator may
+// still redispatch the corrected producer and this dependent. A producer that
+// was itself blocked has already put the run into wrap-up.
+func (c *Coordinator) persistStrandedDependent(item *TodoItem, detail string, class TaskFailureClass) {
+	blocked := TaskBlocked
+	c.persistFailureRecord(item.Agent, item.Desc, item.ID, detail, RetryNone, class, &blocked, "", false)
+}
+
 func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus, output string) error {
+	return c.persistFailureRecord(agentName, taskDesc, todoID, detail, disposition, class, forcedStatus, output, true)
+}
+
+func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail string, disposition RetryDisposition, class TaskFailureClass, forcedStatus *TaskStatus, output string, blockedStopsDelegation bool) error {
 	if c == nil || detail == "" {
 		return nil
 	}
@@ -436,7 +450,7 @@ func (c *Coordinator) persistFailureWithOutput(agentName, taskDesc, todoID, deta
 		// evidence.  Force the coordinator into wrap-up before another
 		// delegation can be accepted.  Explicit acceptance recovery remains the
 		// only path that may continue after the operator has acknowledged it.
-		if status == TaskBlocked {
+		if status == TaskBlocked && blockedStopsDelegation {
 			c.wrapUp.Store(1)
 		}
 		metadata := map[string]interface{}{}

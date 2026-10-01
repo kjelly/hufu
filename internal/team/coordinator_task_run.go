@@ -2121,8 +2121,10 @@ retryLoop:
 			// Do not replay a task its worker reported blocked, or one stopped
 			// by a path-consent or read-only policy denial: a retry runs under
 			// a hint to change approach, which is exactly how a denied action
-			// gets worked around. Stop here, keep the worker's own status, and
-			// let the run continue so the coordinator decides what is next.
+			// gets worked around. Stop here and keep the worker's own status. A
+			// worker-reported block is persisted as TaskBlocked, which ends
+			// delegation for the run (persistFailureRecord); a policy denial stays
+			// TaskError, so the coordinator still decides what is next.
 			disposition = RetryNone
 			reason = "worker reported the task blocked or was denied by policy"
 			replayAvoided = true

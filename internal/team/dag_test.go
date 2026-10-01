@@ -384,3 +384,35 @@ func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
 		t.Fatal("second route must be blocked by scheduler budget")
 	}
 }
+
+func TestStrandedDependentKeepsDelegationOpenAndReportsProducerOutcome(t *testing.T) {
+	tests := []struct {
+		name           string
+		producerStatus TaskStatus
+		wantDetail     string
+	}{
+		{name: "failed producer", producerStatus: TaskError, wantDetail: "producer_status=error"},
+		{name: "blocked producer", producerStatus: TaskBlocked, wantDetail: "producer_status=blocked"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+			tasks := []TaskDef{{Agent: "builder"}, {Agent: "tester", DependsOn: []int{0}}}
+			items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "builder", Desc: "produce"}, {Agent: "tester", Desc: "consume"}})
+			coord.taskTracker.TodoList().UpdateStatus(items[0].ID, test.producerStatus, "producer did not complete")
+
+			s := mustNewDAGScheduler(t, coord, tasks, items, nil)
+			// The scheduler records every worker error as TaskError.
+			s.states[0] = TaskError
+			s.markStranded()
+
+			dependent := coord.taskTracker.TodoList().Items()[1]
+			if dependent.Status != TaskBlocked || !strings.Contains(dependent.Detail, test.wantDetail) {
+				t.Fatalf("dependent = %s %q, want blocked with %q", dependent.Status, dependent.Detail, test.wantDetail)
+			}
+			if coord.IsWrapUp() {
+				t.Fatal("a dependent that never started put the run into wrap-up")
+			}
+		})
+	}
+}

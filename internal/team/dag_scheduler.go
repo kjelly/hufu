@@ -621,7 +621,7 @@ func (s *dagScheduler) markStranded() {
 		detail, class := s.strandedDependencyDetail(i)
 		item := s.todoItems[i]
 		s.states[i] = TaskBlocked
-		c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, RetryNone, class, TaskBlocked)
+		c.persistStrandedDependent(item, detail, class)
 		s.results[i] = agentTaskResult{
 			agentName: s.tasks[i].Agent,
 			todoID:    item.ID,
@@ -660,6 +660,13 @@ func (s *dagScheduler) strandedDependencyDetail(idx int) (string, TaskFailureCla
 			dep.taskID = item.ID
 			dep.verify = item.VerifyResult
 			dep.fail = item.FailureEvent
+			// The scheduler records any worker error as TaskError, but the
+			// canonical todo may hold a more specific outcome such as a worker
+			// that reported itself blocked. Report that outcome to the
+			// coordinator so it does not treat a blocked producer as retryable.
+			if canonical := s.coord.todoItemByID(item.ID); canonical != nil && isTerminalTaskStatus(canonical.Status) {
+				dep.status = canonical.Status
+			}
 		}
 		if dep.taskID == "" {
 			dep.taskID = fmt.Sprintf("index:%d", depIdx)
