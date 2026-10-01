@@ -756,3 +756,45 @@ func TestResolveAndValidatePathWithConsentAllowedOutsideWorkDir(t *testing.T) {
 		t.Errorf("path = %q, want %q", path, want)
 	}
 }
+
+func TestCheckBashPathConsentKeepsPathWhenReviewFails(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	reviewErr := errors.New("sidecar timeout")
+	tests := []struct {
+		name         string
+		isFileAccess bool
+		reviewErr    error
+		wantConsent  bool
+	}{
+		{name: "reviewed as not a file access", isFileAccess: false, wantConsent: false},
+		{name: "reviewed as a file access", isFileAccess: true, wantConsent: true},
+		{name: "review failed reporting access", isFileAccess: true, reviewErr: reviewErr, wantConsent: true},
+		{name: "review failed reporting no access", isFileAccess: false, reviewErr: reviewErr, wantConsent: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			reviewed := 0
+			err := checkBashPathConsent(context.Background(), "cat "+outside, ToolConfig{
+				WorkDir:      workDir,
+				AllowedPaths: []string{workDir},
+				PathReviewer: func(context.Context, string, string) (bool, error) {
+					reviewed++
+					return tt.isFileAccess, tt.reviewErr
+				},
+			})
+			if reviewed != 1 {
+				t.Fatalf("reviewer calls = %d, want 1", reviewed)
+			}
+			if gotConsent := err != nil; gotConsent != tt.wantConsent {
+				t.Fatalf("consent required = %v (err %v), want %v", gotConsent, err, tt.wantConsent)
+			}
+			if tt.wantConsent && !strings.Contains(err.Error(), "outside allowed paths") {
+				t.Fatalf("err = %v, want an outside-allowed-paths denial", err)
+			}
+		})
+	}
+}

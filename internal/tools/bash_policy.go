@@ -687,8 +687,10 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 	if pathReviewer != nil && len(candidatePaths) > 0 {
 		var realPaths []string
 		for _, p := range candidatePaths {
+			// Only a successful "not a file access" review drops a path. A
+			// failed review keeps it, so the consent check below still runs.
 			isFileAccess, err := pathReviewer(ctx, command, p)
-			if err == nil && isFileAccess {
+			if err != nil || isFileAccess {
 				realPaths = append(realPaths, p)
 			}
 		}
