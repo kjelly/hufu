@@ -277,7 +277,8 @@ func (c *Config) mergeFromFile(path string) {
 
 func (c *Config) mergeScalarFields(fileCfg *Config) {
 	for _, field := range []struct{ dst, src *string }{
-		{&c.ProviderURL, &fileCfg.ProviderURL}, {&c.Model, &fileCfg.Model},
+		{&c.ProviderURL, &fileCfg.ProviderURL}, {&c.ProviderAPIKey, &fileCfg.ProviderAPIKey},
+		{&c.Model, &fileCfg.Model},
 		{&c.WorkerModel, &fileCfg.WorkerModel}, {&c.CoordinatorModel, &fileCfg.CoordinatorModel},
 		{&c.DefaultLLMBackend, &fileCfg.DefaultLLMBackend}, {&c.EmbeddingModel, &fileCfg.EmbeddingModel},
 		{&c.SidecarModel, &fileCfg.SidecarModel}, {&c.PlanReviewerModel, &fileCfg.PlanReviewerModel},

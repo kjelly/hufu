@@ -731,3 +731,46 @@ func TestGracefulWrapUpTimeoutMergeFromFile(t *testing.T) {
 		t.Fatalf("GracefulWrapUpTimeout = %q, want %q", cfg.GracefulWrapUpTimeout, "45m")
 	}
 }
+
+func TestResolveProviderAPIKeyReadsConfigFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		homeYAML    string
+		projectYAML string
+		cliFlag     string
+		teamKey     string
+		envKey      string
+		want        string
+	}{
+		{name: "home config", homeYAML: "provider-api-key: sk-home\n", envKey: "sk-env", want: "sk-home"},
+		{name: "project config overrides home", homeYAML: "provider-api-key: sk-home\n", projectYAML: "provider-api-key: sk-project\n", want: "sk-project"},
+		{name: "env when no file sets a key", projectYAML: "provider-url: http://test:11434/v1\n", envKey: "sk-env", want: "sk-env"},
+		{name: "team config wins over files", projectYAML: "provider-api-key: sk-project\n", teamKey: "sk-team", want: "sk-team"},
+		{name: "CLI flag wins over everything", projectYAML: "provider-api-key: sk-project\n", cliFlag: "sk-cli", teamKey: "sk-team", want: "sk-cli"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := isolateHome(t)
+			if tt.homeYAML != "" {
+				homeConfig := filepath.Join(home, ".config", "hufu", "hufu.yaml")
+				if err := os.MkdirAll(filepath.Dir(homeConfig), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(homeConfig, []byte(tt.homeYAML), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			project := t.TempDir()
+			if tt.projectYAML != "" {
+				if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte(tt.projectYAML), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(project)
+			t.Setenv("HUFU_PROVIDER_API_KEY", tt.envKey)
+			if got := ResolveProviderAPIKey(tt.cliFlag, tt.teamKey); got != tt.want {
+				t.Fatalf("ResolveProviderAPIKey = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
