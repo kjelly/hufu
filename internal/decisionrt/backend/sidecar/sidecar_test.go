@@ -114,6 +114,58 @@ func TestPromptCanonicalizesEquivalentContextNumbers(t *testing.T) {
 	}
 }
 
+// TestPromptBytesAreStable pins the exact prompt bytes, so a refactor of
+// context canonicalization cannot change what the model receives.
+func TestPromptBytesAreStable(t *testing.T) {
+	const prefix = "Choose exactly one candidate token from this JSON input.\nInput:\n"
+	const suffix = "\n\nReturn only one JSON object. TOKEN must be replaced by exactly one candidate token:\n{\"token\":\"TOKEN\"}"
+	choice := choiceRequest()
+	choice.Spec.Question = "Choose \"carefully\".\nNow."
+	choice.Spec.Options[0].Description = "Line one\nline two"
+	choice.Spec.Options[1].Description = "Large <b> & 'x' ünï"
+	choice.Context = map[string]any{
+		"a_string": "quoted \"value\" ünï", "b_bool": true, "c_int": int(3), "d_int8": int8(-4),
+		"e_uint": uint(5), "f_uint64": uint64(math.MaxInt64), "g_float_int": float64(3), "h_float_frac": 2.5,
+		"i_float32": float32(0.1), "j_number_int": json.Number("3"), "k_number_float": json.Number("3.0"),
+		"l_number_exp": json.Number("1e2"), "m_number_neg_zero": json.Number("-0.0"), "n_number_frac": json.Number("0.125"),
+		"o_float_large": 1e21, "p_float_neg_zero": math.Copysign(0, -1),
+	}
+	tests := []struct {
+		name    string
+		request decisionrt.Request
+		input   string
+	}{
+		{
+			name: "choice with every context type", request: choice,
+			input: `{"purpose":"size-policy@v1","spec_id":"size-policy","spec_version":"v1","question":"Choose \"carefully\".\nNow.","context":{"a_string":"quoted \"value\" ünï","b_bool":true,"c_int":3,"d_int8":-4,"e_uint":5,"f_uint64":9223372036854775807,"g_float_int":3,"h_float_frac":2.5,"i_float32":0.10000000149011612,"j_number_int":3,"k_number_float":3,"l_number_exp":100,"m_number_neg_zero":0,"n_number_frac":0.125,"o_float_large":1e+21,"p_float_neg_zero":0},"candidates":[{"token":"A0","value":"small","description":"Line one\nline two"},{"token":"A1","value":"large","description":"Large \u003cb\u003e \u0026 'x' ünï"}]}`,
+		},
+		{
+			name: "boolean with nil context", request: booleanRequest(),
+			input: `{"purpose":"boolean-policy@v1","spec_id":"boolean-policy","spec_version":"v1","question":"Enable?","context":{},"candidates":[{"token":"A0","value":"false","description":""},{"token":"A1","value":"true","description":""}]}`,
+		},
+		{
+			name: "integer range", request: integerRequest(),
+			input: `{"purpose":"integer-policy@v1","spec_id":"integer-policy","spec_version":"v1","question":"Select an integer.","context":{},"candidates":[{"token":"A0","value":"-9223372036854775808","description":""},{"token":"A1","value":"-9223372036854775807","description":""},{"token":"A2","value":"-9223372036854775806","description":""}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var prompt string
+			generator := &fakeGenerator{modelID: "test-model"}
+			generator.execute = func(_ context.Context, captured string) (string, error) {
+				prompt = captured
+				return `{"token":"A0"}`, nil
+			}
+			if _, err := mustBackend(t, generator).Decide(t.Context(), test.request); err != nil {
+				t.Fatal(err)
+			}
+			if want := prefix + test.input + suffix; prompt != want {
+				t.Fatalf("prompt changed\n got: %q\nwant: %q", prompt, want)
+			}
+		})
+	}
+}
+
 func TestBooleanAndIntegerMappings(t *testing.T) {
 	tests := []struct {
 		name     string

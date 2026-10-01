@@ -34,10 +34,12 @@ type decisionRTFakeRegistry struct {
 	resolveError error
 	infos        []BackendInfo
 	resolveCalls int
+	resolvedName string
 }
 
-func (r *decisionRTFakeRegistry) Resolve(context.Context, string) (decisionrt.Backend, error) {
+func (r *decisionRTFakeRegistry) Resolve(_ context.Context, name string) (decisionrt.Backend, error) {
 	r.resolveCalls++
+	r.resolvedName = name
 	return r.backend, r.resolveError
 }
 
@@ -347,6 +349,22 @@ func TestDecisionRTExitCodesFallbackAndSanitizedStreams(t *testing.T) {
 				t.Fatalf("secret leaked: %q", combined)
 			}
 		})
+	}
+}
+
+func TestDecisionRTDefaultsSelectRuleWithoutFallback(t *testing.T) {
+	fixture := newDecisionRTCommandFixture(abstainedDecisionRTBackend("rule"))
+	err := fixture.execute(append(validDecisionRTChoiceArgs(), "--json")...)
+	assertDecisionRTExitCode(t, err, 3)
+	if fixture.registry.resolvedName != "rule" || fixture.registryOpts.ProviderURL != decisionRTDefaultProviderURL {
+		t.Fatalf("resolved=%q options=%#v", fixture.registry.resolvedName, fixture.registryOpts)
+	}
+	var result decisionrt.Result
+	if err := json.Unmarshal(fixture.stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Backend != "rule" || result.FallbackUsed || result.ReasonCode != "backend_abstained" {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
