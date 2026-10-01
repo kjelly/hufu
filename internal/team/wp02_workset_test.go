@@ -116,7 +116,7 @@ func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 		"zero-byte source": "",
 		"duplicate key":    `{"schema_version":1,"items":[{"key":"same","bindings":{"x":"1"}},{"key":"same","bindings":{"x":"2"}}]}`,
 		"empty key":        `{"schema_version":1,"items":[{"key":"","bindings":{"x":"1"}}]}`,
-		"bad schema":       `{"schema_version":3,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
+		"bad schema":       `{"schema_version":99,"items":[{"key":"one","bindings":{"x":"1"}}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()

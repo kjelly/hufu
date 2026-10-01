@@ -15,6 +15,10 @@ import (
 const (
 	WorksetSchemaVersion  = 1
 	worksetSchemaVersion2 = 2
+	// worksetSchemaVersion3 adds review_source_snapshot inputs beside each
+	// item's diff. Item inputs stay opaque artifact references, so the
+	// runtime reads it exactly as it reads version 2.
+	worksetSchemaVersion3 = 3
 	maxWorksetItems       = 2000
 	maxWorksetKeyBytes    = 256
 	maxWorksetValueBytes  = 4096
@@ -184,8 +188,10 @@ func equivalentWorksetReceipts(first, second *WorksetExpansionReceipt) bool {
 }
 
 func validateWorksetManifest(manifest WorksetManifest) error {
-	if manifest.SchemaVersion != WorksetSchemaVersion && manifest.SchemaVersion != worksetSchemaVersion2 {
-		return fmt.Errorf("unsupported workset schema_version %d (want %d or %d)", manifest.SchemaVersion, WorksetSchemaVersion, worksetSchemaVersion2)
+	switch manifest.SchemaVersion {
+	case WorksetSchemaVersion, worksetSchemaVersion2, worksetSchemaVersion3:
+	default:
+		return fmt.Errorf("unsupported workset schema_version %d (want %d, %d, or %d)", manifest.SchemaVersion, WorksetSchemaVersion, worksetSchemaVersion2, worksetSchemaVersion3)
 	}
 	if len(manifest.Items) == 0 {
 		return fmt.Errorf("workset manifest must contain at least one item")
