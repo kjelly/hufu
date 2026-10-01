@@ -656,6 +656,7 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 		ctx = context.WithValue(ctx, PathReviewerKey, t.pathReviewer)
 	}
 
+	call.Input, _ = CanonicalToolArgumentCase(call.Input, t.info)
 	if err := validateToolInput(call.Input, t.info); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}

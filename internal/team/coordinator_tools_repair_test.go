@@ -314,3 +314,44 @@ func TestCoordinatorToolLocalValidationRemainsEnabledWithProviderOptions(t *test
 		t.Fatal("provider options were not forwarded")
 	}
 }
+
+// enumRecordingTool declares one enum argument so the protocol repair layer
+// has something to fold.
+type enumRecordingTool struct{ protocolRecordingTool }
+
+func (*enumRecordingTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name:       "approve_plan",
+		Parameters: map[string]any{"verdict": map[string]any{"type": "string", "enum": []string{"approve", "reject"}}},
+		Required:   []string{"verdict"},
+	}
+}
+
+func TestProtocolRepairFoldsEnumCaseWithoutARepairRound(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantRuns  int
+		wantInput string
+		wantError bool
+	}{
+		{input: `{"verdict":"APPROVE"}`, wantRuns: 1, wantInput: `{"verdict":"approve"}`},
+		{input: `{"verdict":"reject"}`, wantRuns: 1, wantInput: `{"verdict":"reject"}`},
+		{input: `{"verdict":"APPROVED"}`, wantRuns: 0, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			base := &enumRecordingTool{}
+			wrapper := &protocolRepairWrapper{base: base, c: &Coordinator{}, state: &protocolRepairState{}}
+			response, err := wrapper.Run(t.Context(), fantasy.ToolCall{ID: "call-1", Name: "approve_plan", Input: test.input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if base.runs != test.wantRuns || response.IsError != test.wantError {
+				t.Fatalf("runs=%d isError=%v content=%q", base.runs, response.IsError, response.Content)
+			}
+			if test.wantRuns == 1 && base.lastInput != test.wantInput {
+				t.Fatalf("tool saw %s, want %s", base.lastInput, test.wantInput)
+			}
+		})
+	}
+}

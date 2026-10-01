@@ -553,3 +553,48 @@ func sliceHasString(s []string, want string) bool {
 func workerAgentDef() *agent.AgentDef {
 	return &agent.AgentDef{Name: "worker", Role: "worker"}
 }
+
+func TestSubmitResultAcceptsStatusInAnyLetterCase(t *testing.T) {
+	tests := []struct {
+		status  string
+		want    string
+		invalid bool
+	}{
+		{status: "BLOCKED", want: TaskResultStatusBlocked},
+		{status: " Success ", want: TaskResultStatusSuccess},
+		{status: "Completed_With_Gaps", want: TaskResultStatusCompletedWithGaps},
+		{status: "BLOCKED: guard denied the install", invalid: true},
+		{status: "done", invalid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.status, func(t *testing.T) {
+			c := newDirectTypedCoordinator(t, "", nil, nil)
+			items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "report a status"}})
+			todoID := items[0].ID
+			if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(todoID, TaskInProgress, "running", ""); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(map[string]any{"status": test.status, "summary": "status case check"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool := &submitResultTool{coordinator: c, todoID: todoID}
+			response, err := tool.Run(occurrenceTestContext(c, todoID, 1), fantasy.ToolCall{Name: "submit_result", Input: string(payload)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.invalid {
+				if !response.IsError || c.GetTaskResult(todoID) != nil {
+					t.Fatalf("status %q was accepted: %+v", test.status, response)
+				}
+				return
+			}
+			if response.IsError {
+				t.Fatalf("status %q rejected: %s", test.status, response.Content)
+			}
+			if stored := c.GetTaskResult(todoID); stored == nil || stored.Status != test.want {
+				t.Fatalf("stored result = %#v, want status %q", stored, test.want)
+			}
+		})
+	}
+}

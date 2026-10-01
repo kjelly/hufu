@@ -419,6 +419,7 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
+	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
 	if err != nil {
 		if strings.Contains(err.Error(), `unknown field "raw_output_ref"`) {

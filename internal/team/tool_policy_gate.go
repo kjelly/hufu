@@ -217,6 +217,9 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	if err := ctx.Err(); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
+	// Fold enum letter case before any policy, guard, or schema check sees the
+	// arguments, so every tool accepts "BLOCKED" for "blocked" alike.
+	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	_, dynamicGateway := t.inner.(*dynamicToolGateway)
 	if denial := artifactScopeToolDenial(ctx, t.Info().Name, t.inner); denial != "" && !dynamicGateway {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{

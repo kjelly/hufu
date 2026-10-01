@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // protocolRepairState is shared by every coordinator tool exposed in one
@@ -71,6 +72,7 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 		return fantasy.ToolResponse{}, err
 	}
 
+	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.base.Info())
 	validationErr := validateToolArguments(call.Input, t.base.Info())
 	t.state.mu.Lock()
 	pending := t.state.pending
