@@ -121,7 +121,8 @@ to re-create an abstraction that already exists in the runtime.
   [SQLite optimization implementation record](archive/implementation-plans/hufu-sqlite-optimization-plan.md),
   the [managed workspace registry implementation record](archive/implementation-plans/hufu-workspace-registry-improvement-plan.md),
   the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md),
-  and the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md).
+  the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md),
+  and the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

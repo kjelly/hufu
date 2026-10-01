@@ -1,16 +1,64 @@
 # hufu DecisionPrimitive System One backend implementation specification
 
-> Status: draft (v2, ready for implementation; in progress on branch feat/decisionrt-systemone. It moves to docs/archive/implementation-plans/ once every phase has landed.)
-> Authority: normative implementation plan. After implementation, the canonical document is docs/architecture/decision-primitive.md, and code comments cite only that document.
-> Verified-Commit: f2d7fc3
+> Status: implemented — archived 2026-10-01; implemented on branch feat/decisionrt-systemone (see Implementation record)
+> Authority: reference (implementation record; current behavior is defined by [DecisionPrimitive](../../architecture/decision-primitive.md) §7.3, §18A, §29, §42.2, §46, §47, and §52)
+> Verified-Commit: 2026-10-01
 > Supersedes: —
-> Superseded-By: —
+> Superseded-By: [DecisionPrimitive](../../architecture/decision-primitive.md)
 > Target repository: github.com/kjelly/hufu
 > Baseline commit: f2d7fc35d6a39d00d9dbe420adba0605f744c7d4
 > Date: 2026-10-01
 > Scope: explicit System One backend for the standalone DecisionPrimitive API and hufu decisionrt CLI, a shared canonical-context helper, and raised per-attempt timeouts
->
-> Code and tests take precedence over this plan. The coding agent must update the canonical docs/architecture/decision-primitive.md and the README files as part of the implementation. Production documentation and code comments must not link to this plan.
+
+## Implementation record
+
+Implemented on feat/decisionrt-systemone, one commit per phase of Section 10. The plan was first gitignored scratch material in docs/tmp/, then a draft in docs/architecture/ during implementation. It moved here once every phase had landed.
+
+| Commit | Phase | Content |
+| --- | --- | --- |
+| `0ab7afc` | plan | This plan, v2, as a tracked draft. |
+| `e887f81` | step 1 | Golden sidecar prompt-byte tests covering every accepted context type; a CLI test that the default backend is rule with no fallback. |
+| `b0720d3` | step 2 | decisionrt.CanonicalContextValues; sidecar uses it in place of its three private helpers; a golden digest test. |
+| `50387fe` | step 3 | decisionrt.DefaultTimeout (5s) and MaxTimeout (30s), used by NewRuntime and the CLI. |
+| `0b22bdf` | step 4 | The internal/decisionrt/backend/systemone adapter and its tests. |
+| `95e46f9` | step 5 | Registry row, Resolve, and the --systemone-* flags with the HUFU_SYSTEMONE_API_KEY fallback. |
+| `b851548` | step 6 | End-to-end CLI tests through the real registry against httptest.Server. |
+| `3a7b51b` | step 4 follow-up | Concurrent-use test under the race detector, so the canonical document can list systemone in §28. |
+| `0c03bb8` | step 7 | decision-primitive.md (new §18A and the sections listed in Section 8), both README files, and docs/README.md. |
+
+Baseline at f2d7fc3: go build, go vet, go test ./... (46 packages), and golangci-lint run all passed. bin/check-docs already failed because docs/reference/performance-gate.md has no lifecycle header (since af6205c). This change leaves that file alone; every other header and all 213 relative links passed.
+
+After implementation: go build ./..., go vet ./..., go test ./... (47 packages), and golangci-lint run (0 issues) all pass. internal/team has no changes.
+
+A live smoke test ran the built binary against Ollama 0.35.0 with nimble on a LAN GPU host. It is not an acceptance dependency.
+
+| Request | Result | Exit |
+| --- | --- | --- |
+| backends | systemone available | — |
+| choice (support ticket) | billing, raw 0.991, receipt with backend systemone, model nimble, fallback_used false | 0 |
+| boolean | true, 0.9987 | 0 |
+| integer 0..4 | 4, 0.974 | 0 |
+| boolean with --min-confidence 0.999 | abstained, low_confidence | 3 |
+| single-value integer range | rejected before HTTP | 4 |
+| unknown model | unavailable (HTTP 404) | 5 |
+
+### Deviations from the plan
+
+- **Availability reasons.** The registry derives them by calling systemone.New, so it does not repeat the adapter's validation. To make that work, the adapter package exports ErrMissingModel, ErrInvalidModel, ErrInvalidEndpoint, and ErrInvalidAPIKey. These sit in the adapter package, not the core API, so the three exported core additions of Section 1 are unchanged. Resolve also maps an invalid API key to invalid_systemone_api_key internally; List never reports it, because listing does not read the key.
+- **Default URL.** The CLI derives the default systemone URL from config.DefaultLocalProviderURL + "/systemone". The value is the planned http://127.0.0.1:11434/v1/systemone.
+- **Endpoint validation** also rejects a URL whose host has a port but no hostname, an empty query ("?"), and an empty fragment ("#").
+- **Redirects.** The cloned client returns http.ErrUseLastResponse. A 3xx response is therefore classified as ErrorBackendFailure, the plan's "rejected redirect" row.
+- **Transport errors** drop the URL that *url.Error adds, so an error never carries the endpoint path.
+- **Extra tests.** Beyond Section 9:
+  - a golden digest test;
+  - a dependency-boundary test that the adapter imports only the standard library and internal/decisionrt;
+  - a concurrent-use test;
+  - a runtime-level test that NewRuntime accepts every mapped result.
+
+### Not done
+
+- The hosted TypeSafe System One API was not verified (no account or key), and docs.system-one.dev was unreachable.
+- systemone is not connected to team execution. The plan excludes it, and DecisionPrimitive still has no caller outside cmd/hufu.
 
 ## 0. Revision 2 decisions
 
