@@ -516,6 +516,7 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 	// A successful finish ends any previously enabled bounded recovery window.
 	t.coordinator.acceptanceRecovery.Store(false)
+	response += t.coordinator.runInputResolutionNotice()
 
 	unresolvedPending := pendingTodoItems(todoList.Items())
 	allUnresolved := append(failedTasks, unresolvedPending...)
@@ -562,7 +563,9 @@ func (t *finishTool) handleAcceptanceFailure(ctx context.Context, prof Execution
 			refusal := fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed: %v. Please analyze the failure log, modify files/re-run tasks to fix the issues, and call finish again.", accErr))
 			return response, &refusal
 		}
+		noted := false
 		if t.coordinator.IsUnattended() {
+			noted = true
 			msg := fmt.Sprintf("Acceptance check failed after %d self-healing attempts. Initiating rollback...", t.coordinator.selfHealingAttempts)
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage(msg))
 			if rollErr := t.coordinator.runRollback(ctx); rollErr != nil {
@@ -576,15 +579,20 @@ func (t *finishTool) handleAcceptanceFailure(ctx context.Context, prof Execution
 		}
 		if prof.AcceptanceMode == AcceptanceBlocking {
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed (blocking): " + accErr.Error()))
-			if repairUnavailable == "" {
-				refusal := fantasy.NewTextErrorResponse(fmt.Sprintf("Acceptance check failed (blocking): %v", accErr))
-				return response, &refusal
+			// Self-healing is over: either no more work can run, or the bounded
+			// repair turns are used up. A refused finish would only be retried
+			// until the tool-error limit aborted the run, and the terminal
+			// summary would then blame the coordinator for never finishing.
+			// Finish with the failed acceptance instead: the outcome is partial
+			// (acceptance_failed) and never reported as success.
+			reason := repairUnavailable
+			if reason == "" {
+				reason = fmt.Sprintf("its %d self-healing attempts are exhausted", t.coordinator.selfHealingAttempts)
 			}
-			// Nothing the coordinator can still do changes the result, so a
-			// refused finish would only be retried until the error limit
-			// aborts the run. Finish with the failed acceptance instead: the
-			// outcome is partial and never reported as success.
-			response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\nThe run ends without success because %s.", accErr, repairUnavailable)
+			if !noted {
+				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v", accErr)
+			}
+			response += fmt.Sprintf("\nThe run ends without success because %s.", reason)
 		}
 	} else {
 		// Interactive mode: preserve standard behavior

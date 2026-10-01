@@ -71,6 +71,7 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 	if err != nil {
 		return err
 	}
+	c.resetRunInputResolutionFailures()
 	resolverAssignments, err := c.resolveRunInputCandidates(ctx, prompt, explicit, runID, true)
 	if err != nil {
 		return err
@@ -175,10 +176,12 @@ func (c *Coordinator) resolveRunInputCandidates(ctx context.Context, prompt stri
 		}
 		if semanticFailure != nil && len(explicit[definition.Name]) == 0 {
 			// The deterministic resolver only parses literal syntax, so its
-			// no_match says nothing about prose. Without the semantic answer
-			// the team default would silently replace whatever the request
-			// asked for, as when "the last 22 commits" became the default 10.
-			return nil, fmt.Errorf("input_resolver_failed: %s: the request could not be translated and the deterministic resolver found no value, so the default would be a guess: %w; pass the value explicitly with --input %s=<json>, or retry", definition.Name, semanticFailure, definition.Name)
+			// no_match says nothing about prose. The team default then
+			// replaces whatever the request asked for, as when "the last 22
+			// commits" became the default 10. Failing the run would make an
+			// unstable resolver model fatal, so the default applies, but
+			// visibly.
+			c.recordRunInputResolutionFailure(definition.Name, semanticFailure)
 		}
 	}
 	return assignments, nil
@@ -321,10 +324,12 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 		ResolverID: resolver.ID, ExplicitValue: slices.Clone(explicit), Guidance: resolver.SemanticGuidance,
 		PreviousValue: slices.Clone(previous), Diagnostic: diagnostic,
 	}
+	request.Attempt = 1
 	raw, err := resolveSemanticRunInputOnce(ctx, semanticResolver, resolver, request)
-	if err != nil && !errors.Is(err, errSemanticRunInputUnavailable) && ctx.Err() == nil {
-		// A provider hiccup, a timeout, or a truncated answer is usually
-		// transient, and failing here fails the whole run.
+	for request.Attempt < semanticRunInputAttempts && err != nil && !errors.Is(err, errSemanticRunInputUnavailable) && ctx.Err() == nil {
+		// A dropped stream, a timeout, or a truncated answer is usually
+		// transient; each retry allows more time and output.
+		request.Attempt++
 		raw, err = resolveSemanticRunInputOnce(ctx, semanticResolver, resolver, request)
 	}
 	if errors.Is(err, errSemanticRunInputUnavailable) {
@@ -355,11 +360,14 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 	}
 }
 
+// resolveSemanticRunInputOnce runs one translation attempt. The timeout grows
+// with the attempt number, so a slow route gets 1x, 2x, then 3x the declared
+// timeout.
 func resolveSemanticRunInputOnce(ctx context.Context, semanticResolver SemanticRunInputResolver, resolver *RunInputResolverSpec, request SemanticRunInputRequest) (json.RawMessage, error) {
 	resolverCtx := ctx
 	if resolver.Timeout > 0 {
 		var cancel context.CancelFunc
-		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
+		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout*max(request.Attempt, 1))*time.Second)
 		defer cancel()
 	}
 	return semanticResolver.Resolve(resolverCtx, request)

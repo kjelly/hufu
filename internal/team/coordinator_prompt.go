@@ -80,6 +80,11 @@ func (c *Coordinator) appendCanonicalRunInputsPrompt(b *strings.Builder) {
 		// answer unless the coordinator says so.
 		fmt.Fprintf(b, "The request did not state %s, so the team default applied. Say so in your final answer, naming the default value, so the user can rerun with an explicit value if the default is not what they meant.\n\n", strings.Join(defaulted, ", "))
 	}
+	for _, input := range snapshot.Inputs {
+		if reason, failed := c.runInputResolutionFailure(input.Name); failed && input.Source == RunInputSourceDefault {
+			fmt.Fprintf(b, "The request's value for `%s` could not be translated (%s), so the default above may not be what the user asked for. Put this first in your final answer and do not describe the default as the requested value.\n\n", input.Name, reason)
+		}
+	}
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {

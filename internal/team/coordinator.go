@@ -611,6 +611,10 @@ type Coordinator struct {
 	modelProfileRuntime              *ModelProfileRuntime
 	sidecarModel                     string
 	semanticRunInputResolverOverride SemanticRunInputResolver
+	// runInputResolutionFailures maps an input whose semantic translation
+	// failed, so the team default applied, to the redacted reason. Guarded
+	// by mu; reset for each invocation's input resolution.
+	runInputResolutionFailures map[string]string
 	sidecarInst                      *sidecar.Sidecar
 	sidecarInitMu                    sync.Mutex
 	sidecarInit                      bool

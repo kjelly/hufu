@@ -258,9 +258,19 @@ meaning from the prompt or rewrite the candidate. Hufu allows one bounded
 semantic repair using that diagnostic and revalidates the repaired value before
 stamping resolver provenance and freezing the input snapshot. A second invalid
 candidate fails closed. The deterministic resolver remains the fallback only
-when semantic resolution is unavailable or returns `null`; invalid semantic
-output is never silently replaced by a default. `--dry-run` never invokes the
-semantic resolver. Command-shaped strings are rejected before provider
+when semantic resolution is unavailable, returns `null`, or fails; invalid
+semantic output is never silently replaced by a default.
+
+A translation that fails, because the sidecar timed out, dropped its stream,
+or returned something other than one JSON value, is attempted three times.
+Each retry gets the declared `timeout` multiplied by the attempt number and a
+larger output budget. When all three fail and neither an explicit value nor
+the deterministic resolver supplies one, the input's default applies without
+failing the run, but visibly: Hufu emits a warning naming the
+`--input <name>=<json>` remedy, tells the coordinator that the default may not
+be what the request asked for, and appends a `RUN INPUT DEFAULTED` notice with
+the default value and the failure to the final answer. `--dry-run` never
+invokes the semantic resolver. Command-shaped strings are rejected before provider
 validation or snapshot/event persistence.
 
 Team-owned vocabulary belongs in `resolver.semantic-guidance`. Hufu includes

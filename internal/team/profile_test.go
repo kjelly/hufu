@@ -228,20 +228,37 @@ func TestProfile_AcceptanceModeBlocking(t *testing.T) {
 	strictProf.RequireEvidenceManifest = false // focus test on acceptance check
 	c.SetExecutionProfile(strictProf)
 	c.acceptanceCmd = "exit 1"
-	c.selfHealingAttempts = 2 // exhaust self healing so blocking mode fails immediately
 
+	// The two self-healing turns refuse finish so the coordinator can repair;
+	// after them, finish ends the run with the failed acceptance instead of
+	// refusing until the tool-error limit aborts it.
+	steps := []struct {
+		wantRefused bool
+		want        string
+	}{
+		{wantRefused: true, want: "Please analyze the failure log"},
+		{wantRefused: true, want: "Please analyze the failure log"},
+		{want: "self-healing attempts are exhausted"},
+	}
 	finishTool := &finishTool{coordinator: c}
-	raw, err := finishTool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"all done"}`})
-	if err != nil {
-		t.Fatalf("finishTool.Run failed: %v", err)
+	for index, step := range steps {
+		raw, err := finishTool.Run(context.Background(), fantasy.ToolCall{Input: `{"response":"all done"}`})
+		if err != nil {
+			t.Fatalf("finish %d: %v", index+1, err)
+		}
+		if raw.IsError != step.wantRefused || !strings.Contains(raw.Content, step.want) {
+			t.Fatalf("finish %d = refused %v %q, want refused %v containing %q", index+1, raw.IsError, raw.Content, step.wantRefused, step.want)
+		}
+		if got := c.finishCalled.Load(); got == step.wantRefused {
+			t.Fatalf("finish %d: finishCalled = %v", index+1, got)
+		}
 	}
-
-	textResp := fmt.Sprintf("%+v", raw)
-	if c.finishCalled.Load() {
-		t.Error("finishCalled set to true despite failing acceptance check in AcceptanceBlocking mode")
+	if got := c.finishRejectionSnapshot().count; got != 2 {
+		t.Fatalf("finish rejections = %d, want the two self-healing refusals", got)
 	}
-	if !strings.Contains(textResp, "Acceptance check failed") {
-		t.Errorf("expected acceptance failure error in response, got %q", textResp)
+	result := c.LastRunResult()
+	if result == nil || result.Outcome == RunOutcomeCompleted || result.StopReason != StopReasonAcceptanceFailed {
+		t.Fatalf("run result = %+v, want a non-success acceptance_failed outcome", result)
 	}
 }
 

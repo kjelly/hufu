@@ -1638,6 +1638,7 @@ func (c *Coordinator) completedTasksSummary(rejection finishRejection) string {
 		}
 		fmt.Fprintf(&b, "\n### %s: %s\n%s\n", item.Agent, item.Desc, utils.TruncateRunes(item.Output, summaryMaxRunes))
 	}
+	b.WriteString(c.runInputResolutionNotice())
 	return b.String()
 }
 
