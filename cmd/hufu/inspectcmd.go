@@ -47,6 +47,7 @@ the detailed audit, context, or decision maintenance commands.`,
   hufu inspect trace run-123 --branch incident-fix
   hufu inspect cost run-123 --task task-7 --format json
   hufu inspect replay run-123 --format json
+  hufu inspect control-decisions --workspace ./workspace
   hufu inspect storage --workspace ./workspace --format json`,
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
@@ -66,6 +67,7 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
 		newInspectCostCommand(options),
+		newInspectControlDecisionsCommand(options),
 		newInspectReplayCommand(options),
 		newInspectStorageCommand(options),
 	)
@@ -445,34 +447,10 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		return err
 	case inspectpkg.CostData:
 		return renderInspectCostText(writer, data)
+	case inspectpkg.ControlDecisionsData:
+		return renderInspectControlDecisionsText(writer, envelope.Query, data)
 	case inspectpkg.TaskData:
-		if _, err := fmt.Fprintf(writer, "Run: %s\nTask: %s\nBranch: %s\nStatus: %s\nPhase: %s\nAgent: %s\nExecution target: %s\n",
-			data.RunID, data.TaskID, envelope.Query.BranchID, data.Status, valueOrUnavailable(data.Phase),
-			valueOrUnavailable(data.AgentID), valueOrUnavailable(data.ExecutionTarget)); err != nil {
-			return err
-		}
-		if action := data.CatalogAction; action != nil {
-			if _, err := fmt.Fprintf(writer, "Catalog action: %s  entry=%s  args=%s\nInvocation: %s  proposals: %s\n",
-				action.ActionID, action.EntryHash, action.ArgumentsHash, action.InvocationID, refsOrNone(action.ProposalIDs)); err != nil {
-				return err
-			}
-		}
-		for _, attempt := range data.Attempts {
-			if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s execution_target=%s backend=%s exit_code=%s verification=%s winning=%t\n",
-				attempt.Attempt, valueOrUnavailable(attempt.ModelExecutionID), valueOrUnavailable(attempt.ProducerID),
-				valueOrUnavailable(attempt.ExecutionTarget), valueOrUnavailable(attempt.Backend), optionalInt(attempt.ExitCode), attempt.VerificationStatus, attempt.Winning); err != nil {
-				return err
-			}
-		}
-		_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
-			refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
-		if err == nil && data.KnowledgeCoverage != nil {
-			outcome := data.KnowledgeCoverage.OutcomeCoverage
-			invariants := data.KnowledgeCoverage.InvariantCoverage
-			coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
-			_, err = fmt.Fprintf(writer, "Knowledge: %d known, %d assumed, %d stale%s; invariants: %d/%d paths covered\n", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, conflictingSuffix(outcome.ConflictingCount), coveredPaths, invariants.TouchedPathCount)
-		}
-		return err
+		return renderInspectTaskText(writer, envelope.Query.BranchID, data)
 	case inspectpkg.EvidenceData:
 		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nManifest: %s (%s)\nAudit verdict: %s\nAcceptance: %s\n",
 			data.RunID, envelope.Query.BranchID, valueOrUnavailable(data.Manifest.Hash), data.Manifest.Status,
@@ -537,6 +515,36 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 	default:
 		return fmt.Errorf("unsupported inspect data %T", envelope.Data)
 	}
+}
+
+func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.TaskData) error {
+	if _, err := fmt.Fprintf(writer, "Run: %s\nTask: %s\nBranch: %s\nStatus: %s\nPhase: %s\nAgent: %s\nExecution target: %s\n",
+		data.RunID, data.TaskID, branchID, data.Status, valueOrUnavailable(data.Phase),
+		valueOrUnavailable(data.AgentID), valueOrUnavailable(data.ExecutionTarget)); err != nil {
+		return err
+	}
+	if action := data.CatalogAction; action != nil {
+		if _, err := fmt.Fprintf(writer, "Catalog action: %s  entry=%s  args=%s\nInvocation: %s  proposals: %s\n",
+			action.ActionID, action.EntryHash, action.ArgumentsHash, action.InvocationID, refsOrNone(action.ProposalIDs)); err != nil {
+			return err
+		}
+	}
+	for _, attempt := range data.Attempts {
+		if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s execution_target=%s backend=%s exit_code=%s verification=%s winning=%t\n",
+			attempt.Attempt, valueOrUnavailable(attempt.ModelExecutionID), valueOrUnavailable(attempt.ProducerID),
+			valueOrUnavailable(attempt.ExecutionTarget), valueOrUnavailable(attempt.Backend), optionalInt(attempt.ExitCode), attempt.VerificationStatus, attempt.Winning); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
+		refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
+	if err == nil && data.KnowledgeCoverage != nil {
+		outcome := data.KnowledgeCoverage.OutcomeCoverage
+		invariants := data.KnowledgeCoverage.InvariantCoverage
+		coveredPaths := max(0, invariants.TouchedPathCount-invariants.UncoveredPathCount)
+		_, err = fmt.Fprintf(writer, "Knowledge: %d known, %d assumed, %d stale%s; invariants: %d/%d paths covered\n", outcome.KnownCount, outcome.AssumedCount, outcome.StaleCount, conflictingSuffix(outcome.ConflictingCount), coveredPaths, invariants.TouchedPathCount)
+	}
+	return err
 }
 
 func renderInspectCostText(writer io.Writer, data inspectpkg.CostData) error {

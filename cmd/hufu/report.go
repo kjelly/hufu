@@ -139,6 +139,7 @@ type reportData struct {
 	ContextRouting        team.ContextManifestSummary
 	Decisions             []team.DecisionIndexEntry
 	DecisionPrimitives    []team.DecisionPrimitiveRecord
+	ControlDecisions      []team.ControlDecisionSummary
 	RuntimeWorksets       *team.RuntimeWorksetProjection
 	RuntimeWorksetError   string
 	CanonicalRunError     string
@@ -276,6 +277,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.ContextRouting = tc.coordinator.ContextManifestReport()
 		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 		d.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
+		d.ControlDecisions, _ = tc.coordinator.ControlDecisionSummaries(context.Background())
 		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)
 	}
 	if tc.session != nil {
@@ -805,6 +807,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		b.WriteString("\n")
 	}
+	writeControlDecisionsReport(&b, data.ControlDecisions)
 	if len(data.Decisions) > 0 {
 		b.WriteString("## Decision State\n\n")
 		b.WriteString("| Decision | Profile | Status | Finalizer | Finalizer stale | Record ref | Assumptions | Evidence |\n")

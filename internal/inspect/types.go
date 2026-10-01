@@ -24,6 +24,8 @@ const (
 	KindStorage  Kind = "storage"
 	KindOverview Kind = "overview"
 	KindCost     Kind = "cost"
+	// KindControlDecisions summarizes runtime control decision observations.
+	KindControlDecisions Kind = "control-decisions"
 )
 
 type Format string
@@ -95,6 +97,8 @@ func (q InspectQuery) Validate(kind Kind) error {
 		if q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" || strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
 			return fmt.Errorf("%w: cost accepts only workspace, run, task, branch, and session", ErrInvalidQuery)
 		}
+	case KindControlDecisions:
+		return q.validateControlDecisions()
 	case KindStorage:
 		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
 			strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
@@ -103,6 +107,14 @@ func (q InspectQuery) Validate(kind Kind) error {
 		}
 	default:
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidQuery, kind)
+	}
+	return nil
+}
+
+func (q InspectQuery) validateControlDecisions() error {
+	if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" ||
+		strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+		return fmt.Errorf("%w: control-decisions accepts only workspace, run, branch, and session", ErrInvalidQuery)
 	}
 	return nil
 }
