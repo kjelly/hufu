@@ -55,6 +55,10 @@ type ExecutionPolicySnapshot struct {
 	// DecisionPrimitiveHash pins decision contracts, grants, transport, and
 	// credential revisions without storing credentials or endpoint values.
 	DecisionPrimitiveHash string `json:"decision_primitive_hash,omitempty"`
+	// ControlDecisionHash pins the transport, credential revision, and
+	// thresholds of every active runtime control decision. It is omitted when
+	// no point is active, so off and shadow configuration never affect resume.
+	ControlDecisionHash string `json:"control_decision_hash,omitempty"`
 	// MCPActionProviders pins every MCP action provider's server, tool, and
 	// bound descriptor. It is omitted when a team declares none.
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
@@ -270,6 +274,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		DefaultLLMBackend: defaultBackend,
 	}
 	snapshot.DecisionPrimitiveHash = c.decisionPrimitives.Hash()
+	snapshot.ControlDecisionHash = c.controlDecisions.Hash()
 	if version >= executionPolicyPreviousSnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
 		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
 		if err != nil {
@@ -594,6 +599,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
 		return fmt.Errorf("invalid decision primitive policy hash")
+	}
+	if snapshot.ControlDecisionHash != "" && !decisionDigestPattern.MatchString(snapshot.ControlDecisionHash) {
+		return fmt.Errorf("invalid control decision policy hash")
 	}
 	if len(snapshot.Backends) == 0 {
 		return fmt.Errorf("execution policy snapshot has no backends")

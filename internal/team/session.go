@@ -270,6 +270,8 @@ func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone.InvariantCatalog = cloneInvariantCatalog(orig.InvariantCatalog)
 	clone.RunInputDefinitions = cloneRunInputDefinitions(orig.RunInputDefinitions)
 	clone.ActionCatalog = orig.ActionCatalog.clone()
+	clone.GlobalControlDecisions = orig.GlobalControlDecisions.Clone()
+	clone.Config.ControlDecisions = orig.Config.ControlDecisions.Clone()
 	clone.actionCatalogFindings = append([]ContractFinding(nil), orig.actionCatalogFindings...)
 	return &clone
 }

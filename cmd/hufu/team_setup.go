@@ -211,6 +211,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
+	session.GlobalControlDecisions = cfg.ControlDecisions.Clone()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	// Provenance must be read before resolution overwrites the team's
 	// worker/coordinator fields with their resolved values.

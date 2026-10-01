@@ -774,3 +774,26 @@ func TestResolveProviderAPIKeyReadsConfigFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestControlDecisionsMergeFieldByField(t *testing.T) {
+	home := isolateHome(t)
+	homeConfig := filepath.Join(home, ".config", "hufu", "hufu.yaml")
+	if err := os.MkdirAll(filepath.Dir(homeConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(homeConfig, []byte("control-decisions:\n  endpoint: http://gpu:11434/v1/systemone\n  model: nimble\n  mode: shadow\n  points:\n    guard-reviewer: {mode: off}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte("control-decisions:\n  points:\n    path-reviewer: {mode: active, min-confidence: 0.95}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	got := LoadConfig().ControlDecisions
+	if got.Endpoint != "http://gpu:11434/v1/systemone" || got.Model != "nimble" || got.Mode != "shadow" {
+		t.Fatalf("control-decisions = %#v", got)
+	}
+	if got.Points["guard-reviewer"].Mode != "off" || got.Points["path-reviewer"].Mode != "active" || *got.Points["path-reviewer"].MinConfidence != 0.95 {
+		t.Fatalf("points = %#v", got.Points)
+	}
+}

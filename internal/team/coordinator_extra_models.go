@@ -652,6 +652,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		coreTools:                          coreToolsClone,
 		decisionPrimitives:                 orig.decisionPrimitives,
 		decisionPrimitiveGate:              orig.decisionPrimitiveGate,
+		controlDecisions:                   orig.controlDecisions,
 		agentCache:                         agentCacheClone,
 		agentToolNameCache:                 agentToolNameCacheClone,
 		round:                              orig.round,

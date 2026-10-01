@@ -22,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
+	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
@@ -417,6 +418,7 @@ type Coordinator struct {
 	coreTools             []fantasy.AgentTool
 	decisionPrimitives    *catalog.Service
 	decisionPrimitiveGate chan struct{}
+	controlDecisions      *control.Service
 	agentCache            map[string]fantasy.Agent
 	agentToolNameCache    map[string][]string
 	agentCacheMu          sync.RWMutex
@@ -1344,6 +1346,7 @@ type RoleModels struct {
 
 type coordinatorParams struct {
 	DecisionPrimitives    *catalog.Service
+	ControlDecisions      *control.Service
 	Session               *TeamSession
 	DefaultProviderURL    string
 	DefaultProviderAPIKey string
@@ -1393,6 +1396,11 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, err
 	}
 	params.DecisionPrimitives = primitiveService
+	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets)
+	if err != nil {
+		return nil, err
+	}
+	params.ControlDecisions = controlService
 	return newScopedCoordinator(params, services)
 }
 
@@ -1455,6 +1463,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		coreTools:                 coreTools,
 		decisionPrimitives:        params.DecisionPrimitives,
 		decisionPrimitiveGate:     make(chan struct{}, 1),
+		controlDecisions:          params.ControlDecisions,
 		agentCache:                make(map[string]fantasy.Agent),
 		agentToolNameCache:        make(map[string][]string),
 		retrySuppressionsByReason: make(map[string]int),
@@ -1802,6 +1811,9 @@ func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSessio
 		if primitive.APIKeyEnv != "" {
 			_ = registry.Register(tools.SecretRef{Name: "decision." + name + ".api_key", Source: "decision credential environment", ExactValue: os.Getenv(primitive.APIKeyEnv)})
 		}
+	}
+	if keyEnv := control.Merge(session.GlobalControlDecisions, session.Config.ControlDecisions).APIKeyEnv; keyEnv != "" {
+		_ = registry.Register(tools.SecretRef{Name: "control_decisions.api_key", Source: "control decision credential environment", ExactValue: os.Getenv(keyEnv)})
 	}
 }
 

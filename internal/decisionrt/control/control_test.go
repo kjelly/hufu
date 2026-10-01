@@ -452,3 +452,19 @@ func TestControlDependencyBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateChecksOneBlockWithoutTransport(t *testing.T) {
+	if err := (control.Config{Mode: control.ModeShadow, APIKeyEnv: "HUFU_CONTROL_TEST_UNSET_KEY"}).Validate(); err != nil {
+		t.Fatalf("a block without a model or a set credential is valid on its own: %v", err)
+	}
+	for _, config := range []control.Config{
+		{Mode: "always"},
+		{Points: map[control.Point]control.PointConfig{"similar-task": {}}},
+		{Timeout: time.Minute},
+		{APIKeyEnv: "BAD-NAME"},
+	} {
+		if err := config.Validate(); err == nil {
+			t.Errorf("Validate(%#v) accepted an invalid block", config)
+		}
+	}
+}

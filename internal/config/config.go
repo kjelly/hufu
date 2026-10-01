@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
@@ -169,6 +170,11 @@ type Config struct {
 	// WorkspaceVersioning configures subject-root versioning for managed
 	// workspaces (docs/archive/implementation-plans/workspace-versioning.md §31).
 	WorkspaceVersioning WorkspaceVersioningConfig `yaml:"workspace-versioning"`
+	// ControlDecisions selects how hufu's runtime control decisions use the
+	// systemone decision model (docs/architecture/decision-primitive.md §59).
+	// Each field resolves ./hufu.yaml, then ~/.config/hufu/hufu.yaml; a team's
+	// own block overrides both, field by field.
+	ControlDecisions control.Config `yaml:"control-decisions"`
 	// sources records which file last supplied each model-related key, so
 	// callers can show where an effective value came from.
 	sources map[string]string
@@ -235,6 +241,7 @@ func (c *Config) mergeFromFile(path string) {
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
+	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions)
 	c.Cost.merge(fileCfg.Cost)
 	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {

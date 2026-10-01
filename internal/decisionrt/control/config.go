@@ -135,6 +135,25 @@ func (c Config) clone() Config {
 // Clone returns a deep copy of the configuration.
 func (c Config) Clone() Config { return c.clone() }
 
+// Validate checks one block on its own: modes, point names, thresholds, the
+// timeout range, and the api-key-env name. It does not require a model or
+// read the credential, because another file may supply them; New validates
+// the merged block completely.
+func (c Config) Validate() error {
+	if _, err := c.resolvePoints(); err != nil {
+		return err
+	}
+	if c.Timeout != 0 {
+		if _, err := validateTimeout(c.Timeout); err != nil {
+			return err
+		}
+	}
+	if c.APIKeyEnv != "" && !envName.MatchString(c.APIKeyEnv) {
+		return fmt.Errorf("control-decisions.api-key-env: invalid variable name")
+	}
+	return nil
+}
+
 // resolvedPoint is the effective policy of one point.
 type resolvedPoint struct {
 	Mode          Mode    `json:"mode"`

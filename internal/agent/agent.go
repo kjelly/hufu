@@ -19,6 +19,7 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
+	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
@@ -421,6 +422,11 @@ type TeamConfig struct {
 	// DecisionPrimitives are explicitly granted, bounded helper decisions;
 	// they do not replace the higher-level DecisionEngine.
 	DecisionPrimitives map[string]catalog.Entry
+	// ControlDecisions is the team's control-decisions block for hufu's own
+	// runtime decision points (docs/architecture/decision-primitive.md §59).
+	// The host merges hufu.yaml's block under it before the coordinator is
+	// built; the team's fields win.
+	ControlDecisions control.Config
 	// RequestContract is the single normalized team-level request contract
 	// owner. It is authoring-independent so decision profile selection cannot
 	// accidentally carry a second request contract authority.

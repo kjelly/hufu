@@ -19,6 +19,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
+	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
@@ -54,6 +55,10 @@ type TeamSession struct {
 	// each worker (by lower-case agent name) to one. None is persisted;
 	// admitted occurrences carry an ExecutionRouteBinding.
 	ExecutionRouteConfigs map[string]config.ExecutionRouteConfig
+	// GlobalControlDecisions is hufu.yaml's control-decisions block, supplied
+	// by the host before the coordinator is built. The team's own block
+	// (Config.ControlDecisions) overrides it field by field.
+	GlobalControlDecisions control.Config
 	// CostCatalog is the host's validated global/project price catalog. It is
 	// immutable after setup and contains no provider credentials or endpoints.
 	CostCatalog          cost.Catalog
@@ -1190,6 +1195,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.DecisionPrimitives = yc.DecisionPrimitives
+	if err := yc.ControlDecisions.Validate(); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
+	cfg.ControlDecisions = yc.ControlDecisions.Clone()
 	cfg.RequestContract = requestContract
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the
