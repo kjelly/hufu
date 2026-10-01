@@ -9,10 +9,12 @@
 > Baseline repository: `kjelly/hufu`
 > Baseline branch: `main`
 > Baseline commit: `e02a7ef`
-> Scope: small, backend-agnostic typed decision primitive covering Phase 0–5
-> (core, sidecar adapter, standalone CLI, System One adapter, native team tool).
-> Phase 5 (§58) supersedes prior Phase 0–4 restrictions on team callers and
-> team-owned persistence only; the core layering and DecisionEngine boundary remain.
+> Scope: small, backend-agnostic typed decision primitive covering Phase 0–6
+> (core, sidecar adapter, standalone CLI, System One adapter, native team tool,
+> runtime control decisions). Phase 5 (§58) supersedes prior Phase 0–4
+> restrictions on team callers and team-owned persistence only; Phase 6 (§59)
+> further supersedes §20/§P7 for four fixed runtime call sites only. The core
+> layering and DecisionEngine boundary remain.
 > Non-goal: reimplement any specific third-party logits-based decision
 > technique, or replace hufu's existing DecisionEngine
 > Relationship: distinct from and does not modify
@@ -2926,3 +2928,49 @@ contract 與 policy：
    沒有可靠 token usage 時不偽造 accounting。
 
 完整設定與限制見 [Agent-team DecisionPrimitives](../reference/decision-primitives.md)。
+
+---
+
+## 59. Phase 6 — Runtime control decisions
+
+依使用者要求（2026-10-01 評估的路線 B），hufu runtime 本身可以在四個固定的
+控制面決策點使用 DecisionPrimitive。此節只針對這四個呼叫點取代 §P7 與 §20 的
+「不接入 coordinator、guard」限制；§22 DecisionEngine 邊界、§26 pure decision
+surface 與 §34 anti-patterns 不變。
+
+決策點與語意（問題文字、選項對應、context key 與安全結果都是 Go 常數，
+spec ID 為 `hufu.<point>`、version `v1`；team 設定不能改變問題）：
+
+| Point | Kind | 低信心（abstained）時 |
+|---|---|---|
+| `agent-matcher` | choice（2–21 個 worker） | fail closed，要求明確指定 agent |
+| `ask-user` | choice（2–21 個選項，只限 `single_choice`） | 通知需要人類，請 agent 自行判斷；不猜第一個選項 |
+| `path-reviewer` | boolean（是否真的存取檔案） | 保留路徑，照常走 consent |
+| `guard-reviewer` | boolean（是否符合所有 guard rule） | deny |
+
+規則：
+
+1. backend 固定為 `systemone`；沒有 `sidecar` 或 `rule` control backend。
+2. 模式為 `off | shadow | active`，預設 `off`。`off` 時不送 request、不寫事件、
+   不改 policy snapshot，行為與先前完全相同。
+3. `shadow` 與既有 sidecar 路徑並行執行，回傳既有結果，只記錄兩者是否一致。
+4. `active` 時，decided 且達門檻才採用 systemone；技術錯誤（含 unavailable、
+   timeout、invalid output）一律退回既有路徑，只有成功的 abstention 才採用上表
+   的安全結果。因此 active 的可用性不低於 `off`。
+5. 每次 shadow/active 呼叫寫一筆 `control_decision_observed` durable event，
+   只含 point、mode、套用來源、status、編碼後的值（`true`/`false` 或 0-based
+   候選索引）、raw confidence、error code、duration 與既有結果；不得包含問題、
+   命令、路徑、tool arguments、選項文字、goal、endpoint 或 credential。
+6. 送出前每個 context 字串都經過 `utils.RedactSecrets`。
+7. 只有 active point 的 transport、timeout、credential revision 與門檻會寫入
+   `ExecutionPolicySnapshot.ControlDecisionHash`（omitempty）；active 設定漂移時
+   resume fail closed，shadow 漂移不影響 resume。
+8. `control-decisions:` 可寫在 hufu.yaml 與 team.yaml；每個欄位依 team → hufu.yaml
+   → 預設解析。
+9. confidence 維持 `raw`，不宣稱 calibration。
+
+分層：`internal/decisionrt/control` 持有設定、驗證、固定 spec 與 hash，不得依賴
+`internal/team`、`internal/agent`、`internal/sidecar` 或 `cmd/hufu`；mode、
+shadow 協調、事件、snapshot 與 report 屬 `internal/team`。
+
+實作計畫見 [DecisionPrimitive control decisions implementation plan](decision-primitive-control-decisions.md)。

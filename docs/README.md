@@ -38,8 +38,11 @@ to re-create an abstraction that already exists in the runtime.
   stages, evidence, deterministic aggregation, routing, and commit gates.
 - [DecisionPrimitive](architecture/decision-primitive.md) — bounded typed
   decisions, backend contracts, strict sidecar mapping, the System One
-  decision-model adapter, the standalone `hufu decisionrt` CLI, and native
-  agent-team tools.
+  decision-model adapter, the standalone `hufu decisionrt` CLI, native
+  agent-team tools, and runtime control decisions.
+- [DecisionPrimitive control decisions implementation plan](architecture/decision-primitive-control-decisions.md)
+  — draft plan for running the agent matcher, unattended `ask_user`, path
+  reviewer, and guard reviewer on `systemone` in shadow or active mode.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
