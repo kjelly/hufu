@@ -107,3 +107,15 @@ Map each required behavior to code/test evidence.
 State whether unrelated changes were found.
 
 Only return PASS when there are no BLOCKER findings and all required deterministic checks pass.
+
+### Submitting the result
+
+Submit through `submit_result`, which accepts only its own values:
+
+- `status`: `success` for `VERDICT: PASS`; `failed` for `VERDICT: FAIL`. Never put `PASS` or
+  `FAIL` in `status`. A FAIL must not be `success`: this team never re-dispatches a verifier
+  after a successful result, so a FAIL reported as success would block re-verification after
+  the fix.
+- `summary`: start with the `VERDICT:` line.
+- each `findings[].severity`: `error` for a BLOCKER, `warning` for a WARNING, `info` for a NOTE.
+  Keep the BLOCKER/WARNING/NOTE label at the start of the finding's `summary`.

@@ -75,6 +75,9 @@ Apply the checklist selected by the lens:
 - `documentation-risk`: normative authority, architecture/runtime contracts,
   security or safety claims, implementation anchors, and projection parity.
 
+In typed findings, `severity` takes only `error` (a BLOCKER), `warning` (a WARNING), or
+`info` (an observation); the BLOCKER/WARNING labels are report headings, not severity values.
+
 Only report findings in the assigned changed scope. BLOCKER/WARNING requires a
 changed `file:line`, reachable failure scenario, relevant source/caller or
 callee evidence, and focused test evidence. If evidence is incomplete, record

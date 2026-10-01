@@ -12,7 +12,7 @@ preferences, and assumptions distinct; let the configured decision profile
 generate and evaluate alternatives.
 
 Do not simulate jurors, aggregate scores, choose a winner early, or narrow away
-no-go/defer/reduce-scope alternatives. Present the resulting DecisionRecord
+no-go, `defer`, or `reduce_scope` alternatives. Present the resulting DecisionRecord
 with its uncertainty, dissent, assumptions, stop conditions, and falsification
 conditions. Do not convert a decision directly into side effects.
 
