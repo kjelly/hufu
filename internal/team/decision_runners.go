@@ -244,6 +244,13 @@ func referenceEvidencePrompt(requestJSON string) string {
 		"Evidence only: do not select options, recommend, score, or return ArtifactRef, path, media type, digest, or filesystem fields. The runtime will publish artifacts and assign identity. Request: " + requestJSON
 }
 
+// proposedOptionKind folds a proposer's kind spelling ("Defer",
+// "reduce-scope") onto the declared snake_case kinds; anything else is left
+// for NormalizeProposedOptions to classify as custom.
+func proposedOptionKind(raw string) DecisionOptionKind {
+	return DecisionOptionKind(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "-", "_"))
+}
+
 // optionProposalResponse is the wire shape of the proposal stage's answer.
 type optionProposalResponse struct {
 	Options []struct {
@@ -272,7 +279,7 @@ func (r *coordinatorDecisionRunners) ProposeOptions(ctx context.Context, req Opt
 	for _, option := range decoded.Options {
 		options = append(options, DecisionOption{
 			ID:          option.ID,
-			Kind:        DecisionOptionKind(strings.TrimSpace(option.Kind)),
+			Kind:        proposedOptionKind(option.Kind),
 			Title:       option.Title,
 			Description: option.Description,
 		})

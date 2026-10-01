@@ -23,6 +23,14 @@ type FailureFingerprint struct {
 
 type RecoveryStrategy string
 
+// UnmarshalText folds case and surrounding space, so a model-written
+// "Retry" is the same strategy as "retry" for the repeated-failure rule and
+// "Human" satisfies the never-replay check.
+func (s *RecoveryStrategy) UnmarshalText(text []byte) error {
+	*s = RecoveryStrategy(strings.ToLower(strings.TrimSpace(string(text))))
+	return nil
+}
+
 const (
 	RecoveryStrategyRetry         RecoveryStrategy = "retry"
 	RecoveryStrategyReflection    RecoveryStrategy = "reflection"

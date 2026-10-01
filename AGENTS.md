@@ -120,6 +120,8 @@ Results joined and printed to stdout
 - Deterministic fallback code must not guess the user's intent. If model resolution is unavailable, ambiguous, invalid, or returns no value, use an explicitly declared safe default, request clarification, or fail closed as appropriate to the task's risk.
 - Treat model output as untrusted data. Reject values that violate the schema, authorization boundary, resource limits, or cross-field invariants before any action executes.
 - Keep domain-specific structured-input vocabulary and semantic guidance with the owning agent team, not in `cmd/hufu/` or `internal/**`.
+- Declare every fixed vocabulary in a tool parameter (statuses, actions, kinds, severities) as a lowercase or snake_case `enum`, with no two values differing only in case. `tools.CanonicalToolArgumentCase` then folds a model's letter case automatically (`"BLOCKED"` → `"blocked"`) before validation. Do not write a hand-rolled exact `switch` on a model string without an enum or an explicit `strings.ToLower`.
+- Team prompts must name the exact values the receiving tool accepts (for example `submit_result` status `blocked`, not `BLOCKED: <reason>`); case folding cannot map synonyms such as PASS→success or BLOCKER→error.
 
 ### Coordinator Features
 

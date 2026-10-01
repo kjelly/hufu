@@ -388,7 +388,9 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 		return fantasy.NewTextErrorResponse("question is required"), nil
 	}
 
-	questionType := args.Type
+	// The type is a fixed snake_case vocabulary without a schema enum; fold
+	// case and separators so "Multiple-Choice" is not silently single choice.
+	questionType := strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(args.Type)))
 	if questionType == "" {
 		if len(args.Options) > 0 {
 			questionType = "single_choice"

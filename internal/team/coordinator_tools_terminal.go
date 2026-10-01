@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -122,6 +123,11 @@ func (t *terminalTool) parseArgs(input string) (*terminalArgs, error) {
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %v", err)
 	}
+	// Fixed vocabularies without a schema enum. The action also names the
+	// terminal_<action> permission, so fold it before any check.
+	args.Action = strings.ToLower(strings.TrimSpace(args.Action))
+	args.Filter = strings.ToLower(strings.TrimSpace(args.Filter))
+	args.Target = strings.ToLower(strings.TrimSpace(args.Target))
 	return &args, nil
 }
 

@@ -1053,6 +1053,9 @@ func (t *todoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	if callerName == "" {
 		callerName = "agent"
 	}
+	// action and status are fixed vocabularies without a schema enum.
+	args.Action = strings.ToLower(strings.TrimSpace(args.Action))
+	args.Status = strings.ToLower(strings.TrimSpace(args.Status))
 
 	switch args.Action {
 	case "create":

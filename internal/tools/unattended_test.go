@@ -195,3 +195,29 @@ func TestUnattendedAskUserResponse_SelectorAbstentionAsksForHuman(t *testing.T) 
 		t.Fatalf("needs-human question = %q", notified)
 	}
 }
+
+func TestExecuteAskUser_FoldsQuestionTypeSpelling(t *testing.T) {
+	SetOnNeedsHuman(nil)
+	SetOnAskUserTUI(nil)
+	for _, raw := range []string{"Multiple-Choice", " MULTIPLE_CHOICE ", "multiple choice"} {
+		t.Run(raw, func(t *testing.T) {
+			seen := ""
+			ctx := context.WithValue(context.Background(), UnattendedKey, true)
+			ctx = context.WithValue(ctx, AskUserChoiceSelectorKey, AskUserChoiceSelector(func(_ context.Context, _ string, qtype string, _ []AskUserTUIOption, _ bool) (AskUserResponse, error) {
+				seen = qtype
+				return AskUserResponse{Answers: []string{"a", "b"}}, nil
+			}))
+			input, _ := json.Marshal(map[string]any{
+				"question": "pick some", "type": raw,
+				"options": []map[string]string{{"label": "a", "value": "a"}, {"label": "b", "value": "b"}},
+			})
+			resp, err := executeAskUser(ctx, fantasy.ToolCall{ID: "1", Name: "ask_user", Input: string(input)})
+			if err != nil || resp.IsError {
+				t.Fatalf("response = %+v, %v", resp, err)
+			}
+			if seen != "multiple_choice" {
+				t.Fatalf("selector saw type %q, want multiple_choice", seen)
+			}
+		})
+	}
+}
