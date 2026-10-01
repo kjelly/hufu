@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `3a7b51b`
+> Verified-Commit: `4791d07`
 > Supersedes: —
 > Superseded-By: —
 > Target: implemented runtime contract
@@ -13,8 +13,9 @@
 > (core, sidecar adapter, standalone CLI, System One adapter, native team tool,
 > runtime control decisions). Phase 5 (§58) supersedes prior Phase 0–4
 > restrictions on team callers and team-owned persistence only; Phase 6 (§59)
-> further supersedes §20/§P7 for four fixed runtime call sites only. The core
-> layering and DecisionEngine boundary remain.
+> further supersedes §P7, §19, §20, §21, and §35 for four fixed runtime call
+> sites and the `control-decisions:` configuration only. The core layering and
+> DecisionEngine boundary remain.
 > Non-goal: reimplement any specific third-party logits-based decision
 > technique, or replace hufu's existing DecisionEngine
 > Relationship: distinct from and does not modify
@@ -1157,6 +1158,11 @@ CLI 的 flags、registry 與 fallback 規則見 §42.2、§46、§47、§52；CL
 
 ## 19. Configuration
 
+> Phase 5（§58）與 Phase 6（§59）已取代本節的設定限制：team.yaml 的
+> `decision-primitives:`，以及 hufu.yaml／team.yaml 的 `control-decisions:` 與其
+> `off|shadow|active` 模式，都是允許的設定。本節其餘內容仍描述 standalone CLI
+> 與 Go caller。
+
 MVP 只有兩個明確的建構面：
 
 1. Go caller 以 §12 的 `RuntimeConfig` 直接建構 runtime。
@@ -1199,6 +1205,9 @@ docs/architecture/decision-runtime.md
 ---
 
 ## 21. Existing behavior preservation
+
+> §58 的 `decision_primitive` tool 與 §59 的 runtime control decisions 已是生產
+> call site；兩者未設定時（§59 預設 `off`），本節的「行為完全不變」仍成立。
 
 因為 MVP 沒有生產 runtime call site，現有 team 執行、retry、routing、
 provider admission、budget、session/replay 與 DecisionEngine 行為必須完全不變。
@@ -1775,6 +1784,9 @@ Core 只回 `Receipt`；durability 由 integration layer 決定。
 ---
 
 ## 35. Compatibility
+
+> 本節「不新增或讀取任何 hufu.yaml／team.yaml 設定」的限制已被 §58
+> （`decision-primitives:`）與 §59（`control-decisions:`）取代；其餘相容性要求不變。
 
 不得改變：
 
@@ -2934,9 +2946,14 @@ contract 與 policy：
 ## 59. Phase 6 — Runtime control decisions
 
 依使用者要求（2026-10-01 評估的路線 B），hufu runtime 本身可以在四個固定的
-控制面決策點使用 DecisionPrimitive。此節只針對這四個呼叫點取代 §P7 與 §20 的
-「不接入 coordinator、guard」限制；§22 DecisionEngine 邊界、§26 pure decision
-surface 與 §34 anti-patterns 不變。
+控制面決策點使用 DecisionPrimitive。此節只針對這四個呼叫點與 `control-decisions:`
+設定，取代以下限制：
+
+- §P7 與 §20 的「不接入 coordinator、guard」；
+- §19 與 §35 的「不新增 hufu.yaml／team.yaml key、不定義 runtime mode」；
+- §21 的「沒有生產 runtime call site」前提。
+
+§22 DecisionEngine 邊界、§26 pure decision surface 與 §34 anti-patterns 不變。
 
 決策點與語意（問題文字、選項對應、context key 與安全結果都是 Go 常數，
 spec ID 為 `hufu.<point>`、version `v1`；team 設定不能改變問題）：
