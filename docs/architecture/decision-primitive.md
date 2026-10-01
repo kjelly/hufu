@@ -2,15 +2,15 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `4e40ed0`
+> Verified-Commit: `3a7b51b`
 > Supersedes: —
 > Superseded-By: —
 > Target: implemented runtime contract
 > Baseline repository: `kjelly/hufu`
 > Baseline branch: `main`
 > Baseline commit: `e02a7ef`
-> Scope: small, backend-agnostic typed decision primitive covering Phase 0–3
-> below only (core, sidecar adapter, standalone CLI).
+> Scope: small, backend-agnostic typed decision primitive covering Phase 0–4
+> below only (core, sidecar adapter, standalone CLI, System One adapter).
 > Non-goal: reimplement any specific third-party logits-based decision
 > technique, or replace hufu's existing DecisionEngine
 > Relationship: distinct from and does not modify
@@ -28,7 +28,7 @@
 
 ## 1. Objective
 
-新增一個小型、通用、backend-agnostic（後端無關）的 `DecisionPrimitive`，讓 hufu 可以對有限答案集合做 bounded typed decision（型別化的有界決策）。MVP 的 backend 是 deterministic rule 與既有 sidecar 模型。可決策的形狀例如：
+新增一個小型、通用、backend-agnostic（後端無關）的 `DecisionPrimitive`，讓 hufu 可以對有限答案集合做 bounded typed decision（型別化的有界決策）。MVP 的 backend 是 deterministic rule 與既有 sidecar 模型；Phase 4 另加入需明確選用的 System One decision-model adapter `systemone`（§18A）。可決策的形狀例如：
 
 - choice：`small | medium | large`
 - boolean：`true | false`
@@ -96,11 +96,11 @@ cmd/hufu/decisioncmd.go
 | choice / boolean / bounded score / abstain       |
 +-------------------------+------------------------+
                           |
-                  +-------+-------+
-                  |               |
-                  v               v
-               rule           sidecar
-              backend          backend
+             +------------+------------+
+             |            |            |
+             v            v            v
+           rule        sidecar     systemone
+          backend      backend      backend
 ```
 
 ### 2.2 Hard boundary
@@ -246,9 +246,17 @@ internal/decisionrt/
             sidecar.go
             sidecar_test.go
 
+        systemone/
+            systemone.go
+            request.go
+            response.go
+            transport.go
+            *_test.go
+
 ```
 
-本規格不建立其他 backend 目錄，也不新增 Python 或外部推論服務依賴。
+除 Phase 4 的 `systemone/`（只依賴 standard library 與 core，§18A）外，本規格不建立
+其他 backend 目錄，也不新增 Python 或外部推論服務依賴。
 
 ---
 
@@ -425,6 +433,12 @@ same request -> same semantic input
    value 長度不得超過 4096 UTF-8 bytes。
 8. Canonicalized Context 的 JSON encoding 不得超過 64 KiB；超過就回
    `ErrorInvalidRequest`。
+9. `CanonicalContextValues(map[string]any) (map[string]any, error)` 是
+   canonical context 唯一的對外出口：它由 `Digest` 使用的同一組 canonical
+   entries 產生 transport 用的 map，每個值為 `string`、`bool` 或
+   `json.Number`，nil 或空 Context 回空 map，invalid Context 回與
+   `Request.Validate()` 相同的 error。sidecar prompt 與 systemone `state`
+   都必須使用它；backend 不得保留私有的數值 canonicalization。
 
 ---
 
@@ -657,8 +671,9 @@ type RuntimeConfig struct {
 func NewRuntime(cfg RuntimeConfig) (Runtime, error)
 ```
 
-`Primary` 必須非 nil。`Timeout == 0` 時使用 `2s`；負值或超過
-`10s` 是 configuration error，建構時立即拒絕。`Fallback` 若與
+`Primary` 必須非 nil。`Timeout == 0` 時使用 `DefaultTimeout`（`5s`）；負值或
+超過 `MaxTimeout`（`30s`）是 configuration error，建構時立即拒絕。兩個值都是
+`decisionrt` 的 exported constants，CLI 直接沿用。`Fallback` 若與
 `Primary` 是同一個 backend name 也必須拒絕，避免假 fallback。
 每個 backend 的 `Name()` 必須固定、trim 後非空、無 leading/trailing
 whitespace，並符合 `[a-z][a-z0-9._-]{0,127}`；`NewRuntime` 在建構時讀取並保存名稱，
@@ -1047,6 +1062,92 @@ CLI flag 動態組出任意規則。任何自訂 `Func`
 在沒有 rule 語言/DSL（本節已明文禁止）的前提下，還要求 CLI 能「建立」通用
 規則。
 
+### 18A. System One backend
+
+`internal/decisionrt/backend/systemone` 是需明確選用的 provider adapter：它對
+一個 exact URL 送出 native System One decision protocol 的 `POST`，例如
+Ollama 0.35 起提供的 `/v1/systemone`（decision model 如 `nimble`）。Core API、
+`Request`、`BackendResult`、`Receipt` 與 `Backend` interface 都不因此改變；
+provider 知識只存在於這個 adapter。
+
+建構：
+
+```go
+type Config struct {
+    Endpoint   string
+    APIKey     string
+    Model      string
+    HTTPClient *http.Client
+}
+
+func New(Config) (decisionrt.Backend, error)
+```
+
+- `New` 不做 network I/O。失敗回 `ErrorConfiguration`，並可用 `errors.Is`
+  比對 `ErrMissingModel`、`ErrInvalidModel`、`ErrInvalidEndpoint`、
+  `ErrInvalidAPIKey`（依此順序檢查）。
+- `Endpoint` 必須是含 hostname 的 `http`/`https` URL，不得含 userinfo、query
+  或 fragment；path 原樣使用，不自動補 `/v1/systemone`。
+- `Model` 必填，不得有 leading/trailing whitespace、invalid UTF-8 或 control
+  character，上限 128 Unicode code points 與 256 UTF-8 bytes。
+- `APIKey` 可為空，不得含 control character；非空時送
+  `Authorization: Bearer <key>`。
+- 傳入的 `HTTPClient` 先 clone 再設定 redirect 行為，caller 的 client 不被修改；
+  adapter 一律不跟隨 redirect。
+- `Name()` 固定為 `systemone`。
+
+Request mapping：
+
+- 先執行 `Request.Validate()`，再送出唯一一個 native question，key 固定為
+  `decision`。Body 只有 `model`、`state`、`questions` 三個欄位。
+- `state` 是 §7.3 `CanonicalContextValues` 的結果（空 Context 為 `{}`）；不送
+  `Purpose`、spec ID/version、digest、fallback 或 receipt metadata。
+- `Spec.Question` 成為 `instructions`。
+- `choice`：native `choice`；options 依宣告順序對應 opaque key `o00`…`o20`，
+  criterion description 為 option ID，description 非空時再接 `: ` 與
+  description。
+- `boolean`：native `noul`，沒有 criteria。
+- `integer_range`：native `choice`（不使用 native `score`，因為 score 可能是
+  小數）；整數依遞增順序對應 `i00`…`i20`，description 為十進位整數。
+- 以下 local limits 在 HTTP 前回 `ErrorBackendFailure` 且不送出 request：單值
+  integer range（`Min == Max`；Ollama 對只有一個 criterion 的 choice 回 HTTP
+  400），以及 encoded request body 超過 64 KiB（hufu 自己的上限，非 provider
+  文件規定）。不得在本地自行決定，也不得補假候選。與 sidecar 的 prompt
+  上限一致，Go caller 自行設定的 fallback 仍可接手。
+
+Response：
+
+- Body 上限 64 KiB，必須是 valid UTF-8 的單一 JSON document，任何層級都不得
+  有重複 object name（含 escaped name）；error 不得包含 raw body。
+- `answers` 必須恰好只有 `decision` 一個 key；未知 extension fields 忽略。
+- `choice`：`type` 為 `choice`；`choice` 是已宣告 key；`probabilities` 恰好
+  涵蓋所有已宣告 key，每個值是 `[0,1]` 內的 finite number，總和與 1 相差不
+  超過 `1e-6`（不得 renormalize）；provider `confidence` 必須存在且在
+  `[0,1]`，但不作為 hufu confidence（它與選中機率不同，例如 0.507/0.493 的
+  二選一 confidence 只有 0.00014）。
+- `noul`：`type` 為 `noul`；`noul` 是 P(true)，必須存在且在 `[0,1]`；只有
+  `noul > 0.5` 才選 `true`，0.5 選 `false`。
+- Result：`StatusDecided`；`Candidates` 依宣告順序完整列出（boolean 為
+  `false`、`true`）；`Confidence` 是選中候選的機率；`ConfidenceSemantics` 為
+  `ConfidenceRaw`；`Model` 是設定的 model，不採用 provider 回傳的 alias。永不回
+  `ConfidenceCalibrated`。Provider 選了非最大機率的 key 時保留其選擇。
+
+HTTP 與 errors：
+
+| 情況 | Kind |
+|---|---|
+| HTTP 前的 local limit | `ErrorBackendFailure` |
+| network/DNS、HTTP 408、429、5xx、redirect、其他非預期 non-2xx | `ErrorBackendFailure` |
+| HTTP 400、401、403、404、405、415、422 | `ErrorBackendUnavailable` |
+| 2xx 但內容不符上述規則或超過 64 KiB | `ErrorInvalidBackendOutput` |
+
+Non-2xx 只依 status code 分類，不讀 provider error text。Adapter 不 stream、
+不 retry、不探測 model，也不送 `keep_alive` 等 provider extension。Error、
+receipt 與 metrics 不得包含 provider body、endpoint path、API key 或 state。
+
+CLI 的 flags、registry 與 fallback 規則見 §42.2、§46、§47、§52；CLI 不替
+`systemone` 設定 fallback。
+
 ---
 
 ## 19. Configuration
@@ -1064,8 +1165,10 @@ MVP 只有兩個明確的建構面：
 - `rule`：§18.1 的 `AlwaysAbstain()`，永遠 available。
 - `sidecar`：§17 adapter；只有在 CLI 提供有效 model/provider
   設定時 available。
+- `systemone`：§18A adapter；只有在 CLI 提供有效 model/URL 設定時
+  available。
 
-除了上述兩個名稱，任何 backend name 都是
+除了上述三個名稱，任何 backend name 都是
 `ErrorBackendUnavailable`。
 
 ---
@@ -1109,9 +1212,11 @@ provider admission、budget、session/replay 與 DecisionEngine 行為必須完�
 
 ## 23. External inference backends are excluded
 
-本實作不建立 logits、llama.cpp、Python/HTTP model service 或其他新
-inference backend，也不建立這些 backend 的空目錄、registry row、CLI
-help 或範例。Core API 只保持 backend-agnostic。
+本實作不建立 logits、llama.cpp、Python model service 或其他新 inference
+backend，也不建立這些 backend 的空目錄、registry row、CLI help 或範例。唯一
+例外是 Phase 4 需明確選用的 `systemone` adapter（§18A）：它只呼叫外部
+decision-model service，不在 hufu 內實作推論。Core API 保持
+backend-agnostic，provider 知識只存在於 `Backend` 之後的 adapter。
 
 ---
 
@@ -1119,7 +1224,9 @@ help 或範例。Core API 只保持 backend-agnostic。
 
 本實作不建立 training、calibration、Brier/ECE 或 dataset subsystem。
 §9/§13 的 `ConfidenceCalibrated` 只是 API 可表達的語意；MVP 的
-`rule` 與 `sidecar` backend 都回傳 `ConfidenceNone`。
+`rule` 與 `sidecar` backend 都回傳 `ConfidenceNone`。`systemone` 回傳
+`ConfidenceRaw`（選中候選的 provider 機率），永不回 `ConfidenceCalibrated`，
+因此 `RequireCalibratedConfidence` 一律拒絕其結果。
 
 ## 25. Observability
 
@@ -1214,7 +1321,8 @@ DecisionPrimitive says: "human"
 
 ## 28. Concurrency
 
-`Runtime`、rule backend 與 sidecar adapter 必須 safe for concurrent use。所有
+`Runtime`、rule backend、sidecar adapter 與 systemone adapter 必須 safe for
+concurrent use。所有
 per-request state 都放在 local scope；shared object 不保存 prompt、raw response、
 token mapping 或前一次結果。注入的 `Generator` 也必須由實作者保證
 concurrency-safe；adapter 不額外序列化呼叫。注入的 `Metrics` 和自訂
@@ -1226,10 +1334,13 @@ concurrency-safe；adapter 不額外序列化呼叫。注入的 `Metrics` 和自
 
 每次 backend attempt 都使用 `context.WithTimeout`：
 
-- `RuntimeConfig.Timeout == 0`：`2s`。
-- `0 < Timeout <= 10s`：使用指定值。
-- `Timeout < 0` 或 `Timeout > 10s`：`NewRuntime` 回
+- `RuntimeConfig.Timeout == 0`：`DefaultTimeout`（`5s`）。
+- `0 < Timeout <= MaxTimeout`（`30s`）：使用指定值。
+- `Timeout < 0` 或 `Timeout > MaxTimeout`：`NewRuntime` 回
   `ErrorConfiguration`，不得 clamp。
+- 預設值涵蓋暖機後的 decision request；model 冷載入可能超過預設值，此時由
+  caller 明確提高 timeout（最多 `MaxTimeout`）。預設值仍讓卡住的 server 盡快
+  失敗。
 - Caller deadline 較早時由 Go context 自然採較早 deadline。
 - Primary 進入 fallback 時，fallback 取得新的 attempt timeout，但仍受原始
   caller context 的 deadline/cancellation 約束。
@@ -1310,6 +1421,27 @@ changed context -> different digest
 - cancellation
 - fixed `ConfidenceNone`, zero confidence, empty candidates
 - `ModelID()` copied to result
+- golden prompt bytes for every accepted Context value type（§7.3）
+
+### 30.4A System One backend
+
+以 `httptest.Server` 與依 wire shape 建立的 fixture 測試，不連 live model：
+
+- choice 2／21 options、opaque key 與宣告順序、criterion description、
+  provider confidence 與選中機率不同
+- boolean `noul` 0、0.1、0.5、0.9、1 的 candidate 順序與 0.5 tie
+- integer range（含 `-2..2`、21 values、`int64` 下界）一律 native `choice`
+- 單值 integer range 與超過 64 KiB 的 request 在 HTTP 前回
+  `ErrorBackendFailure`，server 收到 0 個 request
+- `state` 只含 canonical Context；body 不含 runtime metadata
+- missing／null／wrong-type 欄位、未宣告或缺少的 probability key、總和錯誤、
+  out-of-range、duplicate（含 escaped 與 nested）、invalid UTF-8、trailing
+  JSON 皆為 `ErrorInvalidBackendOutput`
+- exact POST path、headers、optional `Authorization`、redirect 被拒、
+  cancellation、64 KiB response 上限、每個 HTTP status 分類、response body
+  必定關閉、error 不含 secret／state／provider text
+- constructor validation 不做 network call；adapter 只 import standard library
+  與 core；concurrent use 通過 race detector
 
 ### 30.5 CLI
 
@@ -1483,6 +1615,38 @@ exit code / stdout-stderr contract 測試通過（§48/§49/§54）
 
 ---
 
+### Phase 4 — System One adapter
+
+新增：
+
+```text
+internal/decisionrt/backend/systemone/
+cmd/hufu/decisionrt_systemone_test.go
+```
+
+依序完成：sidecar prompt 與 digest 的 golden tests；§7.3 的
+`CanonicalContextValues`（sidecar 改用它，prompt bytes 不變）；§29 的
+`DefaultTimeout`／`MaxTimeout`；§18A adapter；registry 與 CLI flags（§42.2、
+§46、§47、§52）。
+
+不得：
+
+- 修改 `Request`、`BackendResult`、`Receipt` 或 `Backend` interface
+- 依賴 `internal/team`，或把 systemone 接到 team execution、routing、retry、
+  guard 或 authorization
+- 為 systemone 設定 CLI fallback、加入 `--fallback-backend`、model discovery、
+  warm-up 或 calibration
+
+Exit criteria：
+
+```text
+rule、sidecar、systemone 皆可明確選用；rule 預設與 sidecar 行為不變
+systemone choice/boolean/integer mapping、local limits 與 raw confidence 測試通過
+go test ./...、go vet ./...、golangci-lint run 通過
+```
+
+---
+
 ## 33. Minimal Go usage
 
 ```go
@@ -1629,11 +1793,17 @@ Phase 3 完成時更新 `README.md` 與 `README.tw.md` 的 command reference，�
 
 1. `DecisionPrimitive` 與既有 `DecisionEngine` 不同。
 2. `hufu decisionrt` 是明確呼叫、decision-only 的 standalone command。
-3. Backend 只有 `rule` 與 `sidecar`；rule 固定 abstain，sidecar 需要明確
-   model/provider flags。
+3. Backend 有 `rule`、`sidecar` 與 `systemone`；rule 固定 abstain，sidecar
+   需要明確 model/provider flags，systemone 需要明確 `--systemone-model`、
+   回傳 raw confidence 且沒有 fallback。
 4. `ABSTAINED`、technical failure 與 exit code 的差異。
+5. Per-attempt timeout 預設 `5s`、上限 `30s`；本地 decision model 的延遲取決於
+   硬體，model 冷載入時可能需要提高 `--timeout`、先暖機或在 server 端調高
+   `OLLAMA_KEEP_ALIVE`。不得發布實測延遲數字。
 
-不得宣稱第三方 protocol compatibility、校準能力或 coordinator integration。
+除了說明 `systemone` 對應 Ollama 0.35 `/v1/systemone` 的 native response
+shape 之外，不得宣稱其他第三方 protocol compatibility（包括 hosted TypeSafe
+API）、校準能力或 coordinator integration。
 
 ---
 
@@ -1652,6 +1822,8 @@ Phase 3 完成時更新 `README.md` 與 `README.tw.md` 的 command reference，�
 - [x] core 不依賴 `internal/team`。
 - [x] core 不依賴任何 logits inference backend/Python。
 - [x] sidecar adapter 使用 strict bounded protocol。
+- [x] systemone adapter 只依賴 standard library 與 core，回傳 raw confidence，
+      且 sidecar prompt bytes 與 request digest 不變。
 - [x] `hufu decisionrt` CLI（Phase 3）不需要 team.yaml 或 agent team 即可
       獨立運作。
 - [x] 不新增第二套 DecisionEngine。
@@ -1683,8 +1855,8 @@ and which has no call site in the existing team runtime or DecisionEngine.
 
 ## 39. Coding-agent execution instruction
 
-實作時依 Phase 0 -> 1 -> 2 -> 3 順序進行（§32：0 baseline、1 core、
-2 sidecar adapter、3 standalone CLI）。
+實作時依 Phase 0 -> 1 -> 2 -> 3 -> 4 順序進行（§32：0 baseline、1 core、
+2 sidecar adapter、3 standalone CLI、4 System One adapter）。
 
 每一 Phase：
 
@@ -1697,9 +1869,10 @@ and which has no call site in the existing team runtime or DecisionEngine.
 7. 不提前實作下一 Phase。
 8. 若現有 repository naming/abstraction 與本文件有衝突，優先維持現有 architecture invariant，再以最小差異調整名稱；不得以此為理由擴張 scope。
 
-Phase 3 結束後必須額外執行 `go vet ./...` 與 `golangci-lint run`。Coordinator
-integration、mode、external inference backend、calibration 與 persistence
-subsystem 均不得實作，也不得建立其空目錄、config 或介面骨架。
+Phase 3 與 Phase 4 結束後必須額外執行 `go vet ./...` 與 `golangci-lint run`。
+Coordinator integration、mode、§18A 以外的 external inference backend、
+calibration 與 persistence subsystem 均不得實作，也不得建立其空目錄、config 或
+介面骨架。
 
 
 ---
@@ -1871,25 +2044,36 @@ scalar 時才當 literal string。`null`、object、array 一律拒絕。需要�
 `choice`、`boolean`、`integer` 與 `run` 共用：
 
 ```text
---backend string            default "rule"; only rule|sidecar
---timeout duration          per attempt; default 2s; (0,10s]
+--backend string            default "rule"; rule|sidecar|systemone
+--timeout duration          per attempt; default 5s; (0,30s]
 --min-confidence float      optional; [0,1]
 --require-calibrated        default false
 --no-fallback               default false
 --sidecar-model string      required when sidecar is selected
 --provider-url string       default http://127.0.0.1:11434/v1
 --provider-api-key string   optional; otherwise HUFU_PROVIDER_API_KEY
+--systemone-model string    required when systemone is selected
+--systemone-url string      default http://127.0.0.1:11434/v1/systemone
+--systemone-api-key string  optional; otherwise HUFU_SYSTEMONE_API_KEY
 --json                      default false
 --receipt                   default false
 ```
 
 這些 flags 不得從 `hufu.yaml` 或 `team.yaml` 補值。API key 不得出現在
 usage、diagnostics、result 或 receipt。`--require-calibrated` 必須隱含
-`MinConfidence=0`，因此 MVP 的 rule/sidecar 都會 abstain；若同時提供
-`--min-confidence` 則使用該 threshold。
+`MinConfidence=0`，因此 rule、sidecar 與 systemone（只有 raw confidence）都會
+abstain；若同時提供 `--min-confidence` 則使用該 threshold。`--min-confidence`
+對 systemone 比較的是選中候選的 raw probability；對 rule/sidecar
+（`ConfidenceNone`）則一律 abstain。
 
 `--sidecar-model` 不得有 leading/trailing whitespace，長度上限 256 UTF-8
 bytes。`--provider-url` 必須符合 §46；API key 可以為空且不得做格式猜測。
+
+`--systemone-model`、`--systemone-url` 與 `--systemone-api-key` 依 §18A 驗證；
+`--systemone-url` 是 exact endpoint。`--systemone-api-key` 為空時才讀
+`HUFU_SYSTEMONE_API_KEY`。`--provider-url`、`--provider-api-key`、
+`--sidecar-model` 與 `HUFU_PROVIDER_API_KEY` 只用於 sidecar；systemone flags 與
+`HUFU_SYSTEMONE_API_KEY` 只用於 systemone。
 
 ---
 
@@ -2074,9 +2258,11 @@ CLI 可 explicit override backend：
 ```bash
 hufu decisionrt choice ... --backend rule
 hufu decisionrt choice ... --backend sidecar --sidecar-model qwen3:1b
+hufu decisionrt choice ... --backend systemone --systemone-model nimble
 ```
 
-MVP 只有這兩個名字有效（`local`／`logits` 未定義任何 backend，見 §23，
+只有 `rule`、`sidecar`、`systemone` 三個名字有效（`local`／`logits` 未定義任何
+backend，見 §23，
 不得出現在 flag 說明或範例中；傳入未知名字必須 configuration error）。
 
 但 backend 必須經 registry 解析：
@@ -2088,9 +2274,12 @@ type BackendRegistry interface {
 }
 
 type RegistryOptions struct {
-    SidecarModel  string
-    ProviderURL   string
-    ProviderAPIKey string
+    SidecarModel    string
+    ProviderURL     string
+    ProviderAPIKey  string
+    SystemOneModel  string
+    SystemOneURL    string
+    SystemOneAPIKey string
 }
 
 func NewDefaultRegistry(RegistryOptions) BackendRegistry
@@ -2103,13 +2292,15 @@ type BackendInfo struct {
 }
 ```
 
-`NewDefaultRegistry` 只註冊這兩個 backend：
+`NewDefaultRegistry` 只註冊這三個 backend：
 
 - `rule`：§18.1 定義的固定內建 rule（無需任何 flag 建構）。
 - `sidecar`：包裝既有 `internal/sidecar`。Registry factory 以 §42.2 flags
   呼叫 `agent.NewOpenAICompatibleProvider(opts.ProviderURL,
   opts.ProviderAPIKey, "local")`、`sidecar.NewSidecar` 與 §17 adapter；
   command handler 不得直接含 provider construction 或 response parsing。
+- `systemone`：以 §42.2 flags 呼叫 §18A 的 `systemone.New`；protocol mapping
+  與 response parsing 只在 adapter 內。
 
 CLI 不得：
 
@@ -2130,8 +2321,11 @@ host、無 userinfo/query/fragment 的合法 `http`/`https` URL 時才把 sideca
 `Resolve("sidecar")` 才執行 constructors，失敗
 回 `ErrorBackendUnavailable`。選擇 unavailable/unknown backend 也回同一 kind，
 不得 silent 選擇其他模型。
-`List()` 固定只回兩筆且順序為 `rule`、`sidecar`；`Type` 分別固定為
-`deterministic`、`generative`。
+`List` 以 `systemone.New` 自己的設定檢查判斷 systemone availability（不做
+network I/O、不讀 API key）；`Resolve("systemone")` 建構失敗同樣回
+`ErrorBackendUnavailable`。
+`List()` 固定回三筆且順序為 `rule`、`sidecar`、`systemone`；`Type` 分別固定為
+`deterministic`、`generative`、`decision-native`。
 
 ---
 
@@ -2143,6 +2337,7 @@ CLI 依下列固定規則建立 runtime，不讀 config：
 |---|---|---|
 | `rule` | none | none |
 | `sidecar` | `rule` (`AlwaysAbstain`) | none |
+| `systemone` | none | none |
 
 例如：
 
@@ -2193,6 +2388,12 @@ hufu decisionrt choice ... \
 ```
 
 此時 backend technical failure 應直接 non-zero exit。
+
+`systemone` 沒有 CLI fallback：technical failure、invalid output 與 local limit
+直接依 §48 回 exit 4 或 5，policy rejection 回 `ABSTAINED`
+（`low_confidence`，exit 3）。`--no-fallback` 可接受但沒有額外效果。sidecar 回
+`ConfidenceNone`，因此不能接手被 `--min-confidence` 或 `--require-calibrated`
+拒絕的 systemone 結果；CLI 也不提供 `--fallback-backend`。
 
 ---
 
@@ -2376,10 +2577,11 @@ hufu decisionrt backends
 NAME       AVAILABLE   TYPE            REASON
 rule       yes         deterministic    -
 sidecar    no          generative       missing_sidecar_model
+systemone  no          decision-native  missing_systemone_model
 ```
 
-（MVP 的 registry 只註冊這兩個 backend；沒有第三個 unavailable 的
-`logits` row，因為那個 backend 本次不建立，見 §23。）
+（registry 只註冊這三個 backend；沒有 unavailable 的 `logits` row，因為那個
+backend 不建立，見 §23。）
 
 JSON：
 
@@ -2400,6 +2602,12 @@ hufu decisionrt backends --json
       "available": false,
       "type": "generative",
       "reason": "missing_sidecar_model"
+    },
+    {
+      "name": "systemone",
+      "available": false,
+      "type": "decision-native",
+      "reason": "missing_systemone_model"
     }
   ]
 }
@@ -2407,12 +2615,14 @@ hufu decisionrt backends --json
 
 不要把 secrets、API keys、provider credentials 顯示出來。
 
-`backends` 只接受 `--sidecar-model`、`--provider-url` 與 `--json`；不接受
-API key 或 decision/request flags，也不發出網路 request。`reason` 是
-固定 machine code；available 時省略，unavailable 時只能是
-`missing_sidecar_model`、`invalid_sidecar_model`、`invalid_provider_url`，不得
-包含底層 error 或 secret。多個問題同時存在時固定依上述列出順序回第一個
-reason。
+`backends` 只接受 `--sidecar-model`、`--provider-url`、`--systemone-model`、
+`--systemone-url` 與 `--json`；不接受 API key 或 decision/request flags，也不
+發出網路 request。`reason` 是固定 machine code；available 時省略。sidecar
+unavailable 時只能是 `missing_sidecar_model`、`invalid_sidecar_model`、
+`invalid_provider_url`；systemone unavailable 時只能是
+`missing_systemone_model`、`invalid_systemone_model`、`invalid_systemone_url`。
+Reason 不得包含底層 error 或 secret。同一 backend 有多個問題時固定依上述列出
+順序回第一個 reason。
 
 ---
 
@@ -2468,7 +2678,9 @@ CLI layer 不得：
 `newDecisionRTCommand` 必須接受 dependency struct，至少可注入
 `BackendRegistry` factory、stdin、stdout、stderr、`stdinIsTerminal` 與
 `getenv`。Unit tests 只使用 fake dependencies；default dependencies 才能建立
-真實 sidecar/provider 或讀取 `HUFU_PROVIDER_API_KEY`。
+真實 sidecar/provider/systemone adapter 或讀取 `HUFU_PROVIDER_API_KEY`、
+`HUFU_SYSTEMONE_API_KEY`；systemone 的 CLI tests 以注入的 `getenv` 搭配本機
+`httptest.Server` 使用真實 registry。
 Command constructor 必須由 `newRootCommand()` 明確
 `AddCommand(newDecisionRTCommand(defaultDecisionRTDeps()))`。每個 leaf 的
 `SetFlagErrorFunc` 與 Args validator 都必須使用 §48 的 exit-2 wrapper，確保
@@ -2568,6 +2780,22 @@ backend unavailable -> 5
 - explicit inherited global flags、missing/unknown subcommand -> exit 2
 - `--help` -> exit 0
 
+### systemone
+
+以真實 registry 與 adapter 對 `httptest.Server` 測：
+
+- decided choice 輸出 raw confidence、完整 candidates、設定的 model 與
+  `fallback_used=false`（`--json` 與 `--receipt`）
+- `--min-confidence` 與 `--require-calibrated` -> ABSTAINED `low_confidence`、
+  exit 3，不 fallback
+- invalid output／HTTP 5xx -> exit 4；HTTP 404 -> exit 5；missing model 或
+  invalid URL -> exit 5 且不送 request；單值 integer range -> exit 4 且不送
+  request
+- boolean／integer 對回 typed value；`HUFU_SYSTEMONE_API_KEY` 只在
+  `--systemone-api-key` 為空時使用，不使用 sidecar 的 key
+- `--timeout` 預設 `DefaultTimeout`，`30s` 可用、`31s` exit 2
+- API key 與 provider error text 不出現在 stdout/stderr
+
 ---
 
 ## 55. CLI safety
@@ -2621,6 +2849,8 @@ DecisionPrimitive 本身永遠不擁有 action authority（執行權限）。
 - [x] `--json` 提供 stable machine schema。
 - [x] `--receipt` 可輸出 request digest 與 runtime receipt。
 - [x] `--backend` 可 explicit 選 backend。
+- [x] `--backend systemone` 可明確選用 System One decision model，raw
+      confidence 可用於 `--min-confidence`。
 - [x] `--no-fallback` 可供 diagnostics。
 - [x] ABSTAINED 與 technical failure 有不同 exit code。
 - [x] CLI 不建立 `DecisionRecord`。

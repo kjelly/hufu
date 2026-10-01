@@ -182,9 +182,9 @@ go run ./cmd/hufu
 的 durable `DecisionEngine` 及 `hufu decision` 指令不同。此指令不會載入
 Agent 團隊、不會建立 `DecisionRecord`，也不會把選出的值自動當成 action 執行。
 
-目前 backend 只有 `rule` 與 `sidecar`。預設的 `rule` 永遠 abstain；使用
-`sidecar` 時必須明確提供 `--sidecar-model`；`--provider-url` 預設為本地
-Ollama 端點（`http://127.0.0.1:11434/v1`）。若未提供
+目前 backend 有 `rule`、`sidecar` 與 `systemone`。預設的 `rule` 永遠
+abstain；使用 `sidecar` 時必須明確提供 `--sidecar-model`；`--provider-url`
+預設為本地 Ollama 端點（`http://127.0.0.1:11434/v1`）。若未提供
 `--provider-api-key`，Hufu 會在環境變數 `HUFU_PROVIDER_API_KEY` 有設定時使用它：
 
 ```bash
@@ -194,6 +194,31 @@ hufu decisionrt choice \
   --option small=小 --option large=大 \
   --backend sidecar --sidecar-model qwen3:1b --json
 ```
+
+`systemone` backend 會把決策交給原生的 decision model，例如 Ollama 0.35 以上
+在 `/v1/systemone` 提供的 `nimble`。使用時必須提供 `--systemone-model`；
+`--systemone-url` 是完整的 endpoint，預設為
+`http://127.0.0.1:11434/v1/systemone`。若未提供 `--systemone-api-key`，Hufu
+會在 `HUFU_SYSTEMONE_API_KEY` 有設定時使用它；sidecar 的 flags 與 key 不會被
+使用：
+
+```bash
+hufu decisionrt choice \
+  --id route --version v1 --purpose model-route@v1 \
+  --question "選擇執行等級" \
+  --option small="小模型" --option large="大模型" \
+  --backend systemone --systemone-model nimble --json
+```
+
+`systemone` 的結果會列出每個候選的機率，並把選中候選的機率當作 raw（未校準）
+confidence 回報，因此模型沒把握時，`--min-confidence` 會以 `low_confidence`
+abstain。對這個 backend，`--require-calibrated` 一律 abstain，而且
+`systemone` 沒有 fallback。`systemone` 不支援只有單一值的 integer range。
+
+每次 backend 嘗試的 timeout 預設為 5 秒，可用 `--timeout` 提高到最多 30 秒。
+本地 decision model 的延遲取決於硬體，建議使用有 GPU 的主機。Ollama 載入模型
+時，第一次呼叫可能超過預設值；可以提高 `--timeout`、先送一次請求暖機，或在
+server 端調高 `OLLAMA_KEEP_ALIVE`。
 
 `hufu decisionrt validate`、`run` 與 `backends` 分別用於 JSON 驗證、通用
 request 與 backend diagnostics。穩定的 exit code 可區分結果：`0` 已決策、

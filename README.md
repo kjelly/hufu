@@ -339,9 +339,9 @@ go run ./cmd/hufu
 `DecisionEngine` and the `hufu decision` commands. It does not load an agent
 team, create a `DecisionRecord`, or execute the selected value as an action.
 
-The available backends are `rule` and `sidecar`. The default `rule` backend
-always abstains. The `sidecar` backend requires an explicit `--sidecar-model`;
-`--provider-url` defaults to the local Ollama endpoint
+The available backends are `rule`, `sidecar`, and `systemone`. The default
+`rule` backend always abstains. The `sidecar` backend requires an explicit
+`--sidecar-model`; `--provider-url` defaults to the local Ollama endpoint
 (`http://127.0.0.1:11434/v1`). If `--provider-api-key` is omitted, Hufu uses
 `HUFU_PROVIDER_API_KEY` when set:
 
@@ -352,6 +352,34 @@ hufu decisionrt choice \
   --option small=Small --option large=Large \
   --backend sidecar --sidecar-model qwen3:1b --json
 ```
+
+The `systemone` backend sends the decision to a native decision model, such as
+`nimble` served by Ollama 0.35 or later at `/v1/systemone`. It requires
+`--systemone-model`. `--systemone-url` is the exact endpoint and defaults to
+`http://127.0.0.1:11434/v1/systemone`. If `--systemone-api-key` is omitted,
+Hufu uses `HUFU_SYSTEMONE_API_KEY` when set; the sidecar flags and key are not
+used:
+
+```bash
+hufu decisionrt choice \
+  --id route --version v1 --purpose model-route@v1 \
+  --question "Select the execution class" \
+  --option small="Small model" --option large="Large model" \
+  --backend systemone --systemone-model nimble --json
+```
+
+A `systemone` result carries the probability of every candidate and reports
+the selected probability as raw (uncalibrated) confidence, so
+`--min-confidence` abstains with `low_confidence` when the model is unsure.
+`--require-calibrated` always abstains for this backend, and `systemone` has
+no fallback. An integer range with a single value is not supported by
+`systemone`.
+
+Each backend attempt has a 5-second default timeout, which `--timeout` can
+raise to at most 30 seconds. Local decision-model latency depends on the
+hardware, and a GPU host is recommended. While Ollama loads a model, the first
+call can exceed the default; raise `--timeout`, warm the model with an earlier
+request, or raise `OLLAMA_KEEP_ALIVE` on the server.
 
 Use `hufu decisionrt validate`, `run`, or `backends` for JSON validation,
 generic requests, and backend diagnostics. Stable exit codes distinguish the

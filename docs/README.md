@@ -37,8 +37,8 @@ to re-create an abstraction that already exists in the runtime.
 - [Decision-aware runtime](architecture/decision-runtime.md) — decision
   stages, evidence, deterministic aggregation, routing, and commit gates.
 - [DecisionPrimitive](architecture/decision-primitive.md) — bounded typed
-  decisions, backend contracts, strict sidecar mapping, and the standalone
-  `hufu decisionrt` CLI.
+  decisions, backend contracts, strict sidecar mapping, the System One
+  decision-model adapter, and the standalone `hufu decisionrt` CLI.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
