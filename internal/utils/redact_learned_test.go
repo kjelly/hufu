@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,19 @@ func TestLearnSecretValueRejectsNonCredentials(t *testing.T) {
 		{"filesystem path", "/etc/application/vault.yml"},
 		{"already redacted", redactedSecret},
 		{"truncated redaction marker", "[REDACTED"},
+		{"separated number", "2_000_000"},
+		{"parent-relative path", "../reference/action-providers.md"},
+		{"url", "https://example.com/reference.md"},
+		{"file name", "team.yaml"},
+		{"relative document path", "docs/reference/action-providers.md"},
+		{"source path with line", "internal/team/runtime.go:42"},
+		{"english word", "requires"},
+		{"identifier", "requestTokens"},
+		{"call expression", "filepath.ToSlash(token)"},
+		{"unclosed call", "append(tokenSteps"},
+		{"index expression", "token[lastSeparator+1:"},
+		{"selector", "cfg.ProviderAPIKey"},
+		{"concatenation operand", "+ secret +"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +122,51 @@ func TestLearnSecretValueRejectsNonCredentials(t *testing.T) {
 				t.Errorf("%q must not be learned as a credential", tc.value)
 			}
 		})
+	}
+}
+
+func TestLearnSecretValueAcceptsCredentialShapes(t *testing.T) {
+	for _, value := range []string{
+		"RealPassword2024!",
+		"Sup3rSecretValue",
+		"hunter2hunter2",
+		"protocol-secret",
+		"audit-secret-7f3c-9a1e",
+		"abcdef1234567890",
+		"sk-proj-abcdefghijklmnopqrstuvwxyz123456",
+		// AWS secret access keys contain slashes but no file extension.
+		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		// A JWT is dotted like a selector, but its segments carry digits.
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+	} {
+		if !isLearnableSecret(value) {
+			t.Errorf("%q must stay learnable as a credential", value)
+		}
+	}
+}
+
+// TestLearnedSecretsIgnoreReviewedSourceText replays what a code review run
+// fed the learner: source lines and model reasoning in which a value merely
+// sits beside a credential-named key. None of those values may be redacted
+// from later records, where they name a document, a contract field, or code.
+func TestLearnedSecretsIgnoreReviewedSourceText(t *testing.T) {
+	resetLearnedSecrets(t)
+	for _, seen := range []string{
+		"    5. secretKeyValueRe: requires key names ✓.",
+		`		{name: "nested path", doc: "README.md", token: "docs/reference/action-providers.md"},`,
+		`		{name: "bare yaml filename", doc: "README.md", token: "team.yaml"},`,
+		"	token = filepath.ToSlash(token)",
+		"		providerAPIKey:    providerConfig.ProviderAPIKey,",
+		"			activeTokenStep = admission",
+		"the secret: `install.go` handles it",
+		"		MaxTokensWithoutProgress: 2_000_000,",
+	} {
+		RedactSecrets(seen)
+	}
+	later := "critic-review execution.requires-evidence: true reads docs/reference/action-providers.md, team.yaml, and `install.go`; " +
+		"admission uses filepath.ToSlash(token) and providerConfig.ProviderAPIKey with a 2_000_000 budget"
+	if got := RedactSecrets(later); got != later {
+		t.Fatalf("source text learned as credentials rewrote a later record:\n got = %q\nwant = %q", got, later)
 	}
 }
 
@@ -126,11 +185,11 @@ func TestLearnedSecretsDoNotRewriteTelemetry(t *testing.T) {
 func TestLearnedSecretsAreBounded(t *testing.T) {
 	resetLearnedSecrets(t)
 	for i := 0; i < maxLearnedSecrets+50; i++ {
-		learnSecretValue(strings.Repeat("a", 10) + string(rune('A'+i%26)) + strings.Repeat("z", i%7+1))
+		learnSecretValue(fmt.Sprintf("bounded-secret-%04d", i))
 	}
 	learnedSecrets.RLock()
 	defer learnedSecrets.RUnlock()
-	if len(learnedSecrets.order) > maxLearnedSecrets || len(learnedSecrets.values) != len(learnedSecrets.order) {
+	if len(learnedSecrets.order) != maxLearnedSecrets || len(learnedSecrets.values) != len(learnedSecrets.order) {
 		t.Fatalf("learned set unbounded or inconsistent: order=%d values=%d", len(learnedSecrets.order), len(learnedSecrets.values))
 	}
 }

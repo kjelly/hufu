@@ -1257,6 +1257,8 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 73. **Implicit tools follow the attempt's artifact policy** — Every worker attempt runs under an artifact policy: bound tasks allow only path-enforcing tools, unbound tasks refuse non-built-in tools other than declared shell tools (`workerArtifactPathPolicy`). `filterImplicitArtifactPolicyDeniedTools` hides the always-included tools that policy would refuse (`team_info`, `todo`, `request_agent`, and `memory_query` for bound tasks), so a worker is never shown a tool every call fails; explicitly declared tools stay visible so the contract error surfaces. An unbound worker may call `memory_query` because it carries the package-sealed `unboundArtifactPolicyTool` marker and answers a worker with the same scope, lineage, and memory policy the runtime uses to inject that worker's memory (`queryWorkerMemory`); a tool's self-described workspace scope is never enough to earn that trust.
 
+74. **Learn a credential only when its value looks like one** — `learnSecretsFrom` sees every line an agent reads or writes, including reviewed source code and model reasoning, so a value beside a credential-named key is often not a credential: `token = filepath.ToSlash(token)`, `token: "team.yaml"`, `secretKeyValueRe: requires`. `isLearnableSecret` rejects words, identifiers, call/index/selector expressions, concatenation operands, numbers, file names, relative paths, and URLs. A learned word is redacted from every later durable record, and that rewrite changes the task event's idempotency key, so an unchanged task is appended again. The key/value pass still redacts such a value where its key is; only the bare-value rule is narrowed.
+
 
 ## Model Configuration Priority
 

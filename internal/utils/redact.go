@@ -253,7 +253,10 @@ func learnedSecretPattern(value string) *regexp.Regexp {
 // It is deliberately conservative: a false positive here silently corrupts
 // unrelated diagnostics, which is worse than missing one bare occurrence.
 func learnSecretValue(raw string) {
-	value := unquoteSecretValue(raw)
+	// Model prose quotes code with Markdown backticks, so `install.go` or
+	// `1048576` arrives with a backtick stuck to one end. No credential
+	// starts or ends with one, and leaving it on hides the value's shape.
+	value := strings.Trim(unquoteSecretValue(raw), "`")
 	if !isLearnableSecret(value) {
 		return
 	}
@@ -295,10 +298,11 @@ func isLearnableSecret(value string) bool {
 	if strings.Contains(value, redactedSecret) || strings.Contains(redactedSecret, value) {
 		return false
 	}
-	// An all-digit value under a token-shaped key is a counter, not a
-	// credential — `tokens_since_progress: 1048576` is the common case, and
-	// redacting that number would rewrite unrelated telemetry.
-	if strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+	// A number under a token-shaped key is a counter, not a credential —
+	// `tokens_since_progress: 1048576` is the common case, and source code
+	// writes the same thing as `MaxTokensWithoutProgress: 2_000_000`.
+	// Redacting that number would rewrite unrelated telemetry.
+	if numericLiteralRe.MatchString(value) {
 		return false
 	}
 	// Unresolved references and fill-me markers are not yet secrets, and
@@ -308,12 +312,50 @@ func isLearnableSecret(value string) bool {
 			return false
 		}
 	}
-	// A filesystem path names a location, not a credential; redacting one
-	// would destroy exactly the evidence a failed run is read for.
-	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "~/") {
+	// A filesystem path or URL names a location, not a credential; redacting
+	// one would destroy exactly the evidence a failed run is read for.
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") || strings.HasPrefix(value, "~/") ||
+		strings.Contains(value, "://") || fileReferenceRe.MatchString(value) {
 		return false
 	}
-	return true
+	return !looksLikeSourceText(value)
+}
+
+var (
+	numericLiteralRe = regexp.MustCompile(`^[0-9][0-9_.,]*$`)
+	// fileReferenceRe is a file name or relative path ending in a short
+	// extension, optionally with a line and column: `team.yaml`,
+	// `docs/reference/action-providers.md`, `internal/team/runtime.go:42`.
+	fileReferenceRe = regexp.MustCompile(`^[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.[a-z][a-z0-9]{0,4}(?::[0-9]+)*$`)
+	// callOrIndexRe is a name followed by a call or an index: `ToSlash(`,
+	// `append(`, `token[`.
+	callOrIndexRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*[(\[]`)
+	// selectorChainRe is a dotted chain of names without digits, such as the
+	// Go selector `cfg.ProviderAPIKey`. Requiring every segment to be letters
+	// keeps a JWT, whose base64 segments carry digits, learnable.
+	selectorChainRe = regexp.MustCompile(`^[A-Za-z_]+(?:\.[A-Za-z_]+)+$`)
+)
+
+// looksLikeSourceText reports a value whose shape says it is a word or a
+// piece of code that merely sits beside a credential-named key. Reviewing
+// source code feeds this file lines such as `token = filepath.ToSlash(token)`
+// and `providerAPIKey: providerConfig.ProviderAPIKey`, and a model reasoning
+// about it wrote `secretKeyValueRe: requires key names`. Learning those
+// values redacted the word "requires", a document path, and a workset binding
+// out of every later durable record, and each rewrite changed the record's
+// idempotency key, so unchanged tasks were appended to the event store again.
+func looksLikeSourceText(value string) bool {
+	// A value made only of letters is a word or an identifier, such as
+	// `requires` or `requestTokens`. A credential like that is still redacted
+	// beside its key; it is only not matched when it later appears alone.
+	if strings.IndexFunc(value, func(r rune) bool { return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') }) < 0 {
+		return true
+	}
+	// The middle of a string concatenation: `"api_token=" + secret + "\n"`.
+	if strings.HasPrefix(value, "+ ") || strings.HasSuffix(value, " +") {
+		return true
+	}
+	return callOrIndexRe.MatchString(value) || selectorChainRe.MatchString(value)
 }
 
 // learnSecretsFrom scans content for key/value credential shapes and records
