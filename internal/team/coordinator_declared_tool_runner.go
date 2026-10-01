@@ -69,12 +69,7 @@ func (r *coordinatorDeclaredToolRunner) RunStructuredStep(ctx context.Context, r
 	}
 	if artifactScope != nil {
 		stepCtx = context.WithValue(stepCtx, artifactAccessScopeKey, cloneArtifactAccessScope(artifactScope))
-		stepCtx = context.WithValue(stepCtx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
-			BlockedPaths:                 r.c.artifactScopePathCandidates(artifactScope),
-			FailClosedForUnsupported:     item.WorksetBinding != nil,
-			DenyUnsupportedDeclaredTools: item.WorksetBinding == nil,
-			DeclaredShellTools:           declaredShellTools(agentDef),
-		})
+		stepCtx = context.WithValue(stepCtx, tools.ArtifactPathPolicyKey, workerArtifactPathPolicy(agentDef, item.WorksetBinding != nil, r.c.artifactScopePathCandidates(artifactScope)))
 	}
 	if len(agentDef.Guard) > 0 {
 		stepCtx = context.WithValue(stepCtx, tools.GuardRulesKey, agentDef.Guard)

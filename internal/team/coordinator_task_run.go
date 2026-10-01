@@ -1126,12 +1126,13 @@ retryLoop:
 			}
 			if attemptArtifactScope != nil {
 				taskCtx = context.WithValue(taskCtx, artifactAccessScopeKey, cloneArtifactAccessScope(attemptArtifactScope))
-				taskCtx = context.WithValue(taskCtx, tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
-					BlockedPaths:                 c.artifactScopePathCandidates(attemptArtifactScope),
-					FailClosedForUnsupported:     c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding != nil,
-					DenyUnsupportedDeclaredTools: c.todoItemByID(todoID) != nil && c.todoItemByID(todoID).WorksetBinding == nil,
-					DeclaredShellTools:           declaredShellTools(agentDef),
-				})
+				item := c.todoItemByID(todoID)
+				policy := workerArtifactPathPolicy(agentDef, item != nil && item.WorksetBinding != nil, c.artifactScopePathCandidates(attemptArtifactScope))
+				if item == nil {
+					// Without a Todo neither restriction has ever applied.
+					policy.DenyUnsupportedDeclaredTools = false
+				}
+				taskCtx = context.WithValue(taskCtx, tools.ArtifactPathPolicyKey, policy)
 			}
 			taskCtx = contextArtifacts.install(taskCtx, resolvedTools)
 

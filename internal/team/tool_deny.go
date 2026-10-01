@@ -119,10 +119,7 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if def == nil {
 		return nil
 	}
-	candidate := agent.SelectTools(c.coreTools, def.Tools)
-	if task.WorksetBinding != nil {
-		candidate = filterImplicitIncompatibleBoundTools(def, candidate)
-	}
+	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil)
 	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task)))
 }
 
@@ -137,19 +134,35 @@ func (c *Coordinator) filterCoordinatorOnlyWorkerTools(candidate []fantasy.Agent
 	return filtered
 }
 
-// filterImplicitIncompatibleBoundTools removes only convenience tools that
-// SelectTools injected implicitly and that the bound artifact policy would
-// reject. Explicitly declared tools remain in the surface so the fail-closed
-// preflight reports the contract error instead of silently changing the
-// worker's declared capability. This keeps ordinary, unbound agents' tool
-// behavior unchanged.
-func filterImplicitIncompatibleBoundTools(def *agent.AgentDef, candidate []fantasy.AgentTool) []fantasy.AgentTool {
+// workerArtifactPathPolicy is the artifact policy a worker attempt runs
+// under. A workset-bound task may use only tools that enforce artifact paths;
+// an unbound task keeps built-in tools and the shell tools its agent declares,
+// and other external tools are refused. Tool selection filters with this same
+// policy so the two cannot drift apart.
+func workerArtifactPathPolicy(def *agent.AgentDef, bound bool, blockedPaths []string) tools.ArtifactPathPolicy {
+	return tools.ArtifactPathPolicy{
+		BlockedPaths:                 blockedPaths,
+		FailClosedForUnsupported:     bound,
+		DenyUnsupportedDeclaredTools: !bound,
+		DeclaredShellTools:           declaredShellTools(def),
+	}
+}
+
+// filterImplicitArtifactPolicyDeniedTools removes only convenience tools that
+// SelectTools injected implicitly and that the attempt's artifact policy
+// would refuse on every call. Explicitly declared tools remain in the surface
+// so the fail-closed preflight or the call reports the contract error instead
+// of silently changing the worker's declared capability.
+//
+// Unbound tasks used to keep every implicit tool. Their policy refuses tools
+// outside the built-in set, so memory_query stayed visible to every unbound
+// worker while each call failed; a critic spent its turns on it and ended
+// without a result.
+func filterImplicitArtifactPolicyDeniedTools(def *agent.AgentDef, candidate []fantasy.AgentTool, bound bool) []fantasy.AgentTool {
 	if def == nil {
 		return candidate
 	}
-	policyCtx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, tools.ArtifactPathPolicy{
-		FailClosedForUnsupported: true,
-	})
+	policyCtx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, workerArtifactPathPolicy(def, bound, nil))
 	filtered := make([]fantasy.AgentTool, 0, len(candidate))
 	for _, tool := range candidate {
 		if tool == nil || !agent.IsAlwaysIncludedTool(tool.Info().Name) || agentDeclaresToolOrAlias(def.Tools, tool.Info().Name) {
