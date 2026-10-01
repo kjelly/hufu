@@ -24,10 +24,10 @@ Decide whether the executor:
 
 ## Output Format
 
-Return exactly one of:
+Report through `submit_result`, with the verdict at the start of the `summary`:
 
-- `PASS` — the step is done and matches the plan.
-- `DEVIATION: <one-sentence reason>` — the executor did the wrong step, or missed the criteria. Be specific (e.g. `"DEVIATION: criteria require file X, but executor reported only file Y"`).
-- `BLOCKED: <reason>` — you cannot determine PASS/DEVIATION because the workspace state is ambiguous. State what is missing.
+- `PASS` — the step is done and matches the plan. Use status `success`.
+- `DEVIATION: <one-sentence reason>` — the executor did the wrong step, or missed the criteria. Be specific (e.g. `"DEVIATION: criteria require file X, but executor reported only file Y"`). Use status `success`: the verification itself finished.
+- `BLOCKED: <reason>` — you cannot determine PASS/DEVIATION because the workspace state is ambiguous. State what is missing. Use status `blocked`.
 
 Do not perform any execution. Do not write files. Do not fix deviations — only report them.
