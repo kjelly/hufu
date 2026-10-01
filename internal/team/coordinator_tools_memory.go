@@ -263,6 +263,9 @@ func (t *canonicalMemoryQueryTool) Run(ctx context.Context, call fantasy.ToolCal
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); strings.TrimSpace(todoID) != "" && todoID != CoordTodoID {
+		return t.coordinator.queryWorkerMemory(ctx, todoID, args.Query, args.N, categoryKind, args.MinConfidence), nil
+	}
 	req := contextstore.SearchRequest{Query: args.Query, Scope: t.coordinator.contextScope(), Limit: 100, MinConfidence: args.MinConfidence, FilePaths: paths}
 	if categoryKind != "" {
 		req.Kinds = []contextstore.ContextKind{categoryKind}

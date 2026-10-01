@@ -167,7 +167,7 @@ func artifactScopeToolDenial(ctx context.Context, name string, inner fantasy.Age
 		// Unbound workers keep their ordinary built-in capabilities. Those tools
 		// receive the blocked backing roots through the shared tool context;
 		// only external/MCP adapters without that enforcement are denied here.
-		if tools.IsBuiltInTool(inner) || artifactScopeToolTrusted(inner) {
+		if tools.IsBuiltInTool(inner) || artifactScopeToolTrusted(inner) || isUnboundArtifactPolicyTool(inner) {
 			return ""
 		}
 		return fmt.Sprintf("tool %q is unavailable for an unbound task because declared external tools do not implement centralized artifact-path enforcement; use built-in tools or artifact_ref-aware tools", name)

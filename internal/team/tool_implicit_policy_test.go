@@ -25,8 +25,10 @@ func TestImplicitToolsTheArtifactPolicyRefusesAreHidden(t *testing.T) {
 		want     []string
 	}{
 		// The 2026-10-01 critic: unbound, declares only view, and was shown
-		// memory_query, which every call refused.
-		{name: "unbound hides implicit team tools", declared: "view", want: []string{"view", "random"}},
+		// memory_query, which every call refused. memory_query is now
+		// scoped to the calling worker and allowed; other team tools stay
+		// hidden.
+		{name: "unbound keeps scoped memory_query and hides other team tools", declared: "view", want: []string{"view", "memory_query", "random"}},
 		{name: "bound hides every implicit untrusted tool", declared: "view", bound: true, want: []string{"view"}},
 		{name: "unbound keeps a declared tool for the contract error", declared: "view,memory_query", want: []string{"view", "memory_query", "random"}},
 		{name: "bound keeps a declared tool for the preflight error", declared: "view,random", bound: true, want: []string{"view", "random"}},
