@@ -18,6 +18,12 @@ spec:
   workspace: workspace
   goal-mode: outcome
   execution-profile: fresh-session
+  # Pilot: record which persistent memories reviewers apply and whether the
+  # review's verification passes, without changing prompt selection. A fresh
+  # session still withholds the prior session's archive. Retire stale review
+  # knowledge with `hufu context retire`; set mode off to stop.
+  memory-learning:
+    mode: observe
   unattended: true
   # This team is read-only. No rollback command is configured: acceptance
   # failure must fail closed without modifying the repository.
