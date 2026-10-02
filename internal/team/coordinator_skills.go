@@ -441,10 +441,6 @@ func (c *Coordinator) mandatorySkillLoadDenial(ctx context.Context, toolName, in
 	return fmt.Sprintf("mandatory skill %q is not loaded; call load_skill for it before task-work tool %q", mandatory, toolName)
 }
 
-func (c *Coordinator) SkillDetector() *skill.SkillPatternDetector {
-	return c.skillDetector
-}
-
 func (c *Coordinator) observeSidecarUsage(result *fantasy.AgentResult) {
 	if c == nil || result == nil {
 		return

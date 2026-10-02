@@ -185,8 +185,7 @@ type reviewScopeReport struct {
 type SkillPatternReport struct {
 	Name  string
 	Tools []string
-	Count int
-	Desc  string
+	Count int64
 	Saved bool
 }
 
@@ -263,7 +262,6 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if tc.coordinator != nil {
 		d.Todos = tc.coordinator.TaskTracker().TodoList().Items()
 		d.Skills = tc.coordinator.SkillUsage()
-		d.SkillPatterns = gatherSkillPatterns(tc.coordinator)
 		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
 		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
 		if sessions, err := tc.coordinator.TerminalSessions(context.Background()); err == nil {
@@ -303,6 +301,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 	if d.EvidenceIdentity == "" {
 		d.EvidenceIdentity = "unavailable"
 	}
+	d.SkillPatterns = gatherSkillPatterns(tc, d.SourceRunID)
 	d.Cost, d.CostUnavailableReason = gatherReportCost(tc, d.SourceRunID)
 	if tc.session != nil {
 		var metrics *team.RunMetrics
@@ -720,26 +719,6 @@ func itemHasAmbiguousCurrentRunReceipts(item *team.TodoItem, runID string) bool 
 	return count > 1
 }
 
-// gatherSkillPatterns extracts detected skill patterns from coordinator
-func gatherSkillPatterns(coordinator *team.Coordinator) []SkillPatternReport {
-	detector := coordinator.SkillDetector()
-	if detector == nil {
-		return nil
-	}
-	candidates := detector.FindCandidates(context.Background())
-	var reports []SkillPatternReport
-	for _, cand := range candidates {
-		reports = append(reports, SkillPatternReport{
-			Name:  cand.SuggestedName,
-			Tools: cand.Sequence.Tools,
-			Count: cand.Sequence.Count,
-			Desc:  cand.SuggestedDesc,
-			Saved: true,
-		})
-	}
-	return reports
-}
-
 //nolint:gocyclo // report rendering intentionally covers all execution projections.
 func buildReportMD(data *reportData, teamName string, finalResult string) string {
 	var b strings.Builder
@@ -1133,15 +1112,14 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 
 	if len(data.SkillPatterns) > 0 {
 		b.WriteString("## Auto-Detected Skill Patterns\n\n")
-		b.WriteString("The following repeating patterns were detected and saved as skill drafts:\n\n")
+		b.WriteString("The following repeating tool-call patterns were detected (✓ saved as a skill draft):\n\n")
 		for _, p := range data.SkillPatterns {
 			status := "○"
 			if p.Saved {
 				status = "✓"
 			}
 			fmt.Fprintf(&b, "%s **%s** (×%d)\n", status, p.Name, p.Count)
-			fmt.Fprintf(&b, "   Pattern: %s\n", strings.Join(p.Tools, " → "))
-			fmt.Fprintf(&b, "   Description: %s\n\n", p.Desc)
+			fmt.Fprintf(&b, "   Pattern: %s\n\n", strings.Join(p.Tools, " → "))
 		}
 		b.WriteString("\n---\n\n")
 	}
