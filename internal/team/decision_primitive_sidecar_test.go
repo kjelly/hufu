@@ -87,3 +87,14 @@ func TestDecisionSidecarResolver(t *testing.T) {
 		t.Fatal("a sidecar entry without any model was accepted")
 	}
 }
+
+// TestDecisionPromptBypassesAuxiliaryContext pins decision-primitive.md §7.2
+// for backend sidecar: the coordinator's prompt preparer must hand the
+// decision prompt to the model unchanged, never wrapped in run context.
+func TestDecisionPromptBypassesAuxiliaryContext(t *testing.T) {
+	raw := "Choose exactly one candidate token from this JSON input.\nInput:\n{\"candidates\":[{\"token\":\"A0\"}]}"
+	got, err := (&Coordinator{}).prepareAuxiliaryPrompt(t.Context(), decisionPrimitivePurpose, raw)
+	if err != nil || got != raw {
+		t.Fatalf("prepared prompt = %q, %v; want the raw decision prompt", got, err)
+	}
+}

@@ -29,6 +29,12 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 	if _, err := contextPurposePolicy(purpose); err != nil {
 		return "", err
 	}
+	// A decision primitive's prompt is its request. The decision may depend
+	// only on context the caller put in that request (decision-primitive.md
+	// §7.2), so it reaches the model exactly as the backend built it.
+	if purpose == decisionPrimitivePurpose {
+		return rawPrompt, nil
+	}
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 	attempt, _ := ctx.Value(executionAttemptKey{}).(int)
 	if attempt < 1 {

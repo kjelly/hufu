@@ -62,6 +62,9 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	// It remains explicit so the audit can drive each caller toward a narrower
 	// purpose without creating an ambient default path.
 	"classifier": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "classifier_unavailable"},
+	// A decision primitive on backend sidecar. Its prompt is the whole
+	// request, so prepareAuxiliaryPrompt passes it through unchanged.
+	decisionPrimitivePurpose: {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "decision_unavailable"},
 }
 
 func contextPurposePolicy(purpose string) (ContextPurposePolicy, error) {

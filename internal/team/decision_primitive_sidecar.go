@@ -9,6 +9,10 @@ import (
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
+// decisionPrimitivePurpose is the auxiliary invocation purpose of a decision
+// made on backend sidecar.
+const decisionPrimitivePurpose = "decision_primitive"
+
 // decisionSidecarResolver supplies the language-model generators for
 // decision-primitives entries with backend: sidecar. The catalog is frozen
 // before the coordinator exists, so each generator resolves its sidecar on
@@ -78,7 +82,7 @@ func (g *lazyDecisionGenerator) Execute(ctx context.Context, prompt string) (str
 	if err != nil {
 		return "", err
 	}
-	return s.Execute(ctx, prompt)
+	return s.Execute(sidecar.WithPurpose(ctx, decisionPrimitivePurpose), prompt)
 }
 
 // newModelSidecar builds a sidecar for model through the execution policy's
