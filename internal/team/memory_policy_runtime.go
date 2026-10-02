@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -62,7 +63,8 @@ func effectiveRankingPolicy(policy MemoryRuntimeRankingPolicy) MemoryRuntimeRank
 // LoadAdoptedMemoryPolicy reads the active memory policy snapshot from the
 // canonical store and returns the learning policy plus the runtime ranking
 // parameters it adopted. When no policy has been adopted (or the repository is
-// not a SQLite store), it returns the defaults. The snapshot is validated the
+// not a SQLite store), it returns the defaults; the coordinator then applies the
+// team configuration instead (loadAdoptedMemoryPolicy). The snapshot is validated the
 // same way the coordinator validates it at load time, so a corrupt or
 // inconsistent active policy is rejected rather than silently used. Callers
 // that explain or display scores must use the returned runtime parameters so
@@ -138,6 +140,9 @@ func LoadMemoryPolicy(ctx context.Context, repo contextstore.Repository, policyV
 	return snapshot.Learning, MemoryRuntimeRankingPolicy{CandidateTopK: candidateTopK, InjectTopK: injectTopK, TopK: candidateTopK, MinimumRelevance: snapshot.Retrieval.MinimumRelevance, UtilityWeight: snapshot.Retrieval.UtilityWeight, FreshnessWeight: snapshot.Retrieval.FreshnessWeight, Fusion: contextstore.FusionMode(snapshot.Retrieval.Fusion), FusionCarriedWeight: snapshot.Retrieval.CarriedWeight}, nil
 }
 
+// loadAdoptedMemoryPolicy installs the effective learning policy. An adopted
+// policy always wins; without one the team configuration applies, so a team can
+// turn learning on without first adopting a policy.
 func (c *Coordinator) loadAdoptedMemoryPolicy(ctx context.Context) error {
 	if c == nil || c.session == nil {
 		return nil
@@ -146,7 +151,50 @@ func (c *Coordinator) loadAdoptedMemoryPolicy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	adopted, err := memoryPolicyAdopted(ctx, c.contextRepo)
+	if err != nil {
+		return err
+	}
+	if !adopted {
+		var downgraded bool
+		learning, downgraded = unadoptedMemoryLearningPolicy(c.session.Config.MemoryLearning)
+		if downgraded {
+			log.Printf("warning: memory-learning mode %q requires an adopted memory policy; running as %q", agent.MemoryLearningActive, agent.MemoryLearningShadow)
+		}
+	}
 	c.session.Config.MemoryLearning = learning
 	c.memoryRankingPolicy = runtime
 	return nil
+}
+
+// memoryPolicyAdopted reports whether the canonical store holds an active
+// memory policy snapshot.
+func memoryPolicyAdopted(ctx context.Context, repo contextstore.Repository) (bool, error) {
+	sqlRepo, ok := repo.(*contextstore.SQLiteRepository)
+	if !ok || sqlRepo == nil {
+		return false, nil
+	}
+	if _, err := sqlRepo.ActiveMemoryPolicyVersion(ctx); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("load active memory policy: %w", err)
+	}
+	return true, nil
+}
+
+// unadoptedMemoryLearningPolicy is the learning policy a team configuration
+// selects when no policy is adopted. Off, observe, and shadow never change
+// prompt selection, so configuration alone may choose them. Active changes
+// selection and stays behind adoption's review gate, so it runs as shadow and
+// the second result reports the downgrade. A configuration without a mode
+// keeps the defaults.
+func unadoptedMemoryLearningPolicy(configured agent.MemoryLearningPolicy) (agent.MemoryLearningPolicy, bool) {
+	if configured.Mode == "" {
+		return agent.DefaultMemoryLearningPolicy(), false
+	}
+	if configured.Mode == agent.MemoryLearningActive {
+		configured.Mode = agent.MemoryLearningShadow
+		return configured, true
+	}
+	return configured, false
 }

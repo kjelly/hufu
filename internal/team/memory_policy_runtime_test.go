@@ -75,3 +75,55 @@ func TestNewMemoryPolicySeparatesCandidateAndInjectLimits(t *testing.T) {
 		t.Fatalf("runtime limits = %+v", runtime)
 	}
 }
+
+// An adopted policy always wins; without one the team configuration applies,
+// except that active, which changes prompt selection, still needs adoption.
+func TestCoordinatorAppliesTeamLearningPolicyWithoutAdoption(t *testing.T) {
+	withMode := func(mode agent.MemoryLearningMode) agent.MemoryLearningPolicy {
+		policy := agent.DefaultMemoryLearningPolicy()
+		policy.Mode = mode
+		return policy
+	}
+	tests := []struct {
+		name       string
+		configured agent.MemoryLearningPolicy
+		adopted    agent.MemoryLearningMode
+		want       agent.MemoryLearningPolicy
+	}{
+		{name: "observe from team config", configured: withMode(agent.MemoryLearningObserve), want: withMode(agent.MemoryLearningObserve)},
+		{name: "shadow from team config", configured: withMode(agent.MemoryLearningShadow), want: withMode(agent.MemoryLearningShadow)},
+		{name: "active without adoption runs as shadow", configured: withMode(agent.MemoryLearningActive), want: withMode(agent.MemoryLearningShadow)},
+		{name: "off from team config", configured: withMode(agent.MemoryLearningOff), want: withMode(agent.MemoryLearningOff)},
+		{name: "config without a mode keeps the defaults", want: agent.DefaultMemoryLearningPolicy()},
+		{name: "adopted policy wins over team config", configured: withMode(agent.MemoryLearningActive), adopted: agent.MemoryLearningObserve, want: withMode(agent.MemoryLearningObserve)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repo.Close() })
+			if tt.adopted != "" {
+				adopted := withMode(tt.adopted)
+				raw, err := json.Marshal(map[string]any{
+					"id": adopted.PolicyVersion, "revision_hash": "revision-adopted", "learning": adopted,
+					"retrieval": map[string]any{"top_k": 20, "minimum_relevance": 0.05, "utility_weight": 0.5, "freshness_weight": 1.0},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := repo.SaveMemoryPolicyVersion(context.Background(), adopted.PolicyVersion, raw, "revision-adopted", "active", nowUTC()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{MemoryLearning: tt.configured}}, contextRepo: repo}
+			if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := c.session.Config.MemoryLearning; got != tt.want {
+				t.Fatalf("effective policy = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

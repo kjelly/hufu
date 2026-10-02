@@ -52,9 +52,9 @@ type CaseFixture struct {
 	// compatibility regression in the very contract this case exercises.
 	PriorRunDecisionAdmissionDigests map[string]string `yaml:"prior-run-decision-admission-digests,omitempty"`
 	// SeedMemoryPolicy records the team's configured learning policy as the
-	// active canonical policy before Coordinator construction. NewCoordinator
-	// deliberately loads only an adopted policy from context.sqlite, so team
-	// YAML alone is not sufficient runtime arrangement for memory evals.
+	// active canonical policy before Coordinator construction, exercising the
+	// adopted-policy path. Without it the team's configured mode applies
+	// directly (active runs as shadow until a policy is adopted).
 	SeedMemoryPolicy bool `yaml:"seed-memory-policy,omitempty"`
 	// FreshSession starts the case as `hufu --new` does: the coordinator
 	// withholds the prior session's archive, and canonical context only when

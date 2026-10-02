@@ -287,7 +287,10 @@ func memoryRankingEntry(entries []MemoryRankingEntry, id string) (MemoryRankingE
 }
 
 // memoryPolicyModeSource reports whether the effective mode comes from a
-// recorded policy snapshot or from the defaults used when none is adopted.
+// recorded policy snapshot or, when none is adopted, from the defaults. The
+// runtime then applies the team configuration instead, which this read-only
+// path does not load; without adoption the mode is at most shadow, so prompt
+// selection still follows the base ranking reported here.
 func memoryPolicyModeSource(ctx context.Context, repo *contextstore.SQLiteRepository, policyVersion string) (string, error) {
 	if strings.TrimSpace(policyVersion) != "" {
 		return "policy_snapshot", nil
