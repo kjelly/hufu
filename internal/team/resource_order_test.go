@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -240,5 +241,32 @@ func TestExplicitEmptyListsMatchTheDurableOccurrence(t *testing.T) {
 	}
 	if items := c.taskTracker.TodoList().Items(); len(items) != 2 || items[0].Status != TaskDone || items[1].Status != TaskDone {
 		t.Fatalf("tasks = %v, want both done", todoStatuses(items))
+	}
+}
+
+// TestFailedBatchDoesNotBlockRedispatch covers a batch that fails after its
+// tasks were created but before any worker started. Its pending occurrences
+// and round counts used to stay behind, so dispatching the same task again
+// was refused as a duplicate.
+func TestFailedBatchDoesNotBlockRedispatch(t *testing.T) {
+	c := newResourceOrderCoordinator(t, 2, 0)
+	worker := &scriptedResultAgent{c: c}
+	c.workerAgentOverride = worker
+	c.SetStepConfirmFn(func(context.Context, []TaskDef) (bool, error) {
+		return false, errors.New("confirmation channel closed")
+	})
+	task := TaskDef{Agent: "worker", Goal: "count the lines in README.md", SideEffect: SideEffectNone}
+	if _, err := c.ExecuteTasks(context.Background(), []TaskDef{task}); err == nil {
+		t.Fatal("the failing batch reported success")
+	}
+	if items := c.taskTracker.TodoList().Items(); len(items) != 0 || len(worker.started) != 0 {
+		t.Fatalf("after the failed batch: tasks %v, workers %v; want nothing left and nothing run", todoStatuses(items), worker.started)
+	}
+	c.SetStepConfirmFn(nil)
+	if _, err := c.ExecuteTasks(context.Background(), []TaskDef{task}); err != nil {
+		t.Fatalf("redispatch: %v", err)
+	}
+	if items := c.taskTracker.TodoList().Items(); len(items) != 1 || items[0].Status != TaskDone || len(worker.started) != 1 {
+		t.Fatalf("after redispatch: tasks %v, workers %v; want the task done once", todoStatuses(items), worker.started)
 	}
 }

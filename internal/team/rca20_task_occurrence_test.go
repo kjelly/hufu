@@ -152,9 +152,10 @@ func TestRCA20PostCreationMutationFailsClosedBeforeWorkerOrAction(t *testing.T) 
 			if *calls != 0 {
 				t.Fatalf("worker/provider calls = %d, want 0", *calls)
 			}
-			items := c.taskTracker.TodoList().Items()
-			if len(items) != 1 || items[0].Status != TaskPending {
-				t.Fatalf("durable occurrence after rejected mutation = %#v, want one pending occurrence", items)
+			// The occurrence never started, so the failed batch withdraws it
+			// instead of leaving it pending to block a corrected dispatch.
+			if items := c.taskTracker.TodoList().Items(); len(items) != 0 {
+				t.Fatalf("durable occurrence after rejected mutation = %#v, want it withdrawn", items)
 			}
 		})
 	}

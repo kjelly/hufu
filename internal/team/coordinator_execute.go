@@ -85,7 +85,7 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 	return out
 }
 
-func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
 	tasks = withoutEmptyCollections(tasks)
 	if err := c.AdmitExecutionPolicy(); err != nil {
 		return "", markCoordinatorFatal(err)
@@ -300,6 +300,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
 	duplicateWarnings, duplicateIndices, suppressedDuplicates := c.Planner().CheckDuplicate(ctx, tasks)
+	// A batch that fails before its workers start must not leave anything
+	// that refuses the same work later in this round.
+	dispatched := false
+	var created []*TodoItem
+	defer func() {
+		if retErr != nil && !dispatched {
+			c.withdrawUndispatchedBatch(ctx, tasks, duplicateIndices, created, retErr)
+		}
+	}()
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
 	}
@@ -548,6 +557,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 		}
 	}
 	todoItems, err := c.CommitTaskCreationResolved(ctx, todoBatch, ids)
+	created = todoItems
 	if err != nil {
 		if advancedPhase && len(todoItems) == 0 && c.sessionData != nil {
 			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
@@ -634,6 +644,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string
 	if err != nil {
 		return "", markCoordinatorFatal(err)
 	}
+	dispatched = true
 	results, err := scheduler.run(ctx)
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
