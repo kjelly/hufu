@@ -627,6 +627,10 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// 2-attempt exit reads "failed after 3 attempts" and looks inconsistent
 	// with the "repeated failure after 2 attempts" persisted alongside it.
 	attemptsMade := 0
+	// changedState records whether any attempt may have changed state. A
+	// worker-reported block from a task that changed nothing leaves delegation
+	// open for the rest of the run.
+	changedState := false
 	// lastOutput keeps the most recent non-empty agent output so a final
 	// failure (e.g. deliverable verification) does not discard findings the
 	// coordinator could act on.
@@ -1274,6 +1278,9 @@ retryLoop:
 		}()
 		if checkpointStopped {
 			return "", err
+		}
+		if !attemptChangedNothing(steps, attemptDispositions) {
+			changedState = true
 		}
 		transcriptRef := ""
 		var transcriptArtifact *ArtifactRef
@@ -2117,14 +2124,16 @@ retryLoop:
 		if isPermissionBlockedFailureDetail(c.FailureDetail(err, "error")) {
 			disposition = NeedsHuman
 			reason = "capability or permission is unavailable"
-		} else if disposition == RetryWorker && (workerReportedBlocked(err) || isSafetyDenialFailureDetail(c.FailureDetail(err, "error"))) {
+		} else if (disposition == RetryWorker || disposition == RetryNone) && workerReportedBlocked(err) ||
+			disposition == RetryWorker && isSafetyDenialFailureDetail(c.FailureDetail(err, "error")) {
 			// Do not replay a task its worker reported blocked, or one stopped
 			// by a path-consent or read-only policy denial: a retry runs under
 			// a hint to change approach, which is exactly how a denied action
-			// gets worked around. Stop here and keep the worker's own status. A
-			// worker-reported block is persisted as TaskBlocked, which ends
-			// delegation for the run (persistFailureRecord); a policy denial stays
-			// TaskError, so the coordinator still decides what is next.
+			// gets worked around. Stop here and keep the worker's own status,
+			// whatever retry budget is left. A worker-reported block is
+			// persisted as TaskBlocked; it ends delegation for the run only if
+			// the task may have changed state. A policy denial stays TaskError,
+			// so the coordinator still decides what is next.
 			disposition = RetryNone
 			reason = "worker reported the task blocked or was denied by policy"
 			replayAvoided = true
@@ -2259,7 +2268,13 @@ retryLoop:
 					status = TaskBlocked
 				}
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("stopping retries: " + reason).withTodoID(todoID))
-				c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass, status, output)
+				// A blocked task that changed nothing needs no reconciliation,
+				// so the rest of the run may continue; the duplicate check keeps
+				// the coordinator from dispatching the same work again.
+				_ = c.persistFailureRecord(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryNone, currentClass, &status, output, changedState)
+				if status == TaskBlocked {
+					c.rememberBlockedThisRound(todoID)
+				}
 				closeTranscript()
 				break retryLoop
 			}

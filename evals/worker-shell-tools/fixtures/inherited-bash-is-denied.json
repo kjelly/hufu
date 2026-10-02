@@ -20,6 +20,15 @@
         "name": "submit_result",
         "arguments": "{\"status\": \"blocked\", \"summary\": \"bash is not available to this worker.\"}"
       }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\": \"bash is not available to the inherited worker; the step is blocked.\", \"acknowledge_failed_tasks\": true}"
+      }
+    },
+    {
+      "content": "(run ends here)"
     }
   ]
 }

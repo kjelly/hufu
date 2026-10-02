@@ -128,6 +128,48 @@ func protocolAttemptWasReadOnly(steps []fantasy.StepResult) bool {
 	return sawCall
 }
 
+// attemptChangedNothing reports whether every tool call an attempt recorded
+// was read-only or refused before it ran. submit_result only reports the
+// outcome. An attempt with no recorded tool call, such as one run by an
+// external provider, may have changed state out of view, so it does not count.
+func attemptChangedNothing(steps []fantasy.StepResult, dispositions *attemptToolDispositions) bool {
+	refused := dispositions.refusedCallIDs()
+	sawCall := false
+	for _, step := range steps {
+		for _, call := range step.Content.ToolCalls() {
+			sawCall = true
+			if call.ToolName != submitResultToolName && !isReadOnlyToolCall(call.ToolName, call.Input) && !refused[call.ToolCallID] {
+				return false
+			}
+		}
+	}
+	return sawCall
+}
+
+// refusedCallIDs returns the tool calls that a gate refused and that never
+// executed.
+func (d *attemptToolDispositions) refusedCallIDs() map[string]bool {
+	if d == nil {
+		return nil
+	}
+	refused := make(map[string]bool)
+	executed := make(map[string]bool)
+	for _, item := range d.snapshot() {
+		if item.ToolCallID == "" {
+			continue
+		}
+		if item.Executed {
+			executed[item.ToolCallID] = true
+		} else {
+			refused[item.ToolCallID] = true
+		}
+	}
+	for id := range executed {
+		delete(refused, id)
+	}
+	return refused
+}
+
 // stalledWithoutToolCall reports whether a turn's last step made no tool
 // call. Fantasy's own continuation loop correctly stops as soon as a step
 // requests no tools -- it has no way to know a caller's task still requires

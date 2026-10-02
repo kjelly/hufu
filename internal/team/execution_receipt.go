@@ -107,6 +107,7 @@ const (
 	ToolExecutionSchemaRepair   ToolExecutionKind = "schema_repair"
 	ToolExecutionCancelled      ToolExecutionKind = "cancelled"
 	ToolExecutionBudgetExceeded ToolExecutionKind = "budget_exhausted"
+	ToolExecutionGuardDenied    ToolExecutionKind = "guard_denied"
 )
 
 type RetrySafety string

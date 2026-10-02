@@ -28,6 +28,7 @@ cases:
           status: blocked
           # A worker that reports its task blocked is not replayed: a retry
           # would run under a "change your approach" hint, which is how a
-          # denied action gets worked around.
+          # denied action gets worked around. The denied call never ran, so
+          # the run is not forced into wrap-up and the coordinator finishes.
           attempts: 1
           retry-disposition: none

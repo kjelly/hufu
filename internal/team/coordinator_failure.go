@@ -450,6 +450,9 @@ func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail s
 		// evidence.  Force the coordinator into wrap-up before another
 		// delegation can be accepted.  Explicit acceptance recovery remains the
 		// only path that may continue after the operator has acknowledged it.
+		// Two blocks leave delegation open because nothing needs reconciling:
+		// a dependent that never started, and a task whose worker reported it
+		// blocked without having run a tool that can change state.
 		if status == TaskBlocked && blockedStopsDelegation {
 			c.wrapUp.Store(1)
 		}

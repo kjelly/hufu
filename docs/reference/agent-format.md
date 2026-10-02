@@ -411,6 +411,13 @@ type Coordinator struct {
 - `ExecuteTasks()` — 偵測 wrap-up 後拒絕新任務
 - `ContinueWithPrompt(wrapUp=true)` — 使用 `wrapUpPromptTemplate` 強制總結
 
+任務被存成 `blocked` 時，通常會讓 run 進入 wrap-up,因為被擋下的嘗試可能已經改過東西，需要人工確認。以下兩種例外不會:
+
+- 因為依賴失敗而從未啟動的下游任務。
+- worker 自己回報 `blocked`,而且整個任務只用了唯讀工具，或只呼叫了在執行前就被擋下的工具(`submit_result` 不算)。
+
+worker 回報 `blocked` 的任務一律不會重試，與剩下的重試額度無關。同一次執行中,coordinator 不能再派一次相同或相似的任務;使用者之後的新訊息才可以重新派發。
+
 ## LLM 日誌記錄
 
 Coordinator 在執行 Agent 時記錄 LLM 對話，用於除錯和審計。

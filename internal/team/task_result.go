@@ -424,6 +424,12 @@ func workerReportedBlocked(err error) bool {
 	return ok && incomplete.status == TaskResultStatusBlocked
 }
 
+// workerReportedBlockedItem reports whether a task's worker submitted a
+// blocked result.
+func workerReportedBlockedItem(item *TodoItem) bool {
+	return item != nil && item.TypedResult != nil && item.TypedResult.Status == TaskResultStatusBlocked
+}
+
 // FormatForContext formats the typed result into a human-readable string suitable
 // for passing as context to downstream agents or dependencies.
 func (tr *TaskResult) FormatForContext() string {

@@ -588,6 +588,10 @@ type Coordinator struct {
 	cachePolicy              CachePolicy
 	cachePolicyMu            sync.RWMutex
 	executionProfile         ExecutionProfile
+	// blockedThisRound holds tasks whose worker reported them blocked during
+	// this invocation. Guarded by delegatedTasksMu and reset with it, so a
+	// later user message can lift a block by dispatching the step again.
+	blockedThisRound map[string]bool
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
 	modelExecutionID       string
@@ -1842,7 +1846,24 @@ func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
 	c.initialToolCorrections.Store(0)
 	c.delegatedTasksMu.Lock()
 	c.delegatedTasks = make(map[string]int)
+	c.blockedThisRound = nil
 	c.delegatedTasksMu.Unlock()
+}
+
+// rememberBlockedThisRound records a task its worker reported blocked.
+func (c *Coordinator) rememberBlockedThisRound(todoID string) {
+	c.delegatedTasksMu.Lock()
+	defer c.delegatedTasksMu.Unlock()
+	if c.blockedThisRound == nil {
+		c.blockedThisRound = make(map[string]bool)
+	}
+	c.blockedThisRound[todoID] = true
+}
+
+func (c *Coordinator) blockedInThisRound(todoID string) bool {
+	c.delegatedTasksMu.Lock()
+	defer c.delegatedTasksMu.Unlock()
+	return c.blockedThisRound[todoID]
 }
 
 // resetRoundStatePreservingWrapUp resets per-invocation counters without

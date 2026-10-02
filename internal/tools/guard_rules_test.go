@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -47,14 +48,23 @@ func TestCoreToolEnforcesDeterministicGuardBeforeHandler(t *testing.T) {
 	ctx := context.WithValue(context.Background(), GuardRulesKey, []string{
 		"deny_tool_input_regex:(?i)roster_add_host",
 	})
-	resp, err := tool.Run(ctx, fantasy.ToolCall{Input: `{"command":"pilot edit --actions roster_add_host.json"}`})
+	ctx = context.WithValue(ctx, AgentToolsAllowedKey, []string{"bash"})
+	var dispositions []ToolExecutionDisposition
+	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) {
+		dispositions = append(dispositions, d)
+	}))
+	resp, err := tool.Run(ctx, fantasy.ToolCall{ID: "guarded", Input: `{"command":"pilot edit --actions roster_add_host.json"}`})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !resp.IsError {
-		t.Fatal("guarded call was not rejected")
+	if !resp.IsError || !strings.Contains(resp.Content, "guard") {
+		t.Fatalf("guarded call was not rejected by the guard: %q", resp.Content)
 	}
 	if called {
 		t.Fatal("handler ran for a deterministically denied call")
+	}
+	// The runtime learns the call never ran, so it does not count as a change.
+	if len(dispositions) != 1 || dispositions[0].Kind != "guard_denied" || dispositions[0].Executed || dispositions[0].ToolCallID != "guarded" {
+		t.Fatalf("dispositions = %+v (response %q), want one unexecuted guard denial", dispositions, resp.Content)
 	}
 }

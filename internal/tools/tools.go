@@ -755,6 +755,9 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 	}
 
 	if guardError := t.guardError(ctx, call.Input); guardError != "" {
+		ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{
+			Kind: "guard_denied", ReasonCode: "guard_rule", ToolName: t.info.Name, ToolCallID: call.ID, Executed: false,
+		})
 		return fantasy.NewTextErrorResponse(guardError), nil
 	}
 

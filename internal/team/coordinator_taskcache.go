@@ -703,6 +703,15 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 			if isPermissionBlockedFailureDetail(item.Detail) {
 				semanticEligible = append(semanticEligible, item)
 			}
+		case TaskBlocked:
+			// A task its worker reported blocked waits for the user. Running
+			// the same work again, even reworded, in the same invocation is
+			// how a block gets worked around. A later invocation carries the
+			// user's answer and may dispatch it again.
+			if workerReportedBlockedItem(item) && c.blockedInThisRound(item.ID) {
+				exactEligible = append(exactEligible, item)
+				semanticEligible = append(semanticEligible, item)
+			}
 		}
 	}
 
@@ -744,6 +753,9 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	reason := fmt.Sprintf("similar to existing task %s with status %s", item.ID, item.Status)
 	if item.Status == TaskError && isPermissionBlockedFailureDetail(item.Detail) {
 		reason = fmt.Sprintf("similar to blocked task %s; previous failure was permission-related", item.ID)
+	}
+	if item.Status == TaskBlocked {
+		reason = fmt.Sprintf("similar to task %s, which its worker reported blocked; only the user can lift that block", item.ID)
 	}
 	return &duplicateTodoMatch{Item: item, Reason: reason}
 }
