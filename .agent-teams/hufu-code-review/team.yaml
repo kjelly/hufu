@@ -89,6 +89,7 @@ spec:
           kind=working_tree is only for staged, unstaged, or untracked changes, always uses head=HEAD, and never carries count, base, since, or commit_type.
           Never use kind=working_tree for a named commit, commit hash, committed revision, or commit history.
           Set commit_type only when the request explicitly limits the review to commits of that type, such as "feat commits".
+          Always set history=first_parent, the only supported history mode.
           Omit every property the request does not state; never set a property to an empty string.
           Return null when the scope remains ambiguous.
 

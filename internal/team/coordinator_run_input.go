@@ -343,6 +343,9 @@ func (c *Coordinator) resolveSemanticRunInputCandidate(ctx context.Context, prom
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "no_match"}
 	}
+	// Required properties the schema pins to one value are supplied here, not
+	// left to the model, which the guidance tells to omit what is unstated.
+	raw = fillSingleValueRequiredProperties(definition.Schema, raw)
 	canonical, err := validateAndCanonicalizeRunInput(definition.Schema, raw)
 	if err != nil {
 		return semanticRunInputCandidate{raw: slices.Clone(raw), status: "invalid", diagnostic: err.Error()}
