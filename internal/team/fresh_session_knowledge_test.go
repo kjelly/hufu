@@ -9,6 +9,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
 )
 
 func learningPolicy(mode agent.MemoryLearningMode) agent.MemoryLearningPolicy {
@@ -353,6 +354,58 @@ func TestFreshSessionCarriesAcceptedKnowledgeToNextFreshRun(t *testing.T) {
 			}
 			if gotKnowledge != tt.wantKnowledge {
 				t.Fatalf("second run sees accepted knowledge = %v, want %v (canonical=%v bundle=%+v)", gotKnowledge, tt.wantKnowledge, canonical, bundle)
+			}
+		})
+	}
+}
+
+// A fresh start archives the prior session's summary into the new session's
+// scope. That archive must stay withheld from a fresh session even when
+// learning lets it read shared-session context; a resumed session keeps it.
+func TestFreshSessionWithholdsPriorSessionArchiveSummary(t *testing.T) {
+	tests := []struct {
+		name        string
+		fresh       bool
+		wantArchive bool
+	}{
+		{name: "fresh session with learning on", fresh: true},
+		{name: "resumed session with learning on", wantArchive: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := t.TempDir()
+			repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repo.Close() })
+			c := freshKnowledgeCoordinator(workspace, repo, agent.MemoryLearningObserve, "run-2", "session-2")
+			c.SetFreshSession(tt.fresh)
+			if _, err := c.ArchiveSessionSummary(ctx, []memory.SessionSummaryEntry{{Role: "assistant", Timestamp: "t1", Content: "prior-session-archive-marker: the previous session already wrote the build marker file"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.appendCanonicalContext(ctx, contextstore.ContextDecision, "current-session-marker: storage uses SQLite", "test", nil); err != nil {
+				t.Fatal(err)
+			}
+			request := c.newTaskContextRequest(TaskDef{Agent: "worker", Goal: "Calibrate the beacon"}, "1", 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
+			routed, _, _, err := c.canonicalContextBundleForRequest(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			direct, _, err := c.canonicalContextBundle(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for label, bundle := range map[string]*CanonicalContextBundle{"routed": routed, "direct": direct} {
+				var sawArchive, sawCurrent bool
+				for _, item := range bundle.SharedSession {
+					sawArchive = sawArchive || strings.Contains(item.Content, "prior-session-archive-marker")
+					sawCurrent = sawCurrent || strings.Contains(item.Content, "current-session-marker")
+				}
+				if sawArchive != tt.wantArchive || !sawCurrent {
+					t.Fatalf("%s shared session: archive=%v (want %v), current=%v (want true)", label, sawArchive, tt.wantArchive, sawCurrent)
+				}
 			}
 		})
 	}

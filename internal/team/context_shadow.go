@@ -122,6 +122,7 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 	if err != nil {
 		return nil, true, err
 	}
+	stm = c.withoutPriorSessionArchive(stm)
 	baseLTM, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
 	if err != nil {
 		return nil, true, err
@@ -258,6 +259,27 @@ func (c *Coordinator) sharedSessionPromptItems(ctx context.Context, scope contex
 	}
 	items = append(items, candidates...)
 	return items, nil
+}
+
+// sessionArchiveSourceType marks the prior session's summary that a fresh
+// start archives into the new session's scope (ArchiveSessionSummary).
+const sessionArchiveSourceType = "session_archive"
+
+// withoutPriorSessionArchive drops the prior session's archived summary while
+// historical memory is withheld. A fresh start writes that summary into the new
+// session's scope, so a shared-session read would otherwise carry the very
+// archive a fresh session must not see.
+func (c *Coordinator) withoutPriorSessionArchive(items []contextstore.ContextItem) []contextstore.ContextItem {
+	if !c.historicalMemoryDisabled() {
+		return items
+	}
+	kept := make([]contextstore.ContextItem, 0, len(items))
+	for _, item := range items {
+		if item.Source.Type != sessionArchiveSourceType {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 func (c *Coordinator) contextScope() contextstore.Scope {

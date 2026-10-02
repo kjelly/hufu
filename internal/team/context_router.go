@@ -284,6 +284,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if err != nil {
 		return ContextRoute{}, err
 	}
+	sessionItems = c.withoutPriorSessionArchive(sessionItems)
 	persistent, err := c.contextRepo.QuerySharedPersistentProjection(ctx, scope)
 	if err != nil {
 		return ContextRoute{}, err

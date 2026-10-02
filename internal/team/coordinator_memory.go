@@ -37,7 +37,7 @@ func (c *Coordinator) ArchiveSessionSummary(ctx context.Context, entries []memor
 	item := contextstore.ContextItem{
 		Kind: contextstore.ContextSummary, Content: content, Scope: c.contextScope(),
 		Authority: contextstore.AuthoritySystem, TrustLevel: contextstore.TrustInternal,
-		Priority: contextstore.PriorityLow, Confidence: 1.0, Source: contextstore.SourceRef{Type: "session_archive", Ref: timestamp},
+		Priority: contextstore.PriorityLow, Confidence: 1.0, Source: contextstore.SourceRef{Type: sessionArchiveSourceType, Ref: timestamp},
 		Metadata: map[string]string{"visibility": "shared", "memory_lifetime": "session", "archive_timestamp": timestamp},
 	}
 	if err := c.contextRepo.Append(ctx, item); err != nil {
