@@ -180,6 +180,13 @@ func marshalAskUserResponse(resp AskUserResponse) (fantasy.ToolResponse, error) 
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
+// unansweredChoiceResponse reports that nobody answered a choice question in
+// an unattended run, so the agent does not mistake any option for the user's.
+func unansweredChoiceResponse(question, reason string) (fantasy.ToolResponse, error) {
+	NotifyNeedsHuman(question)
+	return fantasy.NewTextErrorResponse("ask_user unavailable: running unattended and " + reason + ", so nobody answered and no option was chosen for the user. Proceed using your best judgement and reasonable defaults; do not ask again."), nil
+}
+
 func firstChoiceResponse(args askUserArgs) (fantasy.ToolResponse, error) {
 	first := args.Options[0]
 	val := first.Value
@@ -265,12 +272,13 @@ func chooseAutoApproveAskUserResponse(args askUserArgs) (AskUserResponse, bool) 
 }
 
 // unattendedAskUserResponse produces a safe, non-blocking answer when no human
-// is available. For choice questions it first asks the configured selector to
-// pick the best option; if that fails, it falls back to the first option as a
-// documented default. For free-text it returns an error so the agent proceeds
-// on its own judgement rather than waiting. Free-text prompts still fire a
-// needs-human notification because they cannot be resolved safely without a
-// human-provided answer.
+// is available. For choice questions it asks the configured selector to pick
+// the best option. When the selector abstains, fails, or names no option, the
+// question stays unanswered: the agent is told that nobody chose, rather than
+// receiving the first option as if the user had picked it. Without a selector
+// the first option remains the documented default. For free-text it returns an
+// error so the agent proceeds on its own judgement rather than waiting.
+// Unanswered prompts fire a needs-human notification.
 func unattendedAskUserResponse(ctx context.Context, args askUserArgs, questionType string) (fantasy.ToolResponse, error) {
 	fmt.Fprintf(os.Stderr, "\n%s no human available; auto-answering: %s\n", boldFmt("─── Ask User (unattended) ───"), args.Question)
 
@@ -283,17 +291,16 @@ func unattendedAskUserResponse(ctx context.Context, args askUserArgs, questionTy
 		if selector, ok := ctx.Value(AskUserChoiceSelectorKey).(AskUserChoiceSelector); ok && selector != nil {
 			resp, err := selector(ctx, args.Question, questionType, toTUIOptions(args.Options), args.AllowAny)
 			if errors.Is(err, ErrAskUserAbstained) {
-				NotifyNeedsHuman(args.Question)
-				return fantasy.NewTextErrorResponse("ask_user unavailable: running unattended and no option could be chosen with enough confidence. Proceed using your best judgement and reasonable defaults; do not ask again."), nil
+				return unansweredChoiceResponse(args.Question, "no option could be chosen with enough confidence")
 			}
 			if err == nil {
 				if normalized, ok := normalizeAskUserResponse(resp, args, questionType); ok {
 					return marshalAskUserResponse(normalized)
 				}
-				fmt.Fprintf(os.Stderr, "warning: unattended ask_user selector returned an invalid answer; falling back to first option\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: unattended ask_user selector failed: %v; falling back to first option\n", err)
+				err = fmt.Errorf("the answer %v names no option", resp.Answers)
 			}
+			fmt.Fprintf(os.Stderr, "warning: unattended ask_user selector failed: %v; leaving the question unanswered\n", err)
+			return unansweredChoiceResponse(args.Question, "the automatic selector could not choose an option")
 		}
 		return firstChoiceResponse(args)
 	}

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -217,6 +218,45 @@ func TestExecuteAskUser_FoldsQuestionTypeSpelling(t *testing.T) {
 			}
 			if seen != "multiple_choice" {
 				t.Fatalf("selector saw type %q, want multiple_choice", seen)
+			}
+		})
+	}
+}
+
+// TestUnattendedAskUserSelectorFailureLeavesQuestionUnanswered checks that a
+// selector that cannot choose never turns into the first option being reported
+// as the user's answer.
+func TestUnattendedAskUserSelectorFailureLeavesQuestionUnanswered(t *testing.T) {
+	tests := []struct {
+		name     string
+		selector AskUserChoiceSelector
+	}{
+		{name: "selector error", selector: func(context.Context, string, string, []AskUserTUIOption, bool) (AskUserResponse, error) {
+			return AskUserResponse{}, errors.New("ask_user selection response \"1. go\" does not name one of the options")
+		}},
+		{name: "answer names no option", selector: func(context.Context, string, string, []AskUserTUIOption, bool) (AskUserResponse, error) {
+			return AskUserResponse{Answers: []string{"maybe"}}, nil
+		}},
+		{name: "abstained", selector: func(context.Context, string, string, []AskUserTUIOption, bool) (AskUserResponse, error) {
+			return AskUserResponse{}, ErrAskUserAbstained
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			notified := false
+			SetOnNeedsHuman(func(string) { notified = true })
+			defer SetOnNeedsHuman(nil)
+			ctx := context.WithValue(context.Background(), AskUserChoiceSelectorKey, test.selector)
+			args := askUserArgs{Question: "list or count?", Options: []askOption{{Label: "go", Value: "go"}, {Label: "stop", Value: "stop"}}}
+			resp, err := unattendedAskUserResponse(ctx, args, "single_choice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.IsError || !strings.Contains(resp.Content, "nobody answered") || strings.Contains(resp.Content, `"answers"`) {
+				t.Fatalf("response = %q, want an unanswered result", resp.Content)
+			}
+			if !notified {
+				t.Fatal("needs-human hook did not fire for an unanswered question")
 			}
 		})
 	}
