@@ -1314,7 +1314,7 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 	}
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
-		return fmt.Errorf("commit task resolution: task %s not found", taskID)
+		return fmt.Errorf("commit task resolution: %w", &unknownTaskError{taskID: taskID})
 	}
 	// Validate before appending so an invalid resolution never becomes durable
 	// while the projection rejects it.

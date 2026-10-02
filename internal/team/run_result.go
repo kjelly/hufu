@@ -1069,7 +1069,7 @@ func ValidateResolution(resolution *TaskResolution, itemID string, allItems []*T
 
 	if resolution.Status == "superseded" || resolution.Status == "reconciled" {
 		if resolution.ResolvedBy == "" {
-			return fmt.Errorf("resolution status %q requires resolved_by task ID", resolution.Status)
+			return &unknownResolverError{status: resolution.Status, taskID: itemID}
 		}
 		if resolution.ResolvedBy == itemID {
 			return fmt.Errorf("task %s cannot resolve itself", itemID)
@@ -1084,7 +1084,7 @@ func ValidateResolution(resolution *TaskResolution, itemID string, allItems []*T
 			}
 		}
 		if resolver == nil {
-			return fmt.Errorf("resolving task %s not found in todo list", resolution.ResolvedBy)
+			return &unknownResolverError{status: resolution.Status, resolvedBy: resolution.ResolvedBy, taskID: itemID}
 		}
 		if resolver.Status != TaskDone {
 			return fmt.Errorf("resolving task %s must be done (current status: %s)", resolution.ResolvedBy, resolver.Status)
