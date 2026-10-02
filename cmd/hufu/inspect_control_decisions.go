@@ -20,7 +20,8 @@ run in the branch lineage, every branch (--all-branches; each --new run starts
 a new branch), or one run. Use it to decide whether a point can
 move from shadow to active: agreement with the existing path, how often the
 decision model would abstain under the point's threshold, errors, and latency.
-Confidence is the decision model's raw probability, not a calibrated accuracy.`,
+Confidence is the decision model's raw probability, not a calibrated accuracy;
+backend sidecar reports none.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) error {
@@ -75,6 +76,6 @@ func renderInspectControlDecisionsText(writer io.Writer, query inspectpkg.Inspec
 	if err := table.Flush(); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(writer, "Confidence is the decision model's raw probability, not a calibrated accuracy.")
+	_, err := fmt.Fprintln(writer, "Confidence is the decision model's raw probability, not a calibrated accuracy; backend sidecar reports none.")
 	return err
 }
