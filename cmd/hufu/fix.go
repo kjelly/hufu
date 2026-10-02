@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -189,7 +190,7 @@ func runFixAnalysis(ctx context.Context, tc *teamContext, question string, taskD
 	if err != nil {
 		return "", fmt.Errorf("build fix analysis prompt: %w", err)
 	}
-	sidecarCtx, cancel := context.WithTimeout(tc.coordinator.ContextPreflight(), 90*time.Second)
+	sidecarCtx, cancel := context.WithTimeout(tc.coordinator.ContextPreflight(), llmtimeout.Review(90*time.Second))
 	defer cancel()
 
 	result, err := s.ExecuteProfile(sidecar.WithPurpose(sidecarCtx, "fix_analysis"), prompt, sidecar.CompactorProfile)

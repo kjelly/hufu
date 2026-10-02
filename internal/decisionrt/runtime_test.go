@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/decisionrt"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 type fakeBackend struct {
@@ -598,4 +599,21 @@ func (m *recordingMetrics) ObserveDurationMS(string, string, uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.durations++
+}
+
+func TestRuntimeTimeoutLimitFollowsDecisionSetting(t *testing.T) {
+	t.Cleanup(func() { _ = llmtimeout.Configure(llmtimeout.Settings{}) })
+	newRuntime := func() error {
+		_, err := decisionrt.NewRuntime(decisionrt.RuntimeConfig{Primary: fixedBackend("primary", decidedChoice("small")), Timeout: 45 * time.Second})
+		return err
+	}
+	if newRuntime() == nil {
+		t.Fatal("a 45s timeout was accepted with the default 30s limit")
+	}
+	if err := llmtimeout.Configure(llmtimeout.Settings{Decision: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if err := newRuntime(); err != nil {
+		t.Fatalf("a 45s timeout under a 1m decision limit: %v", err)
+	}
 }

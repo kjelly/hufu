@@ -38,6 +38,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		SilenceUsage: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			configureOutputRendering()
+			configureLLMTimeouts()
 		},
 	}
 

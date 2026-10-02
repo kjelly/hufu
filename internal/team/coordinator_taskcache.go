@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 // errAllWorkerTasksFailed is a task-outcome sentinel, not an agent-tool
@@ -211,7 +213,7 @@ func (tc *defaultTaskCache) Lookup(ctx context.Context, req TaskCacheLookupReque
 		return TaskCacheLookupResult{}, false
 	}
 	semanticEntries := all
-	timeout := 5 * time.Second
+	timeout := llmtimeout.Sidecar(5 * time.Second)
 	if req.Scope == TaskCacheLookupExecution {
 		generation := tc.generation.Load()
 		semanticEntries = make([]cachedTaskEntry, 0, len(all))
@@ -220,7 +222,7 @@ func (tc *defaultTaskCache) Lookup(ctx context.Context, req TaskCacheLookupReque
 				semanticEntries = append(semanticEntries, entry)
 			}
 		}
-		timeout = 10 * time.Second
+		timeout = llmtimeout.Sidecar(10 * time.Second)
 	} else if len(semanticEntries) > 100 {
 		semanticEntries = semanticEntries[len(semanticEntries)-100:]
 	}
@@ -738,7 +740,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		pastDescs[i] = taskCacheIdentityWithSpec(item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
 	}
 
-	sidecarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	sidecarCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
 	defer cancel()
 
 	if c.think {
@@ -855,7 +857,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 				desc += "\nconstraints: " + t.Constraints
 			}
 			agentKey := strings.ToLower(t.Agent)
-			dupCtx, dupCancel := context.WithTimeout(ctx, 5*time.Second)
+			dupCtx, dupCancel := context.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
 			cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithTypedVerification(dupCtx, agentKey, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 			dupCancel()
 			if cacheOK {

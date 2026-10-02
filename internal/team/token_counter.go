@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	hulog "github.com/kjelly/hufu/internal/log"
 )
 
@@ -202,7 +203,7 @@ func DetectAndCacheProviderContextLengths(ctx context.Context, baseURL, apiKey s
 		}
 		wg.Go(func() {
 			_, name := agent.ParseModelProvider(modelID)
-			probeCtx, cancel := context.WithTimeout(ctx, agent.ProviderContextProbeTimeout)
+			probeCtx, cancel := context.WithTimeout(ctx, llmtimeout.Provider(agent.ProviderContextProbeTimeout))
 			defer cancel()
 			capacity, err := agent.DetectProviderContextCapacity(probeCtx, baseURL, apiKey, name)
 			length := capacity.ContextWindow

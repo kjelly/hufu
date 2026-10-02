@@ -24,6 +24,7 @@ import (
 	"github.com/kjelly/hufu/internal/audit"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
@@ -5267,7 +5268,7 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 	s := c.AgentPool().Sidecar()
 	if s != nil {
 		// Use a shorter timeout for reflection to avoid holding up retries
-		reflectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		reflectCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(30*time.Second))
 		defer cancel()
 
 		prompt := buildFailureReflectionPrompt(agentName, goal, lastErr)

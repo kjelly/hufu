@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 // collectConfiguredModels gathers every model ID the run can use, including
@@ -63,7 +64,7 @@ func (c *Coordinator) ValidateConfiguredModels(ctx context.Context) error {
 		return nil
 	}
 
-	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	listCtx, cancel := context.WithTimeout(ctx, llmtimeout.Provider(10*time.Second))
 	defer cancel()
 
 	type providerModels struct {

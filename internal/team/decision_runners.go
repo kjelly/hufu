@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -84,7 +85,7 @@ func (r *coordinatorDecisionRunners) ask(ctx context.Context, purpose, prompt st
 	}
 	s := r.coordinator.AgentPool().JudgeSidecar()
 
-	stageCtx, cancel := context.WithTimeout(ctx, decisionStageTimeout)
+	stageCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(decisionStageTimeout))
 	defer cancel()
 	r.coordinator.report(r.coordinator.newEvent("sidecar_call").withMessage("decision:" + purpose))
 

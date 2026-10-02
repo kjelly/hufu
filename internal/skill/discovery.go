@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
@@ -391,7 +392,7 @@ func (d *SkillPatternDetector) evaluateParamGeneralization(ctx context.Context, 
 
 	prompt := d.buildParamGeneralizationPrompt(seq)
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, llmTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(llmTimeout))
 	defer cancel()
 
 	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)
@@ -654,7 +655,7 @@ func (d *SkillPatternDetector) clusterDescriptions(ctx context.Context, descript
 	prompt := d.buildClusterPrompt(descriptions)
 
 	// Call sidecar with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
 	defer cancel()
 
 	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)
@@ -1030,7 +1031,7 @@ func (d *SkillPatternDetector) generateLLMName(ctx context.Context, seq *ToolSeq
 
 	prompt := d.buildNamingPrompt(seq)
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(10*time.Second))
 	defer cancel()
 
 	result, err := d.modelInvoker.Invoke(timeoutCtx, "skill_learning", prompt)

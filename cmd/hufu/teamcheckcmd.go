@@ -15,6 +15,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/execution"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -186,7 +187,7 @@ type onlineProviderTarget struct {
 
 func onlineTeamCheckItems(parent context.Context, session *team.TeamSession, cfg *config.Config, roles team.RoleModels, roleErr error) []TeamCheckItem {
 	targets := onlineProviderTargets(session, cfg, roles)
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	ctx, cancel := context.WithTimeout(parent, llmtimeout.Provider(15*time.Second))
 	defer cancel()
 	modelsByBackend := make(map[string][]string, len(targets))
 	items := make([]TeamCheckItem, 0, len(targets)+6)

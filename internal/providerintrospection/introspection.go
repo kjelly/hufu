@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 const (
@@ -256,7 +258,7 @@ func requestJSON(ctx context.Context, configuredClient *http.Client, provider Pr
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	requestContext, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
+	requestContext, cancel := context.WithTimeout(ctx, llmtimeout.Provider(defaultRequestTimeout))
 	defer cancel()
 
 	provider.BaseURL = baseURL

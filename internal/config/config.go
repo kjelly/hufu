@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
@@ -175,6 +176,9 @@ type Config struct {
 	// Each field resolves ./hufu.yaml, then ~/.config/hufu/hufu.yaml; a team's
 	// own block overrides both, field by field.
 	ControlDecisions control.Config `yaml:"control-decisions"`
+	// Timeouts groups model-call timeouts into decision, sidecar, review and
+	// provider categories; each field resolves like ControlDecisions.
+	Timeouts llmtimeout.Settings `yaml:"timeouts"`
 	// sources records which file last supplied each model-related key, so
 	// callers can show where an effective value came from.
 	sources map[string]string
@@ -242,6 +246,7 @@ func (c *Config) mergeFromFile(path string) {
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
 	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions)
+	c.Timeouts = c.Timeouts.Merge(fileCfg.Timeouts)
 	c.Cost.merge(fileCfg.Cost)
 	c.mergeHooks(fileCfg.Hooks)
 	if fileCfg.Notify.Enabled() {

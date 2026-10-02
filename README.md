@@ -890,6 +890,15 @@ control-decisions:
   model: nimble                  # endpoint defaults to http://127.0.0.1:11434/v1/systemone
   mode: shadow                   # off (default) | shadow | active, per point under points:
 
+# === Model-call timeouts ===
+# A category applies to every call in it; leave one out to keep each call's
+# own default, shown in parentheses.
+timeouts:
+  decision: 30s                 # Largest timeout decision-primitives and control-decisions may set (30s)
+  # sidecar: 20s                # Duplicate checks (5-10s), failure reflection (30s), skill naming (5-10s)
+  # review: 3m                  # Judge, skeptic, skill analysis (60s); decision stages, explain, fix (90s)
+  # provider: 20s               # Model listing and lookup (5s), validation (10s), probes (3-30s)
+
 # === Escalation ===
 escalate-on-retry: false        # Escalate to next stronger model on retry (requires model-list)
 

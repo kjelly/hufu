@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 const (
@@ -119,7 +121,7 @@ func (s *Store) Update(ctx context.Context) (Catalog, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	requestContext, cancel := context.WithTimeout(ctx, defaultUpdateTimeout)
+	requestContext, cancel := context.WithTimeout(ctx, llmtimeout.Provider(defaultUpdateTimeout))
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {

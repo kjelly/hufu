@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
@@ -1118,7 +1119,7 @@ func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, llmtimeout.Provider(5*time.Second))
 	defer cancel()
 	baseURL, boundaryClient, _ := p.effectiveBaseURL()
 	url := strings.TrimRight(baseURL, "/") + "/models"
@@ -1131,7 +1132,7 @@ func (p *OpenAICompatibleProvider) ListModelNames(ctx context.Context) ([]string
 	}
 	client := boundaryClient
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = &http.Client{Timeout: llmtimeout.Provider(5 * time.Second)}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1167,7 +1168,7 @@ func (p *OpenAICompatibleProvider) ModelExists(ctx context.Context, model string
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, llmtimeout.Provider(5*time.Second))
 	defer cancel()
 	baseURL, boundaryClient, _ := p.effectiveBaseURL()
 	endpoint := strings.TrimRight(baseURL, "/") + "/models/" + url.PathEscape(model)
@@ -1180,7 +1181,7 @@ func (p *OpenAICompatibleProvider) ModelExists(ctx context.Context, model string
 	}
 	client := boundaryClient
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = &http.Client{Timeout: llmtimeout.Provider(5 * time.Second)}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1235,7 +1236,7 @@ func DetectProviderContextCapacity(ctx context.Context, baseURL, apiKey, modelNa
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	client := &http.Client{Timeout: ProviderContextProbeTimeout}
+	client := &http.Client{Timeout: llmtimeout.Provider(ProviderContextProbeTimeout)}
 	resp, err := client.Do(req)
 	if err != nil {
 		return ContextCapacity{}, fmt.Errorf("query %s: %w", url, err)

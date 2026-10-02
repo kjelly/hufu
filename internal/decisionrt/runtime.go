@@ -9,15 +9,24 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 const (
 	// DefaultTimeout is the per-attempt timeout used when
 	// RuntimeConfig.Timeout is zero.
 	DefaultTimeout = 5 * time.Second
-	// MaxTimeout is the largest per-attempt timeout NewRuntime accepts.
+	// MaxTimeout is the default largest per-attempt timeout; see
+	// MaxAllowedTimeout.
 	MaxTimeout = 30 * time.Second
 )
+
+// MaxAllowedTimeout is the largest per-attempt timeout NewRuntime accepts:
+// MaxTimeout unless hufu.yaml timeouts.decision sets another limit.
+func MaxAllowedTimeout() time.Duration {
+	return llmtimeout.DecisionMax(MaxTimeout)
+}
 
 const (
 	receiptSchemaVersion   = 1
@@ -46,7 +55,7 @@ func NewRuntime(config RuntimeConfig) (Runtime, error) {
 	if timeout == 0 {
 		timeout = DefaultTimeout
 	}
-	if timeout < 0 || timeout > MaxTimeout {
+	if timeout < 0 || timeout > MaxAllowedTimeout() {
 		return nil, runtimeError(ErrorConfiguration, "", fmt.Errorf("invalid decision timeout"))
 	}
 	if config.Policy.MinConfidence != nil {

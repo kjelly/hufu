@@ -95,7 +95,7 @@ func newDecisionRTCommand(deps decisionRTDeps) *cobra.Command {
 		Short:             "Run a bounded typed decision without an agent team",
 		SilenceErrors:     true,
 		SilenceUsage:      true,
-		PersistentPreRun:  func(*cobra.Command, []string) {},
+		PersistentPreRun:  func(*cobra.Command, []string) { configureLLMTimeouts() },
 		Args:              decisionRTNoArgs(deps),
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -283,8 +283,8 @@ func executeDecisionRT(command *cobra.Command, deps decisionRTDeps, request deci
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	if options.timeout <= 0 || options.timeout > decisionrt.MaxTimeout {
-		return decisionRTInvalidRequest(fmt.Sprintf("--timeout must be within (0,%s]", decisionrt.MaxTimeout))
+	if limit := decisionrt.MaxAllowedTimeout(); options.timeout <= 0 || options.timeout > limit {
+		return decisionRTInvalidRequest(fmt.Sprintf("--timeout must be within (0,%s]", limit))
 	}
 	if command.Flags().Changed("min-confidence") && (math.IsNaN(options.minConfidence) || math.IsInf(options.minConfidence, 0) || options.minConfidence < 0 || options.minConfidence > 1) {
 		return decisionRTInvalidRequest("--min-confidence must be within [0,1]")

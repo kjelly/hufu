@@ -91,7 +91,7 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 | `range` | 僅 integer_range，`{min: 0, max: 4}`；最多 21 個值；systemone 至少 2 個 |
 | `inputs` | 必要 context 欄位名稱 → `string`、`boolean`、`number`；最多 64 個 |
 | `agents` | 精確 agent 名稱列表，最多 64 個；未知 worker 載入失敗 |
-| `timeout` | 每次 backend attempt，預設 `5s`、最大 `30s` |
+| `timeout` | 每次 backend attempt，預設 `5s`、最大 `30s`;hufu.yaml 的 `timeouts.decision` 可調高上限 |
 | `min-confidence` | 可選 0–1 門檻；不足時 abstain |
 | `require-calibrated` | 預設 false；System One raw confidence 不滿足此要求 |
 | `fallback` | 預設無；僅可明訂 systemone → `rule`，且 rule 永遠 abstain |

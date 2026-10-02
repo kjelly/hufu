@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
@@ -423,7 +424,7 @@ func analyzeExplainAI(ctx context.Context, snapshot *operatorpkg.OperatorSnapsho
 	if err != nil {
 		return result, fmt.Errorf("initialize AI explanation provider: %w", err)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, explainAITimeout)
+	callCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(explainAITimeout))
 	defer cancel()
 	executable, err := os.Executable()
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 func isolateHome(t *testing.T) string {
@@ -795,5 +797,24 @@ func TestControlDecisionsMergeFieldByField(t *testing.T) {
 	}
 	if got.Points["guard-reviewer"].Mode != "off" || got.Points["path-reviewer"].Mode != "active" || *got.Points["path-reviewer"].MinConfidence != 0.95 {
 		t.Fatalf("points = %#v", got.Points)
+	}
+}
+
+func TestConfigMergesTimeoutCategoriesFieldByField(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home.yaml")
+	project := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(home, []byte("timeouts:\n  decision: 45s\n  review: 2m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(project, []byte("timeouts:\n  review: 5m\n  provider: 20s\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{}
+	cfg.mergeFromFile(home)
+	cfg.mergeFromFile(project)
+	want := llmtimeout.Settings{Decision: 45 * time.Second, Review: 5 * time.Minute, Provider: 20 * time.Second}
+	if cfg.Timeouts != want {
+		t.Fatalf("timeouts = %+v, want %+v", cfg.Timeouts, want)
 	}
 }

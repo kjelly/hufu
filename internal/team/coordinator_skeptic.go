@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -160,7 +161,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	var wg sync.WaitGroup
 	for i, lens := range lenses {
 		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(parentCtx, skepticTimeout)
+			ctx, cancel := context.WithTimeout(parentCtx, llmtimeout.Review(skepticTimeout))
 			defer cancel()
 			prompt, err := buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify)
 			if err != nil {

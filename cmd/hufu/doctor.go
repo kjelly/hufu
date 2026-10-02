@@ -15,6 +15,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -232,7 +233,7 @@ func fetchModels(providerURL, apiKey string) ([]string, error) {
 
 func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]string, error) {
 	url := strings.TrimRight(providerURL, "/") + "/models"
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, llmtimeout.Provider(5*time.Second))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

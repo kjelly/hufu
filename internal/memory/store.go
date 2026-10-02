@@ -18,6 +18,7 @@ import (
 	"github.com/philippgille/chromem-go"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/llmtimeout"
 )
 
 const collectionName = "memory"
@@ -200,7 +201,7 @@ func (s *MemoryStore) init() error {
 }
 
 func (s *MemoryStore) doInit() error {
-	probeCtx, probeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), llmtimeout.Provider(30*time.Second))
 	defer probeCancel()
 	if err := probeEmbeddingModel(probeCtx, s.embedFunc); err != nil {
 		return fmt.Errorf("embedding model %q is not available: %w", s.embedModel, err)

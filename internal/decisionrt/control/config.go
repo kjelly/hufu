@@ -224,8 +224,8 @@ func validateTimeout(timeout time.Duration) (time.Duration, error) {
 	if timeout == 0 {
 		return decisionrt.DefaultTimeout, nil
 	}
-	if timeout < 0 || timeout > decisionrt.MaxTimeout {
-		return 0, fmt.Errorf("control-decisions.timeout must be within (0,%s]", decisionrt.MaxTimeout)
+	if limit := decisionrt.MaxAllowedTimeout(); timeout < 0 || timeout > limit {
+		return 0, fmt.Errorf("control-decisions.timeout must be within (0,%s]", limit)
 	}
 	return timeout, nil
 }

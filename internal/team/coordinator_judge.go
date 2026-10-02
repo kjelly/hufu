@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -143,7 +144,7 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 		return valid[0].output, nil
 	}
 
-	judgeCtx, cancel := context.WithTimeout(ctx, judgeTimeout)
+	judgeCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(judgeTimeout))
 	defer cancel()
 	c.report(c.newEvent("sidecar_call").withMessage("judge"))
 	prompt, err := buildJudgePrompt(goal, valid)
