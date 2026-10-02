@@ -531,3 +531,47 @@ func TestDecisionPrimitiveConstructorAndExtraModelSurface(t *testing.T) {
 		t.Fatal("unknown worker grant passed constructor preflight")
 	}
 }
+
+func TestDecisionPrimitiveRefusesOnlyWhenBudgetIsExhausted(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		wrapUp       bool
+		exhausted    bool
+		wantDecision bool
+	}{
+		{name: "running", wantDecision: true},
+		{name: "wrap-up", wrapUp: true, wantDecision: true},
+		{name: "budget exhausted", exhausted: true},
+		{name: "wrap-up with budget exhausted", wrapUp: true, exhausted: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				_, _ = w.Write([]byte(primitiveChoiceResponse))
+			}))
+			defer server.Close()
+			c := primitiveTestCoordinator(t, primitiveTestEntry(server.URL))
+			if test.wrapUp {
+				c.wrapUp.Store(1)
+			}
+			if test.exhausted {
+				c.budgetLedger.setLimits(0, 10)
+				c.budgetLedger.addTokens(10)
+			}
+			response, err := c.coreTools[0].Run(primitiveTestContext(t, "helper"), primitiveTestCall("call", "text"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantDecision {
+				if response.IsError || !strings.Contains(response.Content, `"status":"decided"`) || calls.Load() != 1 {
+					t.Fatalf("response = %#v after %d backend calls, want a decision", response, calls.Load())
+				}
+				return
+			}
+			if !response.IsError || response.Content != "decision_budget_exceeded" || calls.Load() != 0 {
+				t.Fatalf("response = %#v after %d backend calls, want a budget refusal before inference", response, calls.Load())
+			}
+		})
+	}
+}

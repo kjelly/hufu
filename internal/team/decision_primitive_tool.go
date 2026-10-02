@@ -113,7 +113,11 @@ func (t *decisionPrimitiveTool) Run(ctx context.Context, call fantasy.ToolCall) 
 }
 
 func (c *Coordinator) runDecisionPrimitive(ctx context.Context, metadata InvocationMetadata, name string, request decisionrt.Request, digest string, limit int, callID string) (fantasy.ToolResponse, error) {
-	if exceeded, _ := c.budgetExceeded(); exceeded || c.IsWrapUp() {
+	// Only an exhausted run budget refuses a decision. Wrap-up stops new
+	// delegation, but workers already running still act and still need their
+	// decisions; refusing them would remove a safety check at the moment it
+	// matters.
+	if exceeded, _ := c.budgetExceeded(); exceeded {
 		return fantasy.NewTextErrorResponse("decision_budget_exceeded"), nil
 	}
 	if err := c.EventJournal().VerifyHashChain(ctx); err != nil {

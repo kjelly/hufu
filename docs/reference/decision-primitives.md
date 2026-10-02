@@ -120,8 +120,9 @@ started 仍計入限額。無法保證 process crash 橫跨 HTTP 與本機 journ
 technical failure 不做隱藏 retry；同 run/call ID 的失敗可重用，新 call 可在限額內
 重新嘗試。只有明訂的 core fallback 會執行第二個 backend attempt。
 
-開始呼叫前檢查既有 run budget/wrap-up，推論遵守 caller cancellation 與每次
-attempt timeout。System One protocol 沒有可靠 token usage，因此不偽造 token
+開始呼叫前檢查既有 run budget，用完才拒絕(`decision_budget_exceeded`)。
+wrap-up 只停止新的派工，仍在執行的 worker 照常可以呼叫。推論遵守 caller
+cancellation 與每次 attempt timeout。System One protocol 沒有可靠 token usage，因此不偽造 token
 數字、不計入 worker LLM token usage；此工具另受 `max-calls` 與 timeout 限制。
 
 完整 catalog、grants、policy、transport 及 resolved credential revision 的 hash
