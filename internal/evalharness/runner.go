@@ -450,6 +450,8 @@ func assertMemoryAggregates(ctx context.Context, workspace string, expects []Mem
 		findings = append(findings, compareMemoryAggregateInt(prefix+"rejected-count", expect.RejectedCount, aggregate.RejectedCount)...)
 		findings = append(findings, compareMemoryAggregateFloat(prefix+"positive-weight", expect.PositiveWeight, aggregate.PositiveWeight)...)
 		findings = append(findings, compareMemoryAggregateFloat(prefix+"negative-weight", expect.NegativeWeight, aggregate.NegativeWeight)...)
+		findings = append(findings, compareMemoryAggregateInt(prefix+"verified-support-count", expect.VerifiedSupportCount, aggregate.VerifiedSupportCount)...)
+		findings = append(findings, compareMemoryAggregateInt(prefix+"independent-task-count", expect.IndependentTaskCount, aggregate.IndependentTaskCount)...)
 	}
 	return findings
 }

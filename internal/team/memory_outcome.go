@@ -57,6 +57,9 @@ func memoryObservationFromEvent(event RunEvent, policy agent.MemoryLearningPolic
 		PriorAlpha: base.PriorAlpha, PriorBeta: base.PriorBeta,
 		UtilityPercentile: base.UtilityPercentile,
 	}
+	if base.OccurrenceID != "" {
+		observation.TaskID = base.OccurrenceID
+	}
 	if observation.PriorAlpha <= 0 {
 		observation.PriorAlpha = policy.PriorAlpha
 	}
@@ -90,7 +93,9 @@ func memoryObservationFromEvent(event RunEvent, policy agent.MemoryLearningPolic
 		switch outcome.Direction {
 		case "positive":
 			observation.PositiveWeight = outcome.EffectiveWeight
-			if outcome.Signal == "verification_passed" {
+			// A pass whose credit the per-signal cap reduced to zero adds no
+			// support, matching causal failures below.
+			if outcome.Signal == "verification_passed" && outcome.EffectiveWeight > 0 {
 				observation.VerifiedSupportDelta = 1
 			}
 		case "negative":
@@ -130,6 +135,22 @@ func (c *Coordinator) recordMemoryOutcomeForTask(item *TodoItem, terminalEvent s
 	if terminalEvent == "task_completed" && item.Retries > 0 {
 		c.recordMemoryOutcomeSignal(item, "retry_rescued", "positive", 0.5, func(MemoryUseRef) float64 { return 1 })
 	}
+}
+
+// recordCommittedMemoryOutcome records outcome credit for a task whose
+// terminal transition CommitTaskTransition just committed. Terminal tasks
+// commit there; the checkpoint emitter only revisits them, so without this
+// hook no outcome is recorded. Outcome keys are idempotent across both paths,
+// and learning-off teams skip the extra store writes.
+func (c *Coordinator) recordCommittedMemoryOutcome(item *TodoItem) {
+	if c == nil || c.session == nil || !memoryLearningEnabled(c.session.Config.MemoryLearning) {
+		return
+	}
+	eventType, err := taskTransitionEventType(item)
+	if err != nil || !isMemoryOutcomeTerminalEvent(eventType) {
+		return
+	}
+	c.recordMemoryOutcomeForTask(item, eventType)
 }
 
 func (c *Coordinator) recordGeneralContextOutcome(item *TodoItem, terminalEvent string) {
@@ -229,7 +250,7 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 		attributed = append(attributed, attributedUse{use: use, manifest: manifest, causal: causal, raw: raw})
 	}
 	policy := c.session.Config.MemoryLearning
-	remaining := policy.MaxCreditPerSignal - c.memoryOutcomeWeightForSignal(item.ID, signal, direction)
+	remaining := policy.MaxCreditPerSignal - c.memoryOutcomeWeightForSignal(item, signal, direction)
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -237,11 +258,12 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 	if rawTotal > remaining && rawTotal > 0 {
 		scale = remaining / rawTotal
 	}
+	occurrenceID := memoryOccurrenceID(item)
 	for _, attribution := range attributed {
 		use, manifest := attribution.use, attribution.manifest
 		effective := attribution.raw * scale
 		payload := memoryOutcomePayload{
-			memoryEventPayload: memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, ReasonCode: signal, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile},
+			memoryEventPayload: memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, OccurrenceID: occurrenceID, ReasonCode: signal, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile},
 			Signal:             signal, Disposition: use.Disposition, AttributionConfidence: use.Confidence,
 			CausalConfidence: attribution.causal, EvidenceWeight: evidenceWeight, EffectiveWeight: effective, Direction: direction,
 		}
@@ -255,13 +277,21 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 }
 
 // memoryOutcomeWeightForSignal returns the effective credit already recorded
-// for one outcome signal on a task. The max-credit-per-signal cap is scoped to
-// the signal (spec §5.4: each outcome signal's sum(effective_weight) is capped
-// at 1.0), so verification, skeptic, acceptance, and terminal signals each get
-// an independent budget instead of sharing a per-direction pool.
-func (c *Coordinator) memoryOutcomeWeightForSignal(taskID, signal, direction string) float64 {
-	if signal == "" || direction == "" || c == nil || c.eventStore == nil {
+// for one outcome signal on a task occurrence. The max-credit-per-signal cap is
+// scoped to the signal (spec §5.4: each outcome signal's sum(effective_weight)
+// is capped at 1.0), so verification, skeptic, acceptance, and terminal signals
+// each get an independent budget instead of sharing a per-direction pool.
+//
+// The workspace event log spans runs and todo IDs restart at "1" in every
+// fresh run, so credit is matched through the retrievals of this todo's own
+// manifests rather than the bare todo ID.
+func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direction string) float64 {
+	if item == nil || signal == "" || direction == "" || c == nil || c.eventStore == nil {
 		return 0
+	}
+	retrievals := make(map[string]bool, len(item.MemoryManifests))
+	for _, manifest := range item.MemoryManifests {
+		retrievals[manifest.RetrievalID] = true
 	}
 	events, err := c.eventStore.ReadEvents()
 	if err != nil {
@@ -269,11 +299,11 @@ func (c *Coordinator) memoryOutcomeWeightForSignal(taskID, signal, direction str
 	}
 	total := 0.0
 	for _, event := range events {
-		if event.Type != "memory_outcome_recorded" || event.TaskID != taskID {
+		if event.Type != "memory_outcome_recorded" || event.TaskID != item.ID {
 			continue
 		}
 		var payload memoryOutcomePayload
-		if json.Unmarshal(event.Payload, &payload) == nil && payload.Direction == direction && payload.Signal == signal {
+		if json.Unmarshal(event.Payload, &payload) == nil && retrievals[payload.RetrievalID] && payload.Direction == direction && payload.Signal == signal {
 			total += payload.EffectiveWeight
 		}
 	}

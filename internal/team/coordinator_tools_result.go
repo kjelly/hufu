@@ -365,17 +365,17 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 			},
 			"memory_uses": map[string]any{
 				"type":        "array",
-				"description": "Canonical memory records actually applied, consulted, or rejected. Use only IDs and retrieval_id from the injected context; an empty array is valid.",
+				"description": "Canonical memory records actually applied, consulted, or rejected. Each injected record is preceded by a `<!-- hufu-context ... id=context:<id> -->` marker; report that id as context_item_id. An empty array is valid.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"retrieval_id":    map[string]any{"type": "string"},
+						"retrieval_id":    map[string]any{"type": "string", "description": "Optional; the runtime binds the current attempt's retrieval when omitted."},
 						"context_item_id": map[string]any{"type": "string"},
 						"disposition":     map[string]any{"type": "string", "enum": []string{MemoryUseApplied, MemoryUseConsulted, MemoryUseRejected}},
 						"reason_code":     map[string]any{"type": "string"},
 						"confidence":      map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
 					},
-					"required":             []string{"retrieval_id", "context_item_id", "disposition", "confidence"},
+					"required":             []string{"context_item_id", "disposition", "confidence"},
 					"additionalProperties": false,
 				},
 			},

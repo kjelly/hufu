@@ -33,3 +33,31 @@ cases:
           rejected-count: 0
           positive-weight: 0
           negative-weight: 0
+  # The worker prompt shows injected memory only as id=context:<id>; the
+  # runtime-owned retrieval ID is never visible to a model. Reporting that id
+  # without retrieval_id must still earn applied and verified credit.
+  - id: applied-memory-earns-verified-credit
+    prompt: "Calibrate the quartz beacon safely."
+    provider-fixture: fixtures/applied-memory-earns-verified-credit.json
+    seed-memory-policy: true
+    context-items:
+      - id: applied-pattern
+        content: "Calibrate the quartz beacon safely using the established procedure."
+        must-keep: true
+    expect:
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+          verification: passed
+      durable-events:
+        required: [memory_retrieved, memory_usage_recorded, memory_outcome_recorded]
+        order: [memory_retrieved, memory_usage_recorded, memory_outcome_recorded, run_finished]
+      memory-aggregates:
+        - context-item-id: applied-pattern
+          policy-version: memory-policy-v1
+          min-exposure-count: 1
+          applied-count: 1
+          positive-weight: 1
+          verified-support-count: 1
+          independent-task-count: 1

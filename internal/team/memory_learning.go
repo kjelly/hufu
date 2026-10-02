@@ -32,6 +32,13 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 	if result == nil || len(result.MemoryUses) == 0 {
 		return nil
 	}
+	// Attribution only feeds outcome-driven learning. With learning off no
+	// manifest exists to bind a claim to, so the claim is dropped instead of
+	// rejecting an otherwise valid result.
+	if c != nil && c.session != nil && !memoryLearningEnabled(c.session.Config.MemoryLearning) {
+		result.MemoryUses = nil
+		return nil
+	}
 	if result.Source == "parsed_free_text" {
 		return fmt.Errorf("free-text result cannot claim applied memory")
 	}
@@ -78,7 +85,15 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 	}
 	seen := make(map[string]bool, len(result.MemoryUses))
 	ids := make([]string, 0, len(result.MemoryUses))
-	for i, use := range result.MemoryUses {
+	for i := range result.MemoryUses {
+		use := &result.MemoryUses[i]
+		// The prompt marks each injected record as id=context:<id> and never
+		// shows the runtime-owned retrieval ID, so accept that spelling and
+		// bind the attempt's retrieval when the claim omits it.
+		use.ContextItemID = strings.TrimPrefix(strings.TrimSpace(use.ContextItemID), "context:")
+		if use.RetrievalID == "" {
+			use.RetrievalID = manifest.RetrievalID
+		}
 		if use.RetrievalID != manifest.RetrievalID {
 			return fmt.Errorf("memory_uses[%d] retrieval_id is not valid for task %q attempt %d", i, taskID, attempt)
 		}
@@ -134,10 +149,12 @@ func (c *Coordinator) emitMemoryUsageEvents(result *TaskResult) {
 	attempt := result.Attempt
 	for _, use := range result.MemoryUses {
 		var manifest *MemoryInjectionManifest
+		occurrenceID := ""
 		for _, task := range c.taskTracker.TodoList().Items() {
 			if task == nil || task.ID != result.TaskID {
 				continue
 			}
+			occurrenceID = memoryOccurrenceID(task)
 			for i := range task.MemoryManifests {
 				if task.MemoryManifests[i].Attempt == attempt && task.MemoryManifests[i].RetrievalID == use.RetrievalID {
 					manifest = &task.MemoryManifests[i]
@@ -156,7 +173,7 @@ func (c *Coordinator) emitMemoryUsageEvents(result *TaskResult) {
 			}
 		}
 		policy := c.session.Config.MemoryLearning
-		payload := memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, ContentHash: contentHash, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, ReasonCode: use.ReasonCode, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile}
+		payload := memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: use.RetrievalID, ContextItemID: use.ContextItemID, ContentHash: contentHash, PolicyVersion: manifest.PolicyVersion, ProjectID: c.contextScope().ProjectID, OccurrenceID: occurrenceID, ReasonCode: use.ReasonCode, PriorAlpha: policy.PriorAlpha, PriorBeta: policy.PriorBeta, UtilityPercentile: policy.UtilityPercentile}
 		raw, _ := json.Marshal(struct {
 			memoryEventPayload
 			Disposition string  `json:"disposition"`
@@ -264,6 +281,7 @@ type memoryEventPayload struct {
 	ContentHash       string  `json:"content_hash,omitempty"`
 	PolicyVersion     string  `json:"policy_version,omitempty"`
 	ProjectID         string  `json:"project_id,omitempty"`
+	OccurrenceID      string  `json:"occurrence_id,omitempty"` // keys independent-task counting; see memoryOccurrenceID
 	ReasonCode        string  `json:"reason_code,omitempty"`
 	EvidenceRef       string  `json:"evidence_ref,omitempty"`
 	Source            string  `json:"source,omitempty"`
@@ -275,6 +293,18 @@ type memoryEventPayload struct {
 	PriorAlpha        float64 `json:"prior_alpha,omitempty"`
 	PriorBeta         float64 `json:"prior_beta,omitempty"`
 	UtilityPercentile float64 `json:"utility_percentile,omitempty"`
+}
+
+// memoryOccurrenceID names one task occurrence for independent-task counting.
+// Todo IDs restart at "1" in every fresh run, so a bare ID merges unrelated
+// tasks. A todo keeps its memory manifests in order across retries and
+// resume, so the run of its first manifest plus the todo ID is stable for the
+// occurrence and differs between runs.
+func memoryOccurrenceID(item *TodoItem) string {
+	if item == nil || len(item.MemoryManifests) == 0 || item.MemoryManifests[0].RunID == "" {
+		return ""
+	}
+	return item.MemoryManifests[0].RunID + "/" + item.ID
 }
 
 func memoryLearningEnabled(policy agent.MemoryLearningPolicy) bool {

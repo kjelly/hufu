@@ -151,7 +151,8 @@ type TaskResult struct {
 
 runtime validation：
 
-- `RetrievalID` 與 `ContextItemID` 必須存在於該 task/attempt 的 injection manifest。
+- `RetrievalID` 與 `ContextItemID` 必須存在於該 task/attempt 的 injection manifest。worker prompt 只以 `<!-- hufu-context ... id=context:<id> -->` 標出 item，從不顯示 runtime-owned retrieval ID；因此 `retrieval_id` 為選填，省略時 runtime 綁定該 attempt 的 manifest，`context_item_id` 接受帶 `context:` 前綴的寫法。提供了但不相符的 `retrieval_id` 仍 fail closed。
+- memory learning 為 `off` 時沒有 manifest 可綁定，`memory_uses` 會被丟棄，而不是讓整個 result 被退回。
 - 同一 item 只能出現一次；disposition 必須是 enum；confidence 必須在 `[0,1]`。
 - `applied` 表示做法或判斷實際影響執行；`consulted` 只記觀察；`rejected` 表示 agent 判定不適用或衝突。
 - 未回報的 injected item 視為 exposure only，不推測 applied。
@@ -179,6 +180,7 @@ memory_consolidation_proposed
 ```text
 schema_version
 retrieval_id（retrieval/usage/outcome event）
+occurrence_id（usage/outcome event；見 §5.4）
 context_item_id（逐 item event）
 run_id / task_id / attempt / branch_id / actor
 policy_version
@@ -221,7 +223,10 @@ V1 的保守限制：
 - negative attribution 必須同時有 explicit `applied`、objective failure 與 deterministic action/evidence match；缺一即 `causal_confidence=unknown`，不扣 utility。
 - V1 的 deterministic action match 僅接受 confirmed procedural item 的 `metadata["action_fingerprint"]`，且必須等於 runtime 從 typed `CommandResult`／`ExecutionReceipt` 正規化出的 fingerprint；未帶 fingerprint 的既有 item 不做自動負向歸因。
 - agent prose similarity 不能建立 action match。
-- 每個 outcome signal 的 `sum(effective_weight)` 上限為 `1.0`，依各 item attribution confidence 正規化分配。
+- 每個 outcome signal 的 `sum(effective_weight)` 上限為 `1.0`，依各 item attribution confidence 正規化分配。上限以 task occurrence 為範圍：只累計這個 todo 自己 manifest 的 retrieval 已記錄的 credit。workspace event log 跨 run 保留，而 todo ID 每次 fresh run 都從 `1` 開始，所以不能只用 todo ID 比對。
+- `verification_passed` 只有在 `effective_weight > 0` 時才增加 `VerifiedSupportCount`；被上限壓成 0 的重複 pass 不算支持。
+- `IndependentTaskCount` 計算 distinct task occurrence。usage／outcome event payload 帶 `occurrence_id`，由 todo 第一個 memory manifest 的 run ID 加 todo ID 組成，跨 retry 與 resume 不變、跨 run 不同；沒有 `occurrence_id` 的舊 event 仍以 todo ID 計。
+- terminal transition 在 `CommitTaskTransition` 提交時就記錄 outcome（learning 為 `off` 時略過）；checkpoint 重訪同一 task 時以相同 idempotency key 去重。
 
 ### 5.5 Aggregate projection
 

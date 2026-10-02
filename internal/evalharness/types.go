@@ -151,6 +151,10 @@ type MemoryAggregateExpect struct {
 	RejectedCount    *int     `yaml:"rejected-count,omitempty"`
 	PositiveWeight   *float64 `yaml:"positive-weight,omitempty"`
 	NegativeWeight   *float64 `yaml:"negative-weight,omitempty"`
+	// VerifiedSupportCount and IndependentTaskCount pin the support that
+	// promotion eligibility reads, not just the credit weight.
+	VerifiedSupportCount *int `yaml:"verified-support-count,omitempty"`
+	IndependentTaskCount *int `yaml:"independent-task-count,omitempty"`
 }
 
 // TaskExpect asserts on one task by position: Tasks[i] in the fixture is

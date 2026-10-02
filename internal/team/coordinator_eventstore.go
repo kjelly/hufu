@@ -890,6 +890,9 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if projected.Status == TaskSkipped {
 		c.recordSkippedExecutionEvent(&projected)
 	}
+	if !resetForResume {
+		c.recordCommittedMemoryOutcome(&projected)
+	}
 	if planLifecycleChanged {
 		if err := c.taskTracker.TodoList().SetPlanLifecycle(taskID, projected.PlanFirst, projected.PlanID); err != nil {
 			return fmt.Errorf("apply task plan lifecycle after durable append: %w", err)
