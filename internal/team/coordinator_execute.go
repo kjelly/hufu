@@ -86,6 +86,7 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (string, error) {
+	tasks = withoutEmptyCollections(tasks)
 	if err := c.AdmitExecutionPolicy(); err != nil {
 		return "", markCoordinatorFatal(err)
 	}

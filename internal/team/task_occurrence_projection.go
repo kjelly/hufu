@@ -3,6 +3,7 @@ package team
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
@@ -255,10 +256,38 @@ func compareTaskDefWithTodoOccurrence(task TaskDef, item *TodoItem, indexByID ma
 	want.Pipeline = false
 	task.PlanID = ""
 	want.PlanID = ""
+	clearEmptyCollections(&task)
+	clearEmptyCollections(&want)
 	if !reflect.DeepEqual(task, want) {
 		return fmt.Errorf("task %s scheduler contract differs from durable Todo occurrence (%s)", item.ID, taskOccurrenceDiff(task, want))
 	}
 	return nil
+}
+
+// clearEmptyCollections sets every empty top-level slice and map of task to
+// nil. A model that writes "depends_on": [] or "context_files": [] means the
+// same as leaving the field out, and a durable occurrence rebuilds nil.
+func clearEmptyCollections(task *TaskDef) {
+	value := reflect.ValueOf(task).Elem()
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Field(index)
+		if !field.CanSet() || (field.Kind() != reflect.Slice && field.Kind() != reflect.Map) {
+			continue
+		}
+		if !field.IsNil() && field.Len() == 0 {
+			field.Set(reflect.Zero(field.Type()))
+		}
+	}
+}
+
+// withoutEmptyCollections returns a copy of tasks with empty top-level
+// collections cleared, so model-written empty lists match durable state.
+func withoutEmptyCollections(tasks []TaskDef) []TaskDef {
+	out := slices.Clone(tasks)
+	for index := range out {
+		clearEmptyCollections(&out[index])
+	}
+	return out
 }
 
 func taskOccurrenceDiff(got, want TaskDef) string {

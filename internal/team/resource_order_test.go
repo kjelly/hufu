@@ -222,3 +222,23 @@ func TestOrderPredecessorSettlement(t *testing.T) {
 		})
 	}
 }
+
+// TestExplicitEmptyListsMatchTheDurableOccurrence covers a coordinator that
+// writes "depends_on": [] for an independent step. JSON decodes that into an
+// empty slice while the durable occurrence rebuilds nil, and the scheduler
+// contract check rejected the whole batch.
+func TestExplicitEmptyListsMatchTheDurableOccurrence(t *testing.T) {
+	c := newResourceOrderCoordinator(t, 2, 0)
+	worker := &scriptedResultAgent{c: c}
+	c.workerAgentOverride = worker
+	_, err := c.ExecuteTasks(context.Background(), []TaskDef{
+		{Agent: "worker", Goal: "first", SideEffect: SideEffectNone, DependsOn: []int{}, ContextFiles: []string{}},
+		{Agent: "worker", Goal: "second", SideEffect: SideEffectWorkspaceWrite, DependsOn: []int{}},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTasks: %v", err)
+	}
+	if items := c.taskTracker.TodoList().Items(); len(items) != 2 || items[0].Status != TaskDone || items[1].Status != TaskDone {
+		t.Fatalf("tasks = %v, want both done", todoStatuses(items))
+	}
+}
