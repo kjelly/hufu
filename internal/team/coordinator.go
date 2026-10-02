@@ -1402,7 +1402,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, err
 	}
 	params.DecisionPrimitives = primitiveService
-	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets)
+	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets, control.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
 	}

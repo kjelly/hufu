@@ -2972,7 +2972,9 @@ spec ID 為 `hufu.<point>`、version `v1`；team 設定不能改變問題）：
 
 規則：
 
-1. backend 固定為 `systemone`；沒有 `sidecar` 或 `rule` control backend。
+1. backend 預設為 `systemone`;2026-10-02 起可設 `backend: sidecar`,改用 run 的
+   sidecar model。sidecar 沒有信心值,active 時採用每個格式正確的回答，不套門檻。
+   沒有 `rule` control backend。
 2. 模式為 `off | shadow | active`，預設 `off`。`off` 時不送 request、不寫事件、
    不改 policy snapshot，行為與先前完全相同。
 3. `shadow` 與既有 sidecar 路徑並行執行，回傳既有結果，只記錄兩者是否一致。

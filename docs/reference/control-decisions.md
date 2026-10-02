@@ -53,6 +53,7 @@ shadow，再由個別 team 固定自己的 active 設定。
 
 ```yaml
 control-decisions:
+  backend: systemone         # systemone(預設)或 sidecar
   endpoint: http://192.168.11.117:11434/v1/systemone  # 預設 http://127.0.0.1:11434/v1/systemone
   model: nimble              # 任一點不是 off 時必填
   api-key-env: SYSTEMONE_KEY # 可選；有設定時該環境變數必須存在且非空
@@ -71,6 +72,20 @@ control-decisions:
 - 合併後至少有一點不是 `off` 時，coordinator 建立前會檢查 `model`、`endpoint` 與
   credential；不完整時 run 直接失敗。
 - 不接受 inline key。
+
+### backend: sidecar
+
+`backend: sidecar` 改用 run 的 sidecar model(`sidecar-model`)決策，走 team 的
+model provider、request admission 與成本計算,token 計入 run 的 budget。
+
+- `endpoint`、`model`、`api-key-env` 只對 systemone 有效，選 sidecar 時忽略。這樣個人
+  hufu.yaml 保留 systemone 設定時，個別 team 仍可以只寫 `backend: sidecar` 切換。
+- 語言模型只回一個答案、沒有信心值，所以門檻不適用。active 時，格式正確的回答一律採用;
+  只有技術錯誤(含無效輸出)才退回既有路徑。事件裡的 `threshold` 為 0。
+- 決策 prompt 原樣送給模型，不經過 auxiliary context compiler。
+- `hufu inspect control-decisions` 與 report 依 backend 分開統計，改成 active 前要看
+  sidecar 自己的資料。
+- active 點的 policy hash 包含 backend 與實際的 sidecar model。
 
 ## 安全與隱私
 

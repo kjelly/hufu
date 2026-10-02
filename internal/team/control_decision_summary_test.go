@@ -24,14 +24,17 @@ func TestSummarizeControlDecisionsAggregatesPerPointAndMode(t *testing.T) {
 		controlObservationEvent(t, controlDecisionPayload{Point: "path-reviewer", Mode: "shadow", Applied: "legacy", Status: "error", ErrorCode: "timeout", Threshold: 0.9, Legacy: "true", DurationMS: 5000}),
 		controlObservationEvent(t, controlDecisionPayload{Point: "path-reviewer", Mode: "active", Applied: "primitive", Status: "decided", Value: "false", Confidence: 0.99, Accepted: true, Threshold: 0.9, DurationMS: 200}),
 		controlObservationEvent(t, controlDecisionPayload{Point: "agent-matcher", Mode: "active", Applied: "safe_default", Status: "decided", Value: "1", Confidence: 0.5, Threshold: 0.6, Candidates: 2, DurationMS: 400}),
+		controlObservationEvent(t, controlDecisionPayload{Point: "path-reviewer", Mode: "shadow", Applied: "legacy", Status: "decided", Value: "false", Accepted: true, Legacy: "false", Agree: &yes, DurationMS: 900, Backend: "sidecar"}),
 		{Type: string(EventControlDecisionObserved), Actor: "coder", Payload: json.RawMessage(`{"version":1,"point":"bogus"}`)},
 		{Type: string(EventTaskCreated), Actor: "coder", Payload: json.RawMessage(`{}`)},
 	}
 	got := SummarizeControlDecisions(events)
 	want := []ControlDecisionSummary{
-		{Point: "agent-matcher", Mode: "active", Calls: 1, Decided: 1, BelowThreshold: 1, AppliedSafeDefault: 1, MeanConfidence: 0.5, P50MS: 400, P95MS: 400},
-		{Point: "path-reviewer", Mode: "active", Calls: 1, Decided: 1, AppliedPrimitive: 1, MeanConfidence: 0.99, P50MS: 200, P95MS: 200},
-		{Point: "path-reviewer", Mode: "shadow", Calls: 3, Decided: 2, Errors: 1, Compared: 2, Agreed: 1, BelowThreshold: 1, AppliedLegacy: 3,
+		{Point: "agent-matcher", Mode: "active", Backend: "systemone", Calls: 1, Decided: 1, BelowThreshold: 1, AppliedSafeDefault: 1, MeanConfidence: 0.5, P50MS: 400, P95MS: 400},
+		{Point: "path-reviewer", Mode: "active", Backend: "systemone", Calls: 1, Decided: 1, AppliedPrimitive: 1, MeanConfidence: 0.99, P50MS: 200, P95MS: 200},
+		// A sidecar observation stays apart from the systemone ones.
+		{Point: "path-reviewer", Mode: "shadow", Backend: "sidecar", Calls: 1, Decided: 1, Compared: 1, Agreed: 1, AppliedLegacy: 1, P50MS: 900, P95MS: 900},
+		{Point: "path-reviewer", Mode: "shadow", Backend: "systemone", Calls: 3, Decided: 2, Errors: 1, Compared: 2, Agreed: 1, BelowThreshold: 1, AppliedLegacy: 3,
 			MeanConfidence: (0.98 + 0.6) / 2, P50MS: 300, P95MS: 5000, ErrorCodes: map[string]int{"timeout": 1}},
 	}
 	if !reflect.DeepEqual(got, want) {

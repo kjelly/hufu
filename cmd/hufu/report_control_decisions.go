@@ -15,13 +15,13 @@ func writeControlDecisionsReport(b *strings.Builder, summaries []team.ControlDec
 		return
 	}
 	b.WriteString("## Control Decisions\n\n")
-	b.WriteString("| Point | Mode | Calls | Agreed / compared | Below threshold | Errors | Mean confidence | p50 / p95 (ms) | Applied (decision / safe / existing) |\n")
-	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	b.WriteString("| Point | Mode | Backend | Calls | Agreed / compared | Below threshold | Errors | Mean confidence | p50 / p95 (ms) | Applied (decision / safe / existing) |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, summary := range summaries {
-		fmt.Fprintf(b, "| %s | %s | %d | %d / %d | %d | %d | %.3f | %d / %d | %d / %d / %d |\n",
-			reportSafeMetadata(summary.Point, 80), reportSafeMetadata(summary.Mode, 40), summary.Calls,
+		fmt.Fprintf(b, "| %s | %s | %s | %d | %d / %d | %d | %d | %.3f | %d / %d | %d / %d / %d |\n",
+			reportSafeMetadata(summary.Point, 80), reportSafeMetadata(summary.Mode, 40), reportSafeMetadata(summary.Backend, 40), summary.Calls,
 			summary.Agreed, summary.Compared, summary.BelowThreshold, summary.Errors, summary.MeanConfidence,
 			summary.P50MS, summary.P95MS, summary.AppliedPrimitive, summary.AppliedSafeDefault, summary.AppliedLegacy)
 	}
-	b.WriteString("\nConfidence is the decision model's raw probability, not a calibrated accuracy.\n\n")
+	b.WriteString("\nConfidence is the decision model's raw probability, not a calibrated accuracy; backend sidecar reports none.\n\n")
 }

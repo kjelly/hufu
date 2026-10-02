@@ -44,10 +44,11 @@ func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
 
 func TestControlDecisionsRejectInvalidTeamBlock(t *testing.T) {
 	tests := map[string]string{
-		"unknown mode":  "control-decisions:\n  mode: always\n",
-		"unknown point": "control-decisions:\n  points:\n    similar-task: {mode: shadow}\n",
-		"unknown field": "control-decisions:\n  backend: sidecar\n",
-		"bad threshold": "control-decisions:\n  min-confidence: 2\n",
+		"unknown mode":    "control-decisions:\n  mode: always\n",
+		"unknown point":   "control-decisions:\n  points:\n    similar-task: {mode: shadow}\n",
+		"unknown field":   "control-decisions:\n  transport: http\n",
+		"unknown backend": "control-decisions:\n  backend: nimble\n",
+		"bad threshold":   "control-decisions:\n  min-confidence: 2\n",
 	}
 	for name, block := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -61,12 +61,12 @@ func renderInspectControlDecisionsText(writer io.Writer, query inspectpkg.Inspec
 		return err
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "POINT\tMODE\tCALLS\tAGREED\tBELOW-THRESHOLD\tERRORS\tMEAN-CONF\tP50/P95 MS\tAPPLIED decision/safe/existing"); err != nil {
+	if _, err := fmt.Fprintln(table, "POINT\tMODE\tBACKEND\tCALLS\tAGREED\tBELOW-THRESHOLD\tERRORS\tMEAN-CONF\tP50/P95 MS\tAPPLIED decision/safe/existing"); err != nil {
 		return err
 	}
 	for _, summary := range data.Summaries {
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%d\t%d/%d\t%d\t%d\t%.3f\t%d/%d\t%d/%d/%d\n",
-			safeOverviewValue(summary.Point), safeOverviewValue(summary.Mode), summary.Calls, summary.Agreed, summary.Compared,
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d/%d\t%d\t%d\t%.3f\t%d/%d\t%d/%d/%d\n",
+			safeOverviewValue(summary.Point), safeOverviewValue(summary.Mode), safeOverviewValue(summary.Backend), summary.Calls, summary.Agreed, summary.Compared,
 			summary.BelowThreshold, summary.Errors, summary.MeanConfidence, summary.P50MS, summary.P95MS,
 			summary.AppliedPrimitive, summary.AppliedSafeDefault, summary.AppliedLegacy); err != nil {
 			return err

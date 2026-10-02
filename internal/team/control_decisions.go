@@ -61,6 +61,9 @@ type controlDecisionPayload struct {
 	LegacyMS int64  `json:"legacy_ms,omitzero"`
 	// Agree is set only when both sides produced a comparable value.
 	Agree *bool `json:"agree,omitempty"`
+	// Backend is the decision backend; an observation without it predates
+	// backend selection and used systemone.
+	Backend string `json:"backend,omitempty"`
 }
 
 func validateControlDecisionEvent(event RunEvent) error {
@@ -127,6 +130,7 @@ func (c *Coordinator) recordControlDecision(ctx context.Context, record controlD
 		Status: string(record.outcome.Status), Value: record.outcome.Value, Confidence: record.outcome.Confidence,
 		Accepted: record.outcome.Accepted, Threshold: c.controlDecisions.MinConfidence(record.point),
 		ReasonCode: record.outcome.ReasonCode, ErrorCode: record.outcome.ErrorCode, Model: record.outcome.Model,
+		Backend:    c.controlDecisions.Backend(),
 		DurationMS: record.outcome.Duration.Milliseconds(), Candidates: record.candidates,
 		Legacy: record.legacy, LegacyMS: record.legacyTime.Milliseconds(),
 	}

@@ -22,28 +22,51 @@ import (
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Service decides the enabled points against one systemone transport. A nil
-// or empty Service reports every point as off. It is safe for concurrent use.
+// Service decides the enabled points against one decision backend. A nil or
+// empty Service reports every point as off. It is safe for concurrent use.
 type Service struct {
 	runtime decisionrt.Runtime
 	points  map[Point]resolvedPoint
+	backend string
 	model   string
 	redact  func(string) string
 	hash    string
 }
 
-// New validates config and binds the systemone backend without network I/O.
+// ServiceOption configures New.
+type ServiceOption func(*options)
+
+type options struct {
+	generator catalog.GeneratorFactory
+}
+
+// WithSidecarGenerator supplies the language-model generator for backend
+// sidecar. The team runtime owns provider selection, credentials and request
+// admission; the generator decides with the run's sidecar model.
+func WithSidecarGenerator(factory catalog.GeneratorFactory) ServiceOption {
+	return func(o *options) { o.generator = factory }
+}
+
+// New validates config and binds the decision backend without network I/O.
 // redact is applied to every context string before it leaves the process.
 // When every point is off, New does not validate or bind the transport.
-func New(config Config, redact func(string) string) (*Service, error) {
+func New(config Config, redact func(string) string, opts ...ServiceOption) (*Service, error) {
 	if redact == nil {
 		return nil, fmt.Errorf("control-decisions: a redactor is required")
+	}
+	settings := options{}
+	for _, opt := range opts {
+		opt(&settings)
 	}
 	points, err := config.resolvePoints()
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{points: make(map[Point]resolvedPoint), redact: redact}
+	backendName, err := config.backend()
+	if err != nil {
+		return nil, err
+	}
+	service := &Service{points: make(map[Point]resolvedPoint), backend: backendName, redact: redact}
 	for point, resolved := range points {
 		if resolved.Mode != ModeOff {
 			service.points[point] = resolved
@@ -55,6 +78,9 @@ func New(config Config, redact func(string) string) (*Service, error) {
 	timeout, err := validateTimeout(config.Timeout)
 	if err != nil {
 		return nil, err
+	}
+	if backendName == BackendSidecar {
+		return service.bindSidecar(settings, timeout)
 	}
 	endpoint := config.Endpoint
 	if endpoint == "" {
@@ -83,8 +109,32 @@ func New(config Config, redact func(string) string) (*Service, error) {
 	}
 	service.runtime = runtime
 	service.model = config.Model
-	service.hash, err = activeHash(endpoint, config.Model, config.APIKeyEnv, key, timeout, service.points)
+	service.hash, err = activeHash(BackendSystemOne, endpoint, config.Model, config.APIKeyEnv, key, timeout, service.points)
 	return service, err
+}
+
+// bindSidecar binds the run's sidecar model. It reports no confidence, so
+// Decide accepts every decided answer; the systemone transport fields do not
+// apply and are not part of the policy hash.
+func (s *Service) bindSidecar(settings options, timeout time.Duration) (*Service, error) {
+	if settings.generator == nil {
+		return nil, fmt.Errorf("control-decisions: backend sidecar needs the team's model runtime")
+	}
+	generator, err := settings.generator("")
+	if err != nil {
+		return nil, fmt.Errorf("control-decisions: %w", err)
+	}
+	primary, err := backend.New(backend.Config{Name: BackendSidecar, Generator: generator})
+	if err != nil {
+		return nil, fmt.Errorf("control-decisions: %w", err)
+	}
+	runtime, err := decisionrt.NewRuntime(decisionrt.RuntimeConfig{Primary: primary, Timeout: timeout})
+	if err != nil {
+		return nil, fmt.Errorf("control-decisions: %w", err)
+	}
+	s.runtime, s.model = runtime, generator.ModelID()
+	s.hash, err = activeHash(BackendSidecar, "", s.model, "", "", timeout, s.points)
+	return s, err
 }
 
 // transportProblem names the configuration field a systemone constructor
@@ -107,7 +157,7 @@ func transportProblem(err error) string {
 // activeHash pins the policy that can change behavior: the transport, the
 // credential revision, and every active point. It is empty when no point is
 // active, so shadow-only configuration never affects resume admission.
-func activeHash(endpoint, model, keyEnv, key string, timeout time.Duration, points map[Point]resolvedPoint) (string, error) {
+func activeHash(backendName, endpoint, model, keyEnv, key string, timeout time.Duration, points map[Point]resolvedPoint) (string, error) {
 	active := make(map[Point]resolvedPoint)
 	for point, resolved := range points {
 		if resolved.Mode == ModeActive {
@@ -119,18 +169,37 @@ func activeHash(endpoint, model, keyEnv, key string, timeout time.Duration, poin
 	}
 	credential := sha256.Sum256([]byte(key))
 	encoded, err := json.Marshal(struct {
+		Backend        string                  `json:"backend,omitempty"`
 		Endpoint       string                  `json:"endpoint"`
 		Model          string                  `json:"model"`
 		APIKeyEnv      string                  `json:"api_key_env"`
 		CredentialHash string                  `json:"credential_hash"`
 		TimeoutNS      int64                   `json:"timeout_ns"`
 		Points         map[Point]resolvedPoint `json:"points"`
-	}{endpoint, model, keyEnv, hex.EncodeToString(credential[:]), int64(timeout), active})
+	}{backendNameForHash(backendName), endpoint, model, keyEnv, hex.EncodeToString(credential[:]), int64(timeout), active})
 	if err != nil {
 		return "", fmt.Errorf("control-decisions: hash policy: %w", err)
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// backendNameForHash leaves systemone out of the hashed policy, so a
+// systemone configuration keeps the hash it had before backends were
+// selectable.
+func backendNameForHash(name string) string {
+	if name == BackendSystemOne {
+		return ""
+	}
+	return name
+}
+
+// Backend returns the decision backend name.
+func (s *Service) Backend() string {
+	if s == nil || s.backend == "" {
+		return BackendSystemOne
+	}
+	return s.backend
 }
 
 // Mode returns the effective mode of point.
@@ -155,8 +224,12 @@ func (s *Service) Hash() string {
 	return s.hash
 }
 
-// MinConfidence returns the effective threshold of point.
+// MinConfidence returns the effective threshold of point, or 0 on backend
+// sidecar, which reports no confidence to compare.
 func (s *Service) MinConfidence(point Point) float64 {
+	if s.Backend() == BackendSidecar {
+		return 0
+	}
 	if s != nil {
 		if resolved, ok := s.points[point]; ok {
 			return resolved.MinConfidence
@@ -246,7 +319,13 @@ func (s *Service) Decide(ctx context.Context, point Point, request decisionrt.Re
 		return outcome
 	}
 	outcome.Status, outcome.Value, outcome.Confidence = StatusDecided, value, result.Confidence
-	outcome.Accepted = result.ConfidenceSemantics != decisionrt.ConfidenceNone && result.Confidence >= s.MinConfidence(point)
+	if s.backend == BackendSidecar {
+		// A language model names one answer without a confidence, so there
+		// is no threshold to apply; choosing this backend accepts that.
+		outcome.Accepted = result.ConfidenceSemantics == decisionrt.ConfidenceNone
+	} else {
+		outcome.Accepted = result.ConfidenceSemantics != decisionrt.ConfidenceNone && result.Confidence >= s.MinConfidence(point)
+	}
 	return outcome
 }
 

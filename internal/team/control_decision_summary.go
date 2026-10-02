@@ -15,8 +15,11 @@ import (
 // active: how often the decision model agreed with the existing path, how
 // often it would have abstained, and how long it took.
 type ControlDecisionSummary struct {
-	Point     string `json:"point"`
-	Mode      string `json:"mode"`
+	Point string `json:"point"`
+	Mode  string `json:"mode"`
+	// Backend keeps systemone and sidecar observations apart, since each
+	// point is evaluated for activation per backend.
+	Backend   string `json:"backend"`
 	Calls     int    `json:"calls"`
 	Decided   int    `json:"decided"`
 	Abstained int    `json:"abstained"`
@@ -40,7 +43,7 @@ type ControlDecisionSummary struct {
 // SummarizeControlDecisions aggregates every valid observation in events,
 // ordered by point and mode. Invalid observations are skipped.
 func SummarizeControlDecisions(events []RunEvent) []ControlDecisionSummary {
-	type key struct{ point, mode string }
+	type key struct{ point, mode, backend string }
 	type accumulator struct {
 		summary    ControlDecisionSummary
 		confidence float64
@@ -55,10 +58,15 @@ func SummarizeControlDecisions(events []RunEvent) []ControlDecisionSummary {
 		if json.Unmarshal(event.Payload, &payload) != nil {
 			continue
 		}
-		group := groups[key{payload.Point, payload.Mode}]
+		backendName := payload.Backend
+		if backendName == "" {
+			backendName = control.BackendSystemOne
+		}
+		groupKey := key{payload.Point, payload.Mode, backendName}
+		group := groups[groupKey]
 		if group == nil {
-			group = &accumulator{summary: ControlDecisionSummary{Point: payload.Point, Mode: payload.Mode}}
-			groups[key{payload.Point, payload.Mode}] = group
+			group = &accumulator{summary: ControlDecisionSummary{Point: payload.Point, Mode: payload.Mode, Backend: backendName}}
+			groups[groupKey] = group
 		}
 		summary := &group.summary
 		summary.Calls++
@@ -95,7 +103,7 @@ func SummarizeControlDecisions(events []RunEvent) []ControlDecisionSummary {
 		}
 	}
 	keys := slices.SortedFunc(maps.Keys(groups), func(a, b key) int {
-		return cmp.Or(cmp.Compare(a.point, b.point), cmp.Compare(a.mode, b.mode))
+		return cmp.Or(cmp.Compare(a.point, b.point), cmp.Compare(a.mode, b.mode), cmp.Compare(a.backend, b.backend))
 	})
 	summaries := make([]ControlDecisionSummary, 0, len(keys))
 	for _, groupKey := range keys {

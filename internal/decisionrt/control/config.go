@@ -1,6 +1,7 @@
 // Package control defines hufu's fixed runtime control decisions and the
-// configuration that selects how each one uses the systemone decision
-// backend (docs/architecture/decision-primitive.md §59).
+// configuration that selects how each one uses a decision backend: systemone
+// by default, or the run's sidecar language model
+// (docs/architecture/decision-primitive.md §59).
 //
 // The questions, option mappings, context keys, and safe outcomes are owned
 // by this package; configuration only chooses a mode, a confidence threshold,
@@ -66,6 +67,10 @@ type PointConfig struct {
 // Config is the control-decisions block accepted in both hufu.yaml and
 // team.yaml. Every field is optional; an empty block leaves every point off.
 type Config struct {
+	// Backend is systemone (the default) or sidecar. Endpoint, Model and
+	// APIKeyEnv configure systemone only; sidecar decides with the run's
+	// sidecar model, which reports no confidence.
+	Backend       string                `yaml:"backend,omitempty" json:"backend,omitempty"`
 	Endpoint      string                `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	Model         string                `yaml:"model,omitempty" json:"model,omitempty"`
 	APIKeyEnv     string                `yaml:"api-key-env,omitempty" json:"api_key_env,omitempty"`
@@ -80,6 +85,9 @@ type Config struct {
 // modified.
 func Merge(base, override Config) Config {
 	merged := base.clone()
+	if override.Backend != "" {
+		merged.Backend = override.Backend
+	}
 	if override.Endpoint != "" {
 		merged.Endpoint = override.Endpoint
 	}
@@ -143,6 +151,9 @@ func (c Config) Validate() error {
 	if _, err := c.resolvePoints(); err != nil {
 		return err
 	}
+	if _, err := c.backend(); err != nil {
+		return err
+	}
 	if c.Timeout != 0 {
 		if _, err := validateTimeout(c.Timeout); err != nil {
 			return err
@@ -152,6 +163,24 @@ func (c Config) Validate() error {
 		return fmt.Errorf("control-decisions.api-key-env: invalid variable name")
 	}
 	return nil
+}
+
+// Backend names.
+const (
+	BackendSystemOne = "systemone"
+	BackendSidecar   = "sidecar"
+)
+
+// backend returns the effective backend name.
+func (c Config) backend() (string, error) {
+	switch c.Backend {
+	case "", BackendSystemOne:
+		return BackendSystemOne, nil
+	case BackendSidecar:
+		return BackendSidecar, nil
+	default:
+		return "", fmt.Errorf("control-decisions.backend must be systemone or sidecar")
+	}
 }
 
 // resolvedPoint is the effective policy of one point.
