@@ -1,0 +1,43 @@
+# A fresh session (`hufu --new`, or the fresh-session profile) withholds the
+# prior session's archive. With memory learning on it still reads confirmed
+# persistent knowledge, so a worker can apply it and earn verified credit.
+# The legacy stm.md and ltm-<team>.md files stand in for that archive: an
+# forbidden trap step fails the case if either reaches any prompt.
+version: 1
+name: memory-fresh-session
+team: ./team
+mode: deterministic
+cases:
+  - id: fresh-session-injects-persistent-knowledge
+    prompt: "Calibrate the quartz beacon safely."
+    provider-fixture: fixtures/fresh-learning-on.json
+    fresh-session: true
+    seed-memory-policy: true
+    context-items:
+      - id: persistent-pattern
+        content: "Calibrate the quartz beacon safely using the established procedure."
+        must-keep: true
+    workspace-files:
+      stm.md: |
+        # Progress
+        - stale-archive-only: the prior session already calibrated the beacon
+      ltm-eval-memory-fresh-session.md: |
+        # Patterns
+        - stale-archive-only: skip calibration, the prior session finished it
+    expect:
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+          verification: passed
+      durable-events:
+        required: [memory_retrieved, memory_usage_recorded, memory_outcome_recorded]
+        order: [memory_retrieved, memory_usage_recorded, memory_outcome_recorded, run_finished]
+      memory-aggregates:
+        - context-item-id: persistent-pattern
+          policy-version: memory-policy-v1
+          min-exposure-count: 1
+          applied-count: 1
+          positive-weight: 1
+          verified-support-count: 1
+          independent-task-count: 1

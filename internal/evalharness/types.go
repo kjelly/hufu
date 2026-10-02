@@ -56,6 +56,11 @@ type CaseFixture struct {
 	// deliberately loads only an adopted policy from context.sqlite, so team
 	// YAML alone is not sufficient runtime arrangement for memory evals.
 	SeedMemoryPolicy bool `yaml:"seed-memory-policy,omitempty"`
+	// FreshSession starts the case as `hufu --new` does: the coordinator
+	// withholds the prior session's archive, and canonical context only when
+	// memory learning is off. It cannot be combined with a seeded
+	// session.json checkpoint, which a fresh start never resumes.
+	FreshSession bool `yaml:"fresh-session,omitempty"`
 	// WorkspaceFiles seeds files into the case's ephemeral workspace before
 	// the run starts, keyed by path relative to the workspace root, e.g. a
 	// fan_out source manifest a task's tool_call references by a
@@ -236,6 +241,11 @@ type ProviderStep struct {
 	Match    *StepMatch    `json:"match,omitempty"`
 	Content  string        `json:"content,omitempty"`
 	ToolCall *ToolCallStep `json:"tool_call,omitempty"`
+	// Forbidden marks a matched step as a trap that asserts the matched
+	// content never reaches any prompt: the case fails if a request consumes
+	// it, and leaving it unconsumed is expected. Its reply only answers that
+	// request so the run can finish and report the finding.
+	Forbidden bool `json:"forbidden,omitempty"`
 }
 
 // ToolCallStep is one scripted tool call. Arguments is the exact JSON object

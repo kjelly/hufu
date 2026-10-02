@@ -215,6 +215,9 @@ func LoadProviderFixture(path string) (*ProviderFixture, error) {
 		if step.Match != nil && strings.TrimSpace(step.Match.Contains) == "" {
 			return nil, fmt.Errorf("provider fixture %s: steps[%d].match.contains is required", path, index)
 		}
+		if step.Forbidden && step.Match == nil {
+			return nil, fmt.Errorf("provider fixture %s: steps[%d].forbidden requires match", path, index)
+		}
 		if step.ToolCall == nil {
 			continue
 		}

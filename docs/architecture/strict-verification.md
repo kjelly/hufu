@@ -365,6 +365,8 @@ hufu --profile strict-verification ...
 execution-profile: strict-verification
 ```
 
+`DisableHistoricalMemory` 擋的是前一個 session 的 archive（conversation history、session context summary、legacy `stm.md`／`ltm-<team>.md`、vector memory store）。memory learning 開啟時，canonical context 與本次 run 的 working memory 不受此限，見 `memory-learning.md` §6。
+
 ### 驗收條件
 
 - profile resolution 可在 dry-run 顯示所有有效語意。

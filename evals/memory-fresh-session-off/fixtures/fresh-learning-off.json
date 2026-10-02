@@ -1,0 +1,41 @@
+{
+  "steps": [
+    {
+      "match": { "contains": "stale-archive-only" },
+      "forbidden": true,
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"failure\",\"summary\":\"The prior session archive reached a fresh prompt.\"}"
+      }
+    },
+    {
+      "match": { "contains": "using the established procedure" },
+      "forbidden": true,
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"failure\",\"summary\":\"Persistent knowledge reached a fresh prompt with learning off.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Calibrate the quartz beacon safely.\",\"verify\":\"test 2 -gt 1\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"Quartz beacon calibrated.\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "finish",
+        "arguments": "{\"response\":\"Quartz beacon calibration is complete.\"}"
+      }
+    },
+    {
+      "content": "(run ends here)"
+    }
+  ]
+}

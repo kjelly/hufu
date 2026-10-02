@@ -1,0 +1,34 @@
+# With memory learning off, a fresh session withholds canonical context as
+# well as the archive, exactly as before learning could start in a fresh
+# session. Forbidden trap steps fail the case if the persistent item or the
+# legacy archive reaches any prompt.
+version: 1
+name: memory-fresh-session-off
+team: ./team
+mode: deterministic
+cases:
+  - id: fresh-session-learning-off-stays-isolated
+    prompt: "Calibrate the quartz beacon safely."
+    provider-fixture: fixtures/fresh-learning-off.json
+    fresh-session: true
+    context-items:
+      - id: persistent-pattern
+        content: "Calibrate the quartz beacon safely using the established procedure."
+        must-keep: true
+    workspace-files:
+      stm.md: |
+        # Progress
+        - stale-archive-only: the prior session already calibrated the beacon
+      ltm-eval-memory-fresh-session-off.md: |
+        # Patterns
+        - stale-archive-only: skip calibration, the prior session finished it
+    expect:
+      task-count: 1
+      tasks:
+        - agent: worker
+          status: done
+          verification: passed
+      durable-events:
+        counts:
+          - type: memory_retrieved
+            count: 0

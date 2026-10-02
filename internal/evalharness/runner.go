@@ -74,14 +74,14 @@ func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCas
 		return EvalCaseResult{}, err
 	}
 	provider := newScriptedProvider(providerFixture)
-	return runCaseWithHandler(ctx, fixture, c, provider, provider.unconsumed)
+	return runCaseWithHandler(ctx, fixture, c, provider, provider.scriptFindings)
 }
 
 // runCaseWithHandler is runCase's implementation, taking the model driver as
-// a plain http.Handler (plus its own unconsumed-step reporter, or nil) so
+// a plain http.Handler (plus its own script-findings reporter, or nil) so
 // tests can substitute a handler with different failure behavior --
 // see TestEvalTimeout, which needs a handler that never responds.
-func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, unconsumed func() []ProviderStep) (EvalCaseResult, error) {
+func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding) (EvalCaseResult, error) {
 	started := time.Now()
 
 	server := httptest.NewServer(handler)
@@ -149,11 +149,19 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if c.DecisionProfileOverride != "" {
 		coordinator.SetDecisionProfile(c.DecisionProfileOverride)
 	}
+	// The CLI marks a fresh start before installing session data and
+	// freezing the execution policy; follow the same order.
+	if c.FreshSession {
+		coordinator.SetFreshSession(true)
+	}
 	// Follow the production CLI's crash-resume path when a fixture seeds a
 	// session.json checkpoint. Loading it after coordinator construction and
 	// before policy freeze makes ResumeInterruptedTasks exercise the same
 	// durable Todo projection instead of treating the file as inert input.
 	if restored := team.LoadSession(workspace); restored != nil {
+		if c.FreshSession {
+			return EvalCaseResult{}, errors.New("fresh-session cannot resume a seeded workspace-files session.json")
+		}
 		if c.SeedExecutionPolicySnapshot {
 			if seedErr := seedPriorRunPolicyAndTasks(context.WithoutCancel(ctx), workspace, coordinator, restored, c.PriorRunDecisionAdmissionDigests); seedErr != nil {
 				return EvalCaseResult{}, seedErr
@@ -225,14 +233,8 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 			Actual:    boundedRunErrorDiagnostic(runErr),
 		})
 	}
-	if unconsumed != nil {
-		for _, leftover := range unconsumed() {
-			findings = append(findings, EvalFinding{
-				Dimension: "provider-fixture",
-				Expected:  "every scripted step consumed",
-				Actual:    fmt.Sprintf("unused step: %+v", leftover),
-			})
-		}
+	if scriptFindings != nil {
+		findings = append(findings, scriptFindings()...)
 	}
 
 	outcome := ""

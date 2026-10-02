@@ -1,0 +1,4 @@
+name: eval-memory-fresh-session-off
+description: Minimal coordinator and worker for fresh-session evals with memory learning off
+memory-learning:
+  mode: off

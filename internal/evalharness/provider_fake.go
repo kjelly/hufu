@@ -167,19 +167,23 @@ func (p *scriptedProvider) nextStep(requestBody []byte) (ProviderStep, error) {
 	return ProviderStep{}, fmt.Errorf("no unconsumed step left to answer this request")
 }
 
-// unconsumed returns every scripted step the case never triggered, so a
-// runner can flag an over-specified fixture as a finding rather than silently
-// ignoring dead script entries.
-func (p *scriptedProvider) unconsumed() []ProviderStep {
+// scriptFindings reports where the run departed from the script: a step the
+// case never triggered, so an over-specified fixture is flagged rather than
+// its dead entries silently ignored, and a forbidden step a request consumed.
+func (p *scriptedProvider) scriptFindings() []EvalFinding {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var left []ProviderStep
+	var findings []EvalFinding
 	for i, done := range p.consumed {
-		if !done {
-			left = append(left, p.steps[i])
+		step := p.steps[i]
+		switch {
+		case step.Forbidden && done:
+			findings = append(findings, EvalFinding{Dimension: "provider-fixture", Expected: "forbidden step never consumed", Actual: fmt.Sprintf("a request contained %q", step.Match.Contains)})
+		case !step.Forbidden && !done:
+			findings = append(findings, EvalFinding{Dimension: "provider-fixture", Expected: "every scripted step consumed", Actual: fmt.Sprintf("unused step: %+v", step)})
 		}
 	}
-	return left
+	return findings
 }
 
 type sseChunk struct {

@@ -3,6 +3,7 @@ package evalharness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/improve"
@@ -58,8 +59,8 @@ func TestDiscoverSuiteFixturesFromEvalRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverSuiteFixtures: %v", err)
 	}
-	if len(paths) != 19 {
-		t.Fatalf("len(paths) = %d, want 19 suite fixtures: %v", len(paths), paths)
+	if len(paths) != 21 {
+		t.Fatalf("len(paths) = %d, want 21 suite fixtures: %v", len(paths), paths)
 	}
 	for _, path := range paths {
 		if filepath.Base(path) != "cases.yaml" {
@@ -197,5 +198,62 @@ func TestProviderFixtureRejectsTrailingJSON(t *testing.T) {
 	}
 	if _, err := LoadProviderFixture(path); err == nil {
 		t.Fatal("LoadProviderFixture accepted a trailing JSON value")
+	}
+}
+
+func TestProviderFixtureForbiddenStepRequiresMatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		wantErr bool
+	}{
+		{name: "forbidden with match", fixture: `{"steps":[{"match":{"contains":"secret"},"forbidden":true,"content":"leaked"},{"content":"done"}]}`},
+		{name: "forbidden without match", fixture: `{"steps":[{"forbidden":true,"content":"leaked"}]}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "provider.json")
+			if err := os.WriteFile(path, []byte(tt.fixture), 0o644); err != nil {
+				t.Fatalf("write provider fixture: %v", err)
+			}
+			if _, err := LoadProviderFixture(path); (err != nil) != tt.wantErr {
+				t.Fatalf("LoadProviderFixture error = %v, want error %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// A forbidden step is a trap: consuming it is a finding, leaving it unused
+// is the expected outcome. Ordinary steps keep the unused-step finding.
+func TestScriptFindingsReportUnusedStepsAndConsumedTraps(t *testing.T) {
+	trap := ProviderStep{Match: &StepMatch{Contains: "secret"}, Forbidden: true, Content: "leaked"}
+	tests := []struct {
+		name       string
+		requests   []string
+		wantDims   []string
+		wantActual string
+	}{
+		{name: "trap untouched and script complete", requests: []string{"hello"}},
+		{name: "trap consumed", requests: []string{"the secret value", "hello"}, wantDims: []string{"provider-fixture"}, wantActual: `a request contained "secret"`},
+		{name: "ordinary step unused", wantDims: []string{"provider-fixture"}, wantActual: "unused step"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := newScriptedProvider(&ProviderFixture{Steps: []ProviderStep{trap, {Content: "done"}}})
+			for _, request := range tt.requests {
+				if _, err := provider.nextStep([]byte(request)); err != nil {
+					t.Fatalf("nextStep(%q): %v", request, err)
+				}
+			}
+			findings := provider.scriptFindings()
+			if len(findings) != len(tt.wantDims) {
+				t.Fatalf("findings = %+v, want %d", findings, len(tt.wantDims))
+			}
+			for i, finding := range findings {
+				if finding.Dimension != tt.wantDims[i] || !strings.Contains(finding.Actual, tt.wantActual) {
+					t.Fatalf("finding %d = %+v, want dimension %q containing %q", i, finding, tt.wantDims[i], tt.wantActual)
+				}
+			}
+		})
 	}
 }
