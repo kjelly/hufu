@@ -44,8 +44,13 @@ type VerificationFailureInput struct {
 // transition has reached done and verification has completed. Failure is
 // best-effort like the prior STM write: it is observable and queued for
 // repair, but never changes an already-verified task into a failed task.
+//
+// The record lands in this session's scope, so a fresh session with learning
+// on writes it too: it is this run's own working memory, not an archive, and
+// it is the only source accepted-run extraction can promote to persistent
+// knowledge.
 func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input TaskResultMemoryInput) {
-	if c == nil || c.contextRepo == nil || c.session == nil || c.historicalMemoryDisabled() {
+	if c == nil || c.contextRepo == nil || c.session == nil || c.canonicalMemoryDisabled() {
 		return
 	}
 	runID := c.executionRunID
@@ -171,7 +176,7 @@ func (c *Coordinator) reduceTaskResultToSharedMemory(ctx context.Context, input 
 // ContextProgress. A repository write failure is observable and queued for
 // repair, but never changes the already-failed task's status.
 func (c *Coordinator) recordVerificationFailure(ctx context.Context, input VerificationFailureInput) {
-	if c == nil || c.contextRepo == nil || c.session == nil || c.historicalMemoryDisabled() {
+	if c == nil || c.contextRepo == nil || c.session == nil || c.canonicalMemoryDisabled() {
 		return
 	}
 	runID := c.executionRunID

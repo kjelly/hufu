@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,6 +226,133 @@ func TestFreshSessionWorkerBundleCarriesPersistentKnowledgeOnlyWithLearning(t *t
 			got := canonical && bundle != nil && len(bundle.SharedPersistent) == 1 && bundle.SharedPersistent[0].ID == "persistent-1"
 			if got != tt.wantKnowledge {
 				t.Fatalf("worker bundle carries persistent knowledge = %v, want %v (canonical=%v bundle=%+v)", got, tt.wantKnowledge, canonical, bundle)
+			}
+		})
+	}
+}
+
+func freshKnowledgeCoordinator(workspace string, repo *contextstore.SQLiteRepository, mode agent.MemoryLearningMode, runID, sessionID string) *Coordinator {
+	sessionData := NewSession()
+	sessionData.CreatedAt = sessionID
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Scope:     WorkspaceScope{ContextScopeID: "project"},
+			Config:    agent.TeamConfig{Name: "fresh-knowledge", MemoryLearning: learningPolicy(mode)},
+			Agents:    map[string]*agent.AgentDef{"worker": {Name: "worker", Role: "worker"}},
+		},
+		contextRepo:    repo,
+		taskTracker:    NewTaskTracker(),
+		sessionData:    sessionData,
+		executionRunID: runID,
+	}
+	c.SetFreshSession(true)
+	return c
+}
+
+// A fresh run's typed results and verification failures are its own working
+// memory; they are written only when learning is on.
+func TestFreshSessionWritesCurrentRunWorkingMemoryOnlyWithLearning(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      agent.MemoryLearningMode
+		wantItems bool
+	}{
+		{name: "learning on", mode: agent.MemoryLearningObserve, wantItems: true},
+		{name: "learning off", mode: agent.MemoryLearningOff},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := t.TempDir()
+			repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repo.Close() })
+			c := freshKnowledgeCoordinator(workspace, repo, tt.mode, "run-1", "session-1")
+			c.reduceTaskResultToSharedMemory(ctx, TaskResultMemoryInput{TodoID: "1", Attempt: 1, Result: &TaskResult{
+				Findings:  []Finding{{Summary: "adapter requires transaction"}},
+				Decisions: []Decision{{Topic: "storage", Choice: "SQLite"}},
+			}})
+			c.recordVerificationFailure(ctx, VerificationFailureInput{TodoID: "2", Attempt: 1, Err: errors.New("verification failed"), Verify: &VerificationResult{Command: "test -f out", ExitCode: 1}})
+			items, err := repo.Query(ctx, contextstore.RepositoryQuery{Scope: c.contextScope(), Visibility: contextstore.VisibilityExact, IncludeCandidates: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			kinds := make(map[contextstore.ContextKind]bool)
+			for _, item := range items {
+				kinds[item.Kind] = true
+			}
+			got := kinds[contextstore.ContextObservation] && kinds[contextstore.ContextDecision] && kinds[contextstore.ContextError]
+			if got != tt.wantItems || (!tt.wantItems && len(items) != 0) {
+				t.Fatalf("working memory written = %v, want %v: %#v", got, tt.wantItems, items)
+			}
+		})
+	}
+}
+
+// Two consecutive fresh runs share a workspace. Knowledge reaches the second
+// run only through accepted-run extraction and confirmation; the first run's
+// session records never do.
+func TestFreshSessionCarriesAcceptedKnowledgeToNextFreshRun(t *testing.T) {
+	tests := []struct {
+		name          string
+		mode          agent.MemoryLearningMode
+		accepted      bool
+		wantKnowledge bool
+	}{
+		{name: "learning on, run accepted", mode: agent.MemoryLearningObserve, accepted: true, wantKnowledge: true},
+		{name: "learning on, run rejected", mode: agent.MemoryLearningObserve},
+		{name: "learning off, run accepted", mode: agent.MemoryLearningOff, accepted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := t.TempDir()
+			repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repo.Close() })
+
+			first := freshKnowledgeCoordinator(workspace, repo, tt.mode, "run-1", "session-1")
+			first.reduceTaskResultToSharedMemory(ctx, TaskResultMemoryInput{TodoID: "1", Attempt: 1, Result: &TaskResult{
+				Findings: []Finding{{Summary: "Calibrate the beacon after a warmup cycle", Detail: "learned-finding-marker"}},
+			}})
+			if err := first.appendCanonicalContext(ctx, contextstore.ContextProgress, "run-one-progress-marker", "finish", map[string]string{"legacy_section": stmSectionProgress}); err != nil {
+				t.Fatal(err)
+			}
+			first.autoExtractCanonicalLTM(ctx, "run-1")
+			if tt.accepted {
+				if err := first.confirmSharedMemoryCandidates(ctx, &EvidenceManifest{RunID: "run-1", Status: "accepted", ManifestHash: "manifest-1"}); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := first.rejectSharedMemoryCandidates(ctx, &EvidenceManifest{RunID: "run-1"}, "run failed"); err != nil {
+				t.Fatal(err)
+			}
+
+			second := freshKnowledgeCoordinator(workspace, repo, tt.mode, "run-2", "session-2")
+			request := second.newTaskContextRequest(TaskDef{Agent: "worker", Goal: "Calibrate the beacon"}, "1", 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
+			bundle, _, canonical, err := second.canonicalContextBundleForRequest(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotKnowledge := false
+			if canonical && bundle != nil {
+				for _, item := range bundle.SharedPersistent {
+					if strings.Contains(item.Content, "learned-finding-marker") {
+						gotKnowledge = true
+					}
+				}
+				for _, item := range bundle.SharedSession {
+					if strings.Contains(item.Content, "learned-finding-marker") || strings.Contains(item.Content, "run-one-progress-marker") {
+						t.Fatalf("second run saw the first run's session record: %#v", item)
+					}
+				}
+			}
+			if gotKnowledge != tt.wantKnowledge {
+				t.Fatalf("second run sees accepted knowledge = %v, want %v (canonical=%v bundle=%+v)", gotKnowledge, tt.wantKnowledge, canonical, bundle)
 			}
 		})
 	}
