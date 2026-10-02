@@ -623,6 +623,20 @@ func (c *Coordinator) historicalMemoryDisabled() bool {
 	return c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load()
 }
 
+// canonicalMemoryDisabled reports whether canonical context (this session's
+// shared items and confirmed persistent knowledge) is withheld. A fresh
+// session starts a new session scope, so canonical context never carries the
+// prior session's archive; that archive stays behind historicalMemoryDisabled.
+// A team with outcome-driven learning on may therefore read persistent
+// knowledge and write this run's working memory, since learning cannot start
+// otherwise.
+func (c *Coordinator) canonicalMemoryDisabled() bool {
+	if !c.historicalMemoryDisabled() {
+		return false
+	}
+	return c.session == nil || !memoryLearningEnabled(c.session.Config.MemoryLearning)
+}
+
 func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if c == nil {
 		return

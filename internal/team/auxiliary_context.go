@@ -88,7 +88,7 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 		return "", fmt.Errorf("provider-bound context unavailable for auxiliary purpose %q", purpose)
 	}
 	modelSpec := invocation.ModelContext
-	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, ModelContext: modelSpec})
+	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, DisableCanonicalMemory: true, ModelContext: modelSpec})
 	if err != nil {
 		return "", err
 	}

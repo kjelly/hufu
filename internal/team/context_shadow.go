@@ -9,6 +9,8 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // shadowContextAppend records legacy memory writes in the canonical store.
@@ -138,12 +140,41 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates, SharedPersistentConflicts: c.openConflictsForItems(ctx, ltm)}, true, nil
 }
 
+// coordinatorMemorySources is the memory a coordinator prompt draws on:
+// canonical context when it is allowed and available, otherwise the legacy
+// archive files and vector store when the archive is allowed.
+type coordinatorMemorySources struct {
+	rawSTM, rawLTM string
+	store          *memory.MemoryStore
+	canonical      *CanonicalContextBundle
+	routeDecisions []ContextRouteDecision
+}
+
+func (c *Coordinator) coordinatorMemorySources(ctx context.Context, request ContextRequest, allowArchive, allowCanonical bool) (coordinatorMemorySources, error) {
+	var sources coordinatorMemorySources
+	if !allowCanonical {
+		return sources, nil
+	}
+	bundle, decisions, canonical, err := c.canonicalContextBundleForRequest(ctx, request)
+	if err != nil {
+		return sources, fmt.Errorf("coordinator canonical memory preflight failed: %w", err)
+	}
+	if canonical {
+		sources.canonical, sources.routeDecisions = bundle, decisions
+	} else if allowArchive {
+		sources.rawSTM = utils.RedactSecrets(LoadSTM(c.session.Workspace))
+		sources.rawLTM = utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name))
+		sources.store = c.memoryStore
+	}
+	return sources, nil
+}
+
 func (c *Coordinator) canonicalContextBundleForRequest(ctx context.Context, request ContextRequest) (*CanonicalContextBundle, []ContextRouteDecision, bool, error) {
 	if c == nil || c.session == nil {
 		return nil, nil, false, nil
 	}
 	hasInvariantRoute := c.invariantVerificationModeForRequest(request) != "" && len(c.session.InvariantCatalog) > 0
-	if (c.contextRepo == nil || c.historicalMemoryDisabled()) && !hasInvariantRoute {
+	if (c.contextRepo == nil || c.canonicalMemoryDisabled()) && !hasInvariantRoute {
 		return nil, nil, false, nil
 	}
 	route, err := c.contextRouter().Route(ctx, request)

@@ -124,12 +124,12 @@ func (c *Coordinator) selectTaskModel(task TaskDef, defs ...*agent.AgentDef) str
 			}
 		}
 		contextChars += len(c.loadProjectContext())
-		if !c.historicalMemoryDisabled() {
+		if !c.canonicalMemoryDisabled() {
 			if bundle, canonical, err := c.canonicalContextBundle(context.Background()); err == nil && canonical {
 				for _, item := range append(bundle.SharedSession, bundle.SharedPersistent...) {
 					contextChars += len(item.Content)
 				}
-			} else {
+			} else if !c.historicalMemoryDisabled() {
 				contextChars += len(LoadSTM(c.session.Workspace)) + len(LoadLTM(c.session.Workspace, c.session.Config.Name))
 			}
 		}

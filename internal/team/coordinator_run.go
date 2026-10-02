@@ -679,7 +679,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// the actual retrieval query to its retrieval ID (spec §5.1, §7
 	// HF-MEM4-005).
 	retrievalQuery := request.RetrievalQuery()
-	if !c.historicalMemoryDisabled() {
+	if !c.canonicalMemoryDisabled() {
 		bundle, decisions, foundCanonical, memoryErr := c.canonicalContextBundleForRequest(taskCtx, request)
 		if memoryErr != nil {
 			// Canonical memory preflight failed before any round was registered
@@ -712,6 +712,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
+	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
 	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, retrievalQuery); memBundle != nil {
 		workerInput.WorkerMemory = memBundle
@@ -2080,6 +2081,9 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	// initial batch is accepted; the phase prompt and narrowed agent schema are
 	// then the sole normative dispatch inputs.
 	allowHistoricalMemory := !c.historicalMemoryDisabled() && !c.initialDelegationPending()
+	// Canonical context never carries the prior session's archive, so a fresh
+	// session with learning on reads it while the archive stays withheld.
+	allowCanonicalMemory := !c.canonicalMemoryDisabled() && !c.initialDelegationPending()
 	var contextSummary string
 	if !isContinuation && allowHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary = c.sessionData.ContextSummary()
@@ -2091,38 +2095,27 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		modelSpec = c.modelContextSpecForInvocation(ctx, modelID, orchDef)
 	}
 
-	rawSTM, rawLTM := "", ""
-	memoryStore := (*memory.MemoryStore)(nil)
-	var canonicalMemory *CanonicalContextBundle
-	var routeDecisions []ContextRouteDecision
 	contextRequest := c.newCoordinatorContextRequest(prompt, isContinuation, c.totalRounds()+1)
-	if allowHistoricalMemory {
-		bundle, decisions, canonical, memoryErr := c.canonicalContextBundleForRequest(ctx, contextRequest)
-		if memoryErr != nil {
-			return "", fmt.Errorf("coordinator canonical memory preflight failed: %w", memoryErr)
-		}
-		if canonical {
-			canonicalMemory = bundle
-			routeDecisions = decisions
-		} else {
-			rawSTM, rawLTM = utils.RedactSecrets(LoadSTM(c.session.Workspace)), utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name))
-			memoryStore = c.memoryStore
-		}
+	sources, err := c.coordinatorMemorySources(ctx, contextRequest, allowHistoricalMemory, allowCanonicalMemory)
+	if err != nil {
+		return "", err
 	}
+	memoryStore, routeDecisions := sources.store, sources.routeDecisions
 	coordInput := CoordinatorContextInput{
-		Request:          contextRequest,
-		Goal:             prompt,
-		SessionContext:   contextSummary,
-		RawSTM:           rawSTM,
-		RawLTM:           rawLTM,
-		MemoryStore:      memoryStore,
-		CanonicalMemory:  canonicalMemory,
-		SidecarCompacter: c.AgentPool().Sidecar(),
-		ModelContext:     modelSpec,
-		Role:             "coordinator",
-		IsContinuation:   isContinuation,
-		DisableMemory:    !allowHistoricalMemory,
-		ProjectContext:   utils.RedactSecrets(c.loadProjectContext()),
+		Request:                contextRequest,
+		Goal:                   prompt,
+		SessionContext:         contextSummary,
+		RawSTM:                 sources.rawSTM,
+		RawLTM:                 sources.rawLTM,
+		MemoryStore:            memoryStore,
+		CanonicalMemory:        sources.canonical,
+		SidecarCompacter:       c.AgentPool().Sidecar(),
+		ModelContext:           modelSpec,
+		Role:                   "coordinator",
+		IsContinuation:         isContinuation,
+		DisableMemory:          !allowHistoricalMemory,
+		DisableCanonicalMemory: !allowCanonicalMemory,
+		ProjectContext:         utils.RedactSecrets(c.loadProjectContext()),
 	}
 	if c.continuationResume != nil {
 		resume := c.continuationResume

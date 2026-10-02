@@ -301,6 +301,8 @@ memory-learning:
 
 設定 precedence 沿用現有規則：CLI explicit override（若日後加入）> profile > team config > default。第一版不必增加 CLI flag，以 team config 降低 surface area。
 
+fresh session（`fresh-session`／`fresh-verification` profile 或 `--new`）一律不讀前一個 session 的 archive：conversation history、session context summary、legacy `stm.md`／`ltm-<team>.md` 與 vector memory store。canonical context 不在此列，因為 fresh start 建立新的 session scope，shared session 只含本次 session，shared persistent 只含 confirmed 的跨 session 知識。mode 為 `off` 時 fresh session 也不讀 canonical context；mode 不是 `off` 時會讀，否則學習無從開始。因此對 fresh session 的 team 而言，從 `off` 改成 `observe` 會開始注入 persistent 知識；`observe` 與 `shadow` 之間仍不改變選擇。
+
 ## 7. 工作包與 PR 拆分
 
 ### HF-MEM4-000 — Baseline、durability 與契約測試

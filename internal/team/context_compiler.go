@@ -92,9 +92,14 @@ type CoordinatorContextInput struct {
 	ToolsTokens      int
 	Role             string
 	IsContinuation   bool
-	DisableMemory    bool
-	ProjectContext   string
-	CanonicalMemory  *CanonicalContextBundle
+	// DisableMemory withholds the prior session's archive: SessionContext,
+	// RawSTM, RawLTM, and MemoryStore. DisableCanonicalMemory withholds
+	// CanonicalMemory separately, because a fresh session with learning on
+	// reads canonical context while its archive stays withheld.
+	DisableMemory          bool
+	DisableCanonicalMemory bool
+	ProjectContext         string
+	CanonicalMemory        *CanonicalContextBundle
 	// LockedResourceItems are pre-built ContextItems for required resources
 	// declared under team.yaml's required-resources with "coordinator" in
 	// their inject-into list (spec.md "Generic Required Resource Lock").
@@ -126,9 +131,12 @@ type WorkerContextInput struct {
 	SystemTokens         int
 	ToolsTokens          int
 	MaxAuxChars          int
-	DisableMemory        bool
-	WorkerMemory         *WorkerMemoryBundle
-	CanonicalMemory      *CanonicalContextBundle
+	// DisableMemory and DisableCanonicalMemory split the archive from
+	// canonical context, as in CoordinatorContextInput.
+	DisableMemory          bool
+	DisableCanonicalMemory bool
+	WorkerMemory           *WorkerMemoryBundle
+	CanonicalMemory        *CanonicalContextBundle
 	// LockedResourceItems are pre-built ContextItems for required resources
 	// declared under team.yaml's required-resources whose inject-into list
 	// names this worker (spec.md "Generic Required Resource Lock").
@@ -717,7 +725,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		})
 	}
 
-	if input.CanonicalMemory != nil && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
 		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false, true)...)
 	} else if input.RawSTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawSTM)
@@ -744,7 +752,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	if input.CanonicalMemory != nil && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
 		items = append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts)...)
 	} else if input.RawLTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawLTM)
@@ -896,7 +904,7 @@ func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput
 }
 
 func appendWorkerSessionContext(input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
-	if input.CanonicalMemory != nil && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
 		return append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true, true)...)
 	}
 	if input.RawSTM == "" || input.DisableMemory || verifyOnly {
@@ -920,7 +928,7 @@ func appendWorkerSessionContext(input WorkerContextInput, items []ContextItem, v
 }
 
 func appendWorkerPersistentContext(ctx context.Context, input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
-	if input.CanonicalMemory != nil && !input.DisableMemory {
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
 		return append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts)...)
 	}
 	if input.DisableMemory || verifyOnly {

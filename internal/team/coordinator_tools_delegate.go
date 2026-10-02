@@ -372,8 +372,9 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	}
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
+	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
 	var routeDecisions []ContextRouteDecision
-	if !workerInput.DisableMemory || taskDef.InvariantVerification != "" {
+	if !workerInput.DisableCanonicalMemory || taskDef.InvariantVerification != "" {
 		bundle, decisions, canonical, routeErr := c.canonicalContextBundleForRequest(ctx, request)
 		if routeErr != nil {
 			return "", fmt.Errorf("sub-agent context routing preflight failed: %w", routeErr)

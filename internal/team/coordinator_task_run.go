@@ -600,7 +600,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	var canonicalMemory *CanonicalContextBundle
 	canonical := task.InvariantVerification != ""
 	request := c.newTaskContextRequest(task, todoID, 1, ContextTriggerTaskDispatch, agentName, agentDef.Role, nil)
-	if !c.historicalMemoryDisabled() && c.contextRepo != nil {
+	if !c.canonicalMemoryDisabled() && c.contextRepo != nil {
 		canonical = true
 	}
 	if !c.historicalMemoryDisabled() && !canonical {
@@ -616,6 +616,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.CanonicalMemory = canonicalMemory
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
+	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
 	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
 
 	var conversationHistory []fantasy.Message

@@ -275,7 +275,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 			})
 		}
 	}
-	if c.contextRepo == nil || c.historicalMemoryDisabled() {
+	if c.contextRepo == nil || c.canonicalMemoryDisabled() {
 		sort.SliceStable(route.Decisions, func(i, j int) bool { return route.Decisions[i].ContextItemID < route.Decisions[j].ContextItemID })
 		return route, nil
 	}
