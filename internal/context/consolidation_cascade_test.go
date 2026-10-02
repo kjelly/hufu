@@ -40,6 +40,11 @@ func TestSupersedingASourceDemotesApprovedConsolidation(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{name: "retire", invalidate: func(t *testing.T, repo *SQLiteRepository) {
+			if err := repo.RetireConfirmed(context.Background(), []string{"src-a"}, "stale guidance"); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "confirm with supersedes_ids", invalidate: func(t *testing.T, repo *SQLiteRepository) {
 			if err := repo.Append(context.Background(), ContextItem{ID: "src-a2", Kind: ContextDecision, Content: "Run go test -race before committing.", Scope: consolidationTestScope, Lifecycle: LifecycleCandidate, Metadata: map[string]string{"supersedes_ids": "src-a"}}); err != nil {
 				t.Fatal(err)

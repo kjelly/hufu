@@ -336,7 +336,7 @@ func TestContextHelpDocumentsReadOnlyMemoryCommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"list", "show", "candidates", "history", "consolidate", "explain", "query", "confirm", "reject", "supersede", "migrate-memory"} {
+	for _, command := range []string{"list", "show", "candidates", "history", "consolidate", "explain", "query", "confirm", "reject", "supersede", "retire", "migrate-memory"} {
 		if !strings.Contains(out.String(), command) {
 			t.Fatalf("context help missing %q: %s", command, out.String())
 		}

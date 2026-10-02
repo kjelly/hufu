@@ -553,6 +553,7 @@ LLM proposal 步驟由 `hufu context consolidate --apply-proposal --source <ids>
 - 核准以 create、approve、`consolidation show`、doctor 與 improve handoff 共用的同一份新鮮度判斷（固定 reason code）要求 `fresh`，並要求凍結的 content hash 與 aggregate revision 未變。已核准的 proposal 不能 reject；要替換已核准的合併知識，使用 `hufu context supersede`。
 - `consolidation_proposal` 是保留的 source type：`hufu context confirm|reject` 與通用 repository 方法都拒絕它，只能透過 `consolidation approve|reject` 審核。
 - 來源被 supersede 時，同一交易把使用它的 `proposed`／`approved` proposal 標為 `stale`，並把已核准的候選降回 `candidate`（因此離開 prompt）；以該候選為來源的 consolidation 也依序降級。`stale` proposal 不能 approve，可以 reject。
+- operator 用 `hufu context retire <id...> --reason <text>` 撤銷沒有替代品、但已確認錯誤或過時的記憶：同一交易設定 `expires_at`（所有讀取路徑既有的過期判斷），以 reason `source_expired` 連動降級衍生的 consolidation，並保留紀錄與 redact 過的理由。candidate、已 supersede、已過期與 consolidation 產生的候選都會被拒絕；有 confirmed 替代品時改用 `supersede`。
 - 沒有寫入事件的失效（過期、有效期結束、open conflict）由唯讀的 `hufu context doctor --consolidation --project <id> [--team <id>] [--json]` 回報：輸出每個 proposal 的狀態（`fresh`／`stale`／`blocked`／`invalid`）、reason code 與孤兒候選，不輸出內容、不修改任何資料。
 
 ### HF-MEM4-007 — Versioned memory policy experiment

@@ -36,7 +36,7 @@ func configureDynamicCompletions(root *cobra.Command) {
 
 	for _, path := range [][]string{
 		{"context", "show"}, {"context", "history"}, {"context", "confirm"},
-		{"context", "reject"}, {"context", "supersede"},
+		{"context", "reject"}, {"context", "supersede"}, {"context", "retire"},
 	} {
 		registerPositionalCompletion(root, path, completeContextIDs)
 	}
