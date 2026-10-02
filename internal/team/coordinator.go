@@ -1393,7 +1393,8 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	if err := ensureCoordinatorWorkspaceScope(params.Session); err != nil {
 		return nil, err
 	}
-	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives)
+	decisionSidecars := &decisionSidecarResolver{defaultModel: params.RoleModels.Sidecar}
+	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
 	}
@@ -1406,7 +1407,12 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, err
 	}
 	params.ControlDecisions = controlService
-	return newScopedCoordinator(params, services)
+	c, err := newScopedCoordinator(params, services)
+	if err != nil {
+		return nil, err
+	}
+	decisionSidecars.bind(c)
+	return c, nil
 }
 
 func ensureCoordinatorWorkspaceScope(session *TeamSession) error {

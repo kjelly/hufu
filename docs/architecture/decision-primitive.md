@@ -2926,7 +2926,9 @@ contract 與 policy：
    仍生效；no-net/force-mcp 禁止工具，result-only repair 不取得它。
 3. tool 提供 `decided` / `abstained` 與原有 receipt；technical error 分離。
    不自動 dispatch、approve、retry、finalize 或執行 action。
-4. team 版支援 systemone/rule；rule 永遠 abstain，fallback 必須明訂。
+4. team 版支援 systemone/sidecar/rule;rule 永遠 abstain,fallback 必須明訂。
+   sidecar(2026-10-02)用 team 的 model provider 做 LLM 決策，不回報信心值，
+   所以不接受 min-confidence/require-calibrated。
    confidence 維持 raw semantics，不承諾第三方 Jev API compatibility 或 calibration。
 5. 開始與結果各有 durable event；settlement 成功之前不發布結果。receipt replay
    驗證 frozen spec/policy、request digest 與 backend identity。

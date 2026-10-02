@@ -1,12 +1,14 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kjelly/hufu/internal/decisionrt"
+	sidecarbackend "github.com/kjelly/hufu/internal/decisionrt/backend/sidecar"
 )
 
 func testEntry() Entry {
@@ -178,5 +180,82 @@ func TestCatalogBlocksOnlyListedChoices(t *testing.T) {
 	}
 	if !strings.Contains(service.Description("helper"), `"block_on":["b"]`) {
 		t.Errorf("description does not show block-on: %s", service.Description("helper"))
+	}
+}
+
+type fakeGenerator struct{ model string }
+
+func (g fakeGenerator) Execute(context.Context, string) (string, error) {
+	return `{"token":"A1"}`, nil
+}
+
+func (g fakeGenerator) ModelID() string { return g.model }
+
+func TestCatalogSidecarBackend(t *testing.T) {
+	factory := func(model string) (sidecarbackend.Generator, error) {
+		if model == "" {
+			model = "team-sidecar"
+		}
+		return fakeGenerator{model: model}, nil
+	}
+	sidecarEntry := func(edit func(*Entry)) Entry {
+		entry := testEntry()
+		entry.Backend = "sidecar"
+		if edit != nil {
+			edit(&entry)
+		}
+		return entry
+	}
+	for _, test := range []struct {
+		name      string
+		entry     Entry
+		opts      []ServiceOption
+		wantErr   string
+		wantModel string
+	}{
+		{name: "default model", entry: sidecarEntry(nil), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantModel: "team-sidecar"},
+		{name: "explicit model", entry: sidecarEntry(func(e *Entry) { e.Model = "ollama/minimax-m3:cloud" }), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantModel: "ollama/minimax-m3:cloud"},
+		{name: "rule fallback", entry: sidecarEntry(func(e *Entry) { e.Fallback = "rule" }), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantModel: "team-sidecar"},
+		{name: "validation only", entry: sidecarEntry(nil), opts: []ServiceOption{ValidationOnly()}},
+		{name: "no model runtime", entry: sidecarEntry(nil), wantErr: "needs the team's model runtime"},
+		{name: "endpoint", entry: sidecarEntry(func(e *Entry) { e.Endpoint = "http://rog:11434/v1/systemone" }), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantErr: "endpoint and api-key-env"},
+		{name: "min-confidence", entry: sidecarEntry(func(e *Entry) { e.MinConfidence = new(0.6) }), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantErr: "reports confidence"},
+		{name: "require-calibrated", entry: sidecarEntry(func(e *Entry) { e.RequireCalibrated = true }), opts: []ServiceOption{WithSidecarGenerator(factory)}, wantErr: "reports confidence"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, err := New(map[string]Entry{"classify": test.entry}, test.opts...)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("New() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantModel == "" {
+				return
+			}
+			if got := service.entries["classify"].entry.Model; got != test.wantModel {
+				t.Fatalf("resolved model = %q, want %q", got, test.wantModel)
+			}
+			request, _, err := service.Request("classify", "helper", map[string]any{"summary": "text"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, receipt, err := service.Decide(t.Context(), "classify", request)
+			if err != nil || result.Value.Choice != "b" || result.ConfidenceSemantics != decisionrt.ConfidenceNone {
+				t.Fatalf("decision = %+v, %v; want b without confidence", result, err)
+			}
+			digest, _ := decisionrt.Digest(request)
+			if err := service.ValidatePublication("classify", digest, result, receipt); err != nil {
+				t.Fatalf("receipt did not validate: %v", err)
+			}
+		})
+	}
+	first, _ := New(map[string]Entry{"classify": sidecarEntry(nil)}, WithSidecarGenerator(factory))
+	second, _ := New(map[string]Entry{"classify": sidecarEntry(func(e *Entry) { e.Model = "other-model" })}, WithSidecarGenerator(factory))
+	if first.Hash() == second.Hash() {
+		t.Fatal("the catalog hash does not change with the deciding model")
 	}
 }

@@ -1191,7 +1191,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	// authoring normalizer has already validated and materialized this config;
 	// an absent block leaves it at the reserved "off" profile.
 	cfg.Decision = decision
-	if _, err := catalog.New(yc.DecisionPrimitives); err != nil {
+	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly()); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.DecisionPrimitives = yc.DecisionPrimitives

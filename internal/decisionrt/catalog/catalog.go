@@ -71,7 +71,11 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // New validates and freezes configuration without contacting a model. The
 // hash pins resolved credential revisions without storing the credentials.
-func New(entries map[string]Entry) (*Service, error) {
+func New(entries map[string]Entry, opts ...ServiceOption) (*Service, error) {
+	settings := options{}
+	for _, opt := range opts {
+		opt(&settings)
+	}
 	service := &Service{entries: make(map[string]boundEntry)}
 	if len(entries) == 0 {
 		return service, nil
@@ -92,7 +96,7 @@ func New(entries map[string]Entry) (*Service, error) {
 		if entry.MinConfidence != nil {
 			entry.MinConfidence = new(*entry.MinConfidence)
 		}
-		if entry.Endpoint == "" {
+		if entry.Endpoint == "" && entry.Backend == "systemone" {
 			entry.Endpoint = DefaultEndpoint
 		}
 		if entry.Timeout == 0 {
@@ -101,23 +105,7 @@ func New(entries map[string]Entry) (*Service, error) {
 		if entry.MaxCalls == 0 {
 			entry.MaxCalls = 100
 		}
-		if entry.Backend != "systemone" && entry.Backend != "rule" {
-			return nil, fmt.Errorf("decision-primitives.%s: backend must be systemone or rule", name)
-		}
-		if entry.Fallback != "" && (entry.Fallback != "rule" || entry.Backend == "rule") {
-			return nil, fmt.Errorf("decision-primitives.%s: fallback must be rule for systemone", name)
-		}
-		if len(entry.Agents) == 0 || len(entry.Agents) > 64 || len(entry.Inputs) > 64 || entry.MaxCalls < 1 || entry.MaxCalls > 10000 {
-			return nil, fmt.Errorf("decision-primitives.%s: invalid grants or limits", name)
-		}
-		seen := make(map[string]bool)
-		for _, agent := range entry.Agents {
-			if agent == "" || seen[agent] {
-				return nil, fmt.Errorf("decision-primitives.%s: invalid agent grant", name)
-			}
-			seen[agent] = true
-		}
-		if err := validateBlockOn(entry); err != nil {
+		if err := validateEntry(entry); err != nil {
 			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
 		}
 		spec := decisionrt.Spec{ID: name, Version: entry.Version, Kind: entry.Kind, Question: entry.Question}
@@ -141,7 +129,7 @@ func New(entries map[string]Entry) (*Service, error) {
 				return nil, fmt.Errorf("decision-primitives.%s: credential environment unavailable", name)
 			}
 		}
-		primary, err := backend.New(backend.Config{Name: entry.Backend, Endpoint: entry.Endpoint, Model: entry.Model, APIKey: key})
+		primary, err := settings.primary(&entry, key)
 		if err != nil {
 			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
 		}
@@ -174,6 +162,33 @@ func New(entries map[string]Entry) (*Service, error) {
 	hash := sha256.Sum256(encoded)
 	service.hash = hex.EncodeToString(hash[:])
 	return service, service.freezeDescription()
+}
+
+// validateEntry checks an entry's backend, fallback, grants, limits and
+// block-on before any backend is built.
+func validateEntry(entry Entry) error {
+	if entry.Backend != "systemone" && entry.Backend != "sidecar" && entry.Backend != "rule" {
+		return fmt.Errorf("backend must be systemone, sidecar or rule")
+	}
+	if entry.Fallback != "" && (entry.Fallback != "rule" || entry.Backend == "rule") {
+		return fmt.Errorf("fallback must be rule for systemone or sidecar")
+	}
+	if entry.Backend == "sidecar" {
+		if err := validateSidecarEntry(entry); err != nil {
+			return err
+		}
+	}
+	if len(entry.Agents) == 0 || len(entry.Agents) > 64 || len(entry.Inputs) > 64 || entry.MaxCalls < 1 || entry.MaxCalls > 10000 {
+		return fmt.Errorf("invalid grants or limits")
+	}
+	seen := make(map[string]bool)
+	for _, agent := range entry.Agents {
+		if agent == "" || seen[agent] {
+			return fmt.Errorf("invalid agent grant")
+		}
+		seen[agent] = true
+	}
+	return validateBlockOn(entry)
 }
 
 // validateBlockOn accepts block-on only for choice decisions, naming each
@@ -371,6 +386,9 @@ func (s *Service) ValidatePublication(name, digest string, result decisionrt.Res
 	}
 	if backendName == "systemone" && result.Status == decisionrt.StatusDecided && result.ConfidenceSemantics != decisionrt.ConfidenceRaw {
 		return fmt.Errorf("invalid systemone confidence semantics")
+	}
+	if backendName == "sidecar" && result.Status == decisionrt.StatusDecided && result.ConfidenceSemantics != decisionrt.ConfidenceNone {
+		return fmt.Errorf("invalid sidecar confidence semantics")
 	}
 	if result.Status == decisionrt.StatusDecided && (bound.entry.RequireCalibrated && result.ConfidenceSemantics != decisionrt.ConfidenceCalibrated || bound.entry.MinConfidence != nil && (result.ConfidenceSemantics == decisionrt.ConfidenceNone || result.Confidence < *bound.entry.MinConfidence)) {
 		return fmt.Errorf("decision does not satisfy policy")

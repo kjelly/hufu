@@ -81,9 +81,9 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 
 | 欄位 | Contract |
 | --- | --- |
-| `backend` | `systemone` 或 `rule`；必填 |
-| `endpoint` | System One endpoint，預設 `http://127.0.0.1:11434/v1/systemone` |
-| `model` | `systemone` 必填；不自動使用 team worker model |
+| `backend` | `systemone`、`sidecar` 或 `rule`;必填 |
+| `endpoint` | 只限 `systemone`,預設 `http://127.0.0.1:11434/v1/systemone` |
+| `model` | `systemone` 必填;`sidecar` 可省略，省略時使用 team 的 sidecar model;不自動使用 team worker model |
 | `api-key-env` | 可選環境變數名稱；有宣告但值缺失時載入失敗，不允許 inline key |
 | `version`, `question` | 必填；遵循 core Spec 的 ID、長度與 UTF-8 驗證 |
 | `kind` | `choice`、`boolean`、`integer_range` |
@@ -101,7 +101,12 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 `systemone` 重用既有 native protocol adapter；模型必須由服務端提供。
 其 confidence 是選中候選的 raw probability，**不是校準過的正確率**。
 `rule` 目前永遠 abstain，適合離線驗證 contract，不會自行猜測 domain 答案。
-此版沒有 team sidecar backend；standalone CLI 的既有 sidecar 能力保留。
+`backend: sidecar` 用語言模型決策：模型從候選中挑一個 token,不回報信心值。
+
+- 它走 team 既有的 model provider、request admission 與 usage 計算，所以 token 會計入 run 的 budget。
+- 不能設定 `endpoint`、`api-key-env`、`min-confidence`、`require-calibrated`;沒有信心值，任何信心門檻都會讓每次呼叫都 abstain,因此載入時直接拒絕。
+- 只要輸出格式正確就一律 `decided`;`block-on` 與 `fallback: rule` 照常可用。
+- 明訂的 `model` 會納入 execution policy 的模型集合，啟動時會驗證。
 
 ## 持久化、恢復與預算
 

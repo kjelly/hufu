@@ -49,6 +49,11 @@ func (c *Coordinator) collectConfiguredModels() []string {
 	add(c.session.Config.JudgeModel)
 	add(c.session.Config.PlanReviewerModel)
 	add(c.session.Config.Generation.Model)
+	for _, entry := range c.session.Config.DecisionPrimitives {
+		if entry.Backend == "sidecar" {
+			add(entry.Model)
+		}
+	}
 	sort.Strings(ids)
 	return ids
 }
