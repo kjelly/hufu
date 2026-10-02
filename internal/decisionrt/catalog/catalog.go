@@ -39,6 +39,10 @@ type Entry struct {
 	RequireCalibrated bool              `yaml:"require-calibrated,omitempty" json:"require_calibrated,omitzero"`
 	Fallback          string            `yaml:"fallback,omitempty" json:"fallback,omitempty"`
 	MaxCalls          int               `yaml:"max-calls,omitempty" json:"max_calls,omitzero"`
+	// BlockOn lists choice options that stop the calling worker's attempt:
+	// after such a decision the runtime refuses tools that can change state
+	// and accepts only a blocked result.
+	BlockOn []string `yaml:"block-on,omitempty" json:"block_on,omitempty"`
 }
 
 type Option struct {
@@ -81,6 +85,7 @@ func New(entries map[string]Entry) (*Service, error) {
 		entry.Agents = slices.Clone(entry.Agents)
 		entry.Inputs = maps.Clone(entry.Inputs)
 		entry.Options = slices.Clone(entry.Options)
+		entry.BlockOn = slices.Clone(entry.BlockOn)
 		if entry.Range != nil {
 			entry.Range = new(*entry.Range)
 		}
@@ -111,6 +116,9 @@ func New(entries map[string]Entry) (*Service, error) {
 				return nil, fmt.Errorf("decision-primitives.%s: invalid agent grant", name)
 			}
 			seen[agent] = true
+		}
+		if err := validateBlockOn(entry); err != nil {
+			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
 		}
 		spec := decisionrt.Spec{ID: name, Version: entry.Version, Kind: entry.Kind, Question: entry.Question}
 		for _, option := range entry.Options {
@@ -168,14 +176,44 @@ func New(entries map[string]Entry) (*Service, error) {
 	return service, service.freezeDescription()
 }
 
+// validateBlockOn accepts block-on only for choice decisions, naming each
+// option once.
+func validateBlockOn(entry Entry) error {
+	if len(entry.BlockOn) == 0 {
+		return nil
+	}
+	if entry.Kind != decisionrt.KindChoice {
+		return fmt.Errorf("block-on requires kind choice")
+	}
+	seen := make(map[string]bool, len(entry.BlockOn))
+	for _, value := range entry.BlockOn {
+		known := slices.ContainsFunc(entry.Options, func(option Option) bool { return option.ID == value })
+		if !known || seen[value] {
+			return fmt.Errorf("block-on value %q must name a distinct option", value)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+// Blocks reports whether a decided choice stops the calling worker's attempt.
+func (s *Service) Blocks(name, choice string) bool {
+	if s == nil {
+		return false
+	}
+	bound, ok := s.entries[name]
+	return ok && choice != "" && slices.Contains(bound.entry.BlockOn, choice)
+}
+
 func (s *Service) freezeDescription() error {
 	contracts := make(map[string]any, len(s.entries))
 	for name, bound := range s.entries {
 		contracts[name] = struct {
-			Spec   decisionrt.Spec   `json:"spec"`
-			Inputs map[string]string `json:"inputs"`
-			Agents []string          `json:"agents"`
-		}{bound.spec, bound.entry.Inputs, bound.entry.Agents}
+			Spec    decisionrt.Spec   `json:"spec"`
+			Inputs  map[string]string `json:"inputs"`
+			Agents  []string          `json:"agents"`
+			BlockOn []string          `json:"block_on,omitempty"`
+		}{bound.spec, bound.entry.Inputs, bound.entry.Agents, bound.entry.BlockOn}
 	}
 	encoded, err := json.Marshal(contracts)
 	if err != nil {
@@ -228,9 +266,10 @@ func (s *Service) Description(agent string) string {
 	for _, name := range s.Names(agent) {
 		bound := s.entries[name]
 		contracts[name] = struct {
-			Spec   decisionrt.Spec   `json:"spec"`
-			Inputs map[string]string `json:"inputs"`
-		}{bound.spec, bound.entry.Inputs}
+			Spec    decisionrt.Spec   `json:"spec"`
+			Inputs  map[string]string `json:"inputs"`
+			BlockOn []string          `json:"block_on,omitempty"`
+		}{bound.spec, bound.entry.Inputs, bound.entry.BlockOn}
 	}
 	encoded, _ := json.Marshal(contracts)
 	return string(encoded)

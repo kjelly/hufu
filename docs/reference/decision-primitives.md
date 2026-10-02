@@ -96,6 +96,7 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 | `require-calibrated` | 預設 false；System One raw confidence 不滿足此要求 |
 | `fallback` | 預設無；僅可明訂 systemone → `rule`，且 rule 永遠 abstain |
 | `max-calls` | 每個 entry 在 active session lineage 的 primitive 呼叫限額，預設 100，最大 10000；含失敗與未完成呼叫，明訂 fallback 不另計 |
+| `block-on` | 可選，只限 `choice`；列出會擋下呼叫者的選項 ID。worker 拿到其中一個決定後，這次嘗試不能再執行會修改狀態的工具(含 dynamic MCP gateway),`submit_result` 也只接受 `blocked`;唯讀工具仍可使用。下一次嘗試不受影響 |
 
 `systemone` 重用既有 native protocol adapter；模型必須由服務端提供。
 其 confidence 是選中候選的 raw probability，**不是校準過的正確率**。

@@ -453,6 +453,9 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	default:
 		return fantasy.NewTextErrorResponse("status must be success, completed_with_gaps, partial, failed, or blocked"), nil
 	}
+	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
+		return fantasy.NewTextErrorResponse(decisionBlockResultDenial(decision, res.Status)), nil
+	}
 	if err := contract.validateWorkerClaims(&res); err != nil {
 		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
 	}

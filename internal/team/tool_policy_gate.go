@@ -255,6 +255,19 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 		})
 		return fantasy.NewTextErrorResponse(readOnlyToolDenialMessage(t.Info().Name, call.Input)), nil
 	}
+	// A block-on decision stops the attempt regardless of what the model
+	// decides next. A dynamic gateway call can reach any MCP tool, so it is
+	// refused too.
+	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && (dynamicGateway || readOnlyToolMutation(t.Info().Name, call.Input)) {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind:       "policy_denied",
+			ReasonCode: "decision_block",
+			ToolName:   t.Info().Name,
+			ToolCallID: call.ID,
+			Executed:   false,
+		})
+		return fantasy.NewTextErrorResponse(decisionBlockToolDenial(decision, t.Info().Name)), nil
+	}
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID && t.coordinator != nil {
 		if err := t.coordinator.failedWorkflowCallStop(t.Info().Name); err != nil {
 			return fantasy.ToolResponse{}, err

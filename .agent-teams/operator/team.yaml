@@ -38,3 +38,6 @@ spec:
       timeout: 20s
       min-confidence: 0.6
       max-calls: 200
+      # The runtime enforces the executor's rule: after either answer the
+      # attempt cannot change anything and may only report blocked.
+      block-on: [system-change, destructive]

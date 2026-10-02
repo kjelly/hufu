@@ -2938,6 +2938,9 @@ contract 與 policy：
 8. started/settled event、session reducer、checkpoint、JSON 與 report 一致更新。
    helper calls 遵守 run budget/cancellation，加上專用 max-calls/timeout；protocol
    沒有可靠 token usage 時不偽造 accounting。
+9. 唯一的自動效果是 `block-on`(2026-10-02,只限 choice):decided 結果若是其中一個
+   選項，runtime 只限制收到結果的那次 worker 嘗試，不會派工或核准:之後不能執行會修改
+   狀態的工具,`submit_result` 只接受 `blocked`。
 
 完整設定與限制見 [Agent-team DecisionPrimitives](../reference/decision-primitives.md)。
 

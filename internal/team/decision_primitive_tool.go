@@ -134,6 +134,7 @@ func (c *Coordinator) runDecisionPrimitive(ctx context.Context, metadata Invocat
 		return fantasy.ToolResponse{}, err
 	}
 	if previous != nil {
+		c.recordDecisionBlock(metadata, *previous)
 		return decisionPrimitiveResponse(*previous)
 	}
 	if calls >= limit {
@@ -156,6 +157,7 @@ func (c *Coordinator) runDecisionPrimitive(ctx context.Context, metadata Invocat
 	if err := c.appendDecisionPrimitiveEvent(context.WithoutCancel(ctx), metadata, EventDecisionPrimitiveSettled, payload, fmt.Sprintf("%s:settled:%d", payload.Name, calls+1)); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
+	c.recordDecisionBlock(metadata, payload)
 	return decisionPrimitiveResponse(payload)
 }
 

@@ -592,6 +592,10 @@ type Coordinator struct {
 	// this invocation. Guarded by delegatedTasksMu and reset with it, so a
 	// later user message can lift a block by dispatching the step again.
 	blockedThisRound map[string]bool
+	// decisionBlocks holds worker attempts stopped by a block-on decision;
+	// see decision_primitive_block.go.
+	decisionBlocks   map[decisionBlockKey]string
+	decisionBlocksMu sync.Mutex
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
 	modelExecutionID       string

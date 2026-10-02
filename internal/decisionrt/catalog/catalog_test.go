@@ -29,6 +29,14 @@ func TestCatalogValidatesTrustedConfiguration(t *testing.T) {
 		{"confidence", func(e *Entry) { e.MinConfidence = new(1.1) }},
 		{"fallback", func(e *Entry) { e.Fallback = "systemone" }},
 		{"call limit", func(e *Entry) { e.MaxCalls = -1 }},
+		{"unknown block-on", func(e *Entry) { e.BlockOn = []string{"c"} }},
+		{"duplicate block-on", func(e *Entry) { e.BlockOn = []string{"a", "a"} }},
+		{"block-on without choice", func(e *Entry) {
+			e.Backend, e.Model, e.Kind = "systemone", "nimble", decisionrt.KindIntegerRange
+			e.Options = nil
+			e.Range = &IntegerRange{Min: 1, Max: 2}
+			e.BlockOn = []string{"1"}
+		}},
 		{"invalid credential ref", func(e *Entry) { e.APIKeyEnv = "$KEY" }},
 		{"singleton integer", func(e *Entry) {
 			e.Backend, e.Model, e.Kind = "systemone", "nimble", decisionrt.KindIntegerRange
@@ -145,5 +153,30 @@ func TestCatalogBoundsAndFreezesToolDescription(t *testing.T) {
 	}
 	if _, err := New(large); err == nil || !strings.Contains(err.Error(), "256 KiB") {
 		t.Fatalf("oversized tool contract accepted: %v", err)
+	}
+}
+
+func TestCatalogBlocksOnlyListedChoices(t *testing.T) {
+	entry := testEntry()
+	entry.BlockOn = []string{"b"}
+	service, err := New(map[string]Entry{"classify": entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, choice string
+		want         bool
+	}{
+		{"classify", "b", true},
+		{"classify", "a", false},
+		{"classify", "", false},
+		{"unknown", "b", false},
+	} {
+		if got := service.Blocks(test.name, test.choice); got != test.want {
+			t.Errorf("Blocks(%q, %q) = %v, want %v", test.name, test.choice, got, test.want)
+		}
+	}
+	if !strings.Contains(service.Description("helper"), `"block_on":["b"]`) {
+		t.Errorf("description does not show block-on: %s", service.Description("helper"))
 	}
 }
