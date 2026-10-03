@@ -167,6 +167,18 @@ gates:
 
 `hufu improve experiment compare` 會以 benchmark、snapshot、兩份 Phase 1 JSON report 與明確記錄的 acceptance/safety 結果執行 deterministic A/B gate。結果會寫入 JSON 與 Markdown，但 `eligible_for_review` **不是採納授權**：不會改動正式 team、建立 PR 或合併變更。
 
+### Experiment 的證據限制
+
+`compare` 是一組合理性檢查加上 gate，不是受控實驗：
+
+- benchmark case 不會對應到 run。`compare` 只讀兩份事先產生的 Phase 1 report 的總量指標，不檢查 report 裡的 run 是否就是 benchmark 的 case、用的是不是相同的 prompt。
+- `Metrics.TotalTasks >= cases` 只是合理性檢查：task 數不足時拒絕，task 數足夠不代表每個 case 都跑過。
+- report 必須引用 snapshot 的 definition revision，這證明 run 用的是那份 team 定義，不證明兩邊在相同條件（模型、時間、資料）下執行。
+- `--baseline-accepted`／`--candidate-accepted` 由 operator 填寫，`compare` 不自行驗證 acceptance gate；`--baseline-safety-violations`／`--candidate-safety-violations` 同樣是 operator 輸入，未填時為 0，所以 `candidate_safety` gate 只在 operator 記錄了違規時才會失敗。
+- gate 比較兩份 report 的總量（completion rate、error、retry、memory 指標），沒有逐 case 配對、重複次數或變異估計，差距可能只是雜訊。
+
+因此 `eligible_for_review` 只表示 candidate 在這些總量上沒有退步，不表示 candidate 已被證明比較好；採納前仍要人工檢閱實際的 run 與 diff。
+
 ## Phase 2 CLI Workflow
 
 ```bash
