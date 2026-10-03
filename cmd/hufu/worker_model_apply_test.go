@@ -367,6 +367,8 @@ func writeWorkerModelPreviewTeam(t *testing.T) *team.TeamRegistry {
 }
 
 func TestLoadTeamDryRunAppliesWorkerModelOverrides(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 	// Preflight requires an executable, but a dry run must never launch it.
