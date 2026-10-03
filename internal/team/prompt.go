@@ -70,130 +70,81 @@ func ParsePromptWithLazyAgents(rawPrompt string, registry *TeamRegistry, default
 	return nil, fmt.Errorf("no team found in prompt. Available teams: %s", strings.Join(registry.ListTeams(), ", "))
 }
 
+// SplitSegmentByAgents splits a team prompt at mentions of a team or agent.
+// Only a mention that resolves to one, directly or by typo correction,
+// starts a segment; any other @word, such as the host in
+// "https://user:[REDACTED]@example.invalid" or a handle in prose, stays in
+// the text. Splitting at those dropped the rest of the prompt from the run.
 func SplitSegmentByAgents(segment PromptSegment, registry *TeamRegistry, currentAgents []*agent.AgentDef) ([]PromptSegment, error) {
 	if segment.Type != SegmentSwitchTeam || segment.Content == "" {
 		return []PromptSegment{segment}, nil
 	}
 
 	content := segment.Content
-	locs := atNamePattern.FindAllStringSubmatchIndex(content, -1)
-	if len(locs) == 0 {
+	type mention struct {
+		start, end int
+		name       string
+	}
+	var mentions []mention
+	for _, loc := range atNamePattern.FindAllStringSubmatchIndex(content, -1) {
+		if name, ok := resolveMentionName(strings.ToLower(content[loc[2]:loc[3]]), registry, currentAgents); ok {
+			mentions = append(mentions, mention{start: loc[0], end: loc[1], name: name})
+		}
+	}
+	if len(mentions) == 0 {
 		return []PromptSegment{segment}, nil
 	}
 
 	teamName := segment.Name
-
-	var segments []PromptSegment
-	prevEnd := 0
-	needsTeamHeader := true
-	textBeforeFirstAt := strings.TrimSpace(content[:locs[0][0]])
-	if textBeforeFirstAt != "" {
-		segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: textBeforeFirstAt})
-		needsTeamHeader = false
-		prevEnd = locs[0][0]
-	}
-
-	for _, loc := range locs {
-		fullStart := loc[0]
-		nameStart := loc[2]
-		nameEnd := loc[3]
-		name := strings.ToLower(content[nameStart:nameEnd])
-
-		textBefore := strings.TrimSpace(content[prevEnd:fullStart])
-		restAfter := content[loc[1]:]
-		taskContent := extractUntilNextAt(restAfter)
-		consumedLen := len(taskContent)
-
-		if !registry.HasTeam(name) && !isAgentInList(name, currentAgents) {
-			// Try fuzzy correction
-			bestMatch := ""
-			bestScore := 0.0
-			isTeamMatch := false
-
-			for _, tName := range registry.ListTeams() {
-				score := similarityScore(name, tName)
-				if score > bestScore {
-					bestScore = score
-					bestMatch = tName
-					isTeamMatch = true
-				}
-			}
-			for _, ag := range currentAgents {
-				if ag.Role == "orchestrator" || ag.Role == "coordinator" {
-					continue
-				}
-				score := similarityScore(name, strings.ToLower(ag.Name))
-				if score > bestScore {
-					bestScore = score
-					bestMatch = strings.ToLower(ag.Name)
-					isTeamMatch = false
-				}
-				if ag.FileAlias != "" {
-					score2 := similarityScore(name, strings.ToLower(ag.FileAlias))
-					if score2 > bestScore {
-						bestScore = score2
-						bestMatch = strings.ToLower(ag.FileAlias)
-						isTeamMatch = false
-					}
-				}
-			}
-
-			if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
-				fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
-				name = bestMatch
-				_ = isTeamMatch
-			}
+	// The team segment carries any text before the first mention; it stays
+	// even when empty so the mentioned steps run under the current team.
+	segments := []PromptSegment{{Type: SegmentSwitchTeam, Name: teamName, Content: strings.TrimSpace(content[:mentions[0].start])}}
+	for i, m := range mentions {
+		taskEnd := len(content)
+		if i+1 < len(mentions) {
+			taskEnd = mentions[i+1].start
 		}
+		segmentType := SegmentInvokeAgent
+		if registry.HasTeam(m.name) {
+			segmentType = SegmentSwitchTeam
+		}
+		segments = append(segments, PromptSegment{Type: segmentType, Name: m.name, Content: strings.TrimSpace(content[m.end:taskEnd])})
+	}
+	return segments, nil
+}
 
-		if registry.HasTeam(name) {
-			if needsTeamHeader {
-				segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
-				needsTeamHeader = false
-			}
-			if textBefore != "" {
-				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
-			}
-			segments = append(segments, PromptSegment{
-				Type:    SegmentSwitchTeam,
-				Name:    name,
-				Content: strings.TrimSpace(taskContent),
-			})
-		} else if isAgentInList(name, currentAgents) {
-			if needsTeamHeader {
-				segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
-				needsTeamHeader = false
-			}
-			if textBefore != "" {
-				segments = append(segments, PromptSegment{Type: SegmentText, Content: textBefore})
-			}
-			segments = append(segments, PromptSegment{
-				Type:    SegmentInvokeAgent,
-				Name:    name,
-				Content: strings.TrimSpace(taskContent),
-			})
-		} else {
-			segments = append(segments, PromptSegment{Type: SegmentText, Content: "@" + name + extractUntilNextAt(content[loc[1]:])})
-			prevEnd = loc[1] + consumedLen
+// resolveMentionName returns the team or agent a mention names: an exact team,
+// then an exact agent, then the closest team or agent when the name looks
+// like a typo of it. Coordinators are never mention targets.
+func resolveMentionName(name string, registry *TeamRegistry, currentAgents []*agent.AgentDef) (string, bool) {
+	if registry.HasTeam(name) || isAgentInList(name, currentAgents) {
+		return name, true
+	}
+	bestMatch := ""
+	bestScore := 0.0
+	for _, tName := range registry.ListTeams() {
+		if score := similarityScore(name, tName); score > bestScore {
+			bestScore, bestMatch = score, tName
+		}
+	}
+	for _, ag := range currentAgents {
+		if ag.Role == "orchestrator" || ag.Role == "coordinator" {
 			continue
 		}
-
-		prevEnd = loc[1] + consumedLen
-	}
-
-	textAfter := strings.TrimSpace(content[prevEnd:])
-	if textAfter != "" {
-		if needsTeamHeader {
-			segments = append(segments, PromptSegment{Type: SegmentSwitchTeam, Name: teamName, Content: ""})
-			needsTeamHeader = false
+		if score := similarityScore(name, strings.ToLower(ag.Name)); score > bestScore {
+			bestScore, bestMatch = score, strings.ToLower(ag.Name)
 		}
-		segments = append(segments, PromptSegment{Type: SegmentText, Content: textAfter})
+		if ag.FileAlias != "" {
+			if score := similarityScore(name, strings.ToLower(ag.FileAlias)); score > bestScore {
+				bestScore, bestMatch = score, strings.ToLower(ag.FileAlias)
+			}
+		}
 	}
-
-	if len(segments) == 0 {
-		return []PromptSegment{segment}, nil
+	if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
+		fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
+		return bestMatch, true
 	}
-
-	return segments, nil
+	return "", false
 }
 
 func isAgentInList(name string, agents []*agent.AgentDef) bool {
@@ -226,14 +177,6 @@ func isAgentInList(name string, agents []*agent.AgentDef) bool {
 		}
 	}
 	return false
-}
-
-func extractUntilNextAt(rest string) string {
-	nextAt := atNamePattern.FindStringIndex(rest)
-	if nextAt == nil {
-		return rest
-	}
-	return rest[:nextAt[0]]
 }
 
 func similarityScore(s, t string) float64 {

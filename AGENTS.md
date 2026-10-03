@@ -1133,7 +1133,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 2. **Team vs agent disambiguation** — `@name` is first checked against known teams (via `registry.HasTeam()`), then against the current team's agent list. Unknown names produce specific error messages listing available options.
 
-3. **Prompt parsing is lazy-then-eager** — `ParsePromptWithLazyAgents` only identifies the team switch; agent invokes within that team are resolved later by `SplitSegmentByAgents`.
+3. **Prompt parsing is lazy-then-eager** — `ParsePromptWithLazyAgents` only identifies the team switch; agent invokes within that team are resolved later by `SplitSegmentByAgents`. Only an `@name` that resolves to a team or a non-coordinator agent (directly or by typo correction) splits the prompt; any other `@word`, such as the host in `https://user:[REDACTED]@example.invalid`, stays in the text.
 
 4. **`@example.com` false positive** — The `@name` regex is broad. The parser disambiguates, but `HasAtName()` will return true for email-like strings.
 

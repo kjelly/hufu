@@ -226,8 +226,47 @@ func TestSplitSegmentByAgents(t *testing.T) {
 				Name:    "delegate",
 				Content: "@coordinator do task",
 			},
-			// Coordinator should not be invoked directly, treated as text
-			wantContains: []PromptSegmentType{SegmentText},
+			// The coordinator is never a mention target, so the prompt stays whole.
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "@coordinator do task"},
+			},
+		},
+		{
+			// A host after a redaction marker looks like a mention; splitting
+			// there dropped the rest of a task description from the run.
+			name: "unknown mention after bracket stays in text",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "redact to `https://user:[REDACTED]@example.invalid/repo.git`, keeping the host. Defect two follows.",
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "redact to `https://user:[REDACTED]@example.invalid/repo.git`, keeping the host. Defect two follows."},
+			},
+		},
+		{
+			name: "unknown mention before a known one stays with the team text",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "ask @someone about it then @researcher find bugs",
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: "ask @someone about it then"},
+				{Type: SegmentInvokeAgent, Name: "researcher", Content: "find bugs"},
+			},
+		},
+		{
+			name: "unknown mention after a known one stays in its task",
+			segment: PromptSegment{
+				Type:    SegmentSwitchTeam,
+				Name:    "delegate",
+				Content: "@researcher check mail from (@someone) today",
+			},
+			want: []PromptSegment{
+				{Type: SegmentSwitchTeam, Name: "delegate", Content: ""},
+				{Type: SegmentInvokeAgent, Name: "researcher", Content: "check mail from (@someone) today"},
+			},
 		},
 	}
 
@@ -261,28 +300,6 @@ func TestSplitSegmentByAgents(t *testing.T) {
 						t.Errorf("Segment %d type: got %v, want %v", i, got[i].Type, expectedType)
 					}
 				}
-			}
-		})
-	}
-}
-
-func TestExtractUntilNextAt(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"task until @next", "task until "},
-		{"no at sign", "no at sign"},
-		{"@immediate", ""},
-		{"multiple @first and @second", "multiple "},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := extractUntilNextAt(tt.input)
-			if got != tt.want {
-				t.Errorf("extractUntilNextAt(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
