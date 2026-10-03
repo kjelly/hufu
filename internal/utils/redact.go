@@ -706,6 +706,14 @@ func redactKeyValue(match string) string {
 	if len(parts) != 3 {
 		return match
 	}
+	// A source-code location reference (`secrets.go:123`,
+	// `internal/team/token_store.go:45:9`) carries a key whose own word is a
+	// credential name and a value that is just a line number or
+	// line-and-column. Treating the pair as a credential rewrites evidence a
+	// failed run is read for; let it through unchanged.
+	if fileReferenceRe.MatchString(match) {
+		return match
+	}
 	value := parts[2]
 	if safeSecretMetadataValue(secretKeyFromPrefix(parts[1]), unquoteSecretValue(value)) {
 		return match

@@ -74,3 +74,53 @@ func TestRedactSecretsLeavesTextWithoutKeyNamesUnchanged(t *testing.T) {
 		t.Fatalf("RedactSecrets changed text without credential key names: %q", got)
 	}
 }
+
+// TestRedactSecretsKeepsSourceCodeLocationReferences is the regression for
+// treating `secrets.go:123`, `token_store.go:45`, or
+// `internal/teampkg/secrets.go:123:45` as a credential. The key word in the
+// filename is a credential name and the value is just a line number, but the
+// pair is a stack trace / diagnostic reference, not a key/value credential,
+// and rewriting it loses the only evidence a failed run records.
+func TestRedactSecretsKeepsSourceCodeLocationReferences(t *testing.T) {
+	resetLearnedSecrets(t)
+	cases := []string{
+		"secrets.go:123",
+		"token_store.go:45",
+		"internal/teampkg/secrets.go:123:45",
+		"see internal/team/secrets.go:99 for the leak",
+		"trace ends at credential_store.go:7:42",
+	}
+	for _, content := range cases {
+		got := RedactSecrets(content)
+		if got != content {
+			t.Errorf("RedactSecrets rewrote source-code location reference %q -> %q", content, got)
+		}
+		if twice := RedactSecrets(got); twice != got {
+			t.Errorf("redaction of %q was not idempotent: got %q then %q", content, got, twice)
+		}
+	}
+}
+
+// TestRedactSecretsStillRedactsRealCredentials pins the other half of the
+// regression: even though file references with credential words must survive,
+// a real key/value pair under the same kind of key still has to be redacted.
+func TestRedactSecretsStillRedactsRealCredentials(t *testing.T) {
+	resetLearnedSecrets(t)
+	cases := []struct {
+		content string
+		secret  string
+	}{
+		{content: "api_token=abcd1234efgh", secret: "abcd1234efgh"},
+		{content: "password: hunter2", secret: "hunter2"},
+		{content: "DB_PASSWORD=xyz", secret: "xyz"},
+	}
+	for _, tc := range cases {
+		got := RedactSecrets(tc.content)
+		if strings.Contains(got, tc.secret) || !strings.Contains(got, redactedSecret) {
+			t.Fatalf("RedactSecrets(%q) = %q, want %q redacted", tc.content, got, tc.secret)
+		}
+		if twice := RedactSecrets(got); twice != got {
+			t.Fatalf("redaction of %q was not idempotent: got %q then %q", tc.content, got, twice)
+		}
+	}
+}
