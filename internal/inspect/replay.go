@@ -304,13 +304,8 @@ func replayMemoryCheck(ctx context.Context, workspace string, indexed []IndexedE
 	for index := range indexed {
 		events[index] = indexed[index].Event
 	}
-	observations := team.ExperienceObservationsFromEvents(events, agent.DefaultMemoryLearningPolicy())
-	if len(observations) == 0 {
+	if len(team.ExperienceObservationsFromEvents(events, agent.DefaultMemoryLearningPolicy())) == 0 {
 		return ProjectionCheck{Name: "memory_aggregates", Status: "skipped", ReasonCode: ReasonOptionalProjectionAbsent}
-	}
-	expected, err := contextstore.ReduceExperienceAggregates(observations)
-	if err != nil {
-		return ProjectionCheck{Name: "memory_aggregates", Status: "unavailable", ReasonCode: ReasonLegacySchemaUnsupported}
 	}
 	repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -320,6 +315,16 @@ func replayMemoryCheck(ctx context.Context, workspace string, indexed []IndexedE
 		return ProjectionCheck{Name: "memory_aggregates", Status: "unavailable", ReasonCode: ReasonProjectionUnreadable}
 	}
 	defer func() { _ = repo.Close() }()
+	// Expected aggregates include the evidence promoted records inherit, as
+	// the live projection and every rebuild do.
+	observations, err := team.ReplayExperienceObservations(ctx, events, agent.DefaultMemoryLearningPolicy(), repo)
+	if err != nil {
+		return ProjectionCheck{Name: "memory_aggregates", Status: "unavailable", ReasonCode: ReasonProjectionUnreadable}
+	}
+	expected, err := contextstore.ReduceExperienceAggregates(observations)
+	if err != nil {
+		return ProjectionCheck{Name: "memory_aggregates", Status: "unavailable", ReasonCode: ReasonLegacySchemaUnsupported}
+	}
 	actual, err := loadExperienceAggregates(ctx, repo, expected)
 	if err != nil {
 		return ProjectionCheck{Name: "memory_aggregates", Status: "unavailable", ReasonCode: ReasonProjectionUnreadable}

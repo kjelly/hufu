@@ -607,7 +607,8 @@ type Coordinator struct {
 	capabilityInflight     map[string]chan CapabilityResult
 	journal                *taskJournal // persistent task-result journal (nil when disabled)
 	noJournal              bool
-	eventStore             *EventStore     // append-only session event store
+	eventStore             *EventStore // append-only session event store
+	experienceLineage      experienceLineageCache
 	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
 	eventOnceMu            sync.Mutex
 	decisionJournalMu      sync.Mutex

@@ -36,6 +36,14 @@ func (c *Coordinator) reduceMemoryEvent(event RunEvent) {
 	if _, err := repo.ApplyExperienceObservation(context.Background(), observation); err != nil {
 		c.recordLearningGap(RunEvent{Type: "memory_aggregate_repair", TaskID: event.TaskID, IdempotencyKey: event.IdempotencyKey}, err)
 	}
+	// A persistent record promoted from this one keeps inheriting its
+	// evidence, matching the replay a rebuild performs.
+	for _, target := range c.experienceLineageTargets(observation.ContextItemID) {
+		inherited := inheritedObservation(observation, target)
+		if _, err := repo.ApplyExperienceObservation(context.Background(), inherited); err != nil {
+			c.recordLearningGap(RunEvent{Type: "memory_aggregate_repair", TaskID: event.TaskID, IdempotencyKey: inherited.IdempotencyKey}, err)
+		}
+	}
 }
 
 func memoryObservationFromEvent(event RunEvent, policy agent.MemoryLearningPolicy) (contextstore.ExperienceObservation, bool) {
@@ -399,13 +407,13 @@ func (c *Coordinator) RebuildExperienceAggregates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	policy := c.session.Config.MemoryLearning
-	observations := make([]contextstore.ExperienceObservation, 0)
-	for _, event := range events {
-		observation, include := memoryObservationFromEvent(event, policy)
-		if include {
-			observations = append(observations, observation)
-		}
+	var lister experienceLineageLister
+	if l, ok := c.contextRepo.(experienceLineageLister); ok {
+		lister = l
+	}
+	observations, err := ReplayExperienceObservations(ctx, events, c.session.Config.MemoryLearning, lister)
+	if err != nil {
+		return err
 	}
 	return repo.RebuildExperienceAggregates(ctx, observations)
 }

@@ -264,6 +264,13 @@ type ExperienceAggregate struct {
 
 `experience_processed_events.idempotency_key` 是 reducer 防重依據。aggregate 必須能從 `event_store.jsonl` 清空後完整重建；不得依賴 `execution-events.jsonl`，後者只供 `hufu improve` 的 metadata report。
 
+run-end 的 AutoExtractLTM 把 session 記錄升級成 persistent 時，會建立一筆新 ID 的記錄，並以 `context_item` evidence 指回來源。evidence 以 task 看到的 ID 為 key，所以升級後的記錄會承接來源的 evidence（experience lineage）：
+
+- lineage 從 canonical row 推導（confirmed、persistent、source `shared_memory_candidate`/`AutoExtractLTM`、cite 同一 project 中存在的 `context_item`），不另存一份。
+- 承接的是來源每筆 observation 的副本，key 為原 key 加上 `\x1finherited\x1f<target>`，task occurrence 不變，所以 independent task 數不會膨脹。
+- run 被 accept、candidate 被確認時補上來源既有的 evidence；之後來源再有 evidence，reducer 也同步給 target。`hufu context rebuild --aggregates`、replay check 與 `context doctor --learning` 用同一套 replay，所以舊資料重建一次就能補齊。
+- `hufu context learning` 的總數不計已升級的來源，避免同一筆 evidence 算兩次。
+
 Utility 採 weighted Beta posterior 的保守下界：
 
 ```text

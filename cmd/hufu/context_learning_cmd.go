@@ -192,7 +192,10 @@ func runContextLearningDoctor(cmd *cobra.Command, _ []string) error {
 	}
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.PolicyVersion = contextPolicyVersion
-	observations := team.ExperienceObservationsFromEvents(events, policy)
+	observations, err := team.ReplayExperienceObservations(cmd.Context(), events, policy, repo)
+	if err != nil {
+		return err
+	}
 	processed, err := repo.ExperienceProcessedCount(cmd.Context())
 	if err != nil {
 		return err

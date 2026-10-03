@@ -74,8 +74,23 @@ func InspectLearning(ctx context.Context, workspace, projectID, teamID string, r
 		view.UnavailableReason = "learning_aggregate_query_failed"
 		return clearLearningCounters(view)
 	}
+	lineage, err := repo.ListExperienceLineage(ctx, projectID)
+	if err != nil {
+		view.Status = "unknown"
+		view.UnavailableReason = "learning_lineage_query_failed"
+		return clearLearningCounters(view)
+	}
+	// A promoted persistent record inherits its source session record's
+	// evidence; counting the source as well would report that evidence twice.
+	promoted := make(map[string]bool, len(lineage))
+	for _, link := range lineage {
+		promoted[link.SourceID] = true
+	}
 	var exposures, consulted, applied, rejected, verified, failures int64
 	for _, aggregate := range aggregates {
+		if promoted[aggregate.ContextItemID] {
+			continue
+		}
 		exposures += int64(aggregate.ExposureCount)
 		consulted += int64(aggregate.ConsultedCount)
 		applied += int64(aggregate.AppliedCount)

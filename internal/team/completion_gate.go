@@ -225,6 +225,9 @@ func (c *Coordinator) confirmSharedMemoryCandidates(ctx context.Context, manifes
 			"item_id": item.ID, "run_id": manifest.RunID, "manifest_hash": manifest.ManifestHash, "kind": item.Kind,
 		})
 	}
+	if c.session != nil && memoryLearningEnabled(c.session.Config.MemoryLearning) {
+		c.inheritPromotedExperience(ctx, items)
+	}
 	return nil
 }
 

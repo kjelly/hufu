@@ -138,6 +138,45 @@ func TestInspectLearningEffectiveModeFollowsRuntimePrecedence(t *testing.T) {
 	}
 }
 
+// TestInspectLearningCountsPromotedEvidenceOnce pins the totals after
+// promotion: a persistent record inherits its session source's evidence, so
+// counting the source too would report the same uses twice.
+func TestInspectLearningCountsPromotedEvidenceOnce(t *testing.T) {
+	workspace := t.TempDir()
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := contextstore.Scope{ProjectID: "project", TeamID: "team", SessionID: "session-1"}
+	shared := contextstore.Scope{ProjectID: "project", TeamID: "team"}
+	if err = repo.Append(t.Context(),
+		contextstore.ContextItem{ID: "source", Kind: contextstore.ContextObservation, Content: "finding", Scope: session, Lifecycle: contextstore.LifecycleConfirmed},
+		contextstore.ContextItem{ID: "promoted", Kind: contextstore.ContextPattern, Content: "pattern", Scope: shared, Lifecycle: contextstore.LifecycleConfirmed,
+			Source: contextstore.SourceRef{Type: "shared_memory_candidate", Ref: contextstore.PromotedSessionRecordSourceRef}, Evidence: []contextstore.EvidenceRef{{ItemID: "source", Type: "context_item", Ref: "source"}}},
+		contextstore.ContextItem{ID: "unrelated", Kind: contextstore.ContextPattern, Content: "other", Scope: shared, Lifecycle: contextstore.LifecycleConfirmed},
+	); err != nil {
+		t.Fatal(err)
+	}
+	policy := agent.DefaultMemoryLearningPolicy()
+	for _, observation := range []contextstore.ExperienceObservation{
+		{IdempotencyKey: "use", ContextItemID: "source", TaskID: "run-1/1", AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 0.5},
+		{IdempotencyKey: "use\x1finherited\x1fpromoted", ContextItemID: "promoted", TaskID: "run-1/1", AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 0.5},
+		{IdempotencyKey: "other", ContextItemID: "unrelated", TaskID: "run-2/1", AppliedDelta: 1},
+	} {
+		observation.PolicyVersion, observation.ProjectID, observation.ObservedAt = policy.PolicyVersion, "project", time.Now().UTC()
+		if _, err = repo.ApplyExperienceObservation(t.Context(), observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	view := InspectLearning(t.Context(), workspace, "project", "team", requestedPolicy("observe"))
+	if value(view.Applied) != 2 || value(view.VerifiedSupport) != 1 {
+		t.Fatalf("applied=%d verified=%d, want 2 and 1 with the promoted source counted once (view %#v)", value(view.Applied), value(view.VerifiedSupport), view)
+	}
+}
+
 // requestedPolicy is a parsed team policy that sets only a mode, which is how
 // a team definition requests learning.
 func requestedPolicy(mode string) agent.MemoryLearningPolicy {

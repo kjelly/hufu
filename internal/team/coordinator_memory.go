@@ -354,6 +354,6 @@ func (c *Coordinator) autoExtractCanonicalLTM(ctx context.Context, runID string)
 		default:
 			continue
 		}
-		c.persistKnowledgeCandidateWithEvidence(stripSTMListItem(item.Content), section, "AutoExtractLTM", []contextstore.EvidenceRef{{ItemID: item.ID, Type: "context_item", Ref: item.ID}})
+		c.persistKnowledgeCandidateWithEvidence(stripSTMListItem(item.Content), section, contextstore.PromotedSessionRecordSourceRef, []contextstore.EvidenceRef{{ItemID: item.ID, Type: "context_item", Ref: item.ID}})
 	}
 }

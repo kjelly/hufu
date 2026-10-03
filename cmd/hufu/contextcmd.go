@@ -549,7 +549,10 @@ func runContextRebuild(cmd *cobra.Command, _ []string) error {
 		}
 		policy := agent.DefaultMemoryLearningPolicy()
 		policy.PolicyVersion = contextPolicyVersion
-		observations := team.ExperienceObservationsFromEvents(events, policy)
+		observations, replayErr := team.ReplayExperienceObservations(cmd.Context(), events, policy, repo)
+		if replayErr != nil {
+			return fmt.Errorf("replaying experience observations: %w", replayErr)
+		}
 		if rebuildErr := repo.RebuildExperienceAggregates(cmd.Context(), observations); rebuildErr != nil {
 			return fmt.Errorf("rebuilding experience aggregates: %w", rebuildErr)
 		}
