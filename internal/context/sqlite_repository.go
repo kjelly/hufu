@@ -1358,22 +1358,31 @@ func (r *SQLiteRepository) RebuildLexical(ctx context.Context) error {
 // plain FTS tokens so an exact-matchable path cannot make the lexical stage
 // fail with an FTS syntax error. The uppercase FTS5 operators (AND, OR, NOT,
 // NEAR) are dropped rather than searched for: in task text they carry no
-// retrieval signal, and as required terms they would suppress real matches.
-// Every remaining term is quoted. The result is empty when the query has no
-// ASCII word characters.
+// retrieval signal. Every remaining term is quoted, repeated terms are kept
+// once, and the terms are joined with OR so a record matches when it shares
+// any term and bm25 ranks it by how many rare terms it shares. Joined
+// implicitly, every term was required: a task goal of a hundred words or more
+// matched no record at all. The result is empty when the query has no ASCII
+// word characters.
 func ftsQuery(query string) string {
 	fields := strings.FieldsFunc(query, func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_'
 	})
 	terms := make([]string, 0, len(fields))
+	seen := make(map[string]bool, len(fields))
 	for _, field := range fields {
 		switch field {
 		case "AND", "OR", "NOT", "NEAR":
 			continue
 		}
-		terms = append(terms, `"`+field+`"`)
+		// The unicode61 tokenizer folds ASCII case, so case variants are the
+		// same term.
+		if key := strings.ToLower(field); !seen[key] {
+			seen[key] = true
+			terms = append(terms, `"`+field+`"`)
+		}
 	}
-	return strings.Join(terms, " ")
+	return strings.Join(terms, " OR ")
 }
 
 type scanWithScore struct {

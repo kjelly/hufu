@@ -17,10 +17,10 @@ For each session-lineage branch, worker memory constructs the branch scope and c
 The retrieval paths behave as follows:
 
 - `SearchExact` applies content matching, canonical scope visibility, supersession, expiry, validity, lifecycle, kind, and confidence in SQLite, orders by priority/creation/ID, then applies `Limit`.
-- `SearchLexical` ranks FTS5 matches, joins canonical rows, applies the same authorization and lifecycle constraints, then applies `Limit`.
+- `SearchLexical` ranks FTS5 matches, joins canonical rows, applies the same authorization and lifecycle constraints, then applies `Limit`. Query terms are alternatives (joined with `OR`, each quoted once), so a record that shares any term matches and BM25 ranks records sharing more rare terms first; requiring every term made a paragraph-long task goal match nothing.
 - `VectorStore.SearchVector` asks chromem for `Limit` neighbors, hydrates each ID from canonical SQLite, and applies `isRetrievable`. The canonical row—not vector metadata—is the authorization source.
 - `HybridRetrieve` runs all exact terms, lexical search, and optional vector search; filters kinds/confidence; fuses lexical/vector ranks with RRF; applies scope ranking, content deduplication/MMR, exact-result prefixing, file-path boosts, deterministic tie breakers, and only then the final limit.
-- Worker memory finally rechecks canonical scope, applies the restricted ancestor allowed-ID set, ranks memory tiers, deduplicates content, and applies item/token limits.
+- Worker memory finally rechecks canonical scope, applies the restricted ancestor allowed-ID set, ranks memory tiers, deduplicates content, and applies item/token limits. A shared record that the canonical session or persistent lists already carry keeps only its canonical copy in the worker prompt.
 
 Because every source limits before the allowed-ID filter, unrelated post-fork matches can crowd out an authorized ancestor. Lowering the current ceiling makes that failure more likely; `RepositoryQuery` and `Iterate` cannot fix ranked retrieval.
 
