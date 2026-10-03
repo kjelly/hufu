@@ -187,6 +187,9 @@ type Config struct {
 	//   profiles:
 	//     batch: {unattended: "true", max-duration: "600"}
 	Profiles map[string]map[string]string `yaml:"profiles"`
+	// DefaultProfile applies to hufu run when no --profile is supplied. Only
+	// the project-local hufu.yaml may set it; user config defaults are ignored.
+	DefaultProfile string `yaml:"default-profile,omitempty" json:"default-profile,omitempty"`
 }
 
 // PresentationConfig contains user-interface preferences only. These values
@@ -227,6 +230,9 @@ func LoadConfig() *Config {
 	homeConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
 
 	cfg.mergeFromFile(homeConfigPath)
+	// The default run profile belongs to the current project, not the user
+	// config, even though named profiles themselves merge across both files.
+	cfg.DefaultProfile = ""
 	cfg.mergeFromFile("hufu.yaml")
 
 	return cfg
@@ -297,6 +303,7 @@ func (c *Config) mergeScalarFields(fileCfg *Config) {
 		{&c.GuardModel, &fileCfg.GuardModel}, {&c.JudgeModel, &fileCfg.JudgeModel},
 		{&c.StallThreshold, &fileCfg.StallThreshold},
 		{&c.GracefulWrapUpTimeout, &fileCfg.GracefulWrapUpTimeout},
+		{&c.DefaultProfile, &fileCfg.DefaultProfile},
 		{&c.Presentation.Theme, &fileCfg.Presentation.Theme},
 		{&c.Presentation.DisplayPreset, &fileCfg.Presentation.DisplayPreset},
 	} {

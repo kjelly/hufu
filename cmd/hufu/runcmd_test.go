@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -93,6 +95,74 @@ profiles:
 	}
 	if diagnostics.Len() != 0 {
 		t.Fatalf("JSONL profile emitted non-JSONL diagnostics: %q", diagnostics.String())
+	}
+}
+
+func TestCanonicalRunProjectDefaultProfilePrecedence(t *testing.T) {
+	dir := t.TempDir()
+	writeHufuYAML(t, dir, `
+default-profile: coding
+profiles:
+  coding:
+    team: dev-team
+    model: profile-model
+    plan: "true"
+  review:
+    team: review-team
+    model: review-model
+`)
+	defer chdir(t, dir)()
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+
+	tests := []struct {
+		name, team, model string
+		args              []string
+		wantPlan          bool
+	}{
+		{name: "project default", team: "dev-team", model: "profile-model", wantPlan: true},
+		{name: "explicit flags", args: []string{"--team", "cli-team", "--model", "cli-model"}, team: "cli-team", model: "cli-model", wantPlan: true},
+		{name: "legacy selector overrides profile team", args: []string{"--agent-team", "legacy-team"}, team: "legacy-team", model: "profile-model", wantPlan: true},
+		{name: "built-in selector overrides profile team", args: []string{"--default"}, model: "profile-model", wantPlan: true},
+		{name: "automatic selector overrides profile team", args: []string{"--auto-team"}, model: "profile-model", wantPlan: true},
+		{name: "explicit profile", args: []string{"--profile", "review"}, team: "review-team", model: "review-model"},
+		{name: "explicit empty profile", args: []string{"--profile="}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts = runOptions{}
+			root := &cobra.Command{Use: "hufu"}
+			root.PersistentFlags().StringVar(&opts.profileName, "profile", "", "")
+			command, options := newRunCommandWithOptions()
+			root.AddCommand(command)
+			command.SetErr(new(bytes.Buffer))
+			if err := command.ParseFlags(append(tt.args, "task")); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := resolveCanonicalRunOptions(command, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.agentTeamName != tt.team || resolved.modelOverride != tt.model || resolved.planMode != tt.wantPlan {
+				t.Fatalf("resolved = %#v, want team %q, model %q, plan %v", resolved, tt.team, tt.model, tt.wantPlan)
+			}
+		})
+	}
+}
+
+func TestCanonicalRunInvalidProjectDefaultProfileFails(t *testing.T) {
+	dir := t.TempDir()
+	writeHufuYAML(t, dir, "default-profile: missing\nprofiles:\n  coding:\n    team: dev-team\n")
+	defer chdir(t, dir)()
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	opts = runOptions{}
+	command, options := newRunCommandWithOptions()
+	if err := command.ParseFlags([]string{"task"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCanonicalRunOptions(command, options); err == nil || !strings.Contains(err.Error(), "profile \"missing\" not found") {
+		t.Fatalf("invalid project default error = %v", err)
 	}
 }
 
