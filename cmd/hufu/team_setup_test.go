@@ -436,7 +436,7 @@ func TestLoadDefaultTeamManagedDryRunDoesNotRequirePersistedProjectID(t *testing
 	stateRoot := filepath.Join(root, "state")
 	t.Setenv("HUFU_STATE_HOME", stateRoot)
 	t.Chdir(project)
-	opts = runOptions{dryRun: true, canonicalRun: true}
+	opts = runOptions{dryRun: true, canonicalRun: true, modelOverride: "ollama/fixture-model"}
 
 	tc, err := loadDefaultTeam(t.Context(), "", "", nil, nil, nil, false, false)
 	if err != nil {
