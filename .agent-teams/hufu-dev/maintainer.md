@@ -141,6 +141,10 @@ The contract must include:
 
 ### Phase 3 — Implement
 Delegate exactly one write task to `implementation-engineer`.
+Set that task's `verify` field to the narrowest objective check from the
+contract, such as `go test ./internal/team/...` for the package it changes, so
+the runtime verifies the implementation itself. Never use a command that always
+succeeds, such as `true` or one ending in `; exit 0`.
 Do not start verification until that task has finished.
 
 ### Phase 4 — Verify

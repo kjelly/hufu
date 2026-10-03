@@ -16,6 +16,13 @@ spec:
   # This is a code-changing team: completion must be an objective outcome, not
   # the default exploratory/profile-advisory result.
   goal-mode: outcome
+  # Record which persistent memories workers apply and whether their task
+  # verify passes, without changing prompt selection. Implementation and
+  # analysis tasks run in the execute phase, so learned knowledge reaches
+  # them; accepted runs (the blocking acceptance below) add to it. Retire
+  # stale knowledge with `hufu context retire`; set mode off to stop.
+  memory-learning:
+    mode: observe
   delegation:
     # LoadTeam always provides a general-purpose Helper. Keep it unreachable so
     # implementation-engineer remains the only worker with write authority.
