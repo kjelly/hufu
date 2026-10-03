@@ -92,18 +92,34 @@ go run ./cmd/hufu [prompt]
 
 ## Quick Start
 
-### 0. Try it in 3 commands (no config)
+### 0. Try it in 4 commands (no config)
 
 ```bash
 # 1. Check that everything is wired up
 hufu doctor
 
 # 2. Use the built-in default team (no .agent-teams/ directory required)
-hufu --default --model ollama/qwen3:8b "say hello"
+hufu run --default --model ollama/qwen3:8b -- "say hello"
 
 # 3. Scaffold your own team (creates .agent-teams/my-team/ with helper.md)
 hufu init my-team --model ollama/qwen3:8b
+
+# 4. Run a task with that team
+hufu run --team my-team -- "review this codebase"
 ```
+
+For repeated runs, add a named profile to `hufu.yaml`:
+
+```yaml
+profiles:
+  coding:
+    team: my-team
+```
+
+Then use `hufu run --profile coding -- "implement the feature"`. A run with a
+TTY can open the team picker when no team is named; scripts should pass
+`--team` or a profile that names the team. The root `hufu [prompt]` invocation
+and its `--agent-team` flag are compatibility syntax.
 
 Other useful commands:
 ```bash
@@ -321,14 +337,14 @@ Legacy `decision.default-profile`, `decision.request-contract`, and
 ### 3. Run a Task
 
 ```bash
-# Specify prompt directly
-go run ./cmd/hufu "Refactor the error handling logic in the auth module"
+# Explicit team (suitable for scripts)
+go run ./cmd/hufu run --team my-team -- "Refactor the auth module"
 
-# Specify a team
-go run ./cmd/hufu --agent-team my-team "Refactor the auth module"
+# Named profile from hufu.yaml (the profile can select the team)
+go run ./cmd/hufu run --profile coding -- "Refactor the auth module"
 
-# Interactive mode (entered when no prompt is provided)
-go run ./cmd/hufu
+# With a TTY, omitting --team can open the interactive team picker
+go run ./cmd/hufu run -- "Refactor the auth module"
 ```
 
 ---

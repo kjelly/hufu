@@ -21,15 +21,18 @@ func newRootCommand() *cobra.Command {
 
 Quick start:
   hufu doctor                                # preflight: check provider + teams
-  hufu init my-team --model local-model  # scaffold a team
-  hufu @my-team "explain this codebase"      # run a team
-  hufu --default --model local-model "hello"  # use built-in team (no config)
+  hufu init my-team --model local-model      # scaffold a team
+  hufu run --team my-team -- "explain this codebase"
+  hufu run --profile coding -- "implement the feature"
+  hufu run --default --model local-model -- "hello"
   hufu chat --agent-team my-team             # interactive REPL
   hufu resume --workspace ./workspace/my-team # resume a durable session
   hufu list                                  # show all teams
 
-Specify the team with --agent-team <name> or by writing @<team-name> in the prompt.
-Within a team, target a specific agent with @<agent-name> <task>.
+The root hufu [prompt] command is compatibility syntax. It accepts
+--agent-team <name> or @<team-name> in the prompt, and @<agent-name> within a team.
+For hufu run, use --team <name>; a TTY can show a picker when no team is named.
+For scripts, pass --team or a profile that names a team.
 
 Set the model with --model <name> (highest priority), in team.yaml, or in hufu.yaml.`,
 		Args:         cobra.MaximumNArgs(1),
