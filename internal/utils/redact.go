@@ -57,6 +57,26 @@ var (
 	// Environment assignments may use all-caps names and optional export.
 	secretEnvRe     = regexp.MustCompile(`(?m)(\b(?:export\s+)?[A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*=)([^\s]+)`)
 	secretKeyNameRe = regexp.MustCompile(`(?i)(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)`)
+	// Prefix-only credential formats. Each pattern is anchored to a known
+	// vendor prefix and a strict character class so it never matches
+	// ordinary identifiers, git SHAs, UUIDs, or the [REDACTED] marker.
+	// openAISecretRe matches `sk-` followed by exactly 48 alphanumeric
+	// characters (total length 51). The body class forbids `-` and `_` so a
+	// trailing `sk-proj-…` token is left for openAIProjSecretRe instead.
+	openAISecretRe = regexp.MustCompile(`\bsk-[A-Za-z0-9]{48}\b`)
+	// openAIProjSecretRe matches `sk-proj-` followed by ≥20 characters drawn
+	// from `[A-Za-z0-9_-]`. The first body character must be alphanumeric or
+	// `_` so a string of dashes cannot match.
+	openAIProjSecretRe = regexp.MustCompile(`\bsk-proj-[A-Za-z0-9_][A-Za-z0-9_-]{19,}`)
+	// githubPATSecretRe matches `ghp_` followed by exactly 36 alphanumeric
+	// characters.
+	githubPATSecretRe = regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}\b`)
+	// awsAccessKeyIDRe matches `AKIA` followed by exactly 16 uppercase
+	// alphanumeric characters.
+	awsAccessKeyIDRe = regexp.MustCompile(`\bAKIA[A-Z0-9]{16}\b`)
+	// slackTokenRe matches `xoxb-` followed by at least two `-`-separated
+	// segments; the body-length floor is enforced in code.
+	slackTokenRe = regexp.MustCompile(`(?i)\bxoxb-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+`)
 )
 
 // secretKeyNameLiterals spells out every lowercase string secretKeyNameRe
@@ -67,6 +87,46 @@ var secretKeyNameLiterals = []string{
 	"apikey", "api_key", "api-key",
 	"accesskey", "access_key", "access-key",
 	"privatekey", "private_key", "private-key",
+}
+
+// credentialPrefixLiterals spells out every vendor prefix the prefix-only
+// credential patterns above are anchored to. None of these literals appears
+// in the redactedSecret marker, so text that contains only already-redacted
+// content cannot match and the patterns can be skipped.
+var credentialPrefixLiterals = []string{
+	"sk-",
+	"sk-proj-",
+	"ghp_",
+	"akia",
+	"xoxb-",
+}
+
+// mayContainCredentialPrefix is the cheap literal gate that decides whether
+// the prefix-only credential patterns need to run. Each pattern above is
+// strictly anchored to one of these prefixes; ordinary text that contains
+// none cannot match, and running five regexes over multi-megabyte session
+// state on every checkpoint would dwarf the cost of a substring scan.
+func mayContainCredentialPrefix(content string) bool {
+	lower := strings.ToLower(content)
+	for _, literal := range credentialPrefixLiterals {
+		if strings.Contains(lower, literal) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactSlackTokenLengthGate replaces a Slack token match only when the
+// body is at least 16 characters long. The slackTokenRe regex itself
+// enforces the multi-segment shape; the body-length floor distinguishes a
+// real token from a short, dash-separated identifier that happens to share
+// the prefix.
+func redactSlackTokenLengthGate(match string) string {
+	body := match[len("xoxb-"):]
+	if len(body) >= 16 {
+		return redactedSecret
+	}
+	return match
 }
 
 // containsSecretKeyName reports whether secretKeyNameRe matches content. The
@@ -439,6 +499,22 @@ func redactSecretsText(content string, learn bool) string {
 	}
 	if strings.Contains(content, "PRIVATE KEY-----") {
 		content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
+	}
+	// Prefix-only credential formats (OpenAI `sk-`/`sk-proj-`, GitHub `ghp_`,
+	// AWS `AKIA`, Slack `xoxb-`) are matched without an adjacent
+	// credential-named key. Running this pass after the private-key block
+	// pass keeps PEM armor intact, and running it before the
+	// authorization/JSON/key/env passes means a value that appears both bare
+	// and under a key in the same chunk is redacted on the first occurrence
+	// regardless of which form comes first. The marker [REDACTED] does not
+	// contain any prefix literal, so the literal gate rejects re-process
+	// inputs cheaply.
+	if mayContainCredentialPrefix(content) {
+		content = openAISecretRe.ReplaceAllString(content, redactedSecret)
+		content = openAIProjSecretRe.ReplaceAllString(content, redactedSecret)
+		content = githubPATSecretRe.ReplaceAllString(content, redactedSecret)
+		content = awsAccessKeyIDRe.ReplaceAllString(content, redactedSecret)
+		content = slackTokenRe.ReplaceAllStringFunc(content, redactSlackTokenLengthGate)
 	}
 	if hasAuthorization {
 		content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
