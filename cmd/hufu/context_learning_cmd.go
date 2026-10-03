@@ -91,7 +91,7 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	view := inspectpkg.InspectLearning(cmd.Context(), workspace, contextProject, teamID, string(session.Config.MemoryLearning.Mode))
+	view := inspectpkg.InspectLearning(cmd.Context(), workspace, contextProject, teamID, session.Config.MemoryLearning)
 	if contextQueryJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"schema_version": 1, "learning": view})
 	}
@@ -113,7 +113,7 @@ func runContextLearning(cmd *cobra.Command, _ []string) error {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "State: %s\n", view.EmptyState)
 	}
 	if err == nil && view.UnavailableReason == "requested_mode_not_effective" {
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Note: the requested learning mode is not the effective adopted mode; inspect policy state before expecting ranking changes.")
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Note: the requested learning mode is not in effect (an adopted policy takes precedence, and active runs as shadow until one is adopted); inspect policy state before expecting ranking changes.")
 	}
 	if err == nil {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Next: use context promotion list/review for evidence-backed publication; skill review/promote is a separate draft lifecycle; improve reports execution evidence without publishing either.")

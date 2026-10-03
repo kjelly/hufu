@@ -83,7 +83,7 @@ func TestInspectLearningCountsRejectedStaleAndEdited(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view := InspectLearning(ctx, workspace, "project", "team", "observe")
+	view := InspectLearning(ctx, workspace, "project", "team", requestedPolicy("observe"))
 	checks := []struct {
 		name string
 		got  *int64
@@ -138,7 +138,7 @@ func TestInspectLearningCountsOpenConflicts(t *testing.T) {
 	if err = repo.Close(); err != nil {
 		t.Fatal(err)
 	}
-	view := InspectLearning(ctx, workspace, "project", "team", "")
+	view := InspectLearning(ctx, workspace, "project", "team", requestedPolicy(""))
 	if value(view.OpenConflicts) != 1 {
 		t.Fatalf("open conflicts = %d, want 1 (view %#v)", value(view.OpenConflicts), view)
 	}
@@ -154,7 +154,7 @@ func TestInspectLearningCountsOpenConflicts(t *testing.T) {
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	old := InspectLearning(ctx, workspace, "project", "team", "")
+	old := InspectLearning(ctx, workspace, "project", "team", requestedPolicy(""))
 	if old.OpenConflicts != nil || old.Status != "available" || old.UnavailableReason != "" {
 		t.Fatalf("pre-migration view = %#v, want unknown conflicts without degrading status", old)
 	}

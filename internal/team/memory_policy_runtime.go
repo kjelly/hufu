@@ -157,7 +157,7 @@ func (c *Coordinator) loadAdoptedMemoryPolicy(ctx context.Context) error {
 	}
 	if !adopted {
 		var downgraded bool
-		learning, downgraded = unadoptedMemoryLearningPolicy(c.session.Config.MemoryLearning)
+		learning, downgraded = agent.UnadoptedMemoryLearningPolicy(c.session.Config.MemoryLearning)
 		if downgraded {
 			log.Printf("warning: memory-learning mode %q requires an adopted memory policy; running as %q", agent.MemoryLearningActive, agent.MemoryLearningShadow)
 		}
@@ -180,21 +180,4 @@ func memoryPolicyAdopted(ctx context.Context, repo contextstore.Repository) (boo
 		return false, fmt.Errorf("load active memory policy: %w", err)
 	}
 	return true, nil
-}
-
-// unadoptedMemoryLearningPolicy is the learning policy a team configuration
-// selects when no policy is adopted. Off, observe, and shadow never change
-// prompt selection, so configuration alone may choose them. Active changes
-// selection and stays behind adoption's review gate, so it runs as shadow and
-// the second result reports the downgrade. A configuration without a mode
-// keeps the defaults.
-func unadoptedMemoryLearningPolicy(configured agent.MemoryLearningPolicy) (agent.MemoryLearningPolicy, bool) {
-	if configured.Mode == "" {
-		return agent.DefaultMemoryLearningPolicy(), false
-	}
-	if configured.Mode == agent.MemoryLearningActive {
-		configured.Mode = agent.MemoryLearningShadow
-		return configured, true
-	}
-	return configured, false
 }

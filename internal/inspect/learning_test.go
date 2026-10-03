@@ -12,11 +12,11 @@ import (
 )
 
 func TestInspectLearningDistinguishesEmptyFromUnknown(t *testing.T) {
-	empty := InspectLearning(t.Context(), t.TempDir(), "project", "team", "active")
+	empty := InspectLearning(t.Context(), t.TempDir(), "project", "team", requestedPolicy("active"))
 	if empty.Status != "available" || empty.EmptyState != "no_recall_data" || empty.Exposures == nil || *empty.Exposures != 0 {
 		t.Fatalf("missing database learning view = %#v", empty)
 	}
-	if empty.RequestedMode != "active" || empty.EffectiveMode != "off" || empty.UnavailableReason != "requested_mode_not_effective" {
+	if empty.RequestedMode != "active" || empty.EffectiveMode != "shadow" || empty.UnavailableReason != "requested_mode_not_effective" {
 		t.Fatalf("missing database mode fallback = %#v", empty)
 	}
 
@@ -31,7 +31,7 @@ func TestInspectLearningDistinguishesEmptyFromUnknown(t *testing.T) {
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	unknown := InspectLearning(t.Context(), workspace, "project", "team", "active")
+	unknown := InspectLearning(t.Context(), workspace, "project", "team", requestedPolicy("active"))
 	if unknown.Status != "unknown" || unknown.Exposures != nil || unknown.UnavailableReason != "learning_policy_query_failed" {
 		t.Fatalf("query failure learning view = %#v", unknown)
 	}
@@ -71,7 +71,7 @@ func TestInspectLearningSeparatesSignalsAndOmitsPrivateMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view := InspectLearning(t.Context(), workspace, "project", "team", "shadow")
+	view := InspectLearning(t.Context(), workspace, "project", "team", requestedPolicy("shadow"))
 	if view.Status != "available" || view.EffectiveMode != "observe" || view.RequestedMode != "shadow" {
 		t.Fatalf("learning mode view = %#v", view)
 	}
@@ -81,6 +81,69 @@ func TestInspectLearningSeparatesSignalsAndOmitsPrivateMemory(t *testing.T) {
 	if view.EligiblePromotions != nil {
 		t.Fatalf("eligibility should remain unknown before explicit analysis: %#v", view)
 	}
+}
+
+// TestInspectLearningEffectiveModeFollowsRuntimePrecedence pins the view to
+// the mode a run uses: an adopted policy wins, and without one the team's
+// requested mode applies, with active held at shadow until adoption.
+func TestInspectLearningEffectiveModeFollowsRuntimePrecedence(t *testing.T) {
+	cases := []struct {
+		name          string
+		store         string
+		requested     string
+		wantRequested string
+		wantEffective string
+		wantReason    string
+	}{
+		{name: "no store, no request", store: "none", requested: "", wantRequested: "unknown", wantEffective: "off"},
+		{name: "no store, observe", store: "none", requested: "observe", wantRequested: "observe", wantEffective: "observe"},
+		{name: "store without adoption, observe", store: "empty", requested: "observe", wantRequested: "observe", wantEffective: "observe"},
+		{name: "store without adoption, off", store: "empty", requested: "off", wantRequested: "off", wantEffective: "off"},
+		{name: "store without adoption, active", store: "empty", requested: "active", wantRequested: "active", wantEffective: "shadow", wantReason: "requested_mode_not_effective"},
+		{name: "adopted policy wins", store: "adopted", requested: "shadow", wantRequested: "shadow", wantEffective: "observe", wantReason: "requested_mode_not_effective"},
+		{name: "adopted policy matches", store: "adopted", requested: "observe", wantRequested: "observe", wantEffective: "observe"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			if tc.store != "none" {
+				repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.store == "adopted" {
+					policy := agent.DefaultMemoryLearningPolicy()
+					policy.Mode = agent.MemoryLearningObserve
+					snapshot, err := json.Marshal(map[string]any{"id": policy.PolicyVersion, "revision_hash": "revision-1", "learning": policy})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err = repo.SaveMemoryPolicyVersion(t.Context(), policy.PolicyVersion, snapshot, "revision-1", "active", time.Now().UTC()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err = repo.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			view := InspectLearning(t.Context(), workspace, "project", "team", requestedPolicy(tc.requested))
+			if view.Status != "available" || view.RequestedMode != tc.wantRequested || view.EffectiveMode != tc.wantEffective || view.UnavailableReason != tc.wantReason {
+				t.Fatalf("view = status %q requested %q effective %q reason %q, want requested %q effective %q reason %q",
+					view.Status, view.RequestedMode, view.EffectiveMode, view.UnavailableReason, tc.wantRequested, tc.wantEffective, tc.wantReason)
+			}
+			if view.PolicyVersion != agent.DefaultMemoryLearningPolicy().PolicyVersion {
+				t.Fatalf("policy version = %q, want the default the runtime records", view.PolicyVersion)
+			}
+		})
+	}
+}
+
+// requestedPolicy is a parsed team policy that sets only a mode, which is how
+// a team definition requests learning.
+func requestedPolicy(mode string) agent.MemoryLearningPolicy {
+	policy := agent.DefaultMemoryLearningPolicy()
+	policy.Mode = agent.MemoryLearningMode(mode)
+	return policy
 }
 
 func value(pointer *int64) int64 {

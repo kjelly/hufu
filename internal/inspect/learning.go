@@ -14,19 +14,23 @@ import (
 )
 
 // InspectLearning returns the presentation-safe learning projection for one
-// canonical shared scope. requestedMode comes from the team definition; it is
-// kept separate from the adopted effective policy so fallback is visible.
-func InspectLearning(ctx context.Context, workspace, projectID, teamID, requestedMode string) operatorpkg.LearningView {
+// canonical shared scope. requested is the team definition's policy; it is
+// kept separate from the effective policy so fallback is visible. The
+// effective policy follows the runtime: an adopted policy wins, and without
+// one the requested policy applies through agent.UnadoptedMemoryLearningPolicy.
+// A caller that does not know the team's policy passes the zero value.
+func InspectLearning(ctx context.Context, workspace, projectID, teamID string, requested agent.MemoryLearningPolicy) operatorpkg.LearningView {
 	view := operatorpkg.LearningView{Status: "unknown", RequestedMode: "unknown", EffectiveMode: "unknown"}
-	if validLearningMode(agent.MemoryLearningMode(requestedMode)) {
-		view.RequestedMode = requestedMode
+	if validLearningMode(requested.Mode) {
+		view.RequestedMode = string(requested.Mode)
 	}
+	unadopted := unadoptedLearningPolicy(requested)
 	repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			view.Status = "available"
-			view.EffectiveMode = string(agent.MemoryLearningOff)
-			view.PolicyVersion = agent.DefaultMemoryLearningPolicy().PolicyVersion
+			view.EffectiveMode = string(unadopted.Mode)
+			view.PolicyVersion = unadopted.PolicyVersion
 			view.EmptyState = "no_recall_data"
 			setZeroLearningCounters(&view)
 			if view.RequestedMode != "unknown" && view.RequestedMode != view.EffectiveMode {
@@ -43,8 +47,8 @@ func InspectLearning(ctx context.Context, workspace, projectID, teamID, requeste
 	record, err := repo.ActiveMemoryPolicyVersion(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		view.Status = "available"
-		view.EffectiveMode = string(agent.MemoryLearningOff)
-		view.PolicyVersion = agent.DefaultMemoryLearningPolicy().PolicyVersion
+		view.EffectiveMode = string(unadopted.Mode)
+		view.PolicyVersion = unadopted.PolicyVersion
 	} else if err != nil {
 		view.UnavailableReason = "learning_policy_query_failed"
 		return view
@@ -172,7 +176,7 @@ func setZeroLearningCounters(view *operatorpkg.LearningView) {
 }
 
 func learningView(ctx context.Context, workspace, projectID, teamID string) operatorpkg.LearningView {
-	return InspectLearning(ctx, workspace, projectID, teamID, "")
+	return InspectLearning(ctx, workspace, projectID, teamID, agent.MemoryLearningPolicy{})
 }
 
 func clearLearningCounters(view operatorpkg.LearningView) operatorpkg.LearningView {
@@ -192,6 +196,20 @@ func clearLearningCounters(view operatorpkg.LearningView) operatorpkg.LearningVi
 	view.AppliedEditUnknownPromotions = nil
 	view.OpenConflicts = nil
 	return view
+}
+
+// unadoptedLearningPolicy is the policy a run uses when none is adopted. An
+// unknown request keeps the defaults. A request without a policy version,
+// which a parsed team configuration never has, reads the default version.
+func unadoptedLearningPolicy(requested agent.MemoryLearningPolicy) agent.MemoryLearningPolicy {
+	if !validLearningMode(requested.Mode) {
+		return agent.DefaultMemoryLearningPolicy()
+	}
+	policy, _ := agent.UnadoptedMemoryLearningPolicy(requested)
+	if policy.PolicyVersion == "" {
+		policy.PolicyVersion = agent.DefaultMemoryLearningPolicy().PolicyVersion
+	}
+	return policy
 }
 
 func validLearningMode(mode agent.MemoryLearningMode) bool {
