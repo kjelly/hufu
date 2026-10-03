@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/kjelly/hufu/internal/audit"
 	"github.com/kjelly/hufu/internal/hooks"
@@ -216,11 +217,7 @@ func detectInteractiveEnvironment() bool {
 			return false
 		}
 	}
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(os.Stdin.Fd())
 }
 
 var onNeedsHuman func(question string)

@@ -510,7 +510,10 @@ func resolveInitialSegments(prompt, initialTeam string, registry *team.TeamRegis
 			return nil, err
 		}
 	} else {
-		chosen = askUserForTeamFallback(registry.ListTeams())
+		chosen, err = askUserForTeamWithPromptUI(registry.ListTeams())
+		if err != nil {
+			return nil, err
+		}
 	}
 	if chosen == "" {
 		stderrLog("%s No team selected. Pass --agent-team <name>, use @<team> in the prompt, or run 'hufu init <name>' to create one.\n", errStyle.Render("✗"))

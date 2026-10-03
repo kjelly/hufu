@@ -367,8 +367,16 @@ func writeWorkerModelPreviewTeam(t *testing.T) *team.TeamRegistry {
 }
 
 func TestLoadTeamDryRunAppliesWorkerModelOverrides(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
+	// Preflight requires an executable, but a dry run must never launch it.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	registry := writeWorkerModelPreviewTeam(t)
 	workspace := filepath.Join(t.TempDir(), "must-not-exist")
 	opts = runOptions{

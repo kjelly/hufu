@@ -100,11 +100,6 @@ func askUserForPromptFallback() (string, error) {
 	return promptVal, nil
 }
 
-func askUserForTeamFallback(teams []string) string {
-	res, _ := askUserForTeamWithPromptUI(teams)
-	return res
-}
-
 func readStdin() string {
 	stat, err := os.Stdin.Stat()
 	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
@@ -142,12 +137,17 @@ func askUserForTeamWithPromptUI(teams []string) (string, error) {
 	if len(teams) == 0 {
 		return "", nil
 	}
+	teams = append([]string(nil), teams...)
 	sort.Strings(teams)
 
-	stat, err := os.Stdin.Stat()
-	isTTY := err == nil && (stat.Mode()&os.ModeCharDevice) != 0
-	if opts.unattended || !isTTY {
-		return teams[0], nil
+	if opts.unattended || !tools.IsInteractiveEnvironment() {
+		if len(teams) == 1 {
+			return teams[0], nil
+		}
+		if opts.autoTeam {
+			return "", fmt.Errorf("--auto-team could not resolve a team; available teams: %s; select one with hufu run --team <name> or --agent-team <name>", strings.Join(teams, ", "))
+		}
+		return "", fmt.Errorf("multiple teams available: %s; select one with hufu run --team <name> or --agent-team <name>", strings.Join(teams, ", "))
 	}
 
 	searcher := func(input string, index int) bool {

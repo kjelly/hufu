@@ -20,6 +20,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -83,6 +84,9 @@ func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCas
 // see TestEvalTimeout, which needs a handler that never responds.
 func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding) (EvalCaseResult, error) {
 	started := time.Now()
+	// Scripted evals have no operator. Honor explicit tool grants without
+	// depending on the invoking terminal or changing process-wide permissions.
+	ctx = context.WithValue(ctx, tools.UnattendedKey, true)
 
 	server := httptest.NewServer(handler)
 	defer server.Close()
