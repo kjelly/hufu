@@ -945,6 +945,50 @@ func TestCompileWorkerContextKeepsOneCopyOfSharedMemory(t *testing.T) {
 	}
 }
 
+// TestCompileWorkerContextAsksForMemoryUseOnlyWhenMemoryIsPresent pins the
+// reporting instruction: it appears when learning asks for reports and the
+// prompt carries a context:<id> record, and nowhere else.
+func TestCompileWorkerContextAsksForMemoryUseOnlyWhenMemoryIsPresent(t *testing.T) {
+	memory := &CanonicalContextBundle{SharedPersistent: []contextstore.ContextItem{{
+		ID: "ctx-learned", Kind: contextstore.ContextPattern, Content: "redaction runs the private key pass first",
+		ContentHash: "learned-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: .9,
+	}}}
+	cases := []struct {
+		name      string
+		report    bool
+		canonical *CanonicalContextBundle
+		want      bool
+	}{
+		{name: "learning on with memory", report: true, canonical: memory, want: true},
+		{name: "learning on without memory", report: true, canonical: &CanonicalContextBundle{}, want: false},
+		{name: "learning off with memory", report: false, canonical: memory, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+				Goal: "redact tokens", CanonicalMemory: tc.canonical, ReportMemoryUses: tc.report,
+				ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 8192, MaxOutputTokens: 512},
+			})
+			if err != nil {
+				t.Fatalf("CompileWorkerContext: %v", err)
+			}
+			included := false
+			for _, item := range compiled.IncludedItems {
+				if item.ID == memoryUseReportingID {
+					included = true
+				}
+			}
+			inPrompt := strings.Contains(compiled.Prompt, "## Reporting memory use") && strings.Contains(compiled.Prompt, "memory_uses")
+			if included != tc.want || inPrompt != tc.want {
+				t.Fatalf("reporting instruction included=%v in prompt=%v, want %v:\n%s", included, inPrompt, tc.want, compiled.Prompt)
+			}
+			if tc.want && !strings.Contains(compiled.Prompt, "id=context:ctx-learned") {
+				t.Fatalf("memory record missing from prompt:\n%s", compiled.Prompt)
+			}
+		})
+	}
+}
+
 func TestCompileWorkerContextVerifyOmitsRawAndGenericHistory(t *testing.T) {
 	request := validTestContextRequest()
 	request.Phase = PhaseVerify

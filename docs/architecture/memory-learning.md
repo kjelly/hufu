@@ -158,6 +158,7 @@ runtime validation：
 - 未回報的 injected item 視為 exposure only，不推測 applied。
 - free-text fallback 不產生 applied attribution。
 - strict/`submit_result` path 若有 memory 注入，schema 必須公開 `memory_uses`；空陣列合法，避免逼 agent 虛構採用。
+- learning 開啟且 worker prompt 含 `context:<id>` 記錄時，compiler 另加一段 normative 的 `memory_use_reporting` 說明：哪些 marker 是記憶、`applied`／`consulted`／`rejected` 各代表什麼，並提醒沒用到就留空、不要列沒讀過的記錄。只靠 schema 欄位描述時，worker 即使照記憶做事也從不回報。
 - runtime-owned manifest、receipt、outcome 與 causal confidence 不可由 model input 覆寫。
 
 ### 5.3 RunEvent payload

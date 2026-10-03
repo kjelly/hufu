@@ -617,6 +617,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
+	workerInput.ReportMemoryUses = memoryLearningEnabled(c.session.Config.MemoryLearning)
 	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
 
 	var conversationHistory []fantasy.Message

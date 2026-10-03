@@ -713,6 +713,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()
 	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
+	workerInput.ReportMemoryUses = memoryLearningEnabled(c.session.Config.MemoryLearning)
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
 	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, retrievalQuery); memBundle != nil {
 		workerInput.WorkerMemory = memBundle

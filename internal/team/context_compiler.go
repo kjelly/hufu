@@ -135,8 +135,12 @@ type WorkerContextInput struct {
 	// canonical context, as in CoordinatorContextInput.
 	DisableMemory          bool
 	DisableCanonicalMemory bool
-	WorkerMemory           *WorkerMemoryBundle
-	CanonicalMemory        *CanonicalContextBundle
+	// ReportMemoryUses asks the worker to report the memory records it used
+	// in submit_result.memory_uses. Set it only when memory learning is on,
+	// which is when the runtime records those reports.
+	ReportMemoryUses bool
+	WorkerMemory     *WorkerMemoryBundle
+	CanonicalMemory  *CanonicalContextBundle
 	// LockedResourceItems are pre-built ContextItems for required resources
 	// declared under team.yaml's required-resources whose inject-into list
 	// names this worker (spec.md "Generic Required Resource Lock").
@@ -858,6 +862,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 	items = append(items, workerProjectAndDependencyItems(input)...)
 	items = appendWorkerHistoricalContext(ctx, input, items)
+	if input.ReportMemoryUses {
+		items = appendMemoryUseReporting(items)
+	}
 
 	budget := CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens)
 	assignTokenCounts(input.ModelContext, items)
@@ -869,6 +876,40 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		compiled.Semantic = cloneSemanticRetrievalIdentity(input.WorkerMemory.Semantic)
 	}
 	return compiled, nil
+}
+
+// memoryUseReportingID names the instruction that tells a worker how to
+// report memory use; it is not itself a memory record.
+const memoryUseReportingID = "memory_use_reporting"
+
+// appendMemoryUseReporting adds the reporting instruction when the prompt
+// carries memory records. Every record rendered with a context:<id> marker is
+// one the memory manifest accepts in submit_result.memory_uses, yet those
+// markers look like every other context fragment, and with only the schema
+// field description to go on workers left memory_uses out even when they had
+// followed a record. An empty report stays valid so nothing pushes a worker
+// to claim a record it did not use.
+func appendMemoryUseReporting(items []ContextItem) []ContextItem {
+	hasMemory := false
+	for _, item := range items {
+		if strings.HasPrefix(item.ID, "context:") {
+			hasMemory = true
+			break
+		}
+	}
+	if !hasMemory {
+		return items
+	}
+	content := "## Reporting memory use\n\n" +
+		"Fragments whose hufu-context marker id starts with `context:` are team memory: findings from earlier tasks and knowledge confirmed by earlier runs. " +
+		"In submit_result, add one memory_uses entry for each such record that mattered to this task: `applied` if it changed what you did, " +
+		"`consulted` if you checked it but did not rely on it, `rejected` if you found it wrong or not applicable here. " +
+		"Set context_item_id to the marker id and confidence to a number from 0 to 1. " +
+		"Leave memory_uses empty when none mattered, and never list a record you did not read."
+	return append(items, ContextItem{
+		ID: memoryUseReportingID, Kind: "memory_use_reporting", Content: content, Source: "runtime",
+		Priority: PriorityVerificationCriteria, Required: true, Authority: ContextAuthorityNormative, DedupKey: hashContentKey(content),
+	})
 }
 
 func workerProjectAndDependencyItems(input WorkerContextInput) []ContextItem {
