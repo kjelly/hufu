@@ -37,6 +37,10 @@ hufu team check dev-team
 hufu run --team dev-team -- "review this codebase"
 ```
 
+```sh
+hufu run --profile coding -- "implement the feature"
+```
+
 ### Model selection
 
 ```sh

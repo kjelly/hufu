@@ -35,6 +35,41 @@ func TestHelpAllShowsCanonicalGroupsAndSafetyFlags(t *testing.T) {
 	}
 }
 
+func TestHelpShowsCanonicalRunAndKeepsFullFlagListAvailable(t *testing.T) {
+	helping := func(args ...string) string {
+		t.Helper()
+		root := newRootCommand()
+		var output bytes.Buffer
+		root.SetOut(&output)
+		root.SetErr(&output)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+
+	rootHelp := helping("--help")
+	if !strings.Contains(rootHelp, "hufu run --team <name>") || !strings.Contains(rootHelp, "compatibility syntax") || strings.Contains(rootHelp, "Team selection: --team / --agent-team") {
+		t.Fatalf("root help does not distinguish canonical run from compatibility syntax:\n%s", rootHelp)
+	}
+
+	runHelp := helping("run", "--help")
+	for _, required := range []string{"hufu run --profile coding", "interactive picker", "--no-net", "--force-mcp", "--unattended", "hufu help-flags", "hufu help --all run"} {
+		if !strings.Contains(runHelp, required) {
+			t.Fatalf("run help missing %q:\n%s", required, runHelp)
+		}
+	}
+	if strings.Contains(runHelp, "--verify-timeout") {
+		t.Fatalf("run help was not condensed:\n%s", runHelp)
+	}
+
+	fullHelp := helping("help", "--all", "run")
+	if !strings.Contains(fullHelp, "--verify-timeout") || !strings.Contains(fullHelp, "--profile") {
+		t.Fatalf("full run help unavailable:\n%s", fullHelp)
+	}
+}
+
 func TestTeamListFactoryDoesNotShareFlagValues(t *testing.T) {
 	first := newTeamListCommand()
 	second := newTeamListCommand()

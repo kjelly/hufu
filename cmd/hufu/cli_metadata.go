@@ -32,6 +32,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu team create dev-team --wizard"},
 	{Section: "Quick start", Argv: "hufu team check dev-team"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
+	{Section: "Quick start", Argv: `hufu run --profile coding -- "implement the feature"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team --profile coding-balanced -- "implement feature X"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
@@ -81,6 +82,10 @@ func configureCommandDiscovery(root *cobra.Command) {
 			_ = renderCompactRootHelp(command.OutOrStdout())
 			return
 		}
+		if command.Name() == "run" && !showAll {
+			_ = renderCompactRunHelp(command.OutOrStdout())
+			return
+		}
 		defaultHelp(command, args)
 	})
 	if help, _, err := root.Find([]string{"help"}); err == nil && help != root && help.Flags().Lookup("all") == nil {
@@ -89,7 +94,7 @@ func configureCommandDiscovery(root *cobra.Command) {
 }
 
 func renderCompactRootHelp(writer io.Writer) error {
-	if _, err := fmt.Fprint(writer, "hufu discovers and runs agent teams that collaborate on tasks.\nTeam selection: --team / --agent-team\n\n"); err != nil {
+	if _, err := fmt.Fprint(writer, "hufu discovers and runs agent teams that collaborate on tasks.\n\nRun a task: hufu run --team <name> -- \"<task>\"\n            hufu run --profile <name> -- \"<task>\"\n\nThe root hufu [prompt] command and --agent-team spelling are compatibility syntax.\n\n"); err != nil {
 		return err
 	}
 	for _, group := range commandGroups {
@@ -101,5 +106,47 @@ func renderCompactRootHelp(writer io.Writer) error {
 		}
 	}
 	_, err := fmt.Fprint(writer, "\nAdvanced tools: audit / decision / improve / eval / debug / terminal / migrate\nAll commands: hufu help --all\nExamples: hufu examples\nFlag groups: hufu help-flags <group>\n")
+	return err
+}
+
+func renderCompactRunHelp(writer io.Writer) error {
+	_, err := fmt.Fprint(writer, `Run a task with one agent team.
+
+Usage:
+  hufu run [flags] -- "<task>"
+
+Examples:
+  hufu run --team dev-team -- "review this codebase"
+  hufu run --profile coding -- "implement the feature"
+
+Team selection:
+  --team <name>       Select a team explicitly (recommended for scripts).
+  --profile <name>    Apply a named profile from hufu.yaml; it may select the team.
+  --default           Use the built-in team.
+  --auto-team         Ask the model to choose a discovered team.
+  --agent-team <name> Compatibility spelling for --team.
+  With a TTY, omitting a team can open an interactive picker. Scripts should
+  pass --team or a profile that names the team.
+
+Common run options:
+  -m, --model         Override the worker model.
+  --worker-model      Override one worker as agent=target.
+  -w, --workspace     Use an exact team workspace.
+  --plan              Require plan-first execution.
+  --dry-run           Preview without executing agents.
+  -q, --quiet         Suppress status output.
+  --output            Set final output to text or json.
+
+Safety and automation:
+  --no-net            Block network access for agent subprocesses.
+  --force-mcp         Require MCP servers for execution.
+  --rbash             Use restricted bash for the bash tool.
+  --unattended        Run without human interaction.
+  --max-duration      Limit total wall-clock seconds.
+  --max-total-tokens  Limit cumulative LLM tokens.
+
+More options: hufu help-flags <core|execution|output|safety|display|advanced>
+All run flags: hufu help --all run
+`)
 	return err
 }
