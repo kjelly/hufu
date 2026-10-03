@@ -511,7 +511,7 @@ func pickChatTeam(pr *readline.PromptReader) (string, *team.TeamRegistry, error)
 	if pr != nil {
 		chosen, err = askUserForTeam(teams, pr)
 	} else {
-		chosen = askUserForTeamFallback(teams)
+		chosen, err = askUserForTeamWithPromptUI(teams)
 	}
 	if err != nil {
 		return "", nil, err
