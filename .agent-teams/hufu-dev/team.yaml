@@ -36,6 +36,15 @@ spec:
       - integration-engineer
       - implementation-engineer
       - verifier
+    # Workers see only the task the maintainer writes. A one-line goal once
+    # dropped the user's explicit requirements and gave the implementation no
+    # verify check, so its tasks must carry constraints and verify, and the
+    # implementer and verifier also see the original request to check against.
+    require-task-contract:
+      - implementation-engineer
+    share-request-with:
+      - implementation-engineer
+      - verifier
   acceptance:
     mode: blocking
     require-no-unresolved-tasks: true

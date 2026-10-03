@@ -39,7 +39,14 @@
       ],
       "ForbidContextFiles": false,
       "TaskGoalInvariants": null,
-      "CapabilityRouting": null
+      "CapabilityRouting": null,
+      "RequireTaskContract": [
+        "implementation-engineer"
+      ],
+      "ShareRequestWith": [
+        "implementation-engineer",
+        "verifier"
+      ]
     }
   },
   "agents": [

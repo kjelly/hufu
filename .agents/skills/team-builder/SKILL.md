@@ -229,6 +229,10 @@ delegation:
   bind-task-goal-contracts: true
   no-redispatch-after-success: [preparer, auditor, executor, verifier]
   forbid-context-files: true
+  # Reject an executor task without constraints or verify, and show the
+  # executor and verifier the original request to check their task against.
+  require-task-contract: [executor]
+  share-request-with: [executor, verifier]
 
 # policies/capabilities stay at the top level (not wrapped by advanced:).
 policies:
@@ -840,6 +844,7 @@ config from step 4 rather than hand-authoring the whole team.
 | `tool-sequence` names a tool the worker does not have | Align the worker tool grant with the full sequence before dispatch; do not expect the model to work around it |
 | Workflow phase is only described in coordinator prose | Declare `workflow`, `policies`, capabilities, and task phase/action contracts in `team.yaml` |
 | Same worker is redispatched after a successful irreversible step | Use `no-redispatch-after-success` and a downstream verifier or consumer task |
+| Coordinator hands the implementer a one-line goal and the user's requirements are lost | List the implementer in `delegation.require-task-contract`, and list it and the verifier in `delegation.share-request-with` |
 | Retry replays an external change | Classify `side_effect`, select `recovery: reconcile`/`manual`, and supply a read-only `reconcile-tool` |
 | Producer passes a filesystem path as proof | Use declared artifact/typed result handoff; do not treat Todo IDs, checkpoints, or arbitrary paths as artifact references |
 | Unattended team waits for input or retries forever | Set `unattended`, explicit tool allowlists, budgets, no-progress/retry limits, acceptance, and a reviewed rollback policy |

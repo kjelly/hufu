@@ -59,6 +59,9 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 	// Goal invariants, capability routing, and the redispatch locks govern
 	// model workers; a catalog task's identity comes from the catalog.
 	ordinary := withoutCatalogTasks(tasks)
+	if err := c.validateRequiredTaskContracts(ordinary); err != nil {
+		return err
+	}
 	if err := c.validateTaskGoalInvariants(ordinary); err != nil {
 		return err
 	}
@@ -549,4 +552,43 @@ func formatTaskAgents(tasks []TaskDef) string {
 
 func formatAgentNames(names []string) string {
 	return "[" + strings.Join(names, ", ") + "]"
+}
+
+// validateRequiredTaskContracts rejects a dispatch that gives a worker listed
+// in delegation.require-task-contract a task without constraints or a verify
+// check. The worker sees only what the coordinator writes, so the rejection
+// names what is missing and asks for the user's requirements to be restated.
+func (c *Coordinator) validateRequiredTaskContracts(tasks []TaskDef) error {
+	required := c.session.Config.Delegation.RequireTaskContract
+	if len(required) == 0 {
+		return nil
+	}
+	listed := make(map[string]bool, len(required))
+	for _, name := range required {
+		listed[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	var incomplete []string
+	for _, task := range tasks {
+		if task.Action != nil || !listed[strings.ToLower(strings.TrimSpace(task.Agent))] {
+			continue
+		}
+		var missing []string
+		if strings.TrimSpace(task.Constraints) == "" {
+			missing = append(missing, "constraints")
+		}
+		if strings.TrimSpace(task.Verify) == "" && task.VerifySpec == nil {
+			missing = append(missing, "verify")
+		}
+		if len(missing) > 0 {
+			incomplete = append(incomplete, fmt.Sprintf("%s (missing %s)", task.Agent, strings.Join(missing, " and ")))
+		}
+	}
+	if len(incomplete) == 0 {
+		return nil
+	}
+	return c.rejectDelegationPolicy(fmt.Sprintf(
+		"tasks for %s need a full contract, because the worker sees only the task you write: %s. "+
+			"Put the user's explicit requirements, non-goals, and invariants for this task in constraints, "+
+			"set verify to an objective check that fails if the work is wrong, and dispatch again",
+		formatAgentNames(required), strings.Join(incomplete, "; ")))
 }

@@ -254,6 +254,8 @@ type rawDelegationPolicy struct {
 	ForbidContextFiles       bool                          `yaml:"forbid-context-files"`
 	TaskGoalInvariants       []agent.TaskGoalInvariant     `yaml:"task-goal-invariants"`
 	CapabilityRouting        []agent.CapabilityRoutingRule `yaml:"capability-routing"`
+	RequireTaskContract      []string                      `yaml:"require-task-contract"`
+	ShareRequestWith         []string                      `yaml:"share-request-with"`
 }
 
 type rawReliabilityConfig struct {
@@ -1170,6 +1172,12 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	}
 	if len(yc.Delegation.CapabilityRouting) > 0 {
 		cfg.Delegation.CapabilityRouting = yc.Delegation.CapabilityRouting
+	}
+	if len(yc.Delegation.RequireTaskContract) > 0 {
+		cfg.Delegation.RequireTaskContract = yc.Delegation.RequireTaskContract
+	}
+	if len(yc.Delegation.ShareRequestWith) > 0 {
+		cfg.Delegation.ShareRequestWith = yc.Delegation.ShareRequestWith
 	}
 	if len(yc.Preflight) > 0 {
 		cfg.Preflight = yc.Preflight

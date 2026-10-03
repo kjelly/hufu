@@ -52,6 +52,16 @@ func TestValidateTeamPolicyContractsFindsStructuralConflicts(t *testing.T) {
 			code: FindingDelegationWorkerRole,
 		},
 		{
+			name: "unknown worker requires a task contract",
+			edit: func(s *TeamSession) { s.Config.Delegation.RequireTaskContract = []string{"missing"} },
+			code: FindingDelegationWorkerUnknown,
+		},
+		{
+			name: "request shared with the coordinator",
+			edit: func(s *TeamSession) { s.Config.Delegation.ShareRequestWith = []string{"coordinator"} },
+			code: FindingDelegationWorkerRole,
+		},
+		{
 			name: "initial worker excluded",
 			edit: func(s *TeamSession) {
 				s.Config.Delegation.AllowedWorkers = []string{"worker"}

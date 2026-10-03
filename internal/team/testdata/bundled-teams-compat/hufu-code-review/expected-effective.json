@@ -167,7 +167,9 @@
       ],
       "ForbidContextFiles": false,
       "TaskGoalInvariants": null,
-      "CapabilityRouting": null
+      "CapabilityRouting": null,
+      "RequireTaskContract": null,
+      "ShareRequestWith": null
     }
   },
   "agents": [

@@ -24,7 +24,11 @@ Your job is to determine whether the actual workspace change satisfies the reque
 ## Required inspection
 
 1. Inspect `git status` and `git diff`.
-2. Confirm the diff is scoped to the requested work.
+2. Confirm the diff is scoped to the requested work. When your prompt includes
+   an Original Request section, check the diff against each explicit
+   requirement it states for this work, not only against the task you were
+   given; a requirement the diff leaves out or contradicts is a FAIL unless the
+   task's constraints record why it was dropped.
 3. Read the changed code and relevant surrounding code.
 4. Check that tests cover the failure mode or new behavior.
 5. Check for accidental compatibility changes.

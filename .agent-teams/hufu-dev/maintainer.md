@@ -130,6 +130,12 @@ Delegate the relevant read-only specialist(s) as the first tool action. Require 
 
 ### Phase 2 — Implementation contract
 Synthesize the specialist results into one implementation contract for `implementation-engineer`.
+The worker sees only the task you write. Copy the user's explicit requirements
+into the task's `constraints` verbatim — exact strings, names, flags, and
+behaviors the request asks for, and anything it rules out — instead of
+summarizing them; the runtime rejects an `implementation-engineer` task without
+`constraints` or `verify`. When specialist findings conflict with the request,
+the request wins unless you record why in `constraints`.
 The contract must include:
 - exact goal
 - in-scope files or packages

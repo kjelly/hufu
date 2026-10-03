@@ -734,6 +734,15 @@ type DelegationPolicy struct {
 	// declared capability before a TODO is created. Rules are selected by exact
 	// task contract ID and can only narrow the already-authorized workers.
 	CapabilityRouting []CapabilityRoutingRule
+	// RequireTaskContract lists workers whose delegated tasks must carry
+	// constraints and an objective verify check. A worker sees only the task
+	// the coordinator writes, so a one-line goal drops the user's explicit
+	// requirements, and a task without verify earns no verified outcome.
+	RequireTaskContract []string
+	// ShareRequestWith lists workers that also receive the run's original
+	// request as reference context, so they can check the task they were given
+	// against what was actually asked.
+	ShareRequestWith []string
 }
 
 // CapabilityRoutingRule is one maintainer-authored routing requirement.

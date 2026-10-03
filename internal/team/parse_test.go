@@ -49,6 +49,8 @@ delegation:
   bind-task-goal-contracts: true
   no-redispatch-after-success: [reader, probe]
   forbid-context-files: true
+  require-task-contract: [probe]
+  share-request-with: [probe, reader]
 `
 	if err := os.WriteFile(filepath.Join(tmpDir, "team.yaml"), []byte(yamlContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -77,6 +79,12 @@ delegation:
 	}
 	if want := []string{"reader", "probe"}; !reflect.DeepEqual(cfg.Delegation.NoRedispatchAfterSuccess, want) {
 		t.Fatalf("NoRedispatchAfterSuccess = %v, want %v", cfg.Delegation.NoRedispatchAfterSuccess, want)
+	}
+	if want := []string{"probe"}; !reflect.DeepEqual(cfg.Delegation.RequireTaskContract, want) {
+		t.Fatalf("RequireTaskContract = %v, want %v", cfg.Delegation.RequireTaskContract, want)
+	}
+	if want := []string{"probe", "reader"}; !reflect.DeepEqual(cfg.Delegation.ShareRequestWith, want) {
+		t.Fatalf("ShareRequestWith = %v, want %v", cfg.Delegation.ShareRequestWith, want)
 	}
 	if !cfg.Delegation.ForbidContextFiles {
 		t.Fatal("ForbidContextFiles = false, want true")

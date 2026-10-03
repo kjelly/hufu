@@ -110,9 +110,12 @@ type CoordinatorContextInput struct {
 }
 
 type WorkerContextInput struct {
-	Request              ContextRequest
-	Goal                 string
-	Constraints          string
+	Request     ContextRequest
+	Goal        string
+	Constraints string
+	// OriginalRequest is the run's request, shared as reference context with
+	// workers the team lists in delegation.share-request-with.
+	OriginalRequest      string
 	ApprovedPlan         string
 	AgentInstructions    string
 	FailureContext       string
@@ -824,6 +827,9 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 	}
 	if strings.TrimSpace(constraints) != "" {
 		items = append(items, ContextItem{ID: "task_constraints", Kind: "constraints", Content: "## Constraints\n\n" + constraints, Priority: PriorityHardConstraints, Required: true, DedupKey: hashContentKey(constraints), Authority: ContextAuthorityNormative, ConflictKey: "task_constraints"})
+	}
+	if request := strings.TrimSpace(input.OriginalRequest); request != "" {
+		items = append(items, originalRequestContextItem(request))
 	}
 	if strings.TrimSpace(input.ApprovedPlan) != "" {
 		items = append(items, ContextItem{ID: "approved_plan", Kind: "approved_plan", Content: "## Approved Plan\n\n" + input.ApprovedPlan, Priority: PriorityApprovedPlan, Required: true, DedupKey: hashContentKey(input.ApprovedPlan), Authority: ContextAuthorityNormative, ConflictKey: "approved_plan"})

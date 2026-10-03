@@ -455,6 +455,14 @@ func validateDelegationReferences(session *TeamSession) []ContractFinding {
 		field := fmt.Sprintf("delegation.no-redispatch-after-success[%d]", index)
 		findings = append(findings, validateWorkerReference(session, field, name)...)
 	}
+	for index, name := range policy.RequireTaskContract {
+		field := fmt.Sprintf("delegation.require-task-contract[%d]", index)
+		findings = append(findings, validateWorkerReference(session, field, name)...)
+	}
+	for index, name := range policy.ShareRequestWith {
+		field := fmt.Sprintf("delegation.share-request-with[%d]", index)
+		findings = append(findings, validateWorkerReference(session, field, name)...)
+	}
 	return findings
 }
 

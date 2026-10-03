@@ -111,7 +111,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 }
 
 func resumeInstruction(session *team.SessionData) string {
-	const base = "Resume the existing session from its durable checkpoint."
+	base := team.ResumeInstruction
 	if session == nil {
 		return base
 	}
