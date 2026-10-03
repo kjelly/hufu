@@ -59,7 +59,7 @@ func resolveLastNByCommitType(ctx context.Context, repo, head, since string, cou
 	}
 	args := []string{"log", "--first-parent", "--format=%H%x00%s"}
 	if since != "" {
-		args = append(args, "--since="+since)
+		args = append(args, "--since="+sinceArgForDate(since))
 	}
 	args = append(args, end)
 	logText, err := git(ctx, repo, args...)

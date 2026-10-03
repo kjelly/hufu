@@ -1476,7 +1476,7 @@ func resolveLastNRange(ctx context.Context, repo, head, since string, maxCommits
 	// range to include side-branch commits that were not selected.
 	args := []string{"rev-list", "--first-parent", "--reverse"}
 	if since != "" {
-		args = append(args, "--since="+since)
+		args = append(args, "--since="+sinceArgForDate(since))
 	}
 	args = append(args, end)
 	commitsText, err := git(ctx, repo, args...)
@@ -1523,7 +1523,7 @@ func resolveSinceRange(ctx context.Context, repo string, scope resolverScope) (r
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("resolve review head %q: %w", scope.Head, err)
 	}
-	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+scope.Since, head)
+	commitsText, err := git(ctx, repo, "rev-list", "--first-parent", "--reverse", "--since="+sinceArgForDate(scope.Since), head)
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("list commits since %q: %w", scope.Since, err)
 	}
@@ -3382,4 +3382,21 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// sinceArgForDate returns the git --since argument derived from a scope since
+// value. When the input parses as a YYYY-MM-DD date, the lower bound is
+// widened to local-midnight so commits earlier in the same day are still
+// selected (a bare date is otherwise interpreted as "today at HH:MM:SS of the
+// current wall clock" and silently excludes them). Other forms — relative
+// expressions like "2.days.ago" or full timestamps with offsets — are
+// returned unchanged so git interprets them under its own semantics.
+func sinceArgForDate(value string) string {
+	if value == "" {
+		return value
+	}
+	if _, err := time.Parse(time.DateOnly, value); err != nil {
+		return value
+	}
+	return value + " 00:00:00"
 }

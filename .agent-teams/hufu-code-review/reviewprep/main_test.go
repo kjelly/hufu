@@ -267,7 +267,7 @@ func TestPrepareSupportsTypedReviewScopeVariants(t *testing.T) {
 	}{
 		{name: "last_n", scope: resolverScope{Kind: "last_n", Count: 3, History: "first_parent", Head: "HEAD"}, wantCount: 3},
 		{name: "revision_range", scope: resolverScope{Kind: "revision_range", History: "first_parent", Base: "HEAD~2", Head: "HEAD"}, wantCount: 2},
-		{name: "since", scope: resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: "2025-01-04"}, wantCount: 1},
+		{name: "since", scope: resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: "2025-01-04"}, wantCount: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1714,5 +1714,110 @@ func TestSnapshotGoBuildIgnoresEnclosingVCSDirectory(t *testing.T) {
 	build.Env = sanitizedGoTestEnvironment()
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build under an enclosing .git: %v\n%s", err, output)
+	}
+}
+
+// TestResolveSinceRangeSelectsCommitEarlierInTheSameDay pins the regression
+// for the date-boundary bug where a date-only --since=<YYYY-MM-DD> was passed
+// to git, which appends the current time and excludes every commit from the
+// same calendar day. The fix widens a date-only lower bound to local midnight
+// so commits dated at 00:00:01 on the requested day are still selected.
+func TestResolveSinceRangeSelectsCommitEarlierInTheSameDay(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	const sameDay = "2025-01-15"
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "--initial-branch=main")
+	writeFile(t, filepath.Join(repo, "marker.txt"), "boundary\n")
+	// Pin the commit date just past local midnight so the regression
+	// (current-time-appended lower bound) excludes it under any host clock.
+	commit(t, repo, "boundary commit", sameDay+"T00:00:01Z")
+	head, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head = strings.TrimSpace(head)
+
+	scope := resolverScope{Kind: "since", History: "first_parent", Head: "HEAD", Since: sameDay}
+	resolution, err := resolveSinceRange(t.Context(), repo, scope)
+	if err != nil {
+		t.Fatalf("resolveSinceRange: %v", err)
+	}
+	if resolution.Range.CommitCount != 1 {
+		t.Fatalf("resolveSinceRange since=%q selected %d commits, want 1 (head=%s)", sameDay, resolution.Range.CommitCount, head)
+	}
+	if resolution.Range.End != head {
+		t.Fatalf("resolveSinceRange end = %q, want %q", resolution.Range.End, head)
+	}
+	if resolution.Range.Since != sameDay {
+		t.Fatalf("resolveSinceRange emitted Since = %q, want %q (original input preserved)", resolution.Range.Since, sameDay)
+	}
+}
+
+// TestResolveLastNByCommitTypeSelectsCommitEarlierInTheSameDay pins the same
+// regression along the last_n + since path: a date-only since was widened by
+// git to "today at current time" and the same-day commit disappeared.
+func TestResolveLastNByCommitTypeSelectsCommitEarlierInTheSameDay(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	const sameDay = "2025-02-20"
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "--initial-branch=main")
+	writeFile(t, filepath.Join(repo, "marker.txt"), "boundary\n")
+	commit(t, repo, "feat: boundary feature", sameDay+"T00:00:01Z")
+
+	resolution, err := resolveLastNByCommitType(t.Context(), repo, "HEAD", sameDay, 5, "feat")
+	if err != nil {
+		t.Fatalf("resolveLastNByCommitType: %v", err)
+	}
+	if resolution.AvailableCommitCount != 1 || resolution.Range.CommitCount != 1 {
+		t.Fatalf("resolveLastNByCommitType since=%q selected Available=%d Selected=%d, want both 1", sameDay, resolution.AvailableCommitCount, resolution.Range.CommitCount)
+	}
+}
+
+// TestResolveLastNRangeSelectsCommitEarlierInTheSameDay pins the same
+// regression along the last_n path: a date-only since combined with last_n
+// lost same-day commits.
+func TestResolveLastNRangeSelectsCommitEarlierInTheSameDay(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	const sameDay = "2025-03-10"
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "--initial-branch=main")
+	writeFile(t, filepath.Join(repo, "marker.txt"), "boundary\n")
+	commit(t, repo, "boundary commit", sameDay+"T00:00:01Z")
+
+	resolution, err := resolveLastNRange(t.Context(), repo, "HEAD", sameDay, 5)
+	if err != nil {
+		t.Fatalf("resolveLastNRange: %v", err)
+	}
+	if resolution.Range.CommitCount != 1 {
+		t.Fatalf("resolveLastNRange since=%q selected %d commits, want 1", sameDay, resolution.Range.CommitCount)
+	}
+	if resolution.Range.Since != sameDay {
+		t.Fatalf("resolveLastNRange emitted Since = %q, want %q (input preserved)", resolution.Range.Since, sameDay)
+	}
+}
+
+// TestSinceArgForDateWidenDateOnlyBoundary documents the helper contract: a
+// YYYY-MM-DD string is widened so git interprets the lower bound at local
+// midnight, while every other form (relative expressions, full timestamps,
+// empty string) is forwarded unchanged.
+func TestSinceArgForDateWidenDateOnlyBoundary(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty preserved", in: "", want: ""},
+		{name: "date-only widened to local midnight", in: "2025-04-01", want: "2025-04-01 00:00:00"},
+		{name: "relative expression preserved", in: "2.days.ago", want: "2.days.ago"},
+		{name: "full timestamp preserved", in: "2025-04-01T00:00:00Z", want: "2025-04-01T00:00:00Z"},
+		{name: "date-time without zone preserved", in: "2025-04-01 00:00:00", want: "2025-04-01 00:00:00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sinceArgForDate(tc.in); got != tc.want {
+				t.Fatalf("sinceArgForDate(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
