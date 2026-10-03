@@ -202,8 +202,8 @@ transcript sealing 的整條 integration path。這個 fallback 可保留作相�
 
 ### Hufu runtime
 
-- [coordinator_tool_teaminfo.go](/home/ubuntu/nfs/github/agent-team-cli/internal/team/coordinator_tool_teaminfo.go)：`team_info(task_result)` 的 in-memory completed-result fallback。
-- [coordinator_tool_teaminfo_test.go](/home/ubuntu/nfs/github/agent-team-cli/internal/team/coordinator_tool_teaminfo_test.go)：task-file publication race regression test（檔案原本在 dirty worktree 中為未追蹤狀態，未移除其他既有內容）。
+- [coordinator_tool_teaminfo.go](../../internal/team/coordinator_tool_teaminfo.go)：`team_info(task_result)` 的 in-memory completed-result fallback。
+- [coordinator_tool_teaminfo_test.go](../../internal/team/coordinator_tool_teaminfo_test.go)：task-file publication race regression test（檔案原本在 dirty worktree 中為未追蹤狀態，未移除其他既有內容）。
 
 所有 Hufu source 修正都保持 provider/integration independent，沒有寫死 Pilot API 或 Pilot binary 行為。
 
