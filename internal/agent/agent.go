@@ -1040,9 +1040,7 @@ func newOpenAICompatProvider(baseURL, apiKey, name string, client *http.Client) 
 	if apiKey != "" {
 		providerOptions = append(providerOptions, openaicompat.WithAPIKey(apiKey))
 	}
-	if client != nil {
-		providerOptions = append(providerOptions, openaicompat.WithHTTPClient(client))
-	}
+	providerOptions = append(providerOptions, openaicompat.WithHTTPClient(withToolCallIndexes(client)))
 	return openaicompat.New(providerOptions...)
 }
 
