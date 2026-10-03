@@ -425,6 +425,7 @@ func TestLoadTeamByName_ManagedDryRunDoesNotCreateState(t *testing.T) {
 }
 
 func TestLoadDefaultTeamManagedDryRunDoesNotRequirePersistedProjectID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 
@@ -436,7 +437,10 @@ func TestLoadDefaultTeamManagedDryRunDoesNotRequirePersistedProjectID(t *testing
 	stateRoot := filepath.Join(root, "state")
 	t.Setenv("HUFU_STATE_HOME", stateRoot)
 	t.Chdir(project)
-	opts = runOptions{dryRun: true, canonicalRun: true, modelOverride: "ollama/fixture-model"}
+	opts = runOptions{
+		dryRun: true, canonicalRun: true,
+		modelOverride: "ollama/fixture-model", coordinatorModelOverride: "ollama/fixture-model",
+	}
 
 	tc, err := loadDefaultTeam(t.Context(), "", "", nil, nil, nil, false, false)
 	if err != nil {
