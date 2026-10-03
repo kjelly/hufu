@@ -1,5 +1,11 @@
 # End-to-end performance gate
 
+> Status: active
+> Authority: reference
+> Verified-Commit: b624d274570b14d2baa4d557a8b86a669cb96228
+> Supersedes: —
+> Superseded-By: —
+
 Use `hufu eval performance-gate` to compare repeated Hufu invocations with a
 single-agent baseline while keeping correctness as a blocking condition:
 
