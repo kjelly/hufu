@@ -103,6 +103,57 @@ func TestProjectTaskUsesAttemptAnchoredTargetsAndBothTranscriptRefs(t *testing.T
 	}
 }
 
+// TestReceiptExecutionTargetPrefersTheAttemptsOwnTarget pins B3: an anchor
+// event's execution_target is the Todo's primary target, so a fallback
+// attempt must be shown with the target its receipt recorded.
+func TestReceiptExecutionTargetPrefersTheAttemptsOwnTarget(t *testing.T) {
+	primary := execution.ExecutionTarget{Backend: "ollama", Model: "primary"}
+	anchorWith := func(target execution.ExecutionTarget) *IndexedEvent {
+		return &IndexedEvent{Event: team.RunEvent{Payload: jsonBytes(t, map[string]any{"execution_target": target})}}
+	}
+	cases := []struct {
+		name    string
+		anchor  *IndexedEvent
+		receipt team.ExecutionReceipt
+		want    string
+	}{
+		{name: "fallback attempt shows its own target", anchor: anchorWith(primary), receipt: team.ExecutionReceipt{Backend: "ollama", ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "fallback"}}, want: "ollama/fallback"},
+		{name: "receipt without a target uses the anchor", anchor: anchorWith(primary), receipt: team.ExecutionReceipt{Backend: "ollama"}, want: "ollama/primary"},
+		{name: "incomplete receipt target uses the anchor", anchor: anchorWith(primary), receipt: team.ExecutionReceipt{Backend: "ollama", ExecutionTarget: execution.ExecutionTarget{Backend: "ollama"}}, want: "ollama/primary"},
+		{name: "neither falls back to the backend name", receipt: team.ExecutionReceipt{Backend: "codex"}, want: execution.CanonicalTargetBackendName("codex")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := receiptExecutionTarget(tc.anchor, tc.receipt); got != tc.want {
+				t.Fatalf("receiptExecutionTarget() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestInspectShowsFallbackAttemptTarget checks both callers: the inspect task
+// attempt list and the trace show a fallback attempt under the target it ran
+// on, although its anchor event carries the Todo's primary target.
+func TestInspectShowsFallbackAttemptTarget(t *testing.T) {
+	exitCode := 0
+	primary := execution.ExecutionTarget{Backend: "ollama", Model: "primary"}
+	receipt := team.ExecutionReceipt{
+		RunID: "run-1", TaskID: "task-1", Attempt: 1, Backend: "ollama", ModelExecutionID: "execution-fallback",
+		ProducerID: "worker", ExitCode: &exitCode, ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "fallback"},
+	}
+	item := &team.TodoItem{ID: "task-1", ExecutionTarget: primary, ExecutionReceipts: []team.ExecutionReceipt{receipt}}
+	events := []IndexedEvent{{Ordinal: 1, Event: team.RunEvent{ID: "event-1", TaskID: item.ID, Payload: jsonBytes(t, map[string]any{
+		"execution_target": primary, "execution_receipts": []team.ExecutionReceipt{receipt},
+	})}}}
+	query := InspectQuery{RunID: "run-1", TaskID: item.ID}
+	if data := projectTaskWithEvents(item, query, events); len(data.Attempts) != 1 || data.Attempts[0].ExecutionTarget != "ollama/fallback" {
+		t.Fatalf("inspect task attempts = %#v, want the fallback target", data.Attempts)
+	}
+	if trace := receiptTraceCandidates(events, item, query); len(trace) != 1 || trace[0].entry.Ref.ExecutionTarget != "ollama/fallback" {
+		t.Fatalf("trace attempts = %#v, want the fallback target", trace)
+	}
+}
+
 func TestProjectTaskIncludesReadOnlyKnowledgeCoverage(t *testing.T) {
 	item := &team.TodoItem{
 		ID: "task-1",

@@ -211,7 +211,15 @@ func receiptTraceCandidates(events []IndexedEvent, item *team.TodoItem, query In
 	return out
 }
 
+// receiptExecutionTarget names the target an attempt actually ran on. The
+// receipt records it, so a fallback or other admitted candidate shows as
+// itself. An anchor event's execution_target is the Todo's primary target, so
+// it serves only receipts written before attempts recorded their own target,
+// and the receipt's backend name is the last resort.
 func receiptExecutionTarget(anchor *IndexedEvent, receipt team.ExecutionReceipt) string {
+	if receipt.ExecutionTarget.Validate() == nil {
+		return receipt.ExecutionTarget.String()
+	}
 	if anchor != nil {
 		var payload struct {
 			ExecutionTarget execution.ExecutionTarget `json:"execution_target"`
