@@ -303,6 +303,8 @@ memory-learning:
 
 fresh session（`fresh-session`／`fresh-verification` profile 或 `--new`）一律不讀前一個 session 的 archive：conversation history、session context summary、fresh start 寫進新 session scope 的前一個 session 摘要（source type `session_archive`）、legacy `stm.md`／`ltm-<team>.md` 與 vector memory store。其餘 canonical context 不在此列，因為 fresh start 建立新的 session scope，shared session 其餘項目都屬於本次 session，shared persistent 只含 confirmed 的跨 session 知識。mode 為 `off` 時 fresh session 也不讀 canonical context；mode 不是 `off` 時會讀，否則學習無從開始。同樣地，mode 不是 `off` 時，fresh session 會把本次 run 的 typed findings、decisions 與 verification failure 寫入本次 session；run 被 accept 後，既有的 AutoExtractLTM 與確認流程才把它們變成 persistent 知識，下一個 fresh session 才讀得到。因此對 fresh session 的 team 而言，從 `off` 改成 `observe` 會開始累積並注入 persistent 知識；`observe` 與 `shadow` 之間仍不改變選擇。
 
+verify phase 的 task 只會收到明確以 `activation.phases` 啟用 verify 的記憶（`EvaluateContextEligibility`），一般歷史記憶一律不進入，讓驗證不受過去結論影響。自動抽取的 persistent 知識沒有 activation，所以 LLM worker 全部在 verify phase 的 team（例如 hufu-code-review）開啟 learning 只會累積沒有人讀的知識；learning 應開在有 execute phase worker 的 team（例如 hufu-dev）。不要為了讓這類 team 學習而替抽取的知識自動加上 verify activation，那會拆掉驗證獨立性。
+
 ## 7. 工作包與 PR 拆分
 
 ### HF-MEM4-000 — Baseline、durability 與契約測試
