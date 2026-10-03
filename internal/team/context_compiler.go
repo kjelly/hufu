@@ -895,8 +895,17 @@ func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput
 	if verifyOnly || input.WorkerMemory == nil {
 		return items
 	}
+	// Worker memory retrieval also returns shared records, which the canonical
+	// session and persistent lists above may already carry under the same
+	// context:<id>. Keep the canonical copy: it is the one memory attribution
+	// tracks, and a second rendering of one ID fails context validation.
+	present := make(map[string]bool, len(items))
+	for _, item := range items {
+		present[item.ID] = true
+	}
 	for _, memoryItem := range input.WorkerMemory.Items {
-		if item, ok := workerMemoryCompilerItem(memoryItem); ok {
+		if item, ok := workerMemoryCompilerItem(memoryItem); ok && !present[item.ID] {
+			present[item.ID] = true
 			items = append(items, item)
 		}
 	}

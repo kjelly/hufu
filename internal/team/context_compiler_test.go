@@ -908,6 +908,43 @@ func TestCompileWorkerContextUsesCanonicalBundleInsteadOfMarkdown(t *testing.T) 
 	}
 }
 
+// TestCompileWorkerContextKeepsOneCopyOfSharedMemory pins the worker prompt
+// when worker memory retrieval returns a shared record that the canonical
+// bundle already carries. Both render as context:<id> with different text, so
+// keeping both failed validation and every worker task with such a record.
+func TestCompileWorkerContextKeepsOneCopyOfSharedMemory(t *testing.T) {
+	shared := contextstore.ContextItem{ID: "ctx-shared", Kind: contextstore.ContextPattern, Content: "shared redaction finding", ContentHash: "shared-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: .9}
+	private := contextstore.ContextItem{ID: "ctx-private", Kind: contextstore.ContextObservation, Content: "private worker note", ContentHash: "private-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: .9}
+	for _, tc := range []struct {
+		name      string
+		canonical *CanonicalContextBundle
+	}{
+		{name: "shared session", canonical: &CanonicalContextBundle{SharedSession: []contextstore.ContextItem{shared}}},
+		{name: "shared persistent", canonical: &CanonicalContextBundle{SharedPersistent: []contextstore.ContextItem{shared}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
+				Goal: "redact tokens", CanonicalMemory: tc.canonical,
+				WorkerMemory: &WorkerMemoryBundle{Items: []WorkerMemoryItem{{ContextItem: shared, Tier: "shared"}, {ContextItem: private, Tier: "session"}}},
+				ModelContext: ModelContextSpec{ModelID: "test", ContextWindow: 8192, MaxOutputTokens: 512},
+			})
+			if err != nil {
+				t.Fatalf("CompileWorkerContext: %v", err)
+			}
+			counts := map[string]int{}
+			for _, item := range compiled.IncludedItems {
+				counts[item.ID]++
+				if item.ID == "context:ctx-shared" && item.Kind == "worker_memory" {
+					t.Fatalf("shared record kept its worker-memory copy: %#v", item)
+				}
+			}
+			if counts["context:ctx-shared"] != 1 || counts["context:ctx-private"] != 1 {
+				t.Fatalf("included item counts = %v, want one shared and one private copy", counts)
+			}
+		})
+	}
+}
+
 func TestCompileWorkerContextVerifyOmitsRawAndGenericHistory(t *testing.T) {
 	request := validTestContextRequest()
 	request.Phase = PhaseVerify
