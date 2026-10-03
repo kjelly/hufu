@@ -181,3 +181,28 @@ func memoryPolicyAdopted(ctx context.Context, repo contextstore.Repository) (boo
 	}
 	return true, nil
 }
+
+// EffectiveMemoryLearningModeForSession resolves the runtime-effective
+// memory-learning mode a session would use, mirroring the precedence applied
+// by Coordinator.loadAdoptedMemoryPolicy without mutating the session. An
+// adopted snapshot in repo wins; otherwise the team's configured value runs
+// through agent.UnadoptedMemoryLearningPolicy. Any lookup error is treated
+// as "no adopted snapshot" so the helper is safe to call before the
+// coordinator exists. session and repo may both be nil.
+func EffectiveMemoryLearningModeForSession(ctx context.Context, session *TeamSession, repo contextstore.Repository) agent.MemoryLearningMode {
+	if session == nil {
+		return ""
+	}
+	if repo != nil {
+		if adopted, err := memoryPolicyAdopted(ctx, repo); err == nil && adopted {
+			if learning, _, loadErr := LoadAdoptedMemoryPolicy(ctx, repo); loadErr == nil {
+				switch learning.Mode {
+				case agent.MemoryLearningOff, agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive:
+					return learning.Mode
+				}
+			}
+		}
+	}
+	learning, _ := agent.UnadoptedMemoryLearningPolicy(session.Config.MemoryLearning)
+	return learning.Mode
+}

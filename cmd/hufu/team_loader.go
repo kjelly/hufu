@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
@@ -283,16 +285,50 @@ func buildMCPManager(ctx context.Context, session *team.TeamSession, cfg *config
 // buildMemoryStore is retained as a compatibility seam while legacy stores
 // are migrated. New runs use context.sqlite plus its rebuildable canonical
 // vector index; they must not create a second MemoryRecord source of truth.
-func buildMemoryStore(resolvedProviderURL string) *memory.MemoryStore {
+//
+// The banner line names the canonical context index path so it is not confused
+// with the team's memory-learning policy; the effective learning mode is
+// printed on its own line when it differs from the off sentinel, using the
+// same precedence `hufu context learning` applies at runtime.
+func buildMemoryStore(resolvedProviderURL string, session *team.TeamSession) *memory.MemoryStore {
 	_ = resolvedProviderURL
-	if !opts.memoryEnabled || opts.tempWorkspace {
-		if !opts.memoryEnabled {
-			stderrLog("%s Memory: disabled\n", dimStyle.Render("○"))
-		}
-		return nil
+	switch {
+	case !opts.memoryEnabled:
+		stderrLog("%s Memory index: disabled\n", dimStyle.Render("○"))
+	case !opts.tempWorkspace:
+		stderrLog("%s Memory index: enabled (model: %s)\n", doneStyle.Render("✓"), config.ResolveEmbeddingModel(opts.memoryModel))
 	}
-	stderrLog("%s Memory: canonical context index enabled (model: %s)\n", doneStyle.Render("✓"), config.ResolveEmbeddingModel(opts.memoryModel))
+	// Learning does not depend on the index, so its line prints whether or
+	// not --memory was given.
+	if mode := effectiveMemoryLearningMode(context.Background(), session); mode != "" && mode != agent.MemoryLearningOff {
+		stderrLog("%s Memory learning: %s\n", doneStyle.Render("✓"), mode)
+	}
 	return nil
+}
+
+// effectiveMemoryLearningMode reports the runtime-effective memory-learning
+// mode a session would use, matching `hufu context learning`. It opens the
+// canonical store read-only from session.Workspace so an adopted snapshot
+// overrides the team's configured value; any lookup failure falls back to the
+// team-configured value through agent.UnadoptedMemoryLearningPolicy. The
+// helper performs no logging and never panics on I/O failures.
+func effectiveMemoryLearningMode(ctx context.Context, session *team.TeamSession) agent.MemoryLearningMode {
+	if session == nil {
+		return ""
+	}
+	if session.Workspace == "" {
+		return team.EffectiveMemoryLearningModeForSession(ctx, session, nil)
+	}
+	repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(session.Workspace, "context.sqlite"))
+	if err != nil {
+		return team.EffectiveMemoryLearningModeForSession(ctx, session, nil)
+	}
+	defer func() { _ = repo.Close() }()
+	sqlRepo, ok := repo.(*contextstore.SQLiteRepository)
+	if !ok {
+		return team.EffectiveMemoryLearningModeForSession(ctx, session, nil)
+	}
+	return team.EffectiveMemoryLearningModeForSession(ctx, session, sqlRepo)
 }
 
 // resolveAndCheckModel resolves the independent worker/coordinator targets.

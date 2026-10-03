@@ -270,7 +270,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 			err = errors.Join(err, closeTeamMCPManager(mcpManager))
 		}
 	}()
-	memStore := buildMemoryStore(resolvedProviderURL)
+	memStore := buildMemoryStore(resolvedProviderURL, session)
 
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
 
