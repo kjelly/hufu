@@ -77,6 +77,13 @@ var (
 	// slackTokenRe matches `xoxb-` followed by at least two `-`-separated
 	// segments; the body-length floor is enforced in code.
 	slackTokenRe = regexp.MustCompile(`(?i)\bxoxb-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+`)
+	// urlUserInfoRe matches the userinfo portion of an RFC 3986 absolute
+	// URL with a scheme: `scheme://user[:password]@host`. The character
+	// class before the closing `@` is the union of unreserved, sub-delims,
+	// pct-encoded triplets, and `:` — the minimal userinfo grammar. The
+	// capture stops at the first `/`, `?`, `#`, or whitespace, so an `@`
+	// that appears only in a path or query never matches.
+	urlUserInfoRe = regexp.MustCompile(`(?i)\b([a-zA-Z][a-zA-Z0-9+.\-]*)://([^/\s?#]*@)`)
 )
 
 // secretKeyNameLiterals spells out every lowercase string secretKeyNameRe
@@ -114,6 +121,14 @@ func mayContainCredentialPrefix(content string) bool {
 		}
 	}
 	return false
+}
+
+// mayContainURLUserinfo is the cheap literal gate that decides whether the
+// URL userinfo pass needs to run. urlUserInfoRe requires both `://` (a
+// scheme followed by authority) and an `@` inside the authority, so text
+// that contains neither or only one cannot match.
+func mayContainURLUserinfo(content string) bool {
+	return strings.Contains(content, "://") && strings.Contains(content, "@")
 }
 
 // redactSlackTokenLengthGate replaces a Slack token match only when the
@@ -346,6 +361,25 @@ func unquoteSecretValue(raw string) string {
 	return value
 }
 
+// trimTrailingQuote strips at most ONE trailing single-quote or double-quote
+// from value and returns both the trimmed value and the removed quote (empty
+// string when nothing was stripped). A quote that is the only character is
+// left intact, so a lone "'" never turns into an empty string. The function
+// is shared between the Authorization substitution pass and the learner so
+// the value recorded for future bare-occurrence matching matches the value
+// actually replaced — without the trim, the learner would record
+// `FAKEtoken'` and a later bare occurrence `FAKEtoken` would not match.
+func trimTrailingQuote(value string) (trimmed, quote string) {
+	if len(value) < 2 {
+		return value, ""
+	}
+	last := value[len(value)-1]
+	if last != '\'' && last != '"' {
+		return value, ""
+	}
+	return value[:len(value)-1], string(last)
+}
+
 func isLearnableSecret(value string) bool {
 	if len(value) < minLearnedSecretLen {
 		return false
@@ -418,6 +452,39 @@ func looksLikeSourceText(value string) bool {
 	return callOrIndexRe.MatchString(value) || selectorChainRe.MatchString(value)
 }
 
+// redactURLUserinfo replaces an embedded URL password with the redaction
+// marker while preserving the username, scheme, host, and path. The match
+// argument is the full substring captured by urlUserInfoRe (groups: scheme,
+// userinfo-with-trailing-`@`). If the userinfo has no `:`, the URL carries
+// only a username and is left unchanged — username-only URLs are explicitly
+// out of scope. When learn is true, the bare password is recorded so any
+// later bare re-print is also redacted; isLearnableSecret rejects the full
+// `user:pass@host` substring because it contains `://`, so only the bare
+// password is passed to the learner.
+func redactURLUserinfo(match string, learn bool) string {
+	parts := urlUserInfoRe.FindStringSubmatch(match)
+	if len(parts) != 3 {
+		return match
+	}
+	scheme, userinfoWithAt := parts[1], parts[2]
+	userinfo := strings.TrimSuffix(userinfoWithAt, "@")
+	colon := strings.Index(userinfo, ":")
+	if colon < 0 {
+		// Username only — out of scope.
+		return match
+	}
+	password := userinfo[colon+1:]
+	if password == "" {
+		// An empty password carries no secret; leave the URL alone.
+		return match
+	}
+	if learn {
+		learnSecretValue(password)
+	}
+	username := userinfo[:colon]
+	return scheme + "://" + username + ":" + redactedSecret + "@" + match[len(scheme)+len("://")+len(userinfoWithAt):]
+}
+
 // learnSecretsFrom scans content for key/value credential shapes and records
 // their values. The cheap key-name pre-filter keeps this off the hot path for
 // the overwhelming majority of content, which mentions no credential at all.
@@ -432,7 +499,15 @@ func learnSecretsFrom(content string) {
 					safeSecretMetadataValue(secretKeyFromPrefix(match[1]), unquoteSecretValue(match[2])) {
 					continue
 				}
-				learnSecretValue(match[2])
+				// Authorization's value group captures the trailing quote
+				// when the header is wrapped (`Authorization: Bearer
+				// FAKEtoken'`); trim it so the learned value matches the
+				// visible redaction and bare re-prints stay redacted.
+				value := match[2]
+				if re == secretAuthorizationRe {
+					value, _ = trimTrailingQuote(value)
+				}
+				learnSecretValue(value)
 			}
 		}
 	}
@@ -516,8 +591,32 @@ func redactSecretsText(content string, learn bool) string {
 		content = awsAccessKeyIDRe.ReplaceAllString(content, redactedSecret)
 		content = slackTokenRe.ReplaceAllStringFunc(content, redactSlackTokenLengthGate)
 	}
+	// URL userinfo pass: rewrites `scheme://user:pass@host` to
+	// `scheme://user:[REDACTED]@host`. Lives between the prefix-credential
+	// pass (so PEM/prefix credentials are scrubbed first) and the
+	// Authorization pass (so an embedded URL inside a Bearer value is
+	// already scrubbed before Authorization captures it). The prefilter
+	// rejects text without both `://` and `@` cheaply.
+	if mayContainURLUserinfo(content) {
+		content = urlUserInfoRe.ReplaceAllStringFunc(content, func(match string) string {
+			return redactURLUserinfo(match, learn)
+		})
+	}
 	if hasAuthorization {
-		content = secretAuthorizationRe.ReplaceAllString(content, "${1}"+redactedSecret)
+		// ReplaceAllStringFunc preserves a trailing quote (`'` or `"`) the
+		// way the Authorization header's value group captured it; the value
+		// group itself is greedy, so without the trim the closing quote is
+		// silently consumed and the surrounding curl/bash line becomes
+		// syntactically broken. trimTrailingQuote is also used by
+		// learnSecretsFrom so the learned value matches the visible one.
+		content = secretAuthorizationRe.ReplaceAllStringFunc(content, func(match string) string {
+			parts := secretAuthorizationRe.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			_, quote := trimTrailingQuote(parts[2])
+			return parts[1] + redactedSecret + quote
+		})
 	}
 	if hasKeyName {
 		content = secretJSONRe.ReplaceAllStringFunc(content, redactJSONKeyValue)
