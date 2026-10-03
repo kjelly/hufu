@@ -20,7 +20,17 @@ import (
 //
 // worker-model is the one keyed flag: see applyProfileWorkerModels.
 func applyProfile(cmd *cobra.Command) error {
-	return applyNamedProfile(cmd, opts.profileName)
+	profileName := opts.profileName
+	if cmd.Name() == "run" && profileName == "" {
+		explicitProfile := cmd.Flags().Changed("profile")
+		if root := cmd.Root(); root != nil {
+			explicitProfile = explicitProfile || root.PersistentFlags().Changed("profile")
+		}
+		if !explicitProfile {
+			profileName = config.LoadConfig().DefaultProfile
+		}
+	}
+	return applyNamedProfile(cmd, profileName)
 }
 
 func applyNamedProfile(cmd *cobra.Command, profileName string) error {
@@ -59,6 +69,13 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 	if fs := lookup("model"); fs != nil {
 		explicitModel = fs.Changed("model")
 	}
+	explicitTeamSelection := false
+	for _, name := range []string{"team", "agent-team", "default", "auto-team"} {
+		if fs := lookup(name); fs != nil && fs.Changed(name) {
+			value := fs.Lookup(name).Value.String()
+			explicitTeamSelection = explicitTeamSelection || (value != "" && value != "false")
+		}
+	}
 
 	// Apply in sorted key order for deterministic behavior.
 	keys := make([]string, 0, len(profile))
@@ -70,6 +87,12 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 		fs := lookup(name)
 		if fs == nil {
 			return fmt.Errorf("profile %q sets unknown flag %q", profileName, name)
+		}
+		if explicitTeamSelection && !fs.Changed(name) {
+			switch name {
+			case "team", "agent-team", "default", "auto-team":
+				continue
+			}
 		}
 		if name == workerModelFlag {
 			if err := applyProfileWorkerModels(fs, profileName, profile[name], explicitModel); err != nil {

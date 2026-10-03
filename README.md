@@ -519,6 +519,29 @@ profiles:
 hufu @hufu-coding --profile coding-balanced "implement feature X"
 ```
 
+For repeated runs in one project, put `default-profile` in that project's
+`hufu.yaml`. The named profile can select the team as well as model and run
+options:
+
+```yaml
+default-profile: coding
+profiles:
+  coding:
+    team: dev-team
+    model: ollama/qwen3:8b
+    plan: "true"
+```
+
+```bash
+hufu run -- "implement feature X"
+hufu config             # inspect the project default and named profiles
+```
+
+The project default applies to `hufu run` only. An explicit `--profile` selects
+another profile, and explicit run flags override values from the selected
+profile. If the named default profile is missing or invalid, the run fails before
+execution.
+
 Effective worker target, highest priority first:
 
 1. explicit CLI `--worker-model <agent>=<target>`

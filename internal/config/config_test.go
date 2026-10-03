@@ -68,6 +68,31 @@ func TestLoadConfigProfiles(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDefaultProfileIsProjectLocal(t *testing.T) {
+	home := isolateHome(t)
+	userDir := filepath.Join(home, ".config", "hufu")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := "default-profile: global\nprofiles:\n  global:\n    model: user-model\n"
+	if err := os.WriteFile(filepath.Join(userDir, "hufu.yaml"), []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	t.Chdir(project)
+
+	if cfg := LoadConfig(); cfg.DefaultProfile != "" || cfg.Profiles["global"]["model"] != "user-model" {
+		t.Fatalf("user config changed project default: %+v", cfg)
+	}
+	projectConfig := "default-profile: coding\nprofiles:\n  coding:\n    team: dev-team\n"
+	if err := os.WriteFile("hufu.yaml", []byte(projectConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := LoadConfig(); cfg.DefaultProfile != "coding" || cfg.Profiles["coding"]["team"] != "dev-team" {
+		t.Fatalf("project default profile not loaded: %+v", cfg)
+	}
+}
+
 func TestLoadConfigPresentationPreferences(t *testing.T) {
 	isolateHome(t)
 	tmpDir := t.TempDir()
