@@ -1,14 +1,14 @@
-# EventStore 記憶事件範圍查詢實作計畫
+# EventStore 記憶事件範圍查詢實作紀錄
 
-> Status: draft
+> Status: historical
 > Authority: guide
-> Verified-Commit: `ccde722f`
+> Verified-Commit: `9b876332`
 > Supersedes: —
 > Superseded-By: —
-> Implementation-Ready: yes
 
-本文件只規劃 coding agent 能在本 repository 內完成的工作。實作時以當下
-程式碼、測試與正式架構文件為準；本計畫不取代現行 runtime 契約。
+本文件記錄 coding agent 在本 repository 內完成的工作與驗證結果；現行
+runtime 契約仍以程式碼、測試與正式架構文件為準。測試與 benchmark 於
+`9ee8e1e6` 提交，兩個 consumer 的查詢遷移於 `9b876332` 提交。
 
 ## Baseline 驗證（2026-10-04）
 

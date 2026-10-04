@@ -116,8 +116,6 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
-- [EventStore memory query implementation plan](architecture/eventstore-memory-query-implementation-plan.md)
-  — scoped memory-event reads, behavior fixtures, and allocation benchmarks.
 
 ## Archive
 
@@ -132,7 +130,8 @@ to re-create an abstraction that already exists in the runtime.
   the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md),
   the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md),
   the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
-  and the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md).
+  the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md),
+  and the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for
