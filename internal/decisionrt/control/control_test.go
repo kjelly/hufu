@@ -155,7 +155,7 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{name: "threshold above one", config: control.Config{MinConfidence: threshold(1.5)}, want: "min-confidence"},
 		{name: "point threshold below zero", config: control.Config{Points: map[control.Point]control.PointConfig{control.AskUser: {MinConfidence: threshold(-0.1)}}}, want: "min-confidence"},
 		{name: "missing model", config: control.Config{Mode: control.ModeShadow}, want: "model"},
-		{name: "timeout above maximum", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Timeout: 31 * time.Second}, want: "timeout"},
+		{name: "timeout above maximum", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Timeout: decisionrt.MaxTimeout + time.Second}, want: "timeout"},
 		{name: "negative timeout", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Timeout: -time.Second}, want: "timeout"},
 		{name: "endpoint with query", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Endpoint: "http://gpu/v1/systemone?x=1"}, want: "endpoint"},
 		{name: "invalid key variable", config: control.Config{Mode: control.ModeShadow, Model: "nimble", APIKeyEnv: "1BAD"}, want: "api-key-env"},
@@ -460,7 +460,7 @@ func TestValidateChecksOneBlockWithoutTransport(t *testing.T) {
 	for _, config := range []control.Config{
 		{Mode: "always"},
 		{Points: map[control.Point]control.PointConfig{"similar-task": {}}},
-		{Timeout: time.Minute},
+		{Timeout: decisionrt.MaxTimeout + time.Second},
 		{APIKeyEnv: "BAD-NAME"},
 	} {
 		if err := config.Validate(); err == nil {

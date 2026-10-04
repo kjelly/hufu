@@ -19,7 +19,7 @@ const (
 	DefaultTimeout = 5 * time.Second
 	// MaxTimeout is the default largest per-attempt timeout; see
 	// MaxAllowedTimeout.
-	MaxTimeout = 30 * time.Second
+	MaxTimeout = 60 * time.Second
 )
 
 // MaxAllowedTimeout is the largest per-attempt timeout NewRuntime accepts:

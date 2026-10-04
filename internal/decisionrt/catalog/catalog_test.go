@@ -27,7 +27,7 @@ func TestCatalogValidatesTrustedConfiguration(t *testing.T) {
 		{"unknown input type", func(e *Entry) { e.Inputs["summary"] = "object" }},
 		{"missing grants", func(e *Entry) { e.Agents = nil }},
 		{"duplicate grants", func(e *Entry) { e.Agents = []string{"helper", "helper"} }},
-		{"timeout", func(e *Entry) { e.Timeout = time.Minute }},
+		{"timeout", func(e *Entry) { e.Timeout = decisionrt.MaxTimeout + time.Second }},
 		{"confidence", func(e *Entry) { e.MinConfidence = new(1.1) }},
 		{"fallback", func(e *Entry) { e.Fallback = "systemone" }},
 		{"call limit", func(e *Entry) { e.MaxCalls = -1 }},

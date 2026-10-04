@@ -677,7 +677,7 @@ func NewRuntime(cfg RuntimeConfig) (Runtime, error)
 ```
 
 `Primary` 必須非 nil。`Timeout == 0` 時使用 `DefaultTimeout`（`5s`）；負值或
-超過 `MaxTimeout`（`30s`）是 configuration error，建構時立即拒絕。兩個值都是
+超過 `MaxTimeout`（`60s`）是 configuration error，建構時立即拒絕。兩個值都是
 `decisionrt` 的 exported constants，CLI 直接沿用。`Fallback` 若與
 `Primary` 是同一個 backend name 也必須拒絕，避免假 fallback。
 每個 backend 的 `Name()` 必須固定、trim 後非空、無 leading/trailing
@@ -1349,7 +1349,7 @@ concurrency-safe；adapter 不額外序列化呼叫。注入的 `Metrics` 和自
 每次 backend attempt 都使用 `context.WithTimeout`：
 
 - `RuntimeConfig.Timeout == 0`：`DefaultTimeout`（`5s`）。
-- `0 < Timeout <= MaxTimeout`（`30s`）：使用指定值。
+- `0 < Timeout <= MaxTimeout`（`60s`）：使用指定值。
 - `Timeout < 0` 或 `Timeout > MaxTimeout`：`NewRuntime` 回
   `ErrorConfiguration`，不得 clamp。
 - 預設值涵蓋暖機後的 decision request；model 冷載入可能超過預設值，此時由
@@ -1814,7 +1814,7 @@ Phase 3 完成時更新 `README.md` 與 `README.tw.md` 的 command reference，�
    需要明確 model/provider flags，systemone 需要明確 `--systemone-model`、
    回傳 raw confidence 且沒有 fallback。
 4. `ABSTAINED`、technical failure 與 exit code 的差異。
-5. Per-attempt timeout 預設 `5s`、上限 `30s`；本地 decision model 的延遲取決於
+5. Per-attempt timeout 預設 `5s`、上限 `60s`；本地 decision model 的延遲取決於
    硬體，model 冷載入時可能需要提高 `--timeout`、先暖機或在 server 端調高
    `OLLAMA_KEEP_ALIVE`。不得發布實測延遲數字。
 
@@ -2062,7 +2062,7 @@ scalar 時才當 literal string。`null`、object、array 一律拒絕。需要�
 
 ```text
 --backend string            default "rule"; rule|sidecar|systemone
---timeout duration          per attempt; default 5s; (0,30s]
+--timeout duration          per attempt; default 5s; (0,60s]
 --min-confidence float      optional; [0,1]
 --require-calibrated        default false
 --no-fallback               default false
@@ -2810,7 +2810,7 @@ backend unavailable -> 5
   request
 - boolean／integer 對回 typed value；`HUFU_SYSTEMONE_API_KEY` 只在
   `--systemone-api-key` 為空時使用，不使用 sidecar 的 key
-- `--timeout` 預設 `DefaultTimeout`，`30s` 可用、`31s` exit 2
+- `--timeout` 預設 `DefaultTimeout`，`60s` 可用、`61s` exit 2
 - API key 與 provider error text 不出現在 stdout/stderr
 
 ---

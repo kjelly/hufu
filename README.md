@@ -393,7 +393,7 @@ no fallback. An integer range with a single value is not supported by
 `systemone`.
 
 Each backend attempt has a 5-second default timeout, which `--timeout` can
-raise to at most 30 seconds. Local decision-model latency depends on the
+raise to at most 60 seconds. Local decision-model latency depends on the
 hardware, and a GPU host is recommended. While Ollama loads a model, the first
 call can exceed the default; raise `--timeout`, warm the model with an earlier
 request, or raise `OLLAMA_KEEP_ALIVE` on the server.
@@ -933,7 +933,7 @@ control-decisions:
 # A category applies to every call in it; leave one out to keep each call's
 # own default, shown in parentheses.
 timeouts:
-  decision: 30s                 # Largest timeout decision-primitives and control-decisions may set (30s)
+  decision: 60s                 # Largest timeout decision-primitives and control-decisions may set (60s)
   # sidecar: 20s                # Duplicate checks (5-10s), failure reflection (30s), skill naming (5-10s)
   # review: 3m                  # Judge, skeptic, skill analysis (60s); decision stages, explain, fix (90s)
   # provider: 20s               # Model listing and lookup (5s), validation (10s), probes (3-30s)

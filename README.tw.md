@@ -215,7 +215,7 @@ confidence 回報，因此模型沒把握時，`--min-confidence` 會以 `low_co
 abstain。對這個 backend，`--require-calibrated` 一律 abstain，而且
 `systemone` 沒有 fallback。`systemone` 不支援只有單一值的 integer range。
 
-每次 backend 嘗試的 timeout 預設為 5 秒，可用 `--timeout` 提高到最多 30 秒。
+每次 backend 嘗試的 timeout 預設為 5 秒，可用 `--timeout` 提高到最多 60 秒。
 本地 decision model 的延遲取決於硬體，建議使用有 GPU 的主機。Ollama 載入模型
 時，第一次呼叫可能超過預設值；可以提高 `--timeout`、先送一次請求暖機，或在
 server 端調高 `OLLAMA_KEEP_ALIVE`。

@@ -370,6 +370,8 @@ func TestDecisionRTDefaultsSelectRuleWithoutFallback(t *testing.T) {
 }
 
 func TestDecisionRTTimeoutFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	tests := []struct {
 		name     string
 		args     []string
@@ -377,8 +379,8 @@ func TestDecisionRTTimeoutFlag(t *testing.T) {
 		wantCode int
 	}{
 		{name: "default", want: decisionrt.DefaultTimeout},
-		{name: "maximum", args: []string{"--timeout", "30s"}, want: decisionrt.MaxTimeout},
-		{name: "above maximum", args: []string{"--timeout", "31s"}, wantCode: 2},
+		{name: "maximum", args: []string{"--timeout", "60s"}, want: decisionrt.MaxTimeout},
+		{name: "above maximum", args: []string{"--timeout", "61s"}, wantCode: 2},
 		{name: "zero", args: []string{"--timeout", "0s"}, wantCode: 2},
 	}
 	for _, test := range tests {
@@ -406,12 +408,20 @@ func TestDecisionRTTimeoutFlag(t *testing.T) {
 }
 
 func TestDecisionRTTimeoutRangeMessage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	fixture := newDecisionRTCommandFixture(nil)
-	err := fixture.execute(append(validDecisionRTChoiceArgs(), "--timeout", "31s")...)
+	err := fixture.execute(append(validDecisionRTChoiceArgs(), "--timeout", "61s")...)
 	assertDecisionRTExitCode(t, err, 2)
 	typed, ok := errors.AsType[*decisionrt.RuntimeError](err)
-	if !ok || typed.Kind != decisionrt.ErrorInvalidRequest || typed.Err == nil || typed.Err.Error() != "--timeout must be within (0,30s]" {
+	if !ok {
 		t.Fatalf("err = %#v", err)
+	}
+	if typed.Kind != decisionrt.ErrorInvalidRequest || typed.Err == nil {
+		t.Fatalf("typed error = %#v", typed)
+	}
+	if got, want := typed.Err.Error(), "--timeout must be within (0,1m0s]"; got != want {
+		t.Fatalf("error message = %q, want %q", got, want)
 	}
 }
 

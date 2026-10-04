@@ -57,7 +57,7 @@ control-decisions:
   endpoint: http://192.168.11.117:11434/v1/systemone  # 預設 http://127.0.0.1:11434/v1/systemone
   model: nimble              # 任一點不是 off 時必填
   api-key-env: SYSTEMONE_KEY # 可選；有設定時該環境變數必須存在且非空
-  timeout: 5s                # 每次呼叫；預設 5s，最大 30s(hufu.yaml timeouts.decision 可調高上限)
+  timeout: 5s                # 每次呼叫；預設 5s，最大 60s(hufu.yaml timeouts.decision 可調高上限)
   mode: shadow               # 所有點的預設模式：off | shadow | active
   min-confidence: 0.8        # 可選；所有點的預設門檻
   points:

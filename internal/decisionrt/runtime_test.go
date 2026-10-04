@@ -431,7 +431,7 @@ func TestRuntimeAttemptTimeoutBounds(t *testing.T) {
 			}
 		})
 	}
-	if decisionrt.DefaultTimeout != 5*time.Second || decisionrt.MaxTimeout != 30*time.Second {
+	if decisionrt.DefaultTimeout != 5*time.Second || decisionrt.MaxTimeout != 60*time.Second {
 		t.Fatalf("default=%s max=%s", decisionrt.DefaultTimeout, decisionrt.MaxTimeout)
 	}
 }
@@ -604,16 +604,16 @@ func (m *recordingMetrics) ObserveDurationMS(string, string, uint64) {
 func TestRuntimeTimeoutLimitFollowsDecisionSetting(t *testing.T) {
 	t.Cleanup(func() { _ = llmtimeout.Configure(llmtimeout.Settings{}) })
 	newRuntime := func() error {
-		_, err := decisionrt.NewRuntime(decisionrt.RuntimeConfig{Primary: fixedBackend("primary", decidedChoice("small")), Timeout: 45 * time.Second})
+		_, err := decisionrt.NewRuntime(decisionrt.RuntimeConfig{Primary: fixedBackend("primary", decidedChoice("small")), Timeout: 61 * time.Second})
 		return err
 	}
 	if newRuntime() == nil {
-		t.Fatal("a 45s timeout was accepted with the default 30s limit")
+		t.Fatal("a 61s timeout was accepted with the default 60s limit")
 	}
-	if err := llmtimeout.Configure(llmtimeout.Settings{Decision: time.Minute}); err != nil {
+	if err := llmtimeout.Configure(llmtimeout.Settings{Decision: 2 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	if err := newRuntime(); err != nil {
-		t.Fatalf("a 45s timeout under a 1m decision limit: %v", err)
+		t.Fatalf("a 61s timeout under a 1m decision limit: %v", err)
 	}
 }

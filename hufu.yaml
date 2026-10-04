@@ -1,3 +1,6 @@
+timeouts:
+  decision: 60s
+
 profiles:
   hufu-code-review-ci:
     agent-team: hufu-code-review
