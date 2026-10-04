@@ -1228,9 +1228,17 @@ func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningRep
 	b.WriteString("## Outcome-driven Memory\n\n")
 	fmt.Fprintf(b, "- **Mode:** `%s`\n", report.Mode)
 	fmt.Fprintf(b, "- **Policy version:** `%s`\n", report.PolicyVersion)
-	fmt.Fprintf(b, "- **Retrievals / exposures:** %d / %d\n", report.RetrievalCount, report.ExposureCount)
-	fmt.Fprintf(b, "- **Applied / outcomes:** %d / %d\n", report.AppliedCount, report.OutcomeCount)
-	fmt.Fprintf(b, "- **Pending reducer repairs:** %d\n\n---\n\n", report.PendingRepairGaps)
+	if report.EventCountsUnavailable {
+		b.WriteString("- **Event counts:** unavailable (EventStore could not be read; zero values are not measured counts)\n")
+	} else {
+		fmt.Fprintf(b, "- **Retrievals / exposures:** %d / %d\n", report.RetrievalCount, report.ExposureCount)
+		fmt.Fprintf(b, "- **Applied / outcomes:** %d / %d\n", report.AppliedCount, report.OutcomeCount)
+	}
+	fmt.Fprintf(b, "- **Pending automatic learning repairs:** %d\n", report.PendingRepairGaps)
+	if report.ManualReviewGaps > 0 {
+		fmt.Fprintf(b, "- **Manual memory-credit reviews:** %d (inspect `session.json` learning gaps; do not replay the worker)\n", report.ManualReviewGaps)
+	}
+	b.WriteString("\n---\n\n")
 }
 
 func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestSummary) {

@@ -130,14 +130,96 @@ func TestMemoryOutcomeWeightForSignalFiltersByManifestAcrossRuns(t *testing.T) {
 
 	c := &Coordinator{eventStore: store}
 	item := &TodoItem{ID: "task-1", MemoryManifests: []MemoryInjectionManifest{{RetrievalID: "retrieval-a"}}}
-	if got := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0.75 {
-		t.Fatalf("weight = %v, want 0.75", got)
+	if got, err := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); err != nil || got != 0.75 {
+		t.Fatalf("weight = %v, error = %v; want 0.75, nil", got, err)
 	}
 
 	store.stateValid = false
 	store.stateErr = errors.New("injected read failure")
-	if got := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0 {
-		t.Fatalf("invalid store weight = %v, want 0", got)
+	if got, err := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0 || err == nil {
+		t.Fatalf("invalid store weight = %v, error = %v; want 0 and an error", got, err)
+	}
+	c.eventStore = nil
+	if got, err := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0 || err == nil {
+		t.Fatalf("missing store weight = %v, error = %v; want 0 and an error", got, err)
+	}
+}
+
+func TestMemoryOutcomeCreditReadFailureDoesNotAppendBeforeRecovery(t *testing.T) {
+	c, _ := outcomeTestCoordinator(t, "memory-1")
+	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-2", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, nil)
+	item.TypedResult.Attempt = 2
+	item.MemoryManifests = append(item.MemoryManifests, MemoryInjectionManifest{
+		RetrievalID: "retrieval-2", RunID: "run-1", TaskID: item.ID, Attempt: 2,
+		Agent: "worker", PolicyVersion: "memory-policy-v1", Items: []MemoryInjectionItem{{ContextItemID: "memory-1"}},
+	})
+	if err := c.eventStore.Append(RunEvent{
+		RunID: "run-1", TaskID: item.ID, Type: "memory_outcome_recorded", Actor: "runtime",
+		Payload: []byte(`{"retrieval_id":"retrieval-1","signal":"verification_passed","direction":"positive","effective_weight":0.75}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c.eventStore.stateValid = false
+	c.eventStore.stateErr = errors.New("injected read failure")
+	c.recordMemoryOutcomeSignal(item, "verification_passed", "positive", 1, func(MemoryUseRef) float64 { return 1 })
+	if c.eventStore.stateValid {
+		t.Fatal("outcome append recovered an unreadable credit ledger")
+	}
+	if c.sessionData == nil || len(c.sessionData.LearningGaps) != 1 || !c.sessionData.LearningGaps[0].ManualReviewRequired || c.sessionData.LearningGaps[0].PendingRepair {
+		t.Fatalf("credit gap was not classified for manual review: %+v", c.sessionData)
+	}
+	if saved := LoadSession(c.session.Workspace); saved == nil || len(saved.LearningGaps) != 1 || !saved.LearningGaps[0].ManualReviewRequired || saved.LearningGaps[0].PendingRepair {
+		t.Fatalf("manual review gap was not checkpointed: %+v", saved)
+	}
+	c.repairMemoryLearningGaps()
+	if !c.sessionData.LearningGaps[0].ManualReviewRequired || c.sessionData.LearningGaps[0].PendingRepair {
+		t.Fatalf("automatic repair changed manual credit gap: %+v", c.sessionData.LearningGaps[0])
+	}
+
+	// A subsequent independent append may restore the store. Only then may
+	// the new retrieval spend the signal's remaining quarter-credit.
+	if err := c.eventStore.Append(RunEvent{RunID: "run-1", TaskID: item.ID, Type: "task_progress", Actor: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	c.recordMemoryOutcomeSignal(item, "verification_passed", "positive", 1, func(MemoryUseRef) float64 { return 1 })
+	events, err := c.eventStore.QueryEvents(EventQuery{Types: []string{"memory_outcome_recorded"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("outcome events = %d, want 2", len(events))
+	}
+	weight, err := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive")
+	if err != nil || weight != 1 {
+		t.Fatalf("credit after recovery = %v, error = %v; want 1, nil", weight, err)
+	}
+}
+
+func TestRepairMemoryLearningGapsClassifiesLegacyCreditGapForManualReview(t *testing.T) {
+	c, _ := outcomeTestCoordinator(t)
+	c.sessionData = &SessionData{LearningGaps: []LearningGap{{
+		EventType: "memory_outcome_recorded", TaskID: "task-1", PendingRepair: true,
+	}}}
+	c.repairMemoryLearningGaps()
+	gap := c.sessionData.LearningGaps[0]
+	if gap.PendingRepair || !gap.ManualReviewRequired {
+		t.Fatalf("legacy credit gap was not reclassified: %+v", gap)
+	}
+	if saved := LoadSession(c.session.Workspace); saved == nil || len(saved.LearningGaps) != 1 || !saved.LearningGaps[0].ManualReviewRequired {
+		t.Fatalf("legacy credit gap reclassification was not durable: %+v", saved)
+	}
+}
+
+func TestMemoryOutcomeWithoutAttributionDoesNotRecordReadGap(t *testing.T) {
+	c, _ := outcomeTestCoordinator(t, "memory-1")
+	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, nil)
+	item.MemoryManifests = nil
+	c.eventStore.stateValid = false
+	c.eventStore.stateErr = errors.New("injected read failure")
+	c.recordMemoryOutcomeSignal(item, "verification_passed", "positive", 1, func(MemoryUseRef) float64 { return 1 })
+	if c.sessionData != nil && len(c.sessionData.LearningGaps) != 0 {
+		t.Fatalf("no-attribution outcome recorded a learning gap: %+v", c.sessionData.LearningGaps)
 	}
 }
 

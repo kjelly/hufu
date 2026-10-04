@@ -17,6 +17,40 @@ type jsonOutputEventJournal struct {
 	store *team.EventStore
 }
 
+func TestJSONOutputMarksUnavailableMemoryEventCounts(t *testing.T) {
+	workspace := t.TempDir()
+	policy := agent.DefaultMemoryLearningPolicy()
+	policy.Mode = agent.MemoryLearningObserve
+	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "demo", MemoryLearning: policy}}
+	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	c.SetSessionData(&team.SessionData{LearningGaps: []team.LearningGap{{ManualReviewRequired: true}}})
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	os.Stdout = w
+	err = printResultJSON("done", map[string]*teamContext{"demo": {teamName: "demo", session: session, coordinator: c}}, nil)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out jsonRunOutput
+	if err := json.NewDecoder(r).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Teams) != 1 || !out.Teams[0].MemoryLearning.EventCountsUnavailable || out.Teams[0].MemoryLearning.ManualReviewGaps != 1 {
+		t.Fatalf("JSON omitted memory availability or manual review marker: %+v", out.Teams)
+	}
+}
+
 func (j jsonOutputEventJournal) Append(ctx context.Context, event team.RunEvent) (team.RunEvent, error) {
 	return j.store.AppendPersistedContext(ctx, event)
 }

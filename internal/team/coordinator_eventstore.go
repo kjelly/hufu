@@ -578,7 +578,6 @@ func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
 	if c == nil || appendErr == nil {
 		return
 	}
-	c.dualWriteFailures.Add(1)
 	var repairEvent *RunEvent
 	if strings.HasPrefix(event.Type, "memory_") && len(event.Payload) > 0 {
 		copyEvent := event
@@ -587,20 +586,39 @@ func (c *Coordinator) recordLearningGap(event RunEvent, appendErr error) {
 		}
 		repairEvent = &copyEvent
 	}
+	c.persistLearningGap(LearningGap{
+		EventType: event.Type, TaskID: event.TaskID, IdempotencyKey: event.IdempotencyKey,
+		Reason: appendErr.Error(), PendingRepair: true, RepairEvent: repairEvent,
+	})
+}
+
+// A failed credit lookup cannot produce a replayable event: its effective
+// weight depends on the validated ledger that was unavailable. Keep the
+// incident durable and visible, but do not send it to automatic event repair.
+func (c *Coordinator) recordMemoryCreditReviewGap(taskID, signal, direction string, readErr error) {
+	if c == nil || readErr == nil {
+		return
+	}
+	c.persistLearningGap(LearningGap{
+		EventType: "memory_outcome_recorded", TaskID: taskID,
+		Reason:               fmt.Sprintf("outcome credit lookup failed for signal %q direction %q: %v; no outcome event was appended; manual review required", signal, direction, readErr),
+		ManualReviewRequired: true,
+	})
+}
+
+func (c *Coordinator) persistLearningGap(gap LearningGap) {
+	c.dualWriteFailures.Add(1)
+	gap.Reason = utils.RedactSecrets(gap.Reason)
+	gap.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := c.mutateSessionData(func(sd *SessionData) error {
-		sd.LearningGaps = append(sd.LearningGaps, LearningGap{
-			EventType: event.Type, TaskID: event.TaskID, IdempotencyKey: event.IdempotencyKey,
-			Reason: utils.RedactSecrets(appendErr.Error()), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			PendingRepair: true, RepairEvent: repairEvent,
-		})
+		sd.LearningGaps = append(sd.LearningGaps, gap)
 		return nil
 	}); err != nil {
 		return
 	}
-	// The gap must be durable before the failed emission path returns: a crash
-	// before the next unrelated checkpoint would otherwise lose the repair
-	// record and its event, leaving no way to rebuild the observation without
-	// re-running the worker (spec §7 HF-MEM4-000 item 4, §9).
+	// Persist before returning: a crash before the next checkpoint would lose
+	// either the replayable event or the manual-review incident (spec §7
+	// HF-MEM4-000 item 4, §9).
 	if err := c.persistSession("persist learning gap"); err != nil {
 		log.Printf("warning: persist learning gap checkpoint failed: %v", err)
 	}
@@ -631,6 +649,14 @@ func (c *Coordinator) repairMemoryLearningGaps(branchOpts ...any) {
 	changed := false
 	for i := range gaps {
 		gap := &gaps[i]
+		if isManualCreditReviewGap(*gap) {
+			if gap.PendingRepair || !gap.ManualReviewRequired {
+				gap.PendingRepair = false
+				gap.ManualReviewRequired = true
+				changed = true
+			}
+			continue
+		}
 		if !gap.PendingRepair {
 			continue
 		}

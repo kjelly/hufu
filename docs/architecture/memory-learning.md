@@ -225,6 +225,7 @@ V1 的保守限制：
 - V1 的 deterministic action match 僅接受 confirmed procedural item 的 `metadata["action_fingerprint"]`，且必須等於 runtime 從 typed `CommandResult`／`ExecutionReceipt` 正規化出的 fingerprint；未帶 fingerprint 的既有 item 不做自動負向歸因。
 - agent prose similarity 不能建立 action match。
 - 每個 outcome signal 的 `sum(effective_weight)` 上限為 `1.0`，依各 item attribution confidence 正規化分配。上限以 task occurrence 為範圍：只累計這個 todo 自己 manifest 的 retrieval 已記錄的 credit。workspace event log 跨 run 保留，而 todo ID 每次 fresh run 都從 `1` 開始，所以不能只用 todo ID 比對。
+- 若已記錄 credit 的事件查詢失敗，不得將未知額度當成 0；本次 outcome 不寫入，並持久化 `manual_review_required` learning gap。因尚未算出安全權重，此 gap 沒有可自動重播的事件。後續 append 可能自行恢復 EventStore，不能拿寫入失敗當成讀取失敗時的安全保證。
 - `verification_passed` 只有在 `effective_weight > 0` 時才增加 `VerifiedSupportCount`；被上限壓成 0 的重複 pass 不算支持。
 - `IndependentTaskCount` 計算 distinct task occurrence。usage／outcome event payload 帶 `occurrence_id`，由 todo 第一個 memory manifest 的 run ID 加 todo ID 組成，跨 retry 與 resume 不變、跨 run 不同；沒有 `occurrence_id` 的舊 event 仍以 todo ID 計。
 - terminal transition 在 `CommitTaskTransition` 提交時就記錄 outcome（learning 為 `off` 時略過）；checkpoint 重訪同一 task 時以相同 idempotency key 去重。
@@ -618,10 +619,19 @@ controlled exploration 只允許 read-only、sandbox、無 SSH/sudo/deployment/i
 | manifest 無法持久化 | model call 前 fail preflight，避免無法驗證 attribution | 不產 exposure | 修 store 後重試 task，尚未有 side effect |
 | usage event append 失敗 | 不撤銷已完成 worker | claim 留在 receipt/session，但不計分 | repair/replay event，不重跑 worker |
 | outcome event append 失敗 | task/acceptance outcome 保持 authoritative | 不更新 aggregate並標 learning gap | 由既有 task/receipt/manifest deterministic 補事件 |
+| outcome credit 查詢失敗 | task/acceptance outcome 保持 authoritative | 停止本次 outcome 寫入並標記人工對帳，避免超過 signal 上限 | 檢查 `session.json` 的 learning gap 與 durable events；不得重跑 worker 或盲目補寫 |
 | aggregate update 失敗 | 不影響 task | 舊 ranking projection繼續使用並標 degraded | rebuild aggregates |
 | shadow ranker 失敗 | 使用 base ranking | 記 telemetry | 修 policy/reducer |
 | active ranker 失敗 | fail closed 回 base ranking並顯式標 degraded；不得靜默宣稱 active | 不寫虛假 policy success | doctor/rebuild |
 | consolidation/optimizer 失敗 | production policy/context 不變 | proposal failed | 修 candidate，禁止自動 retry side effect |
+
+`MemoryLearningReport` 的 JSON `event_counts_unavailable: true` 表示 EventStore
+不存在或查詢失敗；此時既有 count 欄位的零值不是量測結果，Markdown 報告
+改顯示 unavailable 而不列出虛假的零計數。查詢成功時不輸出該新增欄位，
+維持既有成功報告的 JSON 形狀。`manual_review_gaps` 與
+`pending_repair_gaps` 分別計數需人工對帳、可自動修復的 learning gap；
+舊版缺少 repair event 與 idempotency key 的 credit gap 會在讀取和恢復時
+歸類為需人工對帳，不會永遠佔用自動修復待辦。
 
 ## 10. 最低測試矩陣
 

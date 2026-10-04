@@ -97,6 +97,28 @@ func TestReportRendersContentFreeDeprecatedMemoryUsage(t *testing.T) {
 	}
 }
 
+func TestReportDistinguishesUnavailableMemoryCountsFromZero(t *testing.T) {
+	available := buildReportMD(&reportData{StartedAt: time.Now(), MemoryLearning: team.MemoryLearningReport{
+		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy",
+	}}, "demo", "")
+	if !strings.Contains(available, "Retrievals / exposures:** 0 / 0") || strings.Contains(available, "Event counts:** unavailable") {
+		t.Fatalf("available report did not render measured zero counts: %s", available)
+	}
+
+	report := buildReportMD(&reportData{StartedAt: time.Now(), MemoryLearning: team.MemoryLearningReport{
+		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy", PendingRepairGaps: 1, ManualReviewGaps: 1,
+		EventCountsUnavailable: true,
+	}}, "demo", "")
+	for _, want := range []string{"Outcome-driven Memory", "Event counts:** unavailable", "Pending automatic learning repairs:** 1", "Manual memory-credit reviews:** 1"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q: %s", want, report)
+		}
+	}
+	if strings.Contains(report, "Retrievals / exposures:** 0 / 0") || strings.Contains(report, "Applied / outcomes:** 0 / 0") {
+		t.Fatalf("report presented unavailable counts as measured zero: %s", report)
+	}
+}
+
 func TestReportRendersContentFreeContextRoutingAggregate(t *testing.T) {
 	report := buildReportMD(&reportData{StartedAt: time.Now(), ContextRouting: team.ContextManifestSummary{
 		Requests: 2, ModelCalls: 1, Fallbacks: 1, Included: 5, Omitted: 3, IncludedTokens: 120, OmittedTokens: 80,

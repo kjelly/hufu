@@ -47,17 +47,24 @@ type SessionEntry struct {
 }
 
 // LearningGap records an event-store observation that could not be made
-// durable. It is checkpointed with the session so reducers can be repaired
-// from authoritative task/result/receipt state without replaying a worker or
-// any completed side effect.
+// durable. Replayable gaps are repaired from authoritative evidence without
+// rerunning a worker; gaps with no safe event weight require manual review.
 type LearningGap struct {
-	EventType      string    `json:"event_type"`
-	TaskID         string    `json:"task_id,omitempty"`
-	IdempotencyKey string    `json:"idempotency_key,omitempty"`
-	Reason         string    `json:"reason"`
-	ObservedAt     string    `json:"observed_at"`
-	PendingRepair  bool      `json:"pending_reducer_repair"`
-	RepairEvent    *RunEvent `json:"repair_event,omitempty"`
+	EventType      string `json:"event_type"`
+	TaskID         string `json:"task_id,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	Reason         string `json:"reason"`
+	ObservedAt     string `json:"observed_at"`
+	PendingRepair  bool   `json:"pending_reducer_repair"`
+	// ManualReviewRequired marks a skipped credit emission whose safe weight
+	// was never computed, so no event can be replayed automatically.
+	ManualReviewRequired bool      `json:"manual_review_required,omitzero"`
+	RepairEvent          *RunEvent `json:"repair_event,omitempty"`
+}
+
+func isManualCreditReviewGap(gap LearningGap) bool {
+	return gap.ManualReviewRequired ||
+		(gap.PendingRepair && gap.EventType == "memory_outcome_recorded" && gap.RepairEvent == nil && gap.IdempotencyKey == "")
 }
 
 // PendingTerminalCommit records the identity of a run_finished append whose

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -265,8 +266,18 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 		rawTotal += raw
 		attributed = append(attributed, attributedUse{use: use, manifest: manifest, causal: causal, raw: raw})
 	}
+	if len(attributed) == 0 {
+		return
+	}
 	policy := c.session.Config.MemoryLearning
-	remaining := policy.MaxCreditPerSignal - c.memoryOutcomeWeightForSignal(item, signal, direction)
+	recorded, err := c.memoryOutcomeWeightForSignal(item, signal, direction)
+	if err != nil {
+		// A later append may recover the event store. Treating an unreadable
+		// credit ledger as zero would then spend this signal's cap twice.
+		c.recordMemoryCreditReviewGap(item.ID, signal, direction, err)
+		return
+	}
+	remaining := policy.MaxCreditPerSignal - recorded
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -301,9 +312,12 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 // The workspace event log spans runs and todo IDs restart at "1" in every
 // fresh run, so credit is matched through the retrievals of this todo's own
 // manifests rather than the bare todo ID.
-func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direction string) float64 {
-	if item == nil || signal == "" || direction == "" || c == nil || c.eventStore == nil {
-		return 0
+func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direction string) (float64, error) {
+	if item == nil || signal == "" || direction == "" || c == nil {
+		return 0, nil
+	}
+	if c.eventStore == nil {
+		return 0, errors.New("memory outcome event store unavailable")
 	}
 	retrievals := make(map[string]bool, len(item.MemoryManifests))
 	for _, manifest := range item.MemoryManifests {
@@ -311,7 +325,7 @@ func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direc
 	}
 	events, err := c.eventStore.QueryEvents(EventQuery{Types: []string{"memory_outcome_recorded"}})
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	total := 0.0
 	for _, event := range events {
@@ -323,7 +337,7 @@ func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direc
 			total += payload.EffectiveWeight
 		}
 	}
-	return total
+	return total, nil
 }
 
 func (c *Coordinator) recordMemoryOutcomeSignalForTaskID(taskID, signal, direction string, evidenceWeight float64) {

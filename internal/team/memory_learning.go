@@ -225,6 +225,9 @@ type MemoryLearningReport struct {
 	AppliedCount      int                      `json:"applied_count"`
 	OutcomeCount      int                      `json:"outcome_count"`
 	PendingRepairGaps int                      `json:"pending_repair_gaps"`
+	ManualReviewGaps  int                      `json:"manual_review_gaps,omitzero"`
+	// EventCountsUnavailable distinguishes unreadable event data from true zero counts.
+	EventCountsUnavailable bool `json:"event_counts_unavailable,omitzero"`
 }
 
 func (c *Coordinator) MemoryLearningReport() MemoryLearningReport {
@@ -236,18 +239,22 @@ func (c *Coordinator) MemoryLearningReport() MemoryLearningReport {
 	report.PolicyVersion = c.session.Config.MemoryLearning.PolicyVersion
 	if c.sessionData != nil {
 		for _, gap := range c.sessionData.LearningGaps {
-			if gap.PendingRepair {
+			if isManualCreditReviewGap(gap) {
+				report.ManualReviewGaps++
+			} else if gap.PendingRepair {
 				report.PendingRepairGaps++
 			}
 		}
 	}
 	if c.eventStore == nil {
+		report.EventCountsUnavailable = true
 		return report
 	}
 	events, err := c.eventStore.QueryEvents(EventQuery{Types: []string{
 		"memory_retrieved", "memory_usage_recorded", "memory_outcome_recorded",
 	}})
 	if err != nil {
+		report.EventCountsUnavailable = true
 		return report
 	}
 	retrievals := make(map[string]struct{})

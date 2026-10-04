@@ -20,8 +20,12 @@ func BenchmarkMemoryEventConsumersSparse(b *testing.B) {
 		b.Run(fmt.Sprintf("events=%d/credit", count), func(b *testing.B) {
 			coordinator, item := memoryEventConsumerBenchmarkFixture(count)
 			b.ReportAllocs()
+			var err error
 			for b.Loop() {
-				benchmarkMemoryOutcomeWeight = coordinator.memoryOutcomeWeightForSignal(item, "verification_passed", "positive")
+				benchmarkMemoryOutcomeWeight, err = coordinator.memoryOutcomeWeightForSignal(item, "verification_passed", "positive")
+			}
+			if err != nil {
+				b.Fatal(err)
 			}
 		})
 		b.Run(fmt.Sprintf("events=%d/report", count), func(b *testing.B) {

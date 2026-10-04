@@ -111,21 +111,42 @@ func TestMemoryLearningReportCountsOnlyMemoryEventsAcrossRuns(t *testing.T) {
 		eventStore: store,
 		session:    &TeamSession{Config: agent.TeamConfig{MemoryLearning: policy}},
 		sessionData: &SessionData{LearningGaps: []LearningGap{
-			{PendingRepair: true}, {PendingRepair: false},
+			{PendingRepair: true}, {ManualReviewRequired: true}, {PendingRepair: false},
+			{EventType: "memory_outcome_recorded", PendingRepair: true}, // legacy unreplayable credit gap
 		}},
 	}
 	want := MemoryLearningReport{
 		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy",
-		RetrievalCount: 1, ExposureCount: 3, AppliedCount: 1, OutcomeCount: 1, PendingRepairGaps: 1,
+		RetrievalCount: 1, ExposureCount: 3, AppliedCount: 1, OutcomeCount: 1, PendingRepairGaps: 1, ManualReviewGaps: 2,
 	}
 	if got := c.MemoryLearningReport(); got != want {
 		t.Fatalf("report = %+v, want %+v", got, want)
 	}
+	encoded, err := json.Marshal(c.MemoryLearningReport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "event_counts_unavailable") {
+		t.Fatalf("available report unexpectedly changed JSON shape: %s", encoded)
+	}
 
 	store.stateValid = false
 	want.RetrievalCount, want.ExposureCount, want.AppliedCount, want.OutcomeCount = 0, 0, 0, 0
+	want.EventCountsUnavailable = true
 	if got := c.MemoryLearningReport(); got != want {
 		t.Fatalf("invalid store report = %+v, want %+v", got, want)
+	}
+	encoded, err = json.Marshal(c.MemoryLearningReport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"event_counts_unavailable":true`) {
+		t.Fatalf("invalid store report lacks availability marker: %s", encoded)
+	}
+
+	c.eventStore = nil
+	if got := c.MemoryLearningReport(); got != want {
+		t.Fatalf("missing store report = %+v, want %+v", got, want)
 	}
 }
 
