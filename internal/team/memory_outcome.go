@@ -309,7 +309,7 @@ func (c *Coordinator) memoryOutcomeWeightForSignal(item *TodoItem, signal, direc
 	for _, manifest := range item.MemoryManifests {
 		retrievals[manifest.RetrievalID] = true
 	}
-	events, err := c.eventStore.ReadEvents()
+	events, err := c.eventStore.QueryEvents(EventQuery{Types: []string{"memory_outcome_recorded"}})
 	if err != nil {
 		return 0
 	}

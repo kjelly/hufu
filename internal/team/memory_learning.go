@@ -244,7 +244,9 @@ func (c *Coordinator) MemoryLearningReport() MemoryLearningReport {
 	if c.eventStore == nil {
 		return report
 	}
-	events, err := c.eventStore.ReadEvents()
+	events, err := c.eventStore.QueryEvents(EventQuery{Types: []string{
+		"memory_retrieved", "memory_usage_recorded", "memory_outcome_recorded",
+	}})
 	if err != nil {
 		return report
 	}

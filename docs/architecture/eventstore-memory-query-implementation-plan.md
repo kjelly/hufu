@@ -37,6 +37,28 @@ Consumer benchmark 已於遷移前執行（`go test ./internal/team -run '^$'
 
 這是合成稀疏事件資料的單次 benchmark 結果，不代表實際 workspace 的負載。
 
+## 遷移後驗證（2026-10-04）
+
+兩個 consumer 改用型別查詢後，在同一台 Intel i7-6700K、Go 1.26.6 上，以
+相同命令與 fixture 量測：
+
+| 事件數 | Consumer | ns/op | B/op | allocs/op |
+| ---: | --- | ---: | ---: | ---: |
+| 1,000 | credit | 51,116 | 16,822 | 121 |
+| 1,000 | report | 91,905 | 34,652 | 258 |
+| 10,000 | credit | 441,121 | 138,080 | 1,008 |
+| 10,000 | report | 1,005,837 | 432,288 | 2,410 |
+| 50,000 | credit | 2,350,956 | 625,888 | 5,010 |
+| 50,000 | report | 4,066,460 | 2,096,929 | 12,013 |
+
+10,000 與 50,000 筆的 `B/op` 均低於遷移前，符合本計畫驗收條件。
+`go test ./...`、`go vet ./...`、`golangci-lint run` 均 exit 0；lint
+回報 0 issues。預設快取唯讀及已刪除相鄰 worktree 的快取曾造成警告，
+以 `GOLANGCI_LINT_CACHE=/tmp/hufu-lint-cache-memory-query` 重跑則無警告。
+單次合成 benchmark 的 `ns/op` 不代表整體 runtime 延遲承諾；查詢仍需線性
+走訪 EventStore 的記憶體快取，啟動時的事件驗證與其他 `ReadEvents` consumer
+也未改善。
+
 ## 目標與效益
 
 把記憶結果計算中的兩個全量 `ReadEvents()` 呼叫，改用已存在的
