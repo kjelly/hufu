@@ -29,6 +29,18 @@ type ConsolidationCreateInput struct {
 	// Origin is "operator" for operator text or "model" for a drafted text.
 	Origin     string
 	DraftModel string
+	// Expected is the source state a drafted text was generated from. When
+	// set, creation refuses sources whose content or aggregate revision moved
+	// while the model was writing, instead of binding the text to evidence it
+	// never saw. Operator text leaves it nil.
+	Expected *ConsolidationSourceRevisions
+}
+
+// ConsolidationSourceRevisions records each source's content hash and
+// experience aggregate revision (0 when it had none) by source ID.
+type ConsolidationSourceRevisions struct {
+	Content    map[string]string
+	Aggregates map[string]int64
 }
 
 // ConsolidationReviewInput approves or rejects one proposal.
@@ -104,10 +116,18 @@ func (r *SQLiteRepository) CreateConsolidationProposal(ctx context.Context, in C
 		} else if found {
 			return fmt.Errorf("%w: %s", ErrConsolidationPending, pending.ID)
 		}
-		checked, err := r.checkConsolidationSourcesQ(ctx, tx, consolidationSourceCheck{
+		sourceCheck := consolidationSourceCheck{
 			projectID: in.ProjectID, teamID: in.TeamID, ids: ids, check: consolidationCheckCreate,
 			policyVersion: in.PolicyVersion, support: in.Support, now: time.Now(),
-		})
+		}
+		if in.Expected != nil {
+			sourceCheck.frozen = in.Expected.Content
+			sourceCheck.aggregates = in.Expected.Aggregates
+			if sourceCheck.aggregates == nil {
+				sourceCheck.aggregates = map[string]int64{}
+			}
+		}
+		checked, err := r.checkConsolidationSourcesQ(ctx, tx, sourceCheck)
 		if err != nil {
 			return err
 		}

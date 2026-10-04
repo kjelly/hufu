@@ -214,3 +214,48 @@ func TestConsolidateDraftRejectsOversizedSources(t *testing.T) {
 		t.Fatalf("drafter called %d times for oversized sources", *calls)
 	}
 }
+
+// evidenceMovingGenerator records new outcome evidence for one source while it
+// "writes", the race the draft path must refuse.
+type evidenceMovingGenerator struct {
+	t         *testing.T
+	workspace string
+}
+
+func (g evidenceMovingGenerator) GenerateText(ctx context.Context, _ string) (string, error) {
+	repo, err := contextstore.OpenSQLite(filepath.Join(g.workspace, "context.sqlite"))
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	defer repo.Close()
+	if _, err = repo.ApplyExperienceObservation(ctx, contextstore.ExperienceObservation{
+		IdempotencyKey: "src-a-while-drafting", ContextItemID: "src-a", PolicyVersion: "memory-policy-v1",
+		ProjectID: "proj1", TaskID: "task-late", AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 1,
+	}); err != nil {
+		g.t.Fatal(err)
+	}
+	return validDraftReply, nil
+}
+
+func TestConsolidateDraftRefusesSourcesThatMovedWhileDrafting(t *testing.T) {
+	workspace, search := consolidationDraftFixture(t)
+	original := consolidationDraftFactory
+	consolidationDraftFactory = func(context.Context, string, string) (consolidation.TextGenerator, string, func(), error) {
+		return evidenceMovingGenerator{t: t, workspace: workspace}, "draft-model", func() {}, nil
+	}
+	t.Cleanup(func() {
+		consolidationDraftFactory = original
+		contextWorkspace = ""
+	})
+	if _, err := helperRunConsolidateCLI(draftArgs(workspace, search)...); err == nil || !strings.Contains(err.Error(), string(contextstore.ReasonAggregateRevisionChanged)) {
+		t.Fatalf("draft err = %v, want aggregate_revision_changed", err)
+	}
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if _, found, err := repo.FindProposedConsolidation(context.Background(), "proj1", "demo", []string{"src-a", "src-b"}); err != nil || found {
+		t.Fatalf("refused draft left a pending proposal: found=%v err=%v", found, err)
+	}
+}

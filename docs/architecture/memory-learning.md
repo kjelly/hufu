@@ -550,6 +550,7 @@ LLM proposal 步驟由 `hufu context consolidate --apply-proposal --source <ids>
 - 模型呼叫前先完成全部來源檢查（current confirmed、scope、experience support、記憶衝突 gate），來源內容合計超過 16000 runes 時拒絕並要求改用 `--proposal-text`。
 - 同一組來源已有 `proposed` proposal 時直接回傳該 proposal，不呼叫模型。
 - 模型只能回傳 strict JSON（`text`、`covered_source_ids`）；text 最多 2000 runes、不得含 secret、不得只是某一筆來源的原文，且 `covered_source_ids` 必須等於來源集合。任何失敗都不落庫。
+- 模型呼叫前記下每筆來源的 content hash 與 aggregate revision；建立 proposal 的 transaction 比對這些版本，生成期間來源內容或 outcome 證據有變動就以 `source_revision_changed`／`aggregate_revision_changed` 拒絕，不落庫。人工文字不帶這些版本，維持只檢查門檻。
 - 通過後走與人工文字相同的持久化路徑；candidate metadata 與 `memory_consolidation_proposed` payload 以 `proposal_origin`（`operator`／`model`）區分，模型路徑另記 `draft_model`。approve 仍需人工執行。
 
 規則：

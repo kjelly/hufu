@@ -43,7 +43,9 @@ func validateConsolidateDraftFlags() error {
 // model or validation failure persists nothing.
 func runContextConsolidateDraft(cmd *cobra.Command, repo *contextstore.SQLiteRepository) error {
 	ctx := cmd.Context()
-	sources, ids, err := loadConsolidationSources(cmd, repo)
+	// The revisions are read with the sources the model sees, so creation can
+	// refuse sources that change while the model is writing.
+	sources, ids, revisions, err := repo.ValidateConsolidationSourceRevisions(ctx, consolidationSelection())
 	if err != nil {
 		return err
 	}
@@ -83,5 +85,5 @@ func runContextConsolidateDraft(cmd *cobra.Command, repo *contextstore.SQLiteRep
 	if err = consolidation.ValidateDraft(result, draftSources); err != nil {
 		return err
 	}
-	return persistConsolidationProposal(cmd, repo, ids, strings.TrimSpace(result.Text), "model", model)
+	return persistConsolidationProposal(cmd, repo, ids, strings.TrimSpace(result.Text), "model", model, &revisions)
 }

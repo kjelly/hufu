@@ -284,6 +284,11 @@ func sourceAggregateReason(ctx context.Context, q queryer, id string, in consoli
 	}
 	switch in.check {
 	case consolidationCheckCreate:
+		// A drafted text carries the aggregate revisions it was generated
+		// from; operator text carries none and only meets the thresholds.
+		if in.aggregates != nil && in.aggregates[id] != aggregate.Revision {
+			return ReasonAggregateRevisionChanged, aggregate.Revision, found, nil
+		}
 		if in.support.enabled() && (!found || aggregate.VerifiedSupportCount < in.support.MinConfirmedSupport || aggregate.IndependentTaskCount < in.support.MinIndependentTasks || aggregate.CausalFailureCount > 0) {
 			return ReasonSupportInsufficient, aggregate.Revision, found, nil
 		}
@@ -300,21 +305,33 @@ func sourceAggregateReason(ctx context.Context, q queryer, id string, in consoli
 // draft path uses it before a model call; CreateConsolidationProposal repeats
 // the same check inside its transaction.
 func (r *SQLiteRepository) ValidateConsolidationSources(ctx context.Context, selection ConsolidationSourceSelection) ([]ContextItem, []string, error) {
+	sources, ids, _, err := r.ValidateConsolidationSourceRevisions(ctx, selection)
+	return sources, ids, err
+}
+
+// ValidateConsolidationSourceRevisions is ValidateConsolidationSources plus
+// the revisions it validated, which a drafting caller passes back as
+// ConsolidationCreateInput.Expected.
+func (r *SQLiteRepository) ValidateConsolidationSourceRevisions(ctx context.Context, selection ConsolidationSourceSelection) ([]ContextItem, []string, ConsolidationSourceRevisions, error) {
 	ids := sortedUniqueIDs(selection.SourceIDs)
 	if len(ids) < 2 {
-		return nil, nil, errors.New("consolidation requires at least two source items")
+		return nil, nil, ConsolidationSourceRevisions{}, errors.New("consolidation requires at least two source items")
 	}
 	result, err := r.checkConsolidationSourcesQ(ctx, r.db, consolidationSourceCheck{
 		projectID: selection.ProjectID, teamID: selection.TeamID, ids: ids, check: consolidationCheckCreate,
 		policyVersion: selection.PolicyVersion, support: selection.Support, now: time.Now(),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ConsolidationSourceRevisions{}, err
 	}
 	if len(result.reasons) > 0 {
-		return nil, nil, &ConsolidationSourceError{SourceReasons: result.reasons}
+		return nil, nil, ConsolidationSourceRevisions{}, &ConsolidationSourceError{SourceReasons: result.reasons}
 	}
-	return result.sources, ids, nil
+	revisions := ConsolidationSourceRevisions{Content: make(map[string]string, len(result.sources)), Aggregates: result.aggregateRevisions}
+	for _, source := range result.sources {
+		revisions.Content[source.ID] = source.ContentHash
+	}
+	return result.sources, ids, revisions, nil
 }
 
 // EvaluateConsolidationProposal reports whether proposal, its candidate, and

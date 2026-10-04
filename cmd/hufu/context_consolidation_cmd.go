@@ -88,7 +88,7 @@ func runContextConsolidateProposals(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	return persistConsolidationProposal(cmd, repo, ids, contextProposalText, "operator", "")
+	return persistConsolidationProposal(cmd, repo, ids, contextProposalText, "operator", "", nil)
 }
 
 // consolidationSelection is the source selection named by --source under the
@@ -112,12 +112,13 @@ func loadConsolidationSources(cmd *cobra.Command, repo *contextstore.SQLiteRepos
 // persistConsolidationProposal stores text as a candidate derived from the
 // sources plus a pending proposal in one transaction, then records the
 // idempotent proposal event. origin is "operator" for --proposal-text or
-// "model" for --draft (with draftModel). Rerunning the same proposal records a
-// missed event without writing context records again.
-func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteRepository, ids []string, text, origin, draftModel string) error {
+// "model" for --draft (with draftModel and the source revisions the draft was
+// generated from). Rerunning the same proposal records a missed event without
+// writing context records again.
+func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteRepository, ids []string, text, origin, draftModel string, expected *contextstore.ConsolidationSourceRevisions) error {
 	selection := consolidationSelection()
 	selection.SourceIDs = ids
-	proposal, created, err := repo.CreateConsolidationProposal(cmd.Context(), contextstore.ConsolidationCreateInput{ConsolidationSourceSelection: selection, Text: text, Origin: origin, DraftModel: draftModel})
+	proposal, created, err := repo.CreateConsolidationProposal(cmd.Context(), contextstore.ConsolidationCreateInput{ConsolidationSourceSelection: selection, Text: text, Origin: origin, DraftModel: draftModel, Expected: expected})
 	if err != nil {
 		return err
 	}
