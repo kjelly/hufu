@@ -73,7 +73,7 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 	if strings.TrimSpace(receipt.ModelExecutionID) == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
 		return fmt.Errorf("coordinator task receipt is missing execution identity or transcript reference")
 	}
-	if err := c.taskTracker.TodoList().SetExecutionReceipt(todoID, receipt); err != nil {
+	if err := c.setAttemptReceipt(todoID, receipt); err != nil {
 		return fmt.Errorf("persist coordinator task receipt: %w", err)
 	}
 	return nil

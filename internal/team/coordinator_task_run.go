@@ -1012,7 +1012,7 @@ retryLoop:
 				RunID: runID, TaskID: todoID, Attempt: attempt, ProducerID: agentName,
 				ArtifactScope: cloneArtifactAccessScope(attemptArtifactScope),
 			}
-			if err := c.taskTracker.TodoList().SetExecutionReceipt(todoID, committedScopeReceipt); err != nil {
+			if err := c.setAttemptReceipt(todoID, committedScopeReceipt); err != nil {
 				closeTranscript()
 				return "", fmt.Errorf("commit artifact scope receipt: %w", err)
 			}
@@ -1354,7 +1354,7 @@ retryLoop:
 		}
 		c.applyResultContractReceipt(todoID, c.GetTaskResult(todoID), &receipt)
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-			_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+			_ = c.setAttemptReceipt(todoID, &receipt)
 		}
 
 		if strings.TrimSpace(output) != "" {
@@ -1428,7 +1428,7 @@ retryLoop:
 					failedExit := 1
 					receipt.ExitCode = &failedExit
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+						_ = c.setAttemptReceipt(todoID, &receipt)
 					}
 				} else if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
 					receipt.SubmittedResult = typedRes
@@ -1436,7 +1436,7 @@ retryLoop:
 					failedExit := 1
 					receipt.ExitCode = &failedExit
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+						_ = c.setAttemptReceipt(todoID, &receipt)
 					}
 				}
 			}
@@ -1455,7 +1455,7 @@ retryLoop:
 							err = withFailureClassOverride(errors.New("worker tool call was denied before execution; applying deterministic policy repair"), FailureExecution)
 						}
 						if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-							_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+							_ = c.setAttemptReceipt(todoID, &receipt)
 						}
 					} else {
 						// Protocol failure: the agent finished execution but omitted submit_result.
@@ -1802,7 +1802,7 @@ retryLoop:
 							}
 							c.applyResultContractReceipt(todoID, typedRes, &receipt)
 							if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-								_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+								_ = c.setAttemptReceipt(todoID, &receipt)
 							}
 						}
 					}
@@ -1834,7 +1834,7 @@ retryLoop:
 				receipt.SubmittedResult = typedRes
 				receipt.ExitCode = new(1)
 				if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-					_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+					_ = c.setAttemptReceipt(todoID, &receipt)
 				}
 				err = withFailureClassOverride(errors.New("runtime-attested invariant gate rejected the worker result"), FailureExecution)
 			}
@@ -1934,7 +1934,7 @@ retryLoop:
 				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					receipt.HandoffState = ResultHandoffSubmitted
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-						_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+						_ = c.setAttemptReceipt(todoID, &receipt)
 					}
 				}
 				if err := writeTaskFile(c.session.Workspace, c.session.Config.Name, agentName, taskTS, "done", taskDesc, coordinatorOutput); err != nil {
@@ -2028,7 +2028,7 @@ retryLoop:
 				receipt.FallbackDeniedReason += ": " + string(providerClass)
 			}
 			if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-				_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt)
+				_ = c.setAttemptReceipt(todoID, &receipt)
 			}
 		}
 
@@ -2944,7 +2944,7 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 		})
 	}
 	receipt.RepairProvenance = provenance
-	return c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+	return c.setAttemptReceipt(item.ID, &receipt)
 }
 
 // persistProtocolRepairPreparationFailure records a repair attempt that could
@@ -3005,7 +3005,7 @@ func (c *Coordinator) persistProtocolRepairPreparationFailure(item *TodoItem, ag
 		RepairAttempts: repairAttempts,
 		History:        repairHistory,
 	}
-	return c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+	return c.setAttemptReceipt(item.ID, &receipt)
 }
 
 // resumeProtocolIncompleteTask repairs a checkpointed protocol failure using
@@ -3311,7 +3311,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	if runErr != nil && !repairSuccess {
 		receipt.RepairProvenance.Error = runErr.Error()
 	}
-	_ = c.taskTracker.TodoList().SetExecutionReceipt(item.ID, &receipt)
+	_ = c.setAttemptReceipt(item.ID, &receipt)
 
 	if repairSuccess {
 		return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, typedRes, output)

@@ -813,7 +813,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		zero := 0
 		directReceipt.ExitCode = &zero
 	}
-	_ = c.taskTracker.TodoList().SetExecutionReceipt(todoID, &directReceipt)
+	_ = c.setAttemptReceipt(todoID, &directReceipt)
 	err, terminalBlocked := c.finalizeTaskTerminalResources(ctx, todoID, err)
 	var typedRes *TaskResult
 	if err == nil {

@@ -154,6 +154,36 @@ func TestInspectShowsFallbackAttemptTarget(t *testing.T) {
 	}
 }
 
+// TestInspectTaskShowsRecoveryComparisonPerAttempt pins the WP-002 view: each
+// attempt carries the recovery_change_observed comparison for its receipt.
+func TestInspectTaskShowsRecoveryComparisonPerAttempt(t *testing.T) {
+	exitCode := 1
+	receipts := []team.ExecutionReceipt{
+		{RunID: "run-1", TaskID: "task-1", Attempt: 1, Backend: "ollama", ModelExecutionID: "execution-a", ExitCode: &exitCode},
+		{RunID: "run-1", TaskID: "task-1", Attempt: 2, Backend: "ollama", ModelExecutionID: "execution-a", ExitCode: &exitCode},
+	}
+	item := &team.TodoItem{ID: "task-1", ExecutionReceipts: receipts}
+	observation := func(attempt int, comparison team.RecoveryComparison, reason string, previous int) IndexedEvent {
+		payload := team.RecoveryChangeObservation{
+			SchemaVersion: team.RecoveryChangeSchemaVersion, OccurrenceID: "run-1/task-1", RunID: "run-1", TaskID: "task-1",
+			Attempt: attempt, ModelExecutionID: "execution-a", Comparison: comparison, Reason: reason, PreviousAttempt: previous,
+			NotTracked: []string{"tool_sequence"},
+		}
+		return IndexedEvent{Ordinal: int64(attempt), Event: team.RunEvent{Type: string(team.EventRecoveryChangeObserved), TaskID: "task-1", Payload: jsonBytes(t, payload)}}
+	}
+	events := []IndexedEvent{observation(1, team.RecoveryComparisonUnknown, "no_prior_attempt", 0), observation(2, team.RecoveryNoStructuralChange, "", 1)}
+	data := projectTaskWithEvents(item, InspectQuery{RunID: "run-1", TaskID: "task-1"}, events)
+	if len(data.Attempts) != 2 || data.Attempts[0].Recovery == nil || data.Attempts[1].Recovery == nil {
+		t.Fatalf("attempts = %#v, want a recovery comparison on each", data.Attempts)
+	}
+	if got := data.Attempts[0].Recovery; got.Comparison != "unknown" || got.Reason != "no_prior_attempt" {
+		t.Fatalf("first attempt recovery = %+v", got)
+	}
+	if got := data.Attempts[1].Recovery; got.Comparison != "no_structural_change" || got.PreviousAttempt != 1 {
+		t.Fatalf("second attempt recovery = %+v", got)
+	}
+}
+
 func TestProjectTaskIncludesReadOnlyKnowledgeCoverage(t *testing.T) {
 	item := &team.TodoItem{
 		ID: "task-1",

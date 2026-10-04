@@ -38,3 +38,21 @@ cases:
         counts:
           - type: verify_error
             count: 2
+      # Each finished attempt records what it changed. The scripted retry
+      # reuses the model, inputs, and context, so the second attempt shows
+      # no structural change (the retry feedback is not an input change).
+      durable-events:
+        counts:
+          - type: recovery_change_observed
+            count: 2
+        matches:
+          - type: recovery_change_observed
+            occurrence: 1
+            fields:
+              payload.comparison: unknown
+              payload.reason: no_prior_attempt
+          - type: recovery_change_observed
+            occurrence: 2
+            fields:
+              payload.comparison: no_structural_change
+              payload.previous_attempt: 1

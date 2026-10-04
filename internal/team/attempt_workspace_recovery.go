@@ -198,7 +198,7 @@ func (c *Coordinator) finalizeAppliedAttempt(ctx context.Context, item *TodoItem
 		}
 	}
 	if started.ExecutionReceipt != nil {
-		if err := c.taskTracker.TodoList().SetExecutionReceipt(item.ID, started.ExecutionReceipt); err != nil {
+		if err := c.setAttemptReceipt(item.ID, started.ExecutionReceipt); err != nil {
 			return fmt.Errorf("restore execution receipt: %w", err)
 		}
 	}

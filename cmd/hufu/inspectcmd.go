@@ -535,6 +535,13 @@ func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.Ta
 			valueOrUnavailable(attempt.ExecutionTarget), valueOrUnavailable(attempt.Backend), optionalInt(attempt.ExitCode), attempt.VerificationStatus, attempt.Winning); err != nil {
 			return err
 		}
+		if recovery := attempt.Recovery; recovery != nil {
+			if _, err := fmt.Fprintf(writer, "  Recovery: %s%s changed=%s unknown=%s not_tracked=%s\n",
+				recovery.Comparison, recoveryReasonSuffix(recovery), refsOrNone(recovery.ChangedDimensions),
+				refsOrNone(recovery.UnknownDimensions), refsOrNone(recovery.NotTracked)); err != nil {
+				return err
+			}
+		}
 	}
 	_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
 		refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
@@ -629,4 +636,14 @@ func optionalInt(value *int) string {
 		return "unavailable"
 	}
 	return fmt.Sprintf("%d", *value)
+}
+
+func recoveryReasonSuffix(recovery *inspectpkg.AttemptRecoveryData) string {
+	switch {
+	case recovery.Reason != "":
+		return " (" + recovery.Reason + ")"
+	case recovery.PreviousAttempt > 0:
+		return fmt.Sprintf(" (vs attempt %d)", recovery.PreviousAttempt)
+	}
+	return ""
 }

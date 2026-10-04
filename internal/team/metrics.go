@@ -36,6 +36,7 @@ func (c *Coordinator) Metrics() RunMetrics {
 		RepeatedFailureFingerprints:       repeatedFingerprintCount(c.antiThrashing.Counts),
 		SystemicFingerprintsEscalated:     c.antiThrashing.SystemicEscalations,
 		RecoveryStrategyChanges:           c.antiThrashing.StrategyChanges,
+		RetriesWithoutStructuralChange:    c.retriesWithoutStructuralChange(),
 		LastRecoveryStrategies:            lastStrategies,
 		DiagnosticTasksSinceProgress:      c.antiThrashing.DiagnosticSinceProgress,
 		RepairAttemptsByCriterion:         repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings,

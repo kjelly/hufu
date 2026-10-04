@@ -367,7 +367,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	if leafItem := isolatedCoord.todoItemByID(todoID); leafItem != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		for i := range leafItem.ExecutionReceipts {
 			receipt := leafItem.ExecutionReceipts[i]
-			if mergeErr := c.taskTracker.TodoList().SetExecutionReceipt(todoID, &receipt); mergeErr != nil {
+			if mergeErr := c.setAttemptReceipt(todoID, &receipt); mergeErr != nil {
 				if err == nil {
 					err = fmt.Errorf("merge %s leaf receipt: %w", slot, mergeErr)
 				}

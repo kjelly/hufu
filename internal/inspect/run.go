@@ -45,6 +45,20 @@ type AttemptData struct {
 	VerificationStatus string `json:"verification_status"`
 	VerificationRef    string `json:"verification_ref,omitempty"`
 	Winning            bool   `json:"winning,omitzero"`
+	// Recovery compares the attempt with the previous attempt of the same
+	// task occurrence; it is nil when no observation was recorded.
+	Recovery *AttemptRecoveryData `json:"recovery,omitempty"`
+}
+
+// AttemptRecoveryData is the content-free recovery_change_observed summary
+// for one attempt.
+type AttemptRecoveryData struct {
+	Comparison        string   `json:"comparison"`
+	Reason            string   `json:"reason,omitempty"`
+	PreviousAttempt   int      `json:"previous_attempt,omitempty"`
+	ChangedDimensions []string `json:"changed_dimensions,omitempty"`
+	UnknownDimensions []string `json:"unknown_dimensions,omitempty"`
+	NotTracked        []string `json:"not_tracked,omitempty"`
 }
 
 type TaskData struct {
@@ -318,11 +332,13 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		data.FailureClass = string(item.FailureEvent.FailureClass)
 		data.ReasonCode = item.FailureEvent.FailureType
 	}
+	recovery := attemptRecoveryByReceipt(events)
 	for _, receipt := range item.ExecutionReceipts {
 		if receipt.RunID != query.RunID || receipt.TaskID != item.ID || query.Attempt > 0 && receipt.Attempt != query.Attempt {
 			continue
 		}
 		attempt := AttemptData{
+			Recovery:           recovery[attemptReceiptKey(receipt.RunID, receipt.TaskID, receipt.Attempt, receipt.ModelExecutionID)],
 			Attempt:            receipt.Attempt,
 			ModelExecutionID:   receipt.ModelExecutionID,
 			ProducerID:         receipt.ProducerID,
@@ -433,4 +449,32 @@ func classifyProjectionError(runID string, err error) error {
 		return fmt.Errorf("%w: run %q", ErrNotFound, runID)
 	}
 	return fmt.Errorf("%w: project run %q: %v", ErrIntegrity, runID, err)
+}
+
+func attemptReceiptKey(runID, taskID string, attempt int, modelExecutionID string) string {
+	return fmt.Sprintf("%s\x1f%s\x1f%d\x1f%s", runID, taskID, attempt, modelExecutionID)
+}
+
+// attemptRecoveryByReceipt indexes recovery observations by the receipt
+// identity of the attempt they describe.
+func attemptRecoveryByReceipt(events []IndexedEvent) map[string]*AttemptRecoveryData {
+	runEvents := make([]team.RunEvent, 0, len(events))
+	for _, event := range events {
+		runEvents = append(runEvents, event.Event)
+	}
+	out := map[string]*AttemptRecoveryData{}
+	for _, observation := range team.RecoveryChangeObservations(runEvents) {
+		data := &AttemptRecoveryData{
+			Comparison: string(observation.Comparison), Reason: observation.Reason, PreviousAttempt: observation.PreviousAttempt,
+			NotTracked: observation.NotTracked,
+		}
+		for _, dimension := range observation.ChangedDimensions {
+			data.ChangedDimensions = append(data.ChangedDimensions, string(dimension))
+		}
+		for _, dimension := range observation.UnknownDimensions {
+			data.UnknownDimensions = append(data.UnknownDimensions, string(dimension))
+		}
+		out[attemptReceiptKey(observation.RunID, observation.TaskID, observation.Attempt, observation.ModelExecutionID)] = data
+	}
+	return out
 }

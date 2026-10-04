@@ -609,6 +609,7 @@ type Coordinator struct {
 	noJournal              bool
 	eventStore             *EventStore // append-only session event store
 	experienceLineage      experienceLineageCache
+	recoveryChanges        recoveryChangeLog
 	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
 	eventOnceMu            sync.Mutex
 	decisionJournalMu      sync.Mutex

@@ -91,6 +91,8 @@ func validateCurrentEventPayload(event RunEvent) error {
 		return validateDecisionPrimitiveEvent(event)
 	case EventControlDecisionObserved:
 		return validateControlDecisionEvent(event)
+	case EventRecoveryChangeObserved:
+		return validateRecoveryChangeEvent(event)
 	case EventWrapUpPhase, EventRunCancellationRequested:
 		return validateRunLifecycleControlPayload(event)
 	case EventUserMessageAdded, EventAssistantMessageAdded:

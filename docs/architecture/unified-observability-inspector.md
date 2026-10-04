@@ -311,13 +311,41 @@ integrity diagnostics。run 本身即使 outcome 是 failed/partial，也不代�
 
 - canonical task status、phase、agent、execution target/topology
 - retry/reset/recovery decision 與 reason code
-- 每個 attempt 的 receipt identity、exit code、verification status
+- 每個 attempt 的 receipt identity、實際執行的 execution target（receipt 記錄的 target 優先，
+  其次 anchor event，最後 backend 名稱）、exit code、verification status
+- 每個 attempt 的 recovery comparison（`recovery_change_observed`，見 §6.2.1）
 - artifact/evidence/context/memory opaque references
 - task 的 side effect;catalog action task 另顯示 catalog action ID、entry hash、
   arguments hash、durable invocation ID 與連結的 proposal ID
 
 不得顯示 task output、transcript、tool args、verifier stdout/stderr,或 catalog action
 的參數原文(只顯示 arguments hash)。
+
+### 6.2.1 Recovery change diagnostics
+
+每個 attempt 結束時（receipt 有 `FinishedAt`），coordinator 唯一的 receipt 寫入入口
+`setAttemptReceipt` 會記錄一筆 content-free 的 `recovery_change_observed`（schema
+version 1），與同一 task occurrence（第一個 receipt 的 run ID + todo ID）的前一個
+attempt 比較。它只供鑑識辨識「白重試」，任何 dispatch、retry、replay、stop 或
+no-progress 決策都不讀它；寫入失敗只記 log。
+
+| 維度 | 來源 | unknown／not_applicable |
+|---|---|---|
+| `execution_target` | receipt 的 target、`FallbackFrom`、`CandidateIndex` | receipt 沒有自己的 target（coordinator 執行的 task、舊的 in-dispatch escalation） |
+| `model_execution` | `ModelExecutionID`（todo + agent + model 的 hash） | 缺值 |
+| `action` | contract ID、action capability／type、materialized payload hash | 非 action task 為 not_applicable |
+| `run_inputs` | todo 的 run input snapshot hash 與 bound inputs | 沒有 run input 時為 not_applicable |
+| `dependency_graph` | `DependsOn`、`OrderAfter`（排序後）、`Execution.Steps` | — |
+| `context_manifest` | 實際注入的 context item ID + content hash（排除 runtime 每次重寫的 `retry_failure_context`、`runtime_context`） | 沒有 context manifest |
+| `dynamic_tools` | dynamic gateway 呼叫的 logical tool + descriptor sha，保留順序 | `ToolInvocationsTruncated > 0` |
+
+比較結果：任一 known 維度不同為 `change_detected`；全部可比較且相同為
+`no_structural_change`；其餘為 `unknown`。第一個 attempt 為 `unknown`、reason
+`no_prior_attempt`。每筆都列出 `not_tracked`（完整 tool 順序、每次呼叫的 input hash、
+artifact revision、失敗的 criterion），這些在 attempt 層級沒有 durable 紀錄，比較不會顯示
+它們改變。前一個失敗 fingerprint 與 recovery hypothesis 的 strategy 只作對照欄位。
+同一 attempt 只記一次；resume 後從 event log 重建前一次 attempt，所以比較對象不變。
+`hufu report` 的 Reliability Metrics 列出「Retries without structural change」。
 
 ### 6.3 `inspect trace`
 

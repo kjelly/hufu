@@ -126,7 +126,7 @@ func (e EventType) String() string { return string(e) }
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
 	case EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
-		EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventControlDecisionObserved,
+		EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventUserMessageAdded, EventAssistantMessageAdded,
 		EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted,
 		EventTaskFailed, EventTaskBlocked, EventTaskSkipped,
