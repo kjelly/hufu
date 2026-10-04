@@ -116,6 +116,8 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
+- [EventStore memory query implementation plan](architecture/eventstore-memory-query-implementation-plan.md)
+  — scoped memory-event reads, behavior fixtures, and allocation benchmarks.
 
 ## Archive
 
