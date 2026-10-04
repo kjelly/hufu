@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answerability", "verdict", "supported_claims", "critique", "open_questions"],
+  "properties": {
+    "answerability": {"type": "string", "enum": ["supported", "partial", "insufficient"]},
+    "verdict": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "supported_claims": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "quote", "location"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "quote": {"type": "string", "minLength": 1, "maxLength": 350},
+          "location": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      }
+    },
+    "critique": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "open_questions": {"type": "string", "minLength": 1, "maxLength": 2000}
+  },
+  "if": {"properties": {"answerability": {"const": "supported"}}},
+  "then": {"properties": {"supported_claims": {"minItems": 1}}}
+}

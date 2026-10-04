@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answerability", "leading_answer", "evidence_quote", "evidence_location", "alternative_reading", "uncertainties"],
+  "properties": {
+    "answerability": {"type": "string", "enum": ["supported", "partial", "insufficient"]},
+    "leading_answer": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "evidence_quote": {"type": "string", "maxLength": 350},
+    "evidence_location": {"type": "string", "maxLength": 200},
+    "alternative_reading": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "uncertainties": {"type": "string", "minLength": 1, "maxLength": 2000}
+  },
+  "if": {"properties": {"answerability": {"const": "supported"}}},
+  "then": {"properties": {"evidence_quote": {"minLength": 1}, "evidence_location": {"minLength": 1}}}
+}

@@ -1,0 +1,49 @@
+name: article-debate
+description: "Answer questions from a supplied article through independent analysis and evidence-based debate"
+max-rounds: 8
+max-concurrent: 2
+max-retries: 1
+allow-free-text-results: false
+delegation:
+  bind-task-goal-contracts: true
+  initial-batch:
+    agents: [explorer, challenger, arbiter, reviser]
+    exact: true
+    first-tool: agent
+  allowed-workers: [explorer, challenger, arbiter, reviser]
+  no-redispatch-after-success: [explorer, challenger, arbiter, reviser]
+  share-request-with: [explorer, challenger, arbiter, reviser]
+  forbid-context-files: true
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+  required-workers: [explorer, challenger, arbiter, reviser]
+tasks:
+  - id: explore-article
+    agent: explorer
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+  - id: challenge-article
+    agent: challenger
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+  - id: audit-readings
+    agent: arbiter
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+  - id: revise-answer
+    agent: reviser
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
