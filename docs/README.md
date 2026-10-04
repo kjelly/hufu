@@ -129,7 +129,8 @@ to re-create an abstraction that already exists in the runtime.
   the [team action catalog implementation record](archive/implementation-plans/team-action-catalog.md),
   the [MCP-backed action provider implementation record](archive/implementation-plans/mcp-action-provider.md),
   the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md),
-  and the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md).
+  the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
+  and the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for
