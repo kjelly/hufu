@@ -2,12 +2,106 @@ package team
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+func TestReconcileInterruptedTaskDoesNotTrustHighRiskOutput(t *testing.T) {
+	c := newBudgetCoordinator(t)
+	for _, sideEffect := range []SideEffectClass{SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown} {
+		result := c.reconcileInterruptedTask(t.Context(), &TodoItem{SideEffect: sideEffect, Output: "secret worker output"})
+		if result.Resolution != ResolutionUnknown || result.Source != ReconcileSourceNone || result.ExitCode != nil {
+			t.Errorf("side effect %s: result = %#v", sideEffect, result)
+		}
+	}
+	result := c.reconcileInterruptedTask(t.Context(), &TodoItem{SideEffect: SideEffectWorkspaceWrite, Output: "completed"})
+	if result.Resolution != ResolutionComplete || result.Source != ReconcileSourceTaskOutput || result.ExitCode != nil {
+		t.Fatalf("low-risk result = %#v", result)
+	}
+}
+
+func TestRecoveryStateFromVerification(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *VerificationResult
+		err    error
+		want   RecoveryResolution
+		code   bool
+	}{
+		{"complete", &VerificationResult{ExitCode: 0}, nil, ResolutionComplete, true},
+		{"not_started", &VerificationResult{ExitCode: 1}, errors.New("exit 1"), ResolutionNotStarted, true},
+		{"partial", &VerificationResult{ExitCode: 2}, errors.New("exit 2"), ResolutionPartial, true},
+		{"other", &VerificationResult{ExitCode: 3}, errors.New("exit 3"), ResolutionUnknown, true},
+		{"launch_error", nil, errors.New("start failed"), ResolutionUnknown, false},
+		{"timeout", &VerificationResult{ExitCode: 2, TimedOut: true}, context.DeadlineExceeded, ResolutionUnknown, false},
+		{"missing_result", nil, nil, ResolutionUnknown, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := recoveryStateFromVerification(ReconcileSourceVerify, tt.result, tt.err)
+			if got.Resolution != tt.want || got.Source != ReconcileSourceVerify || (got.ExitCode != nil) != tt.code {
+				t.Fatalf("result = %#v, want resolution %s, code present %t", got, tt.want, tt.code)
+			}
+			if err := got.validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestResumeInterruptedTaskRecordsBoundedReconciliationEvidence(t *testing.T) {
+	workspace := t.TempDir()
+	es, err := NewEventStore(workspace, "run-reconcile", "session-reconcile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newBudgetCoordinator(t)
+	c.eventStore = es
+	c.taskTracker.TodoList().Restore([]*TodoItem{{
+		ID: "high-risk", Agent: "a", Desc: "external mutation", Status: TaskInProgress,
+		SideEffect: SideEffectExternalWrite, Recovery: RecoveryReconcile, Output: "secret worker output",
+	}})
+	if count, err := c.ResumeInterruptedTasks(t.Context()); err != nil || count != 0 {
+		t.Fatalf("resume count=%d err=%v", count, err)
+	}
+	item := c.taskTracker.TodoList().Items()[0]
+	if item.Status != TaskBlocked || item.RecoveryState != RecoveryStateUnknown {
+		t.Fatalf("high-risk task = %#v", item)
+	}
+	events, err := es.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type != "recovery_decision" || event.TaskID != item.ID {
+			continue
+		}
+		if strings.Contains(string(event.Payload), "secret worker output") {
+			t.Fatal("reconciliation event leaked task output")
+		}
+		var payload struct {
+			Decision string `json:"decision"`
+			Source   string `json:"reconcile_source"`
+			State    string `json:"recovery_state"`
+			Attempt  int    `json:"attempt"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Decision == "reconcile_observed" {
+			found = payload.Source == string(ReconcileSourceNone) && payload.State == RecoveryStateUnknown && payload.Attempt == 1
+		}
+	}
+	if !found {
+		t.Fatal("bounded reconciliation observation was not recorded")
+	}
+}
 
 func assertRecoveryFailureEvent(t *testing.T, item *TodoItem, class TaskFailureClass, disposition RetryDisposition) {
 	t.Helper()

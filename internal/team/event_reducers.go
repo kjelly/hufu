@@ -400,6 +400,24 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == "recovery_decision" && e.TaskID != "" {
+			var payload struct {
+				Decision   string             `json:"decision"`
+				Resolution RecoveryResolution `json:"recovery_state"`
+				Source     ReconcileSource    `json:"reconcile_source"`
+				ExitCode   *int               `json:"reconcile_exit_code"`
+				Attempt    int                `json:"attempt"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Decision == "reconcile_observed" {
+				if item := taskMap[e.TaskID]; item != nil && payload.Attempt == reconcileAttempt(item) {
+					result := ReconcileResult{Resolution: payload.Resolution, Source: payload.Source, ExitCode: payload.ExitCode}
+					if result.validate() == nil {
+						item.RecoveryState = string(result.Resolution)
+					}
+				}
+			}
+			continue
+		}
 		if e.Type == string(EventPrimaryDecisionAdmitted) {
 			item, err := ProjectPrimaryDecisionOccurrence(e)
 			if err != nil {

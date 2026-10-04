@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -49,6 +50,79 @@ const (
 	RecoveryStatePartial    = "partial"
 	RecoveryStateUnknown    = "unknown"
 )
+
+type RecoveryResolution string
+
+const (
+	ResolutionNotStarted RecoveryResolution = RecoveryStateNotStarted
+	ResolutionComplete   RecoveryResolution = RecoveryStateComplete
+	ResolutionPartial    RecoveryResolution = RecoveryStatePartial
+	ResolutionUnknown    RecoveryResolution = RecoveryStateUnknown
+)
+
+type ReconcileSource string
+
+const (
+	ReconcileSourceVerifySpec    ReconcileSource = "verify_spec"
+	ReconcileSourceReconcileTool ReconcileSource = "reconcile_tool"
+	ReconcileSourceVerify        ReconcileSource = "verify"
+	ReconcileSourceTaskOutput    ReconcileSource = "task_output"
+	ReconcileSourceNone          ReconcileSource = "none"
+)
+
+// ReconcileResult contains only bounded classification evidence. In particular,
+// it must never contain a verifier command, output, or error text.
+type ReconcileResult struct {
+	Resolution RecoveryResolution
+	Source     ReconcileSource
+	ExitCode   *int
+}
+
+func (result ReconcileResult) validate() error {
+	switch result.Resolution {
+	case ResolutionNotStarted, ResolutionComplete, ResolutionPartial, ResolutionUnknown:
+	default:
+		return fmt.Errorf("unsupported recovery resolution %q", result.Resolution)
+	}
+	switch result.Source {
+	case ReconcileSourceVerifySpec, ReconcileSourceReconcileTool, ReconcileSourceVerify:
+		if result.ExitCode == nil {
+			if result.Resolution != ResolutionUnknown {
+				return fmt.Errorf("check without an exit code cannot prove a recovery state")
+			}
+		} else {
+			switch *result.ExitCode {
+			case ReconcileExitComplete:
+				if result.Resolution != ResolutionComplete {
+					return fmt.Errorf("recovery exit code and resolution disagree")
+				}
+			case ReconcileExitNotStarted:
+				if result.Resolution != ResolutionNotStarted {
+					return fmt.Errorf("recovery exit code and resolution disagree")
+				}
+			case ReconcileExitPartial:
+				if result.Resolution != ResolutionPartial {
+					return fmt.Errorf("recovery exit code and resolution disagree")
+				}
+			default:
+				if result.Resolution != ResolutionUnknown {
+					return fmt.Errorf("recovery exit code and resolution disagree")
+				}
+			}
+		}
+	case ReconcileSourceTaskOutput:
+		if result.Resolution != ResolutionComplete || result.ExitCode != nil {
+			return fmt.Errorf("task output may only prove low-risk completion")
+		}
+	case ReconcileSourceNone:
+		if result.Resolution != ResolutionUnknown || result.ExitCode != nil {
+			return fmt.Errorf("absent evidence may only yield unknown")
+		}
+	default:
+		return fmt.Errorf("unsupported reconcile source %q", result.Source)
+	}
+	return nil
+}
 
 // Reconcile exit codes used by read-only probe commands to classify the
 // state of an interrupted task (§11.4–11.5). A reconcile/verify tool is
@@ -176,45 +250,79 @@ func ResolveRecoveryPolicy(explicit RecoveryPolicy, class SideEffectClass, isUna
 // 1. inspect unfinished operation & side-effect class
 // 2. run read-only reconcile tool or verify command if available
 // 3. classify state: complete, not_started, partial, unknown
-func (c *Coordinator) reconcileInterruptedTask(ctx context.Context, it *TodoItem) string {
+func (c *Coordinator) reconcileInterruptedTask(ctx context.Context, it *TodoItem) ReconcileResult {
 	if it.VerifySpec != nil {
 		res, err := c.verifyTaskDeliverableWithSpec(ctx, nil, taskDefFromTodoItem(it), nil)
-		return recoveryStateFromVerification(res, err)
+		return recoveryStateFromVerification(ReconcileSourceVerifySpec, res, err)
 	}
 	reconcileCmd := it.ReconcileTool
+	source := ReconcileSourceReconcileTool
 	if reconcileCmd == "" {
 		reconcileCmd = it.Verify
+		source = ReconcileSourceVerify
 	}
 
 	if reconcileCmd != "" {
 		res, err := c.verifyTaskDeliverable(ctx, nil, reconcileCmd)
-		return recoveryStateFromVerification(res, err)
+		return recoveryStateFromVerification(source, res, err)
 	}
 
-	if strings.TrimSpace(it.Output) != "" {
-		return RecoveryStateComplete
+	if !nonReplayableSideEffect(it.SideEffect) && strings.TrimSpace(it.Output) != "" {
+		return ReconcileResult{Resolution: ResolutionComplete, Source: ReconcileSourceTaskOutput}
 	}
 
-	return RecoveryStateUnknown
+	return ReconcileResult{Resolution: ResolutionUnknown, Source: ReconcileSourceNone}
 }
 
-func recoveryStateFromVerification(res *VerificationResult, err error) string {
-	if err == nil {
-		return RecoveryStateComplete
+func recoveryStateFromVerification(source ReconcileSource, res *VerificationResult, err error) ReconcileResult {
+	result := ReconcileResult{Resolution: ResolutionUnknown, Source: source}
+	if res == nil || res.TimedOut || res.ExitCode < 0 || err != nil && res.ExitCode == 0 {
+		return result
 	}
-	if res == nil {
-		return RecoveryStateUnknown
-	}
-	switch res.ExitCode {
+	code := res.ExitCode
+	result.ExitCode = &code
+	switch code {
 	case ReconcileExitComplete:
-		return RecoveryStateComplete
+		result.Resolution = ResolutionComplete
 	case ReconcileExitNotStarted:
-		return RecoveryStateNotStarted
+		result.Resolution = ResolutionNotStarted
 	case ReconcileExitPartial:
-		return RecoveryStatePartial
-	default:
-		return RecoveryStateUnknown
+		result.Resolution = ResolutionPartial
 	}
+	return result
+}
+
+// recordReconcileObservation writes bounded evidence before the checkpoint or
+// status transition. A failed append must not permit the transition to proceed.
+func (c *Coordinator) recordReconcileObservation(actor string, item *TodoItem, result ReconcileResult) error {
+	if err := result.validate(); err != nil {
+		return err
+	}
+	attempt := reconcileAttempt(item)
+	payload := map[string]any{
+		"decision":         "reconcile_observed",
+		"recovery_state":   string(result.Resolution),
+		"reconcile_source": string(result.Source),
+		"attempt":          attempt,
+	}
+	if result.ExitCode != nil {
+		payload["reconcile_exit_code"] = *result.ExitCode
+	}
+	return c.emitEvent("recovery_decision", actor, item.ID, payload)
+}
+
+func reconcileAttempt(item *TodoItem) int {
+	if item == nil {
+		return 0
+	}
+	attempt := item.Retries + 1
+	for _, receipt := range item.ExecutionReceipts {
+		attempt = max(attempt, receipt.Attempt)
+	}
+	if item.ExecutionReceipt != nil {
+		attempt = max(attempt, item.ExecutionReceipt.Attempt)
+	}
+	return attempt
 }
 
 // resolveTaskRecovery applies the 3-tier side-effect / recovery precedence

@@ -1065,7 +1065,11 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			})
 
 		case RecoveryReconcile:
-			state := c.reconcileInterruptedTask(ctx, it)
+			result := c.reconcileInterruptedTask(ctx, it)
+			if err := c.recordReconcileObservation("coordinator", it, result); err != nil {
+				return count, fmt.Errorf("record reconciliation for task %s: %w", it.ID, err)
+			}
+			state := string(result.Resolution)
 			it.RecoveryState = state
 			c.taskTracker.TodoList().SetRecoveryState(it.ID, state)
 			switch state {

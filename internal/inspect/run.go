@@ -3,6 +3,7 @@ package inspect
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -87,6 +88,7 @@ type TaskData struct {
 	FailureClass      string                    `json:"failure_class,omitempty"`
 	ReasonCode        string                    `json:"reason_code,omitempty"`
 	RecoveryState     string                    `json:"recovery_state,omitempty"`
+	Reconciliation    *ReconciliationData       `json:"reconciliation,omitempty"`
 	Failure           *team.FailureEventPayload `json:"failure,omitempty"`
 	ArtifactRefs      []string                  `json:"artifact_refs"`
 	ContextRefs       []string                  `json:"context_refs"`
@@ -95,6 +97,14 @@ type TaskData struct {
 	SideEffect        string                    `json:"side_effect,omitempty"`
 	CatalogAction     *CatalogActionData        `json:"catalog_action,omitempty"`
 	Replans           []ReplanData              `json:"replans,omitempty"`
+}
+
+// ReconciliationData is bounded evidence for the selected task attempt.
+// Historical decisions without a source are explicitly unknown.
+type ReconciliationData struct {
+	Attempt  int    `json:"attempt"`
+	Source   string `json:"source"`
+	ExitCode *int   `json:"exit_code,omitempty"`
 }
 
 // CatalogActionData identifies the catalog action a task ran. Arguments are
@@ -330,6 +340,35 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		ContextRefs:       []string{},
 		MemoryRefs:        []string{},
 		SideEffect:        string(item.SideEffect),
+	}
+	if data.RecoveryState != "" {
+		attempt := recoveryAttempt(item)
+		if query.Attempt > 0 && query.Attempt != attempt {
+			data.RecoveryState = ""
+		} else {
+			data.Reconciliation = &ReconciliationData{Attempt: attempt, Source: "unknown"}
+			for _, indexed := range events {
+				event := indexed.Event
+				if event.Type != "recovery_decision" || event.TaskID != item.ID || event.RunID != query.RunID || query.SessionID != "" && event.SessionID != query.SessionID {
+					continue
+				}
+				var evidence struct {
+					Decision string `json:"decision"`
+					State    string `json:"recovery_state"`
+					Source   string `json:"reconcile_source"`
+					Attempt  int    `json:"attempt"`
+					ExitCode *int   `json:"reconcile_exit_code"`
+				}
+				if json.Unmarshal(event.Payload, &evidence) != nil || evidence.Decision != "reconcile_observed" || evidence.State != data.RecoveryState || evidence.Attempt != attempt {
+					continue
+				}
+				switch evidence.Source {
+				case string(team.ReconcileSourceVerifySpec), string(team.ReconcileSourceReconcileTool), string(team.ReconcileSourceVerify), string(team.ReconcileSourceTaskOutput), string(team.ReconcileSourceNone):
+					data.Reconciliation.Source = evidence.Source
+					data.Reconciliation.ExitCode = evidence.ExitCode
+				}
+			}
+		}
 	}
 	if binding := item.CatalogAction; binding != nil {
 		data.CatalogAction = &CatalogActionData{

@@ -523,6 +523,19 @@ func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.Ta
 		valueOrUnavailable(data.AgentID), valueOrUnavailable(data.ExecutionTarget)); err != nil {
 		return err
 	}
+	if data.RecoveryState != "" {
+		source := "unknown"
+		attempt := 0
+		var exitCode *int
+		if data.Reconciliation != nil {
+			source = data.Reconciliation.Source
+			attempt = data.Reconciliation.Attempt
+			exitCode = data.Reconciliation.ExitCode
+		}
+		if _, err := fmt.Fprintf(writer, "Recovery: %s  source=%s  attempt=%d  exit_code=%s\n", data.RecoveryState, source, attempt, optionalInt(exitCode)); err != nil {
+			return err
+		}
+	}
 	if action := data.CatalogAction; action != nil {
 		if _, err := fmt.Fprintf(writer, "Catalog action: %s  entry=%s  args=%s\nInvocation: %s  proposals: %s\n",
 			action.ActionID, action.EntryHash, action.ArgumentsHash, action.InvocationID, refsOrNone(action.ProposalIDs)); err != nil {

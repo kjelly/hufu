@@ -64,6 +64,37 @@ func TestInspectTaskUsesFrozenExecutionTargetAndHidesRawEvidence(t *testing.T) {
 	}
 }
 
+func TestProjectTaskReconciliationEvidenceFollowsAttempt(t *testing.T) {
+	item := &team.TodoItem{ID: "task-reconcile", RecoveryState: team.RecoveryStateUnknown, Retries: 1}
+	query := InspectQuery{RunID: "run-reconcile", TaskID: item.ID}
+	old := projectTaskWithEvents(item, query, nil)
+	if old.Reconciliation == nil || old.Reconciliation.Source != "unknown" || old.Reconciliation.Attempt != 2 {
+		t.Fatalf("historical source = %#v", old.Reconciliation)
+	}
+	events := []IndexedEvent{{Event: team.RunEvent{
+		Type: "recovery_decision", RunID: query.RunID, TaskID: item.ID,
+		Payload: jsonBytes(t, map[string]any{
+			"decision": "reconcile_observed", "recovery_state": team.RecoveryStateUnknown,
+			"reconcile_source": string(team.ReconcileSourceVerify), "reconcile_exit_code": 3, "attempt": 1,
+		}),
+	}}, {Event: team.RunEvent{
+		Type: "recovery_decision", RunID: query.RunID, TaskID: item.ID,
+		Payload: jsonBytes(t, map[string]any{
+			"decision": "reconcile_observed", "recovery_state": team.RecoveryStateUnknown,
+			"reconcile_source": string(team.ReconcileSourceNone), "attempt": 2,
+		}),
+	}}}
+	current := projectTaskWithEvents(item, query, events)
+	if current.Reconciliation == nil || current.Reconciliation.Source != string(team.ReconcileSourceNone) || current.Reconciliation.ExitCode != nil {
+		t.Fatalf("current evidence = %#v", current.Reconciliation)
+	}
+	query.Attempt = 1
+	previous := projectTaskWithEvents(item, query, events)
+	if previous.RecoveryState != "" || previous.Reconciliation != nil {
+		t.Fatalf("previous attempt inherited current recovery evidence: %#v", previous)
+	}
+}
+
 func TestProjectTaskUsesAttemptAnchoredTargetsAndBothTranscriptRefs(t *testing.T) {
 	exitCode := 0
 	first := team.ExecutionReceipt{

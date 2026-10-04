@@ -367,6 +367,30 @@ receipt records the target it ran on, its `candidate_index`, and on a fallback
 attempt `fallback_from` and `fallback_failure_class`; an attempt whose
 provider failure did not fall back records `fallback_denied_reason`.
 
+## Interrupted-task reconciliation evidence
+
+Normal crash resume and operator-requested `hufu reconcile --task` use the
+same typed reconciliation result. A declared `verify_spec`, `reconcile_tool`,
+or `verify` check classifies exit 0 as `complete`, exit 1 as `not_started`,
+exit 2 as `partial`, and any other exit, timeout, launch failure, or absent
+result as `unknown`. Without a declared check, non-empty task output may
+preserve `complete` only for `none` or `workspace_write` side effects. It is
+never completion proof for `external_write`, `infra_mutation`,
+`credential_mutation`, or `unknown` side effects; those remain `unknown` and
+cannot be automatically replayed merely because output exists.
+
+Before a reconciliation changes the task checkpoint or status, a
+`recovery_decision` event records `reconcile_observed` with the persisted
+recovery state, a fixed evidence source (`verify_spec`, `reconcile_tool`,
+`verify`, `task_output`, or `none`), the task attempt, and an optional exit
+code. The event contains no check command, task output, tool arguments, or
+error text. `hufu inspect task` displays that evidence only for the selected
+session, branch lineage, run, task, and attempt; historical events without a
+source display `unknown`. The source is diagnostic evidence, not permission
+to retry, bypass acceptance, or change the frozen execution target. A
+reconciled `complete` still requires affected acceptance criteria to be
+revalidated before the task becomes done.
+
 ## Effect snapshots and workspace versioning
 
 The execution world's `WorkspaceSnapshotter` observes one external-provider

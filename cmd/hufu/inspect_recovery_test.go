@@ -57,3 +57,18 @@ func TestRenderInspectTaskTextShowsRecoveryComparison(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderInspectTaskTextShowsReconciliationSource(t *testing.T) {
+	code := 2
+	data := inspectpkg.TaskData{
+		RunID: "run-1", TaskID: "task-1", Status: "blocked", RecoveryState: "partial",
+		Reconciliation: &inspectpkg.ReconciliationData{Attempt: 3, Source: "verify_spec", ExitCode: &code},
+	}
+	var out bytes.Buffer
+	if err := renderInspectTaskText(&out, "main", data); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Recovery: partial  source=verify_spec  attempt=3  exit_code=2") {
+		t.Fatalf("missing bounded reconciliation evidence: %s", out.String())
+	}
+}

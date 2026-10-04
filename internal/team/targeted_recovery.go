@@ -138,7 +138,11 @@ func (c *Coordinator) reconcileTaskForOperator(ctx context.Context, item *TodoIt
 		return fmt.Errorf("task %s has no declared reconcile_tool, verify, or verify_spec", item.ID)
 	}
 
-	state := c.reconcileInterruptedTask(ctx, item)
+	result := c.reconcileInterruptedTask(ctx, item)
+	if err := c.recordReconcileObservation("operator", item, result); err != nil {
+		return fmt.Errorf("record reconciliation for task %s: %w", item.ID, err)
+	}
+	state := string(result.Resolution)
 	c.taskTracker.TodoList().SetRecoveryState(item.ID, state)
 	_ = c.emitEvent("recovery_decision", "operator", item.ID, map[string]any{
 		"action":         string(TargetedRecoveryReconcile),

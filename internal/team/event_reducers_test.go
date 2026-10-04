@@ -41,6 +41,27 @@ func TestReducersReconstructState(t *testing.T) {
 	}
 }
 
+func TestReduceToTodoListReplaysBoundedReconciliationObservation(t *testing.T) {
+	events := []RunEvent{
+		{Type: "task_created", TaskID: "reconcile-1", Payload: []byte(`{"id":"reconcile-1","status":"in_progress"}`)},
+		{Type: "recovery_decision", TaskID: "reconcile-1", Payload: []byte(`{"decision":"reconcile_observed","recovery_state":"not_started","reconcile_source":"reconcile_tool","reconcile_exit_code":1,"attempt":1}`)},
+	}
+	items := ReduceToTodoList(events)
+	if len(items) != 1 || items[0].RecoveryState != RecoveryStateNotStarted {
+		t.Fatalf("replayed recovery state = %#v", items)
+	}
+	events = append(events, RunEvent{Type: "recovery_decision", TaskID: "reconcile-1", Payload: []byte(`{"decision":"reconcile_observed","recovery_state":"complete","reconcile_source":"task_output","attempt":2}`)})
+	items = ReduceToTodoList(events)
+	if items[0].RecoveryState != RecoveryStateNotStarted {
+		t.Fatalf("another attempt changed recovery state: %#v", items[0])
+	}
+	events = append(events, RunEvent{Type: "recovery_decision", TaskID: "reconcile-1", Payload: []byte(`{"decision":"reconcile_observed","recovery_state":"complete","reconcile_source":"none","attempt":1}`)})
+	items = ReduceToTodoList(events)
+	if items[0].RecoveryState != RecoveryStateNotStarted {
+		t.Fatalf("invalid evidence changed recovery state: %#v", items[0])
+	}
+}
+
 func TestReducersEmptyAndMalformedEvents(t *testing.T) {
 	session := ReduceToSessionData(nil)
 	if session == nil || len(session.Entries) != 0 {
