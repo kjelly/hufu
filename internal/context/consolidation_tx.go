@@ -48,8 +48,11 @@ type ConsolidationReviewInput struct {
 	ProposalID    string
 	ProjectID     string
 	PolicyVersion string
-	Actor         string
-	Reason        string
+	// StaleAfter requires recent strong evidence for every source at
+	// approval; zero skips the check.
+	StaleAfter time.Duration
+	Actor      string
+	Reason     string
 }
 
 // consolidationIdentity derives the proposal and candidate IDs from the
@@ -217,7 +220,7 @@ func (r *SQLiteRepository) ApproveConsolidationProposal(ctx context.Context, in 
 		if proposal.Status != ConsolidationStatusProposed {
 			return fmt.Errorf("%w: %s is %s", ErrConsolidationNotPending, proposal.ID, proposal.Status)
 		}
-		freshness, err := r.evaluateConsolidationQ(ctx, tx, proposal, consolidationCheckApprove, in.PolicyVersion, time.Now())
+		freshness, err := r.evaluateConsolidationQ(ctx, tx, proposal, consolidationCheckApprove, in.PolicyVersion, in.StaleAfter, time.Now())
 		if err != nil {
 			return err
 		}

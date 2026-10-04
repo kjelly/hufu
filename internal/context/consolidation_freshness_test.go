@@ -66,7 +66,7 @@ func TestEvaluateConsolidationProposalReasons(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := repo.EvaluateConsolidationProposal(context.Background(), current, consolidationTestPolicy, false)
+			got, err := repo.EvaluateConsolidationProposal(context.Background(), current, consolidationTestPolicy, false, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -184,7 +184,7 @@ func TestConsolidationConcurrentCreateAndReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	freshness, err := handles[0].EvaluateConsolidationProposal(context.Background(), proposal, consolidationTestPolicy, false)
+	freshness, err := handles[0].EvaluateConsolidationProposal(context.Background(), proposal, consolidationTestPolicy, false, 0)
 	if err != nil || slices.Contains(freshness.Reasons, ReasonLifecycleMismatch) {
 		t.Fatalf("final state inconsistent: %+v err=%v", freshness, err)
 	}

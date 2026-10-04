@@ -26,6 +26,10 @@ type EligibilityRepository interface {
 // open memory conflict (hufu context conflicts).
 const DiagnosticUnresolvedConflict = "unresolved_conflict"
 
+// DiagnosticStrongEvidenceStale marks a supported source excluded because
+// it has not been verified within the policy's stale-after window.
+const DiagnosticStrongEvidenceStale = "strong_evidence_stale"
+
 type EligibilityOptions struct {
 	ProjectID, TeamID, PolicyVersion, AgentID string
 	Type                                      Type
@@ -94,6 +98,10 @@ func EligibleSources(ctx context.Context, repo EligibilityRepository, opts Eligi
 		}
 		harm := float64(agg.CausalFailureCount) / float64(max(agg.AppliedCount, 1))
 		if harm > policy.MaxHarmRate {
+			continue
+		}
+		if !contextstore.StrongEvidenceFresh(agg, now, policy.StaleAfter) {
+			diagnostics = append(diagnostics, Diagnostic{SourceID: item.ID, Reason: DiagnosticStrongEvidenceStale})
 			continue
 		}
 		result = append(result, EligibleSource{Item: item, Aggregate: agg, AllowedTypes: types})

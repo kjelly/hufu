@@ -264,7 +264,7 @@ type ExperienceAggregate struct {
 }
 ```
 
-知識狀態的 `stale` 從 `LastStrongEvidenceAt` 起算：已達支持門檻、但最後一次強證據早於 `memory-learning.stale-after` 的 item 是 `stale`，即使它天天被 retrieval。migration 12 之前建立的 row 這個時間是 0（未知），在 `hufu context rebuild --aggregates` 之前維持 `assumed`，不從 `LastObservedAt` 推測。排序的 freshness 仍看 item 內容的更新時間，不受這兩個時間影響。
+知識狀態的 `stale` 從 `LastStrongEvidenceAt` 起算：已達支持門檻、但最後一次強證據早於 `memory-learning.stale-after` 的 item 是 `stale`，即使它天天被 retrieval。migration 12 之前建立的 row 這個時間是 0（未知），在 `hufu context rebuild --aggregates` 之前維持 `assumed`，不從 `LastObservedAt` 推測。promotion 與 consolidation 也要求每個來源的最後一次強證據在 stale-after 內（`context.StrongEvidenceFresh`；沒有紀錄視為不新鮮）：promotion analyze 排除並回報 `strong_evidence_stale`，approve／apply 把 proposal 設為 `stale`；consolidation 的建立、核准、`show`、doctor 與 improve handoff 以 reason `strong_evidence_stale` 拒絕或回報。排序的 freshness 仍看 item 內容的更新時間，不受這兩個時間影響。
 
 projection 以毫秒保存時間；reducer 也以毫秒計算，所以 `inspect replay` 的 in-memory 重算與 SQLite 一致（event timestamp 帶奈秒）。
 
@@ -567,7 +567,7 @@ LLM proposal 步驟由 `hufu context consolidate --apply-proposal --source <ids>
 - 單一 task 不得自動升 project；跨 project/team/global scope 必須人工批准。
 - LLM 不能直接建立 confirmed item，也不能直接 supersede source。
 - 建立、核准、拒絕各自是單一 SQLite 交易。建立時在交易內重新檢查來源（current confirmed、有效期、scope／kind、contradiction、open conflict、experience support），候選內容與同 scope／kind 既有項目相同時拒絕，同一組來源已有其他 `proposed` proposal 時拒絕；proposal ID 由排序後的來源 ID 與正規化後文字決定，重跑相同輸入回傳既有 proposal，並補寫 idempotent 的 `memory_consolidation_proposed` 事件。
-- 核准以 create、approve、`consolidation show`、doctor 與 improve handoff 共用的同一份新鮮度判斷（固定 reason code）要求 `fresh`，並要求凍結的 content hash 與 aggregate revision 未變。已核准的 proposal 不能 reject；要替換已核准的合併知識，使用 `hufu context supersede`。
+- 核准以 create、approve、`consolidation show`、doctor 與 improve handoff 共用的同一份新鮮度判斷（固定 reason code）要求 `fresh`，並要求凍結的 content hash 與 aggregate revision 未變，且每個來源的最後一次強證據仍在 stale-after 內（`strong_evidence_stale`）。強證據會隨時間過期而沒有任何寫入，所以建立時新鮮的 proposal 到核准時仍可能被拒。已核准的 proposal 不能 reject；要替換已核准的合併知識，使用 `hufu context supersede`。
 - `consolidation_proposal` 是保留的 source type：`hufu context confirm|reject` 與通用 repository 方法都拒絕它，只能透過 `consolidation approve|reject` 審核。
 - 來源被 supersede 時，同一交易把使用它的 `proposed`／`approved` proposal 標為 `stale`，並把已核准的候選降回 `candidate`（因此離開 prompt）；以該候選為來源的 consolidation 也依序降級。`stale` proposal 不能 approve，可以 reject。
 - operator 用 `hufu context retire <id...> --reason <text>` 撤銷沒有替代品、但已確認錯誤或過時的記憶：同一交易設定 `expires_at`（所有讀取路徑既有的過期判斷），以 reason `source_expired` 連動降級衍生的 consolidation，並保留紀錄與 redact 過的理由。candidate、已 supersede、已過期與 consolidation 產生的候選都會被拒絕；有 confirmed 替代品時改用 `supersede`。

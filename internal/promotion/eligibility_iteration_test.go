@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -31,7 +32,7 @@ func (r *iterationOrderingEligibilityRepository) ExperienceAggregate(_ context.C
 	if id != r.item.ID {
 		return contextstore.ExperienceAggregate{}, sql.ErrNoRows
 	}
-	return contextstore.ExperienceAggregate{ContextItemID: id, AppliedCount: 2, VerifiedSupportCount: 2, IndependentTaskCount: 2}, nil
+	return contextstore.ExperienceAggregate{ContextItemID: id, AppliedCount: 2, VerifiedSupportCount: 2, IndependentTaskCount: 2, LastStrongEvidenceAt: time.Now().UTC()}, nil
 }
 
 func (r *iterationOrderingEligibilityRepository) OpenConflictsForItems(context.Context, string, string, []string) (map[string][]string, error) {

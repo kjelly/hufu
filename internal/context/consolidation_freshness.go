@@ -49,6 +49,9 @@ const (
 	ReasonSourceContradiction      ConsolidationReason = "source_contradiction"
 	ReasonAggregateRevisionChanged ConsolidationReason = "aggregate_revision_changed"
 	ReasonSupportInsufficient      ConsolidationReason = "support_insufficient"
+	// ReasonStrongEvidenceStale marks a source with no strong evidence
+	// within the policy's stale-after window.
+	ReasonStrongEvidenceStale ConsolidationReason = "strong_evidence_stale"
 )
 
 var invalidConsolidationReasons = map[ConsolidationReason]bool{
@@ -122,6 +125,8 @@ func consolidationReasonText(id string, reason ConsolidationReason) string {
 		return fmt.Sprintf("source %q aggregate revision changed; create a new proposal", id)
 	case ReasonSupportInsufficient:
 		return fmt.Sprintf("source %q lacks stable verified cross-task support", id)
+	case ReasonStrongEvidenceStale:
+		return fmt.Sprintf("source %q has not been verified within the stale-after window", id)
 	}
 	return fmt.Sprintf("source %q is not eligible", id)
 }
@@ -140,6 +145,9 @@ func joinConsolidationReasons(reasons []ConsolidationReason) string {
 type ConsolidationSupportPolicy struct {
 	MinConfirmedSupport int
 	MinIndependentTasks int
+	// StaleAfter requires each source's last strong evidence to be within
+	// this window at create, approve, and inspection. Zero disables it.
+	StaleAfter time.Duration
 }
 
 func (p ConsolidationSupportPolicy) enabled() bool {
@@ -275,7 +283,8 @@ func sourceItemReasons(item, first ContextItem, selected map[string]bool, in con
 }
 
 // sourceAggregateReason reads a source's experience aggregate and applies the
-// create-time support threshold or the approve-time revision equality.
+// create-time support threshold or the approve-time revision equality, then,
+// in every check, the strong-evidence recency the policy requires.
 func (r *SQLiteRepository) sourceAggregateReason(ctx context.Context, q queryer, id string, in consolidationSourceCheck) (ConsolidationReason, int64, bool, error) {
 	aggregate, err := r.experienceAggregateQ(ctx, q, id, in.policyVersion)
 	found := err == nil
@@ -296,6 +305,10 @@ func (r *SQLiteRepository) sourceAggregateReason(ctx context.Context, q queryer,
 		if in.aggregates[id] != aggregate.Revision {
 			return ReasonAggregateRevisionChanged, aggregate.Revision, found, nil
 		}
+	}
+	// Evidence ages without any write, so every check repeats this one.
+	if !StrongEvidenceFresh(aggregate, in.now, in.support.StaleAfter) {
+		return ReasonStrongEvidenceStale, aggregate.Revision, found, nil
 	}
 	return "", aggregate.Revision, found, nil
 }
@@ -337,15 +350,16 @@ func (r *SQLiteRepository) ValidateConsolidationSourceRevisions(ctx context.Cont
 // EvaluateConsolidationProposal reports whether proposal, its candidate, and
 // its sources are still current. checkAggregates also requires the frozen
 // aggregate revisions, which is what approval and improve handoffs need.
-func (r *SQLiteRepository) EvaluateConsolidationProposal(ctx context.Context, proposal ConsolidationProposal, policyVersion string, checkAggregates bool) (ConsolidationFreshness, error) {
+// staleAfter requires recent strong evidence for every source; zero skips it.
+func (r *SQLiteRepository) EvaluateConsolidationProposal(ctx context.Context, proposal ConsolidationProposal, policyVersion string, checkAggregates bool, staleAfter time.Duration) (ConsolidationFreshness, error) {
 	check := consolidationCheckInspect
 	if checkAggregates {
 		check = consolidationCheckApprove
 	}
-	return r.evaluateConsolidationQ(ctx, r.db, proposal, check, policyVersion, time.Now())
+	return r.evaluateConsolidationQ(ctx, r.db, proposal, check, policyVersion, staleAfter, time.Now())
 }
 
-func (r *SQLiteRepository) evaluateConsolidationQ(ctx context.Context, q queryer, p ConsolidationProposal, check consolidationCheck, policyVersion string, now time.Time) (ConsolidationFreshness, error) {
+func (r *SQLiteRepository) evaluateConsolidationQ(ctx context.Context, q queryer, p ConsolidationProposal, check consolidationCheck, policyVersion string, staleAfter time.Duration, now time.Time) (ConsolidationFreshness, error) {
 	f := ConsolidationFreshness{ProposalID: p.ID, Status: p.Status, CandidateID: p.CandidateContextItemID}
 	reasons := map[ConsolidationReason]bool{}
 	ids := sortedUniqueIDs(p.SourceIDs)
@@ -405,7 +419,7 @@ func (r *SQLiteRepository) evaluateConsolidationQ(ctx context.Context, q queryer
 	if active && !reasons[ReasonSourceSetInvalid] {
 		result, err := r.checkConsolidationSourcesQ(ctx, q, consolidationSourceCheck{
 			projectID: p.ProjectID, teamID: p.TeamID, ids: ids, frozen: p.SourceRevisions, aggregates: p.AggregateRevisions,
-			check: check, policyVersion: policyVersion, now: now,
+			check: check, policyVersion: policyVersion, support: ConsolidationSupportPolicy{StaleAfter: staleAfter}, now: now,
 		})
 		if err != nil {
 			return f, err

@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
@@ -30,7 +31,7 @@ func runContextConsolidationDoctor(cmd *cobra.Command) error {
 		return fmt.Errorf("consolidation database: %w", err)
 	}
 	defer func() { _ = repo.Close() }()
-	report, err := repo.ConsolidationDoctor(cmd.Context(), contextProject, contextTeam, strings.TrimSpace(contextTeam) == "", contextPolicyVersion)
+	report, err := repo.ConsolidationDoctor(cmd.Context(), contextProject, contextTeam, strings.TrimSpace(contextTeam) == "", contextPolicyVersion, agent.DefaultMemoryLearningPolicy().StaleAfter)
 	if err != nil {
 		return fmt.Errorf("consolidation doctor: %w", err)
 	}

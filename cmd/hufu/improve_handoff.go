@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/improve"
 	"github.com/kjelly/hufu/internal/promotion"
@@ -289,7 +290,7 @@ func validateConsolidationHandoffCurrent(ctx context.Context, repo *contextstore
 	if strings.TrimSpace(policyVersion) == "" {
 		policyVersion = "memory-policy-v1"
 	}
-	freshness, err := repo.EvaluateConsolidationProposal(ctx, proposal, policyVersion, true)
+	freshness, err := repo.EvaluateConsolidationProposal(ctx, proposal, policyVersion, true, agent.DefaultMemoryLearningPolicy().StaleAfter)
 	if err != nil {
 		return err
 	}

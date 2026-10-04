@@ -410,7 +410,7 @@ func appendConfirmedHandoffSources(t *testing.T, repo *contextstore.SQLiteReposi
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID
-		if _, err := repo.ApplyExperienceObservation(t.Context(), contextstore.ExperienceObservation{IdempotencyKey: "observation-" + items[i].ID, ContextItemID: items[i].ID, PolicyVersion: scope.PolicyVersion, ProjectID: scope.ProjectID, TaskID: "task-" + items[i].ID, ExposureDelta: 1}); err != nil {
+		if _, err := repo.ApplyExperienceObservation(t.Context(), contextstore.ExperienceObservation{IdempotencyKey: "observation-" + items[i].ID, ContextItemID: items[i].ID, PolicyVersion: scope.PolicyVersion, ProjectID: scope.ProjectID, TaskID: "task-" + items[i].ID, AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 1, StrongEvidence: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

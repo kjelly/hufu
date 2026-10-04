@@ -159,7 +159,7 @@ func TestConsolidationDoctorReportsWithoutWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := mustRevision(t, repo)
-	report, err := repo.ConsolidationDoctor(context.Background(), "project", "team", false, consolidationTestPolicy)
+	report, err := repo.ConsolidationDoctor(context.Background(), "project", "team", false, consolidationTestPolicy, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestConsolidationDoctorReportsWithoutWriting(t *testing.T) {
 	if len(report.Orphans) != 1 || report.Orphans[0].ItemID != "orphan" || report.Orphans[0].Reason != ReasonOrphanCandidate {
 		t.Fatalf("orphans = %+v", report.Orphans)
 	}
-	otherTeam, err := repo.ConsolidationDoctor(context.Background(), "project", "other", false, consolidationTestPolicy)
+	otherTeam, err := repo.ConsolidationDoctor(context.Background(), "project", "other", false, consolidationTestPolicy, 0)
 	if err != nil || len(otherTeam.Proposals) != 0 || len(otherTeam.Orphans) != 0 {
 		t.Fatalf("other team report = %+v err=%v", otherTeam, err)
 	}

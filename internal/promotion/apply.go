@@ -190,6 +190,11 @@ func (s Service) validateEvidence(ctx context.Context, p Proposal) error {
 		if err != nil || agg.Revision != snap.AggregateRevision {
 			return fmt.Errorf("source %s aggregate changed", snap.ContextItemID)
 		}
+		// Evidence ages without changing the aggregate, so this is checked
+		// at every review step, not only at analyze.
+		if staleAfter := s.policy().StaleAfter; !contextstore.StrongEvidenceFresh(agg, time.Now().UTC(), staleAfter) {
+			return fmt.Errorf("source %s has not been verified within %s", snap.ContextItemID, staleAfter)
+		}
 	}
 	return nil
 }

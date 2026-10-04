@@ -34,7 +34,7 @@ func appendEligible(t *testing.T, repo *contextstore.SQLiteRepository, item cont
 		t.Fatal(err)
 	}
 	for i := 1; i <= 2; i++ {
-		_, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{IdempotencyKey: item.ID + string(rune('0'+i)), ContextItemID: item.ID, PolicyVersion: "memory-policy-v1", ProjectID: item.Scope.ProjectID, TaskID: "task-" + string(rune('0'+i)), AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 1})
+		_, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{IdempotencyKey: item.ID + string(rune('0'+i)), ContextItemID: item.ID, PolicyVersion: "memory-policy-v1", ProjectID: item.Scope.ProjectID, TaskID: "task-" + string(rune('0'+i)), AppliedDelta: 1, VerifiedSupportDelta: 1, PositiveWeight: 1, StrongEvidence: true})
 		if err != nil {
 			t.Fatal(err)
 		}

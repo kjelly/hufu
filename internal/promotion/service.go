@@ -5,11 +5,25 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-type Service struct{ Repo Repository }
+// Service reviews and applies proposals. Policy supplies the stale-after
+// window approval and apply check source evidence against; a zero Policy
+// uses agent.DefaultMemoryLearningPolicy, as analyze does.
+type Service struct {
+	Repo   Repository
+	Policy agent.MemoryLearningPolicy
+}
+
+func (s Service) policy() agent.MemoryLearningPolicy {
+	if s.Policy.PolicyVersion == "" {
+		return agent.DefaultMemoryLearningPolicy()
+	}
+	return s.Policy
+}
 
 func (s Service) Get(ctx context.Context, id, project, team string) (Proposal, error) {
 	return s.Repo.GetPromotion(ctx, id, project, team)

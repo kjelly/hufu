@@ -67,6 +67,9 @@ func helperSeedEligibleLTM(t *testing.T, workspace, projectID, teamID, itemID, c
 			AppliedDelta:         1,
 			VerifiedSupportDelta: 1,
 			PositiveWeight:       1,
+			// A credited verification pass is strong evidence, as runtime
+			// events record it; promotion and consolidation require it.
+			StrongEvidence: true,
 		})
 		if err != nil {
 			t.Fatal(err)

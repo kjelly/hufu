@@ -58,6 +58,17 @@ type ExperienceObservation struct {
 	StrongEvidence bool
 }
 
+// StrongEvidenceFresh reports whether aggregate received strong evidence
+// within staleAfter of now. Zero staleAfter disables the check. An
+// aggregate with no recorded strong evidence is not fresh: its recency is
+// unknown, so a gate that requires recent verification refuses it.
+func StrongEvidenceFresh(aggregate ExperienceAggregate, now time.Time, staleAfter time.Duration) bool {
+	if staleAfter <= 0 {
+		return true
+	}
+	return !aggregate.LastStrongEvidenceAt.IsZero() && now.Sub(aggregate.LastStrongEvidenceAt) <= staleAfter
+}
+
 type ExperienceRepository interface {
 	ApplyExperienceObservation(context.Context, ExperienceObservation) (bool, error)
 	ExperienceAggregate(context.Context, string, string) (ExperienceAggregate, error)

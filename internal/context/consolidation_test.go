@@ -125,7 +125,7 @@ func TestCreateConsolidationProposalPersistsEveryRecord(t *testing.T) {
 	if n := countRows(t, repo, "SELECT COUNT(*) FROM context_events WHERE event_type='consolidation_proposed' AND item_id=?", candidate.ID); n != 1 {
 		t.Fatalf("consolidation_proposed events = %d, want 1", n)
 	}
-	freshness, err := repo.EvaluateConsolidationProposal(context.Background(), got, consolidationTestPolicy, true)
+	freshness, err := repo.EvaluateConsolidationProposal(context.Background(), got, consolidationTestPolicy, true, 0)
 	if err != nil || freshness.State != ConsolidationFresh {
 		t.Fatalf("freshness = %+v err=%v", freshness, err)
 	}

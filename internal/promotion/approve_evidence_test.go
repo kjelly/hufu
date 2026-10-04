@@ -31,7 +31,9 @@ func TestApproveRefusesStaleEvidence(t *testing.T) {
 	cases := []struct {
 		name   string
 		change func(t *testing.T, repo *contextstore.SQLiteRepository)
-		want   string
+		// staleAfter, when set, is the review policy's stale-after window.
+		staleAfter time.Duration
+		want       string
 	}{
 		{name: "aggregate revision moved", want: "aggregate changed", change: func(t *testing.T, repo *contextstore.SQLiteRepository) {
 			if _, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{
@@ -55,6 +57,8 @@ func TestApproveRefusesStaleEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		// Nothing is written: the verification simply ages out of the window.
+		{name: "source not verified within stale-after", want: "has not been verified", staleAfter: time.Nanosecond, change: func(*testing.T, *contextstore.SQLiteRepository) {}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,6 +67,10 @@ func TestApproveRefusesStaleEvidence(t *testing.T) {
 			p := proposedSkillProposal(t, repo, search)
 			tc.change(t, repo)
 			svc := Service{Repo: repo}
+			if tc.staleAfter > 0 {
+				svc.Policy = agent.DefaultMemoryLearningPolicy()
+				svc.Policy.StaleAfter = tc.staleAfter
+			}
 			got, err := svc.Approve(ctx, p.ID, "p", "demo")
 			if err == nil || !strings.Contains(err.Error(), "evidence is stale") || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("approve err = %v, want stale evidence mentioning %q", err, tc.want)

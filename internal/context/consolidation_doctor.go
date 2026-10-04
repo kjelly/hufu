@@ -29,7 +29,7 @@ func (r ConsolidationDoctorReport) Healthy() bool {
 // ConsolidationDoctor evaluates every proposal in a project (one team unless
 // allTeams) and lists orphaned candidates. It only reads: it never repairs,
 // regenerates, or changes a lifecycle.
-func (r *SQLiteRepository) ConsolidationDoctor(ctx context.Context, projectID, teamID string, allTeams bool, policyVersion string) (ConsolidationDoctorReport, error) {
+func (r *SQLiteRepository) ConsolidationDoctor(ctx context.Context, projectID, teamID string, allTeams bool, policyVersion string, staleAfter time.Duration) (ConsolidationDoctorReport, error) {
 	report := ConsolidationDoctorReport{
 		Counts:    map[ConsolidationFreshnessState]int{ConsolidationFresh: 0, ConsolidationStale: 0, ConsolidationBlocked: 0, ConsolidationInvalid: 0},
 		Proposals: []ConsolidationFreshness{},
@@ -45,7 +45,7 @@ func (r *SQLiteRepository) ConsolidationDoctor(ctx context.Context, projectID, t
 		var freshness ConsolidationFreshness
 		if decodeErrors[proposal.ID] != nil {
 			freshness = ConsolidationFreshness{ProposalID: proposal.ID, Status: proposal.Status, CandidateID: proposal.CandidateContextItemID, State: ConsolidationInvalid, Reasons: []ConsolidationReason{ReasonProposalDecodeFailed}}
-		} else if freshness, err = r.evaluateConsolidationQ(ctx, r.db, proposal, consolidationCheckInspect, policyVersion, now); err != nil {
+		} else if freshness, err = r.evaluateConsolidationQ(ctx, r.db, proposal, consolidationCheckInspect, policyVersion, staleAfter, now); err != nil {
 			return report, err
 		}
 		report.Proposals = append(report.Proposals, freshness)

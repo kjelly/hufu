@@ -204,7 +204,7 @@ approved -> applied
 proposed|approved -> stale
 ```
 
-`approve` 先做與 `apply` 相同的 source 檢查：source 被 supersede、過期、內容或 aggregate revision 改變時設為 `stale` 並拒絕，必須重新 analyze；source 有未解決的 memory conflict 時只拒絕、維持 `proposed`，dismiss 或 supersede 後可直接再 approve。
+`approve` 先做與 `apply` 相同的 source 檢查：source 被 supersede、過期、內容或 aggregate revision 改變，或最後一次強證據已超出 stale-after 時設為 `stale` 並拒絕，必須重新 analyze（證據會隨時間過期而沒有任何寫入，所以每個審核步驟都重新檢查）；source 有未解決的 memory conflict 時只拒絕、維持 `proposed`，dismiss 或 supersede 後可直接再 approve。
 
 `apply` 的暫時性錯誤不改 status，維持 `approved` 供安全重試；source revision 或 target hash 改變則設為 `stale`，必須重新 analyze，不能強制套用。
 
@@ -225,6 +225,7 @@ proposed|approved -> stale
 - `IndependentTaskCount >= MemoryLearningPolicy.MinIndependentTasks`
 - `CausalFailureCount / max(AppliedCount, 1) <= MemoryLearningPolicy.MaxHarmRate`
 - 沒有 derived state 為 open 的記憶衝突（`hufu context conflicts`）；有衝突的來源被排除並回報 diagnostic `unresolved_conflict`，衝突查詢失敗時 analyze fail closed
+- 最後一次強證據（`LastStrongEvidenceAt`，見 [memory learning](memory-learning.md)）在 `MemoryLearningPolicy.StaleAfter` 內；超過或沒有紀錄的來源被排除並回報 diagnostic `strong_evidence_stale`。`StaleAfter` 為 0 時不檢查
 
 預設 policy 的門檻來自 `agent.DefaultMemoryLearningPolicy()`，不要在 promotion package 複製另一套常數。
 

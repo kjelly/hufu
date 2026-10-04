@@ -98,7 +98,7 @@ func consolidationSelection() contextstore.ConsolidationSourceSelection {
 	return contextstore.ConsolidationSourceSelection{
 		ProjectID: contextProject, TeamID: contextTeam, SourceIDs: splitConsolidationIDs(contextProposalSources),
 		PolicyVersion: contextPolicyVersion,
-		Support:       contextstore.ConsolidationSupportPolicy{MinConfirmedSupport: policy.MinConfirmedSupport, MinIndependentTasks: policy.MinIndependentTasks},
+		Support:       contextstore.ConsolidationSupportPolicy{MinConfirmedSupport: policy.MinConfirmedSupport, MinIndependentTasks: policy.MinIndependentTasks, StaleAfter: policy.StaleAfter},
 	}
 }
 
@@ -234,7 +234,7 @@ func runContextConsolidationShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer func() { _ = repo.Close() }()
-	freshness, err := repo.EvaluateConsolidationProposal(cmd.Context(), proposal, contextPolicyVersion, false)
+	freshness, err := repo.EvaluateConsolidationProposal(cmd.Context(), proposal, contextPolicyVersion, false, agent.DefaultMemoryLearningPolicy().StaleAfter)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func runContextConsolidationShow(cmd *cobra.Command, args []string) error {
 }
 
 func consolidationReviewInput(id, actor, reason string) contextstore.ConsolidationReviewInput {
-	return contextstore.ConsolidationReviewInput{ProposalID: id, ProjectID: contextProject, PolicyVersion: contextPolicyVersion, Actor: actor, Reason: reason}
+	return contextstore.ConsolidationReviewInput{ProposalID: id, ProjectID: contextProject, PolicyVersion: contextPolicyVersion, StaleAfter: agent.DefaultMemoryLearningPolicy().StaleAfter, Actor: actor, Reason: reason}
 }
 
 func runContextConsolidationApprove(cmd *cobra.Command, args []string) error {
