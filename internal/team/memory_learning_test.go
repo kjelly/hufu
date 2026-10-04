@@ -80,6 +80,55 @@ func TestMemoryManifestSurvivesSessionReplay(t *testing.T) {
 	}
 }
 
+func TestMemoryLearningReportCountsOnlyMemoryEventsAcrossRuns(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-a", "session-memory-report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	appendEvent := func(runID, eventType, payload string) {
+		t.Helper()
+		if err := store.Append(RunEvent{RunID: runID, Type: eventType, Actor: "test", Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent("run-a", "memory_retrieved", `{"retrieval_id":"retrieval-1"}`)
+	appendEvent("run-b", "memory_retrieved", `{"retrieval_id":"retrieval-1"}`)
+	appendEvent("run-b", "memory_retrieved", `true`)
+	appendEvent("run-b", "memory_usage_recorded", `{"disposition":"applied"}`)
+	appendEvent("run-a", "memory_usage_recorded", `{"disposition":"consulted"}`)
+	appendEvent("run-b", "memory_usage_recorded", `true`)
+	appendEvent("run-a", "memory_outcome_recorded", `true`)
+	appendEvent("run-a", "task_progress", `{"retrieval_id":"noise","disposition":"applied"}`)
+	for range 20 {
+		appendEvent("run-b", "task_progress", `{"noise":true}`)
+	}
+
+	policy := agent.DefaultMemoryLearningPolicy()
+	policy.Mode = agent.MemoryLearningObserve
+	policy.PolicyVersion = "test-policy"
+	c := &Coordinator{
+		eventStore: store,
+		session:    &TeamSession{Config: agent.TeamConfig{MemoryLearning: policy}},
+		sessionData: &SessionData{LearningGaps: []LearningGap{
+			{PendingRepair: true}, {PendingRepair: false},
+		}},
+	}
+	want := MemoryLearningReport{
+		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy",
+		RetrievalCount: 1, ExposureCount: 3, AppliedCount: 1, OutcomeCount: 1, PendingRepairGaps: 1,
+	}
+	if got := c.MemoryLearningReport(); got != want {
+		t.Fatalf("report = %+v, want %+v", got, want)
+	}
+
+	store.stateValid = false
+	want.RetrievalCount, want.ExposureCount, want.AppliedCount, want.OutcomeCount = 0, 0, 0, 0
+	if got := c.MemoryLearningReport(); got != want {
+		t.Fatalf("invalid store report = %+v, want %+v", got, want)
+	}
+}
+
 func TestUnknownMemoryIDFailsClosed(t *testing.T) {
 	c, manifest := memoryValidationCoordinator(t)
 	result := &TaskResult{TaskID: manifest.TaskID, Attempt: 1, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "forged", Disposition: MemoryUseApplied, Confidence: 1}}}

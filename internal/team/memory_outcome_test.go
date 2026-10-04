@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -99,6 +100,45 @@ func TestCausalVerificationFailureDemotesMemory(t *testing.T) {
 
 func TestResumeDoesNotDoubleCountOutcome(t *testing.T) {
 	testRepeatedOutcomeDoesNotDoubleCount(t)
+}
+
+func TestMemoryOutcomeWeightForSignalFiltersByManifestAcrossRuns(t *testing.T) {
+	store, err := NewEventStore(t.TempDir(), "run-a", "session-memory-credit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	appendEvent := func(runID, taskID, eventType, payload string) {
+		t.Helper()
+		if err := store.Append(RunEvent{
+			RunID: runID, TaskID: taskID, Type: eventType, Actor: "test", Payload: []byte(payload),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent("run-a", "task-1", "memory_outcome_recorded", `{"retrieval_id":"retrieval-a","signal":"verification_passed","direction":"positive","effective_weight":0.25}`)
+	appendEvent("run-b", "task-1", "memory_outcome_recorded", `{"retrieval_id":"retrieval-b","signal":"verification_passed","direction":"positive","effective_weight":0.9}`)
+	appendEvent("run-b", "task-1", "memory_outcome_recorded", `{"retrieval_id":"retrieval-a","signal":"verification_passed","direction":"positive","effective_weight":0.5}`)
+	appendEvent("run-a", "task-2", "memory_outcome_recorded", `{"retrieval_id":"retrieval-a","signal":"verification_passed","direction":"positive","effective_weight":0.8}`)
+	appendEvent("run-a", "task-1", "memory_outcome_recorded", `{"retrieval_id":"retrieval-a","signal":"acceptance_passed","direction":"positive","effective_weight":0.8}`)
+	appendEvent("run-a", "task-1", "memory_outcome_recorded", `{"retrieval_id":"retrieval-a","signal":"verification_passed","direction":"negative","effective_weight":0.8}`)
+	appendEvent("run-a", "task-1", "task_progress", `{"retrieval_id":"retrieval-a","signal":"verification_passed","direction":"positive","effective_weight":0.8}`)
+	appendEvent("run-a", "task-1", "memory_outcome_recorded", `true`)
+	for range 20 {
+		appendEvent("run-b", "task-1", "task_progress", `{"noise":true}`)
+	}
+
+	c := &Coordinator{eventStore: store}
+	item := &TodoItem{ID: "task-1", MemoryManifests: []MemoryInjectionManifest{{RetrievalID: "retrieval-a"}}}
+	if got := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0.75 {
+		t.Fatalf("weight = %v, want 0.75", got)
+	}
+
+	store.stateValid = false
+	store.stateErr = errors.New("injected read failure")
+	if got := c.memoryOutcomeWeightForSignal(item, "verification_passed", "positive"); got != 0 {
+		t.Fatalf("invalid store weight = %v, want 0", got)
+	}
 }
 
 func TestFastPathUpgradeDoesNotDoubleCountOutcome(t *testing.T) {

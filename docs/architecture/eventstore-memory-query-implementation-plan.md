@@ -20,7 +20,22 @@
 | `go vet ./...` | exit 0 |
 | `golangci-lint run` | exit 0，0 issues；曾提示一個已不存在的相鄰 worktree 檔案快取警告 |
 
-後續階段以此為 baseline；效能數據需在新增 consumer benchmark 後、遷移讀取點前另行記錄。
+後續階段以此測試結果及下列修改前的 consumer benchmark 作 baseline。
+
+Consumer benchmark 已於遷移前執行（`go test ./internal/team -run '^$'
+-bench '^BenchmarkMemoryEventConsumersSparse$' -benchtime=10x -benchmem
+-count=1`，Intel i7-6700K）：
+
+| 事件數 | Consumer | ns/op | B/op | allocs/op |
+| ---: | --- | ---: | ---: | ---: |
+| 1,000 | credit | 608,972 | 822,198 | 1,107 |
+| 1,000 | report | 3,294,181 | 1,195,923 | 4,133 |
+| 10,000 | credit | 4,409,704 | 8,149,144 | 10,901 |
+| 10,000 | report | 27,859,773 | 11,887,020 | 41,201 |
+| 50,000 | credit | 20,235,809 | 40,734,700 | 54,501 |
+| 50,000 | report | 132,864,770 | 59,426,718 | 206,001 |
+
+這是合成稀疏事件資料的單次 benchmark 結果，不代表實際 workspace 的負載。
 
 ## 目標與效益
 
