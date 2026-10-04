@@ -6,14 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/team"
@@ -30,10 +27,15 @@ var doctorCmd = &cobra.Command{
   - how many agent teams are discoverable
   - team requirements and delegation/tool policies do not conflict
   - static task and acceptance verifier contracts are asserting and resolvable
+  - existing event history and unresolved recovery tasks are safe to inspect
 
 Most "the agent did nothing" failures are a provider/model misconfiguration.
 Run this first to find them in seconds instead of waiting for a timeout.`,
-	RunE: runDoctor,
+	RunE: runDoctorReport,
+}
+
+func init() {
+	doctorCmd.Flags().Bool("json", false, "Print one machine-readable preflight report to stdout")
 }
 
 // modelsResponse matches the OpenAI-compatible GET /models payload that both
@@ -42,146 +44,6 @@ type modelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
 	} `json:"data"`
-}
-
-func runDoctor(cmd *cobra.Command, args []string) error {
-	ok := true
-	compatibilityWarnings := newExecutionCompatibilityWarningState("")
-	pass := doneStyle.Render("✓")
-	warn := errStyle.Render("⚠")
-	fail := errStyle.Render("✗")
-
-	fmt.Fprintf(os.Stderr, "%s\n\n", boldStyle.Render("─── hufu doctor ───"))
-
-	// 1. Provider connectivity + model list.
-	cfg := config.LoadConfig()
-	providerURLResolved := config.ResolveProviderURL(opts.providerURL, "", "")
-	apiKey := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
-
-	fmt.Fprintf(os.Stderr, "%s %s\n", boldStyle.Render("Provider:"), providerURLResolved)
-	models, err := fetchModels(providerURLResolved, apiKey)
-	if err != nil {
-		ok = false
-		fmt.Fprintf(os.Stderr, "  %s unreachable: %v\n", fail, err)
-		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("Is the configured local OpenAI-compatible server running? Check --provider-url / hufu.yaml."))
-	} else if len(models) == 0 {
-		fmt.Fprintf(os.Stderr, "  %s reachable, but it reports no models\n", warn)
-		fmt.Fprintf(os.Stderr, "    %s\n", dimStyle.Render("Install or download a model in the configured local LLM server, then rerun doctor."))
-	} else {
-		fmt.Fprintf(os.Stderr, "  %s reachable — %d model(s) available:\n", pass, len(models))
-		sort.Strings(models)
-		for _, m := range models {
-			fmt.Fprintf(os.Stderr, "      %s\n", m)
-		}
-	}
-
-	// 2. Resolved roles. CLI flag > hufu.yaml, using the same hierarchy as a
-	// run. (Team/agent overrides apply later at run time and can't be
-	// resolved without a target team; `--dry-run` shows those.)
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Resolved models (hufu.yaml + flags; team/agent may override):"))
-	overrides, err := currentModelOverrides()
-	if err != nil {
-		return err
-	}
-	for _, role := range resolveRoleModelSources(agent.TeamConfig{}, "team.yaml", cfg, overrides) {
-		var failPtr *bool
-		if role.Role == "Worker" || role.Role == "Coordinator" {
-			failPtr = &ok
-		}
-		printRole(os.Stderr, role, models, failPtr)
-	}
-
-	// 3. Workspace writability.
-	ws := getWorkspace()
-	if ws == "" {
-		ok = false
-		fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Workspace:"))
-		fmt.Fprintf(os.Stderr, "  %s no active managed workspace; run a team or use hufu workspace migrate\n", fail)
-	} else {
-		fmt.Fprintf(os.Stderr, "\n%s %s\n", boldStyle.Render("Workspace:"), ws)
-		if err := checkWritable(ws); err != nil {
-			ok = false
-			fmt.Fprintf(os.Stderr, "  %s not writable: %v\n", fail, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  %s writable\n", pass)
-		}
-	}
-
-	// 4. Team discovery.
-	searchPaths := resolveSearchPaths()
-	registry := team.NewTeamRegistry(searchPaths)
-	fmt.Fprintf(os.Stderr, "\n%s %s\n", boldStyle.Render("Teams:"), strings.Join(searchPaths, ", "))
-	if err := registry.Discover(); err != nil {
-		fmt.Fprintf(os.Stderr, "  %s discovery failed: %v\n", warn, err)
-	} else if registry.TeamCount() == 0 {
-		fmt.Fprintf(os.Stderr, "  %s none found — use --default, or scaffold one with `hufu init <team>`\n", warn)
-	} else {
-		fmt.Fprintf(os.Stderr, "  %s %d team(s): %s\n", pass, registry.TeamCount(), strings.Join(registry.ListTeams(), ", "))
-	}
-
-	// 5. Static execution-target and verifier-contract linting.
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("Execution Target, Contract & Verifier Linting:"))
-	contractWarnings := 0
-	contractErrors := 0
-
-	if registry != nil && registry.TeamCount() > 0 {
-		for _, teamName := range registry.ListTeams() {
-			teamDir, err := registry.Resolve(teamName)
-			if err != nil {
-				continue
-			}
-			session, err := team.LoadTeam(teamDir, nil, nil, team.DefaultProviderRegistry)
-			if err != nil {
-				contractErrors++
-				ok = false
-				fmt.Fprintf(os.Stderr, "  %s team %s: contract load failed: %v\n", fail, teamName, err)
-				continue
-			}
-			if team.HasAuthoredLegacyLocalExecutionBackend(session) {
-				compatibilityWarnings.warnAuthoredAlias()
-			}
-			if err := validateDoctorExecutionTargets(session, cfg, nil); err != nil {
-				contractErrors++
-				ok = false
-				fmt.Fprintf(os.Stderr, "  %s team %s execution target: %v\n", fail, teamName, err)
-				continue
-			}
-			projectDir, err := os.Getwd()
-			if err != nil {
-				contractErrors++
-				ok = false
-				fmt.Fprintf(os.Stderr, "  %s team %s: resolve runtime project directory: %v\n", fail, teamName, err)
-				continue
-			}
-			for _, finding := range collectDoctorContractFindings(session, projectDir) {
-				f := finding.Finding
-				location := finding.Location
-				if location == "" {
-					location = "contract"
-				}
-				if f.Severity == team.FindingSeverityError {
-					contractErrors++
-					ok = false
-					fmt.Fprintf(os.Stderr, "  %s team %s %s: %s (%s)\n", fail, teamName, location, f.Message, f.Code)
-				} else {
-					contractWarnings++
-					fmt.Fprintf(os.Stderr, "  %s team %s %s: %s (%s)\n", warn, teamName, location, f.Message, f.Code)
-				}
-			}
-		}
-	}
-
-	if contractErrors == 0 && contractWarnings == 0 {
-		fmt.Fprintf(os.Stderr, "  %s all team verifier contracts valid and asserting\n", pass)
-	}
-
-	fmt.Fprintln(os.Stderr)
-	if ok {
-		fmt.Fprintf(os.Stderr, "%s Ready to call agents.\n", pass)
-		return nil
-	}
-	fmt.Fprintf(os.Stderr, "%s Some checks failed — fix the items above before running a task.\n", fail)
-	return fmt.Errorf("doctor: preflight checks failed")
 }
 
 // validateDoctorExecutionTargets performs the same read-only target setup
@@ -227,10 +89,6 @@ func collectDoctorContractFindings(session *team.TeamSession, projectDir string)
 	return out
 }
 
-func fetchModels(providerURL, apiKey string) ([]string, error) {
-	return fetchModelsContext(context.Background(), providerURL, apiKey)
-}
-
 func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]string, error) {
 	url := strings.TrimRight(providerURL, "/") + "/models"
 	ctx, cancel := context.WithTimeout(parent, llmtimeout.Provider(5*time.Second))
@@ -250,42 +108,20 @@ func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]s
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
-	var mr modelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+	var response modelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("could not parse model list: %w", err)
 	}
-	out := make([]string, 0, len(mr.Data))
-	for _, d := range mr.Data {
-		out = append(out, d.ID)
+	out := make([]string, 0, len(response.Data))
+	for _, model := range response.Data {
+		out = append(out, model.ID)
 	}
 	return out, nil
 }
 
-// printRole prints a resolved model role and, when the model list is known,
-// warns if the model is not among the available ones. failPtr (when non-nil)
-// is set to false to mark the overall run as failed.
-func printRole(w *os.File, role roleModelSource, available []string, failPtr *bool) {
-	label := strings.ToLower(role.Role) + ":"
-	model := role.Target
-	if model == "" {
-		_, _ = fmt.Fprintf(w, "  %-14s %s\n", label, dimStyle.Render("(not set by flags or hufu.yaml; team.yaml or agent .md may set it)"))
-		return
-	}
-	source := dimStyle.Render("(" + role.Source + ")")
-	bare := providerModelName(model)
-	if len(available) > 0 && !modelAvailable(bare, available) {
-		_, _ = fmt.Fprintf(w, "  %-14s %s  %s  %s\n", label, model, source, errStyle.Render("⚠ not in provider's model list"))
-		if failPtr != nil {
-			*failPtr = false
-		}
-		return
-	}
-	_, _ = fmt.Fprintf(w, "  %-14s %s  %s\n", label, model, source)
-}
-
 func modelAvailable(bare string, available []string) bool {
-	for _, a := range available {
-		if a == bare || providerModelName(a) == bare {
+	for _, model := range available {
+		if model == bare || providerModelName(model) == bare {
 			return true
 		}
 	}
@@ -303,24 +139,45 @@ func checkWritable(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	probe := filepath.Join(dir, ".hufu-doctor-probe")
-	if err := os.WriteFile(probe, []byte("ok"), 0o644); err != nil {
+	probe, err := os.CreateTemp(dir, ".hufu-doctor-probe-*")
+	if err != nil {
 		return err
 	}
-	return os.Remove(probe)
+	path := probe.Name()
+	_, writeErr := probe.WriteString("ok")
+	created, statErr := probe.Stat()
+	closeErr := probe.Close()
+	if statErr != nil {
+		return statErr
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(created, current) {
+		return fmt.Errorf("workspace probe changed before cleanup")
+	}
+	removeErr := os.Remove(path)
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
 }
 
 func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
+	for _, value := range vals {
+		if value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
-// resolveSearchPaths returns the team search paths from the --agent-team-search-path
-// flag or the built-in defaults.
+// resolveSearchPaths returns the team search paths from the
+// --agent-team-search-path flag or the built-in defaults.
 func resolveSearchPaths() []string {
 	if opts.agentTeamSearchPath != "" {
 		return strings.Split(opts.agentTeamSearchPath, ",")

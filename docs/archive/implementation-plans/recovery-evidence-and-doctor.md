@@ -1,6 +1,6 @@
 # Hufu Recovery Evidence and Doctor Implementation Plan
 
-> Status: Ready for implementation
+> Status: Implemented
 > Scope: Existing task recovery and `hufu doctor`
 > Authority: Implementation plan; runtime behavior is defined by `docs/architecture/execution-runtime.md` and the code
 
