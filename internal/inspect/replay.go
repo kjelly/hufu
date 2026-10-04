@@ -385,6 +385,7 @@ func compareExperienceAggregates(expected, actual []contextstore.ExperienceAggre
 			diffs = append(diffs, prefix+".utility_lower_bound")
 		}
 		compareField(&diffs, prefix+".last_observed_at", leftAggregate.LastObservedAt, rightAggregate.LastObservedAt)
+		compareField(&diffs, prefix+".last_strong_evidence_at", leftAggregate.LastStrongEvidenceAt, rightAggregate.LastStrongEvidenceAt)
 		compareField(&diffs, prefix+".revision", leftAggregate.Revision, rightAggregate.Revision)
 	}
 	return diffs

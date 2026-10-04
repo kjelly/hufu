@@ -46,6 +46,11 @@ type MemoryScoreExplanation struct {
 	AppliedCount         int              `json:"applied_count"`
 	VerifiedSupportCount int              `json:"verified_support_count"`
 	CausalFailureCount   int              `json:"causal_failure_count"`
+	// LastObservedAt is the newest observation of any kind;
+	// LastStrongEvidenceAt is the newest one that verified the item, which
+	// is what knowledge staleness is measured from.
+	LastObservedAt       time.Time `json:"last_observed_at,omitzero"`
+	LastStrongEvidenceAt time.Time `json:"last_strong_evidence_at,omitzero"`
 }
 
 // ExplainMemoryScore computes the explanation with the default runtime ranking
@@ -70,7 +75,7 @@ func ExplainMemoryScoreWithPolicy(item contextstore.ContextItem, baseRelevance f
 		asOf = contextItemUpdatedAt(item)
 	}
 	parts := MemoryScoreParts{BaseRelevance: baseRelevance, Applicability: 1, UtilityLowerBound: utility, Freshness: memoryFreshnessAt(item, asOf), TrustFactor: memoryTrustFactor(item.TrustLevel), HarmfulUsePenalty: aggregate.NegativeWeight / (aggregate.PositiveWeight + aggregate.NegativeWeight + 1), StaleEnvironmentPenalty: staleEnvironmentPenalty(item)}
-	return MemoryScoreExplanation{ContextItemID: item.ID, PolicyVersion: policy.PolicyVersion, ScoreParts: parts, FinalScore: reinforcedFinalScoreWithPolicy(parts, runtime), PositiveWeight: aggregate.PositiveWeight, NegativeWeight: aggregate.NegativeWeight, ExposureCount: aggregate.ExposureCount, AppliedCount: aggregate.AppliedCount, VerifiedSupportCount: aggregate.VerifiedSupportCount, CausalFailureCount: aggregate.CausalFailureCount}
+	return MemoryScoreExplanation{ContextItemID: item.ID, PolicyVersion: policy.PolicyVersion, ScoreParts: parts, FinalScore: reinforcedFinalScoreWithPolicy(parts, runtime), PositiveWeight: aggregate.PositiveWeight, NegativeWeight: aggregate.NegativeWeight, ExposureCount: aggregate.ExposureCount, AppliedCount: aggregate.AppliedCount, VerifiedSupportCount: aggregate.VerifiedSupportCount, CausalFailureCount: aggregate.CausalFailureCount, LastObservedAt: aggregate.LastObservedAt, LastStrongEvidenceAt: aggregate.LastStrongEvidenceAt}
 }
 
 func reinforcedFinalScore(parts MemoryScoreParts) float64 {

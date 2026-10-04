@@ -69,6 +69,53 @@ func TestInspectReplayComparesMemoryAggregatesInMemory(t *testing.T) {
 	}
 }
 
+// TestInspectReplayMatchesStrongEvidenceAtStoredPrecision replays real-shaped
+// events: runtime timestamps carry nanoseconds, the projection stores
+// milliseconds, and both evidence times must still match.
+func TestInspectReplayMatchesStrongEvidenceAtStoredPrecision(t *testing.T) {
+	retrieved := time.Date(2026, 2, 3, 4, 5, 6, 123456789, time.UTC)
+	verified := retrieved.Add(90 * time.Second)
+	workspace, observations := buildMemoryReplayFixture(t,
+		team.RunEvent{
+			Type: string(team.EventMemoryRetrieved), Actor: "runtime", TaskID: "task-memory", Attempt: 2,
+			IdempotencyKey: "memory:retrieved:2", Timestamp: retrieved.Format(time.RFC3339Nano),
+			Payload: jsonBytes(t, map[string]any{"context_item_id": "memory-1", "policy_version": "memory-policy-v1", "project_id": "project-1"}),
+		},
+		team.RunEvent{
+			Type: "memory_outcome_recorded", Actor: "runtime", TaskID: "task-memory", Attempt: 2,
+			IdempotencyKey: "memory:outcome:2", Timestamp: verified.Format(time.RFC3339Nano),
+			Payload: jsonBytes(t, map[string]any{"context_item_id": "memory-1", "policy_version": "memory-policy-v1", "project_id": "project-1", "signal": "verification_passed", "direction": "positive", "effective_weight": 1, "causal_confidence": 1}),
+		},
+	)
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "memory-1", Kind: contextstore.ContextPattern, Content: "safe", Scope: contextstore.Scope{ProjectID: "project-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RebuildExperienceAggregates(t.Context(), observations); err != nil {
+		t.Fatal(err)
+	}
+	aggregate, err := repo.ExperienceAggregate(t.Context(), "memory-1", "memory-policy-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := verified.Truncate(time.Millisecond); !aggregate.LastStrongEvidenceAt.Equal(want) || !aggregate.LastObservedAt.Equal(want) {
+		t.Fatalf("aggregate times observed=%s strong=%s, want both %s", aggregate.LastObservedAt, aggregate.LastStrongEvidenceAt, want)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: workspace, RunID: "run-memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check := findProjectionCheck(t, envelope.Data.(ReplayData).Checks, "memory_aggregates"); check.Status != "match" {
+		t.Fatalf("memory check = %#v", check)
+	}
+}
+
 func TestInspectReplayDetectsMemoryAggregateDrift(t *testing.T) {
 	workspace, observations := buildMemoryReplayFixture(t)
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
@@ -101,7 +148,7 @@ func TestInspectReplayDetectsMemoryAggregateDrift(t *testing.T) {
 	}
 }
 
-func buildMemoryReplayFixture(t *testing.T) (string, []contextstore.ExperienceObservation) {
+func buildMemoryReplayFixture(t *testing.T, extra ...team.RunEvent) (string, []contextstore.ExperienceObservation) {
 	t.Helper()
 	workspace := t.TempDir()
 	store, err := team.NewEventStore(workspace, "run-memory", "session-memory")
@@ -120,6 +167,9 @@ func buildMemoryReplayFixture(t *testing.T) (string, []contextstore.ExperienceOb
 		IdempotencyKey: "memory:retrieved:1", Timestamp: time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC).Format(time.RFC3339Nano),
 		Payload: jsonBytes(t, map[string]any{"context_item_id": "memory-1", "policy_version": "memory-policy-v1", "project_id": "project-1", "prior_alpha": 1, "prior_beta": 1, "utility_percentile": 0.1}),
 	})
+	for _, event := range extra {
+		appendEvent(event)
+	}
 	appendEvent(team.RunEvent{Type: "run_finished", Actor: "coordinator", Payload: jsonBytes(t, team.RunResult{RunID: "run-memory", Outcome: team.RunOutcomePartial, StopReason: team.StopReasonUnresolvedTasks})})
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

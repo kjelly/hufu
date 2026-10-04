@@ -24,6 +24,12 @@ type memoryOutcomePayload struct {
 	Direction             string  `json:"direction,omitempty"`
 }
 
+// strongPositiveMemorySignals are the positive outcomes that verify a memory:
+// a task's objective verifier and the run's acceptance checks. A terminal
+// success without a verifier, a rescued retry, and a skeptic's model vote are
+// weaker; they add credit but do not count as verifying the item again.
+var strongPositiveMemorySignals = map[string]bool{"verification_passed": true, "acceptance_passed": true}
+
 func (c *Coordinator) reduceMemoryEvent(event RunEvent) {
 	repo, ok := c.contextRepo.(contextstore.ExperienceRepository)
 	if !ok || event.IdempotencyKey == "" {
@@ -106,10 +112,12 @@ func memoryObservationFromEvent(event RunEvent, policy agent.MemoryLearningPolic
 			if outcome.Signal == "verification_passed" && outcome.EffectiveWeight > 0 {
 				observation.VerifiedSupportDelta = 1
 			}
+			observation.StrongEvidence = strongPositiveMemorySignals[outcome.Signal] && outcome.EffectiveWeight > 0
 		case "negative":
 			observation.NegativeWeight = outcome.EffectiveWeight
 			if outcome.CausalConfidence > 0 && outcome.EffectiveWeight > 0 {
 				observation.CausalFailureDelta = 1
+				observation.StrongEvidence = true
 			}
 		}
 	default:

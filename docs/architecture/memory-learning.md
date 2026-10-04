@@ -228,6 +228,7 @@ V1 的保守限制：
 - `verification_passed` 只有在 `effective_weight > 0` 時才增加 `VerifiedSupportCount`；被上限壓成 0 的重複 pass 不算支持。
 - `IndependentTaskCount` 計算 distinct task occurrence。usage／outcome event payload 帶 `occurrence_id`，由 todo 第一個 memory manifest 的 run ID 加 todo ID 組成，跨 retry 與 resume 不變、跨 run 不同；沒有 `occurrence_id` 的舊 event 仍以 todo ID 計。
 - terminal transition 在 `CommitTaskTransition` 提交時就記錄 outcome（learning 為 `off` 時略過）；checkpoint 重訪同一 task 時以相同 idempotency key 去重。
+- **強證據（strong evidence）**：只有重新驗證過 item 的 observation 才算——`verification_passed` 或 run `acceptance_passed` 且 `effective_weight > 0`，或 `causal_confidence > 0` 的負向 outcome（objective verification failure、可歸因的 rollback）。retrieval、consulted／applied 回報、沒有 verifier 的 terminal success、`retry_rescued`、skeptic 的模型投票都不算。強證據推進 `LastStrongEvidenceAt`；`LastObservedAt` 則任何 observation 都會推進，只用於診斷。
 
 ### 5.5 Aggregate projection
 
@@ -258,9 +259,14 @@ type ExperienceAggregate struct {
     IndependentProjectCount int
     UtilityLowerBound      float64
     LastObservedAt         time.Time
+    LastStrongEvidenceAt   time.Time // zero：沒有紀錄
     Revision               int64
 }
 ```
+
+知識狀態的 `stale` 從 `LastStrongEvidenceAt` 起算：已達支持門檻、但最後一次強證據早於 `memory-learning.stale-after` 的 item 是 `stale`，即使它天天被 retrieval。migration 12 之前建立的 row 這個時間是 0（未知），在 `hufu context rebuild --aggregates` 之前維持 `assumed`，不從 `LastObservedAt` 推測。排序的 freshness 仍看 item 內容的更新時間，不受這兩個時間影響。
+
+projection 以毫秒保存時間；reducer 也以毫秒計算，所以 `inspect replay` 的 in-memory 重算與 SQLite 一致（event timestamp 帶奈秒）。
 
 `experience_processed_events.idempotency_key` 是 reducer 防重依據。aggregate 必須能從 `event_store.jsonl` 清空後完整重建；不得依賴 `execution-events.jsonl`，後者只供 `hufu improve` 的 metadata report。
 

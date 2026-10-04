@@ -48,6 +48,9 @@ func writeMemoryExplanation(out io.Writer, e team.MemoryExplanation) error {
 		e.ContextItemID, e.PolicyVersion, e.RetrievalID, parts.BaseRelevance, parts.Applicability, parts.UtilityLowerBound, parts.Freshness, parts.TrustFactor, parts.HarmfulUsePenalty, parts.StaleEnvironmentPenalty, e.FinalScore, e.ExposureCount, e.AppliedCount, e.VerifiedSupportCount, e.CausalFailureCount); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(out, "last_observed_at: %s\nlast_strong_evidence_at: %s\n", evidenceTime(e.LastObservedAt), evidenceTime(e.LastStrongEvidenceAt)); err != nil {
+		return err
+	}
 	reasons := make([]string, len(e.Reasons))
 	for i, reason := range e.Reasons {
 		reasons[i] = string(reason)

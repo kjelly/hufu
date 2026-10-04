@@ -17,8 +17,11 @@ submit or override it.
 - `known`: normative repository context, or historical context with enough
   verified support from independent tasks.
 - `assumed`: eligible historical context without enough independent support.
-- `stale`: supported historical context whose last observation is older than
-  `memory-learning.stale-after`.
+- `stale`: supported historical context whose last strong evidence (objective
+  verification, run acceptance, or a failure attributed to it) is older than
+  `memory-learning.stale-after`. Retrieval does not refresh it. Supported
+  context with no recorded strong evidence, which only rows created before
+  context migration 12 have, stays `assumed`.
 - `conflicting`: shared persistent historical context with an open memory
   conflict, meaning a persisted pair judgment from `hufu context conflicts
   scan` whose derived state is open (see the

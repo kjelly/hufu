@@ -31,6 +31,7 @@ an existing store requires a new migration, hufu creates a timestamped
 | 9 | `semantic_embedding_generations` | Adds rebuildable, generation-scoped semantic embedding projections. |
 | 10 | `promotion_generated_draft_hash` | Records each promotion proposal's generated draft hash so operator edits can be distinguished from the model draft. |
 | 11 | `context_pair_judgments` | Adds model judgments about pairs of existing persistent memories and their human review state (memory conflicts). |
+| 12 | `experience_strong_evidence_recency` | Adds `experience_aggregates.last_strong_evidence_at`, the last time an item received strong evidence; knowledge staleness is measured from it. Earlier rows read 0 (unknown) until rebuilt. |
 
 ## Tables
 

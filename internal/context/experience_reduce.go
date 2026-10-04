@@ -56,6 +56,9 @@ func ReduceExperienceAggregates(observations []ExperienceObservation) ([]Experie
 		if observation.ObservedAt.After(aggregate.LastObservedAt) {
 			aggregate.LastObservedAt = observation.ObservedAt
 		}
+		if observation.StrongEvidence && observation.ObservedAt.After(aggregate.LastStrongEvidenceAt) {
+			aggregate.LastStrongEvidenceAt = observation.ObservedAt
+		}
 		aggregate.Revision++
 		if observation.TaskID != "" && (observation.AppliedDelta > 0 || observation.PositiveWeight > 0 || observation.NegativeWeight > 0) {
 			state.tasks[observation.TaskID] = struct{}{}

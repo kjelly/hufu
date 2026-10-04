@@ -8,6 +8,7 @@ import "context"
 const (
 	schemaVersionPromotionEditTracking = 10
 	schemaVersionPairJudgments         = 11
+	schemaVersionStrongEvidenceRecency = 12
 )
 
 // latestSchemaVersion is the newest migration this build knows.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -25,7 +26,11 @@ type ExperienceAggregate struct {
 	IndependentProjectCount int       `json:"independent_project_count"`
 	UtilityLowerBound       float64   `json:"utility_lower_bound"`
 	LastObservedAt          time.Time `json:"last_observed_at"`
-	Revision                int64     `json:"revision"`
+	// LastStrongEvidenceAt is when the item last received strong evidence;
+	// zero means none is recorded. Retrieval and use reports never move it,
+	// so it, not LastObservedAt, says how recently the item was verified.
+	LastStrongEvidenceAt time.Time `json:"last_strong_evidence_at,omitzero"`
+	Revision             int64     `json:"revision"`
 }
 
 type ExperienceObservation struct {
@@ -46,6 +51,11 @@ type ExperienceObservation struct {
 	PriorAlpha           float64
 	PriorBeta            float64
 	UtilityPercentile    float64
+	// StrongEvidence marks an observation that verified the item or
+	// causally attributed a failure to it: objective verification or run
+	// acceptance that earned credit, or a causal failure. It moves
+	// LastStrongEvidenceAt; exposure and use reports never set it.
+	StrongEvidence bool
 }
 
 type ExperienceRepository interface {
@@ -98,6 +108,10 @@ func normalizeExperienceObservation(observation ExperienceObservation) Experienc
 	if observation.ObservedAt.IsZero() {
 		observation.ObservedAt = time.Now().UTC()
 	}
+	// The projection stores milliseconds. Reducing at that precision keeps
+	// an in-memory replay equal to the stored aggregate; event timestamps
+	// carry nanoseconds.
+	observation.ObservedAt = time.UnixMilli(observation.ObservedAt.UnixMilli()).UTC()
 	return observation
 }
 
@@ -123,11 +137,15 @@ func applyExperienceObservationTx(ctx context.Context, tx experienceTx, observat
 	if projectID == "" {
 		projectID = itemProjectID
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO "+aggregatesTable+`(context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,revision) VALUES(?,?,0,0,0,0,0,0,0,0,0,0,0,?,0) ON CONFLICT(context_item_id,policy_version) DO NOTHING`, observation.ContextItemID, observation.PolicyVersion, observation.ObservedAt.UnixMilli())
+	_, err = tx.ExecContext(ctx, "INSERT INTO "+aggregatesTable+`(context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,last_strong_evidence_at,revision) VALUES(?,?,0,0,0,0,0,0,0,0,0,0,0,?,0,0) ON CONFLICT(context_item_id,policy_version) DO NOTHING`, observation.ContextItemID, observation.PolicyVersion, observation.ObservedAt.UnixMilli())
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE "+aggregatesTable+` SET positive_weight=positive_weight+?, negative_weight=negative_weight+?, exposure_count=exposure_count+?, consulted_count=consulted_count+?, applied_count=applied_count+?, rejected_count=rejected_count+?, verified_support_count=verified_support_count+?, causal_failure_count=causal_failure_count+?, last_observed_at=MAX(last_observed_at,?), revision=revision+1 WHERE context_item_id=? AND policy_version=?`, observation.PositiveWeight, observation.NegativeWeight, observation.ExposureDelta, observation.ConsultedDelta, observation.AppliedDelta, observation.RejectedDelta, observation.VerifiedSupportDelta, observation.CausalFailureDelta, observation.ObservedAt.UnixMilli(), observation.ContextItemID, observation.PolicyVersion)
+	var strongAt int64
+	if observation.StrongEvidence {
+		strongAt = observation.ObservedAt.UnixMilli()
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE "+aggregatesTable+` SET positive_weight=positive_weight+?, negative_weight=negative_weight+?, exposure_count=exposure_count+?, consulted_count=consulted_count+?, applied_count=applied_count+?, rejected_count=rejected_count+?, verified_support_count=verified_support_count+?, causal_failure_count=causal_failure_count+?, last_observed_at=MAX(last_observed_at,?), last_strong_evidence_at=MAX(last_strong_evidence_at,?), revision=revision+1 WHERE context_item_id=? AND policy_version=?`, observation.PositiveWeight, observation.NegativeWeight, observation.ExposureDelta, observation.ConsultedDelta, observation.AppliedDelta, observation.RejectedDelta, observation.VerifiedSupportDelta, observation.CausalFailureDelta, observation.ObservedAt.UnixMilli(), strongAt, observation.ContextItemID, observation.PolicyVersion)
 	if err != nil {
 		return false, err
 	}
@@ -146,16 +164,35 @@ func applyExperienceObservationTx(ctx context.Context, tx experienceTx, observat
 }
 
 func (r *SQLiteRepository) ExperienceAggregate(ctx context.Context, itemID, policyVersion string) (ExperienceAggregate, error) {
-	return experienceAggregateQ(ctx, r.db, itemID, policyVersion)
+	return r.experienceAggregateQ(ctx, r.db, itemID, policyVersion)
 }
 
 // experienceAggregateQ is ExperienceAggregate through q.
-func experienceAggregateQ(ctx context.Context, q queryer, itemID, policyVersion string) (ExperienceAggregate, error) {
-	return scanExperienceAggregate(q.QueryRowContext(ctx, `SELECT context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,revision FROM experience_aggregates WHERE context_item_id=? AND policy_version=?`, itemID, policyVersion))
+func (r *SQLiteRepository) experienceAggregateQ(ctx context.Context, q queryer, itemID, policyVersion string) (ExperienceAggregate, error) {
+	return scanExperienceAggregate(q.QueryRowContext(ctx, `SELECT `+r.experienceAggregateColumns("")+` FROM experience_aggregates WHERE context_item_id=? AND policy_version=?`, itemID, policyVersion))
+}
+
+// experienceAggregateColumns lists the columns scanExperienceAggregate reads,
+// qualified by alias when one is given. A read-only store older than
+// migration 12 reads no strong evidence.
+func (r *SQLiteRepository) experienceAggregateColumns(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	strong := prefix + "last_strong_evidence_at"
+	if !r.schemaAtLeast(schemaVersionStrongEvidenceRecency) {
+		strong = "0"
+	}
+	columns := []string{"context_item_id", "policy_version", "positive_weight", "negative_weight", "exposure_count", "consulted_count", "applied_count", "rejected_count", "verified_support_count", "causal_failure_count", "independent_task_count", "independent_project_count", "utility_lower_bound", "last_observed_at"}
+	for i, column := range columns {
+		columns[i] = prefix + column
+	}
+	return strings.Join(append(columns, strong, prefix+"revision"), ",")
 }
 
 func (r *SQLiteRepository) ListExperienceAggregates(ctx context.Context, policyVersion string) ([]ExperienceAggregate, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT context_item_id,policy_version,positive_weight,negative_weight,exposure_count,consulted_count,applied_count,rejected_count,verified_support_count,causal_failure_count,independent_task_count,independent_project_count,utility_lower_bound,last_observed_at,revision FROM experience_aggregates WHERE policy_version=? ORDER BY context_item_id`, policyVersion)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+r.experienceAggregateColumns("")+` FROM experience_aggregates WHERE policy_version=? ORDER BY context_item_id`, policyVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +212,7 @@ func (r *SQLiteRepository) ListExperienceAggregates(ctx context.Context, policyV
 // canonical project/team scope. Private agent memory is deliberately omitted;
 // callers that need it must use an explicitly authorized item-level query.
 func (r *SQLiteRepository) ListExperienceAggregatesForScope(ctx context.Context, policyVersion string, scope Scope) ([]ExperienceAggregate, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT e.context_item_id,e.policy_version,e.positive_weight,e.negative_weight,e.exposure_count,e.consulted_count,e.applied_count,e.rejected_count,e.verified_support_count,e.causal_failure_count,e.independent_task_count,e.independent_project_count,e.utility_lower_bound,e.last_observed_at,e.revision FROM experience_aggregates e JOIN context_items c ON c.id=e.context_item_id WHERE e.policy_version=? AND c.project_id=? AND (?='' OR COALESCE(c.team_id,'')=?) AND c.agent_id IS NULL ORDER BY e.context_item_id`, policyVersion, scope.ProjectID, scope.TeamID, scope.TeamID)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+r.experienceAggregateColumns("e")+` FROM experience_aggregates e JOIN context_items c ON c.id=e.context_item_id WHERE e.policy_version=? AND c.project_id=? AND (?='' OR COALESCE(c.team_id,'')=?) AND c.agent_id IS NULL ORDER BY e.context_item_id`, policyVersion, scope.ProjectID, scope.TeamID, scope.TeamID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,9 +230,12 @@ func (r *SQLiteRepository) ListExperienceAggregatesForScope(ctx context.Context,
 
 func scanExperienceAggregate(row interface{ Scan(...any) error }) (ExperienceAggregate, error) {
 	var item ExperienceAggregate
-	var observed int64
-	err := row.Scan(&item.ContextItemID, &item.PolicyVersion, &item.PositiveWeight, &item.NegativeWeight, &item.ExposureCount, &item.ConsultedCount, &item.AppliedCount, &item.RejectedCount, &item.VerifiedSupportCount, &item.CausalFailureCount, &item.IndependentTaskCount, &item.IndependentProjectCount, &item.UtilityLowerBound, &observed, &item.Revision)
+	var observed, strong int64
+	err := row.Scan(&item.ContextItemID, &item.PolicyVersion, &item.PositiveWeight, &item.NegativeWeight, &item.ExposureCount, &item.ConsultedCount, &item.AppliedCount, &item.RejectedCount, &item.VerifiedSupportCount, &item.CausalFailureCount, &item.IndependentTaskCount, &item.IndependentProjectCount, &item.UtilityLowerBound, &observed, &strong, &item.Revision)
 	item.LastObservedAt = time.UnixMilli(observed).UTC()
+	if strong > 0 {
+		item.LastStrongEvidenceAt = time.UnixMilli(strong).UTC()
+	}
 	return item, err
 }
 

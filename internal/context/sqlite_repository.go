@@ -47,6 +47,11 @@ var migrations = []migrationDef{
 	// Model judgments about pairs of existing persistent memories; the table
 	// stores relations and review state only, never knowledge content.
 	{11, "context_pair_judgments", `CREATE TABLE context_pair_judgments (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, team_id TEXT NOT NULL DEFAULT '', agent_id TEXT NOT NULL DEFAULT '', item_a_id TEXT NOT NULL, item_b_id TEXT NOT NULL, item_a_content_hash TEXT NOT NULL, item_b_content_hash TEXT NOT NULL, verdict TEXT NOT NULL CHECK (verdict IN ('contradicts','compatible','duplicate','refines','undetermined')), status TEXT NOT NULL CHECK (status IN ('open','dismissed','not_applicable')), judge_policy_version TEXT NOT NULL, judge_model TEXT NOT NULL, rationale TEXT NOT NULL DEFAULT '', dismiss_reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, CHECK (item_a_id < item_b_id), CHECK ((verdict = 'contradicts') = (status IN ('open','dismissed')))); CREATE INDEX idx_pair_judgments_scope ON context_pair_judgments(project_id, team_id, status); CREATE INDEX idx_pair_judgments_item_a ON context_pair_judgments(item_a_id); CREATE INDEX idx_pair_judgments_item_b ON context_pair_judgments(item_b_id);`},
+	// Records when an item last received strong evidence (objective
+	// verification, acceptance, or a causally attributed failure). Rows
+	// created before this migration read zero, meaning unknown, until the
+	// aggregates are rebuilt from events.
+	{12, "experience_strong_evidence_recency", `ALTER TABLE experience_aggregates ADD COLUMN last_strong_evidence_at INTEGER NOT NULL DEFAULT 0;`},
 }
 
 func migrationChecksum(sql string) string {

@@ -127,6 +127,55 @@ func TestMemoryObservationSupportAndOccurrence(t *testing.T) {
 	}
 }
 
+// TestMemoryObservationStrongEvidence pins which outcome signals count as
+// verifying a memory again: objective verification and run acceptance that
+// earned credit, and failures attributed to the memory. Everything else adds
+// at most credit.
+func TestMemoryObservationStrongEvidence(t *testing.T) {
+	outcome := func(signal, direction string, effective, causal float64) []byte {
+		raw, _ := json.Marshal(memoryOutcomePayload{
+			memoryEventPayload: memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: "retrieval-1", ContextItemID: "memory-1", PolicyVersion: "memory-policy-v1", OccurrenceID: "run-a/1"},
+			Signal:             signal, Disposition: MemoryUseApplied, EffectiveWeight: effective, CausalConfidence: causal, Direction: direction,
+		})
+		return raw
+	}
+	plain := func(fields map[string]any) []byte {
+		fields["context_item_id"], fields["policy_version"] = "memory-1", "memory-policy-v1"
+		raw, _ := json.Marshal(fields)
+		return raw
+	}
+	tests := []struct {
+		name      string
+		eventType string
+		payload   []byte
+		want      bool
+	}{
+		{name: "retrieval", eventType: "memory_retrieved", payload: plain(map[string]any{})},
+		{name: "applied use report", eventType: "memory_usage_recorded", payload: plain(map[string]any{"disposition": MemoryUseApplied})},
+		{name: "verification passed", eventType: "memory_outcome_recorded", payload: outcome("verification_passed", "positive", 1, 1), want: true},
+		{name: "verification passed with capped credit", eventType: "memory_outcome_recorded", payload: outcome("verification_passed", "positive", 0, 1)},
+		{name: "run acceptance passed", eventType: "memory_outcome_recorded", payload: outcome("acceptance_passed", "positive", 0.5, 1), want: true},
+		{name: "terminal success without verifier", eventType: "memory_outcome_recorded", payload: outcome("task_terminal_success", "positive", 0.2, 1)},
+		{name: "rescued retry", eventType: "memory_outcome_recorded", payload: outcome("retry_rescued", "positive", 0.5, 1)},
+		{name: "skeptic vote", eventType: "memory_outcome_recorded", payload: outcome("skeptic_passed", "positive", 0.8, 1)},
+		{name: "attributed verification failure", eventType: "memory_outcome_recorded", payload: outcome("verification_failed", "negative", 1, 1), want: true},
+		{name: "attributed rollback", eventType: "memory_outcome_recorded", payload: outcome("rollback", "negative", 1, 1), want: true},
+		{name: "rollback not attributed to the memory", eventType: "memory_outcome_recorded", payload: outcome("rollback", "negative", 0, 0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := RunEvent{Type: tt.eventType, TaskID: "1", Timestamp: time.Now().UTC().Format(time.RFC3339Nano), IdempotencyKey: "key", Payload: tt.payload}
+			observation, ok := memoryObservationFromEvent(event, agent.DefaultMemoryLearningPolicy())
+			if !ok {
+				t.Fatal("event was not reduced")
+			}
+			if observation.StrongEvidence != tt.want {
+				t.Fatalf("strong evidence = %v, want %v (observation %+v)", observation.StrongEvidence, tt.want, observation)
+			}
+		})
+	}
+}
+
 // Todo IDs restart in every fresh run while the workspace event log spans runs.
 // A later run's task with the same ID must earn its own credit and count as a
 // separate task, while a retry of one occurrence stays within that cap.

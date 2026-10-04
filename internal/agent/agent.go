@@ -274,8 +274,9 @@ type MemoryLearningPolicy struct {
 	MinIndependentTasks int                `yaml:"min-independent-tasks" json:"min_independent_tasks"`
 	MaxHarmRate         float64            `yaml:"max-harm-rate" json:"max_harm_rate"`
 	// StaleAfter marks fully verified knowledge stale when its most recent
-	// outcome observation is older than this duration. Zero disables stale
-	// classification.
+	// strong evidence (objective verification, run acceptance, or a causally
+	// attributed failure) is older than this duration. Retrieval and use
+	// reports do not count. Zero disables stale classification.
 	StaleAfter time.Duration `yaml:"stale-after" json:"stale_after"`
 }
 

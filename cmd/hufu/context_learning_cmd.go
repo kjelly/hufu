@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -162,8 +163,16 @@ func runContextOutcomes(cmd *cobra.Command, args []string) error {
 	if contextQueryJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(aggregate)
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context_item_id: %s\npolicy_version: %s\npositive_weight: %.6f\nnegative_weight: %.6f\nutility_lower_bound: %.6f\nexposures: %d\napplied: %d\nconsulted: %d\nrejected: %d\nverified_support: %d\ncausal_failures: %d\nindependent_tasks: %d\nindependent_projects: %d\nrevision: %d\n", aggregate.ContextItemID, aggregate.PolicyVersion, aggregate.PositiveWeight, aggregate.NegativeWeight, aggregate.UtilityLowerBound, aggregate.ExposureCount, aggregate.AppliedCount, aggregate.ConsultedCount, aggregate.RejectedCount, aggregate.VerifiedSupportCount, aggregate.CausalFailureCount, aggregate.IndependentTaskCount, aggregate.IndependentProjectCount, aggregate.Revision)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context_item_id: %s\npolicy_version: %s\npositive_weight: %.6f\nnegative_weight: %.6f\nutility_lower_bound: %.6f\nexposures: %d\napplied: %d\nconsulted: %d\nrejected: %d\nverified_support: %d\ncausal_failures: %d\nindependent_tasks: %d\nindependent_projects: %d\nlast_observed_at: %s\nlast_strong_evidence_at: %s\nrevision: %d\n", aggregate.ContextItemID, aggregate.PolicyVersion, aggregate.PositiveWeight, aggregate.NegativeWeight, aggregate.UtilityLowerBound, aggregate.ExposureCount, aggregate.AppliedCount, aggregate.ConsultedCount, aggregate.RejectedCount, aggregate.VerifiedSupportCount, aggregate.CausalFailureCount, aggregate.IndependentTaskCount, aggregate.IndependentProjectCount, evidenceTime(aggregate.LastObservedAt), evidenceTime(aggregate.LastStrongEvidenceAt), aggregate.Revision)
 	return err
+}
+
+// evidenceTime renders an aggregate evidence time; zero means none recorded.
+func evidenceTime(at time.Time) string {
+	if at.IsZero() {
+		return "none"
+	}
+	return at.UTC().Format(time.RFC3339)
 }
 
 func runContextLearningDoctor(cmd *cobra.Command, _ []string) error {

@@ -210,7 +210,7 @@ func (r *SQLiteRepository) checkConsolidationSourcesQ(ctx context.Context, q que
 		for _, reason := range sourceItemReasons(item, result.sources[0], selected, in) {
 			add(item.ID, reason)
 		}
-		reason, revision, found, err := sourceAggregateReason(ctx, q, item.ID, in)
+		reason, revision, found, err := r.sourceAggregateReason(ctx, q, item.ID, in)
 		if err != nil {
 			return result, err
 		}
@@ -276,8 +276,8 @@ func sourceItemReasons(item, first ContextItem, selected map[string]bool, in con
 
 // sourceAggregateReason reads a source's experience aggregate and applies the
 // create-time support threshold or the approve-time revision equality.
-func sourceAggregateReason(ctx context.Context, q queryer, id string, in consolidationSourceCheck) (ConsolidationReason, int64, bool, error) {
-	aggregate, err := experienceAggregateQ(ctx, q, id, in.policyVersion)
+func (r *SQLiteRepository) sourceAggregateReason(ctx context.Context, q queryer, id string, in consolidationSourceCheck) (ConsolidationReason, int64, bool, error) {
+	aggregate, err := r.experienceAggregateQ(ctx, q, id, in.policyVersion)
 	found := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", 0, false, fmt.Errorf("load experience aggregate for %q: %w", id, err)

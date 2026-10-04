@@ -18,7 +18,12 @@ func TestClassifyKnowledgeState(t *testing.T) {
 		VerifiedSupportCount: policy.MinConfirmedSupport,
 		IndependentTaskCount: policy.MinIndependentTasks,
 		LastObservedAt:       now.Add(-time.Hour),
+		LastStrongEvidenceAt: now.Add(-time.Hour),
 	}
+	supported := func(observed, strong time.Time) *contextstore.ExperienceAggregate {
+		return &contextstore.ExperienceAggregate{VerifiedSupportCount: policy.MinConfirmedSupport, IndependentTaskCount: policy.MinIndependentTasks, LastObservedAt: observed, LastStrongEvidenceAt: strong}
+	}
+	expired := now.Add(-policy.StaleAfter - time.Second)
 	tests := []struct {
 		name      string
 		authority ContextAuthority
@@ -33,7 +38,9 @@ func TestClassifyKnowledgeState(t *testing.T) {
 		{name: "historical without aggregate", authority: ContextAuthorityHistorical, want: KnowledgeAssumed, wantOK: true},
 		{name: "historical below support", authority: ContextAuthorityHistorical, aggregate: &contextstore.ExperienceAggregate{VerifiedSupportCount: policy.MinConfirmedSupport - 1, IndependentTaskCount: policy.MinIndependentTasks}, want: KnowledgeAssumed, wantOK: true},
 		{name: "historical verified", authority: ContextAuthorityHistorical, aggregate: verified, want: KnowledgeKnown, wantOK: true},
-		{name: "historical stale", authority: ContextAuthorityHistorical, aggregate: &contextstore.ExperienceAggregate{VerifiedSupportCount: policy.MinConfirmedSupport, IndependentTaskCount: policy.MinIndependentTasks, LastObservedAt: now.Add(-policy.StaleAfter - time.Second)}, want: KnowledgeStale, wantOK: true},
+		{name: "historical stale", authority: ContextAuthorityHistorical, aggregate: supported(expired, expired), want: KnowledgeStale, wantOK: true},
+		{name: "retrieved recently but verified long ago is stale", authority: ContextAuthorityHistorical, aggregate: supported(now.Add(-time.Minute), expired), want: KnowledgeStale, wantOK: true},
+		{name: "support without recorded strong evidence is assumed", authority: ContextAuthorityHistorical, aggregate: supported(now.Add(-time.Minute), time.Time{}), want: KnowledgeAssumed, wantOK: true},
 		{name: "staleness disabled", authority: ContextAuthorityHistorical, aggregate: &contextstore.ExperienceAggregate{VerifiedSupportCount: policy.MinConfirmedSupport, IndependentTaskCount: policy.MinIndependentTasks, LastObservedAt: time.Time{}}, policy: func() agent.MemoryLearningPolicy { p := policy; p.StaleAfter = 0; return p }(), want: KnowledgeKnown, wantOK: true},
 	}
 	for _, test := range tests {
@@ -97,6 +104,7 @@ func TestKnowledgeStateReusesRankingAggregate(t *testing.T) {
 			AppliedDelta:         1,
 			VerifiedSupportDelta: 1,
 			PositiveWeight:       1,
+			StrongEvidence:       true,
 			PriorAlpha:           policy.PriorAlpha,
 			PriorBeta:            policy.PriorBeta,
 			UtilityPercentile:    policy.UtilityPercentile,

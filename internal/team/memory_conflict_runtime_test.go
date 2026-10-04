@@ -16,7 +16,7 @@ import (
 func TestClassifyKnowledgeStateConflicting(t *testing.T) {
 	policy := agent.DefaultMemoryLearningPolicy()
 	now := time.Now()
-	supported := &contextstore.ExperienceAggregate{VerifiedSupportCount: 10, IndependentTaskCount: 10, LastObservedAt: now}
+	supported := &contextstore.ExperienceAggregate{VerifiedSupportCount: 10, IndependentTaskCount: 10, LastObservedAt: now, LastStrongEvidenceAt: now}
 	cases := []struct {
 		name        string
 		authority   ContextAuthority

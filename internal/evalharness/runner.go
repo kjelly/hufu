@@ -458,6 +458,9 @@ func assertMemoryAggregates(ctx context.Context, workspace string, expects []Mem
 		findings = append(findings, compareMemoryAggregateFloat(prefix+"negative-weight", expect.NegativeWeight, aggregate.NegativeWeight)...)
 		findings = append(findings, compareMemoryAggregateInt(prefix+"verified-support-count", expect.VerifiedSupportCount, aggregate.VerifiedSupportCount)...)
 		findings = append(findings, compareMemoryAggregateInt(prefix+"independent-task-count", expect.IndependentTaskCount, aggregate.IndependentTaskCount)...)
+		if hasStrong := !aggregate.LastStrongEvidenceAt.IsZero(); expect.StrongEvidence != nil && hasStrong != *expect.StrongEvidence {
+			findings = append(findings, EvalFinding{Dimension: prefix + "strong-evidence", Expected: fmt.Sprintf("%t", *expect.StrongEvidence), Actual: fmt.Sprintf("%t", hasStrong)})
+		}
 	}
 	return findings
 }

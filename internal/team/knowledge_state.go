@@ -47,7 +47,18 @@ func classifyKnowledgeState(authority ContextAuthority, aggregate *contextstore.
 	if aggregate == nil || aggregate.VerifiedSupportCount < policy.MinConfirmedSupport || aggregate.IndependentTaskCount < policy.MinIndependentTasks {
 		return KnowledgeAssumed, true
 	}
-	if policy.StaleAfter > 0 && now.Sub(aggregate.LastObservedAt) > policy.StaleAfter {
+	if policy.StaleAfter <= 0 {
+		return KnowledgeKnown, true
+	}
+	// Staleness is measured from the last strong evidence, never from the
+	// last retrieval: an item injected every day but not verified for months
+	// is stale. A row with support but no recorded strong evidence predates
+	// that record, so its recency is unknown and it stays assumed until the
+	// aggregates are rebuilt.
+	if aggregate.LastStrongEvidenceAt.IsZero() {
+		return KnowledgeAssumed, true
+	}
+	if now.Sub(aggregate.LastStrongEvidenceAt) > policy.StaleAfter {
 		return KnowledgeStale, true
 	}
 	return KnowledgeKnown, true

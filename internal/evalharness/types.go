@@ -160,6 +160,9 @@ type MemoryAggregateExpect struct {
 	// promotion eligibility reads, not just the credit weight.
 	VerifiedSupportCount *int `yaml:"verified-support-count,omitempty"`
 	IndependentTaskCount *int `yaml:"independent-task-count,omitempty"`
+	// StrongEvidence pins whether the item has a recorded strong-evidence
+	// time, which knowledge staleness is measured from.
+	StrongEvidence *bool `yaml:"strong-evidence,omitempty"`
 }
 
 // TaskExpect asserts on one task by position: Tasks[i] in the fixture is
