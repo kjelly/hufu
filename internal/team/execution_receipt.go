@@ -245,10 +245,14 @@ type ExecutionReceipt struct {
 	ToolDispositions         []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
 	ToolInvocations          []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
 	ToolInvocationsTruncated int                        `json:"tool_invocations_truncated,omitempty"`
-	HandoffState             ResultHandoffState         `json:"handoff_state,omitempty"`
-	Semantic                 *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
-	MemoryManifest           *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
-	ContextManifest          *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+	// ToolSequence is the order of the tool calls this attempt executed, by
+	// name only. Nil means hufu did not run the attempt's tools itself (an
+	// external agent provider), so the sequence is unknown, not empty.
+	ToolSequence    *ToolSequenceRecord        `json:"tool_sequence,omitempty"`
+	HandoffState    ResultHandoffState         `json:"handoff_state,omitempty"`
+	Semantic        *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
+	MemoryManifest  *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 // Succeeded reports whether the runtime recorded an explicit successful

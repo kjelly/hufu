@@ -1339,6 +1339,9 @@ retryLoop:
 			ProviderTranscriptRef: attemptProviderTranscriptRef,
 		}
 		receipt.ToolInvocations, receipt.ToolInvocationsTruncated = dynamicInvocations.snapshot()
+		if c.toolSequenceObservable(attemptTarget) {
+			receipt.ToolSequence = toolSequenceRecord(executedCalls.snapshot())
+		}
 		receipt.CandidateIndex = fallback.candidateIndex()
 		if fallbackRound {
 			from := fallback.from

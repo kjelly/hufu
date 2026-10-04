@@ -8,6 +8,25 @@ import (
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 )
 
+func TestRenderInspectTaskTextShowsReplanComparison(t *testing.T) {
+	data := inspectpkg.TaskData{RunID: "run-1", TaskID: "2", Status: "error", Replans: []inspectpkg.ReplanData{
+		{PreviousTaskID: "1", Link: "verification", Mode: "warn", Phase: "planned", UnknownDimensions: []string{"tool_sequence"}},
+		{PreviousTaskID: "1", Link: "verification", Mode: "warn", Phase: "executed", Attempt: 1, MateriallyDifferent: true, ChangedDimensions: []string{"tool_sequence"}},
+	}}
+	var out bytes.Buffer
+	if err := renderInspectTaskText(&out, "main", data); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Replaces task 1 (verification link, material-replan warn): planned repeats the failed strategy changed=none unknown=tool_sequence",
+		"Replaces task 1 (verification link, material-replan warn): executed (attempt 1) changes the strategy changed=tool_sequence unknown=none",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRenderInspectTaskTextShowsRecoveryComparison(t *testing.T) {
 	cases := []struct {
 		name     string

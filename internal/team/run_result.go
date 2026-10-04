@@ -719,7 +719,16 @@ type RunMetrics struct {
 	RecoveryStrategyChanges            int                      `json:"recovery_strategy_changes,omitempty"`
 	// RetriesWithoutStructuralChange counts this run's attempts whose
 	// recovery_change_observed comparison found no structural change.
-	RetriesWithoutStructuralChange    int                         `json:"retries_without_structural_change,omitempty"`
+	RetriesWithoutStructuralChange int `json:"retries_without_structural_change,omitempty"`
+	// ReplanMaterialChangeAccepted, ReplanWithoutMaterialChange, and
+	// ReplanMaterialChangeRejected count this run's strategy_change
+	// comparisons of a task dispatched in place of a replan_required failure:
+	// those that changed the failed strategy, those that changed nothing
+	// structural and were dispatched anyway (material-replan: warn), and
+	// refused dispatches (material-replan: enforce).
+	ReplanMaterialChangeAccepted      int                         `json:"replan_material_change_accepted,omitempty"`
+	ReplanWithoutMaterialChange       int                         `json:"replan_without_material_change,omitempty"`
+	ReplanMaterialChangeRejected      int                         `json:"replan_material_change_rejected,omitempty"`
 	LastRecoveryStrategies            map[string]RecoveryStrategy `json:"last_recovery_strategies,omitempty"`
 	DiagnosticTasksSinceProgress      int                         `json:"diagnostic_tasks_since_progress,omitempty"`
 	RepairAttemptsByCriterion         map[string]int              `json:"repair_attempts_by_criterion,omitempty"`

@@ -61,6 +61,19 @@ type AttemptRecoveryData struct {
 	NotTracked        []string `json:"not_tracked,omitempty"`
 }
 
+// ReplanData is one strategy_change_evaluated comparison of a task that
+// was dispatched in place of a replan_required failure with that failure.
+type ReplanData struct {
+	PreviousTaskID      string   `json:"previous_task_id"`
+	Link                string   `json:"link"`
+	Mode                string   `json:"mode"`
+	Phase               string   `json:"phase"`
+	Attempt             int      `json:"attempt,omitempty"`
+	MateriallyDifferent bool     `json:"materially_different"`
+	ChangedDimensions   []string `json:"changed_dimensions,omitempty"`
+	UnknownDimensions   []string `json:"unknown_dimensions,omitempty"`
+}
+
 type TaskData struct {
 	RunID             string                    `json:"run_id"`
 	TaskID            string                    `json:"task_id"`
@@ -81,6 +94,7 @@ type TaskData struct {
 	KnowledgeCoverage *KnowledgeCoverageData    `json:"knowledge_coverage,omitempty"`
 	SideEffect        string                    `json:"side_effect,omitempty"`
 	CatalogAction     *CatalogActionData        `json:"catalog_action,omitempty"`
+	Replans           []ReplanData              `json:"replans,omitempty"`
 }
 
 // CatalogActionData identifies the catalog action a task ran. Arguments are
@@ -332,6 +346,7 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		data.FailureClass = string(item.FailureEvent.FailureClass)
 		data.ReasonCode = item.FailureEvent.FailureType
 	}
+	data.Replans = taskReplans(events, query.RunID, item.ID)
 	recovery := attemptRecoveryByReceipt(events)
 	for _, receipt := range item.ExecutionReceipts {
 		if receipt.RunID != query.RunID || receipt.TaskID != item.ID || query.Attempt > 0 && receipt.Attempt != query.Attempt {
@@ -453,6 +468,29 @@ func classifyProjectionError(runID string, err error) error {
 
 func attemptReceiptKey(runID, taskID string, attempt int, modelExecutionID string) string {
 	return fmt.Sprintf("%s\x1f%s\x1f%d\x1f%s", runID, taskID, attempt, modelExecutionID)
+}
+
+// taskReplans lists the strategy comparisons recorded for one task of a run.
+func taskReplans(events []IndexedEvent, runID, taskID string) []ReplanData {
+	runEvents := make([]team.RunEvent, 0, len(events))
+	for _, event := range events {
+		runEvents = append(runEvents, event.Event)
+	}
+	var out []ReplanData
+	for _, payload := range team.StrategyChangeObservations(runEvents) {
+		if payload.TaskID != taskID || payload.RunID != runID {
+			continue
+		}
+		data := ReplanData{PreviousTaskID: payload.PreviousTaskID, Link: payload.Link, Mode: payload.Mode, Phase: payload.Phase, Attempt: payload.Attempt, MateriallyDifferent: payload.MateriallyDifferent}
+		for _, dimension := range payload.ChangedDimensions {
+			data.ChangedDimensions = append(data.ChangedDimensions, string(dimension))
+		}
+		for _, dimension := range payload.UnknownDimensions {
+			data.UnknownDimensions = append(data.UnknownDimensions, string(dimension))
+		}
+		out = append(out, data)
+	}
+	return out
 }
 
 // attemptRecoveryByReceipt indexes recovery observations by the receipt

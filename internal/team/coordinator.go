@@ -610,6 +610,7 @@ type Coordinator struct {
 	eventStore             *EventStore // append-only session event store
 	experienceLineage      experienceLineageCache
 	recoveryChanges        recoveryChangeLog
+	strategyChanges        strategyChangeLog
 	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
 	eventOnceMu            sync.Mutex
 	decisionJournalMu      sync.Mutex

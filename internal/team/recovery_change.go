@@ -80,6 +80,7 @@ func (c *Coordinator) setAttemptReceipt(todoID string, receipt *ExecutionReceipt
 	}
 	if receipt != nil && !receipt.FinishedAt.IsZero() {
 		c.observeRecoveryChange(todoID, *receipt)
+		c.observeExecutedStrategyChange(todoID, *receipt)
 	}
 	return nil
 }

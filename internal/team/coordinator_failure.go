@@ -680,9 +680,15 @@ func (c *Coordinator) reliabilityConfig() agent.ReliabilityConfig {
 		} else if sessCfg.MaxTokensPerAttempt > 0 {
 			cfg.MaxTokensPerAttempt = sessCfg.MaxTokensPerAttempt
 		}
+		if mode, ok := agent.NormalizeMaterialReplanMode(sessCfg.MaterialReplan); ok {
+			cfg.MaterialReplan = mode
+		}
 		if sessCfg.WarnOnly {
 			cfg.WarnOnly = true
 			cfg.HardEnforcement = false
+			if cfg.MaterialReplan == agent.MaterialReplanEnforce {
+				cfg.MaterialReplan = agent.MaterialReplanWarn
+			}
 		} else {
 			cfg.HardEnforcement = cfg.HardEnforcement || sessCfg.HardEnforcement || c.ExecutionProfile().AntiThrashingEnforced
 		}

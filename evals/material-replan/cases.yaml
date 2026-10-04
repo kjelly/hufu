@@ -1,0 +1,40 @@
+# reliability.material-replan: enforce refuses a replacement of a
+# replan_required task that changes nothing structural. The coordinator
+# first re-dispatches the same agent with the same verification and only a
+# reworded goal; hufu refuses it through the policy repair loop. Dispatching
+# another agent is a different strategy and is admitted.
+version: 1
+name: material-replan
+team: ./team
+mode: deterministic
+cases:
+  - id: replan-must-change-strategy
+    prompt: "Report a status flag."
+    provider-fixture: fixtures/replan-must-change-strategy.json
+    expect:
+      task-count: 2
+      tasks:
+        - agent: worker
+          status: error
+        - agent: checker
+      durable-events:
+        counts:
+          - type: strategy_change_rejected
+            count: 1
+          - type: strategy_change_evaluated
+            count: 2
+        matches:
+          - type: strategy_change_rejected
+            occurrence: 1
+            fields:
+              payload.mode: enforce
+              payload.agent: worker
+              payload.materially_different: false
+              payload.reason_code: replan_not_materially_different
+          - type: strategy_change_evaluated
+            occurrence: 1
+            fields:
+              payload.phase: planned
+              payload.agent: checker
+              payload.materially_different: true
+              payload.changed_dimensions: [task_shape]

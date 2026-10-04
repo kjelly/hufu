@@ -56,3 +56,41 @@ cases:
             fields:
               payload.comparison: no_structural_change
               payload.previous_attempt: 1
+  # The first task fails its verifier until hufu requires a replan. The
+  # coordinator then dispatches the same agent with the same verification
+  # and only a reworded goal. Under the default material-replan: warn the
+  # replacement still runs, and both the dispatch-time and the post-run
+  # comparison record that it changed nothing structural.
+  - id: replan-repeating-failed-strategy-is-flagged
+    prompt: "Report a status flag."
+    provider-fixture: fixtures/replan-repeats-failed-strategy.json
+    expect:
+      task-count: 2
+      events:
+        required: [loop_warning]
+      durable-events:
+        counts:
+          - type: strategy_change_evaluated
+            count: 2
+          - type: strategy_change_rejected
+            count: 0
+        matches:
+          - type: strategy_change_evaluated
+            occurrence: 1
+            fields:
+              payload.phase: planned
+              payload.mode: warn
+              payload.link: verification
+              payload.materially_different: false
+              payload.reason_code: replan_not_materially_different
+          - type: strategy_change_evaluated
+            occurrence: 2
+            fields:
+              payload.phase: executed
+              payload.materially_different: false
+          # Each attempt's receipt keeps the names of the tools it ran, so
+          # the executed comparison above compared known sequences.
+          - type: task_failed
+            occurrence: 1
+            fields:
+              payload.execution_receipt.tool_sequence.tools: [submit_result]

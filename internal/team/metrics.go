@@ -42,6 +42,8 @@ func (c *Coordinator) Metrics() RunMetrics {
 		RepairAttemptsByCriterion:         repairCounts, AntiThrashingWarnings: c.antiThrashing.Warnings,
 		PreflightFailuresCaught: c.preflightFailuresCaught, NonAssertingVerifiersRejected: c.nonAssertingVerifiersRejected}
 	metrics.ContextWindowTelemetry = c.contextWindowTelemetry
+	replans := c.replanStrategyCounts()
+	metrics.ReplanMaterialChangeAccepted, metrics.ReplanWithoutMaterialChange, metrics.ReplanMaterialChangeRejected = replans.changed, replans.unchanged, replans.rejected
 	metrics.RepeatedFailureFingerprintsStopped = metrics.RepeatedFailureFingerprints
 	metrics.TokensSinceCriterionProgress = c.tokensSinceCriterionProgress
 	// No-progress budget counters (§8.1, WP-12). Read under the same lock.

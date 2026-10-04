@@ -27,8 +27,10 @@ var recoveryDimensions = []RecoveryDimension{
 	RecoveryDimensionDependencyGraph, RecoveryDimensionContextManifest, RecoveryDimensionDynamicTools,
 }
 
-// recoveryNotTracked lists retry inputs that are not durable per attempt, so
-// a comparison can never show them changed. Every observation names them.
+// recoveryNotTracked lists what this comparison never shows changed. Input
+// hashes, artifact revisions, and the failed criterion are not durable per
+// attempt; the tool sequence is (ExecutionReceipt.ToolSequence) but is the
+// attempt's behavior, not an input. Every observation names them.
 var recoveryNotTracked = []string{"tool_sequence", "tool_input_hashes", "artifact_revisions", "failed_criterion"}
 
 // RecoveryDimensionState is a dimension's state for one attempt. Unknown

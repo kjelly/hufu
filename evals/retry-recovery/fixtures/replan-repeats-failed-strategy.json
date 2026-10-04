@@ -1,0 +1,46 @@
+{
+  "steps": [
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Report a status flag.\",\"verify\":\"exit 1\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"attempt 1\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"attempt 2\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"attempt 3\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "agent",
+        "arguments": "{\"tasks\":[{\"agent\":\"worker\",\"goal\":\"Report the status flag another way.\",\"verify\":\"exit 1\"}]}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"replacement 1\"}"
+      }
+    },
+    {
+      "tool_call": {
+        "name": "submit_result",
+        "arguments": "{\"status\":\"success\",\"summary\":\"replacement 2\"}"
+      }
+    }
+  ]
+}

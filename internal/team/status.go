@@ -1786,6 +1786,7 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR.ContextManifest = cloneContextInjectionManifest(receipt.ContextManifest)
 	copyR.ToolDispositions = append([]ToolExecutionDisposition(nil), receipt.ToolDispositions...)
 	copyR.ToolInvocations = append([]ToolInvocationReceipt(nil), receipt.ToolInvocations...)
+	copyR.ToolSequence = cloneToolSequenceRecord(receipt.ToolSequence)
 	if receipt.StepBudget != nil {
 		stepBudget := *receipt.StepBudget
 		copyR.StepBudget = &stepBudget

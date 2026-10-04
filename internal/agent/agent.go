@@ -836,6 +836,33 @@ type ReliabilityConfig struct {
 	// docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 	MaxTasksWithoutProgress    int  `yaml:"max-tasks-without-progress" json:"max_tasks_without_progress,omitempty"`
 	MaxTasksWithoutProgressSet bool `yaml:"-" json:"-"`
+	// MaterialReplan controls the check that a task the coordinator
+	// dispatches in place of one that failed with replan_required is a
+	// structurally different strategy. "warn" (empty) records the comparison
+	// and dispatches anyway; "enforce" returns a repeat of the failed
+	// strategy to the coordinator; "off" skips the check. warn-only turns
+	// enforce into warn.
+	MaterialReplan string `yaml:"material-replan" json:"material_replan,omitempty"`
+}
+
+// MaterialReplan modes for ReliabilityConfig.MaterialReplan.
+const (
+	MaterialReplanWarn    = "warn"
+	MaterialReplanEnforce = "enforce"
+	MaterialReplanOff     = "off"
+)
+
+// NormalizeMaterialReplanMode returns the effective mode, or false for a
+// value that is not a mode.
+func NormalizeMaterialReplanMode(mode string) (string, bool) {
+	switch mode = strings.ToLower(strings.TrimSpace(mode)); mode {
+	case "":
+		return MaterialReplanWarn, true
+	case MaterialReplanWarn, MaterialReplanEnforce, MaterialReplanOff:
+		return mode, true
+	default:
+		return "", false
+	}
 }
 
 // DefaultReliabilityConfig returns default reliability anti-thrashing limits.

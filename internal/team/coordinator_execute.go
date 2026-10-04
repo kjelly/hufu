@@ -534,6 +534,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		}
 		return "", envelopeErr
 	}
+	// With every identity, target, and edge bound, compare each task with
+	// the failed strategies it would attempt again.
+	replanEvaluations, replanErr := c.evaluateReplanBatch(todoBatch, ids)
+	if replanErr != nil {
+		if advancedPhase && c.sessionData != nil {
+			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
+		}
+		return "", replanErr
+	}
 	// Freeze decision admission before task_created makes an occurrence
 	// recoverable. A failure leaves no executable task projection behind.
 	if c.hasDurableEventJournal() {
@@ -564,6 +573,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		}
 		return "", markCoordinatorFatal(err)
 	}
+	c.recordPlannedStrategyChanges(replanEvaluations)
 	for i, item := range todoItems {
 		if duplicateIndices[i] {
 			continue

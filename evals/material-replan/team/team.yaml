@@ -1,0 +1,4 @@
+name: eval-material-replan
+description: Coordinator and two workers for the material-replan eval suite, with replacements of replan_required tasks enforced
+reliability:
+  material-replan: enforce

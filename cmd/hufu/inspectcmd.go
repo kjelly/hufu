@@ -543,6 +543,20 @@ func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.Ta
 			}
 		}
 	}
+	for _, replan := range data.Replans {
+		verdict := "repeats the failed strategy"
+		if replan.MateriallyDifferent {
+			verdict = "changes the strategy"
+		}
+		phase := replan.Phase
+		if replan.Attempt > 0 {
+			phase += fmt.Sprintf(" (attempt %d)", replan.Attempt)
+		}
+		if _, err := fmt.Fprintf(writer, "Replaces task %s (%s link, material-replan %s): %s %s changed=%s unknown=%s\n",
+			replan.PreviousTaskID, replan.Link, replan.Mode, phase, verdict, refsOrNone(replan.ChangedDimensions), refsOrNone(replan.UnknownDimensions)); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(writer, "Artifact refs: %s\nContext refs: %s\nMemory refs: %s\n",
 		refsOrNone(data.ArtifactRefs), refsOrNone(data.ContextRefs), refsOrNone(data.MemoryRefs))
 	if err == nil && data.KnowledgeCoverage != nil {

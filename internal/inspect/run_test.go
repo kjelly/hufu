@@ -184,6 +184,34 @@ func TestInspectTaskShowsRecoveryComparisonPerAttempt(t *testing.T) {
 	}
 }
 
+// TestInspectTaskShowsReplanComparisons lists the strategy comparisons of a
+// replacement task for its own run only.
+func TestInspectTaskShowsReplanComparisons(t *testing.T) {
+	item := &team.TodoItem{ID: "task-2"}
+	comparison := func(runID, taskID, phase string, attempt int, material bool, changed ...team.StrategyDimension) IndexedEvent {
+		payload := team.StrategyChangePayload{
+			SchemaVersion: team.StrategyChangeSchemaVersion, Phase: phase, Mode: "warn", RunID: runID, TaskID: taskID, Attempt: attempt,
+			Agent: "worker", PreviousTaskID: "task-1", Link: "verification", PreviousDigest: "a", CandidateDigest: "b",
+			MateriallyDifferent: material, ChangedDimensions: changed, UnknownDimensions: []team.StrategyDimension{team.StrategyDimensionToolSequence},
+		}
+		return IndexedEvent{Event: team.RunEvent{Type: string(team.EventStrategyChangeEvaluated), TaskID: taskID, Payload: jsonBytes(t, payload)}}
+	}
+	events := []IndexedEvent{
+		comparison("run-1", "task-2", "planned", 0, false),
+		comparison("run-1", "task-3", "planned", 0, false),
+		comparison("run-0", "task-2", "planned", 0, true, team.StrategyDimensionTaskShape),
+		comparison("run-1", "task-2", "executed", 1, true, team.StrategyDimensionToolSequence),
+	}
+	data := projectTaskWithEvents(item, InspectQuery{RunID: "run-1", TaskID: "task-2"}, events)
+	if len(data.Replans) != 2 {
+		t.Fatalf("replans = %+v, want this run's two comparisons of task-2", data.Replans)
+	}
+	if planned, executed := data.Replans[0], data.Replans[1]; planned.Phase != "planned" || planned.MateriallyDifferent ||
+		executed.Phase != "executed" || executed.Attempt != 1 || !executed.MateriallyDifferent || len(executed.ChangedDimensions) != 1 || executed.ChangedDimensions[0] != "tool_sequence" {
+		t.Fatalf("replans = %+v", data.Replans)
+	}
+}
+
 func TestProjectTaskIncludesReadOnlyKnowledgeCoverage(t *testing.T) {
 	item := &team.TodoItem{
 		ID: "task-1",

@@ -314,6 +314,8 @@ integrity diagnostics。run 本身即使 outcome 是 failed/partial，也不代�
 - 每個 attempt 的 receipt identity、實際執行的 execution target（receipt 記錄的 target 優先，
   其次 anchor event，最後 backend 名稱）、exit code、verification status
 - 每個 attempt 的 recovery comparison（`recovery_change_observed`，見 §6.2.1）
+- 若 task 是在某個 `replan_required` 失敗之後派出的替代 task：與失敗策略的比較
+  （`strategy_change_evaluated`，見 §6.2.2）
 - artifact/evidence/context/memory opaque references
 - task 的 side effect;catalog action task 另顯示 catalog action ID、entry hash、
   arguments hash、durable invocation ID 與連結的 proposal ID
@@ -342,10 +344,47 @@ no-progress 決策都不讀它；寫入失敗只記 log。
 比較結果：任一 known 維度不同為 `change_detected`；全部可比較且相同為
 `no_structural_change`；其餘為 `unknown`。第一個 attempt 為 `unknown`、reason
 `no_prior_attempt`。每筆都列出 `not_tracked`（完整 tool 順序、每次呼叫的 input hash、
-artifact revision、失敗的 criterion），這些在 attempt 層級沒有 durable 紀錄，比較不會顯示
-它們改變。前一個失敗 fingerprint 與 recovery hypothesis 的 strategy 只作對照欄位。
+artifact revision、失敗的 criterion），比較不會顯示它們改變：input hash、artifact revision
+與失敗的 criterion 在 attempt 層級沒有 durable 紀錄；tool 順序現在記在 receipt（§6.2.2），
+但它是 attempt 的行為而不是輸入，所以這個比較仍不使用。前一個失敗 fingerprint 與 recovery hypothesis 的 strategy 只作對照欄位。
 同一 attempt 只記一次；resume 後從 event log 重建前一次 attempt，所以比較對象不變。
 `hufu report` 的 Reliability Metrics 列出「Retries without structural change」。
+
+### 6.2.2 Replan strategy check
+
+task 失敗且 disposition 為 `replan_required` 時，hufu 要求「以實質不同的計畫繼續」。
+coordinator 只能用新的 todo 繼續，沒有欄位說明新 task 在重做哪個失敗的 task，所以
+runtime 在派工時自己比對：
+
+- **連結**：新 task 與一個尚未被取代（`reconcile_task`）、狀態為 error／blocked、
+  disposition 為 `replan_required` 的 task，用同一個驗證（`verify`、`verify_spec` 或
+  reconcile tool）證明成功，或推進該 task 失敗的 criterion，就視為重做它。兩者都沒有的
+  task 不讀 goal 文字就無法連結，不做比較。
+- **策略指紋**（`StrategyExecutionFingerprint`）：各維度只含 identity、數量與 hash，
+  不含 goal、constraints、tool 參數、輸出或記憶內容。
+
+  | 維度 | 內容 |
+  |---|---|
+  | `task_shape` | agent、kind、side effect、recovery、verify mode、adversarial verify、escalate、plan first、decision profile、contract／action／run input、`Execution.Steps`、可用的 dynamic 與 static tool |
+  | `execution_target` | 派工時凍結的 target、model topology、route candidates |
+  | `dependency_shape` | 依賴的 task 的 agent（不看 todo ID，所以跨批次可比）、`order_after` 數量 |
+  | `evidence_shape` | 驗證操作、`evidence_from` 數量、`context_files`、`requires` |
+  | `tool_sequence` | receipt 的 `tool_sequence`：attempt 實際執行的 tool 名稱順序（最多 256 個，其餘計數）；外部 agent provider 自己執行 tool，記為未知 |
+
+  model 宣告的 recovery strategy 只作對照，不進 digest；只改 strategy 名稱或
+  `difference_from_prior` 不算改變。任一側未知的維度不能證明改變。
+- **派工時（phase `planned`）**：在 `ExecuteTasks` 所有 identity、target 與 DAG 邊都綁定
+  之後、建立 task 之前比對。task 還沒跑，兩側都不比 tool 順序。
+- **執行後（phase `executed`）**：替代 task 第一個完成的 attempt 與失敗 task 最後一個完成的
+  attempt 再比一次，這次包含 tool 順序。只是診斷，每組只記一次；resume 從 event log 重建。
+- **模式**（team.yaml `reliability.material-replan`）：`warn`（預設）記錄比較，沒有實質改變時
+  發 `loop_warning`，仍然派工；`enforce` 經 policy repair 流程退回整批派工（reason
+  `replan_not_materially_different`，事件 `strategy_change_rejected`），要求換 agent 或
+  model、加上它依賴的診斷 task、改用不同的檔案或證據，或用 `reconcile_task` 結束失敗的
+  task；`off` 不比對。`warn-only: true` 會把 `enforce` 降為 `warn`。
+
+`hufu inspect task` 列出替代 task 的每筆比較，`hufu report` 的 Reliability Metrics 列出替代
+task 改變／重複／被退回策略的次數。
 
 ### 6.3 `inspect trace`
 

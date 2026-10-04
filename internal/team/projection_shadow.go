@@ -224,6 +224,7 @@ type canonicalReceipt struct {
 	ToolDispositions              []ToolExecutionDisposition `json:"tool_dispositions,omitempty"`
 	ToolInvocations               []ToolInvocationReceipt    `json:"tool_invocations,omitempty"`
 	ToolInvocationsTruncated      int                        `json:"tool_invocations_truncated,omitempty"`
+	ToolSequence                  *ToolSequenceRecord        `json:"tool_sequence,omitempty"`
 	HandoffState                  ResultHandoffState         `json:"handoff_state,omitempty"`
 	Semantic                      *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	MemoryManifest                *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
@@ -264,6 +265,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			ToolDispositions:              append([]ToolExecutionDisposition(nil), r.ToolDispositions...),
 			ToolInvocations:               append([]ToolInvocationReceipt(nil), r.ToolInvocations...),
 			ToolInvocationsTruncated:      r.ToolInvocationsTruncated,
+			ToolSequence:                  cloneToolSequenceRecord(r.ToolSequence),
 			HandoffState:                  r.HandoffState,
 			Semantic:                      semanticRetrievalIdentityFromReceipt(&r),
 			MemoryManifest:                r.MemoryManifest,

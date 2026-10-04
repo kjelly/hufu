@@ -634,6 +634,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(directDispositions, directSideEffect, directRunID, todoID, 1))
 	directDynamicInvocations := newDynamicInvocationAccumulator(c.stepBudget(agentDef, agent.DefaultMaxSteps))
 	taskCtx = withDynamicToolInvocationSink(taskCtx, directDynamicInvocations.record, dynamicInvocationDiagnosticsReporter(c, nil, nil, resolvedName, todoID))
+	// A direct agent runs in this process, so the gate sees every tool call.
+	directExecutedCalls := &executedToolCallRecorder{}
+	taskCtx = withExecutedToolCallRecorder(taskCtx, directExecutedCalls)
 	taskCtx = withContextWindowRequestDescriptor(taskCtx, c.newContextWindowRequestDescriptorWithContext(taskCtx, directModel, agentDef, resolvedDirectTools.Tools, resolvedName, "direct-agent"))
 	defer cancel()
 
@@ -809,6 +812,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		ToolDispositions: directDispositions.snapshot(),
 	}
 	directReceipt.ToolInvocations, directReceipt.ToolInvocationsTruncated = directDynamicInvocations.snapshot()
+	directReceipt.ToolSequence = toolSequenceRecord(directExecutedCalls.snapshot())
 	if err == nil {
 		zero := 0
 		directReceipt.ExitCode = &zero

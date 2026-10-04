@@ -278,7 +278,8 @@ type rawReliabilityConfig struct {
 	MaxTasksWithoutProgress  *int `yaml:"max-tasks-without-progress"`
 	// Pointer preserves an explicit zero, which disables the per-attempt
 	// circuit breaker for teams that have a justified long-context workflow.
-	MaxTokensPerAttempt *int `yaml:"max-tokens-per-attempt"`
+	MaxTokensPerAttempt *int   `yaml:"max-tokens-per-attempt"`
+	MaterialReplan      string `yaml:"material-replan"`
 }
 
 // rawWorkerMemoryPolicy is the YAML-facing representation of a per-worker
@@ -1103,6 +1104,15 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		cfg.Reliability.WarnOnly = !cfg.Reliability.HardEnforcement
 	}
 	cfg.Reliability.VerifierLintMode = agent.NormalizeVerifierLintMode(yc.Reliability.VerifierLintMode)
+	// Unset stays empty, which means warn, so a team that does not set it
+	// keeps an unchanged configuration.
+	if raw := strings.TrimSpace(yc.Reliability.MaterialReplan); raw != "" {
+		materialReplan, ok := agent.NormalizeMaterialReplanMode(raw)
+		if !ok {
+			return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("reliability.material-replan must be warn, enforce, or off, got %q", raw)
+		}
+		cfg.Reliability.MaterialReplan = materialReplan
+	}
 	if yc.Shell != "" {
 		cfg.Shell = yc.Shell
 	}
