@@ -204,6 +204,8 @@ approved -> applied
 proposed|approved -> stale
 ```
 
+`approve` 先做與 `apply` 相同的 source 檢查：source 被 supersede、過期、內容或 aggregate revision 改變時設為 `stale` 並拒絕，必須重新 analyze；source 有未解決的 memory conflict 時只拒絕、維持 `proposed`，dismiss 或 supersede 後可直接再 approve。
+
 `apply` 的暫時性錯誤不改 status，維持 `approved` 供安全重試；source revision 或 target hash 改變則設為 `stale`，必須重新 analyze，不能強制套用。
 
 ## 5. Eligibility 與分類

@@ -146,11 +146,17 @@ func TestPromotionReviewRejectsStaleIntentAndDoubleApproveIsIdempotent(t *testin
 		t.Fatalf("stale target mutation result: called=%v err=%v", called, err)
 	}
 
-	first, err := helperRunCLI("context", "promotion", "approve", id, "--workspace", workspace, "--project", "project", "--team", "demo", "--team-search-path", search)
+	// source-1's evidence changed above, so approving a proposal drafted
+	// before that change finds stale evidence; one drafted after it approves.
+	if _, err = helperRunCLI("context", "promotion", "approve", id, "--workspace", workspace, "--project", "project", "--team", "demo", "--team-search-path", search); err == nil || !strings.Contains(err.Error(), "evidence is stale") {
+		t.Fatalf("approve with stale evidence err = %v, want a stale-evidence refusal", err)
+	}
+	current := helperCreateProposalInRepo(t, workspace, search, "project", "demo", "worker.md", "## Worker Policy\n- Approve current evidence.")
+	first, err := helperRunCLI("context", "promotion", "approve", current, "--workspace", workspace, "--project", "project", "--team", "demo", "--team-search-path", search)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := helperRunCLI("context", "promotion", "approve", id, "--workspace", workspace, "--project", "project", "--team", "demo", "--team-search-path", search)
+	second, err := helperRunCLI("context", "promotion", "approve", current, "--workspace", workspace, "--project", "project", "--team", "demo", "--team-search-path", search)
 	if err != nil {
 		t.Fatal(err)
 	}

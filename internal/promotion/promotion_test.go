@@ -691,6 +691,17 @@ func TestPathTraversalAndSymlinkEscapeRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Approval checks the source evidence, so the proposal cites a real,
+	// current source; the escape is what apply must refuse.
+	appendEligible(t, repo, contextstore.ContextItem{ID: "src", Kind: contextstore.ContextPattern, Content: "Keep promotion targets inside the team directory", Scope: contextstore.Scope{ProjectID: "p", TeamID: "demo"}, Lifecycle: contextstore.LifecycleConfirmed, Metadata: map[string]string{"memory_lifetime": "persistent"}})
+	source, err := repo.Get(ctx, "src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate, err := repo.ExperienceAggregate(ctx, "src", "memory-policy-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	pSymlink := contextstore.PromotionProposal{
 		ProjectID:      "p",
 		TeamID:         "demo",
@@ -701,7 +712,7 @@ func TestPathTraversalAndSymlinkEscapeRefused(t *testing.T) {
 		Draft:          "## Bad\nSymlink escape.",
 		DraftHash:      contextstore.HashPromotionContent("## Bad\nSymlink escape."),
 		PolicyVersion:  "memory-policy-v1",
-		Sources:        []contextstore.PromotionSourceSnapshot{{ContextItemID: "src", ContentHash: "h", AggregateRevision: 1}},
+		Sources:        []contextstore.PromotionSourceSnapshot{{ContextItemID: "src", ContentHash: source.ContentHash, AggregateRevision: aggregate.Revision}},
 		Status:         contextstore.PromotionStatusProposed,
 	}
 	pSymlink.ID = contextstore.PromotionProposalID(pSymlink)

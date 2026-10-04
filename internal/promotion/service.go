@@ -45,6 +45,22 @@ func (s Service) Approve(ctx context.Context, id, project, team string) (Proposa
 	if p.Status == StatusApproved || p.Status == StatusApplied {
 		return p, nil
 	}
+	if p.Status == StatusProposed {
+		// Approval vouches that the evidence still supports the draft, so it is
+		// checked here rather than first at apply. Stale evidence ends the
+		// proposal as apply does; an open conflict only blocks, because it can
+		// be resolved without a new analyze.
+		if err = s.validateEvidence(ctx, p); err != nil {
+			stale, transitionErr := s.Repo.TransitionPromotion(ctx, p.ID, p.ProjectID, p.TeamID, StatusStale, "", lifecycleEvent("memory_promotion_stale", p, "evidence", "operator"))
+			if transitionErr != nil {
+				return Proposal{}, transitionErr
+			}
+			return stale, fmt.Errorf("promotion evidence is stale; run analyze again: %w", err)
+		}
+		if err = s.validateNoOpenConflicts(ctx, p); err != nil {
+			return p, err
+		}
+	}
 	return s.Repo.TransitionPromotion(ctx, id, project, team, StatusApproved, "", lifecycleEvent("memory_promotion_approved", p, "approve", "operator"))
 }
 func (s Service) Reject(ctx context.Context, id, project, team, reason string) (Proposal, error) {
