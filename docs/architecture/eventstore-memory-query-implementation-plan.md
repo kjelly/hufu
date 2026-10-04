@@ -10,6 +10,18 @@
 本文件只規劃 coding agent 能在本 repository 內完成的工作。實作時以當下
 程式碼、測試與正式架構文件為準；本計畫不取代現行 runtime 契約。
 
+## Baseline 驗證（2026-10-04）
+
+在文件提交 `982b2030`、尚未修改 Go 程式碼時，使用 Go 1.26.6 執行：
+
+| 命令 | 結果 |
+| --- | --- |
+| `go test ./...` | exit 0；所有套件通過 |
+| `go vet ./...` | exit 0 |
+| `golangci-lint run` | exit 0，0 issues；曾提示一個已不存在的相鄰 worktree 檔案快取警告 |
+
+後續階段以此為 baseline；效能數據需在新增 consumer benchmark 後、遷移讀取點前另行記錄。
+
 ## 目標與效益
 
 把記憶結果計算中的兩個全量 `ReadEvents()` 呼叫，改用已存在的
