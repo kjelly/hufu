@@ -21,3 +21,4 @@ docs/tmp
 .worktrees/
 spec.md
 review.md
+/data/
