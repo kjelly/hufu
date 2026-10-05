@@ -1,8 +1,9 @@
 # Hufu × Ollama Web Search：實作規格
 
-- 狀態：可開始實作（離線驗收）
+- 狀態：已實作（離線驗收；未執行真實服務驗收）
 - 日期：2026-10-05
 - 對照版本：`cc3a9521f1e3ba11c445c3389a916c60f6d51729`
+- 實作提交：`ae1bdc0c`、`2f84af06`、`f5866798`；恢復授權回歸測試：`6cea79d9`
 - 範圍：Hufu 原生 `web_search`、`web_fetch` 工具與其權限、HTTP client、測試及使用文件
 
 以下所有完成條件都能由 coding agent 在沒有 Ollama 帳號、真實 API key 或對外網路的環境中，用假 HTTP transport 和假模型完成。使用者日後若要實際查詢 Ollama，需自行取得並在執行環境設定 `OLLAMA_API_KEY`；這不是本規格的實作或驗收工作。
