@@ -271,6 +271,8 @@ var mediumRiskTools = map[string]bool{
 	"download":      true,
 	"fetch":         true,
 	"agentic_fetch": true,
+	"web_search":    true,
+	"web_fetch":     true,
 }
 
 // ForceMCPBlockedTools are disabled when --force-mcp is enabled, forcing use of MCP servers
@@ -286,6 +288,8 @@ var ForceMCPBlockedTools = map[string]bool{
 	"download":           true,
 	"fetch":              true,
 	"agentic_fetch":      true,
+	"web_search":         true,
+	"web_fetch":          true,
 	"terminal":           true,
 	"terminal_start":     true,
 	"terminal_write":     true,
@@ -1299,6 +1303,8 @@ var builtinToolFactories = []builtinToolFactory{
 	{"download", func(opts ...ToolOption) fantasy.AgentTool { return NewDownloadTool(opts...) }},
 	{"fetch", func(opts ...ToolOption) fantasy.AgentTool { return NewFetchTool(opts...) }},
 	{"agentic_fetch", func(opts ...ToolOption) fantasy.AgentTool { return NewAgenticFetchTool(opts...) }},
+	{"web_search", func(opts ...ToolOption) fantasy.AgentTool { return NewWebSearchTool(opts...) }},
+	{"web_fetch", func(opts ...ToolOption) fantasy.AgentTool { return NewWebFetchTool(opts...) }},
 	{"random", func(opts ...ToolOption) fantasy.AgentTool { return NewRandomTool(opts...) }},
 	{"math", func(opts ...ToolOption) fantasy.AgentTool { return NewMathTool(opts...) }},
 	{"create_skill", func(opts ...ToolOption) fantasy.AgentTool { return NewCreateSkillTool(opts...) }},
@@ -1310,7 +1316,7 @@ var builtinToolFactories = []builtinToolFactory{
 func BuiltinToolNames(noNet, forceMCP bool) []string {
 	names := make([]string, 0, len(builtinToolFactories))
 	for _, factory := range builtinToolFactories {
-		if noNet && (factory.name == "fetch" || factory.name == "download" || factory.name == "agentic_fetch") {
+		if noNet && (factory.name == "fetch" || factory.name == "download" || factory.name == "agentic_fetch" || factory.name == "web_search" || factory.name == "web_fetch") {
 			continue
 		}
 		if forceMCP && ForceMCPBlockedTools[factory.name] {
@@ -1328,7 +1334,7 @@ func AllTools(opts ...ToolOption) []fantasy.AgentTool {
 		tools = append(tools, factory.build(opts...))
 	}
 	if cfg.NetworkBlock {
-		netTools := map[string]bool{"fetch": true, "download": true, "agentic_fetch": true}
+		netTools := map[string]bool{"fetch": true, "download": true, "agentic_fetch": true, "web_search": true, "web_fetch": true}
 		filtered := make([]fantasy.AgentTool, 0, len(tools))
 		for _, t := range tools {
 			if !netTools[t.Info().Name] {

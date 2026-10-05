@@ -852,6 +852,9 @@ func (r *defaultToolResolver) finalizeTaskTools(ctx context.Context, def *agent.
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: result-only repair surface must contain exactly %q", submitResultToolName)
 	}
 	names := agentToolNames(tools)
+	if !r.c.ollamaWebKeyPresent && (slices.Contains(names, "web_search") || slices.Contains(names, "web_fetch")) {
+		return ResolvedWorkerTools{}, fmt.Errorf("ollama_web_api_key_missing: OLLAMA_API_KEY is required for the effective web tool set")
+	}
 	descriptors := make(map[string]internaltools.ToolWorkspaceScopeDescriptor, len(tools))
 	for _, tool := range tools {
 		if tool != nil {

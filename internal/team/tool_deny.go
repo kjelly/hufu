@@ -42,6 +42,10 @@ func isLegacyMemoryMutationTool(name string) bool {
 	return legacyMemoryMutationTools[strings.TrimSpace(name)]
 }
 
+func isOllamaWebTool(name string) bool {
+	return name == "web_search" || name == "web_fetch"
+}
+
 // explicitlyDeclaresTool accepts only an exact comma-separated literal.
 // Empty and "all" deliberately do not grant deprecated mutation authority.
 func explicitlyDeclaresTool(raw, want string) bool {
@@ -427,6 +431,8 @@ var executionCapabilityTools = map[string]bool{
 	"download":           true,
 	"fetch":              true,
 	"agentic_fetch":      true,
+	"web_search":         true,
+	"web_fetch":          true,
 	"terminal":           true,
 	"terminal_start":     true,
 	"terminal_write":     true,

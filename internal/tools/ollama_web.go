@@ -84,6 +84,9 @@ func NewWebSearchTool(opts ...ToolOption) fantasy.AgentTool {
 			}
 			result, err := cfg.OllamaWebClient.Search(ctx, req)
 			if err != nil {
+				if ctx.Err() != nil {
+					return fantasy.ToolResponse{}, ctx.Err()
+				}
 				return webClientError(err), nil
 			}
 			return webSuccess(boundedSearchOutput(result, maximum)), nil
@@ -120,6 +123,9 @@ func NewWebFetchTool(opts ...ToolOption) fantasy.AgentTool {
 			}
 			result, err := cfg.OllamaWebClient.Fetch(ctx, req)
 			if err != nil {
+				if ctx.Err() != nil {
+					return fantasy.ToolResponse{}, ctx.Err()
+				}
 				return webClientError(err), nil
 			}
 			return webSuccess(boundedFetchOutput(req.URL, result)), nil

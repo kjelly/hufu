@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +28,7 @@ import (
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/memory"
+	"github.com/kjelly/hufu/internal/ollamaweb"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
@@ -909,6 +911,7 @@ type Coordinator struct {
 	repairController    *RepairController
 	authorizationPolicy AuthorizationPolicy
 	secretRegistry      *tools.SecretRegistry
+	ollamaWebKeyPresent bool
 	contextCompiler     ContextCompiler
 	agentPool           AgentPool
 	workflowEngine      WorkflowEngine
@@ -1376,6 +1379,7 @@ type coordinatorParams struct {
 	ForcedSkillNames      []string
 	PlanMode              bool
 	AutoSkillsMode        bool
+	OllamaWebTransport    http.RoundTripper // test-only seam; production always uses the default verified transport
 }
 
 func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
@@ -1459,13 +1463,22 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	autoSkillsMode := params.AutoSkillsMode
 
 	projectDir := session.Scope.SubjectRoot
+	secretRegistry := tools.NewSecretRegistry()
+	utils.RegisterSecretRedactor(secretRegistry)
+	registerProviderSecrets(secretRegistry, session, defaultProviderAPIKey)
+	ollamaWebKey := strings.TrimSpace(os.Getenv("OLLAMA_API_KEY"))
+	if ollamaWebKey != "" {
+		if err := secretRegistry.Register(tools.SecretRef{Name: "ollama.web.api_key", Source: "OLLAMA_API_KEY environment", ExactValue: ollamaWebKey}); err != nil {
+			return nil, fmt.Errorf("register Ollama web credential: %w", err)
+		}
+	}
 	var coordinator *Coordinator
 	coreTools := agent.BuildAllAgentTools(projectDir, tools.WithAllowedPaths(allowedPaths), tools.WithPathConsent(pathConsent), tools.WithArtifactOpener(func(ctx context.Context, ref string) (io.ReadCloser, error) {
 		if coordinator == nil {
 			return nil, fmt.Errorf("artifact resolver is not initialized")
 		}
 		return coordinator.openArtifactRef(ctx, ref)
-	}), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv))
+	}), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv), tools.WithOllamaWebClient(ollamaweb.NewHTTPClient(ollamaWebKey, params.OllamaWebTransport)))
 	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
@@ -1475,6 +1488,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		session:                   session,
 		mcpManager:                mcpManager,
 		coreTools:                 coreTools,
+		ollamaWebKeyPresent:       ollamaWebKey != "",
 		decisionPrimitives:        params.DecisionPrimitives,
 		decisionPrimitiveGate:     make(chan struct{}, 1),
 		controlDecisions:          params.ControlDecisions,
@@ -1560,9 +1574,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	c.setRuntimeServices(services)
 
 	c.authorizationPolicy = defaultAuthorizationPolicy{}
-	c.secretRegistry = tools.NewSecretRegistry()
-	utils.RegisterSecretRedactor(c.secretRegistry)
-	registerProviderSecrets(c.secretRegistry, session, defaultProviderAPIKey)
+	c.secretRegistry = secretRegistry
 	c.structuredStepRunner = &coordinatorDeclaredToolRunner{c: c}
 	coordinator = c
 	// Context lookup is coordinator-owned so it can use the canonical router.

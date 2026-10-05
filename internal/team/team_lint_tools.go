@@ -143,7 +143,7 @@ func toolExplicitlyDenied(name string, session *TeamSession, policy EffectiveTea
 	if slices.ContainsFunc(session.Config.ToolsDenied, func(denied string) bool { return normalizedName(denied) == name }) {
 		return true
 	}
-	if policy.NoNet && slices.Contains([]string{"fetch", "download", "agentic_fetch"}, name) {
+	if policy.NoNet && slices.Contains([]string{"fetch", "download", "agentic_fetch", "web_search", "web_fetch"}, name) {
 		return true
 	}
 	return policy.ForceMCP && tools.ForceMCPBlockedTools[name]

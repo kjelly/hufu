@@ -95,6 +95,8 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 			status = ToolDenied
 		case isLegacyMemoryMutationTool(name) && !staticLegacyMemoryToolGranted(input, name):
 			status = ToolDenied
+		case isOllamaWebTool(name) && !explicitlyDeclaresTool(input.Agent.Tools, name):
+			status = ToolDenied
 		case denied[name]:
 			status = ToolDenied
 		case input.WorkflowEnabled && input.WorkflowPhase != PhaseExecute && executionCapabilityTools[name] && !input.TrustedTaskGrants[name]:
@@ -122,7 +124,7 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 	}
 	if !result.ResultOnly && !input.Task.Sidecar {
 		for _, name := range staticTeamActionToolNames(input.Session, input.Agent) {
-			if !denied[name] {
+			if !denied[name] && (!isOllamaWebTool(name) || explicitlyDeclaresTool(input.Agent.Tools, name)) {
 				result.Names = append(result.Names, name)
 				result.Tools[name] = ToolAvailable
 			}
@@ -161,7 +163,7 @@ func staticDeniedToolSet(input StaticToolResolutionInput) map[string]bool {
 	applyPolicy := func(names []string) {
 		for _, name := range names {
 			name = strings.TrimSpace(name)
-			if input.Policy.NoNet && (name == "fetch" || name == "download" || name == "agentic_fetch") {
+			if input.Policy.NoNet && (name == "fetch" || name == "download" || name == "agentic_fetch" || isOllamaWebTool(name)) {
 				denied[name] = true
 			}
 			if input.Policy.ForceMCP && tools.ForceMCPBlockedTools[name] {

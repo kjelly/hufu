@@ -629,6 +629,9 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 // error only when the failure is not something the model can work around (a
 // cancelled context, for instance).
 func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, toolName string) (string, error) {
+	if isOllamaWebTool(toolName) && !c.ollamaWebToolGranted(agentName, toolName) {
+		return fmt.Sprintf("tool %q requires an explicit agent tools grant and was not executed", toolName), nil
+	}
 	if denial := c.initialCoordinatorToolDenial(agentName, toolName); denial != "" {
 		return denial, nil
 	}
@@ -666,6 +669,20 @@ func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, to
 		reason = "not authorized"
 	}
 	return fmt.Sprintf("tool %q is not available to you: %s. Do not call it again — achieve the goal with the tools you do have, and state in your result what you could not do without it.", toolName, reason), nil
+}
+
+// Session permissions and team allowlists may narrow a web grant, but cannot
+// create one. The source of authority is the agent's authored literal list.
+func (c *Coordinator) ollamaWebToolGranted(agentName, toolName string) bool {
+	if c == nil || c.session == nil || !isOllamaWebTool(toolName) {
+		return false
+	}
+	for name, def := range c.session.Agents {
+		if strings.EqualFold(name, agentName) && def != nil {
+			return explicitlyDeclaresTool(def.Tools, toolName)
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) initialCoordinatorToolDenial(agentName, toolName string) string {

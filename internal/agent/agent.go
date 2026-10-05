@@ -1928,7 +1928,14 @@ func SelectTools(allTools []fantasy.AgentTool, toolNames string) []fantasy.Agent
 // construction without instantiating a tool implementation.
 func SelectToolNames(available []string, toolNames string) []string {
 	if toolNames == "" || toolNames == "all" {
-		return dedupeNames(available)
+		selected := dedupeNames(available)
+		filtered := selected[:0]
+		for _, name := range selected {
+			if name != "web_search" && name != "web_fetch" {
+				filtered = append(filtered, name)
+			}
+		}
+		return filtered
 	}
 	requested := make(map[string]bool)
 	for name := range strings.SplitSeq(toolNames, ",") {

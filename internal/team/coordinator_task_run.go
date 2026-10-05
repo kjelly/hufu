@@ -3823,6 +3823,9 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 	}
 	filtered := allowed[:0]
 	for _, name := range allowed {
+		if isOllamaWebTool(name) && (def == nil || !explicitlyDeclaresTool(def.Tools, name)) {
+			continue
+		}
 		if isLegacyMemoryMutationTool(name) && !exposed[name] {
 			continue
 		}
