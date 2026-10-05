@@ -329,6 +329,7 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 		} else {
 			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, promptToRun)
 		}
+		result, err = presentExploratoryDelivery(tc, result, err)
 		disp.stopTimer()
 		cancel()
 		stopIdentityHeartbeat()

@@ -2600,5 +2600,11 @@ func runCompletionError(result *RunResult) error {
 	if reason == "" {
 		reason = string(result.Outcome)
 	}
-	return fmt.Errorf("run %s: %s", result.Outcome, utils.TruncateRunes(utils.RedactSecrets(reason), maxRunWarningRunes))
+	err := fmt.Errorf("run %s: %s", result.Outcome, utils.TruncateRunes(utils.RedactSecrets(reason), maxRunWarningRunes))
+	if result.Outcome == RunOutcomeUnverified && result.StopReason == StopReasonAcceptanceNotSet {
+		// Preserve the canonical result for presentation clients that can show
+		// an exploratory response without claiming verified completion.
+		return WrapRunOutcomeError(err, result)
+	}
+	return err
 }

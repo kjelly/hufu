@@ -103,6 +103,7 @@ func runDirectReplanThroughCoordinator(ctx context.Context, tc *teamContext, con
 		defer activeCoord.Store(nil)
 	}
 	result, err := runCoordinator(ctx, prompt)
+	result, err = presentExploratoryDelivery(tc, result, err)
 	if err != nil {
 		return result, err
 	}
@@ -159,6 +160,7 @@ func synthesizeDirectAgentResult(ctx context.Context, tc *teamContext, agentName
 	}
 	synthResult, err := tc.coordinator.Run(ctx, synthesisPrompt)
 	activeCoord.Store(nil)
+	synthResult, err = presentExploratoryDelivery(tc, synthResult, err)
 	if err != nil {
 		return "", err
 	}
@@ -247,6 +249,7 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 
 			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
 			disp.stopTimer()
+			result, err = presentExploratoryDelivery(tc, result, err)
 
 			if err != nil {
 				return handleSegmentError(ctx, tc, results, err, "team %q failed", teamName)
@@ -335,6 +338,7 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 
 			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
 			disp3.stopTimer()
+			result, err = presentExploratoryDelivery(tc, result, err)
 
 			if err != nil {
 				return handleSegmentError(ctx, tc, results, err, "team %q failed", currentTeamName)

@@ -121,6 +121,15 @@ TTY can open the team picker when no team is named; scripts should pass
 `--team` or a profile that names the team. The root `hufu [prompt]` invocation
 and its `--agent-team` flag are compatibility syntax.
 
+An interactive exploratory run can deliver an answer without an acceptance
+contract. In a terminal, Hufu prints an explicit unverified warning and exits
+successfully once the response is delivered; the persisted run remains
+`unverified` with `goal_satisfied: false` and a canonical exit code of 7.
+Non-terminal, `--quiet`, `--output json`, `--unattended`, and strict-verification
+runs retain a nonzero process exit until the goal is verified. Automation
+should use a team with an objective `acceptance:` contract rather than treating
+an exploratory answer as verified work.
+
 Other useful commands:
 ```bash
 hufu list              # show all discoverable teams and their agents

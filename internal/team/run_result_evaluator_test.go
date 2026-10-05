@@ -290,6 +290,18 @@ func TestRunCompletionErrorDistinguishesUnresolvedTasksFromOtherFailures(t *test
 	}
 }
 
+func TestRunCompletionErrorPreservesUnverifiedResultForPresentation(t *testing.T) {
+	result := &RunResult{Outcome: RunOutcomeUnverified, StopReason: StopReasonAcceptanceNotSet, ExitCode: 7}
+	err := runCompletionError(result)
+	outcomeErr, ok := errors.AsType[*RunOutcomeError](err)
+	if !ok || outcomeErr.Result != result || outcomeErr.ProcessExitCode() != 7 {
+		t.Fatalf("run completion error = %v, want canonical unverified result with exit 7", err)
+	}
+	if !strings.Contains(err.Error(), "run unverified") {
+		t.Fatalf("error text = %q, want unverified diagnostic", err)
+	}
+}
+
 func TestAggregateRunResultsUsesCanonicalPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string

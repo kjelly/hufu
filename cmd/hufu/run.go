@@ -417,6 +417,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 		if wrapUp {
 			stderrLog("\n%s Wrapping up — coordinator will summarize and finish.\n\n", boldStyle.Render("⏹"))
 			contResult, err := tc.coordinator.ContinueWithPrompt(ctx, "")
+			contResult, err = presentExploratoryDelivery(tc, contResult, err)
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					return result, nil
@@ -436,6 +437,7 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 		} else {
 			contResult, err = tc.coordinator.ContinueWithPrompt(ctx, prompt)
 		}
+		contResult, err = presentExploratoryDelivery(tc, contResult, err)
 		if err != nil {
 			return result, err
 		}

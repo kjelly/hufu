@@ -288,6 +288,9 @@ func executeAndReport(ctx context.Context, cancel context.CancelFunc, prompt, or
 		}
 	}
 	if outcome := canonicalNonSuccessfulRunResultWithPrior(loadedTeams, priorResults, priorUnresolved); outcome != nil {
+		if unresolvedErr == nil && invocationDeliveredExploratoryResponse(loadedTeams, priorResults, outcome) {
+			return nil
+		}
 		if unresolvedErr == nil {
 			unresolvedErr = fmt.Errorf("run outcome is %s", outcome.Outcome)
 		}

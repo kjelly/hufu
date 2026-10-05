@@ -321,6 +321,43 @@ func TestCLIProcessExitContract(t *testing.T) {
 	})
 }
 
+func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
+	binary := buildProcessContractBinary(t)
+	var calls atomic.Int64
+	server := newContractTextServer(t, &calls)
+	defer server.Close()
+
+	args := []string{
+		"--default", "--provider-url", server.URL + "/v1", "--model", "test", "--coordinator-model", "test",
+		"--context-window", "131072", "--max-rounds", "2", "--timeout", "10",
+	}
+	jsonArgs := append(slices.Clone(args), "--workspace", filepath.Join(t.TempDir(), "json-workspace"), "--output", "json", "answer the question")
+	code, stdout, stderr := runProcessContract(t, binary, jsonArgs...)
+	if code != 7 {
+		t.Fatalf("JSON exit code = %d, want 7; stdout=%q stderr=%q", code, stdout, truncateContractOutput(stderr))
+	}
+	var output jsonRunOutput
+	if err := json.Unmarshal(stdout, &output); err != nil {
+		t.Fatalf("decode JSON result: %v; stdout=%q", err, stdout)
+	}
+	if output.Outcome != string(team.RunOutcomeUnverified) || output.GoalSatisfied || output.ExitCode != 7 {
+		t.Fatalf("machine result = %#v, want unverified/unsatisfied/exit 7", output)
+	}
+
+	interactiveArgs := append(slices.Clone(args), "--workspace", filepath.Join(t.TempDir(), "interactive-workspace"), "--display-mode", "plain", "answer the question")
+	process := startPTY(t, binary, interactiveArgs, 30, 120)
+	if code := process.waitExit(t, 30*time.Second); code != 0 {
+		t.Fatalf("interactive exit code = %d, want 0; output=%q", code, truncateContractOutput([]byte(process.output.String())))
+	}
+	terminalOutput := process.output.String()
+	if !strings.Contains(terminalOutput, "Exploratory response delivered; goal remains unverified") {
+		t.Fatalf("interactive output lacks unverified warning: %q", truncateContractOutput([]byte(terminalOutput)))
+	}
+	if strings.Contains(terminalOutput, "Error: team \"default\" failed") {
+		t.Fatalf("interactive delivery was reported as a team failure: %q", truncateContractOutput([]byte(terminalOutput)))
+	}
+}
+
 func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 	binary := buildProcessContractBinary(t)
 	var chatCalls atomic.Int64
