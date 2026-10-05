@@ -1,0 +1,119 @@
+{
+  "team": {
+    "name": "article-debate",
+    "description": "Answer questions from a supplied article through independent analysis and evidence-based debate",
+    "max_rounds": 8,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 1,
+    "max_concurrent": 2,
+    "acceptance_spec": {
+      "required_workers": [
+        "explorer",
+        "challenger",
+        "arbiter",
+        "reviser"
+      ],
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking"
+    },
+    "delegation": {
+      "AllowedWorkers": [
+        "explorer",
+        "challenger",
+        "arbiter",
+        "reviser"
+      ],
+      "InitialBatch": [
+        "explorer",
+        "challenger",
+        "arbiter",
+        "reviser"
+      ],
+      "RequireExactInitialBatch": true,
+      "InitialCoordinatorTool": "agent",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": [
+        "explorer",
+        "challenger",
+        "arbiter",
+        "reviser"
+      ],
+      "ForbidContextFiles": true,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null,
+      "RequireTaskContract": null,
+      "ShareRequestWith": [
+        "explorer",
+        "challenger",
+        "arbiter",
+        "reviser"
+      ]
+    }
+  },
+  "agents": [
+    {
+      "name": "arbiter",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "challenger",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "explorer",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "reviser",
+      "role": "worker",
+      "tools": "view,grep,glob,ls",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "explore-article",
+      "agent": "explorer",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "challenge-article",
+      "agent": "challenger",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "audit-readings",
+      "agent": "arbiter",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "revise-answer",
+      "agent": "reviser",
+      "side_effect": "none",
+      "recovery": "retry"
+    }
+  ]
+}
