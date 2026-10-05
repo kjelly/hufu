@@ -172,6 +172,25 @@ func TestOllamaWebReadOnlyAndPhaseTaxonomy(t *testing.T) {
 	}
 }
 
+func TestOllamaWebFrozenGrantDoesNotWidenOnResume(t *testing.T) {
+	f := newStaticGrantFixture(t, "view", nil)
+	if ceiling := f.c.todoItemByID(f.todoID).DynamicToolAuthorization.StaticToolCeiling; slices.Contains(ceiling, "web_search") {
+		t.Fatalf("old occurrence unexpectedly froze web_search: %v", ceiling)
+	}
+	// Model-visible tools were expanded only after this occurrence was created.
+	// The old ceiling must prevent both exposure and the missing-key preflight.
+	f.def.Tools = "view,web_search"
+	for _, mode := range []WorkerToolResolutionMode{WorkerToolResolutionNormal, WorkerToolResolutionResume} {
+		resolved, err := f.resolve(t, mode)
+		if err != nil {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+		if slices.Contains(resolved.Names, "web_search") || slices.Contains(resolved.AuthorizedNames, "web_search") {
+			t.Fatalf("mode %q widened frozen tool grant: %v", mode, resolved.Names)
+		}
+	}
+}
+
 func TestOllamaWebDefaultHelperExplicitGrant(t *testing.T) {
 	for _, extra := range []string{"", "all", "web_search", "web_search,web_fetch"} {
 		session, err := LoadDefaultTeam(t.TempDir(), nil, extra)
