@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/ollamaweb"
 )
 
 type PathScopeBehavior string
@@ -152,8 +153,14 @@ type ToolConfig struct {
 	ArtifactPathPolicy *ArtifactPathPolicy
 	TaskPathScope      *AgentTaskPathScope
 	TaskPathScopeError error
+	OllamaWebClient    ollamaweb.Client
 	// ExecutionRoot and DeniedWriteRoots come from AgentExecutionRootKey;
 	// see applyExecutionRoot.
 	ExecutionRoot    string
 	DeniedWriteRoots []string
+}
+
+// WithOllamaWebClient supplies the coordinator-owned hosted web client.
+func WithOllamaWebClient(client ollamaweb.Client) ToolOption {
+	return func(c *ToolConfig) { c.OllamaWebClient = client }
 }
