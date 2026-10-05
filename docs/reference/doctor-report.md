@@ -2,6 +2,9 @@
 
 > Status: active
 > Authority: reference
+> Verified-Commit: `a177333b`
+> Supersedes: —
+> Superseded-By: —
 
 `hufu doctor` runs provider, model, workspace, team-contract, event-integrity,
 and recovery-readiness checks without starting an agent or performing recovery.
