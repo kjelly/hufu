@@ -422,6 +422,23 @@ func TestVerifyWorkspaceRunUnknownRetryReceiptDoesNotCreateAmbiguousWinner(t *te
 	}
 }
 
+func TestVerifyWorkspaceRunFailedResultRepairReceiptDoesNotCreateAmbiguousWinner(t *testing.T) {
+	fx := buildProvenanceFixture(t,
+		[]team.ExecutionReceipt{
+			{RunID: "run-provenance-fixture", TaskID: "t1", Attempt: 1, ModelExecutionID: "exec-a", ProducerID: "worker-a", ExitCode: intPtr(1), TranscriptRef: "sha256-failed-repair"},
+			{RunID: "run-provenance-fixture", TaskID: "t1", Attempt: 2, ModelExecutionID: "exec-a", ProducerID: "worker-a", ExitCode: intPtr(0), TranscriptRef: "sha256-success"},
+		},
+		team.EvidenceBinding{RunID: "run-provenance-fixture", TaskID: "t1", Attempt: 2, ModelExecutionID: "exec-a", ProducerID: "worker-a", TranscriptRef: "sha256-success", ArtifactIDs: []string{"sha256-success"}},
+	)
+	result, err := VerifyWorkspaceRun(t.Context(), fx.workspace, fx.runID, VerifyOptions{})
+	if err != nil {
+		t.Fatalf("VerifyWorkspaceRun: %v", err)
+	}
+	if result.Provenance.Status != AuditDimensionPass {
+		t.Fatalf("failed repair receipt polluted provenance: provenance=%#v verdict=%s findings=%#v", result.Provenance, result.Verdict, result.Findings)
+	}
+}
+
 func TestVerifyWorkspaceRunBindingAttemptMismatchFailsProvenance(t *testing.T) {
 	fx := buildProvenanceFixture(t,
 		[]team.ExecutionReceipt{

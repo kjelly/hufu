@@ -1498,14 +1498,15 @@ retryLoop:
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 						{
-							repairEvidence := utils.TruncateRunes(output, 12000)
+							observationEvidence, hasSuccessfulObservation := protocolRepairObservationEvidence(steps)
+							repairEvidence := utils.TruncateRunes(output, 12000) + observationEvidence
 							rejectedSubmission := protocolRepairRejectedSubmission(attemptEvidence, steps)
 							repairEvidence += rejectedSubmission
 							// A repair turn can only restate evidence it is given. With
-							// neither output text nor a submission, a completed_with_gaps
+							// neither output text, a successful observation, nor a submission, a completed_with_gaps
 							// result reports only that the evidence was missing, so it is
 							// not accepted as a completion below.
-							noRepairEvidence := strings.TrimSpace(output) == "" && rejectedSubmission == ""
+							noRepairEvidence := strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == ""
 							finalizationBinding := c.taskFinalizationBinding(todoID)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if resultProtocolLoop {
@@ -1987,6 +1988,17 @@ retryLoop:
 			}
 		}
 
+		// A model stream may exit cleanly even though its required handoff,
+		// verifier, or result-only repair failed. The durable attempt receipt
+		// must describe the task outcome, not just the provider transport exit;
+		// otherwise audit sees two successful attempts after a retry and cannot
+		// justify the evidence binding's winning attempt.
+		if receipt.ExitCode == nil || *receipt.ExitCode == 0 {
+			receipt.ExitCode = new(1)
+		}
+		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+			_ = c.setAttemptReceipt(todoID, &receipt)
+		}
 		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
 		// Classify the current attempt's failure using structured inputs
 		// (§5: the verify result supplies the exit code; environment findings
@@ -3664,6 +3676,9 @@ func submitResultFailureFingerprint(toolName, result string) (string, bool) {
 		category string
 	}{
 		{prefix: "invalid submit_result arguments:", category: "invalid_arguments"},
+		{prefix: structuredPayloadInvalidCode + ":", category: structuredPayloadInvalidCode},
+		{prefix: structuredPayloadMissingCode + ":", category: structuredPayloadMissingCode},
+		{prefix: "missing required parameter: structured_payload", category: structuredPayloadMissingCode},
 		{prefix: "summary is required", category: "summary_required"},
 		{prefix: "status must be success", category: "status_must_be_success"},
 		{prefix: "submit_result contract violation:", category: "contract_violation"},

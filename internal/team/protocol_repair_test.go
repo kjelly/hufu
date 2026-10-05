@@ -678,6 +678,9 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 	if got.ExecutionReceipts[0].RepairProvenance == nil || got.ExecutionReceipts[0].RepairProvenance.FailureReason != RepairFailureProgressNotFinal {
 		t.Fatalf("first attempt provenance = %#v, want progress_not_final", got.ExecutionReceipts[0].RepairProvenance)
 	}
+	if got.ExecutionReceipts[0].Succeeded() || !got.ExecutionReceipts[1].Succeeded() {
+		t.Fatalf("retry receipts must record failed then successful task attempts: %#v", got.ExecutionReceipts)
+	}
 	metrics := c.Metrics()
 	if metrics.RetriesByFailureClass[FailureExecution] != 1 {
 		t.Fatalf("execution retries = %d, want 1", metrics.RetriesByFailureClass[FailureExecution])

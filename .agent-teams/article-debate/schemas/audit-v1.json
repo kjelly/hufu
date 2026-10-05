@@ -2,9 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["answerability", "verdict", "supported_claims", "critique", "open_questions"],
+  "required": ["answerability", "debate_complete", "verdict", "supported_claims", "critique", "open_questions"],
   "properties": {
     "answerability": {"type": "string", "enum": ["supported", "partial", "insufficient"]},
+    "debate_complete": {"type": "boolean"},
     "verdict": {"type": "string", "minLength": 1, "maxLength": 3000},
     "supported_claims": {
       "type": "array",

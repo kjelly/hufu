@@ -835,6 +835,12 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 	}
 	if err != nil {
+		// A clean provider return does not make a failed direct-agent handoff
+		// successful. Keep its receipt consistent with the terminal task state.
+		if directReceipt.ExitCode == nil || *directReceipt.ExitCode == 0 {
+			directReceipt.ExitCode = new(1)
+		}
+		_ = c.setAttemptReceipt(todoID, &directReceipt)
 		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
 		failureClass := classifyTaskFailure(err)
 		if terminalBlocked {

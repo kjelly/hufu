@@ -385,6 +385,9 @@ func TestRunDirectAgentRejectsProseWithoutSubmittedResult(t *testing.T) {
 	if items[0].Status != TaskError {
 		t.Fatalf("direct task status = %s, want error", items[0].Status)
 	}
+	if items[0].ExecutionReceipt == nil || items[0].ExecutionReceipt.Succeeded() {
+		t.Fatalf("failed direct task has a successful receipt: %#v", items[0].ExecutionReceipt)
+	}
 	if items[0].FailureEvent == nil || items[0].FailureEvent.FailureClass != FailureProtocol {
 		t.Fatalf("direct task failure event = %#v, want protocol failure", items[0].FailureEvent)
 	}

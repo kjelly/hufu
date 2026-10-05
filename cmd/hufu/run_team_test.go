@@ -220,6 +220,35 @@ func TestRenderExecutionSummary(t *testing.T) {
 	}
 }
 
+func TestExecutionSummaryShowsRecoveredAttemptsWithoutChangingTaskOutcome(t *testing.T) {
+	tracker := team.NewTaskTracker()
+	item := tracker.TodoList().AddBatch([]team.TodoSpec{{Agent: "reviewer", Desc: "review article"}})[0]
+	item.Status = team.TaskDone
+	item.Retries = 2
+	coordinator := &team.Coordinator{}
+	coordinator.SetTaskTracker(tracker)
+	summary := summarizeExecution(map[string]*teamContext{"review": {coordinator: coordinator}})
+	if summary.done != 1 || summary.errored != 0 || summary.recoveredAttempts != 2 {
+		t.Fatalf("recovered task was counted incorrectly: %+v", summary)
+	}
+	out := formatExecutionSummary(summary, time.Second, []*team.RunResult{{
+		Outcome: team.RunOutcomeCompleted, GoalSatisfied: true,
+	}})
+	for _, want := range []string{"1 done · 0 error", "Retries:   2 failed attempts recovered"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("summary missing %q:\n%s", want, out)
+		}
+	}
+	summary.recoveredAttempts = 0
+	if out := formatExecutionSummary(summary, time.Second, nil); strings.Contains(out, "Retries:") {
+		t.Fatalf("summary invents recovered attempts:\n%s", out)
+	}
+	summary.recoveredAttempts = 1
+	if out := formatExecutionSummary(summary, time.Second, nil); !strings.Contains(out, "Retries:   1 failed attempt recovered") {
+		t.Fatalf("summary uses an incorrect singular label:\n%s", out)
+	}
+}
+
 func TestExecutionReportUsesCanonicalCostView(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now(), SourceRunID: "run-report", EvidenceIdentity: "unavailable",

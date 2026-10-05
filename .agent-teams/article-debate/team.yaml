@@ -37,9 +37,13 @@ tasks:
     agent: arbiter
     side_effect: none
     recovery: retry
-    max_retries: 1
+    max_retries: 0
     execution:
       requires-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /structured_payload/value/debate_complete, op: equals, value: true}
   - id: revise-answer
     agent: reviser
     side_effect: none

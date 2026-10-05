@@ -436,15 +436,16 @@ func executionUnresolvedTask(items []*team.TodoItem, prior map[string]time.Time)
 }
 
 type executionSummary struct {
-	teams      []string
-	workspaces []string
-	total      int
-	done       int
-	errored    int
-	skipped    int
-	pending    int
-	costs      []executionCostSummary
-	costErrors []string
+	teams             []string
+	workspaces        []string
+	total             int
+	done              int
+	errored           int
+	skipped           int
+	pending           int
+	recoveredAttempts int
+	costs             []executionCostSummary
+	costErrors        []string
 }
 
 type executionCostSummary struct {
@@ -467,6 +468,7 @@ func summarizeExecution(loadedTeams map[string]*teamContext) executionSummary {
 			switch item.Status {
 			case team.TaskDone:
 				summary.done++
+				summary.recoveredAttempts += item.Retries
 			case team.TaskError, team.TaskBlocked:
 				summary.errored++
 			case team.TaskSkipped:
@@ -522,6 +524,13 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration, ru
 		fmt.Fprintf(&b, "  Team:      %s\n", strings.Join(summary.teams, ", "))
 	}
 	fmt.Fprintf(&b, "  Tasks:     %d done · %d error · %d skipped · %d pending (%d total)\n", summary.done, summary.errored, summary.skipped, summary.pending, summary.total)
+	if summary.recoveredAttempts > 0 {
+		attemptLabel := "attempt"
+		if summary.recoveredAttempts != 1 {
+			attemptLabel += "s"
+		}
+		fmt.Fprintf(&b, "  Retries:   %d failed %s recovered\n", summary.recoveredAttempts, attemptLabel)
+	}
 	fmt.Fprintf(&b, "  Duration:  %s\n", duration.Round(time.Second))
 	if len(summary.workspaces) > 0 {
 		fmt.Fprintf(&b, "  Workspace: %s\n", strings.Join(summary.workspaces, ", "))

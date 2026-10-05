@@ -453,6 +453,30 @@ func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
 	}
 }
 
+func TestSubmitResultFailureFingerprintStructuredPayload(t *testing.T) {
+	invalid := []string{
+		`structured_payload_invalid: structured_payload does not satisfy result contract "audit": /debate_complete: expected boolean`,
+		`structured_payload_invalid: structured_payload does not satisfy result contract "audit": /supported_claims/0: expected string`,
+	}
+	first, ok := submitResultFailureFingerprint(submitResultToolName, invalid[0])
+	if !ok || first == "" {
+		t.Fatal("structured payload rejection was not classified")
+	}
+	if second, ok := submitResultFailureFingerprint(submitResultToolName, invalid[1]); !ok || second != first {
+		t.Fatalf("schema paths changed the failure identity: %q, %q", first, second)
+	}
+	missing, ok := submitResultFailureFingerprint(submitResultToolName, "missing required parameter: structured_payload")
+	if !ok || missing == first {
+		t.Fatal("missing payload must have its own stable failure identity")
+	}
+	if coded, ok := submitResultFailureFingerprint(submitResultToolName, "structured_payload_missing: payload is required"); !ok || coded != missing {
+		t.Fatal("both missing-payload rejection forms must share an identity")
+	}
+	if _, ok := submitResultFailureFingerprint("view", invalid[0]); ok {
+		t.Fatal("another tool's failure must not be classified as submit_result")
+	}
+}
+
 func TestLoopDetection_StopsRepeatedSuccessfulToolCalls(t *testing.T) {
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
