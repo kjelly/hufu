@@ -13,13 +13,14 @@ import (
 const mcpToolDescriptorVersion = 1
 
 type mcpToolDescriptorV1 struct {
-	Version     int            `json:"version"`
-	Name        string         `json:"name"`
-	Kind        string         `json:"kind"`
-	ServerName  string         `json:"server_name"`
-	NativeName  string         `json:"native_name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
+	Version      int               `json:"version"`
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind"`
+	ServerName   string            `json:"server_name"`
+	NativeName   string            `json:"native_name"`
+	Description  string            `json:"description"`
+	InputSchema  map[string]any    `json:"input_schema"`
+	WorkerPolicy *WorkerToolPolicy `json:"worker_policy,omitempty"`
 }
 
 // MCPToolDescriptorSHA256 fingerprints the complete immutable logical MCP
@@ -32,7 +33,7 @@ func MCPToolDescriptorSHA256(tool MCPTool) (string, error) {
 	payload, err := json.Marshal(mcpToolDescriptorV1{
 		Version: mcpToolDescriptorVersion, Name: tool.Name, Kind: "mcp",
 		ServerName: tool.ServerName, NativeName: tool.OrigName,
-		Description: tool.Description, InputSchema: schema,
+		Description: tool.Description, InputSchema: schema, WorkerPolicy: cloneWorkerToolPolicy(tool.WorkerPolicy),
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal MCP tool descriptor: %w", err)
@@ -74,6 +75,7 @@ func cloneMCPTool(tool MCPTool) MCPTool {
 	cloned.InputSchema, _ = canonicalJSONMap(tool.InputSchema)
 	cloned.Parameters, _ = canonicalJSONMap(tool.Parameters)
 	cloned.Required = slices.Clone(tool.Required)
+	cloned.WorkerPolicy = cloneWorkerToolPolicy(tool.WorkerPolicy)
 	return cloned
 }
 

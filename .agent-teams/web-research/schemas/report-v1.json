@@ -1,18 +1,51 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "x-hufu-tool-evidence": {
-    "groups_pointer": "/findings", "items_pointer": "/sources", "tool": "web_fetch",
-    "input_pointer": "/url", "value_pointer": "/url", "output_pointer": "/content",
-    "quote_pointer": "/quote", "status_pointer": "/page_status", "call_id_pointer": "/tool_call_id",
-    "verified_status": "checked", "unverified_status": "unverified",
-    "corroboration": {"group_pointer": "/evidence_basis", "group_value": "independent_corroboration", "origin_pointer": "/independence_group", "minimum": 2},
-    "diagnostics": {
-      "fetch_pointer": "/fetch_status", "citation_pointer": "/citation_status",
-      "fetch_values": {"succeeded": "fetched", "failed": "failed", "unusable": "unusable_response", "absent": "not_attempted", "pending": "pending"},
-      "citation_values": {"matched": "matched", "mismatch": "mismatch", "empty": "missing_quote", "unavailable": "unavailable"}
+    "groups_pointer": "/findings",
+    "items_pointer": "/sources",
+    "value_pointer": "/url",
+    "quote_pointer": "/quote",
+    "status_pointer": "/page_status",
+    "call_id_pointer": "/tool_call_id",
+    "verified_status": "checked",
+    "unverified_status": "unverified",
+    "corroboration": {
+      "group_pointer": "/evidence_basis",
+      "group_value": "independent_corroboration",
+      "origin_pointer": "/independence_group",
+      "minimum": 2
     },
-    "group_fallback": {"/verdict": "unverified", "/evidence_basis": "insufficient_evidence", "/analysis": "至少一項來源引文未通過本次工具證據綁定。缺口原因請見各來源的抓取與引用驗證狀態；抓取成功不代表引文符合原文。"},
-    "group_append": {"/limitations": "工具證據綁定未完成，結論降為未驗證；來源保留供檢查缺口。"}
+    "diagnostics": {
+      "fetch_pointer": "/fetch_status",
+      "citation_pointer": "/citation_status",
+      "fetch_values": {
+        "succeeded": "fetched",
+        "failed": "failed",
+        "unusable": "unusable_response",
+        "absent": "not_attempted",
+        "pending": "pending"
+      },
+      "citation_values": {
+        "matched": "matched",
+        "mismatch": "mismatch",
+        "empty": "missing_quote",
+        "unavailable": "unavailable"
+      }
+    },
+    "group_fallback": {
+      "/verdict": "unverified",
+      "/evidence_basis": "insufficient_evidence",
+      "/analysis": "至少一項來源引文未通過本次工具證據綁定。缺口原因請見各來源的抓取與引用驗證狀態；抓取成功不代表引文符合原文。"
+    },
+    "group_append": {
+      "/limitations": "工具證據綁定未完成，結論降為未驗證；來源保留供檢查缺口。"
+    },
+    "tools": [
+      "playwright_verifier__browser_snapshot"
+    ],
+    "output_format": "text",
+    "target_pattern": "(?m)^- Page URL: (https?://\\S+)[ \\t]*\\r?$",
+    "text_pattern": "(?ms)^### Snapshot\\r?\\n```yaml\\r?\\n(.*?)\\r?\\n```[ \\t]*(?:\\r?\\n|$)"
   },
   "x-hufu-evidence-inputs": {
     "items_pointer": "/input_review", "task_id_pointer": "/task_id",

@@ -202,7 +202,7 @@ func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools
 		if resultTool, ok := candidate.(*submitResultTool); ok && resultTool != nil && resultTool.coordinator == c && resultTool.todoID == todoID {
 			resultToolPresent = true
 		}
-		if denial := artifactScopeToolDenial(policyCtx, candidate.Info().Name, candidate); denial != "" {
+		if denial := c.workerArtifactToolDenial(policyCtx, candidate.Info().Name, candidate); denial != "" {
 			return fmt.Errorf("resolved tool %q is incompatible with the bound artifact policy: %s", candidate.Info().Name, denial)
 		}
 	}
@@ -217,11 +217,38 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	if err := ctx.Err(); err != nil {
 		return fantasy.ToolResponse{}, err
 	}
+	// Reject ambiguous raw arguments before enum normalization could re-encode
+	// them and discard duplicate keys.
+	if t.coordinator != nil && t.coordinator.mcpManager != nil {
+		if _, ok := t.coordinator.mcpManager.WorkerPolicy(t.Info().Name); ok {
+			if len(call.Input) > 64<<10 {
+				tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+					Kind: "policy_denied", ReasonCode: "mcp_worker_arguments_denied",
+					ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+				})
+				return fantasy.NewTextErrorResponse("MCP worker policy arguments exceed 64 KiB"), nil
+			}
+			if _, err := decodeUniqueJSON([]byte(call.Input)); err != nil {
+				tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+					Kind: "policy_denied", ReasonCode: "mcp_worker_arguments_denied",
+					ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+				})
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+		}
+	}
 	// Fold enum letter case before any policy, guard, or schema check sees the
 	// arguments, so every tool accepts "BLOCKED" for "blocked" alike.
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	_, dynamicGateway := t.inner.(*dynamicToolGateway)
-	if denial := artifactScopeToolDenial(ctx, t.Info().Name, t.inner); denial != "" && !dynamicGateway {
+	if denial := t.coordinator.workerMCPArgumentDenial(t.Info().Name, call.Input); denial != "" {
+		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+			Kind: "policy_denied", ReasonCode: "mcp_worker_arguments_denied",
+			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+		})
+		return fantasy.NewTextErrorResponse(denial), nil
+	}
+	if denial := t.coordinator.workerArtifactToolDenial(ctx, t.Info().Name, t.inner); denial != "" && !dynamicGateway {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind: "policy_denied", ReasonCode: "artifact_scope_unsupported",
 			ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
@@ -245,7 +272,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// Enforce it before authorization or handler execution so every mutation
 	// capable tool is denied consistently, including handlers that do not
 	// inspect the marker themselves.
-	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && !dynamicGateway && readOnlyToolMutation(t.Info().Name, call.Input) {
+	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && !dynamicGateway && t.coordinator.workerReadOnlyToolMutation(ctx, t.Info().Name, call.Input, t.inner) {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind:       "policy_denied",
 			ReasonCode: "read_only_tool_denied",
@@ -258,7 +285,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// A block-on decision stops the attempt regardless of what the model
 	// decides next. A dynamic gateway call can reach any MCP tool, so it is
 	// refused too.
-	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && (dynamicGateway || readOnlyToolMutation(t.Info().Name, call.Input)) {
+	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && (dynamicGateway || t.coordinator.workerReadOnlyToolMutation(ctx, t.Info().Name, call.Input, t.inner)) {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
 			Kind:       "policy_denied",
 			ReasonCode: "decision_block",

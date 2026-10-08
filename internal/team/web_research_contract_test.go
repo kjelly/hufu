@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,21 +25,14 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 			"relation": "Source needed for this conclusion", "independence_group": name,
 		})
 		if name != "absent" {
-			input, err := json.Marshal(map[string]string{"url": url})
-			if err != nil {
-				t.Fatal(err)
-			}
 			body := "exact words"
 			if name == "mismatch" {
 				body = "different punctuation and words"
 			}
-			output, err := json.Marshal(map[string]string{"content": body})
-			if err != nil {
-				t.Fatal(err)
-			}
+			output := fmt.Sprintf("### Page\n- Page URL: %s\n### Snapshot\n```yaml\n- paragraph: %s\n```\n", url, body)
 			records = append(records,
-				taskTranscriptRecord{Event: "tool_call", Tool: "web_fetch", ToolCallID: name, Input: string(input)},
-				taskTranscriptRecord{Event: "tool_result", Tool: "web_fetch", ToolCallID: name, Output: string(output), Error: name == "failed"},
+				taskTranscriptRecord{Event: "tool_call", Tool: contract.toolEvidence.Tools[0], ToolCallID: name, Input: `{}`},
+				taskTranscriptRecord{Event: "tool_result", Tool: contract.toolEvidence.Tools[0], ToolCallID: name, Output: output, Error: name == "failed"},
 			)
 		}
 	}

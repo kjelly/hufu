@@ -16,19 +16,22 @@ import (
 	"charm.land/fantasy"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 type MCPTool struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Parameters  map[string]any
-	Required    []string
-	ServerName  string
-	OrigName    string
+	Name              string
+	Description       string
+	InputSchema       map[string]any
+	Parameters        map[string]any
+	Required          []string
+	ServerName        string
+	OrigName          string
+	WorkerPolicy      *WorkerToolPolicy
+	workerInputSchema *jsonschema.Schema
 }
 
 // ToolAuthorizer is injected by the coordinator at the execution boundary so
@@ -239,6 +242,10 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 // initializeServerTools initializes a connected client and lists the tools
 // the server's allowedTools/excludedTools admit. It closes cli on failure.
 func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig, cli *client.Client) ([]MCPTool, error) {
+	if err := ValidateWorkerToolPolicies(cfg); err != nil {
+		_ = cli.Close()
+		return nil, err
+	}
 	initReq := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
@@ -261,6 +268,7 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 	}
 
 	var tools []MCPTool
+	seenPolicies := make(map[string]bool)
 	for _, t := range toolsResult.Tools {
 		prefixedName := name + "__" + t.Name
 		if !IsToolAllowed(t.Name, cfg.AllowedTools, cfg.ExcludedTools) {
@@ -275,7 +283,19 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 		if t.InputSchema.Properties != nil {
 			params = t.InputSchema.Properties
 		}
+		var workerPolicy *WorkerToolPolicy
+		var workerSchema *jsonschema.Schema
+		if policy, ok := cfg.ToolPolicies[t.Name]; ok {
+			workerPolicy = cloneWorkerToolPolicy(&policy)
+			workerSchema, err = compileWorkerPolicy(*workerPolicy)
+			if err != nil {
+				_ = cli.Close()
+				return nil, err
+			}
+			seenPolicies[t.Name] = true
+		}
 		tools = append(tools, MCPTool{
+			WorkerPolicy: workerPolicy, workerInputSchema: workerSchema,
 			Name:        prefixedName,
 			Description: t.Description,
 			InputSchema: inputSchema,
@@ -284,6 +304,12 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 			ServerName:  name,
 			OrigName:    t.Name,
 		})
+	}
+	for native := range cfg.ToolPolicies {
+		if !seenPolicies[native] {
+			_ = cli.Close()
+			return nil, fmt.Errorf("MCP worker policy tool %q was not listed by server %q", native, name)
+		}
 	}
 	return tools, nil
 }
@@ -340,6 +366,9 @@ func (m *MCPToolManager) ExecuteTool(ctx context.Context, toolName string, args 
 	if err != nil {
 		return "", false, err
 	}
+	if t.WorkerPolicy != nil {
+		return "", false, &toolAuthorizationError{cause: fmt.Errorf("MCP worker policy requires ExecuteAuthorizedTool")}
+	}
 	return executeMCPTool(ctx, t, cli, args)
 }
 
@@ -363,7 +392,14 @@ func (m *MCPToolManager) ExecuteAuthorizedTool(ctx context.Context, logicalName,
 	if fingerprint != expectedDescriptorSHA256 {
 		return "", false, &toolDescriptorMismatchError{name: logicalName}
 	}
-	if authorize := toolAuthorizerFromContext(ctx); authorize != nil {
+	if err := validateWorkerPolicyArguments(t, input); err != nil {
+		return "", false, &toolAuthorizationError{cause: err}
+	}
+	authorize := toolAuthorizerFromContext(ctx)
+	if t.WorkerPolicy != nil && authorize == nil {
+		return "", false, &toolAuthorizationError{cause: fmt.Errorf("MCP worker policy requires a runtime authorizer")}
+	}
+	if authorize != nil {
 		if err := authorize(ctx, t.ServerName, t.OrigName, input); err != nil {
 			return "", false, &toolAuthorizationError{cause: err}
 		}
@@ -453,7 +489,9 @@ func callMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string
 // it: decoding into float64 would silently change integers above 2^53.
 func decodeToolArguments(args string) (map[string]any, error) {
 	if args == "" || args == "{}" {
-		return nil, nil
+		// An interface containing a nil map serializes as null, which strict
+		// MCP servers reject. Empty argument lists are still JSON objects.
+		return map[string]any{}, nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(args))
 	decoder.UseNumber()
@@ -463,6 +501,9 @@ func decodeToolArguments(args string) (map[string]any, error) {
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("invalid tool arguments: trailing data after the JSON object")
+	}
+	if argsMap == nil {
+		return nil, fmt.Errorf("invalid tool arguments: expected JSON object")
 	}
 	return argsMap, nil
 }
@@ -494,7 +535,7 @@ func (m *MCPToolManager) AsAgentTools() []fantasy.AgentTool {
 			continue
 		}
 		tools = append(tools, &mcpAgentTool{
-			tool:    t,
+			tool:    cloneMCPTool(t),
 			manager: m,
 		})
 	}
@@ -546,11 +587,23 @@ type mcpAgentTool struct {
 }
 
 func (t *mcpAgentTool) Info() fantasy.ToolInfo {
+	parameters, required := t.tool.Parameters, t.tool.Required
+	if policy := t.tool.WorkerPolicy; policy != nil {
+		parameters, _ = policy.InputSchema["properties"].(map[string]any)
+		required = nil
+		if fields, ok := policy.InputSchema["required"].([]any); ok {
+			for _, field := range fields {
+				if name, ok := field.(string); ok {
+					required = append(required, name)
+				}
+			}
+		}
+	}
 	return fantasy.ToolInfo{
 		Name:        t.tool.Name,
 		Description: t.tool.Description,
-		Parameters:  t.tool.Parameters,
-		Required:    t.tool.Required,
+		Parameters:  parameters,
+		Required:    required,
 	}
 }
 

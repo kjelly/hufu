@@ -6,9 +6,65 @@ max-concurrent: 2
 max-retries: 1
 allow-free-text-results: false
 tools:
-  denied: [write, edit, multiedit, bash, sudo, ssh, scp, lua, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
+  denied: [web_fetch, write, edit, multiedit, bash, sudo, ssh, scp, lua, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
 requires:
   environment: [OLLAMA_API_KEY]
+# Each track has its own browser context so parallel research stays independent.
+mcp-servers:
+  playwright_researcher:
+    type: local
+    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    allowedTools: [browser_navigate, browser_snapshot]
+    toolPolicies:
+      browser_navigate:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [url]
+          properties:
+            url: {type: string, maxLength: 4096, pattern: '^https?://[^\s]+$'}
+      browser_snapshot:
+        sideEffect: none
+        filesystem: none
+        inputSchema: {type: object, additionalProperties: false, properties: {}}
+  playwright_countercheck:
+    type: local
+    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    allowedTools: [browser_navigate, browser_snapshot]
+    toolPolicies:
+      browser_navigate:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [url]
+          properties:
+            url: {type: string, maxLength: 4096, pattern: '^https?://[^\s]+$'}
+      browser_snapshot:
+        sideEffect: none
+        filesystem: none
+        inputSchema: {type: object, additionalProperties: false, properties: {}}
+  playwright_verifier:
+    type: local
+    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    allowedTools: [browser_navigate, browser_snapshot]
+    toolPolicies:
+      browser_navigate:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [url]
+          properties:
+            url: {type: string, maxLength: 4096, pattern: '^https?://[^\s]+$'}
+      browser_snapshot:
+        sideEffect: none
+        filesystem: none
+        inputSchema: {type: object, additionalProperties: false, properties: {}}
 delegation:
   bind-task-goal-contracts: true
   initial-batch:

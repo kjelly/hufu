@@ -112,74 +112,81 @@ func TestExternalToolEvidenceFailsClosed(t *testing.T) {
 }
 
 func TestSubmitResultUsesOnlyOwnTranscript(t *testing.T) {
-	for _, scope := range []string{"own", "other_task", "other_run", "other_attempt", "other_agent"} {
-		t.Run(scope, func(t *testing.T) {
-			compiled := evidenceTestContract(t)
-			ref := compiled.ref(true)
-			c := &Coordinator{session: &TeamSession{ResultContracts: map[string]*CompiledResultContract{compiled.ID: compiled}}, taskTracker: NewTaskTracker()}
-			c.executionRunID = "run-evidence"
-			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", ResultContract: &ref}})[0]
-			id := item.ID
-			run, attempt, worker := "run-evidence", 1, "worker"
-			switch scope {
-			case "other_task":
-				id = "other-task"
-			case "other_run":
-				run = "other-run"
-			case "other_attempt":
-				attempt = 2
-			case "other_agent":
-				worker = "other-worker"
-			}
-			transcript, err := newTaskTranscriptForAttempt(t.TempDir(), id, run, attempt, worker)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = transcript.f.Close() }()
-			for _, r := range evidenceTestRecords() {
-				if r.Event == "tool_call" {
-					err = transcript.RecordToolCall(r.ToolCallID, r.Tool, r.Input)
-				} else {
-					err = transcript.RecordToolResult(r.ToolCallID, r.Tool, r.Output, r.Error)
+	for _, format := range []string{"json", "text"} {
+		for _, scope := range []string{"own", "other_task", "other_run", "other_attempt", "other_agent"} {
+			t.Run(format+"_"+scope, func(t *testing.T) {
+				compiled := evidenceTestContract(t)
+				records := evidenceTestRecords()
+				if format == "text" {
+					compiled = textEvidenceTestContract(t, true)
+					records = textEvidenceTestRecords()
 				}
+				ref := compiled.ref(true)
+				c := &Coordinator{session: &TeamSession{ResultContracts: map[string]*CompiledResultContract{compiled.ID: compiled}}, taskTracker: NewTaskTracker()}
+				c.executionRunID = "run-evidence"
+				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", ResultContract: &ref}})[0]
+				id := item.ID
+				run, attempt, worker := "run-evidence", 1, "worker"
+				switch scope {
+				case "other_task":
+					id = "other-task"
+				case "other_run":
+					run = "other-run"
+				case "other_attempt":
+					attempt = 2
+				case "other_agent":
+					worker = "other-worker"
+				}
+				transcript, err := newTaskTranscriptForAttempt(t.TempDir(), id, run, attempt, worker)
 				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			ctx := context.WithValue(occurrenceTestContext(c, item.ID, 1), taskTranscriptKey{}, transcript)
-			response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"all proven","structured_payload":` + evidenceTestPayload + `}`})
-			if err != nil || response.IsError {
-				t.Fatalf("response=%#v err=%v", response, err)
-			}
-			stored := c.GetTaskResult(item.ID)
-			if stored == nil || (stored.StructuredPayload.EvidenceDowngrades == 0) != (scope == "own") {
-				t.Fatalf("stored=%#v", stored)
-			}
-			if scope != "own" && stored.Summary == "all proven" {
-				t.Fatal("unsafe summary survived")
-			}
-			encoded, err := json.Marshal(map[string]any{"typed_result": stored})
-			if err != nil {
-				t.Fatal(err)
-			}
-			redacted, err := redactJSONPreservingRuntimeOutputs(encoded)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var compact bytes.Buffer
-			if err := json.Compact(&compact, redacted); err != nil {
-				t.Fatal(err)
-			}
-			var restored struct {
-				TypedResult TaskResult `json:"typed_result"`
-			}
-			if err := json.Unmarshal(compact.Bytes(), &restored); err != nil {
-				t.Fatal(err)
-			}
-			if restored.TypedResult.StructuredPayload.SHA256 != stored.StructuredPayload.SHA256 || string(restored.TypedResult.StructuredPayload.Value) != string(stored.StructuredPayload.Value) {
-				t.Fatal("binding changed in persistence")
-			}
-		})
+				defer func() { _ = transcript.f.Close() }()
+				for _, r := range records {
+					if r.Event == "tool_call" {
+						err = transcript.RecordToolCall(r.ToolCallID, r.Tool, r.Input)
+					} else {
+						err = transcript.RecordToolResult(r.ToolCallID, r.Tool, r.Output, r.Error)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx := context.WithValue(occurrenceTestContext(c, item.ID, 1), taskTranscriptKey{}, transcript)
+				response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"all proven","structured_payload":` + evidenceTestPayload + `}`})
+				if err != nil || response.IsError {
+					t.Fatalf("response=%#v err=%v", response, err)
+				}
+				stored := c.GetTaskResult(item.ID)
+				if stored == nil || (stored.StructuredPayload.EvidenceDowngrades == 0) != (scope == "own") {
+					t.Fatalf("stored=%#v", stored)
+				}
+				if scope != "own" && stored.Summary == "all proven" {
+					t.Fatal("unsafe summary survived")
+				}
+				encoded, err := json.Marshal(map[string]any{"typed_result": stored})
+				if err != nil {
+					t.Fatal(err)
+				}
+				redacted, err := redactJSONPreservingRuntimeOutputs(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var compact bytes.Buffer
+				if err := json.Compact(&compact, redacted); err != nil {
+					t.Fatal(err)
+				}
+				var restored struct {
+					TypedResult TaskResult `json:"typed_result"`
+				}
+				if err := json.Unmarshal(compact.Bytes(), &restored); err != nil {
+					t.Fatal(err)
+				}
+				if restored.TypedResult.StructuredPayload.SHA256 != stored.StructuredPayload.SHA256 || string(restored.TypedResult.StructuredPayload.Value) != string(stored.StructuredPayload.Value) {
+					t.Fatal("binding changed in persistence")
+				}
+			})
+		}
 	}
 }
 

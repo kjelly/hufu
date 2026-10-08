@@ -79,6 +79,9 @@ func (c *Coordinator) bindPolicyTargets() error {
 	if err := c.bindExecutionRoutes(); err != nil {
 		return err
 	}
+	if err := c.bindMCPWorkerPolicies(); err != nil {
+		return err
+	}
 	return c.bindMCPActionProviders()
 }
 

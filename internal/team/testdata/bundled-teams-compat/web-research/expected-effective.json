@@ -18,6 +18,7 @@
     },
     "goal_mode": "outcome",
     "tools_denied": [
+      "web_fetch",
       "write",
       "edit",
       "multiedit",
@@ -76,7 +77,7 @@
     {
       "name": "countercheck",
       "role": "worker",
-      "tools": "web_search,web_fetch",
+      "tools": "web_search,playwright_countercheck__browser_navigate,playwright_countercheck__browser_snapshot",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": -1
@@ -90,7 +91,7 @@
     {
       "name": "researcher",
       "role": "worker",
-      "tools": "web_search,web_fetch",
+      "tools": "web_search,playwright_researcher__browser_navigate,playwright_researcher__browser_snapshot",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": -1
@@ -98,7 +99,7 @@
     {
       "name": "verifier",
       "role": "worker",
-      "tools": "web_search,web_fetch",
+      "tools": "web_search,playwright_verifier__browser_navigate,playwright_verifier__browser_snapshot",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": -1

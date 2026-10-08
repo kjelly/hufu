@@ -62,6 +62,7 @@ type ExecutionPolicySnapshot struct {
 	// MCPActionProviders pins every MCP action provider's server, tool, and
 	// bound descriptor. It is omitted when a team declares none.
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
+	MCPWorkerPolicies  []ExecutionMCPWorkerPolicySnapshot   `json:"mcp_worker_policies,omitempty"`
 	// ContextArtifacts pins the opt-in tool-result offload limits. It is
 	// omitted when offload is disabled.
 	ContextArtifacts *ExecutionContextArtifactPolicySnapshot `json:"context_artifacts,omitempty"`
@@ -294,6 +295,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			snapshot.ActionCatalogHash = c.session.ActionCatalog.Hash
 		}
 		snapshot.MCPActionProviders = executionPolicyMCPActionProviders(c.session)
+		snapshot.MCPWorkerPolicies = executionPolicyMCPWorkerPolicies(c.session)
 		snapshot.ContextArtifacts = executionPolicyContextArtifacts(c.session)
 	}
 	state := &executionPolicyState{
@@ -579,6 +581,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
 	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
+	clone.MCPWorkerPolicies = slices.Clone(snapshot.MCPWorkerPolicies)
 	clone.ContextArtifacts = cloneExecutionContextArtifactPolicy(snapshot.ContextArtifacts)
 	clone.Cost = cost.ClonePolicySnapshot(snapshot.Cost)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
@@ -617,6 +620,12 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 				return fmt.Errorf("execution policy snapshot v%d writes legacy_provider", snapshot.Version)
 			}
 		}
+	}
+	if err := validateExecutionMCPWorkerPolicies(snapshot.MCPWorkerPolicies); err != nil {
+		return err
+	}
+	if snapshot.Version < executionPolicyPreviousSnapshotVersion && len(snapshot.MCPWorkerPolicies) > 0 {
+		return fmt.Errorf("legacy snapshot cannot pin MCP worker policies")
 	}
 	if err := validateExecutionPolicyMCPActionProviders(snapshot.Version, snapshot.MCPActionProviders); err != nil {
 		return err
@@ -892,6 +901,9 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionPolicySnapshot) (bool, error) {
 	if err := validateExecutionPolicySnapshot(snapshot); err != nil {
 		return false, err
+	}
+	if snapshot != nil && snapshot.Version == executionPolicyLegacySnapshotVersion && len(executionPolicyMCPWorkerPolicies(c.session)) > 0 {
+		return false, fmt.Errorf("legacy execution policy cannot pin MCP worker policies; start a new session with --new")
 	}
 	if err := c.checkLegacySnapshotMCPActionProviders(snapshot); err != nil {
 		return false, err

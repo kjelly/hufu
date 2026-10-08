@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"text/template"
@@ -14,9 +15,15 @@ import (
 // Vocabulary and fallback values belong to the owning schema. Core only
 // matches declared JSON fields against successful, runner-owned observations.
 type resultToolEvidenceSpec struct {
-	GroupsPointer    string                       `json:"groups_pointer"`
-	ItemsPointer     string                       `json:"items_pointer"`
-	Tool             string                       `json:"tool"`
+	GroupsPointer    string   `json:"groups_pointer"`
+	ItemsPointer     string   `json:"items_pointer"`
+	Tool             string   `json:"tool"`
+	Tools            []string `json:"tools,omitempty"`
+	OutputFormat     string   `json:"output_format,omitempty"`
+	TextPattern      string   `json:"text_pattern,omitempty"`
+	TargetPattern    string   `json:"target_pattern,omitempty"`
+	textPattern      *regexp.Regexp
+	targetPattern    *regexp.Regexp
 	InputPointer     string                       `json:"input_pointer"`
 	ValuePointer     string                       `json:"value_pointer"`
 	OutputPointer    string                       `json:"output_pointer"`
@@ -93,7 +100,7 @@ func compileResultContractExtensions(root map[string]any) (*resultToolEvidenceSp
 		if err := decoder.Decode(spec); err != nil {
 			return nil, nil, fmt.Errorf("x-hufu-tool-evidence: %w", err)
 		}
-		for _, pointer := range []string{spec.GroupsPointer, spec.ItemsPointer, spec.InputPointer, spec.ValuePointer, spec.OutputPointer, spec.QuotePointer, spec.StatusPointer, spec.CallIDPointer} {
+		for _, pointer := range []string{spec.GroupsPointer, spec.ItemsPointer, spec.ValuePointer, spec.QuotePointer, spec.StatusPointer, spec.CallIDPointer} {
 			if pointer == "" {
 				return nil, nil, fmt.Errorf("x-hufu-tool-evidence requires all pointer fields")
 			}
@@ -111,7 +118,10 @@ func compileResultContractExtensions(root map[string]any) (*resultToolEvidenceSp
 		if _, err := evidenceMember(spec.QuotePointer); err != nil {
 			return nil, nil, err
 		}
-		if strings.TrimSpace(spec.Tool) == "" || spec.VerifiedStatus == "" || spec.UnverifiedStatus == "" || spec.VerifiedStatus == spec.UnverifiedStatus || len(spec.GroupFallback) == 0 {
+		if err := spec.validateOutput(); err != nil {
+			return nil, nil, err
+		}
+		if spec.VerifiedStatus == "" || spec.UnverifiedStatus == "" || spec.VerifiedStatus == spec.UnverifiedStatus || len(spec.GroupFallback) == 0 {
 			return nil, nil, fmt.Errorf("x-hufu-tool-evidence requires a tool, distinct statuses and a group fallback")
 		}
 		for pointer := range spec.GroupFallback {
@@ -184,18 +194,113 @@ func evidenceString(value any, pointer string) string {
 
 type successfulToolObservation struct{ id, match, output string }
 
+func (spec *resultToolEvidenceSpec) matchesTool(name string) bool {
+	return name != "" && (name == spec.Tool || slices.Contains(spec.Tools, name))
+}
+
+func (spec *resultToolEvidenceSpec) validateOutput() error {
+	if (spec.InputPointer == "") == (spec.TargetPattern == "") {
+		return fmt.Errorf("tool evidence requires exactly one of input_pointer or target_pattern")
+	}
+	if spec.InputPointer != "" {
+		if err := validateJSONPointer(spec.InputPointer); err != nil {
+			return err
+		}
+	}
+	if (strings.TrimSpace(spec.Tool) == "") == (len(spec.Tools) == 0) {
+		return fmt.Errorf("tool evidence requires exactly one of tool or tools")
+	}
+	seen := make(map[string]bool)
+	for _, tool := range spec.Tools {
+		if tool == "" || tool != strings.TrimSpace(tool) || seen[tool] {
+			return fmt.Errorf("tool evidence tools must be non-empty, exact and unique")
+		}
+		seen[tool] = true
+	}
+	switch spec.OutputFormat {
+	case "", "json":
+		if spec.OutputPointer == "" || spec.TextPattern != "" || spec.TargetPattern != "" {
+			return fmt.Errorf("JSON tool evidence requires output_pointer and does not accept text patterns")
+		}
+		return validateJSONPointer(spec.OutputPointer)
+	case "text":
+		if spec.OutputPointer != "" {
+			return fmt.Errorf("text tool evidence does not accept output_pointer")
+		}
+		for _, field := range []struct {
+			raw         string
+			destination **regexp.Regexp
+		}{
+			{spec.TextPattern, &spec.textPattern}, {spec.TargetPattern, &spec.targetPattern},
+		} {
+			if field.raw == "" {
+				continue
+			}
+			pattern, err := regexp.Compile(field.raw)
+			if len(field.raw) > 4096 || err != nil || pattern.NumSubexp() != 1 {
+				return fmt.Errorf("tool evidence text patterns require a valid regexp with exactly one capture group, at most 4096 bytes")
+			}
+			*field.destination = pattern
+		}
+		return nil
+	default:
+		return fmt.Errorf("tool evidence output_format must be json or text")
+	}
+}
+
+func (spec *resultToolEvidenceSpec) observedTarget(input any, output string) string {
+	if spec.targetPattern != nil {
+		matches := spec.targetPattern.FindAllStringSubmatch(output, 2)
+		if len(matches) != 1 {
+			return ""
+		}
+		return matches[0][1]
+	}
+	return evidenceString(input, spec.InputPointer)
+}
+
+func (spec *resultToolEvidenceSpec) observedText(output string) string {
+	if spec.OutputFormat == "text" {
+		if spec.textPattern != nil {
+			matches := spec.textPattern.FindAllStringSubmatch(output, 2)
+			if len(matches) != 1 {
+				return ""
+			}
+			return matches[0][1]
+		}
+		return output
+	}
+	value, err := decodeResultContractJSON([]byte(output))
+	if err != nil {
+		return ""
+	}
+	return evidenceString(value, spec.OutputPointer)
+}
+
 func matchingToolObservations(spec *resultToolEvidenceSpec, records []taskTranscriptRecord) []successfulToolObservation {
-	calls := make(map[string]taskTranscriptRecord)
+	type observationKey struct{ tool, id string }
+	calls := make(map[observationKey]taskTranscriptRecord)
+	callCounts, resultCounts := make(map[observationKey]int), make(map[observationKey]int)
+	for _, record := range records {
+		key := observationKey{record.Tool, record.ToolCallID}
+		switch record.Event {
+		case "tool_call":
+			callCounts[key]++
+		case "tool_result":
+			resultCounts[key]++
+		}
+	}
 	var observations []successfulToolObservation
 	for _, record := range records {
-		if record.Tool != spec.Tool || record.ToolCallID == "" {
+		key := observationKey{record.Tool, record.ToolCallID}
+		if !spec.matchesTool(record.Tool) || record.ToolCallID == "" || callCounts[key] != 1 || resultCounts[key] != 1 {
 			continue
 		}
 		if record.Event == "tool_call" {
-			calls[record.ToolCallID] = record
+			calls[observationKey{record.Tool, record.ToolCallID}] = record
 			continue
 		}
-		call, ok := calls[record.ToolCallID]
+		call, ok := calls[observationKey{record.Tool, record.ToolCallID}]
 		if !ok || record.Event != "tool_result" || record.Error {
 			continue
 		}
@@ -203,12 +308,8 @@ func matchingToolObservations(spec *resultToolEvidenceSpec, records []taskTransc
 		if err != nil {
 			continue
 		}
-		output, err := decodeResultContractJSON([]byte(record.Output))
-		if err != nil {
-			continue
-		}
-		match := evidenceString(input, spec.InputPointer)
-		body := evidenceString(output, spec.OutputPointer)
+		match := spec.observedTarget(input, record.Output)
+		body := spec.observedText(record.Output)
 		if match != "" && strings.TrimSpace(body) != "" {
 			observations = append(observations, successfulToolObservation{record.ToolCallID, match, body})
 		}
@@ -233,18 +334,29 @@ func bindResultEvidenceDiagnostics(item map[string]any, spec *resultToolEvidence
 		}
 	} else {
 		for _, record := range records {
-			if record.Event != "tool_call" || record.Tool != spec.Tool || record.ToolCallID == "" {
+			if record.Event != "tool_call" || !spec.matchesTool(record.Tool) || record.ToolCallID == "" {
 				continue
 			}
 			input, err := decodeResultContractJSON([]byte(record.Input))
-			if err != nil || evidenceString(input, spec.InputPointer) != match {
+			if err != nil {
+				continue
+			}
+			target := evidenceString(input, spec.InputPointer)
+			if spec.targetPattern != nil {
+				for _, result := range records {
+					if result.Event == "tool_result" && result.Tool == record.Tool && result.ToolCallID == record.ToolCallID {
+						target = spec.observedTarget(input, result.Output)
+					}
+				}
+			}
+			if target != match {
 				continue
 			}
 			if fetch == "absent" {
 				fetch = "pending"
 			}
 			for _, result := range records {
-				if result.Event == "tool_result" && result.Tool == spec.Tool && result.ToolCallID == record.ToolCallID {
+				if result.Event == "tool_result" && result.Tool == record.Tool && result.ToolCallID == record.ToolCallID {
 					fetch = "unusable"
 					if result.Error {
 						fetch = "failed"

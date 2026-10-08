@@ -5,24 +5,26 @@ import (
 )
 
 type MCPServerConfig struct {
-	Type          string            `json:"type"                       yaml:"type"`
-	Command       []string          `json:"command,omitempty"           yaml:"command,omitempty"`
-	Environment   map[string]string `json:"environment,omitempty"       yaml:"environment,omitempty"`
-	URL           string            `json:"url,omitempty"              yaml:"url,omitempty"`
-	AllowedTools  []string          `json:"allowedTools,omitempty"      yaml:"allowedTools,omitempty"`
-	ExcludedTools []string          `json:"excludedTools,omitempty"    yaml:"excludedTools,omitempty"`
-	NoOAuth       bool              `json:"noOAuth,omitempty"           yaml:"noOAuth,omitempty"`
+	Type          string                      `json:"type"                       yaml:"type"`
+	Command       []string                    `json:"command,omitempty"           yaml:"command,omitempty"`
+	Environment   map[string]string           `json:"environment,omitempty"       yaml:"environment,omitempty"`
+	URL           string                      `json:"url,omitempty"              yaml:"url,omitempty"`
+	AllowedTools  []string                    `json:"allowedTools,omitempty"      yaml:"allowedTools,omitempty"`
+	ExcludedTools []string                    `json:"excludedTools,omitempty"    yaml:"excludedTools,omitempty"`
+	ToolPolicies  map[string]WorkerToolPolicy `json:"toolPolicies,omitempty" yaml:"toolPolicies,omitempty"`
+	NoOAuth       bool                        `json:"noOAuth,omitempty"           yaml:"noOAuth,omitempty"`
 }
 
 func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 	type newFormat struct {
-		Type          string            `json:"type"`
-		Command       []string          `json:"command,omitempty"`
-		Environment   map[string]string `json:"environment,omitempty"`
-		URL           string            `json:"url,omitempty"`
-		AllowedTools  []string          `json:"allowedTools,omitempty"`
-		ExcludedTools []string          `json:"excludedTools,omitempty"`
-		NoOAuth       bool              `json:"noOAuth,omitempty"`
+		Type          string                      `json:"type"`
+		Command       []string                    `json:"command,omitempty"`
+		Environment   map[string]string           `json:"environment,omitempty"`
+		URL           string                      `json:"url,omitempty"`
+		AllowedTools  []string                    `json:"allowedTools,omitempty"`
+		ExcludedTools []string                    `json:"excludedTools,omitempty"`
+		ToolPolicies  map[string]WorkerToolPolicy `json:"toolPolicies,omitempty"`
+		NoOAuth       bool                        `json:"noOAuth,omitempty"`
 	}
 
 	var nc newFormat
@@ -36,6 +38,7 @@ func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 	s.AllowedTools = nc.AllowedTools
 	s.ExcludedTools = nc.ExcludedTools
 	s.NoOAuth = nc.NoOAuth
+	s.ToolPolicies = nc.ToolPolicies
 
 	if s.Type == "" && len(s.Command) > 0 {
 		s.Type = "local"

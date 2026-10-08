@@ -266,6 +266,11 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   降級來源及群組，並在 `ResultPayload` 中記錄 `evidence_downgrades`。
   未宣告 diagnostics 的舊 contract 會清空無法驗證的引文；宣告 diagnostics
   時保留提交引文供診斷，明確標示它是否匹配，不把失配視為抓取失敗。
+  支援 MCP 文字回傳：宣告 `output_format: text`，移除 `output_pointer`，
+  可用單一 capture 的 `text_pattern` 限定原文區段。`tools` 陣列可取代
+  `tool`；`target_pattern` 可取代 `input_pointer`，以成功回傳中的實際
+  target 綁定來源。詳細限制與通用工具授權見
+  [MCP worker policy](mcp-worker-policy.md)。
 - `x-hufu-evidence-inputs`：將 review 清單中的 task ID、payload hash 及可選
   欄位綁定到該 task 的 `evidence_from` 已接受輸入。ID 必須逐字相同，
   不會去引號或猜測；重複、未宣告 ID、hash 不符及來源 payload 變動皆拒絕。

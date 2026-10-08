@@ -48,15 +48,16 @@ type DynamicToolAuthorizationSnapshot struct {
 }
 
 type DynamicToolTarget struct {
-	Name             string
-	Kind             string
-	Server           string
-	NativeName       string
-	Description      string
-	InputSchema      map[string]any
-	Parameters       map[string]any
-	Required         []string
-	DescriptorSHA256 string
+	Name              string
+	Kind              string
+	Server            string
+	NativeName        string
+	Description       string
+	InputSchema       map[string]any
+	WorkerInputSchema map[string]any
+	Parameters        map[string]any
+	Required          []string
+	DescriptorSHA256  string
 }
 
 func cloneResolvedWorkerTools(src ResolvedWorkerTools) ResolvedWorkerTools {
@@ -67,6 +68,7 @@ func cloneResolvedWorkerTools(src ResolvedWorkerTools) ResolvedWorkerTools {
 	cloned.DynamicTargets = slices.Clone(src.DynamicTargets)
 	for i := range cloned.DynamicTargets {
 		cloned.DynamicTargets[i].InputSchema = cloneJSONMap(src.DynamicTargets[i].InputSchema)
+		cloned.DynamicTargets[i].WorkerInputSchema = cloneJSONMap(src.DynamicTargets[i].WorkerInputSchema)
 		cloned.DynamicTargets[i].Parameters = cloneJSONMap(src.DynamicTargets[i].Parameters)
 		cloned.DynamicTargets[i].Required = slices.Clone(src.DynamicTargets[i].Required)
 	}
@@ -204,7 +206,7 @@ func (c *Coordinator) resolveNewTaskToolAuthorization(_ context.Context, task Ta
 	}
 	targets := make([]FrozenDynamicToolTarget, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		if !authorized[descriptor.Name] {
+		if !authorized[descriptor.Name] || (descriptor.WorkerPolicy != nil && !explicitlyDeclaresTool(def.Tools, descriptor.Name)) {
 			continue
 		}
 		fingerprint, err := internalmcp.MCPToolDescriptorSHA256(descriptor)
@@ -467,10 +469,15 @@ func projectDynamicToolGateway(c *Coordinator, tools, baseTools []fantasy.AgentT
 			continue
 		}
 		proxied[descriptor.Name] = true
+		var workerInputSchema map[string]any
+		if descriptor.WorkerPolicy != nil {
+			workerInputSchema = cloneJSONMap(descriptor.WorkerPolicy.InputSchema)
+		}
 		targets = append(targets, DynamicToolTarget{
 			Name: descriptor.Name, Kind: "mcp", Server: descriptor.ServerName, NativeName: descriptor.OrigName,
 			Description: descriptor.Description, InputSchema: cloneJSONMap(descriptor.InputSchema),
-			Parameters: cloneJSONMap(descriptor.Parameters), Required: slices.Clone(descriptor.Required), DescriptorSHA256: fingerprint,
+			WorkerInputSchema: workerInputSchema,
+			Parameters:        cloneJSONMap(descriptor.Parameters), Required: slices.Clone(descriptor.Required), DescriptorSHA256: fingerprint,
 		})
 	}
 	if len(targets) == 0 {

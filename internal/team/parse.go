@@ -1419,6 +1419,9 @@ func loadTeamMCPServers(teamDir string, vars map[string]string) (map[string]mcp.
 		if err := yaml.Unmarshal(encoded, &cfg); err != nil {
 			return nil, fmt.Errorf("decode MCP server %q: %w", name, err)
 		}
+		if err := mcp.ValidateWorkerToolPolicies(cfg); err != nil {
+			return nil, fmt.Errorf("MCP server %q: %w", name, err)
+		}
 		servers[name] = cfg
 	}
 	return servers, nil

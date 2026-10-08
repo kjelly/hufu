@@ -3967,7 +3967,12 @@ func (c *Coordinator) taskFinalizationBinding(todoID string) string {
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
 	acceptedTerminalResult := &acceptedTerminalResultStop{}
 	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)
-	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, _ string) error {
+	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, input string) error {
+		if _, ok := c.mcpManager.WorkerPolicy(server + "__" + tool); ok {
+			if denial, _ := c.authorizeDynamicLogicalInvocation(callCtx, agentName, server+"__"+tool, input); denial != "" {
+				return fmt.Errorf("MCP worker authorization denied: %s", denial)
+			}
+		}
 		allowed := make(map[string]bool)
 		for _, name := range tools.GetToolsAllowed(callCtx) {
 			allowed[strings.TrimSpace(name)] = true

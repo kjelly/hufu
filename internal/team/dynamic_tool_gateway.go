@@ -92,6 +92,7 @@ func cloneDynamicToolTargets(targets []DynamicToolTarget) []DynamicToolTarget {
 	cloned := slices.Clone(targets)
 	for i := range cloned {
 		cloned[i].InputSchema = cloneJSONMap(targets[i].InputSchema)
+		cloned[i].WorkerInputSchema = cloneJSONMap(targets[i].WorkerInputSchema)
 		cloned[i].Parameters = cloneJSONMap(targets[i].Parameters)
 		cloned[i].Required = slices.Clone(targets[i].Required)
 	}
@@ -156,6 +157,9 @@ func (g *dynamicToolGateway) Run(ctx context.Context, call fantasy.ToolCall) (fa
 func parseDynamicGatewayRequest(input string) (dynamicGatewayRequest, string, error) {
 	if len(input) > maxDynamicGatewayInputBytes {
 		return dynamicGatewayRequest{}, "dynamic_input_too_large", fmt.Errorf("gateway input exceeds %d bytes", maxDynamicGatewayInputBytes)
+	}
+	if _, err := decodeUniqueJSON([]byte(input)); err != nil {
+		return dynamicGatewayRequest{}, "dynamic_invalid_request", err
 	}
 	decoder := json.NewDecoder(bytes.NewReader([]byte(input)))
 	decoder.DisallowUnknownFields()
@@ -270,6 +274,9 @@ func renderDynamicTargetInspection(target DynamicToolTarget) string {
 		"name": target.Name, "description": description, "required": target.Required,
 		"input_schema": target.InputSchema, "descriptor_sha256": target.DescriptorSHA256, "schema_truncated": false,
 	}
+	if target.WorkerInputSchema != nil {
+		full["worker_input_schema"] = target.WorkerInputSchema
+	}
 	if raw, err := json.Marshal(full); err == nil && len(raw) <= maxDynamicInspectOutputBytes {
 		return string(raw)
 	}
@@ -298,6 +305,11 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		target.Name = request.Target
 		reportDynamicToolInvocation(ctx, dynamicInvocation(target, callID, "denied", "dynamic_target_not_authorized"), "", "target is not authorized for this attempt")
 		return dynamicGatewayError("dynamic_target_not_authorized", "target is not authorized for this attempt"), nil
+	}
+	if target.WorkerInputSchema != nil {
+		parameters, _ := target.WorkerInputSchema["properties"].(map[string]any)
+		canonical, _ := tools.CanonicalToolArgumentCase(string(request.Arguments), fantasy.ToolInfo{Parameters: parameters})
+		request.Arguments = json.RawMessage(canonical)
 	}
 	input, err := validateDynamicArguments(target.InputSchema, request.Arguments)
 	if err != nil {
@@ -475,10 +487,13 @@ func (c *Coordinator) authorizeDynamicLogicalInvocation(ctx context.Context, age
 	if !allowed {
 		return reason, "tool_permission_denied"
 	}
-	if denial := artifactScopeToolDenial(ctx, toolName, nil); denial != "" {
+	if denial := c.workerMCPArgumentDenial(toolName, input); denial != "" {
+		return denial, "mcp_worker_arguments_denied"
+	}
+	if denial := c.workerArtifactToolDenial(ctx, toolName, nil); denial != "" {
 		return denial, "artifact_scope_unsupported"
 	}
-	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && readOnlyToolMutation(toolName, input) {
+	if readOnly, _ := ctx.Value(tools.AgentReadOnlyExecutionKey).(bool); readOnly && c.workerReadOnlyToolMutation(ctx, toolName, input, nil) {
 		return fmt.Sprintf("tool %q is denied for side_effect:none tasks", toolName), "read_only_tool_denied"
 	}
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
