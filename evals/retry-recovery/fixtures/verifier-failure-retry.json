@@ -30,6 +30,8 @@
         "arguments": "{\"response\":\"Could not verify after retries.\",\"acknowledge_failed_tasks\":true}"
       }
     },
-    { "content": "(run ends here)" }
+    { "match": {"contains": "FINISHED:"},
+      "forbidden": true,
+      "content": "unexpected provider call after finish" }
   ]
 }

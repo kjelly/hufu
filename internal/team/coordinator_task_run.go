@@ -4052,7 +4052,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	stopWhen := append([]fantasy.StopCondition(nil), extraStop...)
 	stopWhen = append(stopWhen, func([]fantasy.StepResult) bool {
-		return acceptedTerminalResult.isAcceptedFor(c, todoID)
+		// finish seals both successful and failed coordinator outcomes. Stop
+		// before another model turn can reinterpret that terminal tool result.
+		return (todoID == CoordTodoID && c.finishCalled.Load()) ||
+			acceptedTerminalResult.isAcceptedFor(c, todoID)
 	})
 	streamCall := fantasy.AgentStreamCall{
 		Prompt:   prompt,

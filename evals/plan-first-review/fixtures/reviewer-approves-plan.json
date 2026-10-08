@@ -31,7 +31,9 @@
       }
     },
     {
-      "content": "(run ends here)"
+      "match": {"contains": "FINISHED:"},
+      "forbidden": true,
+      "content": "unexpected provider call after finish"
     }
   ]
 }
