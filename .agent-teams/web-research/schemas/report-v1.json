@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-hufu-tool-evidence": {
+    "groups_pointer": "/findings", "items_pointer": "/sources", "tool": "web_fetch",
+    "input_pointer": "/url", "value_pointer": "/url", "output_pointer": "/content",
+    "quote_pointer": "/quote", "status_pointer": "/page_status", "call_id_pointer": "/tool_call_id",
+    "verified_status": "checked", "unverified_status": "unverified",
+    "corroboration": {"group_pointer": "/evidence_basis", "group_value": "independent_corroboration", "origin_pointer": "/independence_group", "minimum": 2},
+    "diagnostics": {
+      "fetch_pointer": "/fetch_status", "citation_pointer": "/citation_status",
+      "fetch_values": {"succeeded": "fetched", "failed": "failed", "unusable": "unusable_response", "absent": "not_attempted", "pending": "pending"},
+      "citation_values": {"matched": "matched", "mismatch": "mismatch", "empty": "missing_quote", "unavailable": "unavailable"}
+    },
+    "group_fallback": {"/verdict": "unverified", "/evidence_basis": "insufficient_evidence", "/analysis": "至少一項來源引文未通過本次工具證據綁定。缺口原因請見各來源的抓取與引用驗證狀態；抓取成功不代表引文符合原文。"},
+    "group_append": {"/limitations": "工具證據綁定未完成，結論降為未驗證；來源保留供檢查缺口。"}
+  },
+  "x-hufu-evidence-inputs": {
+    "items_pointer": "/input_review", "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256", "complete_pointer": "/audit_complete",
+    "value_bindings": {"/lens": "/lens"}
+  },
+  "x-hufu-final-report": "# 事實查核報告\n\n問題：{{.question}}\n\n稽核流程完成：{{.audit_complete}}\n\n## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range .findings}}\n## {{.claim}}\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["audit_complete", "input_review", "question", "summary", "findings", "overall_limitations"],
+  "properties": {
+    "audit_complete": {"type": "boolean"},
+    "input_review": {
+      "type": "array", "maxItems": 2, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["task_id", "payload_sha256", "lens"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "payload_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "lens": {"type": "string", "enum": ["primary_search", "countercheck"]}
+        }
+      }
+    },
+    "question": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "overall_limitations": {"type": "string", "minLength": 1, "maxLength": 2500}
+  },
+  "allOf": [{
+    "if": {"properties": {"audit_complete": {"const": true}}, "required": ["audit_complete"]},
+    "then": {"properties": {"input_review": {
+      "minItems": 2,
+      "allOf": [
+        {"contains": {"properties": {"lens": {"const": "primary_search"}}, "required": ["lens"]}},
+        {"contains": {"properties": {"lens": {"const": "countercheck"}}, "required": ["lens"]}}
+      ]
+    }}}
+  }],
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "verdict", "researcher_agreement", "evidence_basis", "analysis", "sources", "dissent", "limitations"],
+      "properties": {
+        "claim": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "One atomic, independently checkable claim. Merge duplicates; do not combine date, trigger, count and elapsed time."},
+        "verdict": {"type": "string", "enum": ["supported", "contradicted", "mixed", "unverified"]},
+        "researcher_agreement": {"type": "string", "enum": ["agree", "disagree", "partial", "not_applicable"]},
+        "evidence_basis": {"type": "string", "enum": ["official_primary_checked", "primary_source_checked", "independent_corroboration", "single_source", "conflicting_sources", "insufficient_evidence"]},
+        "analysis": {"type": "string", "minLength": 1, "maxLength": 2500},
+        "sources": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/source"}
+        },
+        "dissent": {"type": "string", "minLength": 1, "maxLength": 1500},
+        "limitations": {"type": "string", "minLength": 1, "maxLength": 1500}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"verdict": {"enum": ["supported", "contradicted", "mixed"]}}, "required": ["verdict"]},
+          "then": {"properties": {"sources": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"evidence_basis": {"const": "independent_corroboration"}}, "required": ["evidence_basis"]},
+          "then": {"properties": {"sources": {"minItems": 2}}}
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "publisher", "publication_date", "url", "source_type", "page_status", "quote", "relation", "independence_group"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "publisher": {"type": "string", "minLength": 1, "maxLength": 300},
+        "publication_date": {"type": "string", "minLength": 1, "maxLength": 100},
+        "url": {"type": "string", "pattern": "^https?://[^\\s]+$", "maxLength": 4096},
+        "source_type": {"type": "string", "enum": ["official_primary", "primary", "secondary", "reference", "unknown"]},
+        "page_status": {"type": "string", "enum": ["checked", "unverified"]},
+        "fetch_status": {"type": "string", "enum": ["fetched", "failed", "unusable_response", "not_attempted", "pending"], "description": "Runtime-owned observation status; omit on submission."},
+        "citation_status": {"type": "string", "enum": ["matched", "mismatch", "missing_quote", "unavailable"], "description": "Runtime-owned exact quote matching status; omit on submission."},
+        "tool_call_id": {"type": "string", "maxLength": 200},
+        "quote": {"type": "string", "maxLength": 800, "description": "One contiguous exact substring of this worker's successful fetch; no added ellipsis, splicing or paraphrase."},
+        "relation": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "independence_group": {"type": "string", "minLength": 1, "maxLength": 300}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"page_status": {"const": "checked"}}, "required": ["page_status"]},
+          "then": {"properties": {"quote": {"minLength": 1}}}
+        }
+      ]
+    }
+  }
+}

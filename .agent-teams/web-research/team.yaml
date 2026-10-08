@@ -1,0 +1,66 @@
+name: web-research
+description: "Independently research factual claims online, verify source evidence, and report uncertainty"
+goal-mode: outcome
+max-rounds: 8
+max-concurrent: 2
+max-retries: 1
+allow-free-text-results: false
+tools:
+  denied: [write, edit, multiedit, bash, sudo, ssh, scp, lua, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
+requires:
+  environment: [OLLAMA_API_KEY]
+delegation:
+  bind-task-goal-contracts: true
+  initial-batch:
+    agents: [researcher, countercheck]
+    exact: true
+    first-tool: agent
+  allowed-workers: [researcher, countercheck, verifier]
+  no-redispatch-after-success: [researcher, countercheck, verifier]
+  share-request-with: [researcher, countercheck, verifier]
+  forbid-context-files: true
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+  required-workers: [researcher, countercheck, verifier]
+tasks:
+  - id: primary-research
+    agent: researcher
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /structured_payload/value/lens, op: equals, value: primary_search}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+  - id: counter-research
+    agent: countercheck
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /structured_payload/value/lens, op: equals, value: countercheck}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+  - id: evidence-audit
+    agent: verifier
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+      requires-evidence: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /structured_payload/value/audit_complete, op: equals, value: true}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}

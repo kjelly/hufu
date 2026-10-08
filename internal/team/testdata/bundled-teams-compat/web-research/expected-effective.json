@@ -1,0 +1,127 @@
+{
+  "team": {
+    "name": "web-research",
+    "description": "Independently research factual claims online, verify source evidence, and report uncertainty",
+    "max_rounds": 8,
+    "timeout": 600,
+    "verify_timeout": 120,
+    "max_retries": 1,
+    "max_concurrent": 2,
+    "acceptance_spec": {
+      "required_workers": [
+        "researcher",
+        "countercheck",
+        "verifier"
+      ],
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking"
+    },
+    "goal_mode": "outcome",
+    "tools_denied": [
+      "write",
+      "edit",
+      "multiedit",
+      "bash",
+      "sudo",
+      "ssh",
+      "scp",
+      "lua",
+      "golang",
+      "download",
+      "fetch",
+      "agentic_fetch",
+      "grep",
+      "glob",
+      "ls",
+      "random",
+      "math"
+    ],
+    "delegation": {
+      "AllowedWorkers": [
+        "researcher",
+        "countercheck",
+        "verifier"
+      ],
+      "InitialBatch": [
+        "researcher",
+        "countercheck"
+      ],
+      "RequireExactInitialBatch": true,
+      "InitialCoordinatorTool": "agent",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": [
+        "researcher",
+        "countercheck",
+        "verifier"
+      ],
+      "ForbidContextFiles": true,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null,
+      "RequireTaskContract": null,
+      "ShareRequestWith": [
+        "researcher",
+        "countercheck",
+        "verifier"
+      ]
+    }
+  },
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "max_retries": -1
+    },
+    {
+      "name": "countercheck",
+      "role": "worker",
+      "tools": "web_search,web_fetch",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "researcher",
+      "role": "worker",
+      "tools": "web_search,web_fetch",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    },
+    {
+      "name": "verifier",
+      "role": "worker",
+      "tools": "web_search,web_fetch",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "primary-research",
+      "agent": "researcher",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "counter-research",
+      "agent": "countercheck",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "evidence-audit",
+      "agent": "verifier",
+      "side_effect": "none",
+      "recovery": "retry"
+    }
+  ]
+}

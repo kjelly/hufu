@@ -22,3 +22,4 @@ docs/tmp
 spec.md
 review.md
 /data/
+/.envrc
