@@ -123,7 +123,7 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 	if def == nil {
 		return nil
 	}
-	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil)
+	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil, c.effectiveSideEffect(task) == SideEffectNone)
 	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task)))
 }
 
@@ -153,16 +153,15 @@ func workerArtifactPathPolicy(def *agent.AgentDef, bound bool, blockedPaths []st
 }
 
 // filterImplicitArtifactPolicyDeniedTools removes only convenience tools that
-// SelectTools injected implicitly and that the attempt's artifact policy
+// SelectTools injected implicitly and that the artifact or readonly policy
 // would refuse on every call. Explicitly declared tools remain in the surface
 // so the fail-closed preflight or the call reports the contract error instead
 // of silently changing the worker's declared capability.
 //
-// Unbound tasks used to keep every implicit tool. Their policy refuses tools
-// outside the built-in set, so memory_query stayed visible to every unbound
-// worker while each call failed; a critic spent its turns on it and ended
-// without a result.
-func filterImplicitArtifactPolicyDeniedTools(def *agent.AgentDef, candidate []fantasy.AgentTool, bound bool) []fantasy.AgentTool {
+// In particular, scoped memory_query can pass an unbound artifact policy but
+// is still rejected by side_effect:none. Selection and the frozen static
+// ceiling apply the same intersection as the call-time policy gate.
+func filterImplicitArtifactPolicyDeniedTools(def *agent.AgentDef, candidate []fantasy.AgentTool, bound, readOnly bool) []fantasy.AgentTool {
 	if def == nil {
 		return candidate
 	}
@@ -171,6 +170,9 @@ func filterImplicitArtifactPolicyDeniedTools(def *agent.AgentDef, candidate []fa
 	for _, tool := range candidate {
 		if tool == nil || !agent.IsAlwaysIncludedTool(tool.Info().Name) || agentDeclaresToolOrAlias(def.Tools, tool.Info().Name) {
 			filtered = append(filtered, tool)
+			continue
+		}
+		if readOnly && readOnlyToolMutation(tool.Info().Name, "") {
 			continue
 		}
 		if artifactScopeToolDenial(policyCtx, tool.Info().Name, tool) == "" {

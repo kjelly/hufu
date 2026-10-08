@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -22,8 +23,7 @@ const (
 	resultPayloadMaxErrors     = 20
 	resultPayloadErrorMaxRunes = 200
 	// resultPayloadContextMaxBytes bounds the payload shown to the
-	// coordinator and downstream task context; the full value stays in the
-	// durable typed result.
+	// coordinator preview; downstream required evidence uses the full value.
 	resultPayloadContextMaxBytes = 16 << 10
 	// resultContractPromptSchemaMaxBytes bounds the schema copied into a
 	// worker prompt.
@@ -41,7 +41,8 @@ type ResultPayload struct {
 	// Value is the canonical JSON encoding of the payload.
 	Value json.RawMessage `json:"value"`
 	// SHA256 is the hex SHA-256 of Value.
-	SHA256 string `json:"sha256"`
+	SHA256             string `json:"sha256"`
+	EvidenceDowngrades int    `json:"evidence_downgrades,omitzero"`
 }
 
 func (p *ResultPayload) clone() *ResultPayload {
@@ -67,7 +68,7 @@ const (
 // validateStructuredResultPayload is the single trust boundary for
 // structured payloads: local submit_result, result-only repair, and external
 // provider proposals all go through it.
-func validateStructuredResultPayload(compiled *CompiledResultContract, ref ResultContractRef, raw []byte) (*ResultPayload, error) {
+func validateStructuredResultPayload(compiled *CompiledResultContract, ref ResultContractRef, raw []byte, observations ...[]taskTranscriptRecord) (*ResultPayload, error) {
 	if compiled == nil || compiled.schema == nil {
 		return nil, fmt.Errorf("%s: result contract %q is not loaded", resultContractDriftCode, ref.ID)
 	}
@@ -81,15 +82,29 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 	if err := compiled.schema.Validate(value); err != nil {
 		return nil, fmt.Errorf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, ref.ID, formatResultPayloadValidationError(err))
 	}
+	var records []taskTranscriptRecord
+	if len(observations) > 0 {
+		records = observations[0]
+	}
+	downgrades, err := bindResultToolEvidence(value, compiled.toolEvidence, records)
+	if err != nil {
+		return nil, fmt.Errorf("%s: bind tool evidence: %w", structuredPayloadInvalidCode, err)
+	}
+	if err := compiled.schema.Validate(value); err != nil {
+		return nil, fmt.Errorf("%s: evidence fallback violates schema: %s", structuredPayloadInvalidCode, formatResultPayloadValidationError(err))
+	}
 	canonical, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("%s: canonicalize structured_payload: %w", structuredPayloadInvalidCode, err)
+	}
+	if len(canonical) > resultPayloadMaxBytes {
+		return nil, fmt.Errorf("%s: evidence-bound payload exceeds the byte limit", structuredPayloadInvalidCode)
 	}
 	if !redactionStableJSON(canonical) {
 		return nil, fmt.Errorf("%s: structured_payload contains secret-like content that durable event redaction would rewrite; remove credentials, tokens, and keys from the payload", structuredPayloadInvalidCode)
 	}
 	sum := sha256.Sum256(canonical)
-	return &ResultPayload{Contract: ref, Value: canonical, SHA256: hex.EncodeToString(sum[:])}, nil
+	return &ResultPayload{Contract: ref, Value: canonical, SHA256: hex.EncodeToString(sum[:]), EvidenceDowngrades: downgrades}, nil
 }
 
 // redactionStableJSON reports whether event redaction leaves canonical JSON
@@ -110,27 +125,54 @@ func redactionStableJSON(canonical []byte) bool {
 // formatResultPayloadValidationError turns a schema validation error into a
 // bounded list of "location: message" lines the worker can act on.
 func formatResultPayloadValidationError(err error) string {
-	var validation *jsonschema.ValidationError
-	if !errors.As(err, &validation) {
+	validation, ok := errors.AsType[*jsonschema.ValidationError](err)
+	if !ok {
 		return "- " + utils.TruncateRunes(err.Error(), resultPayloadErrorMaxRunes)
 	}
-	output := validation.BasicOutput()
 	lines := make([]string, 0, resultPayloadMaxErrors)
 	total := 0
-	for _, unit := range output.Errors {
-		if unit.Error == nil {
-			continue
+	seen := make(map[string]bool)
+	add := func(location, message string) {
+		line := location + ": " + message
+		if seen[line] {
+			return
 		}
+		seen[line] = true
 		total++
 		if len(lines) == resultPayloadMaxErrors {
-			continue
+			return
 		}
-		location := unit.InstanceLocation
 		if location == "" {
 			location = "/"
 		}
-		lines = append(lines, "- "+utils.TruncateRunes(location+": "+unit.Error.String(), resultPayloadErrorMaxRunes))
+		lines = append(lines, "- "+utils.TruncateRunes(location+": "+message, resultPayloadErrorMaxRunes))
 	}
+	// BasicOutput's flattened reference/group wrappers can hide leaf kinds
+	// behind "validation failed". Walk Causes directly and budget actionable
+	// leaves, not wrappers, so $ref/allOf errors cannot starve missing fields.
+	var visit func(*jsonschema.ValidationError)
+	visit = func(node *jsonschema.ValidationError) {
+		if len(node.Causes) > 0 {
+			for _, cause := range node.Causes {
+				visit(cause)
+			}
+			return
+		}
+		location := ""
+		for _, token := range node.InstanceLocation {
+			location += "/" + escapeJSONPointerToken(token)
+		}
+		if required, ok := node.ErrorKind.(*kind.Required); ok {
+			for _, property := range required.Missing {
+				add(location+"/"+escapeJSONPointerToken(property), "missing required property")
+			}
+			return
+		}
+		if output := node.BasicOutput(); output.Error != nil {
+			add(location, output.Error.String())
+		}
+	}
+	visit(validation)
 	if len(lines) == 0 {
 		return "- " + utils.TruncateRunes(validation.Error(), resultPayloadErrorMaxRunes)
 	}
@@ -173,7 +215,7 @@ func (c *Coordinator) boundResultContract(todoID string) (*ResultContractRef, *C
 // structuredPayloadForSubmission validates a submit_result payload against
 // the Todo's contract. The returned message, when non-empty, is the
 // worker-facing rejection.
-func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.RawMessage) (*ResultPayload, string) {
+func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.RawMessage, observations ...[]taskTranscriptRecord) (*ResultPayload, string) {
 	present := len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 	ref, compiled, err := c.boundResultContract(todoID)
 	if err != nil {
@@ -191,7 +233,12 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 		}
 		return nil, ""
 	}
-	payload, err := validateStructuredResultPayload(compiled, *ref, raw)
+	payload, err := validateStructuredResultPayload(compiled, *ref, raw, observations...)
+	if err == nil {
+		if bindingErr := c.validateSubmittedEvidenceInputs(todoID, payload); bindingErr != nil {
+			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
+		}
+	}
 	if err != nil {
 		c.recordResultValidationFailure(todoID)
 		return nil, err.Error()
@@ -254,9 +301,9 @@ func (c *Coordinator) applyResultContractReceipt(todoID string, result *TaskResu
 }
 
 // providerVisibleResultPayloadSchema is the structured_payload property the
-// worker's submit_result tool advertises. A schema that only uses keywords
-// every provider accepts is embedded; otherwise the property stays open and
-// names the contract. Either way validateStructuredResultPayload is the
+// worker's submit_result tool advertises. Portable schemas are embedded;
+// complex schemas retain a portable projection when possible, otherwise the
+// property stays open and names the contract. validateStructuredResultPayload is the
 // trust boundary, not the provider.
 func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract) map[string]any {
 	description := fmt.Sprintf("Structured payload that must satisfy result contract %s (sha256 %s).", ref.ID, shortResultContractHash(ref.SchemaSHA256))
@@ -269,6 +316,12 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 						schema["description"] = description
 					}
 					return schema
+				}
+				if projected := projectProviderResultSchema(schema); projected != nil {
+					if _, described := projected["description"]; !described {
+						projected["description"] = description
+					}
+					return projected
 				}
 				open := map[string]any{"description": description}
 				if typeName, ok := schema["type"].(string); ok {
@@ -363,5 +416,16 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, nil
 	}
-	return validateStructuredResultPayload(request.resultContractSchema, *ref, []byte(raw))
+	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, []byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	value, err := decodeResultContractJSON(payload.Value)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	return payload, nil
 }

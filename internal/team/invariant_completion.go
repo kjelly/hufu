@@ -194,6 +194,9 @@ func EvaluateSemanticRegression(runID string, tasks []*TodoItem) SemanticRegress
 			continue
 		}
 		decision.Configured = true
+		if VerifiedTaskResolution(todo, tasks, runID) != nil {
+			continue // the matching gate attestation is checked on the resolver
+		}
 		validation := ValidateInvariantVerificationResult(todo, runID)
 		if !validation.Valid {
 			blockers = append(blockers, blocker{taskID: todo.ID, reason: fmt.Sprintf("task %s invariant verification invalid: %s", todo.ID, validation.Code)})

@@ -112,9 +112,9 @@ type ExecutionContract struct {
 	RequiresGroundedResult bool  `json:"requires_grounded_result,omitempty" yaml:"requires-grounded-result,omitempty"`
 	AllowsReplay           *bool `json:"allows_replay,omitempty" yaml:"allows-replay,omitempty"`
 	ForbidArtifacts        bool  `json:"forbid_artifacts,omitempty" yaml:"forbid-artifacts,omitempty"`
-	// RequiresEvidence rejects a dispatch that names no evidence_from task. A
-	// task that checks another task's result, such as a critic confirming a
-	// finding, cannot do its work from goal prose alone.
+	// RequiresEvidence requires completed evidence_from results to be delivered
+	// in full, unchanged, to the worker and sealed in its context manifest.
+	// Missing delivery cannot be accepted as success or terminal TaskDone.
 	RequiresEvidence bool `json:"requires_evidence,omitempty" yaml:"requires-evidence,omitempty"`
 	// Steps is the structured execution contract for workflows that need
 	// artifact/validator dataflow and bounded repair. It is mutually exclusive

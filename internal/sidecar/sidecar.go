@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -17,14 +18,15 @@ import (
 )
 
 const (
-	summarizeMaxChars      = 4000
-	compactMaxChars        = 4000
-	defaultExecuteMaxRunes = 8000
-	sidecarMaxSteps        = 1
-	minimumTeamConfidence  = 0.60
-	minimumSkillConfidence = 0.60
-	minimumAgentConfidence = 0.60
-	sidecarSystemPrompt    = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
+	summarizeMaxChars       = 4000
+	auxiliarySummaryTimeout = 30 * time.Second
+	compactMaxChars         = 4000
+	defaultExecuteMaxRunes  = 8000
+	sidecarMaxSteps         = 1
+	minimumTeamConfidence   = 0.60
+	minimumSkillConfidence  = 0.60
+	minimumAgentConfidence  = 0.60
+	sidecarSystemPrompt     = "You are a concise assistant. Follow the user's instruction exactly. Be brief and precise. Do not add unnecessary commentary."
 )
 
 // SystemPrompt returns the system message included in every sidecar request.
@@ -434,6 +436,8 @@ func (s *Sidecar) Summarize(ctx context.Context, text string, maxChars int) (str
 	if utf8.RuneCountInString(text) <= maxChars/2 {
 		return text, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	defer cancel()
 	prompt := fmt.Sprintf(`Summarize the following text in under %d characters. Preserve all key information, facts, and conclusions. Output ONLY the summary, no meta-commentary.
 
 ---
@@ -454,6 +458,8 @@ func (s *Sidecar) Compact(ctx context.Context, text string, instruction string) 
 	if s == nil || s.agent == nil {
 		return text, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	defer cancel()
 	if instruction == "" {
 		instruction = "Condense the following text while preserving all key information."
 	}

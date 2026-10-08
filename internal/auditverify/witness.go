@@ -51,7 +51,8 @@ type CriterionWitness struct {
 type TaskWitness struct {
 	TaskID string `json:"task_id"`
 
-	Status team.TaskStatus `json:"status"`
+	Status     team.TaskStatus          `json:"status"`
+	Resolution *team.EvidenceResolution `json:"resolution,omitempty"`
 
 	WinningAttempt ReceiptRef `json:"winning_attempt"`
 
@@ -249,6 +250,10 @@ func buildDecisionWitness(runID string, runResult *team.RunResult, tasks []*team
 			}
 			item := tasksByID[taskID]
 			tw := TaskWitness{TaskID: taskID, EvidenceRequirementID: er.RequirementID}
+			if er.Resolution != nil {
+				resolution := *er.Resolution
+				tw.Resolution = &resolution
+			}
 			if item != nil {
 				tw.Status = item.Status
 			}
@@ -257,8 +262,9 @@ func buildDecisionWitness(runID string, runResult *team.RunResult, tasks []*team
 				RunID: binding.RunID, TaskID: binding.TaskID, Attempt: binding.Attempt,
 				ModelExecutionID: binding.ModelExecutionID, ProducerID: binding.ProducerID,
 			}
-			if item != nil {
-				if receipt := team.LatestSuccessfulExecutionReceipt(item, runID); receipt != nil {
+			producer := tasksByID[binding.TaskID]
+			if producer != nil {
+				if receipt := team.LatestSuccessfulExecutionReceipt(producer, runID); receipt != nil {
 					if hash, err := HashExecutionReceipt(*receipt); err == nil {
 						tw.WinningAttempt.ReceiptHash = hash
 					}

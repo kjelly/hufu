@@ -591,9 +591,21 @@ func AggregateRunResults(results []*RunResult, unresolved []TaskReference, stats
 	}
 	// A multi-team aggregate can only claim fixed_and_verified when its
 	// canonical outcome is successful and no participating review left findings.
-	aggregated.FixedAndVerified = aggregated.GoalSatisfied && !findingsPresent
+	aggregated.FixedAndVerified = aggregateFixedAndVerified(results, aggregated.GoalSatisfied, findingsPresent)
 	aggregated.Warnings = warnings
 	return aggregated
+}
+
+func aggregateFixedAndVerified(results []*RunResult, goalSatisfied, findingsPresent bool) bool {
+	if len(results) == 0 || !goalSatisfied || findingsPresent {
+		return false
+	}
+	for _, result := range results {
+		if result == nil || !result.FixedAndVerified {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeWorksetStates(dst map[string]WorksetGroupState, states []WorksetGroupState) {
@@ -969,7 +981,7 @@ func SummarizeRunStats(items []*TodoItem) RunStats {
 		case TaskDone:
 			stats.TasksDone++
 		case TaskError, TaskBlocked:
-			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				// Resolved failure, not counted as unresolved task
 			} else {
 				stats.TasksUnresolved++
@@ -1037,7 +1049,7 @@ func UnresolvedTaskReferences(items []*TodoItem) []TaskReference {
 		if item == nil || IsPrimaryOccurrence(item) || !isUnresolvedTaskStatus(item.Status) {
 			continue
 		}
-		if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+		if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 			continue
 		}
 		unresolved = append(unresolved, item)
@@ -1103,7 +1115,7 @@ func ValidateResolution(resolution *TaskResolution, itemID string, allItems []*T
 		}
 
 		// 3. Objective evidence check: resolver task MUST have passed objective verification (VerifyResult exit code 0) or contain verified TypedResult evidence with a valid system HMAC signature. Model claims or un-signed self-authored evidenceRefs are rejected.
-		hasVerification := resolver.VerifyResult != nil && resolver.VerifyResult.ExitCode == 0
+		hasVerification := resolver.VerifyResult != nil && resolver.VerifyResult.ExitCode == 0 && !resolver.VerifyResult.TimedOut && !resolver.VerifyResult.Overturned
 		hasTypedEvidence := false
 		if resolver.TypedResult != nil && len(resolver.TypedResult.Evidence) > 0 {
 			sec, err := GetSystemSecret()
@@ -1118,6 +1130,9 @@ func ValidateResolution(resolution *TaskResolution, itemID string, allItems []*T
 		}
 		if !hasVerification && !hasTypedEvidence {
 			return fmt.Errorf("resolving task %s lacks objective verification evidence (must have passing verify result or system-signed evidence signature)", resolution.ResolvedBy)
+		}
+		if err := validateResolutionRequirements(targetItem, resolver, runID); err != nil {
+			return err
 		}
 
 		// 4. Graph Cycle Check (N-node cycle traversal starting from resolver.ID)

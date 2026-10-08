@@ -518,6 +518,15 @@ type EvidenceResult struct {
 	Assertions           []string                `json:"assertions,omitempty"`
 	CheckedAt            time.Time               `json:"checked_at"`
 	PrimaryDecisionProof *PrimaryManifestProofV1 `json:"primary_decision_proof,omitempty"`
+	Resolution           *EvidenceResolution     `json:"resolution,omitempty"`
+}
+
+// EvidenceResolution records satisfaction through another verified occurrence,
+// without claiming that the original failed execution succeeded.
+type EvidenceResolution struct {
+	Status         string `json:"status"`
+	ResolvedBy     string `json:"resolved_by"`
+	OriginalStatus string `json:"original_status"`
 }
 
 // EvidenceBinding seals the exact execution provenance behind one task
@@ -628,7 +637,10 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 		return fmt.Errorf("evidence requirement %q has no sealed execution binding", result.RequirementID)
 	}
 	b := result.Binding
-	wantTask := strings.TrimPrefix(result.RequirementID, "task:")
+	wantTask, err := evidenceProducerTask(manifest, result)
+	if err != nil {
+		return err
+	}
 	if b.RunID != manifest.RunID || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
 		return fmt.Errorf("evidence requirement %q has conflicting execution binding", result.RequirementID)
 	}

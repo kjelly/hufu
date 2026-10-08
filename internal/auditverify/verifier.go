@@ -172,7 +172,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 	result.SemanticRegression = verifySemanticRegressionDimension(runID, session.Tasks, semanticDecision, result)
 
 	// Phase G: completion derivation.
-	requiredTasksComplete := allRequiredTasksComplete(session.Tasks)
+	requiredTasksComplete := allRequiredTasksComplete(session.Tasks, runID, runResult.EvidenceManifest)
 	completionDim := DeriveCompletionAudit(CompletionAuditInput{
 		RunResult:               runResult,
 		EvidenceValid:           evidenceValid,
@@ -378,6 +378,9 @@ func verifySemanticRegressionDimension(runID string, tasks []*team.TodoItem, dec
 		if item == nil || item.InvariantVerification != team.InvariantVerificationGate {
 			continue
 		}
+		if team.VerifiedTaskResolution(item, tasks, runID) != nil {
+			continue
+		}
 		validation := team.ValidateInvariantVerificationResult(item, runID)
 		attempt := 0
 		if item.TypedResult != nil {
@@ -480,6 +483,16 @@ func verifyProvenanceDimension(runID string, runResult *team.RunResult, tasks []
 			result.addFinding(CodeReceiptMissing, FindingSeverityCritical, reason, taskID, binding.Attempt, "")
 			return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		}
+		if resolution := evidenceResult.Resolution; resolution != nil {
+			resolver := team.VerifiedTaskResolution(item, tasks, runID)
+			if resolver == nil || resolver.ID != resolution.ResolvedBy || item.Resolution.Status != resolution.Status ||
+				string(item.Status) != resolution.OriginalStatus || binding.TaskID != resolver.ID {
+				reason := fmt.Sprintf("task %q evidence resolution does not match verified replayed task state", taskID)
+				result.addFinding(CodeBindingConflict, FindingSeverityCritical, reason, taskID, binding.Attempt, "")
+				return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+			}
+			item = resolver
+		}
 		checked++
 
 		if ambiguous, identities := ambiguousSuccessfulReceipts(item, runID); ambiguous {
@@ -575,11 +588,19 @@ func verifyAcceptanceDimension(runResult *team.RunResult, requiredIDs map[string
 }
 
 // allRequiredTasksComplete mirrors the exact check EvaluateCompletionGate
-// makes over its RequiredTasks input: every replayed task must be TaskDone.
-func allRequiredTasksComplete(tasks []*team.TodoItem) bool {
+// makes over its RequiredTasks input: done, or satisfied by a verified
+// replacement whose binding is present in the sealed manifest.
+func allRequiredTasksComplete(tasks []*team.TodoItem, runID string, manifest *team.EvidenceManifest) bool {
 	for _, item := range tasks {
 		if item != nil && item.Status != team.TaskDone {
-			return false
+			resolver := team.VerifiedTaskResolution(item, tasks, runID)
+			if resolver == nil || manifest == nil {
+				return false
+			}
+			binding, ok := manifest.VerifiedTaskBinding(item.ID)
+			if !ok || binding.TaskID != resolver.ID {
+				return false
+			}
 		}
 	}
 	return true

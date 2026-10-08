@@ -565,7 +565,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 				evidence = append(evidence, item.TypedResult.Artifacts...)
 			}
 		case TaskError, TaskProtocolIncomplete:
-			if isResolvedTaskResolution(item.Resolution) {
+			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
 			if optionalContracts[item.ContractID] {
@@ -576,7 +576,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 			}
 			return w.failLocked(item.ID, item.Agent, item.Agent, "TASK_FAILURE", item.Detail, false, PhaseStatusFailure)
 		case TaskBlocked:
-			if isResolvedTaskResolution(item.Resolution) {
+			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
 			if optionalContracts[item.ContractID] {
@@ -672,25 +672,6 @@ func (w *runtimeWorkflow) failLocked(taskID, component, source, category, messag
 		Artifacts:        []ArtifactRef{},
 	})
 	return fmt.Errorf("workflow %s failed: %s", strings.ToLower(string(phase)), message)
-}
-
-// isResolvedTaskResolution reports whether a task's resolution (set via the
-// reconcile_task tool / CommitTaskResolution) marks it as no longer an active
-// failure — the same three terminal resolution statuses already treated as
-// non-blocking by the acceptance verifier (run_result.go) and the finish gate
-// (coordinator_tools.go). observe() must apply the identical rule, otherwise
-// a task reconciled with objective evidence still re-fails the workflow on
-// every subsequent observe() call.
-func isResolvedTaskResolution(resolution *TaskResolution) bool {
-	if resolution == nil {
-		return false
-	}
-	switch resolution.Status {
-	case "superseded", "reconciled", "waived":
-		return true
-	default:
-		return false
-	}
 }
 
 // failedTask returns the task whose failure moved the workflow into

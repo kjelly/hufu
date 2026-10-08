@@ -38,6 +38,9 @@ func (c *Coordinator) bindEvidenceSources(tasks []TaskDef) ([]TaskDef, error) {
 			if source.Status != TaskDone || source.TypedResult == nil || !taskResultStatusIsSuccessful(source.TypedResult.Status) {
 				return nil, fmt.Errorf("tasks[%d] evidence_from %q is %s, not a completed task with a successful result", index, id, source.Status)
 			}
+			if err := c.validateAcceptedDependencyPayload(source); err != nil {
+				return nil, fmt.Errorf("tasks[%d] evidence_from %q: %w", index, id, err)
+			}
 		}
 		if task.Execution.RequiresEvidence && len(ids) == 0 {
 			return nil, fmt.Errorf("tasks[%d] contract %q requires evidence_from: set it to the ID of the completed task whose result this task checks, such as the review that reported the finding", index, firstNonEmpty(task.ContractID, task.Agent))

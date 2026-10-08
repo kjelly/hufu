@@ -277,15 +277,22 @@ func (c *Coordinator) getWorkerSummary(name string) string {
 	return c.workerSummaries[name]
 }
 
+const auxiliarySummaryTimeout = 30 * time.Second
+
 func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
 	c.workerSummariesOnce.Do(func() {
+		// One bounded batch, not a fresh timeout for each optional role summary.
+		ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+		defer cancel()
+		c.workerSummariesMu.Lock()
 		c.workerSummaries = make(map[string]string)
+		c.workerSummariesMu.Unlock()
 		for _, def := range c.uniqueWorkerDefs() {
 			if def.System == "" {
 				continue
 			}
-			c.workerSummariesMu.Lock()
 			summary := c.summarizeSystem(ctx, def.System)
+			c.workerSummariesMu.Lock()
 			c.workerSummaries[def.Name] = summary
 			c.workerSummariesMu.Unlock()
 		}
@@ -293,12 +300,15 @@ func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
 }
 
 func (c *Coordinator) summarizeSystem(ctx context.Context, system string) string {
-	if s := c.AgentPool().Sidecar(); s != nil {
+	if utf8.RuneCountInString(system) <= 500 {
+		return system
+	}
+	if s := c.AgentPool().Sidecar(); s != nil && ctx.Err() == nil {
 		if c.think {
 			c.emitThinkSidecar("Compact", "summarizing worker system prompt for coordinator")
 		}
 		compacted, err := s.Compact(ctx, system, "Summarize this agent's role, key behavioral guidelines, and unique instructions in 2-3 concise sentences. Preserve what makes this agent distinct.")
-		if err == nil && compacted != "" {
+		if err == nil && ctx.Err() == nil && compacted != "" && compacted != system {
 			return compacted
 		}
 	}

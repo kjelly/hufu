@@ -83,6 +83,16 @@ func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req Evidenc
 		manifest.ArtifactRefs = append(manifest.ArtifactRefs, refs...)
 		manifest.EvidenceResults = append(manifest.EvidenceResults, result)
 	}
+	applyEvidenceResolutions(manifest, req.Items)
+	// Resolution proof satisfies a requirement, not an execution status. Keep
+	// failed transcripts in ArtifactRefs, but derive acceptance from the sealed
+	// effective requirements, including the replacement's own evidence.
+	manifest.Status = "accepted"
+	for _, result := range manifest.EvidenceResults {
+		if result.Status != "passed" {
+			manifest.Status = "failed"
+		}
+	}
 	if completedCount == 0 && supportingCount > 0 {
 		manifest.Status = "failed"
 		if req.Strict {

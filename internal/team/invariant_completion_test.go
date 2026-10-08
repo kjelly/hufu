@@ -121,6 +121,23 @@ func TestEvaluateSemanticRegressionRequiresDoneWithoutSemanticBlocker(t *testing
 	}
 }
 
+func TestEvaluateSemanticRegressionAcceptsOnlyVerifiedClearReplacement(t *testing.T) {
+	const runID = "run-invariant-resolution"
+	original := invariantCompletionTodo(runID, "1", InvariantVerificationGate, TaskBlocked, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantViolated)})
+	replacement := invariantCompletionTodo(runID, "2", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
+	replacement.VerifyResult = &VerificationResult{ExitCode: 0}
+	replacement.ExecutionReceipt = &ExecutionReceipt{RunID: runID, TaskID: replacement.ID, Attempt: 1, ExitCode: new(0)}
+	original.Resolution = &TaskResolution{Status: "superseded", ResolvedBy: replacement.ID}
+	items := []*TodoItem{original, replacement}
+	if decision := EvaluateSemanticRegression(runID, items); !decision.Configured || !decision.Clear || decision.BlockingCount != 0 {
+		t.Fatalf("verified clear replacement blocked: %#v", decision)
+	}
+	replacement.TypedResult.InvariantVerification = nil
+	if decision := EvaluateSemanticRegression(runID, items); decision.Clear || decision.BlockingCount != 2 {
+		t.Fatalf("missing replacement attestation accepted: %#v", decision)
+	}
+}
+
 func TestEvaluateSemanticRegressionBoundsReasons(t *testing.T) {
 	assessments := make([]InvariantAssessment, 55)
 	for i := range assessments {

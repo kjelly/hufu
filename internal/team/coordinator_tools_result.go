@@ -466,11 +466,28 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextErrorResponse("submit_result contract violation: ordinary task must omit invariant_assessments or submit null"), nil
 	}
 	if t.coordinator != nil {
-		payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload)
+		var observations []taskTranscriptRecord
+		_, compiled, contractErr := t.coordinator.boundResultContract(t.todoID)
+		if contractErr != nil {
+			return fantasy.NewTextErrorResponse(contractErr.Error()), nil
+		}
+		if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); compiled != nil && compiled.toolEvidence != nil && transcript != nil && transcript.todoID == t.todoID {
+			identity, identityErr := submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
+			if identityErr != nil {
+				return fantasy.NewTextErrorResponse(identityErr.Error()), nil
+			}
+			if transcript.runID == identity.RunID && transcript.attempt == identity.Attempt && transcript.agent == identity.Agent {
+				observations = transcript.evidenceRecords()
+			}
+		}
+		payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload, observations)
 		if rejection != "" {
 			return fantasy.NewTextErrorResponse(rejection), nil
 		}
 		res.StructuredPayload = payload
+		if payload != nil && payload.EvidenceDowngrades > 0 {
+			res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
 		return fantasy.NewTextErrorResponse("structured_payload is not accepted for this task because it has no result contract; omit the field"), nil
 	}

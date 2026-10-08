@@ -86,6 +86,9 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 			reason = decision.Reason
 		}
 		manifestItem := ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)}
+		if item.Kind == "dependency_result" {
+			manifestItem.ContentHash = hashContentKey(item.Content)
+		}
 		if item.Kind == string(contextstore.ContextInvariant) {
 			if item.Source != repositoryInvariantSource || !validFullContentHash(item.InvariantContentHash) || !validInvariantVerificationSeverity(item.InvariantSeverity) {
 				return fmt.Errorf("context manifest invariant %q has invalid compiler attribution", id)

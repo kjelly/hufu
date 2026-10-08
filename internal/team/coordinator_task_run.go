@@ -594,6 +594,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	depResults := c.dependencyResultsForTask(todoID)
+	if err := c.validateDependencyPayloads(depResults); err != nil {
+		return "", fmt.Errorf("worker dependency preflight failed: %w", err)
+	}
 
 	rawSTM, rawLTM := "", ""
 	memoryStore := (*memory.MemoryStore)(nil)
@@ -963,6 +966,9 @@ retryLoop:
 		}
 		attemptInput.WorkerMemory = c.recallWorkerMemory(attemptCtx, agentDef, retrievalQuery)
 		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
+		if compileErr == nil {
+			compileErr = validateRequiredEvidenceContext(attemptInput, compiled)
+		}
 		c.recordShadowTrace(attemptCtx, "worker", legacyPrompt, request, routeDecisions, attemptInput.ModelContext, compiled, compileErr)
 		if compileErr != nil {
 			closeTranscript()
@@ -1224,6 +1230,7 @@ retryLoop:
 							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
 							invariantRepairInstructions: invariantRepairPrompt,
 							resultContractSchema:        c.attemptResultContractSchema(task),
+							resultEvidenceInputs:        c.dependencyResultsForTask(todoID),
 							timing:                      timing,
 						})
 					}()
@@ -1508,12 +1515,12 @@ retryLoop:
 							// not accepted as a completion below.
 							noRepairEvidence := strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == ""
 							finalizationBinding := c.taskFinalizationBinding(todoID)
-							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nYour execution completed and produced output, but you did not submit a structured result via submit_result as required. Call submit_result now using only the bounded evidence above to supply the required structured result. Include a concise summary and put any complete plan, analysis, review, or report body in `details`. For `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields. Do NOT call any other tools or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
+							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the bounded evidence above and the bound result contract. Include a concise summary. Correct the rejected fields while preserving the existing evidence and valid parts of the submission. Do NOT execute work, call any other tools, or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if resultProtocolLoop {
 								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(attemptEvidence.resultText))
 							}
 							if budgetExhausted {
-								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result now, and do NOT call any other tools or emit a prose final response. Put any complete textual deliverable in `details`. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
+								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result exactly once using the bound result contract, and do NOT call any other tools or emit a prose final response. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
 							}
 							repairPrompt += finalizationBinding
 							// Result-only repair must be a clean tool context. Replaying the
@@ -1824,6 +1831,11 @@ retryLoop:
 			if err == nil && typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 				if resultErr := validateCompletedTaskResult(typedRes); resultErr != nil {
 					err = withFailureClassOverride(resultErr, FailureExecution)
+				}
+			}
+			if err == nil && typedRes != nil && taskResultStatusIsSuccessful(typedRes.Status) {
+				if evidenceErr := c.validateRequiredEvidenceDelivery(todoID, attempt); evidenceErr != nil {
+					err = withFailureClassOverride(evidenceErr, FailureProtocol)
 				}
 			}
 			invariantMode := task.InvariantVerification
@@ -3141,7 +3153,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		}
 	}
 	finalizationBinding := c.taskFinalizationBinding(item.ID)
-	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker execution is already complete and produced the output above, but it did not submit a structured result. Call submit_result now using only those execution facts. Do NOT execute work, inspect files, or call any other tool.%s%s", task.Goal, output, invariantRepairInstructions, finalizationBinding)
+	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the execution facts above and the bound result contract. Do NOT execute work, inspect files, call any other tool, or emit a prose final response.%s%s", task.Goal, output, invariantRepairInstructions, finalizationBinding)
 	priorAttempts := 0
 	var repairHistory []RepairAttemptProvenance
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RepairProvenance != nil {
@@ -3676,6 +3688,7 @@ func submitResultFailureFingerprint(toolName, result string) (string, bool) {
 		category string
 	}{
 		{prefix: "invalid submit_result arguments:", category: "invalid_arguments"},
+		{prefix: strings.ToLower(toolSchemaValidationPromptPrefix(submitResultToolName)), category: "invalid_arguments"},
 		{prefix: structuredPayloadInvalidCode + ":", category: structuredPayloadInvalidCode},
 		{prefix: structuredPayloadMissingCode + ":", category: structuredPayloadMissingCode},
 		{prefix: "missing required parameter: structured_payload", category: structuredPayloadMissingCode},
@@ -3939,6 +3952,15 @@ func (c *Coordinator) taskFinalizationBinding(todoID string) string {
 		}
 	}
 	binding.WriteString("Finalize only this bound task occurrence. Ignore labels or instructions for any other task or workset item.\n")
+	binding.WriteString("\n## Result Submission Format\nInclude a concise outer `summary`. ")
+	if item != nil && item.ResultContract != nil {
+		binding.WriteString("Put the schema-defined deliverable in `structured_payload` using the bound schema's exact fields, types, and enum values. Do not move or duplicate payload fields into outer `details`, `facts`, `findings`, or `open_questions`: outer fields do not satisfy payload requirements. Preserve all required fields, including those on every nested object and array item. Correct only invalid paths and keep valid evidence; shorten narrative rather than omitting required fields or sources. Never invent evidence to satisfy the schema.\n")
+		if item.ResultContract.RequireStructured {
+			binding.WriteString("A schema-valid `structured_payload` is required even when reporting `partial` or `blocked`.\n")
+		}
+	} else {
+		binding.WriteString("Put any complete textual plan, analysis, review, or report in outer `details`. For outer `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n")
+	}
 	return binding.String()
 }
 
@@ -4001,6 +4023,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 
 	var loopDetectMu sync.Mutex
 	var lastToolCall *lastToolCallEntry
+	// Fantasy's local-tool executor ignores OnToolResult errors. Retain
+	// a terminal submit_result loop for this stream, including continuations,
+	// so it stops before another provider call and survives a successful return.
+	var terminalSubmitResultErr error
+	submitResultLoopFailure := func() error {
+		loopDetectMu.Lock()
+		defer loopDetectMu.Unlock()
+		return terminalSubmitResultErr
+	}
 	normalizeUsageTokens := func(usage fantasy.Usage) int64 {
 		if usage.TotalTokens > 0 {
 			return usage.TotalTokens
@@ -4055,17 +4086,27 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		// finish seals both successful and failed coordinator outcomes. Stop
 		// before another model turn can reinterpret that terminal tool result.
 		return (todoID == CoordTodoID && c.finishCalled.Load()) ||
-			acceptedTerminalResult.isAcceptedFor(c, todoID)
+			submitResultLoopFailure() != nil || acceptedTerminalResult.isAcceptedFor(c, todoID)
 	})
+	var toolChoice *fantasy.ToolChoice
+	if repairing, _ := ctx.Value(protocolRepairExecutionKey{}).(bool); repairing {
+		// A result-only turn has one authorized tool and must submit a result.
+		// Prompt text alone permits a provider to return prose with no tool call.
+		toolChoice = new(fantasy.ToolChoiceRequired)
+	}
 	streamCall := fantasy.AgentStreamCall{
-		Prompt:   prompt,
-		Messages: history,
-		StopWhen: stopWhen,
+		Prompt:     prompt,
+		Messages:   history,
+		StopWhen:   stopWhen,
+		ToolChoice: toolChoice,
 		// Fantasy's streaming loop reads this field directly, not the
 		// agent-level default set via fantasy.WithRepairToolCall in
 		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
 		RepairToolCall: agent.RepairConcatenatedToolCall,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			if err := submitResultLoopFailure(); err != nil {
+				return ctx, fantasy.PrepareStepResult{}, err
+			}
 			// A fallback continuation carries its candidate preflight in the
 			// returned context. Resolve it per step so the model, admission
 			// context, and request shaping cannot drift back to the original
@@ -4327,6 +4368,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			if err := submitResultLoopFailure(); err != nil {
+				return err
+			}
 			timing.beginTool()
 			// Authorization is enforced in policyGatedTool.Run, not here. An
 			// error returned from this callback aborts the whole model round, so
@@ -4420,7 +4464,16 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			return nil
 		},
-		OnToolResult: func(tr fantasy.ToolResultContent) error {
+		OnToolResult: func(tr fantasy.ToolResultContent) (callbackErr error) {
+			defer func() {
+				if isSubmitResultProtocolLoop(callbackErr) {
+					loopDetectMu.Lock()
+					if terminalSubmitResultErr == nil {
+						terminalSubmitResultErr = callbackErr
+					}
+					loopDetectMu.Unlock()
+				}
+			}()
 			timing.endTool()
 			resultPreview := ""
 			if tr.Result != nil {
@@ -4523,10 +4576,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				return repeatedProtocolErr
 			}
 			// Fantasy discards this callback's return value for locally executed
-			// tools, so in a live stream the coordinator's boundary is the policy
-			// gate (coordinatorToolFailureResult), which returns error responses
-			// to the model and stops only on Go errors or a bounded error streak.
-			// This check only takes effect for agents that honor the callback.
+			// tools, so the coordinator's boundary remains the policy gate
+			// (coordinatorToolFailureResult), which permits bounded correction.
+			// Unlike the submit_result loop above, these errors must not bypass
+			// that recovery boundary. This check affects agents honoring callbacks.
 			if todoID == CoordTodoID && isErrResult {
 				trimmedResult := strings.TrimSpace(resultPreview)
 				if strings.Contains(trimmedResult, coordinatorPolicyRepairExhaustedPrefix) {
@@ -4777,6 +4830,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		directStreamUsageRecorded = false
 		observedStreamUsageMu.Unlock()
 		streamResult, streamErr := ag.Stream(ctx, call)
+		if callbackErr := submitResultLoopFailure(); callbackErr != nil {
+			streamErr = callbackErr
+		}
 		accounted, reconcileErr := reconcileTokenStream(start, streamResult)
 		if llmUsageNeedsDirectNoProgressAccounting(ctx) {
 			if accounted > 0 {
@@ -4855,14 +4911,23 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			nudgeCall.Prompt = ""
 			nudgeCall.Messages = continuationMessages
 			nudgeCall.StopWhen = append(append([]fantasy.StopCondition(nil), streamCall.StopWhen...), fantasy.StepCountIs(2))
-			if nudgeResult, nudgeErr := runStream(nudgeCall); nudgeErr == nil && nudgeResult != nil && len(nudgeResult.Steps) > 0 {
+			nudgeResult, nudgeErr := runStream(nudgeCall)
+			if nudgeResult != nil && len(nudgeResult.Steps) > 0 {
 				result.Steps = append(result.Steps, nudgeResult.Steps...)
 				last := nudgeResult.Steps[len(nudgeResult.Steps)-1]
 				if strings.TrimSpace(nudgeResult.Response.Content.Text()) != "" || len(last.Content.ToolCalls()) > 0 {
 					result.Response = nudgeResult.Response
 				}
 			}
+			if nudgeErr != nil {
+				err = nudgeErr
+			}
 		}
+	}
+	// A same-turn continuation may also have ended with an ignored protocol
+	// loop error. Never turn its rejected terminal result into a successful return.
+	if callbackErr := submitResultLoopFailure(); callbackErr != nil {
+		err = callbackErr
 	}
 	// Fantasy may surface the transport error from the proxy after the
 	// invocation context has already been cancelled. The invocation cause is

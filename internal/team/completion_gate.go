@@ -71,6 +71,11 @@ func (CompletionGate) Evaluate(ctx context.Context, input CompletionGateInput) C
 
 	for _, task := range input.RequiredTasks {
 		if task.Status != string(TaskDone) {
+			proof := taskManifestEvidence(input.Evidence, task.ID)
+			if proof != nil && proof.Status == "passed" && proof.Resolution != nil &&
+				proof.Resolution.OriginalStatus == task.Status && verifyEvidenceResolution(*input.Evidence, *proof) == nil {
+				continue
+			}
 			reject(fmt.Sprintf("required task %q is not done (status %s)", task.ID, task.Status))
 		}
 	}

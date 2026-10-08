@@ -738,6 +738,30 @@ func TestCurrentRunDiagnosticsOmitsAmbiguousWinnerBinding(t *testing.T) {
 	}
 }
 
+func TestCurrentRunDiagnosticsRetainsVerifiedReplacementProvenance(t *testing.T) {
+	original := &team.TodoItem{ID: "1", Agent: "worker", Status: team.TaskBlocked, Resolution: &team.TaskResolution{Status: "superseded", ResolvedBy: "2"}}
+	replacement := &team.TodoItem{ID: "2", Agent: "worker", Status: team.TaskDone, VerifyResult: &team.VerificationResult{ExitCode: 0}, ExecutionReceipt: &team.ExecutionReceipt{
+		RunID: "run-current", TaskID: "2", Attempt: 1, ModelExecutionID: "exec-2", ProducerID: "worker", TranscriptRef: "sha256-transcript", ExitCode: new(0),
+	}}
+	artifact := team.ArtifactRef{ID: "sha256-transcript", RunID: "run-current", TaskID: "2", Attempt: 1}
+	binding := &team.EvidenceBinding{RunID: "run-current", TaskID: "2", Attempt: 1, ModelExecutionID: "exec-2", ProducerID: "worker", TranscriptRef: artifact.ID, ArtifactIDs: []string{artifact.ID}}
+	manifest := &team.EvidenceManifest{RunID: "run-current", ArtifactRefs: []team.ArtifactRef{artifact}, EvidenceResults: []team.EvidenceResult{
+		{RequirementID: "task:1", Status: "passed", ArtifactRefs: []team.ArtifactRef{artifact}, Binding: binding, Resolution: &team.EvidenceResolution{Status: "superseded", OriginalStatus: "blocked", ResolvedBy: "2"}},
+		{RequirementID: "task:2", Status: "passed", ArtifactRefs: []team.ArtifactRef{artifact}, Binding: binding},
+	}}
+	items := []*team.TodoItem{original, replacement}
+	diagnostics := currentRunReportDiagnostics(items, manifest)["worker"]
+	for _, want := range []string{"### Task 1", "original_status: `blocked`", "resolution: `superseded`", "resolved_by: `2`", "task_id: `2`", "transcript_ref: `sha256-transcript`"} {
+		if !strings.Contains(diagnostics, want) {
+			t.Fatalf("diagnostics missing %q: %s", want, diagnostics)
+		}
+	}
+	replacement.VerifyResult.ExitCode = 1
+	if diagnostics := currentRunReportDiagnostics(items, manifest)["worker"]; strings.Contains(diagnostics, "### Task 1") {
+		t.Fatalf("unverified replacement reported as verified: %s", diagnostics)
+	}
+}
+
 func TestCurrentRunDiagnosticsIgnoresUnknownRetryReceipt(t *testing.T) {
 	zero := 0
 	item := &team.TodoItem{ID: "task-1", Agent: "worker", ExecutionReceipts: []team.ExecutionReceipt{

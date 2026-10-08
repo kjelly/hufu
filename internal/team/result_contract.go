@@ -3,6 +3,7 @@ package team
 import (
 	"sort"
 	"strings"
+	"text/template"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -42,6 +43,9 @@ type CompiledResultContract struct {
 	SchemaSHA256    string
 	CanonicalSchema []byte
 	schema          *jsonschema.Schema
+	toolEvidence    *resultToolEvidenceSpec
+	evidenceInputs  *resultEvidenceInputsSpec
+	finalReport     *template.Template
 }
 
 // ref binds the compiled schema to one declaration's require-structured

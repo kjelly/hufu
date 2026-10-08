@@ -616,6 +616,22 @@ func TestDelegationPolicyRepairIgnoresRuntimeOwnedTaskStates(t *testing.T) {
 	}
 }
 
+func TestDelegationPolicyRepairDoesNotTrustUnverifiedResolutionLabel(t *testing.T) {
+	for _, status := range []string{"superseded", "reconciled", "waived"} {
+		t.Run(status, func(t *testing.T) {
+			tracker := NewTaskTracker()
+			item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "failed worker"}})[0]
+			item.Status = TaskBlocked
+			item.Resolution = &TaskResolution{Status: status, ResolvedBy: "missing"}
+			c := &Coordinator{taskTracker: tracker, session: &TeamSession{}}
+			c.coordinatorPolicyRepairsAttempt.Store(1)
+			if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "repair unfinished work"}}); err != nil {
+				t.Fatalf("unverified label incorrectly treated as completed work: %v", err)
+			}
+		})
+	}
+}
+
 func TestDelegationPolicyRepairRealWorkerStillBlocksRuntimeMixedRedispatch(t *testing.T) {
 	tracker := NewTaskTracker()
 	worker := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "completed review"}})[0]

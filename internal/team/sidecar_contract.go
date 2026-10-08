@@ -68,6 +68,9 @@ func (c *Coordinator) validateSidecarTaskContract(task TaskDef) error {
 	if !task.Sidecar {
 		return nil
 	}
+	if task.Execution.RequiresEvidence {
+		return fmt.Errorf("sidecar:true cannot deliver required typed evidence_from inputs; use a normal worker task for this audit")
+	}
 	effect := c.effectiveSideEffect(task)
 	hasVerifier := strings.TrimSpace(task.Verify) != "" || task.VerifySpec != nil
 	switch effect {

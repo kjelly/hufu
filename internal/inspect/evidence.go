@@ -27,11 +27,12 @@ type EvidenceBindingData struct {
 }
 
 type EvidenceRequirementData struct {
-	RequirementID string               `json:"requirement_id"`
-	Status        string               `json:"status"`
-	Validator     string               `json:"validator,omitempty"`
-	ArtifactRefs  []ArtifactMetadata   `json:"artifact_refs"`
-	Binding       *EvidenceBindingData `json:"binding,omitempty"`
+	RequirementID string                   `json:"requirement_id"`
+	Status        string                   `json:"status"`
+	Validator     string                   `json:"validator,omitempty"`
+	ArtifactRefs  []ArtifactMetadata       `json:"artifact_refs"`
+	Binding       *EvidenceBindingData     `json:"binding,omitempty"`
+	Resolution    *team.EvidenceResolution `json:"resolution,omitempty"`
 }
 
 type EvidenceManifestData struct {
@@ -157,6 +158,10 @@ func projectEvidenceManifest(data *EvidenceData, manifest *team.EvidenceManifest
 	}
 	for _, result := range manifest.EvidenceResults {
 		requirement := EvidenceRequirementData{RequirementID: result.RequirementID, Status: result.Status, Validator: result.Validator, ArtifactRefs: []ArtifactMetadata{}}
+		if result.Resolution != nil {
+			resolution := *result.Resolution
+			requirement.Resolution = &resolution
+		}
 		for _, ref := range result.ArtifactRefs {
 			requirement.ArtifactRefs = append(requirement.ArtifactRefs, safeArtifactMetadata(ref))
 		}

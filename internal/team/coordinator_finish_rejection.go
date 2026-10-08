@@ -78,17 +78,25 @@ func completedTasksSummaryHeader(rejection finishRejection) string {
 // acceptanceRepairUnavailableReason reports why no further work can change a
 // failed acceptance check, or "" when the coordinator may still delegate
 // repairs. finish is only available once a runtime workflow is done, and a
-// done or failed workflow accepts no new tasks, so asking the coordinator to
-// re-run tasks there only produces rejected dispatches and repeated finish
-// calls.
+// done or failed workflow accepts no new tasks. A task requiring reconciliation
+// or human intervention also cannot be repaired by replaying worker tools;
+// acceptance self-healing must not reopen that terminal recovery boundary.
 func (c *Coordinator) acceptanceRepairUnavailableReason() string {
-	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() {
+	if c == nil {
 		return ""
 	}
-	switch state := c.phaseWorkflow.State(); state {
-	case PhaseDone, PhaseFailed:
-		return fmt.Sprintf("the runtime workflow is %s and accepts no new tasks", strings.ToLower(string(state)))
-	default:
-		return ""
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		switch state := c.phaseWorkflow.State(); state {
+		case PhaseDone, PhaseFailed:
+			return fmt.Sprintf("the runtime workflow is %s and accepts no new tasks", strings.ToLower(string(state)))
+		}
 	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		for _, task := range UnresolvedTaskReferences(c.taskTracker.TodoList().Items()) {
+			if task.RetryDisposition == ReconcileOnly || task.RetryDisposition == NeedsHuman {
+				return fmt.Sprintf("unresolved task %s requires %s; acceptance self-healing cannot replay worker tools or create a replacement to bypass its recovery disposition", task.ID, task.RetryDisposition)
+			}
+		}
+	}
+	return ""
 }

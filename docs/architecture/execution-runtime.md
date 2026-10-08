@@ -97,6 +97,35 @@ contract can be attached to an upstream resolver worker through
 schema-validated successful result. The schema is pinned in the execution
 policy snapshot and cannot be changed by a coordinator task payload.
 
+Result-only repair exposes only `submit_result` and requests a required tool
+call from the LLM provider. This applies to initial repair, schema-only repair,
+step-budget finalization and resumed repair. Provider compliance is still
+checked: prose alone, an invalid payload or an incomplete result does not
+complete the task.
+
+Provider-facing result schemas retain portable fields, required properties and
+enum values even when the full schema uses local `$defs` references or
+unsupported conditional constraints. References are inlined within bounded
+depth and node limits. The full pinned schema remains authoritative; constraints
+omitted from provider guidance are still enforced on submission. Cyclic or
+unresolvable shapes fall back to an open payload property with the contract
+identity and full schema instructions.
+
+Repeated `submit_result` argument rejections, including portable-schema
+preflight and DTO decoding, share a stable failure category. After three
+rejections, the worker stream stops and enters the existing bounded result-only
+repair path. Changing JSON paths or call IDs cannot bypass that limit, and
+result-only repair does not replay worker tools.
+
+Blocking acceptance self-healing respects unresolved task recovery
+dispositions. A task requiring `reconcile_only` or `needs_human` prevents
+acceptance from reopening worker dispatch, even when the task's side-effect
+class is `none`. An acknowledged finish ends with failed acceptance and the
+original unresolved task; it cannot create a fresh task to bypass that
+disposition. A runtime-verified resolution removes that blocker. Tasks allowing
+`retry_worker` or `replan_required` retain the existing bounded self-healing
+window.
+
 ## Frozen task execution envelope
 
 Every new task occurrence resolves an immutable `TaskExecutionEnvelope` before

@@ -835,6 +835,13 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("commit task transition: invalid %s -> %s for task %s", current.Status, next, taskID)
 	}
 	if next == TaskDone {
+		attempt := c.currentTaskAttempt(taskID)
+		if attempt < 1 {
+			attempt = c.taskAttempt(taskID)
+		}
+		if err := c.validateRequiredEvidenceDelivery(taskID, attempt); err != nil {
+			return fmt.Errorf("commit task transition: %w", err)
+		}
 		if discipline := c.disciplineFor(taskID); discipline != nil {
 			discipline.mu.Lock()
 			stopped := discipline.stopped
@@ -1350,6 +1357,21 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 	if resolution != nil {
 		if err := ValidateResolution(resolution, taskID, c.taskTracker.TodoList().Items(), c.taskTracker.TodoList().RunID()); err != nil {
 			return err
+		}
+		if resolution.Status == "superseded" || resolution.Status == "reconciled" {
+			resolver := c.todoItemByID(resolution.ResolvedBy)
+			if resolver.ResultContract != nil {
+				if err := c.validateAcceptedDependencyPayload(resolver); err != nil {
+					return fmt.Errorf("resolution payload: %w", err)
+				}
+			}
+			attempt := c.taskAttempt(resolver.ID)
+			if resolver.TypedResult != nil && resolver.TypedResult.Attempt > 0 {
+				attempt = resolver.TypedResult.Attempt
+			}
+			if err := c.validateRequiredEvidenceDelivery(resolver.ID, attempt); err != nil {
+				return err
+			}
 		}
 	}
 	if !c.hasDurableEventJournal() {

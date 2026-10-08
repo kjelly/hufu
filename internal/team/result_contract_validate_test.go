@@ -89,6 +89,55 @@ func TestValidationErrorsAreBounded(t *testing.T) {
 	}
 }
 
+func TestValidationErrorsExposeNestedReferenceLeafPaths(t *testing.T) {
+	dir := t.TempDir()
+	writeResultContractSchema(t, dir, "nested.json", `{
+	  "type":"object", "properties":{"findings":{"type":"array","items":{"$ref":"#/$defs/finding"}}},
+	  "$defs":{
+	    "finding":{"type":"object","properties":{"sources":{"type":"array","items":{"$ref":"#/$defs/source"}}}},
+	    "source":{"type":"object","required":["independence_group","a/b~c"],
+	      "properties":{"page_status":{"enum":["fetched","inaccessible"]}},
+	      "allOf":[{"if":{"properties":{"page_status":{"const":"fetched"}},"required":["page_status"]},
+	        "then":{"required":["quote"],"properties":{"quote":{"type":"string","minLength":1}}}}]}
+	  }
+	}`)
+	compiled, err := compileResultContractSchema(dir, "nested.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateStructuredResultPayload(compiled, compiled.ref(true), []byte(`{"findings":[{"sources":[{"page_status":"fetched"}]}]}`))
+	if err == nil {
+		t.Fatal("invalid nested source accepted")
+	}
+	for _, pointer := range []string{"/findings/0/sources/0/independence_group", "/findings/0/sources/0/a~1b~0c", "/findings/0/sources/0/quote"} {
+		if !strings.Contains(err.Error(), pointer+": missing required property") {
+			t.Errorf("diagnostic does not identify %s: %v", pointer, err)
+		}
+	}
+	if strings.Contains(err.Error(), "validation failed") {
+		t.Fatalf("wrapper replaced actionable leaves: %v", err)
+	}
+}
+
+func TestValidationErrorBudgetCountsLeavesNotReferenceWrappers(t *testing.T) {
+	dir := t.TempDir()
+	writeResultContractSchema(t, dir, "many.json", `{"type":"array","items":{"$ref":"#/$defs/item"},"$defs":{"item":{"type":"object","required":["origin"]}}}`)
+	compiled, err := compileResultContractSchema(dir, "many.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateStructuredResultPayload(compiled, compiled.ref(true), []byte("["+strings.Repeat("{},", 24)+"{}]"))
+	if err == nil {
+		t.Fatal("invalid payload accepted")
+	}
+	if got := strings.Count(err.Error(), "missing required property"); got != resultPayloadMaxErrors {
+		t.Fatalf("actionable leaves = %d, want %d: %v", got, resultPayloadMaxErrors, err)
+	}
+	if !strings.Contains(err.Error(), "and 5 more") || strings.Contains(err.Error(), "validation failed") {
+		t.Fatalf("unhelpful bounded diagnostic: %v", err)
+	}
+}
+
 // A validated payload survives durable event redaction byte-for-byte, so
 // its hash still matches after a round trip through the event store.
 func TestStructuredPayloadIsStableAcrossEventRedaction(t *testing.T) {
@@ -210,11 +259,11 @@ func TestSubmitResultToolValidatesStructuredPayload(t *testing.T) {
 
 func TestProviderVisibleResultPayloadSchema(t *testing.T) {
 	compiled, ref := compiledReviewContract(t, true)
-	// The review schema uses $defs/$ref, which the provider keyword allowlist
-	// excludes, so the property stays open and names the contract.
-	open := providerVisibleResultPayloadSchema(ref, compiled)
-	if open["type"] != "object" || !strings.Contains(open["description"].(string), ref.ID) || open["properties"] != nil {
-		t.Fatalf("open property = %#v", open)
+	// Local definitions are inlined and unsupported constraints stay at the
+	// runtime boundary; the provider still sees required nested fields.
+	projected := providerVisibleResultPayloadSchema(ref, compiled)
+	if projected["type"] != "object" || !strings.Contains(projected["description"].(string), ref.ID) || projected["properties"] == nil || !dynamicSchemaEligible(projected) {
+		t.Fatalf("projected property = %#v", projected)
 	}
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "simple.json", `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["verdict"],"properties":{"verdict":{"type":"string","enum":["approve","reject"]}}}`)

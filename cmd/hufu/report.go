@@ -538,13 +538,23 @@ func currentRunReportDiagnostics(todos []*team.TodoItem, manifest *team.Evidence
 		// does not prove which candidate produced the merged/judged output, so
 		// do not publish a transcript or winner claim without an explicit
 		// output-to-receipt binding.
-		if itemHasAmbiguousCurrentRunReceipts(item, runID) {
+		producer := item
+		if binding.TaskID != item.ID {
+			producer = team.VerifiedTaskResolution(item, todos, runID)
+			if producer == nil || producer.ID != binding.TaskID {
+				continue
+			}
+		}
+		if itemHasAmbiguousCurrentRunReceipts(producer, runID) {
 			continue
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "- run_id: `%s`\n- task_id: `%s`\n- attempt: `%d`\n- model_execution_id: `%s`\n- producer: `%s`\n",
 			reportSafeMetadata(binding.RunID, 120), reportSafeMetadata(binding.TaskID, 120), binding.Attempt, reportSafeMetadata(binding.ModelExecutionID, 160), reportSafeMetadata(binding.ProducerID, 120))
 		fmt.Fprintf(&b, "- transcript_ref: `%s`\n- artifact_membership: `%d`\n- artifact_verification: `verified`\n", reportSafeMetadata(binding.TranscriptRef, 240), len(binding.ArtifactIDs))
+		if producer.ID != item.ID {
+			fmt.Fprintf(&b, "- original_status: `%s`\n- resolution: `%s`\n- resolved_by: `%s`\n", item.Status, item.Resolution.Status, reportSafeMetadata(producer.ID, 120))
+		}
 		diagnostics[item.Agent] += fmt.Sprintf("### Task %s\n%s\n", reportSafeMetadata(item.ID, 120), b.String())
 	}
 	return diagnostics

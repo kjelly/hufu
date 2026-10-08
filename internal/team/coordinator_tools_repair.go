@@ -177,8 +177,14 @@ func buildProtocolRepairPrompt(toolName string, violation *toolArgumentSchemaErr
 }
 
 func buildToolSchemaValidationPrompt(toolName string, violation *toolArgumentSchemaError, info fantasy.ToolInfo) string {
-	return fmt.Sprintf("Tool %q arguments are invalid at %s: expected %s, got %s. Valid example: %s",
-		toolName, violation.Path, violation.Expected, violation.Actual, compactToolExampleJSON(info))
+	return fmt.Sprintf("%s%s: expected %s, got %s. Valid example: %s",
+		toolSchemaValidationPromptPrefix(toolName), violation.Path, violation.Expected, violation.Actual, compactToolExampleJSON(info))
+}
+
+// Keep diagnostic production and the submit_result loop classifier coupled;
+// changing a field-specific message must not bypass the rejection budget.
+func toolSchemaValidationPromptPrefix(toolName string) string {
+	return fmt.Sprintf("Tool %q arguments are invalid at ", toolName)
 }
 
 func compactToolExampleJSON(info fantasy.ToolInfo) string {

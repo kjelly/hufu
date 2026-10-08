@@ -1213,7 +1213,7 @@ func TestRuntimeWorkflow_ObserveSkipsResolvedFailedTasks(t *testing.T) {
 	// and coordinator_tools.go's finish gate already do — as no longer active.
 	failing.Resolution = &TaskResolution{Status: "reconciled", ResolvedBy: "2", Reason: "fixed by task 2"}
 	w.state = PhaseExecute // simulates reconcileFailure() having restored the phase
-	completing := &TodoItem{ID: "2", Phase: PhaseExecute, Status: TaskDone, ContractID: "c1"}
+	completing := &TodoItem{ID: "2", Phase: PhaseExecute, Status: TaskDone, ContractID: "c1", VerifyResult: &VerificationResult{ExitCode: 0}}
 	if err := w.observe([]*TodoItem{failing, completing}); err != nil {
 		t.Fatalf("observe returned error for a resolved failed task: %v", err)
 	}

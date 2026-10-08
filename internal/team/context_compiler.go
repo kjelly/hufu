@@ -593,6 +593,12 @@ func FormatDependencyResults(results []TaskResult) string {
 		if res.Summary != "" {
 			sb.WriteString("**Summary:** " + res.Summary + "\n")
 		}
+		if payload := res.StructuredPayload; payload != nil {
+			fmt.Fprintf(&sb, "\n**Accepted Structured Payload** (contract `%s`, schema sha256 `%s`, payload sha256 `%s`, evidence downgrades %d):\n", payload.Contract.ID, payload.Contract.SchemaSHA256, payload.SHA256, payload.EvidenceDowngrades)
+			// Required evidence is never replaced by the coordinator's bounded
+			// display preview. The context budget must fit the whole value or fail.
+			sb.WriteString(fenceUntrusted("json", string(payload.Value)) + "\n")
+		}
 		if res.Details != "" {
 			sb.WriteString("\n**Deliverable Details:**\n" + res.Details + "\n")
 		}
@@ -716,11 +722,8 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 
 	if input.ProjectContext != "" {
 		content := input.ProjectContext
-		if input.SidecarCompacter != nil && len(content) > 4000 {
-			compacted, err := input.SidecarCompacter.CompactStructured(ctx, content, "", "Compress this project context while preserving key facts, patterns, conventions, and instructions.")
-			if err == nil && compacted != "" {
-				content = compacted
-			}
+		if compacter, ok := input.SidecarCompacter.(textCompacter); ok {
+			content = compactProjectContext(ctx, compacter, content)
 		}
 		items = append(items, ContextItem{
 			ID:           "project_context",
@@ -880,6 +883,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 	if input.WorkerMemory != nil {
 		compiled.Semantic = cloneSemanticRetrievalIdentity(input.WorkerMemory.Semantic)
+	}
+	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
+		return CompiledContext{}, err
 	}
 	return compiled, nil
 }

@@ -472,7 +472,7 @@ func TestEvaluateRunOutcomeUnknownAcceptanceFailsClosed(t *testing.T) {
 	}
 }
 
-func TestUnresolvedTaskReferencesIncludesProtocolIncompleteAndSkipsResolvedFailures(t *testing.T) {
+func TestUnresolvedTaskReferencesIncludesProtocolIncompleteAndUnverifiedWaiver(t *testing.T) {
 	items := []*TodoItem{
 		{ID: "pending", Status: TaskPending, Agent: "worker"},
 		{ID: "protocol", Status: TaskProtocolIncomplete, Agent: "worker"},
@@ -480,8 +480,8 @@ func TestUnresolvedTaskReferencesIncludesProtocolIncompleteAndSkipsResolvedFailu
 		{ID: "resolved", Status: TaskError, Agent: "worker", Resolution: &TaskResolution{Status: "waived"}},
 	}
 	refs := UnresolvedTaskReferences(items)
-	if len(refs) != 2 {
-		t.Fatalf("unresolved refs = %#v, want pending and protocol-incomplete only", refs)
+	if len(refs) != 3 {
+		t.Fatalf("unresolved refs = %#v, want pending, protocol-incomplete and unverified waiver", refs)
 	}
 	if refs[0].ID != "pending" || refs[1].ID != "protocol" {
 		t.Fatalf("unresolved refs = %#v, want stable task order", refs)

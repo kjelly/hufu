@@ -66,6 +66,9 @@ type taskTranscript struct {
 	f               *os.File
 	toolResults     int
 	assistantOutput bool
+	evidence        []taskTranscriptRecord
+	evidenceBytes   int
+	evidenceInvalid bool
 }
 
 type taskTranscriptRecord struct {
@@ -77,6 +80,33 @@ type taskTranscriptRecord struct {
 	Output     string `json:"output,omitempty"`
 	Error      bool   `json:"error,omitempty"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
+}
+
+// evidenceRecords uses only observations held by this runner-owned attempt,
+// never the writable transcript file or an upstream worker's observations.
+// A closed original recorder is still usable by a result-only repair.
+func (t *taskTranscript) evidenceRecords() []taskTranscriptRecord {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.evidenceInvalid {
+		return nil // Unavailable bounded observations must downgrade, not invent evidence.
+	}
+	return append([]taskTranscriptRecord(nil), t.evidence...)
+}
+
+// retainEvidence is called under mu only after a successful transcript write.
+// Bounding retained bytes avoids an unbounded second copy of large tool output.
+func (t *taskTranscript) retainEvidence(record taskTranscriptRecord, bytes int) {
+	if t.evidenceInvalid {
+		return
+	}
+	if bytes > 1<<20 || t.evidenceBytes+bytes > 16<<20 {
+		t.evidenceInvalid = true
+		t.evidence = nil
+		return
+	}
+	t.evidenceBytes += bytes
+	t.evidence = append(t.evidence, record)
 }
 
 // CompactEvidence returns a bounded, redacted text view for a text-only
@@ -239,6 +269,7 @@ func (t *taskTranscript) RecordToolResult(id, tool, output string, isError bool)
 		return fmt.Errorf("write task transcript: %w", err)
 	}
 	t.toolResults++
+	t.retainEvidence(record, len(data))
 	return nil
 }
 
@@ -273,6 +304,7 @@ func (t *taskTranscript) append(record taskTranscriptRecord) error {
 	if _, err := t.f.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("write task transcript: %w", err)
 	}
+	t.retainEvidence(record, len(data))
 	return nil
 }
 

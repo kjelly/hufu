@@ -250,13 +250,17 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize external result: %w", err)
 	}
+	summary := utils.TruncateRunes(proposal.Summary, workerResultProposalMaxTextRunes)
+	if structuredPayload != nil && structuredPayload.EvidenceDowngrades > 0 {
+		summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+	}
 
 	return &TaskResult{
 		TaskID:  request.TaskID,
 		Attempt: request.Attempt,
 		Agent:   canonicalAttemptAgentName(request),
 		Status:  proposal.Status,
-		Summary: utils.TruncateRunes(proposal.Summary, workerResultProposalMaxTextRunes),
+		Summary: summary,
 		Details: utils.TruncateRunes(proposal.Details, workerResultProposalMaxTextRunes),
 
 		Artifacts:     artifacts,

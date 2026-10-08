@@ -25,7 +25,7 @@ func (c *Coordinator) staticToolGrantNames(def *agent.AgentDef, task TaskDef) []
 	if c == nil || def == nil {
 		return names
 	}
-	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil)
+	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil, c.effectiveSideEffect(task) == SideEffectNone)
 	candidate = c.filterCoordinatorOnlyWorkerTools(c.filterTeamDeniedWorkerTools(c.filterLegacyMemoryMutationTools(def, candidate), nil, false))
 	names = append(names, agentToolNames(candidate)...)
 	for key := range def.MCPTools {

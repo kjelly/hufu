@@ -53,6 +53,9 @@ type AttemptRequest struct {
 	// resolved by the coordinator. A nil schema for a bound contract fails
 	// canonicalization as drift.
 	resultContractSchema *CompiledResultContract
+	// Accepted dependency payloads supplied by the coordinator, never provider
+	// claims. Used by result-contract input bindings on external attempts.
+	resultEvidenceInputs []TaskResult
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.

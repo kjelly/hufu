@@ -76,7 +76,7 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 				continue
 			}
 			agentName := strings.ToLower(strings.TrimSpace(item.Agent))
-			if isSuccessfulWorkerExecution(item) || item.Status == TaskSkipped || (item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived")) {
+			if isSuccessfulWorkerExecution(item) || item.Status == TaskSkipped || VerifiedTaskResolution(item, items, c.taskTracker.TodoList().RunID()) != nil {
 				hasDone[agentName] = true
 			} else {
 				hasUnfinished[agentName] = true

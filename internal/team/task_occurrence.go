@@ -386,6 +386,14 @@ func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("task result is nil")
 	}
+	if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
+		return err
+	}
+	if taskResultStatusIsSuccessful(result.Status) {
+		if err := tx.coordinator.validateRequiredEvidenceDelivery(tx.identity.TaskID, tx.identity.Attempt, tx.identity.RunID); err != nil {
+			return err
+		}
+	}
 	copyResult := cloneTaskResult(result)
 	tx.controller.mu.Lock()
 	if tx.finished || !tx.controller.reserved || !sameTaskResultOccurrence(tx.controller.identity, tx.identity) {

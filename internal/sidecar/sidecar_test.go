@@ -3,9 +3,11 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -14,6 +16,52 @@ import (
 )
 
 type usageAgent struct{}
+
+type deadlineSummaryAgent struct {
+	usageAgent
+	deadline time.Time
+	wait     bool
+}
+
+func (a *deadlineSummaryAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
+	a.deadline, _ = ctx.Deadline()
+	if a.wait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return a.usageAgent.Generate(ctx, call)
+}
+
+func TestAuxiliaryTextSummariesAreBoundedAndTimeoutKeepsSource(t *testing.T) {
+	for _, method := range []string{"compact", "summarize"} {
+		for _, expire := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/expire=%t", method, expire), func(t *testing.T) {
+				ag := &deadlineSummaryAgent{wait: expire}
+				s := &Sidecar{agent: ag}
+				ctx := t.Context()
+				if expire {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, time.Millisecond)
+					defer cancel()
+				}
+				text := strings.Repeat("original information ", 150)
+				var got string
+				var err error
+				if method == "compact" {
+					got, err = s.Compact(ctx, text, "condense")
+				} else {
+					got, err = s.Summarize(ctx, text, 4000)
+				}
+				if err != nil || (expire && got != text) || (!expire && got != "ok") {
+					t.Fatalf("summary=%q err=%v", got, err)
+				}
+				if ag.deadline.IsZero() || time.Until(ag.deadline) > auxiliarySummaryTimeout {
+					t.Fatal("auxiliary text summary did not inherit a bounded deadline")
+				}
+			})
+		}
+	}
+}
 
 func (usageAgent) Generate(context.Context, fantasy.AgentCall) (*fantasy.AgentResult, error) {
 	return &fantasy.AgentResult{

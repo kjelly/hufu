@@ -387,6 +387,9 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if len(pendingTasks) > 0 {
 		return fantasy.NewTextErrorResponse("cannot finish while worker tasks are unresolved or still running:\n" + formatPendingTasks(pendingTasks) + "\nWait for the workers to reach a terminal state before calling finish."), nil
 	}
+	if err := t.coordinator.validateCompletedEvidenceDeliveries(); err != nil {
+		return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
+	}
 
 	if len(failedTasks) > 0 {
 		if prof.RequireEvidenceManifest || prof.StrictPolicy {
@@ -433,6 +436,16 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// surfaced in the result and via a notifiable event so an unattended run's
 	// failure is not silent.
 	response := args.Response
+	if rendered, configured, err := t.coordinator.renderedContractFinalReport(); configured || err != nil {
+		if err != nil {
+			if !args.AcknowledgeFailedTasks || len(failedTasks) == 0 {
+				return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
+			}
+			response = "Final report unavailable: " + err.Error()
+		} else {
+			response = rendered
+		}
+	}
 	if len(failedTasks) > 0 {
 		response += "\n\n⚠️ UNRESOLVED TASKS\n" + formatFailedTasks(failedTasks)
 	}
@@ -645,7 +658,7 @@ func failedTodoItems(items []*TodoItem) []*TodoItem {
 	failed := make([]*TodoItem, 0)
 	for _, item := range items {
 		if item != nil && !IsPrimaryOccurrence(item) && (item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete) {
-			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
 			failed = append(failed, item)
@@ -658,7 +671,7 @@ func pendingTodoItems(items []*TodoItem) []*TodoItem {
 	pending := make([]*TodoItem, 0)
 	for _, item := range items {
 		if item != nil && !IsPrimaryOccurrence(item) && (item.Status == TaskPending || item.Status == TaskInProgress || item.Status == TaskPlanned || item.Status == TaskVerifying || item.Status == TaskPaused || item.Status == TaskProtocolIncomplete) {
-			if item.Resolution != nil && (item.Resolution.Status == "superseded" || item.Resolution.Status == "reconciled" || item.Resolution.Status == "waived") {
+			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
 			pending = append(pending, item)

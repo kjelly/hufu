@@ -1231,7 +1231,7 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 				orchTools = append(orchTools, t)
 			}
 		}
-		return c.restrictInitialCoordinatorTools(c.filterDeniedCoordinatorTools(orchTools))
+		return c.filterDeniedCoordinatorTools(orchTools)
 	}
 	orchTools = []fantasy.AgentTool{
 		c.RunAgentsTool(),
@@ -1255,68 +1255,10 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 			orchTools = append(orchTools, t)
 		}
 	}
-	return c.restrictInitialCoordinatorTools(c.filterDeniedCoordinatorTools(orchTools))
-}
-
-// restrictInitialCoordinatorTools makes a configured first-tool policy
-// model-visible as well as runtime-enforced. A fresh session can retain
-// non-authoritative history in an upstream provider or other memory layer; it
-// must not be able to turn that prose into a terminal out-of-order tool call
-// before the canonical initial delegation is created. Once a TODO exists, the
-// ordinary coordinator tool set is restored.
-//
-// This is deliberately generic: it honors whichever coordinator tool a team
-// configured as its first tool and does not inspect task goals, providers, or
-// project-specific state. Returning no tools for an unavailable configured
-// first tool is fail-closed and leaves the existing policy validation error as
-// the diagnostic boundary.
-func (c *Coordinator) restrictInitialCoordinatorTools(candidate []fantasy.AgentTool) []fantasy.AgentTool {
-	want := c.initialCoordinatorToolName()
-	if want == "" || c.hasCoordinatorTasks() {
-		return candidate
-	}
-
-	// A coordinator model stream can continue after the initial agent call;
-	// Fantasy does not replace its tool schema mid-stream. Keep the required
-	// first tool plus harmless observation tools exposed from the start so the
-	// coordinator can inspect the run-scoped handoff immediately after the
-	// initial worker returns. initialCoordinatorToolDenial still rejects every
-	// non-first call while the task list is empty, so exposure does not weaken
-	// the ordering contract.
-	filtered := make([]fantasy.AgentTool, 0, len(candidate))
-	for _, tool := range candidate {
-		if tool == nil {
-			continue
-		}
-		name := tool.Info().Name
-		if name == want || coordinatorInitialReadOnlyTools[name] {
-			filtered = append(filtered, tool)
-		}
-	}
-	return filtered
-}
-
-// hasCoordinatorTasks reports whether the initial delegation has already
-// created a canonical TODO. Tool schemas are fixed for a model stream, so the
-// initial first-tool restriction must be removed when the stream continues
-// after that delegation; otherwise terminal tools such as finish remain
-// invisible and the coordinator can never close the run.
-func (c *Coordinator) hasCoordinatorTasks() bool {
-	return c != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil && len(c.taskTracker.TodoList().Items()) > 0
-}
-
-// coordinatorInitialReadOnlyTools are safe to expose alongside the required
-// first delegation tool. They are still runtime-denied until the initial task
-// exists; this set only keeps a single model stream usable after delegation.
-var coordinatorInitialReadOnlyTools = map[string]bool{
-	"view":      true,
-	"grep":      true,
-	"glob":      true,
-	"ls":        true,
-	"team_info": true,
-
-	teamActionListToolName: true,
-	teamActionGetToolName:  true,
+	// Keep the full executable catalog for the whole Fantasy stream. The
+	// central policy gate enforces first-tool ordering, so finish becomes
+	// usable after delegation without recreating the model invocation.
+	return c.filterDeniedCoordinatorTools(orchTools)
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
@@ -2139,7 +2081,8 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	// its STM/LTM inputs were loaded directly from SQLite above; Markdown files
 	// remain compatibility projections and are never prompt sources.
 	if agentsMD := coordInput.ProjectContext; agentsMD != "" {
-		agentsMD = compactLegacyProjectContext(ctx, c.AgentPool().Sidecar(), agentsMD)
+		// Shadow assembly is diagnostic only. The compiler owns the single
+		// model-visible project compaction; do not spend a second model call here.
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
 		projectText.WriteString(agentsMD)
 	}
@@ -2204,15 +2147,17 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 
 // textCompacter is intentionally the sidecar's plain-text compaction API.
 // CompactStructured summarizes conversations into JSON and must never be used
-// for model-visible project instructions in the legacy prompt path.
+// for model-visible project instructions.
 type textCompacter interface {
 	Compact(context.Context, string, string) (string, error)
 }
 
-func compactLegacyProjectContext(ctx context.Context, compacter textCompacter, projectContext string) string {
+func compactProjectContext(ctx context.Context, compacter textCompacter, projectContext string) string {
 	if compacter == nil || len(projectContext) <= 4000 {
 		return projectContext
 	}
+	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	defer cancel()
 	compacted, err := compacter.Compact(ctx, projectContext, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
 	if err != nil || compacted == "" {
 		return projectContext

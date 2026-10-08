@@ -229,6 +229,18 @@ agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交�
 結果中。team.yaml 的 static contract task 也可以宣告 `result-contract`，它會覆寫
 該 contract 的 agent 預設值；coordinator 的 task payload 不能設定或覆寫它。
 
+下游 `depends_on`／`evidence_from` 的交接會傳遞完整、已驗證且經 runtime
+證據降級後的 payload，附帶 contract 與 payload hash，不會重新採用 worker
+提交前的結論。coordinator 的顯示預覽仍有大小限制，但必要交接不可截斷來
+遷就 context budget；放不下時會在模型呼叫前 fail closed。
+
+static task 的 `execution.requires-evidence: true` 除了要求完成的
+`evidence_from`，還要求完整交付內容的 hash 被封存在 task context manifest。
+缺少、改寫、壓縮或無法證明交付時，成功提交、TaskDone 與 `finish` 都會被
+拒絕；worker 仍可提交 `partial`／`blocked` 說明缺口。舊 session 沒有此交付
+紀錄時不可冒充完整稽核；請用新執行重新查核。tool-less `sidecar:true` 不支援
+此契約，應改用一般 worker。
+
 - schema 必須是自給自足的 Draft 2020-12：不允許 `$id`，`$ref` 只能指向同一份
   文件的 fragment（`#...`），`$schema` 只能出現在根節點。
 - 屬性名稱若會被 durable event 的 secret redaction 改寫（例如含 `token`、
@@ -236,11 +248,123 @@ agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交�
   提交時也會被拒絕。
 - `require-structured: true` 時，缺少或不合法的 payload 都不能完成 task，
   free-text promotion 也不會套用；worker 可以在 result-only repair turn 補交。
+- schema 驗證失敗會列出具體 JSON Pointer 與原因，例如
+  `/findings/0/sources/0/independence_group: missing required property`。
+  診斷有數量與長度上限；應修補既有結果再提交，不必因此重新執行研究工具。
 - 修改 schema 會改變 execution policy snapshot，resume 時 fail closed；
   要使用新 schema 請用 `--new`。
 - 不能與 `extra-models` 同時使用，也不能用在可能被 decision runtime 綁定為
   角色的 agent。
 - `hufu team explain` 會列出每個 agent 綁定的 contract ID 與 hash。
+
+Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
+
+- `x-hufu-tool-evidence`：宣告結果中的群組陣列、來源陣列與 JSON Pointer，
+  將來源欄位及引文綁定到本次 task attempt 的成功工具紀錄。它不會使用搜尋
+  摘要、其他 task 的紀錄、失敗或無內容的回傳作為證據。runtime 會覆寫
+  model 提供的工具 ID；無對應紀錄或引文不符時，依 schema 的 fallback
+  降級來源及群組，並在 `ResultPayload` 中記錄 `evidence_downgrades`。
+  未宣告 diagnostics 的舊 contract 會清空無法驗證的引文；宣告 diagnostics
+  時保留提交引文供診斷，明確標示它是否匹配，不把失配視為抓取失敗。
+- `x-hufu-evidence-inputs`：將 review 清單中的 task ID、payload hash 及可選
+  欄位綁定到該 task 的 `evidence_from` 已接受輸入。ID 必須逐字相同，
+  不會去引號或猜測；重複、未宣告 ID、hash 不符及來源 payload 變動皆拒絕。
+  local/external 提交、commit、完成檢查及最終報告會檢查綁定；
+  單純 JSON Schema 驗證不取代此有上下文的檢查。
+- `x-hufu-final-report`：字串形式的 Go text/template。`finish` 直接從唯一
+  已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
+  取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；
+  明確承認失敗的 partial finish 仍可結束並揭露缺少報告的原因。
+
+例如，在 schema 根節點宣告（欄位名稱與降級值由團隊定義）：
+
+```json
+{
+  "x-hufu-tool-evidence": {
+    "groups_pointer": "/findings",
+    "items_pointer": "/sources",
+    "tool": "web_fetch",
+    "input_pointer": "/url",
+    "value_pointer": "/url",
+    "output_pointer": "/content",
+    "quote_pointer": "/quote",
+    "status_pointer": "/page_status",
+    "call_id_pointer": "/tool_call_id",
+    "verified_status": "checked",
+    "unverified_status": "unverified",
+    "diagnostics": {
+      "fetch_pointer": "/fetch_status",
+      "citation_pointer": "/citation_status",
+      "fetch_values": {
+        "succeeded": "fetched", "failed": "failed", "unusable": "unusable_response",
+        "absent": "not_attempted", "pending": "pending"
+      },
+      "citation_values": {
+        "matched": "matched", "mismatch": "mismatch",
+        "empty": "missing_quote", "unavailable": "unavailable"
+      }
+    },
+    "group_fallback": {"/verdict": "unverified"},
+    "group_append": {"/limitations": "來源引文未通過驗證，詳見抓取與引用狀態。"}
+  },
+  "x-hufu-final-report": "{{range .findings}}判定：{{.verdict}}\n限制：{{.limitations}}\n{{end}}"
+}
+```
+
+以上為擴充欄位片段；完整 schema 還須定義 payload 結構，包括 runtime
+注入的 `tool_call_id` 字串，以及允許 fallback 值。寫入用 pointer 僅能指向
+一個 object member；`group_append` 保留原有文字並追加限制。任何來源缺證據
+都會使其群組採用 fallback，避免部分來源仍未查核卻宣稱整項已證實。
+比對使用原始工具輸入值與引文（僅摺疊空白），不猜測 URL 等價或語意。
+沒有本機工具紀錄的 external backend/result-only repair 會依同一規則降級；
+這證明來源被讀取及引文存在，不代表 runtime 判定了主張的語意真偽。
+
+宣告 diagnostics 後，runtime 會覆寫抓取與引用狀態；完整 schema 須允許
+這些欄位。抓取成功但引文不符是 `fetched/mismatch`，空引文是
+`fetched/missing_quote`。工具回報 error 才是 `failed`；
+非 error 回傳卻缺少可解析的非空內容是 `unusable_response`。
+沒有匹配呼叫是 `not_attempted`，有呼叫但沒有結果是 `pending`。
+多次抓取中若有成功且引文匹配，以該成功工具 ID 綁定。保留引文不是驗證通過。
+
+需要多來源時，可在 `x-hufu-tool-evidence` 宣告
+`corroboration: {"group_pointer":"/evidence_basis","group_value":"independent_corroboration","origin_pointer":"/independence_group","minimum":2}`。
+宣稱該 basis 的群組必須具有足量不同來源識別及不同輸入目標；
+同一 URL 不能靠更換 origin 字串湊數。這只驗證結構與已讀取引文，
+真正獨立性及是否支持同一原子主張仍由研究與稽核 agent 判斷。
+
+研究輸入綁定範例（同樣是 schema 根節點擴充片段）：
+
+```json
+{
+  "x-hufu-evidence-inputs": {
+    "items_pointer": "/input_review",
+    "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256",
+    "complete_pointer": "/audit_complete",
+    "value_bindings": {"/lens": "/lens"}
+  }
+}
+```
+
+`audit_complete: true` 必須逐項綁定全部非空 `evidence_from`；
+false 可交付空清單或部分輸入，但列出的每項仍須有效。hash 由已接受的
+canonical payload bytes 重算，`value_bindings` 將 review 欄位與該輸入
+payload 的欄位逐值比較。完成稽核不要求每項事實皆已證實；
+未驗證結論可以交付，必須保留證據缺口與準確的原因。
+
+### 已驗證的替代任務（reconcile_task）
+
+失敗或 blocked 的任務可以使用 `reconcile_task`，以 `superseded` 或
+`reconciled` 指向已完成的替代任務。runtime 會重新檢查原任務的 frozen
+contract、result schema、輸入與驗證要求；替代任務必須有通過的客觀驗證
+或 runtime 簽署的證據，必要的 structured payload 與交接證據也須有效。
+模型敘述「已取代」或 `waived` 不會滿足完成要求。
+
+原任務的失敗狀態、failure event 與 transcript 不會改寫。證據清單中的
+原要求會保存 `resolution`、`original_status` 與 `resolved_by`，並綁定
+替代任務的成功 receipt／artifact；缺少成功 transcript 或驗證不符時仍
+fail closed。驗收、workflow、完成 gate、resume 與離線稽核使用相同判定，
+報告及 inspection 則保留原失敗與替代來源。
 
 ### Execution route（execution-route）
 

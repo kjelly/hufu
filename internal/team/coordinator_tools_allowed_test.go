@@ -139,7 +139,7 @@ func TestCoordinatorLegacyMemoryAliasesAreScopedExactOptIn(t *testing.T) {
 	}
 }
 
-func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegation(t *testing.T) {
+func TestBuildOrchestratorToolsKeepFinishAttachedWithInitialPolicy(t *testing.T) {
 	coreTools := make([]fantasy.AgentTool, 0, len(coordinatorCoreToolNames))
 	for name := range coordinatorCoreToolNames {
 		coreTools = append(coreTools, namedCoordinatorTool(name))
@@ -159,7 +159,13 @@ func TestBuildOrchestratorToolsExposeOnlyConfiguredFirstToolBeforeInitialDelegat
 	if !slices.Contains(got, "agent") || !slices.Contains(got, "view") || !slices.Contains(got, "ls") {
 		t.Fatalf("fresh initial tools = %v, want agent plus read-only observation tools", got)
 	}
-	for _, forbidden := range []string{"finish", "bash", "write", "edit"} {
+	if !slices.Contains(got, "finish") {
+		t.Fatal("finish must remain attached to the original model stream")
+	}
+	if denial := c.initialCoordinatorToolDenial("", "finish"); denial == "" {
+		t.Fatal("exposed finish must still be denied before initial delegation")
+	}
+	for _, forbidden := range []string{"bash", "write", "edit"} {
 		if slices.Contains(got, forbidden) {
 			t.Fatalf("fresh initial tools expose unsafe/non-observation tool %q: %v", forbidden, got)
 		}
