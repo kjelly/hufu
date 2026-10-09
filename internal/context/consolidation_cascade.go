@@ -20,7 +20,7 @@ type derivedConsolidation struct {
 // approved candidate returns to candidate lifecycle so it leaves every
 // confirmed-only read path in the same commit. Demoted candidates are
 // processed in turn, so a consolidation of consolidations is demoted too.
-func demoteDerivedConsolidationsTx(ctx context.Context, tx *sql.Tx, invalidated []string, reason ConsolidationReason) error {
+func demoteDerivedConsolidationsTx(ctx context.Context, tx execQueryer, invalidated []string, reason ConsolidationReason) error {
 	type pending struct {
 		id     string
 		reason ConsolidationReason

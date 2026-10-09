@@ -189,3 +189,78 @@ func TestConsolidationConcurrentCreateAndReview(t *testing.T) {
 		t.Fatalf("final state inconsistent: %+v err=%v", freshness, err)
 	}
 }
+
+// TestConsolidationCreateWaitsForConcurrentWriter holds one handle's create
+// transaction open after its first write. The second handle must wait for
+// that commit and return the same proposal instead of exhausting its busy
+// retries on a read snapshot that SQLite cannot upgrade to a write.
+func TestConsolidationCreateWaitsForConcurrentWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	seed, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTwoConsolidationSources(t, seed)
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	handles := make([]*SQLiteRepository, 2)
+	for i := range handles {
+		if handles[i], err = OpenSQLite(path); err != nil {
+			t.Fatal(err)
+		}
+		defer func(repo *SQLiteRepository) { _ = repo.Close() }(handles[i])
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	var holdOnce sync.Once
+	consolidationTxTestHook = func(stage string) error {
+		if stage == "candidate" {
+			holdOnce.Do(func() {
+				close(held)
+				<-release
+			})
+		}
+		return nil
+	}
+	t.Cleanup(func() { consolidationTxTestHook = nil })
+
+	type createResult struct {
+		proposal ConsolidationProposal
+		created  bool
+		err      error
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	create := func(repo *SQLiteRepository) <-chan createResult {
+		done := make(chan createResult, 1)
+		go func() {
+			proposal, created, err := repo.CreateConsolidationProposal(ctx, consolidationInput("merged guidance", "src-a", "src-b"))
+			done <- createResult{proposal, created, err}
+		}()
+		return done
+	}
+	firstDone := create(handles[0])
+	select {
+	case <-held:
+	case got := <-firstDone:
+		t.Fatalf("first create finished before holding its transaction: %+v", got)
+	}
+	secondDone := create(handles[1])
+	// Hold the first transaction well past the busy-retry backoff. A second
+	// create that cannot wait for the writer fails inside this window.
+	var second createResult
+	select {
+	case second = <-secondDone:
+		close(release)
+	case <-time.After(500 * time.Millisecond):
+		close(release)
+		second = <-secondDone
+	}
+	first := <-firstDone
+	if first.err != nil || !first.created {
+		t.Fatalf("first create = created %v, err %v; want a new proposal", first.created, first.err)
+	}
+	if second.err != nil || second.created || second.proposal.ID != first.proposal.ID {
+		t.Fatalf("second create = %q created %v, err %v; want existing proposal %q", second.proposal.ID, second.created, second.err, first.proposal.ID)
+	}
+}

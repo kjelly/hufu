@@ -92,13 +92,8 @@ func (r *SQLiteRepository) CreateConsolidationProposal(ctx context.Context, in C
 	proposalID, candidateID := consolidationIdentity(ids, text)
 	var out ConsolidationProposal
 	var created bool
-	err := r.withBusyRetry(ctx, func() error {
+	err := r.withImmediateTx(ctx, func(tx execQueryer) error {
 		out, created = ConsolidationProposal{}, false
-		tx, err := r.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
 		existing, err := getConsolidationProposalQ(ctx, tx, proposalID)
 		switch {
 		case err == nil:
@@ -194,25 +189,20 @@ func (r *SQLiteRepository) CreateConsolidationProposal(ctx context.Context, in C
 		if err = insertEvent(ctx, tx, "consolidation_proposed", candidate.ID, candidate.Scope, map[string]any{"proposal_id": proposal.ID, "source_ids": ids, "origin": in.Origin, "policy_version": in.PolicyVersion}); err != nil {
 			return err
 		}
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 		out, created = proposal, true
 		return nil
 	})
-	return out, created, err
+	if err != nil {
+		return ConsolidationProposal{}, false, err
+	}
+	return out, created, nil
 }
 
 // ApproveConsolidationProposal revalidates a pending proposal and confirms
 // its candidate and the proposal in one transaction.
 func (r *SQLiteRepository) ApproveConsolidationProposal(ctx context.Context, in ConsolidationReviewInput) (ConsolidationProposal, error) {
 	var out ConsolidationProposal
-	err := r.withBusyRetry(ctx, func() error {
-		tx, err := r.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
+	err := r.withImmediateTx(ctx, func(tx execQueryer) error {
 		proposal, err := loadConsolidationForReviewQ(ctx, tx, in)
 		if err != nil {
 			return err
@@ -245,14 +235,14 @@ func (r *SQLiteRepository) ApproveConsolidationProposal(ctx context.Context, in 
 		if err = insertEvent(ctx, tx, "consolidation_approved", candidate.ID, candidate.Scope, map[string]string{"proposal_id": proposal.ID, "actor": in.Actor}); err != nil {
 			return err
 		}
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 		proposal.Status, proposal.Reason, proposal.ReviewedAt = ConsolidationStatusApproved, in.Reason, &reviewed
 		out = proposal
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return ConsolidationProposal{}, err
+	}
+	return out, nil
 }
 
 // RejectConsolidationProposal rejects a pending or stale proposal and its
@@ -263,12 +253,7 @@ func (r *SQLiteRepository) RejectConsolidationProposal(ctx context.Context, in C
 		return ConsolidationProposal{}, errors.New("consolidation rejection requires a reason")
 	}
 	var out ConsolidationProposal
-	err := r.withBusyRetry(ctx, func() error {
-		tx, err := r.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
+	err := r.withImmediateTx(ctx, func(tx execQueryer) error {
 		proposal, err := loadConsolidationForReviewQ(ctx, tx, in)
 		if err != nil {
 			return err
@@ -308,14 +293,14 @@ func (r *SQLiteRepository) RejectConsolidationProposal(ctx context.Context, in C
 		if err = insertEvent(ctx, tx, "consolidation_rejected", candidate.ID, candidate.Scope, map[string]string{"proposal_id": proposal.ID, "actor": in.Actor}); err != nil {
 			return err
 		}
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 		proposal.Status, proposal.Reason, proposal.ReviewedAt = ConsolidationStatusRejected, in.Reason, &reviewed
 		out = proposal
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return ConsolidationProposal{}, err
+	}
+	return out, nil
 }
 
 func loadConsolidationForReviewQ(ctx context.Context, q queryer, in ConsolidationReviewInput) (ConsolidationProposal, error) {
@@ -331,7 +316,7 @@ func loadConsolidationForReviewQ(ctx context.Context, q queryer, in Consolidatio
 
 // updateConsolidationStatusTx moves a proposal from one of from to to and
 // requires exactly one row to change.
-func updateConsolidationStatusTx(ctx context.Context, tx *sql.Tx, id string, from []string, to, reason string, reviewed *time.Time) error {
+func updateConsolidationStatusTx(ctx context.Context, tx execQueryer, id string, from []string, to, reason string, reviewed *time.Time) error {
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
 	args := []any{to, reason}
 	query := "UPDATE consolidation_proposals SET status=?,reason=?"

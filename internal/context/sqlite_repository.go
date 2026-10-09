@@ -1003,7 +1003,7 @@ func (r *SQLiteRepository) itemScope(ctx context.Context, tx *sql.Tx, id string)
 // changes canonical state (append, supersede, edge, expiry) MUST insert one
 // of these so Revision reflects the true repository state and can be used
 // for cache/prefetch invalidation.
-func insertEvent(ctx context.Context, tx *sql.Tx, eventType, itemID string, scope Scope, payload any) error {
+func insertEvent(ctx context.Context, tx execQueryer, eventType, itemID string, scope Scope, payload any) error {
 	_, err := tx.ExecContext(ctx, "INSERT INTO context_events(event_type,item_id,scope_json,payload_json,created_at) VALUES(?,?,?,?,?)", eventType, itemID, mustJSON(scope), mustJSON(payload), time.Now().UnixMilli())
 	return err
 }
