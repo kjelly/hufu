@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -23,6 +24,9 @@ func rankingLockFixture(t *testing.T, mode agent.MemoryLearningMode) *Coordinato
 	for i := range 36 {
 		content := fmt.Sprintf("%s %s %s note %d", words[i%len(words)], words[(i*3+1)%len(words)], words[(i*7+2)%len(words)], i)
 		item := rankingItem(fmt.Sprintf("lock-%02d", i), contextstore.Priority(10*(i%5)))
+		// Preserve insertion order explicitly: the projection sorts equal
+		// priorities by creation time, which determines the allowed subset.
+		item.CreatedAt = time.Unix(200+int64(i), 0)
 		if i%11 == 0 {
 			// Same content under different kinds keeps separate rows, so
 			// retrieval's content-hash deduplication has work to do.
