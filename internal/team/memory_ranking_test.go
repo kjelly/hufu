@@ -392,5 +392,7 @@ func rankingTestCoordinator(t *testing.T, mode agent.MemoryLearningMode) (*Coord
 }
 
 func rankingItem(id string, priority contextstore.Priority) contextstore.ContextItem {
-	return contextstore.ContextItem{ID: id, Kind: contextstore.ContextPattern, Content: "procedure " + id, Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Lifecycle: contextstore.LifecycleConfirmed, TrustLevel: contextstore.TrustTrusted, Priority: priority, Confidence: 1, UpdatedAt: time.Unix(100, 0)}
+	// SQLite orders equal-priority items by creation time before ID. Pin the
+	// creation time so fixture order and allowed subsets do not depend on timing.
+	return contextstore.ContextItem{ID: id, Kind: contextstore.ContextPattern, Content: "procedure " + id, Scope: contextstore.Scope{ProjectID: "project", TeamID: "team"}, Lifecycle: contextstore.LifecycleConfirmed, TrustLevel: contextstore.TrustTrusted, Priority: priority, Confidence: 1, CreatedAt: time.Unix(100, 0), UpdatedAt: time.Unix(100, 0)}
 }
