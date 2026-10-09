@@ -23,7 +23,7 @@ func getItemQ(ctx context.Context, q queryer, id string) (ContextItem, error) {
 
 // insertItemRowTx inserts an already normalized item and its FTS row. The
 // caller records the context event that describes why the row was added.
-func insertItemRowTx(ctx context.Context, tx execQueryer, it ContextItem) error {
+func insertItemRowTx(ctx context.Context, tx *sql.Tx, it ContextItem) error {
 	if _, err := tx.ExecContext(ctx, "INSERT INTO context_items ("+itemColumns+") VALUES ("+strings.TrimSuffix(strings.Repeat("?,", 30), ",")+")", it.ID, it.Kind, it.Content, it.ContentHash, it.Scope.ProjectID, nilIfEmpty(it.Scope.TeamID), nilIfEmpty(it.Scope.SessionID), nilIfEmpty(it.Scope.BranchID), nilIfEmpty(it.Scope.AgentID), nilIfEmpty(it.Scope.TaskID), nilIfEmpty(it.Scope.AttemptID), it.Authority, it.TrustLevel, it.Priority, boolInt(it.MustKeep), boolInt(it.Pinned), it.Confidence, mustJSON(it.Source), mustJSON(it.Evidence), mustJSON(it.Tags), mustJSON(it.Metadata), it.CreatedAt.UnixMilli(), it.UpdatedAt.UnixMilli(), millis(it.ValidFrom), millis(it.ValidUntil), millis(it.ExpiresAt), nilIfEmpty(it.SupersededBy), string(it.Lifecycle), it.EmbeddingState, nilIfEmpty(it.EmbeddingModel)); err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func insertItemRowTx(ctx context.Context, tx execQueryer, it ContextItem) error 
 // confirmCandidateTx binds sealed evidence to one loaded candidate, confirms
 // it, and applies its recorded supersession links inside tx. seenOld detects
 // two candidates in one transaction superseding the same record.
-func confirmCandidateTx(ctx context.Context, tx execQueryer, item ContextItem, binding CandidateBinding, seenOld map[string]string) error {
+func confirmCandidateTx(ctx context.Context, tx *sql.Tx, item ContextItem, binding CandidateBinding, seenOld map[string]string) error {
 	id := item.ID
 	if item.Lifecycle != LifecycleCandidate {
 		return fmt.Errorf("context item %q is not a candidate", id)
