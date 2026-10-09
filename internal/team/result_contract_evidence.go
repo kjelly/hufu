@@ -156,6 +156,10 @@ func compileResultContractExtensions(root map[string]any) (*resultToolEvidenceSp
 					return nil, nil, err
 				}
 			}
+			fallback, present := spec.GroupFallback[policy.GroupPointer]
+			if !present || fallback == policy.GroupValue {
+				return nil, nil, fmt.Errorf("corroboration requires group_fallback for %q to differ from group_value %q", policy.GroupPointer, policy.GroupValue)
+			}
 		}
 	}
 	var report *template.Template
@@ -408,6 +412,9 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 			return 0, fmt.Errorf("items pointer must resolve to an array")
 		}
 		missing := len(items) == 0
+		// Count only sources bound by this attempt, never model-claimed
+		// origins from evidence that was downgraded.
+		verifiedItems := make([]map[string]any, 0, len(items))
 		for _, rawItem := range items {
 			item, ok := rawItem.(map[string]any)
 			if !ok {
@@ -420,13 +427,16 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 				return o.match == match && strings.TrimSpace(quote) != "" && strings.Contains(strings.Join(strings.Fields(o.output), " "), strings.Join(strings.Fields(quote), " "))
 			})
 			if spec.Diagnostics != nil {
-				if !bindResultEvidenceDiagnostics(item, spec, observations, records, match, quote, index) {
+				if bindResultEvidenceDiagnostics(item, spec, observations, records, match, quote, index) {
+					verifiedItems = append(verifiedItems, item)
+				} else {
 					missing = true
 				}
 				continue
 			}
 			if item[statusKey] == spec.VerifiedStatus && index >= 0 {
 				item[callKey] = observations[index].id
+				verifiedItems = append(verifiedItems, item)
 				continue
 			}
 			item[statusKey], item[quoteKey] = spec.UnverifiedStatus, ""
@@ -449,15 +459,15 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 		if policy := spec.Corroboration; policy != nil && evidenceString(group, policy.GroupPointer) == policy.GroupValue {
 			origins := make(map[string]bool)
 			targets := make(map[string]bool)
-			for _, rawItem := range items {
-				target := evidenceString(rawItem, spec.ValuePointer)
-				if origin := strings.TrimSpace(evidenceString(rawItem, policy.OriginPointer)); origin != "" && !targets[target] {
+			for _, item := range verifiedItems {
+				target := evidenceString(item, spec.ValuePointer)
+				if origin := strings.TrimSpace(evidenceString(item, policy.OriginPointer)); origin != "" && !targets[target] {
 					origins[origin] = true
 					targets[target] = true
 				}
 			}
 			if len(origins) < policy.Minimum {
-				return 0, fmt.Errorf("corroboration requires %d distinct source origins; got %d", policy.Minimum, len(origins))
+				return 0, fmt.Errorf("corroboration requires %d distinct verified source origins; got %d", policy.Minimum, len(origins))
 			}
 		}
 	}

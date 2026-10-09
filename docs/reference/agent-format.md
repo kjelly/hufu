@@ -333,8 +333,10 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
 
 需要多來源時，可在 `x-hufu-tool-evidence` 宣告
 `corroboration: {"group_pointer":"/evidence_basis","group_value":"independent_corroboration","origin_pointer":"/independence_group","minimum":2}`。
-宣稱該 basis 的群組必須具有足量不同來源識別及不同輸入目標；
-同一 URL 不能靠更換 origin 字串湊數。這只驗證結構與已讀取引文，
+宣稱該 basis 的群組必須具有足量已通過工具證據綁定的不同來源識別及不同輸入目標；
+未查核或引文失配的來源不計入數量，同一 URL 不能靠更換 origin 字串湊數。
+`group_fallback` 必須包含 `group_pointer`，且降級值不得等於 `group_value`；
+不符合此條件的 schema 會在載入時被拒絕。這只驗證結構與已讀取引文，
 真正獨立性及是否支持同一原子主張仍由研究與稽核 agent 判斷。
 
 研究輸入綁定範例（同樣是 schema 根節點擴充片段）：
