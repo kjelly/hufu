@@ -108,14 +108,21 @@ func NotifyAskUserDone() {
 }
 
 func SetAskUserActive(active bool) {
+	interactiveWait.mu.Lock()
 	if active {
 		askUserActive.Store(1)
-		interactiveWaitStartNs.CompareAndSwap(0, time.Now().UnixNano())
+		if interactiveWait.start.IsZero() {
+			interactiveWait.start = time.Now()
+		}
 	} else {
 		askUserActive.Store(0)
-		if started := interactiveWaitStartNs.Swap(0); started != 0 {
-			interactiveWaitTotalNs.Add(time.Now().UnixNano() - started)
+		if !interactiveWait.start.IsZero() {
+			interactiveWait.total += time.Since(interactiveWait.start)
+			interactiveWait.start = time.Time{}
 		}
+	}
+	interactiveWait.mu.Unlock()
+	if !active {
 		NotifyAskUserDone()
 	}
 }
@@ -124,25 +131,28 @@ func IsAskUserActive() bool {
 	return askUserActive.Load() == 1
 }
 
-// interactiveWaitTotalNs accumulates time this process has spent blocked on
-// interactive prompts (ask_user, path consent). interactiveWaitStartNs is
-// the start of the in-flight prompt, or 0 when none is active; prompts are
-// serialized on StdinMu so at most one runs at a time.
-var (
-	interactiveWaitTotalNs atomic.Int64
-	interactiveWaitStartNs atomic.Int64
-)
+// Completed wait and the active prompt start form one snapshot. Updating or
+// reading them independently can temporarily lose a whole prompt's wait and
+// expire a compensated deadline. Prompts are serialized on StdinMu.
+// time.Time preserves the monotonic clock for elapsed wait accounting.
+var interactiveWait struct {
+	mu    sync.Mutex
+	start time.Time
+	total time.Duration
+}
 
 // InteractiveWaitTotal returns the cumulative time spent waiting on
 // interactive prompts, including the currently active one. Task deadlines
 // take the delta of this value so human response time does not count
 // against an agent's time budget (see WithInteractiveAwareTimeout).
 func InteractiveWaitTotal() time.Duration {
-	total := interactiveWaitTotalNs.Load()
-	if started := interactiveWaitStartNs.Load(); started != 0 {
-		total += time.Now().UnixNano() - started
+	interactiveWait.mu.Lock()
+	defer interactiveWait.mu.Unlock()
+	total := interactiveWait.total
+	if !interactiveWait.start.IsZero() {
+		total += time.Since(interactiveWait.start)
 	}
-	return time.Duration(total)
+	return total
 }
 
 // RequestInteractiveAbort marks interactive input as aborted and closes stdin

@@ -63,7 +63,7 @@ func (m *rejectedResultStreamModel) Stream(_ context.Context, call fantasy.Call)
 }
 
 func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
-	for _, name := range []string{"next_round", "step_limit", "provider_stop", "valid_correction", "same_turn_continuation"} {
+	for _, name := range []string{"next_round", "step_limit", "provider_stop", "stop_without_dispatch", "valid_correction", "same_turn_continuation"} {
 		t.Run(name, func(t *testing.T) {
 			c := newBudgetCoordinator(t)
 			c.session.Workspace = t.TempDir()
@@ -94,6 +94,11 @@ func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
 				},
 			}
 			if name == "provider_stop" {
+				// Execute a rejected tool call, then let the provider end the
+				// next turn normally before reaching the protocol-loop limit.
+				model.pauseAt = 2
+			}
+			if name == "stop_without_dispatch" {
 				model.finish = fantasy.FinishReasonStop
 			}
 			if name == "same_turn_continuation" {
@@ -113,13 +118,8 @@ func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
 			if name == "step_limit" || name == "valid_correction" {
 				limit = maxRepeatedSubmitResultFailures
 			}
-			// A stop finish ends a turn immediately; three independent tool errors
-			// in the same turn are covered by the callback-return test below.
-			if name == "provider_stop" {
-				limit = 1
-			}
 			_, steps, err := c.runAgentWithStatusAndHistory(ctx, ag, "reviewer", "submit a result", nil, &taskTiming{}, fantasy.StepCountIs(limit))
-			if name == "valid_correction" || name == "provider_stop" {
+			if name == "valid_correction" || name == "provider_stop" || name == "stop_without_dispatch" {
 				if err != nil {
 					t.Fatalf("recoverable result error stopped the stream: %v", err)
 				}
@@ -128,6 +128,14 @@ func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
 			}
 			wantCalls := min(limit, maxRepeatedSubmitResultFailures)
 			wantSteps := wantCalls
+			if name == "provider_stop" {
+				wantCalls, wantSteps = 1, 2
+			}
+			if name == "stop_without_dispatch" {
+				// Fantasy dispatches local tools only on a tool_calls finish.
+				// A raw call on a stop turn must not execute or gain a result.
+				wantCalls, wantSteps = 0, 1
+			}
 			if name == "same_turn_continuation" {
 				wantSteps++
 			}

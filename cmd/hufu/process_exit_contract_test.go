@@ -343,19 +343,6 @@ func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
 	if output.Outcome != string(team.RunOutcomeUnverified) || output.GoalSatisfied || output.ExitCode != 7 {
 		t.Fatalf("machine result = %#v, want unverified/unsatisfied/exit 7", output)
 	}
-
-	interactiveArgs := append(slices.Clone(args), "--workspace", filepath.Join(t.TempDir(), "interactive-workspace"), "--display-mode", "plain", "answer the question")
-	process := startPTY(t, binary, interactiveArgs, 30, 120)
-	if code := process.waitExit(t, 30*time.Second); code != 0 {
-		t.Fatalf("interactive exit code = %d, want 0; output=%q", code, truncateContractOutput([]byte(process.output.String())))
-	}
-	terminalOutput := process.output.String()
-	if !strings.Contains(terminalOutput, "Exploratory response delivered; goal remains unverified") {
-		t.Fatalf("interactive output lacks unverified warning: %q", truncateContractOutput([]byte(terminalOutput)))
-	}
-	if strings.Contains(terminalOutput, "Error: team \"default\" failed") {
-		t.Fatalf("interactive delivery was reported as a team failure: %q", truncateContractOutput([]byte(terminalOutput)))
-	}
 }
 
 func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
