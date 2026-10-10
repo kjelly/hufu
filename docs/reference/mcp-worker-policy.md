@@ -1,5 +1,11 @@
 # MCP worker observation policy
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `5ae90664`
+> Supersedes: —
+> Superseded-By: —
+
 A team maintainer can authorize a trusted external MCP tool for an unbound,
 read-only worker by declaring `toolPolicies` on the owning server. The worker
 must also name the exact `{server}__{tool}` in its literal tool grant. An empty

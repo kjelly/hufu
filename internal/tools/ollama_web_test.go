@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -167,6 +168,8 @@ func TestWebPolicyDenialDisposition(t *testing.T) {
 		{"context no-net", nil, context.WithValue(t.Context(), AgentNetworkBlockKey, true), "network_blocked"},
 		{"config force-mcp", []ToolOption{WithForceMCP(true)}, t.Context(), "force_mcp"},
 		{"context force-mcp", nil, context.WithValue(t.Context(), AgentForceMCPKey, true), "force_mcp"},
+		{"read-only no-net", []ToolOption{WithNetworkBlock(true)}, context.WithValue(t.Context(), AgentReadOnlyExecutionKey, true), "network_blocked"},
+		{"read-only force-mcp", []ToolOption{WithForceMCP(true)}, context.WithValue(t.Context(), AgentReadOnlyExecutionKey, true), "force_mcp"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var dispositions []ToolExecutionDisposition
@@ -182,5 +185,80 @@ func TestWebPolicyDenialDisposition(t *testing.T) {
 	}
 	if client.searchCalls != 0 {
 		t.Fatalf("policy-denied request reached client: %d", client.searchCalls)
+	}
+}
+
+func TestWebOutputExactByteLimits(t *testing.T) {
+	const sourceURL = "https://example.com/"
+	for _, delta := range []int{-1, 0, 1} {
+		t.Run(fmt.Sprint(delta), func(t *testing.T) {
+			client := &fakeOllamaWebClient{}
+			// Determine the metadata overhead with the final, untruncated
+			// representation, then exercise the complete handler at its limit.
+			fetch := webFetchOutput{URL: sourceURL, Links: []string{}}
+			fetch.Meta.Provider = "ollama-web"
+			encoded, err := json.Marshal(fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.fetchResult.Content = strings.Repeat("a", webFetchOutputLimit-len(encoded)+delta)
+			response := runWebHandler(t, NewWebFetchTool(WithOllamaWebClient(client)), t.Context(), `{"url":"`+sourceURL+`"}`)
+			if err := json.Unmarshal([]byte(response.Content), &fetch); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Content) > webFetchOutputLimit || fetch.Meta.Truncated != (delta > 0) {
+				t.Fatalf("fetch boundary: bytes=%d truncated=%t delta=%d", len(response.Content), fetch.Meta.Truncated, delta)
+			}
+			if delta <= 0 && (len(response.Content) != webFetchOutputLimit+delta || fetch.Content != client.fetchResult.Content) {
+				t.Fatal("fetch unnecessarily truncated content that fits")
+			}
+
+			search := webSearchOutput{Results: make([]ollamaweb.SearchResult, 4)}
+			search.Meta.Provider, search.Meta.ResultCount = "ollama-web", 4
+			for i := range search.Results {
+				search.Results[i].URL = sourceURL
+			}
+			encoded, err = json.Marshal(search)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remaining := webSearchOutputLimit - len(encoded) + delta
+			for i := range search.Results {
+				length := min(remaining, 16<<10)
+				search.Results[i].Content = strings.Repeat("a", length)
+				remaining -= length
+			}
+			client.searchResult.Results = search.Results
+			response = runWebHandler(t, NewWebSearchTool(WithOllamaWebClient(client)), t.Context(), `{"query":"public information","max_results":4}`)
+			if err := json.Unmarshal([]byte(response.Content), &search); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Content) > webSearchOutputLimit || search.Meta.Truncated != (delta > 0) || len(search.Results) != 4 {
+				t.Fatalf("search boundary: bytes=%d meta=%+v delta=%d", len(response.Content), search.Meta, delta)
+			}
+			if delta <= 0 && len(response.Content) != webSearchOutputLimit+delta {
+				t.Fatal("search unnecessarily truncated content that fits")
+			}
+		})
+	}
+}
+
+func TestWebReadOnlyObservationHandlers(t *testing.T) {
+	client := &fakeOllamaWebClient{}
+	ctx := context.WithValue(t.Context(), AgentReadOnlyExecutionKey, true)
+	for _, test := range []struct {
+		tool  fantasy.AgentTool
+		input string
+	}{
+		{NewWebSearchTool(WithOllamaWebClient(client)), `{"query":"public information"}`},
+		{NewWebFetchTool(WithOllamaWebClient(client)), `{"url":"https://example.com/"}`},
+	} {
+		response := runWebHandler(t, test.tool, ctx, test.input)
+		if response.IsError {
+			t.Fatalf("authorized read-only observation failed: %+v", response)
+		}
+	}
+	if client.searchCalls != 1 || client.fetchCalls != 1 {
+		t.Fatalf("read-only observations did not reach the client: search=%d fetch=%d", client.searchCalls, client.fetchCalls)
 	}
 }

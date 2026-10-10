@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `a177333b`
+> Verified-Commit: 2026-10-10
 > Supersedes: —
 > Superseded-By: —
 
@@ -33,6 +33,31 @@ but at least one is `warning` or `unknown`, and `ready` otherwise. Only
 `subject`, and message. Consumers should use `id`, `status`, and the optional
 numeric `count`, not parse `message`.
 
+Provider failures include an optional `reason_code` and, for an HTTP error,
+numeric `http_status`. These additive schema-version-1 fields carry only
+runtime-owned diagnostics; neither the raw error nor the response body is
+rendered. Text mode uses the same safe message, including HTTP status when
+available.
+
+| Provider reason code | Meaning |
+| --- | --- |
+| `invalid_request` | The provider request configuration is invalid. |
+| `request_cancelled` | The request was cancelled. |
+| `timeout` | The request exceeded its deadline or a network timeout. |
+| `dns_failed` | The provider hostname could not be resolved. |
+| `connection_refused` | The provider refused the connection. |
+| `tls_failed` | TLS certificate verification failed. |
+| `transport_failed` | Another transport failure prevented the request. |
+| `http_error` | The provider returned a non-200 status; `http_status` is present. |
+| `invalid_model_list` | The successful HTTP response could not be decoded as a model list. |
+
+Each `models.resolved` check also includes `model_state`: `configured` means
+there is a target at the inspected CLI/global configuration level; `deferred`
+means the team or agent may select it later. A deferred check remains `pass`
+because omission at this level is valid. It does not certify that an effective
+model has been selected or that a model call will succeed. A configured target
+is compared with the provider's model list only when that list is nonempty.
+
 | Check ID | Meaning |
 | --- | --- |
 | `provider.reachable` | Configured provider responds and reports model availability. |
@@ -48,10 +73,13 @@ numeric `count`, not parse `message`.
 valid active-branch projection support a count, including zero. If both event
 history and the checkpoint are absent, the check says `no prior session` and
 has no count. If history exists but the checkpoint is absent, it is `unknown`
-without a count. A malformed or unreadable checkpoint, invalid active branch
-lineage, or corrupt event chain never becomes a zero count. The event check
-fails on corruption; the recovery check remains unknown until the chain can
-be trusted. Doctor never executes reconciliation or grants retry permission.
+without a count. With a valid event chain, a malformed or unreadable checkpoint
+or invalid active branch lineage makes `recovery.unresolved` `fail`, without a
+count. If the event chain is corrupt, `events.integrity` is `fail` and
+`recovery.unresolved` is `unknown`, without a count; checkpoint and lineage
+checks do not proceed until the chain can be trusted. None of these cases is
+reported as a zero count. Doctor never executes reconciliation or grants retry
+permission.
 
 Reports do not include event payloads, task output, prompts, commands,
 provider credentials, or raw provider URLs. The temporary workspace probe

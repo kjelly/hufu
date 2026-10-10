@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,11 +20,14 @@ import (
 )
 
 type doctorCheck struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject,omitempty"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
-	Count   *int   `json:"count,omitempty"`
+	ID         string `json:"id"`
+	Subject    string `json:"subject,omitempty"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
+	Count      *int   `json:"count,omitempty"`
+	ReasonCode string `json:"reason_code,omitempty"`
+	HTTPStatus int    `json:"http_status,omitzero"`
+	ModelState string `json:"model_state,omitempty"`
 }
 
 type doctorReport struct {
@@ -126,6 +130,10 @@ func collectDoctorReport(ctx context.Context) doctorReport {
 	switch {
 	case err != nil:
 		report.add("provider.reachable", "", "fail", "configured provider is unreachable")
+		if failure, ok := errors.AsType[*doctorProviderError](err); ok {
+			check := &report.Checks[len(report.Checks)-1]
+			check.Message, check.ReasonCode, check.HTTPStatus = failure.Message, failure.Code, failure.HTTPStatus
+		}
 	case len(models) == 0:
 		report.add("provider.reachable", "", "warning", "provider is reachable but reports no models")
 	default:
@@ -146,19 +154,19 @@ func collectDoctorModels(report *doctorReport, cfg *config.Config, available []s
 	}
 	for _, role := range resolveRoleModelSources(agent.TeamConfig{}, "team.yaml", cfg, overrides) {
 		subject := strings.ToLower(role.Role)
-		if role.Target == "" {
-			report.add("models.resolved", subject, "pass", "model not set at this level; team or agent may select one")
-			continue
-		}
-		if len(available) > 0 && !modelAvailable(providerModelName(role.Target), available) {
-			status := "warning"
+		check := doctorCheck{ID: "models.resolved", Subject: subject, Status: "pass", ModelState: "configured", Message: "model target is configured"}
+		switch {
+		case role.Target == "":
+			check.ModelState = "deferred"
+			check.Message = "model not set at this level; team or agent may select one"
+		case len(available) > 0 && !modelAvailable(providerModelName(role.Target), available):
+			check.Status = "warning"
 			if role.Role == "Worker" || role.Role == "Coordinator" {
-				status = "fail"
+				check.Status = "fail"
 			}
-			report.add("models.resolved", subject, status, "configured model is not in the provider model list")
-			continue
+			check.Message = "configured model is not in the provider model list"
 		}
-		report.add("models.resolved", subject, "pass", "model target is configured")
+		report.Checks = append(report.Checks, check)
 	}
 }
 

@@ -205,7 +205,7 @@ func boundedSearchOutput(response ollamaweb.SearchResponse, maximum int) webSear
 		candidate := ollamaweb.SearchResult{Title: title, URL: item.URL}
 		output.Results = append(output.Results, candidate)
 		output.Meta.ResultCount = len(output.Results)
-		output.Meta.Truncated = true // reserve the larger serialized boolean while fitting
+		output.Meta.Truncated = false // reserve the larger serialized boolean while fitting
 		if webSize(output) > webSearchOutputLimit {
 			output.Results = output.Results[:len(output.Results)-1]
 			output.Meta.ResultCount = len(output.Results)
@@ -234,7 +234,7 @@ func boundedFetchOutput(requestURL string, response ollamaweb.FetchResponse) web
 	output.Links = []string{}
 	output.Meta.Provider = "ollama-web"
 	content, contentCut := webTruncate(response.Content, webFetchOutputLimit)
-	output.Meta.Truncated = true // reserve serialized boolean while fitting
+	output.Meta.Truncated = false // reserve the larger serialized boolean while fitting
 	output.Content, contentCut = webFitContent(content, webFetchOutputLimit, contentCut, func(value string) int {
 		output.Content = value
 		return webSize(output)

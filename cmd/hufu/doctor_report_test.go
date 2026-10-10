@@ -2,14 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -242,8 +248,116 @@ func TestDoctorJSONFailureIsOneObjectWithoutSecrets(t *testing.T) {
 	if report.Status != "failed" || doctorCheckByID(t, report, "provider.reachable").Status != "fail" {
 		t.Fatalf("failed report = %#v", report)
 	}
+	if check := doctorCheckByID(t, report, "provider.reachable"); check.ReasonCode == "" {
+		t.Fatalf("provider failure has no safe diagnostic: %#v", check)
+	}
 	if strings.Contains(stdout.String(), "super-secret") || strings.Contains(stderr.String(), "super-secret") {
 		t.Fatal("doctor leaked provider credentials")
+	}
+}
+
+func TestDoctorProviderTransportDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+		code  string
+	}{
+		{"cancelled", context.Canceled, "request_cancelled"},
+		{"deadline", context.DeadlineExceeded, "timeout"},
+		{"network timeout", &net.DNSError{Err: "secret", Name: "secret.invalid", IsTimeout: true}, "timeout"},
+		{"dns", &net.DNSError{Err: "secret", Name: "secret.invalid"}, "dns_failed"},
+		{"refused", &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, "connection_refused"},
+		{"tls", &tls.CertificateVerificationError{Err: errors.New("secret certificate")}, "tls_failed"},
+		{"other", errors.New("secret transport detail"), "transport_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wrapped := &url.Error{Op: "Get", URL: "https://user:secret@example.com/private?token=secret", Err: test.cause}
+			failure := doctorProviderTransportError(wrapped)
+			if failure.Code != test.code || failure.Message == "" || strings.Contains(failure.Error(), "secret") || strings.Contains(failure.Error(), "example.com") {
+				t.Fatalf("unsafe or incorrect diagnostic: %#v", failure)
+			}
+			if !errors.Is(failure, test.cause) {
+				t.Fatal("safe diagnostic lost its original error cause")
+			}
+		})
+	}
+}
+
+func TestDoctorProviderResponseDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		status   int
+		body     string
+		code     string
+		wantHTTP int
+	}{
+		{"unauthorized", http.StatusUnauthorized, "secret response body", "http_error", http.StatusUnauthorized},
+		{"unavailable", http.StatusServiceUnavailable, "secret response body", "http_error", http.StatusServiceUnavailable},
+		{"invalid model list", http.StatusOK, `{"data":"secret"}`, "invalid_model_list", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+			previous := opts
+			defer func() { opts = previous }()
+			opts.workspace, opts.agentTeamSearchPath, opts.providerURL = t.TempDir(), t.TempDir(), server.URL+"/private?token=secret"
+			report := collectDoctorReport(t.Context())
+			check := doctorCheckByID(t, report, "provider.reachable")
+			if check.Status != "fail" || check.ReasonCode != test.code || check.HTTPStatus != test.wantHTTP {
+				t.Fatalf("provider diagnostic = %#v", check)
+			}
+			if test.wantHTTP != 0 && !strings.Contains(check.Message, fmt.Sprint(test.wantHTTP)) {
+				t.Fatalf("HTTP diagnostic omits status: %#v", check)
+			}
+			encoded, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var text bytes.Buffer
+			if err := renderDoctorReportText(&text, report); err != nil {
+				t.Fatal(err)
+			}
+			for _, output := range []string{string(encoded), text.String()} {
+				if strings.Contains(output, "secret") || strings.Contains(output, server.URL) || !strings.Contains(output, check.Message) {
+					t.Fatalf("unsafe or missing provider diagnostic: %s", output)
+				}
+			}
+		})
+	}
+	_, err := fetchModelsContext(t.Context(), "http://user:secret@invalid/%zz", "secret")
+	failure, ok := errors.AsType[*doctorProviderError](err)
+	if !ok || failure.Code != "invalid_request" || strings.Contains(failure.Error(), "secret") {
+		t.Fatalf("invalid request diagnostic = %v", err)
+	}
+}
+
+func TestDoctorModelStateDistinguishesDeferredConfiguration(t *testing.T) {
+	previous := opts
+	defer func() { opts = previous }()
+	opts = runOptions{}
+	report := doctorReport{}
+	collectDoctorModels(&report, &config.Config{}, nil)
+	for _, check := range report.Checks {
+		if check.ID == "models.resolved" && (check.ModelState != "deferred" || check.Status != "pass") {
+			t.Fatalf("unset model is not deferred: %#v", check)
+		}
+	}
+	if len(report.Checks) == 0 {
+		t.Fatal("no role model checks were emitted")
+	}
+	report.finish()
+	if report.Status != "ready" {
+		t.Fatalf("deferred configuration degraded the report: %#v", report)
+	}
+	report = doctorReport{}
+	collectDoctorModels(&report, &config.Config{Model: "ollama/available", SidecarModel: "ollama/available"}, []string{"available"})
+	for _, check := range report.Checks {
+		if check.ID == "models.resolved" && (check.ModelState != "configured" || check.Status != "pass") {
+			t.Fatalf("configured model state = %#v", check)
+		}
 	}
 }
 

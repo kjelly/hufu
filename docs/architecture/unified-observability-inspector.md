@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `b35e578`
+> Verified-Commit: `84cc80ef`
 > Supersedes: —
 > Superseded-By: —
 > Priority: P2
@@ -339,14 +339,19 @@ no-progress 決策都不讀它；寫入失敗只記 log。
 | `run_inputs` | todo 的 run input snapshot hash 與 bound inputs | 沒有 run input 時為 not_applicable |
 | `dependency_graph` | `DependsOn`、`OrderAfter`（排序後）、`Execution.Steps` | — |
 | `context_manifest` | 實際注入的 context item ID + content hash（排除 runtime 每次重寫的 `retry_failure_context`、`runtime_context`） | 沒有 context manifest |
-| `dynamic_tools` | dynamic gateway 呼叫的 logical tool + descriptor sha，保留順序 | `ToolInvocationsTruncated > 0` |
+| `dynamic_tools` | receipt 的 `ToolInvocations`：dynamic gateway 的 logical tool + descriptor sha，保留順序（含已拒絕或失敗的呼叫） | `ToolInvocationsTruncated > 0` |
 
 比較結果：任一 known 維度不同為 `change_detected`；全部可比較且相同為
 `no_structural_change`；其餘為 `unknown`。第一個 attempt 為 `unknown`、reason
 `no_prior_attempt`。每筆都列出 `not_tracked`（完整 tool 順序、每次呼叫的 input hash、
 artifact revision、失敗的 criterion），比較不會顯示它們改變：input hash、artifact revision
 與失敗的 criterion 在 attempt 層級沒有 durable 紀錄；tool 順序現在記在 receipt（§6.2.2），
-但它是 attempt 的行為而不是輸入，所以這個比較仍不使用。前一個失敗 fingerprint 與 recovery hypothesis 的 strategy 只作對照欄位。
+但此 recovery 比較目前只使用上表的七個維度，尚未納入完整 tool 順序。
+`dynamic_tools` 來自獨立的 `ToolInvocations` 欄位，只記 dynamic gateway 的 logical
+tool 與 descriptor identity；它保留這個子集的呼叫順序，並非純輸入比較。
+`ToolSequence` 則記錄 attempt 實際執行的完整 tool 名稱順序，用於 §6.2.2 的
+executed 比較。兩者的來源與範圍不同，不可將 `no_structural_change` 解讀成
+所有執行行為都相同。前一個失敗 fingerprint 與 recovery hypothesis 的 strategy 只作對照欄位。
 同一 attempt 只記一次；resume 後從 event log 重建前一次 attempt，所以比較對象不變。
 `hufu report` 的 Reliability Metrics 列出「Retries without structural change」。
 
@@ -377,6 +382,10 @@ runtime 在派工時自己比對：
   之後、建立 task 之前比對。task 還沒跑，兩側都不比 tool 順序。
 - **執行後（phase `executed`）**：替代 task 第一個完成的 attempt 與失敗 task 最後一個完成的
   attempt 再比一次，這次包含 tool 順序。只是診斷，每組只記一次；resume 從 event log 重建。
+- **比較事件**（`strategy_change_evaluated`，schema version 1）：記錄上述 planned 或
+  executed 比較；payload 的 `phase` 區分時機，並包含前後 task／attempt identity、
+  changed／unknown dimensions、digest 與 `materially_different`。enforce 拒絕派工
+  使用下述獨立的 `strategy_change_rejected` 事件。
 - **模式**（team.yaml `reliability.material-replan`）：`warn`（預設）記錄比較，沒有實質改變時
   發 `loop_warning`，仍然派工；`enforce` 經 policy repair 流程退回整批派工（reason
   `replan_not_materially_different`，事件 `strategy_change_rejected`），要求換 agent 或
@@ -606,6 +615,19 @@ file、SQLite table、package-global cache 或 second truth store。
 - 加入 help、completion、正式文件與 migration note。
 - 若保留既有 `audit/context/decision` commands，明確把 inspect 定位為 facade，
   不重複或取代既有 command 的 canonical semantics。
+
+### Recovery change diagnostics（`ea8b2f17`）
+
+- 實作 §6.2.1 的 `recovery_change_observed`、receipt 比較與 resume 重建。
+- 驗證 `TestRecoveryChangeObservedPerFinishedAttempt` 與
+  `TestCompareRecoverySignatures`，涵蓋記錄去重、未知維度與比較結果。
+
+### Material replan check（`84cc80ef`）
+
+- 實作 §6.2.2 的 strategy fingerprint、planned／executed 比較與 warn／enforce／off。
+- 發出 `strategy_change_evaluated` 與 `strategy_change_rejected`，並投影至 inspect／report。
+- 驗證 `TestRepeatedFailureRejectsSameExecutionStrategy` 與
+  `TestExecutedStrategyChangeComparesToolSequencesOnce`。
 
 ## 11. Required tests
 

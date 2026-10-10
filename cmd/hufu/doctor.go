@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -89,28 +93,61 @@ func collectDoctorContractFindings(session *team.TeamSession, projectDir string)
 	return out
 }
 
+// doctorProviderError exposes only runtime-owned diagnostics. The original
+// cause remains available for error matching, but URLs and response bodies
+// must never enter the doctor report.
+type doctorProviderError struct {
+	Code       string
+	Message    string
+	HTTPStatus int
+	Cause      error
+}
+
+func (err *doctorProviderError) Error() string { return err.Message }
+func (err *doctorProviderError) Unwrap() error { return err.Cause }
+
+func doctorProviderTransportError(err error) *doctorProviderError {
+	failure := &doctorProviderError{Code: "transport_failed", Message: "provider connection failed", Cause: err}
+	networkErr, isNetwork := errors.AsType[net.Error](err)
+	_, isDNS := errors.AsType[*net.DNSError](err)
+	_, isTLS := errors.AsType[*tls.CertificateVerificationError](err)
+	switch {
+	case errors.Is(err, context.Canceled):
+		failure.Code, failure.Message = "request_cancelled", "provider request was cancelled"
+	case errors.Is(err, context.DeadlineExceeded) || (isNetwork && networkErr.Timeout()):
+		failure.Code, failure.Message = "timeout", "provider request timed out"
+	case isDNS:
+		failure.Code, failure.Message = "dns_failed", "provider hostname could not be resolved"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		failure.Code, failure.Message = "connection_refused", "provider connection was refused"
+	case isTLS:
+		failure.Code, failure.Message = "tls_failed", "provider TLS certificate could not be verified"
+	}
+	return failure
+}
+
 func fetchModelsContext(parent context.Context, providerURL, apiKey string) ([]string, error) {
 	url := strings.TrimRight(providerURL, "/") + "/models"
 	ctx, cancel := context.WithTimeout(parent, llmtimeout.Provider(5*time.Second))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, &doctorProviderError{Code: "invalid_request", Message: "provider request configuration is invalid", Cause: err}
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, doctorProviderTransportError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+		return nil, &doctorProviderError{Code: "http_error", HTTPStatus: resp.StatusCode, Message: fmt.Sprintf("provider returned HTTP %d", resp.StatusCode)}
 	}
 	var response modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("could not parse model list: %w", err)
+		return nil, &doctorProviderError{Code: "invalid_model_list", Message: "provider returned an invalid model list", Cause: err}
 	}
 	out := make([]string, 0, len(response.Data))
 	for _, model := range response.Data {

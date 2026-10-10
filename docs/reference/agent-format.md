@@ -528,6 +528,11 @@ Ollama endpoint 無關；模型即使不是 Ollama，工具仍只向固定的
 phase gate 及 closed tool sequence 仍會縮限工具；離線檢查與 `--dry-run`
 不需要真實金鑰。
 
+`side_effect: none` 允許已明確授權的 `web_search`／`web_fetch` 網路觀察；
+它不代表禁止將查詢或 URL 傳出程序。禁止連網需使用 `--no-net` 或對應的
+team／agent `no-net` 設定。這不放寬既有 `fetch`／`agentic_fetch` 的唯讀
+限制，也不取代上述 literal grant、team deny、phase 或 sequence gate。
+
 搜尋的 `query` 最多 2048 UTF-8 bytes；`max_results` 可選，預設 3，範圍
 1–10。擷取的 `url` 最多 4096 bytes，只接受絕對 HTTP(S) URL，不接受
 userinfo、`localhost` 或非公開 IP 字面值。一般 hostname 的遠端 DNS 解析
