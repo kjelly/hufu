@@ -645,6 +645,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 		"ToolExpectedExitCodes":      true,
 		"ForbidArtifacts":            true,
 		"RequiresEvidence":           true,
+		"MaxEvidenceSources":         true,
 		"Steps":                      true,
 	}
 
@@ -660,8 +661,8 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 	}
 
 	// 2. Verify buildAgentTaskProperties exposes coordinator-authored fields
-	// only. TemplateToolGrants is static-team authority and must never appear
-	// in the delegation schema a coordinator model can populate.
+	// only. TemplateToolGrants and MaxEvidenceSources are static-team authority
+	// and must never appear in the delegation schema a coordinator can populate.
 	props := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", nil, true)
 	execProp := props["execution"].(map[string]any)
 	execSubProps := execProp["properties"].(map[string]any)

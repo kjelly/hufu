@@ -57,6 +57,44 @@ func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing
 	}
 }
 
+func TestProtocolIncompleteCompatibilityExportUsesRepairOutcome(t *testing.T) {
+	for _, repaired := range []bool{true, false} {
+		t.Run(fmt.Sprintf("repaired=%t", repaired), func(t *testing.T) {
+			event := func(kind EventType) RunEvent {
+				return RunEvent{Type: string(kind), RunID: "run-repair", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","dispatch_attempt":1}`)}
+			}
+			events := []RunEvent{event(EventTaskStarted), event(EventTaskProtocolIncomplete), event(EventTaskProtocolIncomplete)}
+			legacy := []ExecutionEvent{{Status: "in_progress", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1}}
+			if repaired {
+				events = append(events, event(EventTaskVerifying), event(EventTaskCompleted))
+				legacy = append(legacy,
+					ExecutionEvent{Status: "verifying", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1},
+					ExecutionEvent{Status: "done", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1})
+			} else {
+				events = append(events, event(EventTaskBlocked))
+				legacy = append(legacy, ExecutionEvent{Status: "error", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1})
+			}
+			workspace := t.TempDir()
+			if err := ExportExecutionEvents(workspace, events); err != nil {
+				t.Fatal(err)
+			}
+			projected, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, eventStoreExecutionEventsFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CompareExecutionEventsParity(legacy, projected); err != nil {
+				t.Fatalf("repair outcome parity: %v", err)
+			}
+			if _, mapped := ExecutionEventFromRunEvent(events[1]); mapped {
+				t.Fatal("recoverable checkpoint was projected as a legacy terminal event")
+			}
+			if events[1].Type != string(EventTaskProtocolIncomplete) || events[2].Type != string(EventTaskProtocolIncomplete) {
+				t.Fatal("export mutated canonical recovery evidence")
+			}
+		})
+	}
+}
+
 // The legacy logger numbers attempts with the in-dispatch counter that the
 // attempt-starting task_started event carries as dispatch_attempt, and records
 // a status again when the task re-enters it after another status. The
@@ -479,5 +517,39 @@ func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
 				t.Fatalf("legacy skipped events = %#v, want one for task 1 at attempt %d", skipped, wantAttempt)
 			}
 		})
+	}
+}
+
+func TestSealedPartialRunDoesNotAppendLateTaskSkips(t *testing.T) {
+	workspace := t.TempDir()
+	c := &Coordinator{
+		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "sealed-partial"}},
+		sessionData: NewSession(), taskTracker: NewTaskTracker(),
+	}
+	c.SetSessionData(c.sessionData)
+	closeRun := c.beginExecutionRun()
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "unexecuted work"}})[0]
+	result := &RunResult{RunID: c.executionRunID, Outcome: RunOutcomePartial, StopReason: StopReasonUnresolvedTasks, UnresolvedTasks: []TaskReference{{ID: item.ID, Agent: item.Agent}}}
+	c.FinalizeRun(t.Context(), result, nil)
+	if !c.TerminalLifecycleConfirmed() {
+		t.Fatal("run boundary was not sealed")
+	}
+	before := len(mustReadEvents(t, c.eventStore))
+	// This is the normal Run/Continue tail after ensureFinished has already
+	// committed the partial business result.
+	c.finalizeNormalCompletion()
+	if len(mustReadEvents(t, c.eventStore)) != before || c.todoItemByID(item.ID).Status != TaskPending {
+		t.Fatal("normal completion rewrote the sealed task snapshot")
+	}
+	closeRun()
+	if c.dualWriteFailures.Load() != 0 {
+		t.Fatal("terminal task cleanup broke execution-event parity")
+	}
+	canonical, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, "execution-events.event-store.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(canonical) != 2 || canonical[0].Status != "run_started" || canonical[1].Status != "run_finished" {
+		t.Fatalf("canonical events=%+v", canonical)
 	}
 }

@@ -27,6 +27,118 @@ func loadHufuCodeReviewTeam(t *testing.T) *TeamSession {
 	return session
 }
 
+func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	checked := 0
+	for _, task := range session.ContractTasks {
+		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" {
+			continue
+		}
+		checked++
+		if task.VerifySpec == nil {
+			t.Fatalf("%s has no objective verification", task.ID)
+		}
+		var projection *TaskResultAssertion
+		for i := range task.VerifySpec.TaskResultAssertions {
+			assertion := &task.VerifySpec.TaskResultAssertions[i]
+			if assertion.Op == "equals_projection" {
+				projection = assertion
+			}
+		}
+		if projection == nil || projection.Pointer != "/findings" {
+			t.Fatalf("%s omitted the findings projection", task.ID)
+		}
+		policy, err := decodeTaskResultProjection(projection.Value)
+		if err != nil || policy.Pointer != "/structured_payload/value/record/findings" || !slices.Equal(policy.Fields, []string{"summary", "detail", "severity"}) || !policy.AllowMissing {
+			t.Fatalf("%s projection=%#v error=%v", task.ID, policy, err)
+		}
+		contract := taskResultSubmissionContractForTask(task)
+		candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
+			Findings:          []Finding{{Summary: "gap", Detail: "cannot verify implementation", Severity: "info"}},
+			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[]}}`)},
+		}
+		if err := contract.validateFinalizableResult(candidate); err == nil || !strings.Contains(err.Error(), "exactly 0 items") {
+			t.Fatalf("%s accepts unmirrored outer info finding: %v", task.ID, err)
+		}
+		candidate.Findings = nil
+		if err := contract.validateFinalizableResult(candidate); err != nil {
+			t.Fatalf("%s rejects a clean review with a coverage gap: %v", task.ID, err)
+		}
+	}
+	if checked != 3 {
+		t.Fatalf("checked %d source review contracts, want 3", checked)
+	}
+}
+
+func TestHufuCodeReviewSequentialCritiquesAndFullSynthesisHandoff(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	session.Workspace = t.TempDir()
+	w, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.state = PhaseVerify
+	w.results[PhaseVerify] = PhaseResult{Status: PhaseStatusSuccess}
+	c := &Coordinator{session: session, taskTracker: NewTaskTracker()}
+	ids := completedEvidenceSources(c, 11)
+	// A successful documentation review by critic must not prevent a distinct
+	// critique contract from checking another source in a later call.
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic"}})[0].Status = TaskDone
+	for _, source := range ids[:2] {
+		bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "critic", ContractID: "critic-review", EvidenceFrom: []string{source}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.validateTasks(bound); err != nil {
+			t.Fatalf("single critique dispatch rejected: %v", err)
+		}
+		if err := c.validateDelegationPolicy(bound); err != nil {
+			t.Fatalf("completed critic prevented a new source critique: %v", err)
+		}
+		if _, err := c.bindEvidenceSources(bound); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", EvidenceFrom: ids}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.validateTasks(bound); err != nil {
+		t.Fatal(err)
+	}
+	handoff, err := c.bindEvidenceSources(bound)
+	if err != nil || !slices.Equal(handoff[0].EvidenceFrom, ids) {
+		t.Fatalf("eleven-source synthesis handoff rejected or truncated: %#v %v", handoff, err)
+	}
+}
+
+func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	compiled := session.ResultContracts["schemas/review-v1.json"]
+	if compiled == nil {
+		t.Fatal("review result contract missing")
+	}
+	ref := compiled.ref(true)
+	info := submitResultToolInfo(taskResultSubmissionContract{
+		ResultContract: &ref, resultPayloadSchema: providerVisibleResultPayloadSchema(ref, compiled),
+	})
+	example := generateCompactToolExample(info)
+	raw, err := json.Marshal(example)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateToolArguments(string(raw), info); err != nil {
+		t.Fatalf("repair example violates tool schema: %v", err)
+	}
+	payload, err := json.Marshal(example["structured_payload"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateStructuredResultPayload(compiled, ref, payload); err != nil {
+		t.Fatalf("repair example violates compiled result schema: %v; example=%s", err, raw)
+	}
+}
+
 func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	if len(session.RunInputDefinitions) != 1 {
@@ -77,14 +189,20 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 		t.Fatalf("verifier input bindings = %#v", verifier.Action.InputBindings)
 	}
 	acceptance := session.Config.AcceptanceSpec
-	if acceptance == nil || len(acceptance.Verifications) != 7 ||
+	if acceptance == nil || len(acceptance.Verifications) != 9 ||
 		acceptance.Verifications[0].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[0].WorksetSourceTask != "verify-review-report" ||
+		acceptance.Verifications[0].TaskOutputName != "review_report_verification" ||
 		acceptance.Verifications[1].Type != VerifyTaskOutputAssert ||
 		acceptance.Verifications[2].Type != VerifyTaskOutputAssert ||
 		acceptance.Verifications[3].Type != VerifyTaskOutputAssert ||
-		acceptance.Verifications[4].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[4].Type != VerifyTaskOutputAssert ||
 		acceptance.Verifications[5].Type != VerifyWorksetComplete ||
-		acceptance.Verifications[6].Type != VerifyWorksetComplete {
+		acceptance.Verifications[6].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[7].Type != VerifyWorksetComplete ||
+		acceptance.Verifications[8].Type != VerifyTaskOutputAssert ||
+		acceptance.Verifications[8].WorksetSourceTask != "inventory-review-handoffs" ||
+		acceptance.Verifications[8].TaskOutputName != "review_handoff_inventory" {
 		t.Fatalf("acceptance wiring = %#v", acceptance)
 	}
 	if coordinator := session.Agents["coordinator"]; coordinator == nil || strings.Contains(coordinator.System, "Natural-language scope text cannot override") {

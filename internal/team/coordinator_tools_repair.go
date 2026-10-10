@@ -72,6 +72,7 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 		return fantasy.ToolResponse{}, err
 	}
 
+	call.Input = canonicalToolArgumentObjects(call.Input, t.base.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.base.Info())
 	validationErr := validateToolArguments(call.Input, t.base.Info())
 	t.state.mu.Lock()
@@ -209,18 +210,27 @@ func generateCompactToolExample(info fantasy.ToolInfo) map[string]any {
 	}
 	sort.Strings(keys)
 	for _, name := range keys {
-		result[name] = generateCompactExample(info.Parameters[name])
+		// Domain payload examples should not fabricate optional claims.
+		// Other tool arrays retain an item to illustrate their input shape.
+		result[name] = generateCompactExampleWithArrayDefaults(info.Parameters[name], name == "structured_payload")
 	}
 	return result
 }
 
 func generateCompactExample(raw any) any {
+	return generateCompactExampleWithArrayDefaults(raw, false)
+}
+
+func generateCompactExampleWithArrayDefaults(raw any, emptyOptionalArrays bool) any {
 	schema, _ := raw.(map[string]any)
 	if schema == nil {
 		return nil
 	}
+	if value, ok := schema["const"]; ok {
+		return value
+	}
 	if alternatives, ok := schema["oneOf"].([]any); ok && len(alternatives) > 0 {
-		return generateCompactExample(alternatives[0])
+		return generateCompactExampleWithArrayDefaults(alternatives[0], emptyOptionalArrays)
 	}
 	if enum, ok := schema["enum"].([]string); ok && len(enum) > 0 {
 		return enum[0]
@@ -234,12 +244,16 @@ func generateCompactExample(raw any) any {
 		props, _ := schema["properties"].(map[string]any)
 		for _, name := range schemaStringSlice(schema["required"]) {
 			if child, exists := props[name]; exists {
-				obj[name] = generateCompactExample(child)
+				obj[name] = generateCompactExampleWithArrayDefaults(child, emptyOptionalArrays)
 			}
 		}
 		return obj
 	case "array":
-		return []any{generateCompactExample(schema["items"])}
+		minimum, specified := schemaInt(schema["minItems"])
+		if (specified && minimum == 0) || (!specified && emptyOptionalArrays) {
+			return []any{}
+		}
+		return []any{generateCompactExampleWithArrayDefaults(schema["items"], emptyOptionalArrays)}
 	case "string":
 		return "value"
 	case "boolean":

@@ -515,6 +515,7 @@ func TestDelegationPolicyTaskDoneRealWorkerConsumesSlotWithoutTypedResultStatus(
 					}
 					if policyRepair {
 						c.coordinatorPolicyRepairsAttempt.Store(1)
+						c.coordinatorPolicyRepairPending.Store(true)
 					}
 
 					_, err := c.ExecuteTasks(context.Background(), []TaskDef{{Agent: "reviewer", Goal: "duplicate review"}})
@@ -558,6 +559,7 @@ func TestDelegationPolicyRuntimeOwnedSuccessDoesNotConsumeProtectedWorkerSlot(t 
 					}
 					if policyRepair {
 						c.coordinatorPolicyRepairsAttempt.Store(1)
+						c.coordinatorPolicyRepairPending.Store(true)
 					}
 					if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "review workset"}}); err != nil {
 						t.Fatalf("runtime-owned task consumed protected worker slot: %v", err)
@@ -608,6 +610,7 @@ func TestDelegationPolicyRepairIgnoresRuntimeOwnedTaskStates(t *testing.T) {
 					session:     &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}}}},
 				}
 				c.coordinatorPolicyRepairsAttempt.Store(1)
+				c.coordinatorPolicyRepairPending.Store(true)
 				if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "review workset"}}); err != nil {
 					t.Fatalf("runtime-owned %s task affected policy repair: %v", shape, err)
 				}
@@ -625,6 +628,7 @@ func TestDelegationPolicyRepairDoesNotTrustUnverifiedResolutionLabel(t *testing.
 			item.Resolution = &TaskResolution{Status: status, ResolvedBy: "missing"}
 			c := &Coordinator{taskTracker: tracker, session: &TeamSession{}}
 			c.coordinatorPolicyRepairsAttempt.Store(1)
+			c.coordinatorPolicyRepairPending.Store(true)
 			if err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "repair unfinished work"}}); err != nil {
 				t.Fatalf("unverified label incorrectly treated as completed work: %v", err)
 			}
@@ -647,6 +651,7 @@ func TestDelegationPolicyRepairRealWorkerStillBlocksRuntimeMixedRedispatch(t *te
 		session:     &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{NoRedispatchAfterSuccess: []string{"reviewer"}}}},
 	}
 	c.coordinatorPolicyRepairsAttempt.Store(1)
+	c.coordinatorPolicyRepairPending.Store(true)
 	if err := c.validateDelegationPolicy([]TaskDef{{Agent: "reviewer", Goal: "redispatch review"}}); err == nil || !strings.Contains(err.Error(), "completed workers may not be redispatched") {
 		t.Fatalf("mixed worker/runtime redispatch error = %v, want completed-worker rejection", err)
 	}

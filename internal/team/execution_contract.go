@@ -116,6 +116,9 @@ type ExecutionContract struct {
 	// in full, unchanged, to the worker and sealed in its context manifest.
 	// Missing delivery cannot be accepted as success or terminal TaskDone.
 	RequiresEvidence bool `json:"requires_evidence,omitempty" yaml:"requires-evidence,omitempty"`
+	// MaxEvidenceSources is a configuration-owned fan-in bound. Zero retains
+	// the default; larger synthesis handoffs must declare their capacity.
+	MaxEvidenceSources int `json:"max_evidence_sources,omitzero" yaml:"max-evidence-sources,omitempty"`
 	// Steps is the structured execution contract for workflows that need
 	// artifact/validator dataflow and bounded repair. It is mutually exclusive
 	// with the legacy ToolSequence, which remains supported for existing
@@ -373,6 +376,12 @@ func ValidateExecutionContractFull(task TaskDef, lintMode string) ContractPrefli
 	mode := agent.NormalizeVerifierLintMode(lintMode)
 	c := DefaultExecutionContract(task.Execution)
 	var findings []ContractFinding
+	if _, err := evidenceSourceLimit(c); err != nil {
+		findings = append(findings, ContractFinding{
+			Severity: FindingSeverityError, Code: "invalid_evidence_source_limit",
+			Field: "execution.max_evidence_sources", Message: err.Error(),
+		})
+	}
 
 	switch c.Kind {
 	case ExecutionKindInline, ExecutionKindProcess, ExecutionKindInteractive, ExecutionKindExternal:

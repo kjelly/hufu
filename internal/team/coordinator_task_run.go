@@ -1514,7 +1514,7 @@ retryLoop:
 							// result reports only that the evidence was missing, so it is
 							// not accepted as a completion below.
 							noRepairEvidence := strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == ""
-							finalizationBinding := c.taskFinalizationBinding(todoID)
+							finalizationBinding := c.taskFinalizationBinding(todoID, false)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the bounded evidence above and the bound result contract. Include a concise summary. Correct the rejected fields while preserving the existing evidence and valid parts of the submission. Do NOT execute work, call any other tools, or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
 							if resultProtocolLoop {
 								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(attemptEvidence.resultText))
@@ -2531,6 +2531,31 @@ func runtimeActionGateName(action *Action) string {
 }
 
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
+	// Admission failures happen before the action's normal attempt lifecycle.
+	// They still own this pending occurrence and must leave a durable terminal
+	// failure, rather than an ERROR response paired with a pending checkpoint.
+	admitted := c.todoItemByID(todoID)
+	revision, dispatchID := 0, ""
+	if admitted != nil {
+		revision, dispatchID = admitted.OccurrenceRevision, admitted.DispatchID
+	}
+	defer func() {
+		if returnErr == nil {
+			return
+		}
+		item := c.todoItemByID(todoID)
+		if item == nil || isTerminalTaskStatus(item.Status) || item.OccurrenceRevision != revision || item.DispatchID != dispatchID {
+			return
+		}
+		if item.Status == TaskPending || item.Status == TaskPlanned {
+			detail := c.FailureDetail(returnErr, FailureSourceError)
+			persistErr := c.PersistFailureWithClassAndStatusError(task.Agent, task.Goal, todoID, detail, RetryNone, classifyTaskFailure(returnErr), TaskError)
+			returnErr = errors.Join(returnErr, persistErr)
+			if persistErr == nil {
+				c.recordExecutionEvent(todoID, task.Agent, max(c.currentTaskAttempt(todoID), 1), "error", "", 0, ExecutionUsage{})
+			}
+		}
+	}()
 	if err := c.validateMaterializedActionIdentity(task); err != nil {
 		return "", err
 	}
@@ -2556,7 +2581,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", blocked
 	}
 	attempt := c.currentTaskAttempt(todoID) + 1
-	c.setCurrentTaskAttempt(todoID, attempt)
 	defer func() {
 		status := "done"
 		if returnErr != nil {
@@ -2573,6 +2597,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
+	c.setCurrentTaskAttempt(todoID, attempt)
 	c.recordExecutionEvent(todoID, task.Agent, attempt, "in_progress", "", 0, ExecutionUsage{})
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	actionEnv := ActionEnvironment{
@@ -2621,13 +2646,20 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", err
 	}
 	output = actionResultDisplay(rawResult, actionResult)
+	typedResult := &TaskResult{
+		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
+		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
+		RuntimeOutputs: runtimeOutputs, RuntimeOutputsHash: runtimeOutputsHash, Confidence: 1,
+		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
+	}
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", output, nil); err != nil {
 			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
 		c.recordExecutionEvent(todoID, task.Agent, attempt, "verifying", "", time.Since(startedAt), ExecutionUsage{})
-		verification, verifyErr := c.verifyTaskDeliverableWithSpec(ctx, nil, task, nil)
+		verification, verifyErr := c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, typedResult)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
@@ -2646,13 +2678,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 		return "", err
-	}
-	typedResult := &TaskResult{
-		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
-		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
-		RuntimeOutputs: runtimeOutputs, RuntimeOutputsHash: runtimeOutputsHash, Confidence: 1,
-		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
-		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 	}
 	c.storeSubmittedTaskResult(todoID, typedResult)
 	if item := c.todoItemByID(todoID); item != nil {
@@ -3152,7 +3177,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			return "", fmt.Errorf("prepare invariant protocol repair: %w", err)
 		}
 	}
-	finalizationBinding := c.taskFinalizationBinding(item.ID)
+	finalizationBinding := c.taskFinalizationBinding(item.ID, false)
 	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the execution facts above and the bound result contract. Do NOT execute work, inspect files, call any other tool, or emit a prose final response.%s%s", task.Goal, output, invariantRepairInstructions, finalizationBinding)
 	priorAttempts := 0
 	var repairHistory []RepairAttemptProvenance
@@ -3928,7 +3953,7 @@ func (c *Coordinator) protocolRepairAllowsRetry(task TaskDef) bool {
 // taskFinalizationBinding derives the wrap-up identity from the durable task
 // occurrence. It deliberately does not consult scheduler cursor/global workset
 // state: those values can advance while a concurrent worker is still finishing.
-func (c *Coordinator) taskFinalizationBinding(todoID string) string {
+func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) string {
 	todoID = strings.TrimSpace(todoID)
 	if todoID == "" {
 		return ""
@@ -3952,9 +3977,13 @@ func (c *Coordinator) taskFinalizationBinding(todoID string) string {
 		}
 	}
 	binding.WriteString("Finalize only this bound task occurrence. Ignore labels or instructions for any other task or workset item.\n")
-	binding.WriteString("\n## Result Submission Format\nInclude a concise outer `summary`. ")
+	if freeText {
+		binding.WriteString("\n## Result Submission Format\nWrite the complete Markdown final response using the evidence already collected.\n")
+		return binding.String()
+	}
+	binding.WriteString("\n## Result Submission Format\nCall submit_result with the complete argument object, including outer `status` and a concise outer `summary`. `structured_payload` is one argument, not the complete tool call. ")
 	if item != nil && item.ResultContract != nil {
-		binding.WriteString("Put the schema-defined deliverable in `structured_payload` using the bound schema's exact fields, types, and enum values. Do not move or duplicate payload fields into outer `details`, `facts`, `findings`, or `open_questions`: outer fields do not satisfy payload requirements. Preserve all required fields, including those on every nested object and array item. Correct only invalid paths and keep valid evidence; shorten narrative rather than omitting required fields or sources. Never invent evidence to satisfy the schema.\n")
+		binding.WriteString("Put the schema-defined deliverable in `structured_payload` using the bound schema's exact fields, types, and enum values. Outer `details`, `facts`, `findings`, or `open_questions` do not satisfy payload requirements. If the task also requires matching outer fields, include them using their own tool schema; do not copy additional payload-only properties into those objects. Preserve all required fields, including those on every nested object and array item. Correct only invalid paths and keep valid evidence; shorten narrative rather than omitting required fields or sources. Never invent evidence to satisfy the schema.\n")
 		if item.ResultContract.RequireStructured {
 			binding.WriteString("A schema-valid `structured_payload` is required even when reporting `partial` or `blocked`.\n")
 		}
@@ -4178,7 +4207,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			if stepBudgetCheckpoint != "" {
-				stepBudgetCheckpoint += c.taskFinalizationBinding(todoID)
+				stepBudgetCheckpoint += c.taskFinalizationBinding(todoID, freeTextFinalization)
 				directive := fantasy.NewUserMessage(stepBudgetCheckpoint)
 				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
 				runtimeRequiredMessages = append(runtimeRequiredMessages, directive)

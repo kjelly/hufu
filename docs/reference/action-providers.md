@@ -312,8 +312,8 @@ The capability is referenced by a static task contract in a workflow team.
 The workflow owns phase dispatch, so the team must bind task goals to
 contracts, list the capability as required, give every phase a static
 contract with `contract_id`, and, when verification is required,
-declare an objective check in the verify phase. An action outside the execute
-phase must be `side_effect: none`:
+declare an objective check in the verify phase. Actions in PREPARE or VERIFY
+must explicitly declare `side_effect: none`; actions are not allowed in AUDIT:
 
 ```yaml
 name: review-team
@@ -538,9 +538,9 @@ proposals and a fresh budget.
 ### Workflow teams
 
 In a workflow team a catalog action may run in EXECUTE, and a `side-effect:
-none` action may also run in PREPARE. The last static EXECUTE contract moves
-the workflow to VERIFY as soon as it succeeds, so dispatch a catalog action
-before, or together with, that contract. A catalog task does not count as a
+none` action may also run in PREPARE or VERIFY. The last static EXECUTE contract
+moves the workflow to VERIFY as soon as it succeeds, so dispatch a mutating
+catalog action before, or together with, that contract. A catalog task does not count as a
 phase contract, and a failed catalog task does not fail the phase. Catalog
 tasks in a workflow team cannot use `depends_on`.
 

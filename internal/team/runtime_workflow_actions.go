@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// phaseAllowsAction keeps static validation, catalog discovery, and execution
+// on the same boundary. Read-only verification providers may inspect accepted
+// evidence in VERIFY; mutation remains confined to EXECUTE.
+func phaseAllowsAction(phase Phase, sideEffect string) bool {
+	return phase == PhaseExecute || (phase == PhasePrepare || phase == PhaseVerify) && strings.EqualFold(strings.TrimSpace(sideEffect), string(SideEffectNone))
+}
+
 // ActionsEnabled reports whether this workflow can run structured actions:
 // either its phase workflow is enabled, or a team without phases declares an
 // action catalog. Phase dispatch, validation, and gating still follow
@@ -59,14 +66,14 @@ func runtimeActionEventPhase(w *runtimeWorkflow) string {
 }
 
 // validateCatalogTaskLocked admits a catalog task into the current phase:
-// every entry in EXECUTE, only side-effect-free entries in PREPARE. Catalog
+// every entry in EXECUTE, only side-effect-free entries in PREPARE or VERIFY. Catalog
 // tasks are not phase contracts, so the phase agent, static contract, and
 // dispatch-once checks do not apply. The caller holds w.mu.
 func (w *runtimeWorkflow) validateCatalogTaskLocked(task TaskDef) error {
 	if task.Phase != w.state {
 		return fmt.Errorf("workflow phase %s only accepts %s tasks; catalog action %q is bound to %s", w.state, w.state, task.CatalogAction.ActionID, task.Phase)
 	}
-	if w.state == PhaseExecute || w.state == PhasePrepare && task.SideEffect == SideEffectNone {
+	if phaseAllowsAction(w.state, string(task.SideEffect)) {
 		return nil
 	}
 	return fmt.Errorf("catalog action %q (%s) cannot run in workflow phase %s", task.CatalogAction.ActionID, task.SideEffect, w.state)

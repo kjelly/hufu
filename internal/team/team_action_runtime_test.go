@@ -157,3 +157,32 @@ func TestCatalogActionBindingCloneNormalizesProposals(t *testing.T) {
 		t.Fatal("clone shares proposal IDs with the original")
 	}
 }
+
+func TestStaticActionAdmissionFailurePersistsTerminalOccurrence(t *testing.T) {
+	provider := &recordingActionProvider{result: ActionResult{}}
+	c, events := newDynamicCatalogCoordinator(t, dynamicCatalogSession(t, provider, true))
+	c.sessionData = NewSession()
+	c.SetSessionData(c.sessionData)
+	task, item := addCatalogActionTodo(c, catalogActionTask(nil))
+	_, err := c.executeRuntimeAction(t.Context(), task, item.ID)
+	if err == nil || !strings.Contains(err.Error(), "action invocation requires an enabled runtime workflow") {
+		t.Fatalf("dispatch err=%v", err)
+	}
+	current := c.todoItemByID(item.ID)
+	if current.Status != TaskError || current.FailureEvent == nil || !strings.Contains(current.Detail, err.Error()) || provider.executed != 0 {
+		t.Fatalf("occurrence=%+v calls=%d", current, provider.executed)
+	}
+	saved := LoadSession(c.session.Workspace)
+	if saved == nil || len(saved.Tasks) != 1 || saved.Tasks[0].Status != TaskError {
+		t.Fatalf("checkpoint=%+v", saved)
+	}
+	foundFailure := false
+	for _, event := range mustReadEvents(t, events) {
+		if event.Type == string(EventTaskFailed) && event.TaskID == item.ID {
+			foundFailure = true
+		}
+	}
+	if !foundFailure {
+		t.Fatal("admission rejection has no canonical task_failed event")
+	}
+}

@@ -353,7 +353,7 @@ func learnSecretValue(raw string) {
 
 func unquoteSecretValue(raw string) string {
 	value := strings.TrimSpace(raw)
-	for _, quote := range []string{`\"`, `"`, `'`} {
+	for _, quote := range []string{`\"`, `"`, `'`, "`"} {
 		if len(value) > 2*len(quote) && strings.HasPrefix(value, quote) && strings.HasSuffix(value, quote) {
 			return strings.TrimSpace(value[len(quote) : len(value)-len(quote)])
 		}
@@ -439,10 +439,19 @@ var (
 // out of every later durable record, and each rewrite changed the record's
 // idempotency key, so unchanged tasks were appended to the event store again.
 func looksLikeSourceText(value string) bool {
-	// A value made only of letters is a word or an identifier, such as
-	// `requires` or `requestTokens`. A credential like that is still redacted
+	// These public policy modes describe credential handling, for example
+	// "Missing credential: fail-closed". They are not values to learn and
+	// replace in every later record. Keyed values remain masked, and an
+	// explicitly registered credential still overrides this learning guard.
+	switch strings.ToLower(value) {
+	case "fail-closed", "fail-open", "deny-by-default", "allow-by-default":
+		return true
+	}
+	// A value made only of letters and underscores is a word or an identifier,
+	// such as `requires`, `requestTokens`, or `SERVICE_API_KEY`. A credential
+	// like that is still redacted
 	// beside its key; it is only not matched when it later appears alone.
-	if strings.IndexFunc(value, func(r rune) bool { return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') }) < 0 {
+	if strings.IndexFunc(value, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') }) < 0 {
 		return true
 	}
 	// The middle of a string concatenation: `"api_token=" + secret + "\n"`.

@@ -151,13 +151,13 @@ func validateActionCatalogPhase(session *TeamSession, entry ActionCatalogEntry) 
 		return nil
 	}
 	hasExecute := slices.Contains(phases, PhaseExecute)
-	hasPrepare := slices.Contains(phases, PhasePrepare)
-	if hasExecute || entry.SideEffect == SideEffectNone && hasPrepare {
+	hasReadOnlyPhase := slices.Contains(phases, PhasePrepare) || slices.Contains(phases, PhaseVerify)
+	if hasExecute || entry.SideEffect == SideEffectNone && hasReadOnlyPhase {
 		return nil
 	}
 	allowed := "an execute phase"
 	if entry.SideEffect == SideEffectNone {
-		allowed = "a prepare or execute phase"
+		allowed = "a prepare, execute, or verify phase"
 	}
 	return []ContractFinding{errorFinding(actionCatalogField(entry.ID, "side-effect"), FindingActionCatalogPhaseUnreachable,
 		fmt.Sprintf("action %q (%s) needs %s, which this workflow does not declare", entry.ID, entry.SideEffect, allowed))}

@@ -139,8 +139,8 @@ func newRuntimeWorkflow(session *TeamSession) (*runtimeWorkflow, error) {
 // compiled catalog action (docs/reference/action-providers.md). The runtime
 // owns this boundary: a coordinator cannot supply an action through its tool
 // schema. With phases, mutating actions are permitted only during EXECUTE; a
-// side-effect-free action may also run during PREPARE so deterministic
-// discovery can produce the inputs for later phases.
+// side-effect-free action may also run during PREPARE or VERIFY for
+// deterministic discovery and evidence validation.
 func (w *runtimeWorkflow) executeActionValue(ctx context.Context, action Action) (interface{}, error) {
 	return w.executeActionValueForTask(ctx, action, "")
 }
@@ -153,9 +153,8 @@ func (w *runtimeWorkflow) executeActionValueForTask(ctx context.Context, action 
 	phase := w.state
 	registry := w.registry
 	w.mu.RUnlock()
-	prepareReadOnly := phase == PhasePrepare && strings.EqualFold(strings.TrimSpace(sideEffect), "none")
-	if w.Enabled() && phase != PhaseExecute && !prepareReadOnly {
-		return "", fmt.Errorf("structured action %q is only allowed during execute phase or side-effect-free prepare", action.Type)
+	if w.Enabled() && !phaseAllowsAction(phase, sideEffect) {
+		return "", fmt.Errorf("structured action %q is only allowed during execute phase or side-effect-free prepare/verify", action.Type)
 	}
 	capability := normalizeCapability(action.Capability)
 	if capability == "" {
@@ -944,8 +943,7 @@ func validateRuntimeWorkflowTeam(session *TeamSession, registry *ProviderRegistr
 			return fmt.Errorf("workflow task %q references unknown agent %q", task.ID, task.Agent)
 		}
 		if task.Action != nil {
-			prepareReadOnly := phase == PhasePrepare && strings.EqualFold(strings.TrimSpace(string(task.SideEffect)), "none")
-			if phase != PhaseExecute && !prepareReadOnly {
+			if !phaseAllowsAction(phase, string(task.SideEffect)) {
 				return fmt.Errorf("workflow task %q declares a mutating action outside execute phase", task.ID)
 			}
 			capability := normalizeCapability(task.Action.Capability)

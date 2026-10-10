@@ -322,10 +322,13 @@ func validateStaticFactRef(field string, ref FactRef, consumerIndex int, indexes
 		if fact != "" {
 			findings = append(findings, errorFinding(field+".fact", FindingWorksetReceiptSource, "source-artifact cannot name a fact"))
 		}
+		if strings.TrimSpace(ref.RuntimeOutput) != "" {
+			findings = append(findings, errorFinding(field+".runtime_output", FindingWorksetReceiptSource, "source-artifact cannot name a runtime output"))
+		}
 		return findings
 	}
-	if (fact == "") == (artifact == "") {
-		findings = append(findings, errorFinding(field, FindingWorksetReceiptSource, "fact reference requires exactly one of fact or artifact"))
+	if factRefSelectorCount(ref) != 1 {
+		findings = append(findings, errorFinding(field, FindingWorksetReceiptSource, "fact reference requires exactly one of fact or artifact or runtime_output"))
 	}
 	return findings
 }

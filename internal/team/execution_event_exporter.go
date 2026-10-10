@@ -61,7 +61,12 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		out.Status = "verifying"
 	case string(EventTaskCompleted):
 		out.Status = "done"
-	case string(EventTaskFailed), string(EventTaskBlocked), string(EventTaskProtocolIncomplete), string(EventTaskCancelled):
+	case string(EventTaskProtocolIncomplete):
+		// This is a recoverable checkpoint, not a terminal legacy error.
+		// Raw canonical events retain it for inspection and crash recovery;
+		// the compatibility stream records the eventual repair outcome.
+		return ExecutionEvent{}, false
+	case string(EventTaskFailed), string(EventTaskBlocked), string(EventTaskCancelled):
 		out.Status = "error"
 	case string(EventTaskSkipped):
 		out.Status = "skipped"

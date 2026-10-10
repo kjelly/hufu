@@ -419,6 +419,7 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
+	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
 	if err != nil {
@@ -427,6 +428,18 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 		if strings.Contains(err.Error(), `unknown field "outputs"`) {
 			return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
+		}
+		// The DTO decoder names an unknown field without its parent path.
+		// Resolve that path against the normalized input so a repair can fix
+		// the rejected object without removing a legal namesake elsewhere.
+		if strings.HasPrefix(err.Error(), "json: unknown field ") {
+			if normalized, normalizeErr := normalizeSubmitResultInput([]byte(call.Input)); normalizeErr == nil {
+				validationInfo := t.Info()
+				validationInfo.Required = nil
+				if validationErr := validateToolArguments(string(normalized), validationInfo); validationErr != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.Info()))), nil
+				}
+			}
 		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. Valid example: %s", err, compactToolExampleJSON(t.Info()))), nil
 	}

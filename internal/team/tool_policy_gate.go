@@ -239,6 +239,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	}
 	// Fold enum letter case before any policy, guard, or schema check sees the
 	// arguments, so every tool accepts "BLOCKED" for "blocked" alike.
+	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	_, dynamicGateway := t.inner.(*dynamicToolGateway)
 	if denial := t.coordinator.workerMCPArgumentDenial(t.Info().Name, call.Input); denial != "" {

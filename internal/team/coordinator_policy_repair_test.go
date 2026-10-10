@@ -84,6 +84,7 @@ func TestCoordinatorPolicyRepairNeverRedispatchesCompletedWorker(t *testing.T) {
 	}
 	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{}}}
 	c.coordinatorPolicyRepairsAttempt.Store(1)
+	c.coordinatorPolicyRepairPending.Store(true)
 	err := c.validateDelegationPolicy([]TaskDef{{Agent: "worker", Goal: "repeat completed work"}})
 	if err == nil || !strings.Contains(err.Error(), "completed workers may not be redispatched") {
 		t.Fatalf("validateDelegationPolicy error=%v", err)
@@ -107,9 +108,54 @@ func TestCoordinatorPolicyRepairAllowsRedispatchWhenAgentHasUnfinishedWork(t *te
 	}
 	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{}}}
 	c.coordinatorPolicyRepairsAttempt.Store(1)
+	c.coordinatorPolicyRepairPending.Store(true)
 	err := c.validateDelegationPolicy([]TaskDef{{Agent: "go-reviewer", Goal: "review batch 2 retry"}})
 	if err != nil {
 		t.Fatalf("validateDelegationPolicy failed unexpectedly for agent with unfinished work: %v", err)
+	}
+}
+
+func TestCompletedPolicyRepairRestoresNormalDelegation(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		name := "reusable_role"
+		if protected {
+			name = "one_shot_role"
+		}
+		t.Run(name, func(t *testing.T) {
+			tracker := NewTaskTracker()
+			item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "completed first stage"}})[0]
+			if err := tracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "done", "accepted result"); err != nil {
+				t.Fatal(err)
+			}
+			c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{}}}
+			if protected {
+				c.session.Config.Delegation.NoRedispatchAfterSuccess = []string{"analyst"}
+			}
+			c.coordinatorPolicyRepairPrompt(&delegationPolicyViolation{message: "wrong role in an earlier stage"})
+			// Successful agent delegation clears the pending correction while
+			// preserving cumulative attempts for the bounded repair budget.
+			c.coordinatorPolicyRepairPending.Store(false)
+			c.coordinatorPolicyRepairsSuccess.Add(1)
+			err := c.validateDelegationPolicy([]TaskDef{{Agent: "analyst", Goal: "perform required next stage"}})
+			if protected {
+				if err == nil || !strings.Contains(err.Error(), "successful terminal results may not be redispatched in this team") {
+					t.Fatalf("explicit team one-shot policy was bypassed: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("historical repair attempt prevented normal next-stage work: %v", err)
+			}
+			if c.coordinatorPolicyRepairsAttempt.Load() != 1 || c.coordinatorPolicyRepairsSuccess.Load() != 1 || c.coordinatorPolicyRepairPending.Load() {
+				t.Fatal("normal delegation changed repair accounting")
+			}
+			// A later violation still uses the remaining budget; completing a
+			// correction does not grant unbounded fresh repair attempts.
+			if _, exhausted := c.coordinatorPolicyRepairPrompt(&delegationPolicyViolation{message: "later violation"}); exhausted {
+				t.Fatal("remaining repair attempt was lost")
+			}
+			if _, exhausted := c.coordinatorPolicyRepairPrompt(&delegationPolicyViolation{message: "repeated later violation"}); !exhausted {
+				t.Fatal("completed correction reset the bounded repair budget")
+			}
+		})
 	}
 }
 

@@ -88,8 +88,34 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 		return "", fmt.Errorf("provider-bound context unavailable for auxiliary purpose %q", purpose)
 	}
 	modelSpec := invocation.ModelContext
-	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, DisableCanonicalMemory: true, ModelContext: modelSpec})
+	input := WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, DisableCanonicalMemory: true, ModelContext: modelSpec}
+	// Result repair retains the admitted task's inputs, separately from the
+	// bounded diagnostic prompt. These required blocks must never be truncated
+	// with the transcript summary or replaced by a model's rejected submission.
+	if purpose == "result_repair" || purpose == "protocol_repair" {
+		if item := c.todoItemByID(todoID); item != nil {
+			input.TaskDef = taskDefFromTodoItem(item)
+			input.Constraints = input.TaskDef.Constraints
+			input.RuntimeContext = "Admitted task goal:\n" + input.TaskDef.Goal + "\n" + c.taskFinalizationBinding(todoID, false)
+			ref, compiledContract, err := c.boundResultContract(todoID)
+			if err != nil {
+				return "", err
+			}
+			input.RuntimeContext += resultContractPromptSection(ref, compiledContract, false)
+			input.DependencyResults = c.dependencyResultsForTask(todoID)
+			if len(input.DependencyResults) != len(resultDependencyIDs(item)) {
+				return "", fmt.Errorf("result repair for task %s lacks completed dependency results", todoID)
+			}
+			if err := c.validateDependencyPayloads(input.DependencyResults); err != nil {
+				return "", err
+			}
+		}
+	}
+	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)
 	if err != nil {
+		return "", err
+	}
+	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
 		return "", err
 	}
 	if persist {

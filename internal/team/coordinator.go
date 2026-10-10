@@ -218,8 +218,8 @@ type TaskDef struct {
 	ResourceClaims     []string            `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
 	Resources          []ResourceClaim     `json:"resources,omitempty" yaml:"resources,omitempty"`
 	// FactRefs substitutes {name} in this task's Goal and Constraints with a
-	// named fact or artifact an EARLIER task already declared in its own
-	// submit_result, resolved by the runtime before dispatch. This exists so
+	// named fact, artifact, or receipt-verified runtime output from an EARLIER
+	// task, resolved by the runtime before dispatch. This exists so
 	// a coordinator never retypes a value another task already discovered
 	// (a list, a computed count, a resolved path) into a later task's prose.
 	FactRefs []FactRef `json:"fact_refs,omitempty" yaml:"fact_refs,omitempty"`
@@ -277,13 +277,15 @@ type TaskDef struct {
 // Constraints is replaced with either the named Fact (task_result.Facts[Fact]
 // from the task TaskID already submitted, JSON-encoded unless it is already a
 // plain string) or the named Artifact (matched by exact Description against
-// that task's own submit_result artifacts, resolved to its Path). Exactly one
-// of Fact or Artifact must be set.
+// that task's own submit_result artifacts, resolved to its Path). RuntimeOutput
+// selects a canonical runtime value checked against the current run's receipt
+// and frozen input snapshot. Exactly one selector must be set.
 type FactRef struct {
-	Name     string `json:"name" yaml:"name"`
-	TaskID   string `json:"task_id" yaml:"task_id"`
-	Fact     string `json:"fact,omitempty" yaml:"fact,omitempty"`
-	Artifact string `json:"artifact,omitempty" yaml:"artifact,omitempty"`
+	Name          string `json:"name" yaml:"name"`
+	TaskID        string `json:"task_id" yaml:"task_id"`
+	Fact          string `json:"fact,omitempty" yaml:"fact,omitempty"`
+	Artifact      string `json:"artifact,omitempty" yaml:"artifact,omitempty"`
+	RuntimeOutput string `json:"runtime_output,omitempty" yaml:"runtime_output,omitempty"`
 }
 
 // FanOutSpec names an artifact-backed workset source and a goal template.
@@ -2252,14 +2254,15 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 	}
 	props["fact_refs"] = map[string]any{
 		"type":        "array",
-		"description": "Substitute {name} placeholders in THIS task's goal and constraints with a named fact or artifact an earlier task (in this run) already declared in its own submit_result — resolved by the runtime, not retyped by you. Use this to pass a value one task discovered (a list, a computed count, a resolved path) into a later task's prose exactly, instead of copying it by hand.",
+		"description": "Substitute {name} placeholders in THIS task's goal and constraints with a named fact, artifact, or receipt-verified runtime output from an earlier task. The runtime resolves these values without manual copying.",
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "Placeholder token substituted wherever {name} appears in this task's goal or constraints."},
-				"task_id":  map[string]any{"type": "string", "description": "ID of the earlier task in this run that already submitted the value."},
-				"fact":     map[string]any{"type": "string", "description": "Name of a fact that task declared in its own submit_result 'facts'. Set exactly one of fact or artifact."},
-				"artifact": map[string]any{"type": "string", "description": "Description of an artifact that task declared in its own submit_result 'artifacts' (matched by exact description text), resolved to that artifact's path. Set exactly one of fact or artifact."},
+				"name":           map[string]any{"type": "string", "description": "Placeholder token substituted wherever {name} appears in this task's goal or constraints."},
+				"task_id":        map[string]any{"type": "string", "description": "ID of the earlier task in this run that already submitted the value."},
+				"fact":           map[string]any{"type": "string", "description": "Name of a fact that task declared in its own submit_result 'facts'. Set exactly one of fact, artifact, or runtime_output."},
+				"artifact":       map[string]any{"type": "string", "description": "Description of an artifact that task declared in its own submit_result 'artifacts' (matched by exact description text), resolved to that artifact's path. Set exactly one of fact, artifact, or runtime_output."},
+				"runtime_output": map[string]any{"type": "string", "description": "Exact name of a canonical runtime_outputs value from a completed runtime action with a matching current-run receipt and input snapshot. Set exactly one of fact, artifact, or runtime_output."},
 			},
 			"required": []string{"name", "task_id"},
 		},

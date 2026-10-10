@@ -228,7 +228,7 @@ var modelTaskRuntimeOwnedFields = []string{
 
 // modelExecutionRuntimeOwnedFields are execution-contract keys reserved for
 // configuration-owned result contracts.
-var modelExecutionRuntimeOwnedFields = []string{"result", "result_contract", "result-contract"}
+var modelExecutionRuntimeOwnedFields = []string{"result", "result_contract", "result-contract", "max_evidence_sources", "max-evidence-sources"}
 
 func rejectModelExecutionRuntimeOwnedFields(raw json.RawMessage) error {
 	if len(raw) == 0 {

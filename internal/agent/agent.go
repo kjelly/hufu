@@ -1013,7 +1013,8 @@ type ToolCallAssertion struct {
 // TaskResultAssertion declares a bounded assertion against the canonical
 // structured TaskResult produced by the worker. Pointer uses RFC 6901 JSON
 // Pointer syntax; Op is one of exists, non_empty, equals, min_items, or
-// contains_scalar.
+// contains_scalar or equals_projection. equals_projection takes a bounded
+// object value with pointer, fields, and optional allow_missing.
 type TaskResultAssertion struct {
 	Pointer string `json:"pointer" yaml:"pointer"`
 	Op      string `json:"op" yaml:"op"`

@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "record": {
+      "$ref": "#/$defs/review"
+    }
+  },
+  "required": [
+    "record"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "review": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "review"
+        },
+        "review_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "workset_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^unit-[0-9]{4}$",
+          "description": "Exact WorksetBinding.bindings.key / ItemKey (for example unit-0000), never the Workset ID.",
+          "enum": [
+            "unit-0000",
+            "unit-0001",
+            "unit-0002",
+            "unit-0003",
+            "unit-0004",
+            "unit-0005",
+            "unit-0006",
+            "unit-0007",
+            "unit-0008",
+            "unit-0009",
+            "unit-0010",
+            "unit-0011",
+            "unit-0012",
+            "unit-0013",
+            "unit-0014",
+            "unit-0015",
+            "unit-0016",
+            "unit-0017",
+            "unit-0018",
+            "unit-0019",
+            "unit-0020",
+            "unit-0021",
+            "unit-0022",
+            "unit-0023",
+            "unit-0024",
+            "unit-0025",
+            "unit-0026",
+            "unit-0027",
+            "unit-0028",
+            "unit-0029",
+            "unit-0030",
+            "unit-0031"
+          ]
+        },
+        "lens": {
+          "type": "string",
+          "enum": [
+            "noop",
+            "general",
+            "runtime-integrity",
+            "boundary-tui",
+            "security-tool",
+            "documentation-risk",
+            "documentation"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "location": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192,
+                  "pattern": "^sha256-[0-9a-f]{64}$",
+                  "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                },
+                "minItems": 1,
+                "maxItems": 32
+              },
+              "requires_critique": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "summary",
+              "severity",
+              "location",
+              "evidence",
+              "requires_critique",
+              "detail"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "severity": {
+                      "enum": [
+                        "error",
+                        "warning"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "requires_critique": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "missing_evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "description",
+              "missing_evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "invariant_assessments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": [
+              "invariant_id",
+              "status",
+              "summary"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "invariant_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "preserved",
+                  "violated",
+                  "unknown"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "finding_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missing_evidence": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "review_revision",
+        "workset_key",
+        "lens",
+        "findings",
+        "gaps",
+        "invariant_assessments"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lens": {
+                "const": "noop"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "gaps": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

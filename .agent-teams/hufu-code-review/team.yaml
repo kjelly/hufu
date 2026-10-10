@@ -106,6 +106,8 @@ spec:
       max-concurrent: 1
       inherit-env: [PATH, CODEX_HOME, HOME]
 
+  # PREPARE produces immutable inputs; VERIFY reviews, synthesizes, and runs
+  # the side-effect-free report audit before the workflow can reach DONE.
   workflow:
     phases: [prepare, verify]
   policies:
@@ -113,7 +115,7 @@ spec:
     allow_phase_skip: true
     fail_fast: true
   capabilities:
-    required: [produce-workset, verify-review-tests]
+    required: [produce-workset, verify-review-tests, inventory-review-handoffs, verify-review-report]
   verification:
     required: true
   retry:
@@ -139,15 +141,33 @@ spec:
       mode: trusted-static
       timeout: 1200
 
+    verify-review-report:
+      runtime: golang
+      source: ./reviewgate
+      mode: trusted-static
+      timeout: 30
+
+    inventory-review-handoffs:
+      runtime: golang
+      source: ./reviewgate
+      mode: trusted-static
+      timeout: 30
+
   delegation:
     bind-task-goal-contracts: true
-    allowed-workers: [reviewer, documentation-reviewer, critic]
-    no-redispatch-after-success: [reviewer, documentation-reviewer]
+    forbid-context-files: true
+    allowed-workers: [reviewer, documentation-reviewer, critic, synthesizer]
+    no-redispatch-after-success: [reviewer, documentation-reviewer, synthesizer]
 
   acceptance:
     mode: blocking
     require-no-unresolved-tasks: true
     verifications:
+      - type: task_output_assert
+        source-task: verify-review-report
+        output: review_report_verification
+        assertions:
+          - { pointer: /passed, op: equals, value: true }
       - type: task_output_assert
         source-task: produce-workset
         output: scope
@@ -188,10 +208,15 @@ spec:
         require-all-terminal: true
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
+      - type: task_output_assert
+        source-task: inventory-review-handoffs
+        output: review_handoff_inventory
+        assertions:
+          - { pointer: /passed, op: equals, value: true }
 
   # The producer, snapshot-pinned Go verifier, and all three routed worksets
-  # are blocking. A second critic pass over a typed primary finding remains
-  # optional.
+  # and the final report audit are blocking. Critic dispatch is conditional
+  # on typed requires_critique; every dispatched critic audits one source.
   tasks:
     - id: produce-workset
       agent: reviewer
@@ -225,11 +250,12 @@ spec:
       agent: reviewer
       phase: verify
       invariant-verification: report
+      result-contract: { schema: schemas/review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
           artifact: primary review workset manifest
-        goal-template: "Review primary workset item {key} with the {lens} lens."
+        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -239,15 +265,22 @@ spec:
         task-result-assertions:
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
+          - pointer: /findings
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/findings
+              fields: [summary, detail, severity]
+              allow_missing: true
 
     - id: review-documentation-workset
       agent: documentation-reviewer
       phase: verify
+      result-contract: { schema: schemas/review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
           artifact: documentation review workset manifest
-        goal-template: "Review routine documentation workset item {key} with the {lens} lens."
+        goal-template: 'Review routine documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -257,15 +290,22 @@ spec:
         task-result-assertions:
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
+          - pointer: /findings
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/findings
+              fields: [summary, detail, severity]
+              allow_missing: true
 
     - id: review-documentation-escalation
       agent: critic
       phase: verify
+      result-contract: { schema: schemas/review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
           artifact: documentation escalation workset manifest
-        goal-template: "Adversarially review escalated documentation workset item {key} with the {lens} lens."
+        goal-template: 'Adversarially review escalated documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -275,19 +315,95 @@ spec:
         task-result-assertions:
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
+          - pointer: /findings
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/findings
+              fields: [summary, detail, severity]
+              allow_missing: true
 
     - id: critic-review
       agent: critic
       phase: verify
       optional: true
+      result-contract: { schema: schemas/critique-v1.json, require-structured: true }
       execution:
         requires-result: true
         requires-grounded-result: true
-        # The critic checks one completed review's finding. Without
+        # The critic checks every finding of one completed review. Without
         # evidence_from it has neither the finding nor the diff and snapshot
         # artifacts that review was given.
         requires-evidence: true
+        max-evidence-sources: 1
       verify-spec:
         type: task_result_assert
         task-result-assertions:
           - { pointer: /summary, op: non_empty }
+
+    # These follow-up contracts are optional to the phase batch scheduler;
+    # the blocking report audit acceptance makes their results mandatory.
+    - id: inventory-review-handoffs
+      agent: reviewer
+      phase: verify
+      optional: true
+      side_effect: none
+      recovery: retry
+      action:
+        capability: inventory-review-handoffs
+        type: inventory_review_handoffs
+        payload: >-
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}
+        input-bindings:
+          - input: review.scope
+            target: /scope
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/review_handoff_inventory/passed, op: equals, value: true }
+
+    - id: synthesize-review
+      agent: synthesizer
+      phase: verify
+      optional: true
+      result-contract: { schema: schemas/report-v1.json, require-structured: true }
+      constraints: |-
+        PREPARE Runtime Outputs (receipt-verified; copy these JSON values verbatim):
+        scope: {scope_attestation}
+        targeted_go_tests: {test_attestation}
+        Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
+        {handoff_inventory}
+      fact_refs:
+        - { name: scope_attestation, task_id: produce-workset, runtime_output: scope }
+        - { name: test_attestation, task_id: verify-targeted-go-tests, runtime_output: targeted_go_tests }
+        - { name: handoff_inventory, task_id: inventory-review-handoffs, runtime_output: review_handoff_inventory }
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+        requires-evidence: true
+        # The producer permits 32 total reviews; each may require one critic.
+        max-evidence-sources: 64
+        forbid-artifacts: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /summary, op: non_empty }
+          - { pointer: /files_read, op: min_items, value: 1 }
+
+    - id: verify-review-report
+      agent: reviewer
+      phase: verify
+      optional: true
+      side_effect: none
+      recovery: retry
+      action:
+        capability: verify-review-report
+        type: verify_review_report
+        payload: >-
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}
+        input-bindings:
+          - input: review.scope
+            target: /scope
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/review_report_verification/passed, op: equals, value: true }

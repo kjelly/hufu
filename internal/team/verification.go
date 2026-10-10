@@ -679,6 +679,12 @@ func validateTaskResultAssertion(index int, assertion TaskResultAssertion) error
 	if strings.TrimSpace(assertion.Op) == "" {
 		return fmt.Errorf("task_result_assert assertion %d requires a non-empty op", index)
 	}
+	if assertion.Op == "equals_projection" {
+		if _, err := decodeTaskResultProjection(assertion.Value); err != nil {
+			return fmt.Errorf("task_result_assert assertion %d: %w", index, err)
+		}
+		return nil
+	}
 	if assertion.Value != nil {
 		if !isJSONScalar(assertion.Value) {
 			return fmt.Errorf("task_result_assert assertion %d value must be a scalar", index)
@@ -1121,6 +1127,12 @@ func evaluateTaskResultAssertions(document any, assertions []TaskResultAssertion
 	var failures []string
 	for i, assertion := range assertions {
 		value, resolveErr := resolveJSONPointer(document, assertion.Pointer)
+		if assertion.Op == "equals_projection" {
+			if err := evaluateTaskResultProjection(document, value, resolveErr, assertion.Value); err != nil {
+				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q: %v", i, assertion.Pointer, err))
+			}
+			continue
+		}
 		if resolveErr != nil {
 			if assertion.Op == "exists" {
 				failures = append(failures, fmt.Sprintf("assertion %d: pointer %q does not exist: %v", i, assertion.Pointer, resolveErr))

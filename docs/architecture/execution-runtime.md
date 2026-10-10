@@ -308,6 +308,13 @@ evidence, last-operation tracking, and shadow projections use the logical MCP
 target with the parent model call ID; a gateway call still consumes only one
 model tool step.
 
+The canonical `task_protocol_incomplete` event records a recoverable result
+checkpoint and remains available for inspection and crash recovery. The legacy
+execution-event compatibility export omits that checkpoint: it records the
+subsequent verification/completion or terminal failed/blocked/cancelled outcome.
+A successfully repaired submission therefore does not acquire a terminal error
+in the compatibility stream.
+
 ## Backend identity
 
 `ollama` is the canonical built-in LLM backend name. `local` is accepted only
@@ -461,3 +468,61 @@ For implementation details, use code and tests first:
   stable MCP provider surface and logical dispatch;
 - [`scoped_file_access_unix.go`](../../internal/tools/scoped_file_access_unix.go)
   — root-anchored bounded file access.
+
+### Read-only verification actions
+
+Static workflow actions and catalog actions with `side_effect: none` may run
+in PREPARE or VERIFY, as well as EXECUTE. VERIFY providers can inspect accepted
+evidence after worker verification without reopening mutation authority. AUDIT
+still forbids actions, and actions that can mutate state remain confined to
+EXECUTE. Configuration validation, catalog discovery, and provider dispatch use
+the same phase rule. A declared `task_result_assert` on an action evaluates the
+provider's canonical runtime outputs before publishing the successful result or
+receipt; verification failure leaves the occurrence failed.
+
+### Ordered result projections
+
+Teams may declare an `equals_projection` task-result assertion to compare two
+ordered object arrays before a successful worker result is committed and again
+at objective verification. The assertion's `pointer` selects the first array;
+its configuration-owned `value` contains a reference `pointer`, 1–16 unique
+`fields`, and optional boolean `allow_missing`. Both arrays must have the same
+length, and every selected field must exist and match at the same index.
+Additional fields are ignored; array order is significant. This supports an
+outer result summary paired with a richer schema-defined record without
+teaching the runtime domain-specific field names.
+
+`allow_missing: true` permits an omitted first array only when the reference
+array exists and is empty, accommodating canonical `omitempty` fields. Null,
+wrong types, missing references, extra entries, and substituted fields fail
+closed. The policy is bounded, pinned in the execution contract and verification
+fingerprint, preserved on resume, and reused during result repair. References
+to runtime-owned transcript fields are deferred until transcript finalization.
+Rejected submissions leave the original occurrence available for correction;
+they do not persist an accepted result that later synthesis must repair.
+
+Process-wide secret learning excludes source identifiers made of letters and
+underscores, including public environment variable names. Such values remain
+masked beside credential keys, and explicitly registered secret values remain
+masked everywhere. Treating a public variable name as a learned secret would
+otherwise rewrite earlier validated payloads during subsequent checkpoints,
+invalidate their hashes, and change task event idempotency keys. Markdown
+backticks are treated as quoting for learning, so real quoted credentials still
+receive bare-value protection while quoted source symbols remain identifiers.
+Public policy labels (`fail-closed`, `fail-open`, `deny-by-default`, and
+`allow-by-default`) likewise remain ordinary text during bare-value learning.
+For example, a review note saying `Missing credential: fail-closed` must not
+rewrite earlier evidence of that policy. The keyed value is still masked;
+explicit credential registration takes precedence over this learning guard.
+
+Coordinator policy repair restricts dispatch only while a correction is
+pending. A successful delegation clears that state; cumulative attempt and
+success counters remain for telemetry and the bounded repair budget. Later
+workflow steps use normal team delegation policy, including any explicit
+`no-redispatch-after-success` restrictions. A historical correction must not
+permanently consume every worker role used in the repaired batch.
+
+Once `run_finished` is committed, normal completion does not rewrite unresolved
+tasks as skipped. The sealed terminal snapshot keeps their states and original
+diagnostics for inspection and recovery, without appending task transitions
+after the run boundary.

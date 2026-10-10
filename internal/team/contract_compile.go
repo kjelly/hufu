@@ -34,6 +34,8 @@ type EffectiveTaskContract struct {
 	DecisionBaseRates     []BaseRateEvidence        `json:"decision_base_rates,omitempty"`
 	DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
 	DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
+	ContextConstraints    string                    `json:"context_constraints,omitempty"`
+	ContextFactRefs       []FactRef                 `json:"context_fact_refs,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -85,6 +87,9 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash initial task contract %q: %w", contractID, err)
 		}
+		if err := bindStaticTaskContext(&bound[i], contract, hash); err != nil {
+			return nil, nil, err
+		}
 		bound[i].Execution = cloneExecutionContract(contract.Execution)
 		bound[i].OutputMode = contract.OutputMode
 		bound[i].SideEffect = contract.SideEffect
@@ -103,7 +108,8 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		contextConstraints, contextRefs := staticTaskContext(contract)
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs})
 	}
 	return bound, effective, nil
 }
@@ -157,6 +163,9 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		if err != nil {
 			return nil, nil, fmt.Errorf("hash task goal contract %q: %w", contractID, err)
 		}
+		if err := bindStaticTaskContext(&bound[i], contract, hash); err != nil {
+			return nil, nil, err
+		}
 		bound[i].Execution = cloneExecutionContract(contract.Execution)
 		bound[i].OutputMode = contract.OutputMode
 		bound[i].SideEffect = contract.SideEffect
@@ -175,7 +184,8 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].ContractID = contractID
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance)})
+		contextConstraints, contextRefs := staticTaskContext(contract)
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs})
 	}
 	return bound, effective, nil
 }
@@ -289,6 +299,29 @@ func executionContractsEqualOrEmpty(got, want ExecutionContract) bool {
 	return leftErr == nil && rightErr == nil && string(left) == string(right)
 }
 
+// Static context is bound once, before fact resolution. The final contract
+// binding pass must preserve already-resolved text instead of restoring tokens.
+func staticTaskContext(contract TaskDef) (string, []FactRef) {
+	if len(contract.FactRefs) == 0 {
+		return "", nil
+	}
+	return contract.Constraints, append([]FactRef(nil), contract.FactRefs...)
+}
+
+func bindStaticTaskContext(task *TaskDef, contract TaskDef, hash string) error {
+	if len(contract.FactRefs) == 0 || task.ContractHash == hash {
+		return nil
+	}
+	for _, ref := range contract.FactRefs {
+		if strings.TrimSpace(ref.Name) == "" || strings.TrimSpace(ref.TaskID) == "" || factRefSelectorCount(ref) != 1 || !strings.Contains(contract.Constraints, "{"+ref.Name+"}") {
+			return fmt.Errorf("task contract %q has an invalid static context reference %q: requires name, task_id, and a constraints placeholder", contract.ID, ref.Name)
+		}
+	}
+	task.Constraints = contract.Constraints
+	task.FactRefs = append([]FactRef(nil), contract.FactRefs...)
+	return nil
+}
+
 func effectiveContractHash(id, agent string, execution ExecutionContract, outputMode string, sideEffect SideEffectClass, recovery RecoveryPolicy, maxRetries int, action *Action, fanOut *FanOutSpec, optional bool, evidence ...TaskDef) (string, error) {
 	payload := struct {
 		ID                    string                    `json:"id"`
@@ -310,7 +343,9 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		DecisionAssumptions   []DecisionAssumption      `json:"decision_assumptions,omitempty"`
 		DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
 		ResultContract        *resultContractSpec       `json:"result_contract,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil}
+		ContextConstraints    string                    `json:"context_constraints,omitempty"`
+		ContextFactRefs       []FactRef                 `json:"context_fact_refs,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil, "", nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
 		payload.InvariantVerification = declared.InvariantVerification
@@ -321,6 +356,10 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		payload.DecisionAssumptions = cloneDecisionAssumptions(declared.DecisionAssumptions)
 		payload.DecisionProvenance = cloneEvidenceProvenance(declared.DecisionProvenance)
 		payload.ResultContract = declared.ResultContractSpec.Clone()
+		if len(declared.FactRefs) > 0 {
+			payload.ContextConstraints = declared.Constraints
+			payload.ContextFactRefs = append([]FactRef(nil), declared.FactRefs...)
+		}
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -394,6 +433,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 				findings = append(findings, contractFinding(field+".output_mode", "goal_contract_output_mode", err.Error()))
 			}
 			findings = append(findings, validateOnFailureClasses(field, task.OnFailureClasses)...)
+			if err := bindStaticTaskContext(&TaskDef{}, task, "preflight"); err != nil {
+				findings = append(findings, contractFinding(field+".fact_refs", "static_context_invalid", err.Error()))
+			}
 			for _, finding := range ValidateExecutionContractFull(task, "error").Findings {
 				if finding.Severity == FindingSeverityError {
 					finding.Field = field + "." + finding.Field
@@ -437,6 +479,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 			findings = append(findings, contractFinding(field+".output_mode", "initial_contract_output_mode", err.Error()))
 		}
 		findings = append(findings, validateOnFailureClasses(field, task.OnFailureClasses)...)
+		if err := bindStaticTaskContext(&TaskDef{}, task, "preflight"); err != nil {
+			findings = append(findings, contractFinding(field+".fact_refs", "static_context_invalid", err.Error()))
+		}
 		for _, finding := range ValidateExecutionContractFull(task, "error").Findings {
 			if finding.Severity == FindingSeverityError {
 				finding.Field = field + "." + finding.Field

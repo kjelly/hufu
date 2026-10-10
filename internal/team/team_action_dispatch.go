@@ -184,7 +184,7 @@ func (c *Coordinator) catalogDispatchPhase(entry ActionCatalogEntry) (Phase, boo
 		return "", true
 	}
 	state := c.phaseWorkflow.State()
-	return state, state == PhaseExecute || state == PhasePrepare && entry.SideEffect == SideEffectNone
+	return state, phaseAllowsAction(state, string(entry.SideEffect))
 }
 
 // catalogDecisionProfileBlocked reports whether a catalog task, whose own

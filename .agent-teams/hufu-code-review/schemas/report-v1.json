@@ -1,0 +1,1951 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "audit_complete": {
+      "const": true
+    },
+    "coverage": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "completed_with_gaps"
+      ]
+    },
+    "input_review": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "payload_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/review"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "critique"
+                  },
+                  "input_review": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 8192
+                        },
+                        "payload_sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "record": {
+                          "$ref": "#/$defs/review",
+                          "properties": {
+                            "findings": {
+                              "minItems": 1
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "task_id",
+                        "payload_sha256",
+                        "record"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 1
+                  },
+                  "decisions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "finding_index": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 31
+                        },
+                        "verdict": {
+                          "type": "string",
+                          "enum": [
+                            "confirmed",
+                            "downgraded",
+                            "rejected",
+                            "unverified"
+                          ]
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "error",
+                            "warning",
+                            "info"
+                          ]
+                        },
+                        "rationale": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 8192
+                        },
+                        "evidence": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192,
+                            "pattern": "^sha256-[0-9a-f]{64}$",
+                            "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                          },
+                          "minItems": 0,
+                          "maxItems": 32
+                        },
+                        "missing_evidence": {
+                          "type": "string",
+                          "maxLength": 8192
+                        }
+                      },
+                      "required": [
+                        "finding_index",
+                        "verdict",
+                        "severity",
+                        "rationale",
+                        "evidence",
+                        "missing_evidence"
+                      ],
+                      "additionalProperties": false,
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "verdict": {
+                                "const": "unverified"
+                              }
+                            }
+                          },
+                          "then": {
+                            "properties": {
+                              "missing_evidence": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            }
+                          },
+                          "else": {
+                            "properties": {
+                              "evidence": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 8192,
+                                  "pattern": "^sha256-[0-9a-f]{64}$",
+                                  "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                                },
+                                "minItems": 1,
+                                "maxItems": 32
+                              },
+                              "missing_evidence": {
+                                "const": ""
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "allOf": [
+                      {
+                        "prefixItems": [
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 0
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 1
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 2
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 3
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 4
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 5
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 6
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 7
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 8
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 9
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 10
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 11
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 12
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 13
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 14
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 15
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 16
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 17
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 18
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 19
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 20
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 21
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 22
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 23
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 24
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 25
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 26
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 27
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 28
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 29
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 30
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "finding_index": {
+                                "const": 31
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input_review",
+                  "decisions"
+                ],
+                "additionalProperties": false,
+                "$comment": "Every decision satisfies items; separate allOf prefixItems enforces ascending indices without overriding items. Count-specific conditions bind exact source coverage.",
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 1,
+                                      "maxItems": 1
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 1,
+                          "maxItems": 1
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 2,
+                                      "maxItems": 2
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 2,
+                          "maxItems": 2
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 3,
+                                      "maxItems": 3
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 3,
+                          "maxItems": 3
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 4,
+                                      "maxItems": 4
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 4,
+                          "maxItems": 4
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 5,
+                                      "maxItems": 5
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 5,
+                          "maxItems": 5
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 6,
+                                      "maxItems": 6
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 6,
+                          "maxItems": 6
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 7,
+                                      "maxItems": 7
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 7,
+                          "maxItems": 7
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 8,
+                                      "maxItems": 8
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 8,
+                          "maxItems": 8
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 9,
+                                      "maxItems": 9
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 9,
+                          "maxItems": 9
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 10,
+                                      "maxItems": 10
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 10,
+                          "maxItems": 10
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 11,
+                                      "maxItems": 11
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 11,
+                          "maxItems": 11
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 12,
+                                      "maxItems": 12
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 12,
+                          "maxItems": 12
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 13,
+                                      "maxItems": 13
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 13,
+                          "maxItems": 13
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 14,
+                                      "maxItems": 14
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 14,
+                          "maxItems": 14
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 15,
+                                      "maxItems": 15
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 15,
+                          "maxItems": 15
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 16,
+                                      "maxItems": 16
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 16,
+                          "maxItems": 16
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 17,
+                                      "maxItems": 17
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 17,
+                          "maxItems": 17
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 18,
+                                      "maxItems": 18
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 18,
+                          "maxItems": 18
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 19,
+                                      "maxItems": 19
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 19,
+                          "maxItems": 19
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 20,
+                                      "maxItems": 20
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 20,
+                          "maxItems": 20
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 21,
+                                      "maxItems": 21
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 21,
+                          "maxItems": 21
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 22,
+                                      "maxItems": 22
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 22,
+                          "maxItems": 22
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 23,
+                                      "maxItems": 23
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 23,
+                          "maxItems": 23
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 24,
+                                      "maxItems": 24
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 24,
+                          "maxItems": 24
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 25,
+                                      "maxItems": 25
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 25,
+                          "maxItems": 25
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 26,
+                                      "maxItems": 26
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 26,
+                          "maxItems": 26
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 27,
+                                      "maxItems": 27
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 27,
+                          "maxItems": 27
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 28,
+                                      "maxItems": 28
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 28,
+                          "maxItems": 28
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 29,
+                                      "maxItems": 29
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 29,
+                          "maxItems": 29
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 30,
+                                      "maxItems": 30
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 30,
+                          "maxItems": 30
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 31,
+                                      "maxItems": 31
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 31,
+                          "maxItems": 31
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "input_review": {
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "record": {
+                                  "properties": {
+                                    "findings": {
+                                      "minItems": 32,
+                                      "maxItems": 32
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "decisions": {
+                          "minItems": 32,
+                          "maxItems": 32
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "task_id",
+          "payload_sha256",
+          "record"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 128
+    },
+    "gap_resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "gap_index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 31
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "retained",
+              "resolved_cross_workset"
+            ]
+          },
+          "resolving_task_id": {
+            "type": "string",
+            "description": "One other accepted review whose files_read contains the sole evidence artifact. Never combine evidence from different reviews under this ID."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192,
+              "pattern": "^sha256-[0-9a-f]{64}$",
+              "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+            },
+            "minItems": 0,
+            "maxItems": 1,
+            "description": "At most one artifact for a bounded cross-workset resolution. That same artifact must be read by both resolving_task_id and the synthesizer and fully answer the gap. Retain gaps requiring combined artifacts or reviews."
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "source_task_id",
+          "gap_index",
+          "status",
+          "resolving_task_id",
+          "evidence",
+          "explanation"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "resolved_cross_workset"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resolving_task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192,
+                    "pattern": "^sha256-[0-9a-f]{64}$",
+                    "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "resolving_task_id": {
+                  "const": ""
+                },
+                "evidence": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 2048
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "requested",
+        "requested_input_hash",
+        "resolved",
+        "observed_budget",
+        "satisfied"
+      ],
+      "properties": {
+        "requested": {
+          "type": "object",
+          "required": [
+            "kind",
+            "history",
+            "head"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "last_n",
+                "revision_range",
+                "since",
+                "working_tree"
+              ]
+            },
+            "history": {
+              "type": "string",
+              "enum": [
+                "first_parent"
+              ]
+            },
+            "head": {
+              "type": "string",
+              "minLength": 1
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "commit_type": {
+              "type": "string",
+              "enum": [
+                "feat"
+              ]
+            },
+            "base": {
+              "type": "string",
+              "minLength": 1
+            },
+            "since": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "resolved": {
+          "type": "object",
+          "required": [
+            "base",
+            "head",
+            "selected_commit_count",
+            "available_commit_count",
+            "history_exhausted",
+            "repository_shallow"
+          ],
+          "properties": {
+            "base": {
+              "type": "string"
+            },
+            "head": {
+              "type": "string"
+            },
+            "selected_commit_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "available_commit_count": {
+              "type": "integer"
+            },
+            "history_exhausted": {
+              "type": "boolean"
+            },
+            "repository_shallow": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "satisfied": {
+          "const": true
+        },
+        "requested_input_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "observed_budget": {
+          "type": "object",
+          "properties": {
+            "changed_paths": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_diff_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_diff_lines": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "workset_items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "changed_paths",
+            "total_diff_bytes",
+            "total_diff_lines",
+            "workset_items"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "test_verification": {
+      "type": "object",
+      "required": [
+        "passed",
+        "reviewed_revision",
+        "command",
+        "artifact_id",
+        "artifact_sha256",
+        "base_revision",
+        "packages",
+        "requested_input_hash",
+        "exit_code",
+        "timed_out",
+        "output_truncated"
+      ],
+      "properties": {
+        "passed": {
+          "const": true
+        },
+        "reviewed_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "base_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "requested_input_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "exit_code": {
+          "type": "integer",
+          "const": 0
+        },
+        "timed_out": {
+          "const": false
+        },
+        "output_truncated": {
+          "const": false
+        },
+        "diagnostic": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "audit_complete",
+    "coverage",
+    "input_review",
+    "gap_resolutions",
+    "scope",
+    "test_verification"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "review": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "review"
+        },
+        "review_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "workset_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^unit-[0-9]{4}$",
+          "description": "Exact WorksetBinding.bindings.key / ItemKey (for example unit-0000), never the Workset ID.",
+          "enum": [
+            "unit-0000",
+            "unit-0001",
+            "unit-0002",
+            "unit-0003",
+            "unit-0004",
+            "unit-0005",
+            "unit-0006",
+            "unit-0007",
+            "unit-0008",
+            "unit-0009",
+            "unit-0010",
+            "unit-0011",
+            "unit-0012",
+            "unit-0013",
+            "unit-0014",
+            "unit-0015",
+            "unit-0016",
+            "unit-0017",
+            "unit-0018",
+            "unit-0019",
+            "unit-0020",
+            "unit-0021",
+            "unit-0022",
+            "unit-0023",
+            "unit-0024",
+            "unit-0025",
+            "unit-0026",
+            "unit-0027",
+            "unit-0028",
+            "unit-0029",
+            "unit-0030",
+            "unit-0031"
+          ]
+        },
+        "lens": {
+          "type": "string",
+          "enum": [
+            "noop",
+            "general",
+            "runtime-integrity",
+            "boundary-tui",
+            "security-tool",
+            "documentation-risk",
+            "documentation"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "location": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192,
+                  "pattern": "^sha256-[0-9a-f]{64}$",
+                  "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                },
+                "minItems": 1,
+                "maxItems": 32
+              },
+              "requires_critique": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "summary",
+              "severity",
+              "location",
+              "evidence",
+              "requires_critique",
+              "detail"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "severity": {
+                      "enum": [
+                        "error",
+                        "warning"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "requires_critique": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "missing_evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "description",
+              "missing_evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "invariant_assessments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": [
+              "invariant_id",
+              "status",
+              "summary"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "invariant_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "preserved",
+                  "violated",
+                  "unknown"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "finding_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missing_evidence": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "review_revision",
+        "workset_key",
+        "lens",
+        "findings",
+        "gaps",
+        "invariant_assessments"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lens": {
+                "const": "noop"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "gaps": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-hufu-evidence-inputs": {
+    "items_pointer": "/input_review",
+    "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256",
+    "complete_pointer": "/audit_complete",
+    "value_bindings": {
+      "/record": "/record"
+    }
+  },
+  "x-hufu-final-report": "範圍：{{.scope.requested}}；已選 commit：{{.scope.resolved.selected_commit_count}}；base {{.scope.resolved.base}}；head {{.scope.resolved.head}}\n已執行 targeted Go tests：{{.test_verification.command}}；revision {{.test_verification.reviewed_revision}}；結果 passed={{.test_verification.passed}}；artifact {{.test_verification.artifact_id}}\n審查覆蓋：{{.coverage}}。此判定描述審查證據的完整性，程式風險見逐項 findings 與 critic 判定。\n{{range .input_review}}\n來源 task {{.task_id}}（payload {{.payload_sha256}}）\n{{if eq .record.kind \"review\"}}工作集 {{.record.workset_key}}；lens {{.record.lens}}；revision {{.record.review_revision}}\n{{range $i, $f := .record.findings}}- finding {{$i}} [{{$f.severity}}] {{$f.location}}：{{$f.summary}}{{if $f.detail}}；{{$f.detail}}{{end}}；需 critic：{{$f.requires_critique}}；證據：{{range $f.evidence}}{{.}} {{end}}\n{{else}}- 無具體 findings。\n{{end}}{{range $i, $g := .record.gaps}}- 原始局部缺口 {{$i}}：{{$g.description}}；缺少證據：{{$g.missing_evidence}}\n{{end}}{{range .record.invariant_assessments}}- invariant {{.invariant_id}}：{{.status}}；{{.summary}}{{with index . \"missing_evidence\"}}；缺少證據：{{.}}{{end}}\n{{end}}{{else}}{{range .record.input_review}}Critic 對象：task {{.task_id}}（payload {{.payload_sha256}}）\n{{end}}{{range .record.decisions}}- finding {{.finding_index}}：{{.verdict}} [{{.severity}}] {{.rationale}}；證據：{{range .evidence}}{{.}} {{end}}{{if .missing_evidence}}；未解證據：{{.missing_evidence}}{{end}}\n{{end}}{{end}}{{end}}\n跨工作集缺口處理：\n{{range .gap_resolutions}}- task {{.source_task_id}} gap {{.gap_index}}：{{.status}}；{{.explanation}}{{if .resolving_task_id}}；解答 task {{.resolving_task_id}}；證據：{{range .evidence}}{{.}} {{end}}{{end}}\n{{else}}- 無原始缺口。\n{{end}}"
+}

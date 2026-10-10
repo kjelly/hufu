@@ -112,17 +112,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		// wrong tasks.
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
-	// fact_refs resolves against each (possibly fan_out-expanded) task's own
-	// Goal/Constraints text, so it must run after expansion and, like
-	// expansion, before any goal-contract binding.
-	tasks, err = c.resolveFactRefs(tasks)
-	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
-	}
 	tasks, err = c.bindInitialTaskContracts(tasks)
 	if err != nil {
 		// This is a compile-time configuration conflict, not a worker failure:
 		// no TODO/model call has happened and no execution retry is consumed.
+		return "", c.rejectDelegationPolicy(err.Error())
+	}
+	// Static contracts contribute context references before resolution. Resolve
+	// each expanded task's template before the final goal-contract binding;
+	// that binding preserves context already resolved under the same hash.
+	tasks, err = c.resolveFactRefs(tasks)
+	if err != nil {
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
 	tasks, err = c.bindTaskGoalContracts(tasks)

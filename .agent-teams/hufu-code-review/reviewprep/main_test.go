@@ -1711,7 +1711,11 @@ func TestSnapshotGoBuildIgnoresEnclosingVCSDirectory(t *testing.T) {
 	}
 	build := exec.Command("go", "build", "-o", filepath.Join(root, "snapshot-bin"), ".")
 	build.Dir = module
-	build.Env = sanitizedGoTestEnvironment()
+	var err error
+	build.Env, err = sanitizedGoTestEnvironment(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build under an enclosing .git: %v\n%s", err, output)
 	}

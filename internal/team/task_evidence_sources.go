@@ -6,9 +6,21 @@ import (
 	"strings"
 )
 
-// maxEvidenceSources bounds evidence_from. A task that checks other work
-// names the few tasks it checks, not a whole run.
+// Most evidence consumers inspect a few sources. Larger fan-in is opt-in,
+// configuration-owned, and bounded independently of model-authored input.
 const maxEvidenceSources = 8
+const maxConfiguredEvidenceSources = 64
+
+func evidenceSourceLimit(contract ExecutionContract) (int, error) {
+	limit := contract.MaxEvidenceSources
+	if limit < 0 || limit > maxConfiguredEvidenceSources {
+		return 0, fmt.Errorf("execution.max_evidence_sources must be between 0 and %d", maxConfiguredEvidenceSources)
+	}
+	if limit == 0 {
+		limit = maxEvidenceSources
+	}
+	return limit, nil
+}
 
 // bindEvidenceSources validates each task's evidence_from before any TODO
 // exists. An evidence task must be a completed task with a successful typed
@@ -21,14 +33,18 @@ func (c *Coordinator) bindEvidenceSources(tasks []TaskDef) ([]TaskDef, error) {
 	bound := append([]TaskDef(nil), tasks...)
 	for index := range bound {
 		task := &bound[index]
+		limit, err := evidenceSourceLimit(task.Execution)
+		if err != nil {
+			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
+		}
 		ids := make([]string, 0, len(task.EvidenceFrom))
 		for _, raw := range task.EvidenceFrom {
 			if id := strings.TrimSpace(raw); id != "" && !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
 		}
-		if len(ids) > maxEvidenceSources {
-			return nil, fmt.Errorf("tasks[%d] evidence_from names %d tasks; at most %d are allowed", index, len(ids), maxEvidenceSources)
+		if len(ids) > limit {
+			return nil, fmt.Errorf("tasks[%d] evidence_from names %d tasks; at most %d are allowed", index, len(ids), limit)
 		}
 		for _, id := range ids {
 			source := c.todoItemByID(id)

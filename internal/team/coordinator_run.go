@@ -1915,6 +1915,16 @@ func (c *Coordinator) finalizeRemainingTasks(causes ...error) {
 // this point since ExecuteTasks waits for all goroutines. Do not mark them done
 // defensively: that would turn an incomplete task into a false success.
 func (c *Coordinator) finalizeNormalCompletion() {
+	// A sealed run owns an immutable task/evidence snapshot. EOF fallback may
+	// have finalized a partial run while tasks remain pending for resume; never
+	// append skips or errors after run_finished or change that checkpoint.
+	c.terminalLifecycleMu.Lock()
+	sealed := c.terminalLifecycleRunID != "" && c.terminalLifecycleState == terminalLifecycleCommitted
+	c.terminalLifecycleMu.Unlock()
+	if sealed {
+		c.reconcileProjectedStatuses(AgentStatusIdle)
+		return
+	}
 	items := c.taskTracker.TodoList().Items()
 	changed := false
 	for _, item := range items {

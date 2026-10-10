@@ -59,7 +59,8 @@ func TestWorkflowAdmitsCatalogTasksByPhase(t *testing.T) {
 		{PhasePrepare, SideEffectNone, true},
 		{PhasePrepare, SideEffectWorkspaceWrite, false},
 		{PhaseAudit, SideEffectNone, false},
-		{PhaseVerify, SideEffectNone, false},
+		{PhaseVerify, SideEffectNone, true},
+		{PhaseVerify, SideEffectWorkspaceWrite, false},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s/%s", tt.phase, tt.sideEffect), func(t *testing.T) {
@@ -145,6 +146,16 @@ func TestWorkflowAgentToolSchemaWithCatalog(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"action-31"`) {
 		t.Fatal("32-entry catalog schema should still enumerate IDs")
+	}
+
+	c.phaseWorkflow = workflowAt(t, PhaseVerify)
+	info = (&runAgentsTool{coordinator: c}).Info()
+	properties = info.Parameters["tasks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := properties["catalog_action"]; !ok {
+		t.Fatal("verify-phase schema omits read-only catalog actions")
+	}
+	if enum, _ := properties["agent"].(map[string]any)["enum"].([]string); !slices.Contains(enum, "catalog-runner") {
+		t.Fatalf("verify-phase agent enum %v omits the read-only catalog agent", enum)
 	}
 
 	c.phaseWorkflow = workflowAt(t, PhaseAudit)

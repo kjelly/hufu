@@ -19,6 +19,18 @@
           "type": "task_output_assert",
           "assertions": [
             {
+              "pointer": "/passed",
+              "op": "equals",
+              "value": true
+            }
+          ],
+          "source_task": "verify-review-report",
+          "output": "review_report_verification"
+        },
+        {
+          "type": "task_output_assert",
+          "assertions": [
+            {
               "pointer": "/requested",
               "op": "equals_input",
               "input": "review.scope"
@@ -117,6 +129,18 @@
             "success",
             "completed_with_gaps"
           ]
+        },
+        {
+          "type": "task_output_assert",
+          "assertions": [
+            {
+              "pointer": "/passed",
+              "op": "equals",
+              "value": true
+            }
+          ],
+          "source_task": "inventory-review-handoffs",
+          "output": "review_handoff_inventory"
         }
       ]
     },
@@ -136,7 +160,9 @@
     "capabilities": {
       "required": [
         "produce-workset",
-        "verify-review-tests"
+        "verify-review-tests",
+        "inventory-review-handoffs",
+        "verify-review-report"
       ]
     },
     "verification": {
@@ -154,7 +180,8 @@
       "AllowedWorkers": [
         "reviewer",
         "documentation-reviewer",
-        "critic"
+        "critic",
+        "synthesizer"
       ],
       "InitialBatch": null,
       "RequireExactInitialBatch": false,
@@ -163,9 +190,10 @@
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": [
         "reviewer",
-        "documentation-reviewer"
+        "documentation-reviewer",
+        "synthesizer"
       ],
-      "ForbidContextFiles": false,
+      "ForbidContextFiles": true,
       "TaskGoalInvariants": null,
       "CapabilityRouting": null,
       "RequireTaskContract": null,
@@ -214,6 +242,15 @@
       "recovery": "retry",
       "max_retries": 1,
       "max_steps": 120
+    },
+    {
+      "name": "synthesizer",
+      "role": "worker",
+      "tools": "view",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": 1,
+      "max_steps": 12
     }
   ],
   "tasks": [
@@ -250,6 +287,28 @@
       "id": "critic-review",
       "agent": "critic",
       "phase": "VERIFY",
+      "optional": true
+    },
+    {
+      "id": "inventory-review-handoffs",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
+      "optional": true
+    },
+    {
+      "id": "synthesize-review",
+      "agent": "synthesizer",
+      "phase": "VERIFY",
+      "optional": true
+    },
+    {
+      "id": "verify-review-report",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
       "optional": true
     }
   ]

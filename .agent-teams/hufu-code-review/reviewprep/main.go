@@ -747,8 +747,12 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	}
 	defer snapshot.Close()
 
+	goTestEnvironment, err := sanitizedGoTestEnvironment(ctx)
+	if err != nil {
+		return actionResult{}, err
+	}
 	packages := targetedGoTestPackages(snapshot.root, paths)
-	verification := runSnapshotGoTests(ctx, snapshot, packages)
+	verification := runSnapshotGoTests(ctx, snapshot, packages, goTestEnvironment)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
 	}
@@ -823,11 +827,11 @@ func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
 	return result
 }
 
-func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, packages []string) goTestVerification {
+func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, packages, environment []string) goTestVerification {
 	arguments := append([]string{"test", "-mod=readonly", "-count=1"}, packages...)
 	command := exec.CommandContext(ctx, "go", arguments...)
 	command.Dir = snapshot.root
-	command.Env = sanitizedGoTestEnvironment()
+	command.Env = environment
 	output := &cappedBuffer{limit: maxGoTestOutputBytes}
 	command.Stdout = output
 	command.Stderr = output
@@ -851,7 +855,28 @@ func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, pac
 	}
 }
 
-func sanitizedGoTestEnvironment() []string {
+func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
+	// Resolve operator settings before GOENV=off disables their persistent Go
+	// configuration. Probe outside the reviewed module, without workspace,
+	// build flags, toolchain downloads, or network access.
+	probe := exec.CommandContext(ctx, "go", "env", "-json", "GOPATH", "GOMODCACHE", "GOCACHE")
+	probe.Dir = os.TempDir()
+	probe.Env = replaceEnvironmentValue(offlineGoEnvironment(), "GOWORK", "off")
+	probe.Env = replaceEnvironmentValue(probe.Env, "GOFLAGS", "-buildvcs=false")
+	output := &cappedBuffer{limit: 16 * 1024}
+	diagnostic := &cappedBuffer{limit: 16 * 1024}
+	probe.Stdout = output
+	probe.Stderr = diagnostic
+	if err := probe.Run(); err != nil {
+		return nil, fmt.Errorf("resolve Go test cache paths: %w: %s", err, strings.TrimSpace(diagnostic.String()))
+	}
+	var paths map[string]string
+	if output.truncated {
+		return nil, errors.New("resolve Go test cache paths: Go environment output exceeded limit")
+	}
+	if err := json.Unmarshal([]byte(output.String()), &paths); err != nil {
+		return nil, fmt.Errorf("decode Go test cache paths: %w", err)
+	}
 	env := make([]string, 0, 16)
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
@@ -859,7 +884,7 @@ func sanitizedGoTestEnvironment() []string {
 			continue
 		}
 		switch key {
-		case "GOCACHE", "GOMODCACHE", "GOPATH", "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR":
+		case "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR":
 			env = append(env, entry)
 		default:
 			if strings.HasPrefix(key, "LC_") {
@@ -867,12 +892,18 @@ func sanitizedGoTestEnvironment() []string {
 			}
 		}
 	}
+	for _, key := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
+		if strings.TrimSpace(paths[key]) == "" {
+			return nil, fmt.Errorf("resolve Go test cache paths: missing %s", key)
+		}
+		env = append(env, key+"="+paths[key])
+	}
 	// The snapshot has no .git, but Go stamps VCS information whenever any
 	// parent directory has one: an empty /tmp/.git made every go build under
 	// the snapshot run git status, fail with exit 128, and fail the tests
 	// that build the CLI. Snapshot tests must not depend on what encloses
 	// the temporary directory.
-	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false")
+	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false"), nil
 }
 
 func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {

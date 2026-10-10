@@ -68,7 +68,10 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 	if err := c.validateCapabilityRouting(ordinary); err != nil {
 		return err
 	}
-	if c.coordinatorPolicyRepairsAttempt.Load() > 0 {
+	// Repair attempts are cumulative telemetry and budget accounting. Only a
+	// pending correction restricts the next dispatch; a successful correction
+	// must allow later work to reuse roles under the team's normal policy.
+	if c.coordinatorPolicyRepairPending.Load() {
 		hasDone := make(map[string]bool)
 		hasUnfinished := make(map[string]bool)
 		for _, item := range items {

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,12 @@ func TestLearnSecretValueRejectsNonCredentials(t *testing.T) {
 		{"source path with line", "internal/team/runtime.go:42"},
 		{"english word", "requires"},
 		{"identifier", "requestTokens"},
+		{"environment variable identifier", "SERVICE_API_KEY"},
+		{"snake case identifier", "provider_api_key"},
+		{"credential failure policy", "fail-closed"},
+		{"credential warning policy", "fail-open"},
+		{"credential admission policy", "deny-by-default"},
+		{"credential permissive policy", "allow-by-default"},
 		{"call expression", "filepath.ToSlash(token)"},
 		{"unclosed call", "append(tokenSteps"},
 		{"index expression", "token[lastSeparator+1:"},
@@ -122,6 +129,81 @@ func TestLearnSecretValueRejectsNonCredentials(t *testing.T) {
 				t.Errorf("%q must not be learned as a credential", tc.value)
 			}
 		})
+	}
+}
+
+func TestLearnedSecretsDoNotRewriteEnvironmentVariableReferences(t *testing.T) {
+	resetLearnedSecrets(t)
+	for _, source := range []string{
+		"api_key: SERVICE_API_KEY", "credential=provider_api_key", "api_key: `SERVICE_API_KEY`",
+	} {
+		RedactSecrets(source)
+	}
+	const later = "SERVICE_API_KEY, `SERVICE_API_KEY`, and provider_api_key are documented configuration identifiers"
+	if got := RedactSecrets(later); got != later {
+		t.Fatalf("source identifiers changed after learning: %q", got)
+	}
+	// Symbolic values remain masked beside credential keys; this exception
+	// concerns only process-wide bare-value learning from source text.
+	if got := RedactSecrets("api_key: SERVICE_API_KEY"); strings.Contains(got, "SERVICE_API_KEY") {
+		t.Fatalf("keyed credential value escaped redaction: %q", got)
+	}
+	RedactSecrets("api_key: ActualCredential123!")
+	if got := RedactSecrets("value was ActualCredential123!"); strings.Contains(got, "ActualCredential123!") {
+		t.Fatalf("actual learned credential escaped redaction: %q", got)
+	}
+	RedactSecrets("api_key: `MarkdownCredential123!`")
+	if got := RedactSecrets("value was MarkdownCredential123!"); strings.Contains(got, "MarkdownCredential123!") {
+		t.Fatalf("markdown-quoted credential escaped redaction: %q", got)
+	}
+}
+
+func TestRegisteredSecretWithIdentifierShapeRemainsRedacted(t *testing.T) {
+	const secret = "REGISTERED_IDENTIFIER_SHAPED_CREDENTIAL"
+	RegisterSecretRedactor(testSecretRedactor{value: secret})
+	if got := RedactSecrets("the actual value is " + secret); strings.Contains(got, secret) {
+		t.Fatalf("registered exact credential escaped redaction: %q", got)
+	}
+	data, err := RedactJSON([]byte(`{"description":"REGISTERED_IDENTIFIER_SHAPED_CREDENTIAL"}`))
+	if err != nil || strings.Contains(string(data), secret) {
+		t.Fatalf("registered credential escaped JSON redaction: %s, error=%v", data, err)
+	}
+}
+
+func TestCredentialPolicyModesDoNotBecomeBareSecrets(t *testing.T) {
+	resetLearnedSecrets(t)
+	for _, mode := range []string{"fail-closed", "fail-open", "deny-by-default", "allow-by-default"} {
+		if got := RedactSecrets("Missing credential: " + mode); strings.Contains(got, mode) {
+			t.Fatalf("keyed value escaped masking: %q", got)
+		}
+		const prefix = "The documented policy is "
+		if got := RedactSecrets(prefix + mode); got != prefix+mode {
+			t.Fatalf("public policy mode rewrote an unrelated record: %q", got)
+		}
+	}
+	RedactSecrets("credential: ActualCredential123!")
+	if got := RedactSecrets("value was ActualCredential123!"); strings.Contains(got, "ActualCredential123!") {
+		t.Fatalf("actual bare credential escaped masking: %q", got)
+	}
+}
+
+func TestRegisteredCredentialOverridesPublicPolicyMode(t *testing.T) {
+	processRedactors.Lock()
+	before := slices.Clone(processRedactors.items)
+	processRedactors.Unlock()
+	t.Cleanup(func() {
+		processRedactors.Lock()
+		processRedactors.items = before
+		processRedactors.Unlock()
+	})
+	const secret = "fail-closed"
+	RegisterSecretRedactor(testSecretRedactor{value: secret})
+	if got := RedactSecrets("value was " + secret); strings.Contains(got, secret) {
+		t.Fatalf("explicit registered credential escaped masking: %q", got)
+	}
+	got, err := RedactJSON([]byte(`{"output":"fail-closed"}`))
+	if err != nil || strings.Contains(string(got), secret) {
+		t.Fatalf("explicit registered credential escaped JSON masking: %s; %v", got, err)
 	}
 }
 

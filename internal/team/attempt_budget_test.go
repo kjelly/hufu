@@ -214,9 +214,11 @@ func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
 
 func TestWorkerStepBudgetFreeTextFinalizationDisablesTools(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Goal: "review unit-a"}})[0]
 	stream := &attemptBudgetStreamAgent{messages: []fantasy.Message{fantasy.NewUserMessage("inspect")}, usages: make([]fantasy.Usage, 10)}
 	ctx := context.WithValue(context.Background(), workerStepBudgetKey{}, 10)
 	ctx = context.WithValue(ctx, workerFreeTextFinalizationKey{}, true)
+	ctx = context.WithValue(ctx, todoIDKey{}, item.ID)
 	_, _, err := c.runAgentWithStatusAndHistory(ctx, stream, "worker", "prompt", nil, &taskTiming{})
 	if err != nil {
 		t.Fatalf("run agent: %v", err)
@@ -231,6 +233,9 @@ func TestWorkerStepBudgetFreeTextFinalizationDisablesTools(t *testing.T) {
 	}
 	if len(wrapUp.Messages) == 0 || !messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "Write your complete Markdown final response") {
 		t.Fatalf("free-text wrap-up = %#v", wrapUp)
+	}
+	if messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "submit_result") || messageContains(wrapUp.Messages[len(wrapUp.Messages)-1], "outer `status`") {
+		t.Fatalf("free-text wrap-up injected structured-only instructions: %#v", wrapUp)
 	}
 }
 

@@ -236,10 +236,31 @@ agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交�
 
 static task 的 `execution.requires-evidence: true` 除了要求完成的
 `evidence_from`，還要求完整交付內容的 hash 被封存在 task context manifest。
+`execution.max-evidence-sources` 可由 static contract 設定交接來源上限，範圍為
+1–64；省略或設為 0 保持預設 8。此容量屬於配置，coordinator 不得自行提高。
+來源仍必須是本次 run 中完成且成功的 typed result，必要交接也不會因為數量增加
+而截斷。可將單一來源的 critic 設為 1，將完整彙整的 consumer 設為較大上限。
 缺少、改寫、壓縮或無法證明交付時，成功提交、TaskDone 與 `finish` 都會被
 拒絕；worker 仍可提交 `partial`／`blocked` 說明缺口。舊 session 沒有此交付
 紀錄時不可冒充完整稽核；請用新執行重新查核。tool-less `sidecar:true` 不支援
 此契約，應改用一般 worker。
+
+Static task 可用 `constraints` 模板與 `fact_refs` 傳遞先前 task 的資料：
+
+```yaml
+constraints: 'Prepared observation: {observation}'
+fact_refs:
+  - name: observation
+    task_id: prepare-observation
+    runtime_output: observation
+```
+
+每個引用只能設定 `fact`、`artifact`、`runtime_output` 其中一項。
+`runtime_output` 必須來自本次 run 已完成的原生 action，且成功 receipt、輸出
+hash 與 frozen input snapshot 一致。缺少、歧義或不可信的來源會在派工前拒絕。
+Static 模板與引用來源納入 contract hash 與 execution-policy snapshot；runtime
+會自動綁定並解析，coordinator 不必手動複製 constraints。替換只進行一次，
+來源 JSON 中的 `{...}` 保持資料原文，不能再當作模板。
 
 - schema 必須是自給自足的 Draft 2020-12：不允許 `$id`，`$ref` 只能指向同一份
   文件的 fragment（`#...`），`$schema` 只能出現在根節點。
@@ -652,3 +673,9 @@ IMPORTANT: You MUST use these exact agent names in agent: <names>. Do NOT invent
 ```
 
 確保 coordinator 使用正確的 agent 名稱進行委派。
+
+Result-only repair restores the admitted task goal, constraints, and complete accepted dependency results as required context blocks. Diagnostic transcript summaries remain bounded; required source payloads and their hashes are never truncated to fit that diagnostic limit. Missing sources, changed payload hashes, or insufficient model context fail closed before a repair model call. Auxiliary guard and plan reviews remain isolated from worker inputs.
+
+Tool arguments whose schema explicitly requires an object may arrive as a JSON-encoded object string. Hufu losslessly unwraps a single object before the existing policy and schema checks. Free text, union types, duplicate keys, trailing values, and non-object values are not coerced. Result schema validation, canonical payload hashing, evidence binding, and acceptance still apply.
+
+Result-only repair also restores the admitted result contract instructions and full schema (within the same full-schema budget as normal execution) in required context, independent of truncated diagnostic evidence. Schema drift fails before the repair model call.

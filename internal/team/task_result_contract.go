@@ -51,6 +51,13 @@ func taskResultSubmissionContractForTask(task TaskDef) taskResultSubmissionContr
 		if field := taskResultAssertionRootField(assertion.Pointer); field != "" {
 			contract.RequiredFields = appendUniqueString(contract.RequiredFields, field)
 		}
+		if assertion.Op == "equals_projection" {
+			if projection, err := decodeTaskResultProjection(assertion.Value); err == nil {
+				if field := taskResultAssertionRootField(projection.Pointer); field != "" {
+					contract.RequiredFields = appendUniqueString(contract.RequiredFields, field)
+				}
+			}
+		}
 		if strings.TrimSpace(assertion.Pointer) == "/files_read" {
 			switch assertion.Op {
 			case "min_items":
@@ -96,6 +103,14 @@ func taskResultContractRequiresFilesRead(assertions []TaskResultAssertion) bool 
 }
 
 func taskResultAssertionUsesTranscriptFinalization(assertion TaskResultAssertion) bool {
+	if assertion.Op == "equals_projection" {
+		if projection, err := decodeTaskResultProjection(assertion.Value); err == nil {
+			switch taskResultAssertionRootField(projection.Pointer) {
+			case "raw_output_ref", "outputs":
+				return true
+			}
+		}
+	}
 	switch taskResultAssertionRootField(assertion.Pointer) {
 	case "raw_output_ref", "outputs":
 		return true

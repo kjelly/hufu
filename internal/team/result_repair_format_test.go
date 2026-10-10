@@ -120,13 +120,21 @@ func TestResultRepairUsesBoundSubmissionFormat(t *testing.T) {
 				t.Fatalf("worker/repair/prompts = %d/%d/%d, want %d/%d/%d", workerCalls, repairCalls, len(prompts), wantWorkerCalls, wantRepairCalls, wantRepairCalls)
 			}
 			for _, prompt := range prompts {
+				for _, want := range []string{"complete argument object", "outer `status`", "`structured_payload` is one argument"} {
+					if !strings.Contains(prompt, want) {
+						t.Fatalf("%s prompt lacks complete submission instruction %q: %s", path, want, prompt)
+					}
+				}
 				if path == "legacy" {
 					if !strings.Contains(prompt, "report in outer `details`") {
 						t.Fatalf("legacy deliverable instructions missing: %s", prompt)
 					}
 					continue
 				}
-				for _, want := range []string{"schema-defined deliverable in `structured_payload`", "every nested object and array item", "schema-valid `structured_payload` is required"} {
+				if !strings.Contains(prompt, string(compiled.CanonicalSchema)) {
+					t.Fatalf("%s repair omitted the complete admitted schema", path)
+				}
+				for _, want := range []string{"schema-defined deliverable in `structured_payload`", "every nested object and array item", "schema-valid `structured_payload` is required", "their own tool schema"} {
 					if !strings.Contains(prompt, want) {
 						t.Fatalf("%s prompt lacks %q: %s", path, want, prompt)
 					}
@@ -155,11 +163,24 @@ func TestFinalizationFormatUsesDurableContract(t *testing.T) {
 	// The loaded agent's current default must not replace the occurrence's
 	// admitted optional contract with a different, required one.
 	c.session.AgentResultContracts = map[string]ResultContractRef{"reviewer": {ID: "different", RequireStructured: true}}
-	prompt := c.taskFinalizationBinding(item.ID)
+	prompt := c.taskFinalizationBinding(item.ID, false)
 	if !strings.Contains(prompt, "schema-defined deliverable in `structured_payload`") {
 		t.Fatalf("durable contract ignored: %s", prompt)
 	}
 	if strings.Contains(prompt, "schema-valid `structured_payload` is required") {
 		t.Fatalf("optional contract made mandatory: %s", prompt)
+	}
+}
+
+func TestFinalizationFormatPreservesFreeTextProtocol(t *testing.T) {
+	c, item := newEvidenceRepairCoordinator(t, "free-text-finalization")
+	prompt := c.taskFinalizationBinding(item.ID, true)
+	if !strings.Contains(prompt, "Todo ID: "+item.ID) || !strings.Contains(prompt, "complete Markdown final response") {
+		t.Fatalf("free-text finalization lost task binding or protocol: %s", prompt)
+	}
+	for _, forbidden := range []string{"submit_result", "outer `status`", "structured_payload"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("free-text finalization contradicts its protocol with %q: %s", forbidden, prompt)
+		}
 	}
 }
