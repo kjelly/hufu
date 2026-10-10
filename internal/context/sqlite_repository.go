@@ -72,7 +72,21 @@ func OpenSQLite(path string) (*SQLiteRepository, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("open context database: resolve path: %w", err)
+	}
+	dsn := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	query := dsn.Query()
+	// Most writable transactions read before they write. In a deferred transaction
+	// that holds a read snapshot, SQLite returns SQLITE_BUSY at once when
+	// another connection holds the write lock, without applying busy_timeout.
+	// IMMEDIATE takes the write lock at BEGIN, so busy_timeout waits for the
+	// other writer and the transaction reads its committed state. The driver
+	// keeps read-only transactions (sql.TxOptions{ReadOnly: true}) deferred.
+	query.Set("_txlock", "immediate")
+	dsn.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, err
 	}
