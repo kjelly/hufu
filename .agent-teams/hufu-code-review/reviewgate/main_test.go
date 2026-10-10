@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,6 +169,11 @@ func TestReviewGateCoverageAndRejectedHandoffs(t *testing.T) {
 			})
 		}, "substituted source record"},
 		{"report_hides_original_gap", func(s *session) { replacePayload(t, &s.Tasks[4], func(p *payload) { p.GapResolutions = nil }) }, "omitted original gaps"},
+		{"report_invents_original_gap", func(s *session) {
+			replacePayload(t, &s.Tasks[4], func(p *payload) {
+				p.GapResolutions = append(p.GapResolutions, gapResolution{TaskID: "3", Index: 1, Status: "retained"})
+			})
+		}, "unknown 3/1 (source has 1 gaps)"},
 		{"report_claims_complete", func(s *session) { replacePayload(t, &s.Tasks[4], func(p *payload) { p.Coverage = "complete" }) }, "overstated coverage"},
 		{"report_invents_test_execution", func(s *session) {
 			replacePayload(t, &s.Tasks[4], func(p *payload) {
@@ -208,6 +214,28 @@ func TestReviewGateCoverageAndRejectedHandoffs(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error=%v, want %s", err, test.want)
+			}
+		})
+	}
+}
+
+func TestReviewGapCoverageDiagnostics(t *testing.T) {
+	records := map[string]record{"10": {Kind: "review", Gaps: make([]json.RawMessage, 4)}}
+	valid := []gapResolution{{TaskID: "10", Index: 0, Status: "retained"}, {TaskID: "10", Index: 1, Status: "retained"}, {TaskID: "10", Index: 2, Status: "retained"}, {TaskID: "10", Index: 3, Status: "retained"}}
+	for _, test := range []struct {
+		name        string
+		resolutions []gapResolution
+		want        string
+	}{
+		{"complete", valid, ""},
+		{"invented_prose_subquestions", append(slices.Clone(valid), gapResolution{TaskID: "10", Index: 4, Status: "retained"}, gapResolution{TaskID: "10", Index: 5, Status: "retained"}), "unknown 10/4 (source has 4 gaps)"},
+		{"missing", valid[:2], "report omitted original gaps: missing [10/2 10/3]"},
+		{"duplicate_replaces_missing", []gapResolution{valid[0], valid[1], valid[2], valid[2]}, "duplicate 10/2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyGaps(payload{GapResolutions: test.resolutions}, records, nil)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("error=%v, want %q", err, test.want)
 			}
 		})
 	}

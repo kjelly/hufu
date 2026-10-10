@@ -142,6 +142,193 @@
           "source_task": "inventory-review-handoffs",
           "output": "review_handoff_inventory"
         }
+      ],
+      "criteria": [
+        {
+          "id": "review-scope-attested",
+          "required": true,
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/requested",
+                "op": "equals_input",
+                "input": "review.scope"
+              },
+              {
+                "pointer": "/requested_input_hash",
+                "op": "equals_input_hash",
+                "input": "review.scope"
+              },
+              {
+                "pointer": "/satisfied",
+                "op": "equals",
+                "value": true
+              },
+              {
+                "pointer": "/observed_budget/changed_paths",
+                "op": "minimum",
+                "value": 1
+              }
+            ],
+            "source_task": "produce-workset",
+            "output": "scope"
+          }
+        },
+        {
+          "id": "test-scope-attested",
+          "required": true,
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/requested",
+                "op": "equals_input",
+                "input": "review.scope"
+              },
+              {
+                "pointer": "/requested_input_hash",
+                "op": "equals_input_hash",
+                "input": "review.scope"
+              },
+              {
+                "pointer": "/satisfied",
+                "op": "equals",
+                "value": true
+              }
+            ],
+            "source_task": "verify-targeted-go-tests",
+            "output": "scope"
+          }
+        },
+        {
+          "id": "targeted-go-tests-passed",
+          "required": true,
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/passed",
+                "op": "equals",
+                "value": true
+              }
+            ],
+            "source_task": "verify-targeted-go-tests",
+            "output": "targeted_go_tests"
+          }
+        },
+        {
+          "id": "documentation-references-verified",
+          "required": true,
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/passed",
+                "op": "equals",
+                "value": true
+              }
+            ],
+            "source_task": "produce-workset",
+            "output": "documentation_verification"
+          }
+        },
+        {
+          "id": "primary-reviews-complete",
+          "required": true,
+          "depends_on": [
+            "review-scope-attested",
+            "test-scope-attested",
+            "targeted-go-tests-passed",
+            "documentation-references-verified"
+          ],
+          "verify": {
+            "type": "workset_complete",
+            "source_task": "review-primary-workset",
+            "require_all_terminal": true,
+            "require_all_verified": true,
+            "accepted_statuses": [
+              "success",
+              "completed_with_gaps"
+            ]
+          }
+        },
+        {
+          "id": "documentation-reviews-complete",
+          "required": true,
+          "depends_on": [
+            "review-scope-attested"
+          ],
+          "verify": {
+            "type": "workset_complete",
+            "source_task": "review-documentation-workset",
+            "require_all_terminal": true,
+            "require_all_verified": true,
+            "accepted_statuses": [
+              "success",
+              "completed_with_gaps"
+            ]
+          }
+        },
+        {
+          "id": "documentation-escalation-complete",
+          "required": true,
+          "depends_on": [
+            "review-scope-attested"
+          ],
+          "verify": {
+            "type": "workset_complete",
+            "source_task": "review-documentation-escalation",
+            "require_all_terminal": true,
+            "require_all_verified": true,
+            "accepted_statuses": [
+              "success",
+              "completed_with_gaps"
+            ]
+          }
+        },
+        {
+          "id": "review-handoffs-inventoried",
+          "required": true,
+          "depends_on": [
+            "primary-reviews-complete",
+            "documentation-reviews-complete",
+            "documentation-escalation-complete"
+          ],
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/passed",
+                "op": "equals",
+                "value": true
+              }
+            ],
+            "source_task": "inventory-review-handoffs",
+            "output": "review_handoff_inventory"
+          }
+        },
+        {
+          "id": "review-report-audited",
+          "required": true,
+          "depends_on": [
+            "review-handoffs-inventoried",
+            "test-scope-attested",
+            "targeted-go-tests-passed"
+          ],
+          "verify": {
+            "type": "task_output_assert",
+            "assertions": [
+              {
+                "pointer": "/passed",
+                "op": "equals",
+                "value": true
+              }
+            ],
+            "source_task": "verify-review-report",
+            "output": "review_report_verification"
+          }
+        }
       ]
     },
     "execution_profile": "fresh-session",

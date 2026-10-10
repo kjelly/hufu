@@ -28,6 +28,16 @@ Your files_read paths and new gap-resolution evidence must use bare opaque
 `sha256-` artifact IDs with exactly 64 lowercase hexadecimal characters.
 Put annotations in the separate purpose or explanation field, never in an ID.
 
+The inventory's `required_gap_refs` is the exact runtime-owned gap universe.
+Make ONE resolution for each listed `(source_task_id, gap_index)` pair, in that
+order, and no other resolution. Each source's `gap_count` is the length of its
+accepted review record's `gaps` array. Do not count sentences, subquestions,
+invariant assessments, details, open_questions, or gaps nested inside critic
+records as additional gaps. Do not infer the number from your gap table.
+Before submission, compare the resolution keys against `required_gap_refs`
+and check each source's count against `gap_count`. A retained gap still needs
+exactly one resolution; never add another index to describe a limitation.
+
 This is a bounded inventory-and-reconciliation task. The source reviewers and
 critics already performed the code review. Do not repeat their investigation
 or seek proof of every runtime invariant. Preserve their records verbatim.

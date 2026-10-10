@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -522,18 +523,14 @@ func verifyActionEvidence(current session, report payload, runID string) error {
 
 func verifyGaps(report payload, records map[string]record, tasks map[string]task) error {
 	seen := make(map[string]bool)
-	count := 0
-	for _, r := range records {
-		count += len(r.Gaps)
-	}
-	if len(report.GapResolutions) != count {
-		return fmt.Errorf("report omitted original gaps")
-	}
 	for _, gap := range report.GapResolutions {
 		r, ok := records[gap.TaskID]
 		key := fmt.Sprintf("%s/%d", gap.TaskID, gap.Index)
-		if !ok || gap.Index < 0 || gap.Index >= len(r.Gaps) || seen[key] {
-			return fmt.Errorf("report substituted an original gap")
+		if !ok || r.Kind != "review" || gap.Index < 0 || gap.Index >= len(r.Gaps) {
+			return fmt.Errorf("report substituted an original gap: unknown %s (source has %d gaps)", key, len(r.Gaps))
+		}
+		if seen[key] {
+			return fmt.Errorf("report substituted an original gap: duplicate %s", key)
 		}
 		seen[key] = true
 		if gap.Status == "resolved_cross_workset" {
@@ -542,6 +539,20 @@ func verifyGaps(report payload, records map[string]record, tasks map[string]task
 				return fmt.Errorf("gap %s lacks observed cross-workset evidence", key)
 			}
 		}
+	}
+	var missing []string
+	for id, r := range records {
+		for index := range r.Gaps {
+			key := fmt.Sprintf("%s/%d", id, index)
+			if !seen[key] {
+				missing = append(missing, key)
+			}
+		}
+	}
+	if len(missing) > 0 {
+		// Keep the embedded interpreter on exported non-generic sort helpers.
+		sort.Strings(missing)
+		return fmt.Errorf("report omitted original gaps: missing %v", missing)
 	}
 	return nil
 }

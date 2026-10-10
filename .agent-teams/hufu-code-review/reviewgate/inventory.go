@@ -12,7 +12,13 @@ type handoffSource struct {
 	ContractID       string `json:"contract_id"`
 	PayloadHash      string `json:"payload_sha256"`
 	FindingCount     int    `json:"finding_count"`
+	GapCount         int    `json:"gap_count"`
 	RequiresCritique bool   `json:"requires_critique"`
+}
+
+type gapRef struct {
+	TaskID string `json:"source_task_id"`
+	Index  int    `json:"gap_index"`
 }
 
 type handoffInventory struct {
@@ -20,12 +26,13 @@ type handoffInventory struct {
 	SourceTaskIDs         []string        `json:"source_task_ids"`
 	RequiredCriticSources []string        `json:"required_critic_source_task_ids"`
 	Sources               []handoffSource `json:"sources"`
+	RequiredGapRefs       []gapRef        `json:"required_gap_refs"`
 }
 
 // Source identity comes from the admitted contract and validated record, never
 // from the agent's name: a critic can itself produce a documentation review.
 func collectReviewHandoffs(current session, runID string) (handoffInventory, error) {
-	inventory := handoffInventory{Passed: true, SourceTaskIDs: []string{}, RequiredCriticSources: []string{}, Sources: []handoffSource{}}
+	inventory := handoffInventory{Passed: true, SourceTaskIDs: []string{}, RequiredCriticSources: []string{}, Sources: []handoffSource{}, RequiredGapRefs: []gapRef{}}
 	seen := make(map[string]bool)
 	for _, item := range current.Tasks {
 		switch item.ContractID {
@@ -54,7 +61,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 		}
 		inventory.Sources = append(inventory.Sources, handoffSource{
 			TaskID: item.ID, ContractID: item.ContractID, PayloadHash: item.Result.Payload.Hash,
-			FindingCount: len(r.Findings), RequiresCritique: requiresCritique,
+			FindingCount: len(r.Findings), GapCount: len(r.Gaps), RequiresCritique: requiresCritique,
 		})
 	}
 	if len(inventory.Sources) == 0 {
@@ -72,6 +79,10 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 	})
 	for _, source := range inventory.Sources {
 		inventory.SourceTaskIDs = append(inventory.SourceTaskIDs, source.TaskID)
+		// Yaegi cannot interpret Go's range-over-integer form.
+		for index := 0; index < source.GapCount; index++ {
+			inventory.RequiredGapRefs = append(inventory.RequiredGapRefs, gapRef{TaskID: source.TaskID, Index: index})
+		}
 		if source.RequiresCritique {
 			inventory.RequiredCriticSources = append(inventory.RequiredCriticSources, source.TaskID)
 		}

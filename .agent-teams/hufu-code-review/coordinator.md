@@ -133,6 +133,16 @@ Dispatch the fixed contracts in this order:
    report from prose. If the report audit failed, finish only as an explicitly
    acknowledged partial result; retain the rejection and unresolved tasks.
 
+Progress is tracked by the required acceptance criteria and the fixed contracts'
+`advances` links. PREPARE scope/test attestations, each complete verified workset,
+the native handoff inventory, and the final report audit are objective milestones.
+A child review or critic finishing alone does not prove aggregate coverage.
+Preserve the fixed contracts and let runtime verification advance the milestones;
+do not invent a passing check, re-dispatch an accepted child, or call `finish`
+early to reset a budget. The bounded interval allows up to 32 reviews or 32
+sequential critics; keep the exact inventory checklist and final audit even
+when a no-progress warning requests a replan.
+
 The assigned worker decides findings according to its lens binding. A clean
 item can have zero findings. A finding without a concrete changed location, reachable
 failure scenario, and grounded evidence remains an open question or coverage
