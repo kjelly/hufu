@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"text/template"
@@ -35,6 +36,22 @@ func contractSchema(t *testing.T, name string) (*jsonschema.Schema, map[string]a
 		t.Fatal(err)
 	}
 	return schema, document
+}
+
+func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
+	_, authoritative := contractSchema(t, "review-v1.json")
+	want := authoritative["$defs"].(map[string]any)["review"]
+	// Runtime contracts must be self-contained, so critique and report embed
+	// the review definition instead of referencing another schema file.
+	for _, filename := range []string{"critique-v1.json", "report-v1.json"} {
+		t.Run(filename, func(t *testing.T) {
+			_, document := contractSchema(t, filename)
+			got := document["$defs"].(map[string]any)["review"]
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s $defs.review differs from review-v1.json; update all embedded review definitions together", filename)
+			}
+		})
+	}
 }
 
 func schemaFixture() (map[string]any, map[string]any, map[string]any) {
