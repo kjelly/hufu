@@ -38,6 +38,10 @@ without weakening the whole-run gates.
    and frozen input snapshot. No guessed metadata path or manual retyping is
    needed.
    The native review handoff inventory is forwarded through the same mechanism.
+   It includes each source's `gap_count` and the ordered `required_gap_refs`
+   list of `(source_task_id, gap_index)` pairs. Synthesis must return exactly
+   one resolution per pair. Only accepted review `record.gaps` entries count;
+   prose, open questions and copies nested in critic records do not add gaps.
    Synthesis fails closed before exploration if any required source lacks an
    accepted critic dependency. The final audit independently re-derives the
    inventory, checks its current action receipt and snapshot, and compares
@@ -160,3 +164,38 @@ that exact artifact in both the resolving review's and synthesizer's accepted
 the synthesizer retains the gap and explains the partial evidence. It preserves
 all original findings, gaps, and critic decisions; retention does not fail an
 otherwise complete review inventory.
+
+## Objective progress and budgets
+
+Nine required acceptance criteria reuse the existing blocking verifications:
+review scope, test scope, executed Go tests, documentation references, each of
+the three complete verified worksets, the native handoff inventory, and the
+final report audit. YAML anchors keep the preflight checks and milestone
+verifiers identical. Every static task declares `kind: outcome`, an objective
+result verifier, and its `advances` links. First-time receipt-backed criterion
+passes reset the runtime no-progress counters; repeated passes do not.
+
+A review child contributes to its route's aggregate workset criterion. An
+incomplete group does not count as progress. The workset contracts keep their
+zero scheduler criterion-replay allowance, so completing another child cannot
+replay accepted siblings while the group is still incomplete; normal worker
+attempt recovery remains controlled by the team and agent retry policies.
+
+The handoff inventory advances only after all three worksets pass. Critics and
+synthesis contribute to the final report-audit criterion, which stays unpassed
+until the native audit checks the complete inventory and every required
+critique. A successful PREPARE or partial review cannot satisfy final acceptance.
+
+The producer caps the total at 32 review children, each of which can require one
+sequential critic. An interval can therefore contain 32 worker attempts at the
+500,000-token per-attempt guard. The no-progress token ceiling is 18,000,000,
+allowing 16,000,000 critic tokens, 500,000 synthesis tokens, and 1,500,000
+tokens of coordinator overhead.
+The task ceiling is 40, covering 32 critics plus synthesis and the audit. The
+coordinator-turn ceiling remains 8, hard enforcement stays enabled, and the
+24-hour wall-clock ceiling still bounds the whole run. `max-total-tokens: 0`
+remains the existing whole-run policy; it does not disable these guards.
+
+Changed task contracts and acceptance criteria require a fresh `--new` run;
+resuming an old frozen policy does not retrofit these milestones into its
+completed receipts.

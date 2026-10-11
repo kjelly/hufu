@@ -72,6 +72,49 @@ func TestInventoryVerificationRejectsOmittedSource(t *testing.T) {
 	}
 }
 
+func TestInventoryEnumeratesOriginalGapIndices(t *testing.T) {
+	fixture := gateFixture(t)
+	for _, source := range []struct {
+		id, contract string
+		gapCount     int
+	}{
+		{"13", "review-documentation-escalation", 2},
+		{"10", "review-primary-workset", 4},
+	} {
+		r := record{Kind: "review", Revision: "frozen-head", Key: "unit-" + source.id, Lens: "general"}
+		for index := range source.gapCount {
+			r.Gaps = append(r.Gaps, raw(t, map[string]any{"description": "Local limitation", "missing_evidence": "caller", "index": index}))
+		}
+		fixture.Tasks = append(fixture.Tasks, fixtureTask(t, source.id, source.contract, "completed_with_gaps", payload{Record: raw(t, r)}, r, nil))
+	}
+	inventory, err := collectReviewHandoffs(fixture, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []gapRef{{"3", 0}, {"10", 0}, {"10", 1}, {"10", 2}, {"10", 3}, {"13", 0}, {"13", 1}}
+	if !slices.Equal(inventory.RequiredGapRefs, want) {
+		t.Fatalf("gap refs = %v, want %v; nested critic records must not add gaps", inventory.RequiredGapRefs, want)
+	}
+	for index, count := range []int{1, 0, 4, 2} {
+		if inventory.Sources[index].GapCount != count {
+			t.Fatalf("source %s gap count = %d, want %d", inventory.Sources[index].TaskID, inventory.Sources[index].GapCount, count)
+		}
+	}
+}
+
+func TestInventoryVerificationRejectsInventedGapIndex(t *testing.T) {
+	fixture := gateFixture(t)
+	var inventory handoffInventory
+	if err := json.Unmarshal(fixture.Tasks[7].Result.RuntimeOutputs["review_handoff_inventory"], &inventory); err != nil {
+		t.Fatal(err)
+	}
+	inventory.RequiredGapRefs = append(inventory.RequiredGapRefs, gapRef{TaskID: "3", Index: 1})
+	fixture.Tasks[7].Result.RuntimeOutputs["review_handoff_inventory"] = raw(t, inventory)
+	if err := verifyHandoffInventory(fixture, "run-1"); err == nil {
+		t.Fatal("inventory with an invented gap accepted")
+	}
+}
+
 func TestEmbeddedInventoryActionUsesCurrentCheckpoint(t *testing.T) {
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
@@ -119,5 +162,8 @@ func TestEmbeddedInventoryActionUsesCurrentCheckpoint(t *testing.T) {
 	}
 	if !inventory.Passed || !slices.Equal(inventory.RequiredCriticSources, []string{"3", "4"}) {
 		t.Fatalf("incorrect native inventory: %+v", inventory)
+	}
+	if !slices.Equal(inventory.RequiredGapRefs, []gapRef{{"3", 0}}) || inventory.Sources[0].GapCount != 1 || inventory.Sources[1].GapCount != 0 {
+		t.Fatalf("native inventory changed the gap universe: %+v", inventory)
 	}
 }

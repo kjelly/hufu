@@ -27,6 +27,17 @@ spec:
   # failure must fail closed without modifying the repository.
   max-duration: 86400
   max-total-tokens: 0
+  # Progress is receipt-backed acceptance advancement, not task narration.
+  # One interval may contain 32 reviews or 32 sequential critics. Allow
+  # 32 x the 500,000-token attempt guard plus 2,000,000 tokens for synthesis
+  # and coordinator overhead;
+  # allow 32 critics, synthesis, and the report audit before the next milestone.
+  reliability:
+    hard-enforcement: true
+    max-tokens-without-progress: 18000000
+    max-tasks-without-progress: 40
+    max-turns-without-progress: 8
+    max-tokens-per-attempt: 500000
   no-net: true
   allow-free-text-results: false
 
@@ -163,12 +174,14 @@ spec:
     mode: blocking
     require-no-unresolved-tasks: true
     verifications:
-      - type: task_output_assert
+      - &review-report-audited
+        type: task_output_assert
         source-task: verify-review-report
         output: review_report_verification
         assertions:
           - { pointer: /passed, op: equals, value: true }
-      - type: task_output_assert
+      - &review-scope-attested
+        type: task_output_assert
         source-task: produce-workset
         output: scope
         assertions:
@@ -176,49 +189,93 @@ spec:
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
           - { pointer: /observed_budget/changed_paths, op: minimum, value: 1 }
-      - type: task_output_assert
+      - &test-scope-attested
+        type: task_output_assert
         source-task: verify-targeted-go-tests
         output: scope
         assertions:
           - { pointer: /requested, op: equals_input, input: review.scope }
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
-      - type: task_output_assert
+      - &targeted-go-tests-passed
+        type: task_output_assert
         source-task: verify-targeted-go-tests
         output: targeted_go_tests
         assertions:
           - { pointer: /passed, op: equals, value: true }
-      - type: task_output_assert
+      - &documentation-references-verified
+        type: task_output_assert
         source-task: produce-workset
         output: documentation_verification
         assertions:
           - { pointer: /passed, op: equals, value: true }
-      - type: workset_complete
+      - &primary-reviews-complete
+        type: workset_complete
         source-task: review-primary-workset
         require-all-terminal: true
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
-      - type: workset_complete
+      - &documentation-reviews-complete
+        type: workset_complete
         source-task: review-documentation-workset
         require-all-terminal: true
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
-      - type: workset_complete
+      - &documentation-escalation-complete
+        type: workset_complete
         source-task: review-documentation-escalation
         require-all-terminal: true
         require-all-verified: true
         accepted-statuses: [success, completed_with_gaps]
-      - type: task_output_assert
+      - &review-handoffs-inventoried
+        type: task_output_assert
         source-task: inventory-review-handoffs
         output: review_handoff_inventory
         assertions:
           - { pointer: /passed, op: equals, value: true }
+    # Required criteria reuse the blocking checks above. Static advances links
+    # let verified first-time successes reset the no-progress counters.
+    criteria:
+      - id: review-scope-attested
+        required: true
+        verify: *review-scope-attested
+      - id: test-scope-attested
+        required: true
+        verify: *test-scope-attested
+      - id: targeted-go-tests-passed
+        required: true
+        verify: *targeted-go-tests-passed
+      - id: documentation-references-verified
+        required: true
+        verify: *documentation-references-verified
+      - id: primary-reviews-complete
+        required: true
+        depends-on: [review-scope-attested, test-scope-attested, targeted-go-tests-passed, documentation-references-verified]
+        verify: *primary-reviews-complete
+      - id: documentation-reviews-complete
+        required: true
+        depends-on: [review-scope-attested]
+        verify: *documentation-reviews-complete
+      - id: documentation-escalation-complete
+        required: true
+        depends-on: [review-scope-attested]
+        verify: *documentation-escalation-complete
+      - id: review-handoffs-inventoried
+        required: true
+        depends-on: [primary-reviews-complete, documentation-reviews-complete, documentation-escalation-complete]
+        verify: *review-handoffs-inventoried
+      - id: review-report-audited
+        required: true
+        depends-on: [review-handoffs-inventoried, test-scope-attested, targeted-go-tests-passed]
+        verify: *review-report-audited
 
   # The producer, snapshot-pinned Go verifier, and all three routed worksets
   # and the final report audit are blocking. Critic dispatch is conditional
   # on typed requires_critique; every dispatched critic audits one source.
   tasks:
     - id: produce-workset
+      kind: outcome
+      advances: [review-scope-attested, documentation-references-verified]
       agent: reviewer
       phase: prepare
       side_effect: none
@@ -231,8 +288,15 @@ spec:
         input-bindings:
           - input: review.scope
             target: /scope
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/scope/satisfied, op: equals, value: true }
+          - { pointer: /runtime_outputs/documentation_verification/passed, op: equals, value: true }
 
     - id: verify-targeted-go-tests
+      kind: outcome
+      advances: [test-scope-attested, targeted-go-tests-passed]
       agent: reviewer
       phase: prepare
       side_effect: none
@@ -245,8 +309,15 @@ spec:
         input-bindings:
           - input: review.scope
             target: /scope
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/scope/satisfied, op: equals, value: true }
+          - { pointer: /runtime_outputs/targeted_go_tests/passed, op: equals, value: true }
 
     - id: review-primary-workset
+      kind: outcome
+      advances: [primary-reviews-complete]
       agent: reviewer
       phase: verify
       invariant-verification: report
@@ -273,6 +344,8 @@ spec:
               allow_missing: true
 
     - id: review-documentation-workset
+      kind: outcome
+      advances: [documentation-reviews-complete]
       agent: documentation-reviewer
       phase: verify
       result-contract: { schema: schemas/review-v1.json, require-structured: true }
@@ -298,6 +371,8 @@ spec:
               allow_missing: true
 
     - id: review-documentation-escalation
+      kind: outcome
+      advances: [documentation-escalation-complete]
       agent: critic
       phase: verify
       result-contract: { schema: schemas/review-v1.json, require-structured: true }
@@ -323,6 +398,8 @@ spec:
               allow_missing: true
 
     - id: critic-review
+      kind: outcome
+      advances: [review-report-audited]
       agent: critic
       phase: verify
       optional: true
@@ -343,6 +420,8 @@ spec:
     # These follow-up contracts are optional to the phase batch scheduler;
     # the blocking report audit acceptance makes their results mandatory.
     - id: inventory-review-handoffs
+      kind: outcome
+      advances: [review-handoffs-inventoried]
       agent: reviewer
       phase: verify
       optional: true
@@ -362,6 +441,8 @@ spec:
           - { pointer: /runtime_outputs/review_handoff_inventory/passed, op: equals, value: true }
 
     - id: synthesize-review
+      kind: outcome
+      advances: [review-report-audited]
       agent: synthesizer
       phase: verify
       optional: true
@@ -372,6 +453,7 @@ spec:
         targeted_go_tests: {test_attestation}
         Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
         {handoff_inventory}
+        Use required_gap_refs as the exact resolution key list; each source gap_count counts only original record.gaps entries. Do not create indices from prose or nested critic records.
       fact_refs:
         - { name: scope_attestation, task_id: produce-workset, runtime_output: scope }
         - { name: test_attestation, task_id: verify-targeted-go-tests, runtime_output: targeted_go_tests }
@@ -390,6 +472,8 @@ spec:
           - { pointer: /files_read, op: min_items, value: 1 }
 
     - id: verify-review-report
+      kind: outcome
+      advances: [review-report-audited]
       agent: reviewer
       phase: verify
       optional: true

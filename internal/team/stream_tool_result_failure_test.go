@@ -155,6 +155,68 @@ func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
 	}
 }
 
+func TestFantasyStreamFinishControlsLocalToolExecution(t *testing.T) {
+	for _, finish := range []fantasy.FinishReason{
+		fantasy.FinishReasonToolCalls,
+		fantasy.FinishReasonStop,
+		fantasy.FinishReasonLength,
+		fantasy.FinishReasonError,
+		fantasy.FinishReasonContentFilter,
+		fantasy.FinishReasonUnknown,
+	} {
+		t.Run(string(finish), func(t *testing.T) {
+			c := newBudgetCoordinator(t)
+			c.session.Workspace = t.TempDir()
+			c.executionRunID = "run-stream-finish"
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "submit a result"}})[0]
+			toolCalls := 0
+			tool := fantasy.NewAgentTool(submitResultToolName, "Submit a structured result", func(_ context.Context, _ resultStreamSubmission, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+				toolCalls++
+				return fantasy.NewTextResponse("accepted"), nil
+			})
+			model := &rejectedResultStreamModel{
+				toolName: submitResultToolName, finish: finish,
+				input: func(int) string {
+					return `{"status":"success","summary":"complete","structured_payload":{"value":"complete"}}`
+				},
+			}
+			ag := fantasy.NewAgent(model, fantasy.WithTools(tool), fantasy.WithMaxRetries(0))
+			transcript, err := newTaskTranscriptForAttempt(c.session.Workspace, item.ID, c.executionRunID, 1, "reviewer")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = transcript.Close() })
+			ctx := context.WithValue(withTestAuxiliaryInvocationContext(t.Context()), todoIDKey{}, item.ID)
+			ctx = context.WithValue(ctx, taskTranscriptKey{}, transcript)
+			_, steps, err := c.runAgentWithStatusAndHistory(ctx, ag, "reviewer", "submit a result", nil, &taskTiming{}, fantasy.StepCountIs(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if model.calls != 1 || len(steps) != 1 || steps[0].FinishReason != finish {
+				t.Fatalf("provider calls/steps = %d/%d, want one step with finish %q: %#v", model.calls, len(steps), finish, steps)
+			}
+			// Even a complete, valid input must not execute without an explicit
+			// tool-calls finish. Keep the attempted call in the provider result.
+			if calls := steps[0].Content.ToolCalls(); len(calls) != 1 || calls[0].ToolName != submitResultToolName {
+				t.Fatalf("attempted tool calls = %#v, want one submit_result", calls)
+			}
+			wantCalls := 0
+			if finish == fantasy.FinishReasonToolCalls {
+				wantCalls = 1
+			}
+			results := 0
+			for _, record := range transcript.evidenceRecords() {
+				if record.Event == "tool_result" {
+					results++
+				}
+			}
+			if toolCalls != wantCalls || len(steps[0].Content.ToolResults()) != wantCalls || results != wantCalls {
+				t.Fatalf("executions/step results/transcript results = %d/%d/%d, want %d", toolCalls, len(steps[0].Content.ToolResults()), results, wantCalls)
+			}
+		})
+	}
+}
+
 func TestToolResultFailureSurvivesIgnoredCallbackAndStreamSuccess(t *testing.T) {
 	for _, continuation := range []bool{false, true} {
 		t.Run(fmt.Sprintf("continuation=%t", continuation), func(t *testing.T) {
