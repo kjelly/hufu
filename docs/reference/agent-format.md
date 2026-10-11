@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `6ab9951`
+> Verified-Commit: `08163ebe`
 > Supersedes: —
 > Superseded-By: —
 
@@ -373,6 +373,22 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   }
 }
 ```
+
+各 JSON Pointer 的解析起點如下；前綴 `/` 表示從該起點取欄位，並非
+所有 pointer 都相對於整份結果 payload。這裡的 payload 指
+`structured_payload`，不包含外層 `submit_result` envelope。
+
+| 擴充欄位 | Pointer 解析起點 |
+| --- | --- |
+| `items_pointer`、`complete_pointer` | 本次提交的 payload 根節點 |
+| `task_id_pointer`、`hash_pointer` | `items_pointer` 陣列中每個 item 的根節點 |
+| `value_bindings` 的 key | 同一個 input item 的根節點 |
+| `value_bindings` 的 value | 該 item 所指 task 的已接受 payload 根節點 |
+
+例如 `items_pointer: "/record/input_review"` 先取得 payload 中的
+`record.input_review` 陣列，再以 `task_id_pointer: "/task_id"` 讀取
+每個 item 的 `task_id`。`value_bindings: {"/record": "/record"}` 則將
+item 的 `record` 與來源 task 已接受 payload 的 `record` 逐值比對。
 
 `audit_complete: true` 必須逐項綁定全部非空 `evidence_from`；
 false 可交付空清單或部分輸入，但列出的每項仍須有效。hash 由已接受的
