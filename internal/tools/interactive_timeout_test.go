@@ -36,43 +36,56 @@ func TestInteractiveAwareTimeoutExpires(t *testing.T) {
 }
 
 func TestInteractiveAwareTimeoutCompensatesForPromptWait(t *testing.T) {
-	// Virtual time exercises the exact remaining budget without scheduler jitter.
-	synctest.Test(t, func(t *testing.T) {
-		resetInteractiveWait()
-		ctx, cancel := WithInteractiveAwareTimeout(context.Background(), 150*time.Millisecond)
-		defer cancel()
+	for _, workingTime := range []time.Duration{0, 50 * time.Millisecond} {
+		t.Run(workingTime.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				resetInteractiveWait()
+				const budget = 150 * time.Millisecond
+				ctx, cancel := WithInteractiveAwareTimeout(t.Context(), budget)
+				defer cancel()
+				originalDeadline, _ := ctx.Deadline()
+				time.Sleep(workingTime)
 
-		// Simulate a prompt that spans well past the base deadline.
-		SetAskUserActive(true)
-		time.Sleep(300 * time.Millisecond)
+				// Simulate a prompt that spans well past the base deadline.
+				SetAskUserActive(true)
+				const promptWait = 300 * time.Millisecond
+				time.Sleep(promptWait)
 
-		select {
-		case <-ctx.Done():
-			SetAskUserActive(false)
-			t.Fatalf("context expired while a prompt was active: %v", ctx.Err())
-		default:
-		}
+				select {
+				case <-ctx.Done():
+					SetAskUserActive(false)
+					t.Fatalf("context expired while a prompt was active: %v", ctx.Err())
+				default:
+				}
 
-		SetAskUserActive(false)
+				SetAskUserActive(false)
 
-		// The countdown resumes with roughly the time that was left when the
-		// prompt started, so the context must survive a little longer and then
-		// expire.
-		select {
-		case <-ctx.Done():
-			t.Fatalf("context expired immediately after the prompt resolved: %v", ctx.Err())
-		case <-time.After(20 * time.Millisecond):
-		}
+				if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(originalDeadline.Add(promptWait)) {
+					t.Fatalf("Deadline() = %v, %v; want %v", deadline, ok, originalDeadline.Add(promptWait))
+				}
+				// Virtual time verifies that every remaining nanosecond is preserved,
+				// without returning working time already spent before the prompt.
+				time.Sleep(budget - workingTime - time.Nanosecond)
+				synctest.Wait()
+				select {
+				case <-ctx.Done():
+					t.Fatalf("context expired before the working budget was spent: %v", ctx.Err())
+				default:
+				}
 
-		select {
-		case <-ctx.Done():
-		case <-time.After(2 * time.Second):
-			t.Fatal("context never expired after compensation was spent")
-		}
-		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			t.Fatalf("Err() = %v, want DeadlineExceeded", ctx.Err())
-		}
-	})
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				select {
+				case <-ctx.Done():
+				default:
+					t.Fatal("context did not expire after the working budget was spent")
+				}
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					t.Fatalf("Err() = %v, want DeadlineExceeded", ctx.Err())
+				}
+			})
+		})
+	}
 }
 
 func TestInteractiveAwareTimeoutParentCancel(t *testing.T) {
