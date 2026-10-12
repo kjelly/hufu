@@ -380,6 +380,15 @@ func (m ChatModel) settleTurn(result conversation.TurnResult) ChatModel {
 	case result.Err != nil:
 		m.transcript.add(chatItem{kind: itemError, turnID: result.TurnID, body: "Error: " + result.Err.Error()})
 	}
+	if i := m.transcript.findTurnItem(itemProgress, result.TurnID); i >= 0 {
+		if summary, failed := turnSummary(m.transcript.items[i].card, label); summary != "" {
+			item := chatItem{kind: itemSummary, turnID: result.TurnID, body: summary}
+			if failed {
+				item.tag = "failed"
+			}
+			m.transcript.add(item)
+		}
+	}
 	m.lastResult = result.Result
 	m.lastTurnID = result.TurnID
 	m.lastRunIDs = append([]string(nil), result.RunIDs...)

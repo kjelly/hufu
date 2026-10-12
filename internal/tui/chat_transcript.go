@@ -15,6 +15,7 @@ const (
 	itemProgress
 	itemNotice
 	itemError
+	itemSummary
 )
 
 // chatItem is one transcript entry. Rendered lines are cached per width,
@@ -136,6 +137,14 @@ func renderChatItem(item chatItem, width int, s styleSet) []string {
 	case itemError:
 		for _, l := range wrapChatText("✗ "+item.body, width) {
 			lines = append(lines, s.errorIcon.Render(l))
+		}
+	case itemSummary:
+		style, mark := s.dim, "■ "
+		if item.tag == "failed" {
+			style, mark = s.errorIcon, "✗ "
+		}
+		for _, l := range wrapChatText(mark+item.body, width) {
+			lines = append(lines, style.Render(l))
 		}
 	}
 	return append(lines, "")

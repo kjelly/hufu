@@ -77,6 +77,7 @@ finalization.
 | Outcome label | the `RunResult` this turn published (`LastRunResult()` changed); otherwise `no result` — an earlier turn's result is never reused |
 | Progress cards | the canonical task projection (`TasksUpdatedMsg`): tasks new or changed since the turn started, one row each with agent, status, execution target, task ID, the task description, and its latest activity; frozen when the turn settles |
 | Elapsed time and activity | `TurnStarted.StartedAt` and `TurnResult.Elapsed` from the controller clock; the header shows `running <elapsed>` (refreshed by a per-turn tick: 1 s, 15 s on e-paper), the status line the latest runtime status (`⟳ reviewer step 3`), and the final answer title the turn's duration |
+| Turn summary | after a turn settles, one line at the bottom from the frozen card: outcome, status counts, and up to three failed tasks by ID, contract (or description), and agent — visible even when a long answer pushes the card out of view |
 | Sidebar models | the runtime's precedence: the coordinator runs on the resolved coordinator target; a worker on its own model, else the team route, else the resolved worker default |
 | Tool activity | `TaskLogMsg` lines built from already-redacted `StatusEvent`s, sanitized again before rendering |
 | Restored history | `session.json` entries loaded by the normal resume path, marked `restored` |

@@ -25,12 +25,13 @@ type progressCard struct {
 }
 
 type progressRow struct {
-	id     string
-	agent  string
-	desc   string
-	status team.TaskStatus
-	target string
-	last   string
+	id       string
+	agent    string
+	contract string
+	desc     string
+	status   team.TaskStatus
+	target   string
+	last     string
 }
 
 func newProgressCard(turnID string, number int, tasks []*team.TodoItem) *progressCard {
@@ -57,7 +58,7 @@ func (c *progressCard) refresh(tasks []*team.TodoItem, logs map[string][]string)
 		if status, seen := c.baseline[task.ID]; seen && status == task.Status {
 			continue
 		}
-		row := progressRow{id: task.ID, agent: task.Agent, desc: task.Desc, status: task.Status}
+		row := progressRow{id: task.ID, agent: task.Agent, contract: task.ContractID, desc: task.Desc, status: task.Status}
 		if !task.ExecutionTarget.IsZero() {
 			row.target = task.ExecutionTarget.String()
 		}
