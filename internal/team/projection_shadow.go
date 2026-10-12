@@ -316,6 +316,7 @@ type canonicalTaskShadow struct {
 	ID                            string                      `json:"id"`
 	Phase                         string                      `json:"phase,omitempty"`
 	Action                        *Action                     `json:"action,omitempty"`
+	ActionProgress                *ActionProgressObservation  `json:"action_progress,omitempty"`
 	ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings,omitempty"`
 	RunInputSnapshotID            string                      `json:"run_input_snapshot_id,omitempty"`
 	RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash,omitempty"`
@@ -424,6 +425,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		ID:                            item.ID,
 		Phase:                         string(item.Phase),
 		Action:                        cloneActionPtr(item.Action),
+		ActionProgress:                cloneActionProgress(item.ActionProgress),
 		ActionInputBindings:           append([]ActionInputBinding(nil), item.ActionInputBindings...),
 		RunInputSnapshotID:            item.RunInputSnapshotID,
 		RunInputSnapshotHash:          item.RunInputSnapshotHash,

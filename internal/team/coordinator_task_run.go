@@ -2607,8 +2607,14 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if c.session != nil {
 		actionEnv.TeamName = c.session.Config.Name
 	}
-	actionCtx := c.withRuntimeActionMCPAuthorization(WithActionEnvironment(ctx, actionEnv), task)
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	defer stopProgress()
+	actionCtx := WithActionProgressReporter(c.withRuntimeActionMCPAuthorization(WithActionEnvironment(progressCtx, actionEnv), task), func(value ActionProgress) {
+		c.recordActionProgress(task, todoID, actionID, attempt, value)
+	})
+	ReportActionProgress(actionCtx, ActionProgress{Version: 1, Kind: "stage", Stage: "starting", Status: "started", Message: task.Action.Type})
 	rawResult, err := c.phaseWorkflow.executeActionValueForTask(actionCtx, *task.Action, string(task.SideEffect))
+	stopProgress()
 	if err != nil {
 		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
@@ -2823,6 +2829,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		}
 	}
 	capability := normalizeCapability(task.Action.Capability)
+	c.report(c.newEvent(eventType).withAgent(task.Agent).withTodoID(todoID).withMessage(task.Action.Type).withData(map[string]any{"action_id": actionID, "action_type": task.Action.Type}))
 	providerName := c.phaseWorkflow.providerName(capability)
 	refs := []ArtifactRef{}
 	failureSignature := ""

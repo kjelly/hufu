@@ -490,6 +490,21 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 			continue
 		}
+		if e.Type == "action_progress" && e.TaskID != "" {
+			var payload struct {
+				ActionProgress *ActionProgressObservation `json:"action_progress"`
+			}
+			if json.Unmarshal(e.Payload, &payload) == nil && payload.ActionProgress != nil {
+				if item := taskMap[e.TaskID]; item != nil && item.Status == TaskInProgress {
+					prior := item.ActionProgress
+					observed := payload.ActionProgress
+					if prior == nil || observed.Attempt > prior.Attempt || observed.Attempt == prior.Attempt && observed.ActionID == prior.ActionID && observed.Sequence > prior.Sequence {
+						item.ActionProgress = cloneActionProgress(observed)
+					}
+				}
+			}
+			continue
+		}
 		if e.Type == "criterion_re_evaluated" && e.TaskID != "" {
 			var payload struct {
 				Progress         TaskProgress `json:"progress"`
@@ -633,6 +648,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ID                            string                      `json:"id"`
 			Phase                         Phase                       `json:"phase"`
 			Action                        *Action                     `json:"action"`
+			ActionProgress                *ActionProgressObservation  `json:"action_progress"`
 			ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings"`
 			RunInputSnapshotID            string                      `json:"run_input_snapshot_id"`
 			RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash"`
@@ -764,6 +780,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				ID:                            taskID,
 				Phase:                         payload.Phase,
 				Action:                        payload.Action,
+				ActionProgress:                cloneActionProgress(payload.ActionProgress),
 				ActionInputBindings:           append([]ActionInputBinding(nil), payload.ActionInputBindings...),
 				RunInputSnapshotID:            payload.RunInputSnapshotID,
 				RunInputSnapshotHash:          payload.RunInputSnapshotHash,
@@ -853,6 +870,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 
 		if desc != "" {
 			item.Desc = desc
+		}
+		if observed := payload.ActionProgress; observed != nil {
+			prior := item.ActionProgress
+			if prior == nil || observed.Attempt > prior.Attempt || observed.Attempt == prior.Attempt && observed.ActionID == prior.ActionID && observed.Sequence > prior.Sequence {
+				item.ActionProgress = cloneActionProgress(observed)
+			}
 		}
 		if payload.Goal != "" {
 			item.Goal = payload.Goal

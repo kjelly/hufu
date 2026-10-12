@@ -242,6 +242,9 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 			w.write(continuationPrefix + dimStyle.Render(line) + "\n")
 		}
 
+	case "action_started", "action_progress", "action_completed", "action_failed":
+		w.write(fmt.Sprintf("  %s %s action %s\n", stepStyle.Render("│"), formatAgentLabel(event), dimStyle.Render(event.Message)))
+
 	case "verify_start":
 		w.write(fmt.Sprintf("  %s %s %s\n",
 			stepStyle.Render("│"),
@@ -786,6 +789,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 		mu.Lock()
 		defer mu.Unlock()
 		idleTimer.reset()
+		idleTimer.ObserveAction(event)
 
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
@@ -1737,6 +1741,12 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: label + dimStyle.Render(fmt.Sprintf("  step %d", event.Step))})
 			} else if event.Message != "" {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
+			}
+
+		case "action_started", "action_progress", "action_completed", "action_failed":
+			if event.TodoID != "" {
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: dimStyle.Render("action " + event.Message)})
+				p.Send(tuipkg.StatusBarMsg{Text: agentStyle.Render(event.Agent) + "  " + dimStyle.Render("action "+event.Message)})
 			}
 
 		case "codex_activity":

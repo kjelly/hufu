@@ -1526,6 +1526,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"id":                               item.ID,
 		"phase":                            item.Phase,
 		"action":                           item.Action,
+		"action_progress":                  cloneActionProgress(item.ActionProgress),
 		"plan_task_id":                     item.PlanTaskID,
 		"plan_first":                       item.PlanFirst,
 		"plan_id":                          item.PlanID,
@@ -1724,7 +1725,11 @@ func taskTransitionEventKey(item *TodoItem) string {
 		return ""
 	}
 	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
-	data, err := json.Marshal(toCanonicalTaskShadow(item))
+	shadow := toCanonicalTaskShadow(item)
+	// Observations have their own canonical action_progress event. A heartbeat
+	// must not synthesize another task lifecycle transition at checkpoint time.
+	shadow.ActionProgress = nil
+	data, err := json.Marshal(shadow)
 	if err != nil {
 		// The payload marshal on the durable path will fail closed immediately
 		// afterwards. Keep this deterministic fallback only so the caller can

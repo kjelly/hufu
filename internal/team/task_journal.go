@@ -32,24 +32,25 @@ const (
 )
 
 type journalRecord struct {
-	Op                  string               `json:"op"` // "put", "del", or "err" (diagnostic only)
-	Agent               string               `json:"agent"`
-	TaskID              string               `json:"task_id,omitempty"`
-	RunID               string               `json:"run_id,omitempty"`
-	Desc                string               `json:"desc,omitempty"`
-	Verify              string               `json:"verify,omitempty"`
-	VerifyMode          string               `json:"verify_mode,omitempty"`
-	VerifySpec          *VerificationSpec    `json:"verify_spec,omitempty"`
-	Verification        *VerificationResult  `json:"verification,omitempty"`
-	Output              string               `json:"output,omitempty"`
-	FailureOutput       string               `json:"failure_output,omitempty"`
-	TS                  string               `json:"ts"`
-	Round               int                  `json:"round,omitempty"`
-	RepoCommit          string               `json:"repo_commit,omitempty"`
-	ProjectFingerprint  string               `json:"project_fingerprint,omitempty"`
-	Identity            *CacheIdentity       `json:"identity,omitempty"`
-	FailureFingerprints []FailureFingerprint `json:"failure_fingerprints,omitempty"`
-	FailureEvent        *FailureEventPayload `json:"failure_event,omitempty"`
+	Op                  string                     `json:"op"` // "put", "del", "err", or "progress" (diagnostic only)
+	Agent               string                     `json:"agent"`
+	TaskID              string                     `json:"task_id,omitempty"`
+	RunID               string                     `json:"run_id,omitempty"`
+	Desc                string                     `json:"desc,omitempty"`
+	Verify              string                     `json:"verify,omitempty"`
+	VerifyMode          string                     `json:"verify_mode,omitempty"`
+	VerifySpec          *VerificationSpec          `json:"verify_spec,omitempty"`
+	Verification        *VerificationResult        `json:"verification,omitempty"`
+	Output              string                     `json:"output,omitempty"`
+	FailureOutput       string                     `json:"failure_output,omitempty"`
+	TS                  string                     `json:"ts"`
+	Round               int                        `json:"round,omitempty"`
+	RepoCommit          string                     `json:"repo_commit,omitempty"`
+	ProjectFingerprint  string                     `json:"project_fingerprint,omitempty"`
+	Identity            *CacheIdentity             `json:"identity,omitempty"`
+	FailureFingerprints []FailureFingerprint       `json:"failure_fingerprints,omitempty"`
+	FailureEvent        *FailureEventPayload       `json:"failure_event,omitempty"`
+	ActionProgress      *ActionProgressObservation `json:"action_progress,omitempty"`
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`

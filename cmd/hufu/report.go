@@ -1046,6 +1046,11 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		b.WriteString("---\n\n")
 	}
+	for _, item := range data.Todos {
+		if item != nil && item.ActionProgress != nil {
+			fmt.Fprintf(&b, "Last action observation for task %s: `%s` — %s (%s). Progress is observational; acceptance remains authoritative.\n\n", reportSafeMetadata(item.ID, 120), reportSafeMetadata(item.ActionProgress.Stage, 128), reportSafeMetadata(item.ActionProgress.Message, 300), item.ActionProgress.UpdatedAt.Format(time.RFC3339))
+		}
+	}
 	if hasInvariantAssessments(data.Todos) {
 		b.WriteString("## Invariant Assessments\n\n")
 		for _, item := range data.Todos {

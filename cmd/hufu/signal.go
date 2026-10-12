@@ -23,12 +23,14 @@ type idleWarningTimer struct {
 	warned   bool
 	deadline time.Time
 	model    string
+	actions  map[string]string
 }
 
 func newIdleWarningTimer(w *lineWriter, interval time.Duration) *idleWarningTimer {
 	t := &idleWarningTimer{
 		w:        w,
 		interval: interval,
+		actions:  make(map[string]string),
 	}
 	t.timer = time.AfterFunc(interval, t.warn)
 	t.deadline = time.Now().Add(t.interval)
@@ -39,6 +41,21 @@ func (t *idleWarningTimer) SetModel(model string) {
 	t.mu.Lock()
 	t.model = model
 	t.mu.Unlock()
+}
+
+func (t *idleWarningTimer) ObserveAction(event team.StatusEvent) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	id, _ := event.Data["action_id"].(string)
+	if id == "" {
+		return
+	}
+	switch event.Type {
+	case "action_started", "action_progress":
+		t.actions[id], _ = event.Data["action_type"].(string)
+	case "action_completed", "action_failed":
+		delete(t.actions, id)
+	}
 }
 
 func (t *idleWarningTimer) warn() {
@@ -52,8 +69,13 @@ func (t *idleWarningTimer) warn() {
 	if t.model != "" {
 		modelStr = " [" + t.model + "]"
 	}
-	t.w.write(fmt.Sprintf("\n%s Waiting for LLM response%s... (%v elapsed)\n",
+	waiting := "LLM response"
+	if len(t.actions) > 0 {
+		waiting, modelStr = "action progress", ""
+	}
+	t.w.write(fmt.Sprintf("\n%s Waiting for %s%s... (%v elapsed)\n",
 		stepStyle.Render("⏳"),
+		waiting,
 		modelStr,
 		elapsed.Truncate(time.Second),
 	))

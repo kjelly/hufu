@@ -110,6 +110,13 @@ func (c *Coordinator) SetCurrentModel(modelID string) {
 // GetCurrentStatus returns a human-readable snapshot of the coordinator's
 // current state. Designed for SIGINT/watchdog diagnostics.
 func (c *Coordinator) GetCurrentStatus() string {
+	if c.taskTracker != nil {
+		for _, item := range c.taskTracker.TodoList().Items() {
+			if item.Status == TaskInProgress && item.Action != nil && item.ActionProgress != nil {
+				return fmt.Sprintf("action agent=%s type=%s stage=%s (last observation %s ago)", item.Agent, item.Action.Type, item.ActionProgress.Stage, time.Since(item.ActionProgress.UpdatedAt).Truncate(time.Second))
+			}
+		}
+	}
 	s := c.current.Load()
 	c.currentStageStartMu.RLock()
 	stageStart := c.currentStageStart

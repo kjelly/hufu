@@ -381,17 +381,21 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	cmd.Dir = p.dir
 	cmd.Stdin = bytes.NewReader(payload)
 	cmd.Env = actionCommandEnvironment(ctx)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newBoundedBuffer(1024 * 1024)
+	stderr := newActionProgressWriter(ctx)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := processutil.RunContextCommand(cmd, 500*time.Millisecond); err != nil {
 		if ctx.Err() != nil {
 			return nil, commandActionFailure(errors.Join(err, ctx.Err()), nil, ctx.Err().Error())
 		}
-		return nil, commandActionFailure(err, stdout.Bytes(), stderr.String())
+		return nil, commandActionFailure(err, []byte(stdout.String()), stderr.diagnostic.String())
+	}
+	if stdout.Truncated() {
+		return nil, withFailureClassOverride(fmt.Errorf("adapter output exceeds 1048576 bytes"), FailureProtocol)
 	}
 	var result interface{}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+	if err := json.Unmarshal([]byte(stdout.String()), &result); err != nil {
 		return nil, withFailureClassOverride(fmt.Errorf("adapter command returned invalid JSON: %w", err), FailureProtocol)
 	}
 	return result, nil

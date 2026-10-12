@@ -17,6 +17,29 @@ cloud, database, or other domain-specific commands.
 
 ## Provider types
 
+### Progress frames
+
+Command adapters may emit newline-delimited progress on stderr while stdout
+remains the final result JSON:
+
+```text
+HUFU_ACTION_PROGRESS {"version":1,"kind":"stage","stage":"deploy","status":"started","message":"deployment started"}
+```
+
+`kind` is `stage` or `heartbeat`; optional `status` is `started`, `running`,
+`completed`, or `failed`. Stage identifiers contain only lowercase ASCII letters,
+digits, `_`, `-`, and `.`. Frames are limited to 4096 bytes, stage IDs to 128
+bytes, and messages to 1024 bytes. Unknown fields, duplicate keys, invalid enums
+and oversized frames remain diagnostic output. Runtime identity and timestamps
+are assigned by Hufu, never supplied by the adapter. Secret and terminal-control
+characters are removed before projection.
+
+Observations appear in task/session state, the event stream, journal, terminal,
+TUI and report. They cannot finish a task, reset verified-criterion progress, or
+bypass acceptance. Custom in-process providers can call `ReportActionProgress`
+on their runtime-supplied context. Command result output is bounded to 1 MiB;
+diagnostic stderr is bounded independently from progress parsing.
+
 On a nonzero exit, a command adapter may return a strict stdout failure envelope:
 
 ```json

@@ -70,7 +70,7 @@ func actionLifecycleEvents(t *testing.T, events *EventStore) []RunEvent {
 	}
 	var result []RunEvent
 	for _, event := range stored {
-		if strings.HasPrefix(event.Type, "action_") {
+		if event.Type == "action_started" || event.Type == "action_completed" || event.Type == "action_failed" {
 			result = append(result, event)
 		}
 	}

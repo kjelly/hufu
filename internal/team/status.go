@@ -250,20 +250,21 @@ func (t *TaskTracker) TodoList() *TodoList {
 
 type TodoItem struct {
 	ID                            string
-	Phase                         Phase                     `json:"phase,omitempty"`
-	Action                        *Action                   `json:"action,omitempty"`
-	ActionInputBindings           []ActionInputBinding      `json:"action_input_bindings,omitempty"`
-	RunInputSnapshotID            string                    `json:"run_input_snapshot_id,omitempty"`
-	RunInputSnapshotHash          string                    `json:"run_input_snapshot_hash,omitempty"`
-	MaterializedActionPayloadHash string                    `json:"materialized_action_payload_hash,omitempty"`
-	BoundInputs                   map[string]string         `json:"bound_inputs,omitempty"`
-	InvariantVerification         InvariantVerificationMode `json:"invariant_verification,omitempty"`
-	PlanTaskID                    string                    `json:"plan_task_id,omitempty"`
-	PlanFirst                     bool                      `json:"plan_first,omitzero"`
-	PlanID                        string                    `json:"plan_id,omitempty"`
-	ContractID                    string                    `json:"contract_id,omitempty"`
-	ContractHash                  string                    `json:"contract_hash,omitempty"`
-	ContractRevision              int                       `json:"contract_revision,omitempty"`
+	Phase                         Phase                      `json:"phase,omitempty"`
+	Action                        *Action                    `json:"action,omitempty"`
+	ActionProgress                *ActionProgressObservation `json:"action_progress,omitempty"`
+	ActionInputBindings           []ActionInputBinding       `json:"action_input_bindings,omitempty"`
+	RunInputSnapshotID            string                     `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string                     `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string                     `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string          `json:"bound_inputs,omitempty"`
+	InvariantVerification         InvariantVerificationMode  `json:"invariant_verification,omitempty"`
+	PlanTaskID                    string                     `json:"plan_task_id,omitempty"`
+	PlanFirst                     bool                       `json:"plan_first,omitzero"`
+	PlanID                        string                     `json:"plan_id,omitempty"`
+	ContractID                    string                     `json:"contract_id,omitempty"`
+	ContractHash                  string                     `json:"contract_hash,omitempty"`
+	ContractRevision              int                        `json:"contract_revision,omitempty"`
 	Agent                         string
 	Desc                          string
 	Goal                          string `json:"goal,omitempty"`
@@ -1067,6 +1068,36 @@ func (tl *TodoList) SetRuntimeError(id string, runtimeErr *ExecutionError) error
 	return nil
 }
 
+func cloneActionProgress(value *ActionProgressObservation) *ActionProgressObservation {
+	if value == nil {
+		return nil
+	}
+	return new(*value)
+}
+
+// SetActionProgress updates only telemetry, preserving the occurrence lease,
+// task lifecycle, typed result and verified-criterion progress.
+func (tl *TodoList) SetActionProgress(id string, value *ActionProgressObservation) error {
+	tl.mu.Lock()
+	updated := false
+	for _, item := range tl.items {
+		if item.ID == id && item.Status == TaskInProgress {
+			item.ActionProgress = cloneActionProgress(value)
+			updated = true
+			break
+		}
+	}
+	onChange := tl.onChange
+	tl.mu.Unlock()
+	if !updated {
+		return fmt.Errorf("task %s has no active action occurrence", id)
+	}
+	if onChange != nil {
+		onChange()
+	}
+	return nil
+}
+
 func (tl *TodoList) SetTypedResult(id string, result *TaskResult) error {
 	tl.mu.Lock()
 	updated := false
@@ -1301,6 +1332,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ID:                            item.ID,
 		Phase:                         item.Phase,
 		Action:                        cloneActionPtr(item.Action),
+		ActionProgress:                cloneActionProgress(item.ActionProgress),
 		ActionInputBindings:           append([]ActionInputBinding(nil), item.ActionInputBindings...),
 		RunInputSnapshotID:            item.RunInputSnapshotID,
 		RunInputSnapshotHash:          item.RunInputSnapshotHash,
