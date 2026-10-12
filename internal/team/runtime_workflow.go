@@ -227,6 +227,10 @@ func (w *runtimeWorkflow) permitActionRetry(task TaskDef, err error) bool {
 	if w == nil || !w.ActionsEnabled() || task.Action == nil || err == nil {
 		return false
 	}
+	switch ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}) {
+	case FailureCancelled, FailureEnvironment, FailureContract:
+		return false
+	}
 	// A retry re-executes the provider, so it needs the same replay safety as
 	// any other automatic re-execution. Checking before RecordFailure keeps a
 	// non-replayable action from consuming the signature budget.
@@ -291,6 +295,12 @@ func (w *runtimeWorkflow) actionExecutionError(task TaskDef, err error) Executio
 	if errors.Is(err, context.DeadlineExceeded) {
 		category = CategoryTimeout
 	}
+	switch ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}) {
+	case FailureCancelled:
+		category, retryable = CategoryCancelled, false
+	case FailureEnvironment:
+		category, retryable = CategoryEnvironment, false
+	}
 	source := ""
 	component := task.Agent
 	if task.Action != nil {
@@ -300,8 +310,12 @@ func (w *runtimeWorkflow) actionExecutionError(task TaskDef, err error) Executio
 	if source == "" {
 		source = task.Agent
 	}
-	return ExecutionError{Phase: phase, Component: component, Source: source, Category: category,
+	result := ExecutionError{Phase: phase, Component: component, Source: source, Category: category,
 		Message: err.Error(), Cause: err.Error(), Retryable: retryable}
+	if commandErr, ok := errors.AsType[*ActionCommandError](err); ok {
+		result.ExitCode = commandErr.ExitCode
+	}
+	return result
 }
 
 // repairRetryLimit returns the configured repair limit, falling back to the
@@ -327,6 +341,9 @@ func (w *runtimeWorkflow) repairRetryLimit(taskMaxRetries int) int {
 // repair a provider, tool, or environment failure only within this bound.
 func (w *runtimeWorkflow) permitRepairRetry(task TaskDef, err error) bool {
 	if err == nil {
+		return false
+	}
+	if ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}) == FailureCancelled {
 		return false
 	}
 	var validation ActionValidationError
@@ -613,6 +630,9 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 }
 
 func (w *runtimeWorkflow) failExecutionErrorLocked(taskID string, executionErr ExecutionError, status PhaseStatus) error {
+	if executionErr.Category == CategoryCancelled {
+		status = PhaseStatusCancelled
+	}
 	if status == "" {
 		status = PhaseStatusFailure
 	}

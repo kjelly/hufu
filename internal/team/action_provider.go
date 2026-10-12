@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -384,19 +385,50 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, commandActionFailure(errors.Join(err, ctx.Err()), nil, ctx.Err().Error())
 		}
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = err.Error()
-		}
-		return nil, fmt.Errorf("adapter command failed: %s", utils.RedactSecrets(detail))
+		return nil, commandActionFailure(err, stdout.Bytes(), stderr.String())
 	}
 	var result interface{}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("adapter command returned invalid JSON: %w", err)
+		return nil, withFailureClassOverride(fmt.Errorf("adapter command returned invalid JSON: %w", err), FailureProtocol)
 	}
 	return result, nil
+}
+
+func commandActionFailure(err error, stdout []byte, stderr string) error {
+	class := FailureExecution
+	if errors.Is(err, context.DeadlineExceeded) {
+		class = FailureTimeout
+	} else if errors.Is(err, context.Canceled) {
+		class = FailureCancelled
+	}
+	var exitCode *int
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+		exitCode = new(exitErr.ExitCode())
+		// Shell adapters use the conventional 128+signal statuses when their
+		// child receives an interrupt or termination signal.
+		if class == FailureExecution && (*exitCode == 130 || *exitCode == 143 || processWasInterrupted(exitErr.ProcessState)) {
+			class = FailureCancelled
+		}
+	} else if class == FailureExecution {
+		class = FailureEnvironment
+	}
+	detail := strings.TrimSpace(stderr)
+	var reported actionCommandFailure
+	if jsonv2.Unmarshal(stdout, &reported, jsonv2.RejectUnknownMembers(true)) == nil {
+		switch reported.Error.Class {
+		case FailureExecution, FailureEnvironment, FailureContract, FailureProtocol, FailureVerify:
+			if reported.Error.Message != "" && class != FailureCancelled && class != FailureTimeout {
+				class, detail = reported.Error.Class, reported.Error.Message
+			}
+		}
+	}
+	if detail == "" {
+		detail = err.Error()
+	}
+	return &ActionCommandError{Cause: err, ExitCode: exitCode, Class: class,
+		Diagnostic: utils.TruncateString(utils.RedactSecrets(detail), 4096)}
 }
 
 func (p *golangActionProvider) Execute(ctx context.Context, action Action) (interface{}, error) {
@@ -565,6 +597,22 @@ func (e ActionProviderError) Error() string {
 
 func (e ActionProviderError) Unwrap() error { return e.Cause }
 
+func (e ActionProviderError) FailureClassOverride() TaskFailureClass {
+	if errors.Is(e.Cause, context.Canceled) {
+		return FailureCancelled
+	}
+	if errors.Is(e.Cause, context.DeadlineExceeded) {
+		return FailureTimeout
+	}
+	if classified, ok := errors.AsType[interface {
+		error
+		FailureClassOverride() TaskFailureClass
+	}](e.Cause); ok {
+		return classified.FailureClassOverride()
+	}
+	return FailureExecution
+}
+
 // ActionValidationError marks a permanent invalid-action response from a
 // provider. It is distinct from an execution failure so the retry engine does
 // not repeatedly send an invalid action to an adapter.
@@ -578,3 +626,5 @@ func (e ActionValidationError) Error() string {
 }
 
 func (e ActionValidationError) Unwrap() error { return e.Cause }
+
+func (e ActionValidationError) FailureClassOverride() TaskFailureClass { return FailureContract }

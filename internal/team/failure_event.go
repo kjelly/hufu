@@ -247,6 +247,10 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 	if c != nil && c.session != nil && c.session.Config.Shell != "" {
 		event.Shell = c.session.Config.Shell
 	}
+	if item.Action != nil && item.RuntimeError != nil {
+		event.Command = item.Action.Type
+		event.ExitCode = item.RuntimeError.ExitCode
+	}
 	if class == FailureCancelled {
 		// Cancellation is a coordination-level terminal cause. A failed tool or
 		// verifier from earlier in the attempt is historical context and must not

@@ -2610,19 +2610,11 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	actionCtx := c.withRuntimeActionMCPAuthorization(WithActionEnvironment(ctx, actionEnv), task)
 	rawResult, err := c.phaseWorkflow.executeActionValueForTask(actionCtx, *task.Action, string(task.SideEffect))
 	if err != nil {
-		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
-		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
-		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
-		return "", err
+		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
 	actionResult, err := decodeActionResult(rawResult)
 	if err != nil {
-		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
-		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
-		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
-		return "", err
+		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
 	runtimeOutputs, runtimeOutputsHash, err := c.canonicalizeRuntimeActionOutputs(task, todoID, actionID, startedAt, actionResult)
 	if err != nil {
@@ -2631,19 +2623,11 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	declaredArtifacts := append([]ArtifactRef(nil), actionResult.Artifacts...)
 	providerArtifacts, err := c.ingestActionProviderArtifacts(ctx, actionRoot, task, todoID, attempt, declaredArtifacts)
 	if err != nil {
-		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
-		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
-		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
-		return "", err
+		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
 	actionResult.Artifacts = providerArtifacts
 	if err := c.publishRuntimeWorksetProjection(actionRoot, actionID, declaredArtifacts, providerArtifacts); err != nil {
-		runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
-		_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
-		c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
-		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
-		return "", err
+		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
 	output = actionResultDisplay(rawResult, actionResult)
 	typedResult := &TaskResult{

@@ -17,6 +17,20 @@ cloud, database, or other domain-specific commands.
 
 ## Provider types
 
+On a nonzero exit, a command adapter may return a strict stdout failure envelope:
+
+```json
+{"error":{"failure_class":"environment","message":"resource limit reached"}}
+```
+
+Accepted classes are `execution`, `environment`, `contract`, `protocol`, and
+`verify`. Unknown fields or classes are ignored; the process still fails as an
+execution error. Process cancellation and timeout evidence always takes
+precedence. Exit status and typed classification are persisted separately from
+diagnostic stderr, whose prose cannot change the failure class. Shell exit
+statuses 130 and 143, and direct SIGINT/SIGTERM exits on Unix, represent
+cancellation. A failure envelope never grants permission to replay side effects.
+
 ### Command provider
 
 The legacy command form starts an external executable with an argv array. It

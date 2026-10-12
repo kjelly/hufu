@@ -407,6 +407,14 @@ func EvaluateRunOutcome(input RunEvaluationInput) RunResult {
 		return result
 	}
 	for _, task := range input.UnresolvedTasks {
+		if task.FailureClass == FailureCancelled {
+			result.Outcome = RunOutcomeCancelled
+			result.StopReason = StopReasonCancelled
+			result.ExitCode = 130
+			return result
+		}
+	}
+	for _, task := range input.UnresolvedTasks {
 		if task.Status == string(TaskBlocked) {
 			result.Outcome = RunOutcomeBlocked
 			if task.FailureClass == FailurePolicy || task.FailureClass == FailureContract || task.FailureClass == FailureProtocol {

@@ -10,7 +10,8 @@ import (
 func (c *Coordinator) failRuntimeAction(task TaskDef, todoID, actionID string, startedAt time.Time, err error) error {
 	runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
 	_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
-	c.PersistFailure(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError))
+	class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
+	c.PersistFailureWithClass(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, class)
 	c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 	return err
 }

@@ -32,6 +32,7 @@ func TestEvaluateRunOutcome(t *testing.T) {
 		{name: "budget exceeded", budget: true, outcome: RunOutcomePartial, exitCode: 7},
 		{name: "run failure", runFailed: true, outcome: RunOutcomeFailed, exitCode: 1},
 		{name: "cancelled", cancelled: true, outcome: RunOutcomeCancelled, exitCode: 130},
+		{name: "cancelled action", unresolved: []TaskReference{{ID: "1", Status: string(TaskError), FailureClass: FailureCancelled}}, outcome: RunOutcomeCancelled, exitCode: 130},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

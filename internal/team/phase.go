@@ -39,6 +39,7 @@ type ExecutionError struct {
 	Cause     string   `json:"cause,omitempty"`
 	Evidence  []string `json:"evidence,omitempty"`
 	Retryable bool     `json:"retryable"`
+	ExitCode  *int     `json:"exit_code,omitempty"`
 }
 
 // PhaseResult represents the structured outcome of a workflow phase.
