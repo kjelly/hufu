@@ -94,6 +94,8 @@ to re-create an abstraction that already exists in the runtime.
 - [Action providers](reference/action-providers.md) — team-owned command,
   embedded Go, and MCP tool adapters for structured runtime actions.
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
+- [Context delivery baseline](reference/context-delivery-baseline.md) — pre-change
+  full-suite results and the Unix socket temporary-path requirement.
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.
