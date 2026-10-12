@@ -139,3 +139,26 @@ func TestStatusToolResultRedactsSecretsBeyondCollapsedPreview(t *testing.T) {
 		t.Fatal("status projection modified the original tool result")
 	}
 }
+
+func TestStatusToolArgsRedactSecrets(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+	}{
+		{name: "github token", secret: "ghp_" + strings.Repeat("a", 36)},
+		{name: "openai key", secret: "sk-" + strings.Repeat("b", 48)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var reported StatusEvent
+			c := &Coordinator{reportStatus: func(event StatusEvent) { reported = event }}
+			c.report(c.newEvent("tool_call").withTool("bash", `{"command":"curl -H 'Authorization: `+tt.secret+`'"}`))
+			if strings.Contains(reported.ToolArgs, tt.secret) {
+				t.Fatalf("tool arguments exposed a credential: %q", reported.ToolArgs)
+			}
+			if !strings.Contains(reported.ToolArgs, "curl") {
+				t.Fatalf("tool arguments lost non-secret context: %q", reported.ToolArgs)
+			}
+		})
+	}
+}

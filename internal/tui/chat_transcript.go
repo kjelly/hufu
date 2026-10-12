@@ -28,7 +28,9 @@ type chatItem struct {
 	tag      string
 	restored bool
 	card     *progressCard
-	version  int
+	// selectedTask highlights one row of a progress card.
+	selectedTask string
+	version      int
 
 	cacheWidth   int
 	cacheTheme   string
@@ -126,7 +128,7 @@ func renderChatItem(item chatItem, width int, s styleSet) []string {
 		}
 		lines = append(lines, wrapChatText(item.body, width)...)
 	case itemProgress:
-		lines = append(lines, renderProgressCard(item.card, width, s)...)
+		lines = append(lines, renderProgressCard(item.card, item.selectedTask, width, s)...)
 	case itemNotice:
 		for _, l := range wrapChatText("· "+item.body, width) {
 			lines = append(lines, s.dim.Render(l))

@@ -89,7 +89,17 @@ func (c *progressCard) freeze(state string) {
 	c.frozen = true
 }
 
-func renderProgressCard(c *progressCard, width int, s styleSet) []string {
+// rowStatus returns the status task id had in this card.
+func (c *progressCard) rowStatus(id string) (team.TaskStatus, bool) {
+	for _, row := range c.rows {
+		if row.id == id {
+			return row.status, true
+		}
+	}
+	return "", false
+}
+
+func renderProgressCard(c *progressCard, selected string, width int, s styleSet) []string {
 	if c == nil {
 		return nil
 	}
@@ -112,8 +122,16 @@ func renderProgressCard(c *progressCard, width int, s styleSet) []string {
 		if row.last != "" && width >= 60 {
 			fields = append(fields, strings.ReplaceAll(row.last, "\n", " "))
 		}
-		line := "│ " + strings.Join(fields, "  ")
-		lines = append(lines, progressStatusStyle(row.status, s).Render(truncateCells(line, width)))
+		marker := "│ "
+		if row.id == selected {
+			marker = "│›"
+		}
+		line := truncateCells(marker+strings.Join(fields, "  "), width)
+		if row.id == selected {
+			lines = append(lines, s.selectedFG.Render(line))
+			continue
+		}
+		lines = append(lines, progressStatusStyle(row.status, s).Render(line))
 	}
 	return append(lines, s.dim.Render(truncateCells("└"+strings.Repeat("─", max(min(width-1, 40), 0)), width)))
 }

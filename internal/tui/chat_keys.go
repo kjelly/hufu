@@ -111,7 +111,22 @@ func (m ChatModel) updateTranscriptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		m.transcript.vp.GotoBottom()
 		m.transcript.followIfAtBottom()
 		return m, nil
-	case "i", "a", "enter":
+	case "n":
+		return m.moveSelection(1), nil
+	case "p":
+		return m.moveSelection(-1), nil
+	case "enter":
+		if m.selection != nil {
+			return m.openSelection()
+		}
+		return m.focusComposer()
+	case "esc":
+		if m.selection != nil {
+			m = m.setSelection(nil)
+			m.rerender()
+		}
+		return m, nil
+	case "i", "a":
 		return m.focusComposer()
 	case "T":
 		return m.cycleTheme()

@@ -92,6 +92,7 @@ func (m ChatModel) helpText() string {
 		"Tab              complete /commands and @names",
 		"Esc              move focus to the transcript",
 		"j/k, PgUp/PgDn   scroll (transcript focus); g/G top/bottom",
+		"n/p, Enter       select a task row in a progress card; open its detail",
 		"i, a             return to the composer",
 		"T                cycle the theme (transcript focus)",
 		"Ctrl+T           switch between chat and tasks",

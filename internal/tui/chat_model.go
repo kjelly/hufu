@@ -70,6 +70,7 @@ type ChatModel struct {
 	lastResult  *team.RunResult
 	lastTurnID  string
 	lastRunIDs  []string
+	selection   *cardSelection
 	closeReport *conversation.CloseReport
 
 	width  int

@@ -169,7 +169,7 @@ func (m ChatModel) hintLine() string {
 	}
 	hint := "Enter send · Ctrl+J newline · Tab complete · Esc scroll · Ctrl+T tasks · ? help"
 	if m.focus == focusTranscript {
-		hint = "j/k scroll · g/G top/bottom · i compose · T theme · Ctrl+T tasks · ? help"
+		hint = "j/k scroll · n/p select task · enter open · i compose · T theme · Ctrl+T tasks · ? help"
 	}
 	return s.dim.Render(truncateCells(hint, m.width))
 }

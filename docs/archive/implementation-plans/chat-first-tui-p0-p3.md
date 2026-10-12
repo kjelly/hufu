@@ -471,7 +471,7 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 
 #### WP-20｜從進度卡片連到 Tasks detail
 
-- 在 transcript focus 下選取某張進度卡片的某一列（`j`／`k` 移動選取、`Enter` 開啟）→ 切換到 Tasks view，並開啟該 task 的 detail。若 dashboard 沒有「依 ID 選取」的函式，就在 `package tui` 內新增一個。
+- 在 transcript focus 下選取某張進度卡片的某一列（`n`／`p` 移動選取——`j`／`k` 保留給 viewport 捲動；`Enter` 開啟；`Esc` 取消選取）→ 切換到 Tasks view，並開啟該 task 的 detail（`package tui` 內新增 `openTaskDetail`）。
 - 從 detail 返回（dashboard 原本的 `Esc`）→ 回到 Tasks 主畫面；`Ctrl+T` 回到 Chat 時，選取狀態與捲動位置都保留。
 - 已凍結的卡片如果指向已經被新一輪覆寫的 task ID，開啟時要顯示 `task has newer activity` 提示（比較目前 Status 與凍結時的 Status）。
 - **測試**：teatest 驗證選取 → detail → 返回 → 切回 Chat 的整條路徑；同一個 task ID 跨輪出現時有提示。
@@ -550,7 +550,9 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 | Composer | `PgUp`／`PgDn` | 捲動 transcript |
 | Transcript | `g`／`G`；其餘捲動鍵（`j`／`k`／`↑`／`↓`／`PgUp`／`PgDn`／`Ctrl+U`／`Ctrl+D` 等）沿用 bubbles `viewport` 的 key map | 捲動，或移動進度卡片的選取（WP-20） |
 | Transcript | `i`、`a` | focus 回到 composer |
+| Transcript | `n`／`p` | 選取下一／上一個進度卡片列（WP-20） |
 | Transcript | `Enter` | 有選取的卡片列時開啟 detail（WP-20）；否則 focus 回到 composer |
+| Transcript | `Esc` | 取消卡片列選取 |
 | Transcript | `T` | 切換主題 |
 | 沒有 overlay 時 | `Ctrl+T` | Chat ↔ Tasks |
 | 沒有 overlay 時 | `Ctrl+P` | palette |
