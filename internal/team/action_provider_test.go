@@ -147,9 +147,26 @@ func TestCommandActionProviderHonorsContextDeadline(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
+	started := time.Now()
 	_, err := provider.Execute(ctx, Action{Capability: "structured-actions", Type: "apply"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Execute error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
+		t.Fatalf("deadline did not bound process cleanup: %s", elapsed)
+	}
+}
+
+func TestCommandResolverDeadlineBoundsDescendants(t *testing.T) {
+	provider := &commandActionProvider{
+		command: []string{"/bin/sh", "-c", "cat >/dev/null; sleep 1"},
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := provider.ResolveRunInput(ctx, RunInputResolverRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 750*time.Millisecond {
+		t.Fatalf("resolver cleanup: elapsed=%s error=%v", time.Since(started), err)
 	}
 }
 

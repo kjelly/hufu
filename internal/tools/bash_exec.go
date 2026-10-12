@@ -12,11 +12,11 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -83,23 +83,7 @@ func waitAndDrain(cmd *exec.Cmd, wg *sync.WaitGroup) error {
 // signalled at all. Preserves existing SysProcAttr fields if setNetNamespace
 // was called first.
 func configureCommandReaping(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			// EPERM for root-owned children (sudo). Try the plain kill and
-			// otherwise rely on WaitDelay to unblock Wait; the orphan keeps
-			// running but the tool call returns.
-			return cmd.Process.Kill()
-		}
-		return nil
-	}
-	cmd.WaitDelay = commandReapDelay
+	processutil.ConfigureCommandReaping(cmd, commandReapDelay)
 }
 
 // runShellCommand runs name+args under a derived context with the given timeout,

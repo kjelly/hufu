@@ -22,6 +22,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/traefik/yaegi/interp"
@@ -131,7 +132,7 @@ func Execute(ctx context.Context, executable string, program Program, input []by
 	}
 	stdout := newLimitedBuffer(outputLimit)
 	stderr := newLimitedBuffer(errorLimit)
-	cmd := exec.Command(executable, ChildArg, program.Source, program.Digest)
+	cmd := exec.CommandContext(ctx, executable, ChildArg, program.Source, program.Digest)
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -139,24 +140,18 @@ func Execute(ctx context.Context, executable string, program Program, input []by
 		cmd.Env = slices.Clone(env)
 	}
 	configureProcessAttributes(cmd)
+	processutil.ConfigureCommandReaping(cmd, 500*time.Millisecond)
 	wait, err := processutil.StartAndWait(cmd)
 	if err != nil {
 		return Result{}, fmt.Errorf("start embedded Go runtime: %w", err)
 	}
-	var runErr error
-	select {
-	case runErr = <-wait:
-	case <-ctx.Done():
-		terminateProcess(cmd)
-		<-wait
-		return Result{
-			Stdout: stdout.Bytes(), Stderr: stderr.Bytes(),
-			StdoutTruncated: stdout.Truncated(), StderrTruncated: stderr.Truncated(),
-		}, ctx.Err()
-	}
+	runErr := <-wait
 	result := Result{
 		Stdout: stdout.Bytes(), Stderr: stderr.Bytes(),
 		StdoutTruncated: stdout.Truncated(), StderrTruncated: stderr.Truncated(),
+	}
+	if ctx.Err() != nil {
+		return result, ctx.Err()
 	}
 	if runErr != nil {
 		return result, fmt.Errorf("embedded Go runtime failed: %w", runErr)

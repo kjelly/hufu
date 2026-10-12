@@ -31,6 +31,13 @@ diagnostic stderr, whose prose cannot change the failure class. Shell exit
 statuses 130 and 143, and direct SIGINT/SIGTERM exits on Unix, represent
 cancellation. A failure envelope never grants permission to replay side effects.
 
+Command actions and command input resolvers supervise their subprocesses with
+bounded pipe draining. On Unix cancellation sends TERM to the owned process
+group, allows a short cleanup interval for supervisors and PTY owners, then
+sends KILL. Embedded Go adapters use the same cancellation boundary while
+retaining their OS-thread-pinned parent-death protection. Other platforms retain
+their native process cancellation with bounded pipe draining.
+
 ### Command provider
 
 The legacy command form starts an external executable with an argv array. It

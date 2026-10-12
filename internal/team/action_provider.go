@@ -17,6 +17,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/golangruntime"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -383,7 +384,7 @@ func (p *commandActionProvider) Execute(ctx context.Context, action Action) (int
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := processutil.RunContextCommand(cmd, 500*time.Millisecond); err != nil {
 		if ctx.Err() != nil {
 			return nil, commandActionFailure(errors.Join(err, ctx.Err()), nil, ctx.Err().Error())
 		}
@@ -474,15 +475,11 @@ func (p *commandActionProvider) ResolveRunInput(ctx context.Context, request Run
 	stderr := newBoundedBuffer(maxRunInputResolverDiagnosticBytes)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if err := processutil.RunContextCommand(cmd, 500*time.Millisecond); err != nil {
 		if ctx.Err() != nil {
-			return RunInputResolverResponse{}, ctx.Err()
+			return RunInputResolverResponse{}, commandActionFailure(errors.Join(err, ctx.Err()), nil, ctx.Err().Error())
 		}
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = err.Error()
-		}
-		return RunInputResolverResponse{}, fmt.Errorf("resolver command failed: %s", utils.RedactSecrets(detail))
+		return RunInputResolverResponse{}, fmt.Errorf("resolver command failed: %w", commandActionFailure(err, []byte(stdout.String()), stderr.String()))
 	}
 	if stdout.Truncated() {
 		return RunInputResolverResponse{}, fmt.Errorf("resolver output exceeds %d bytes", maxRunInputResolverOutputBytes)
