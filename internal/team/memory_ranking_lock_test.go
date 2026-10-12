@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -43,8 +44,14 @@ func rankingLockFixture(t *testing.T, mode agent.MemoryLearningMode) *Coordinato
 		}
 		items = append(items, item)
 	}
-	if err := repo.Append(context.Background(), items...); err != nil {
-		t.Fatal(err)
+	// Append stamps UpdatedAt from the clock, and freshness is ranked before
+	// priority. Separate update times by a millisecond; the golden test uses
+	// synctest so insertion speed cannot change their spacing or the order.
+	for _, item := range items {
+		time.Sleep(time.Millisecond)
+		if err := repo.Append(t.Context(), item); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i, id := range []string{"lock-01", "lock-02", "lock-12"} {
 		if _, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{
@@ -101,21 +108,23 @@ func rankingLockSummary(t *testing.T) string {
 // memories reach the prompt. Regenerate only for an intended ranking change:
 // UPDATE_RANKING_LOCK=1 go test ./internal/team -run TestPersistentRankingBehaviourIsLocked
 func TestPersistentRankingBehaviourIsLocked(t *testing.T) {
-	got := rankingLockSummary(t)
-	path := filepath.Join("testdata", "memory_ranking_lock.golden")
-	if os.Getenv("UPDATE_RANKING_LOCK") == "1" {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
+	synctest.Test(t, func(t *testing.T) {
+		got := rankingLockSummary(t)
+		path := filepath.Join("testdata", "memory_ranking_lock.golden")
+		if os.Getenv("UPDATE_RANKING_LOCK") == "1" {
+			if err := os.MkdirAll("testdata", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-			t.Fatal(err)
+		if got != string(want) {
+			t.Fatalf("persistent ranking changed:\n--- got\n%s\n--- want\n%s", got, want)
 		}
-	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != string(want) {
-		t.Fatalf("persistent ranking changed:\n--- got\n%s\n--- want\n%s", got, want)
-	}
+	})
 }
