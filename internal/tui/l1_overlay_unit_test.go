@@ -777,6 +777,11 @@ func TestPromptInput_SubmitEmpty(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	m.width = 100
 	m.height = 30
+	calls := 0
+	m.SubmitPrompt = func(string) bool {
+		calls++
+		return true
+	}
 
 	// Open prompt input
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
@@ -786,18 +791,16 @@ func TestPromptInput_SubmitEmpty(t *testing.T) {
 	}
 
 	// Submit with empty text — should close but not inject
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = m3.(Model)
 	if model.inPromptInput {
 		t.Error("expected inPromptInput=false after enter with empty text")
 	}
-
-	// No prompt should be in the channel
-	select {
-	case <-model.PromptInjectCh:
-		t.Error("expected no prompt injected for empty submit")
-	default:
-		// Good
+	if cmd != nil {
+		t.Error("expected no submit command for empty submit")
+	}
+	if calls != 0 {
+		t.Errorf("SubmitPrompt calls = %d, want 0 for empty submit", calls)
 	}
 }
 

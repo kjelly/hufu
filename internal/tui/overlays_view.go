@@ -120,8 +120,11 @@ func (m Model) confirmView() string {
 func (m Model) promptInputView() string {
 	m.promptInput.Width = max(m.width-8, 20)
 	content := m.styles.prompt.Render("─── Additional Prompt ───") + "\n\n" +
-		m.promptInput.View() + "\n\n" +
-		m.styles.dim.Render("enter submit · esc cancel")
+		m.promptInput.View() + "\n\n"
+	if m.promptNotice != "" {
+		content += m.styles.errorIcon.Render("✗ "+m.promptNotice) + "\n"
+	}
+	content += m.styles.dim.Render("enter submit · esc cancel")
 	dialog := m.styles.promptInputBox.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }

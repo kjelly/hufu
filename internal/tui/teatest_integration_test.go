@@ -508,7 +508,16 @@ func TestIntegration_ResultMsg(t *testing.T) {
 // TestIntegration_PromptInput verifies that 'c' opens the prompt injection
 // dialog, typing works, and Enter submits.
 func TestIntegration_PromptInput(t *testing.T) {
-	tm := newTestModelWithTasks(t, "test", sampleTeamInfo(), sampleTasks(), 120, 40)
+	t.Setenv("NO_SPINNER", "1")
+	submitted := make(chan string, 1)
+	m := New("test", sampleTeamInfo())
+	m.tasks = sampleTasks()
+	m.SubmitPrompt = func(prompt string) bool {
+		submitted <- prompt
+		return true
+	}
+	tm := &tuiTestModel{tm: teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 40))}
+	t.Cleanup(func() { _ = tm.tm.Quit() })
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// 'c' opens prompt input.
@@ -525,21 +534,14 @@ func TestIntegration_PromptInput(t *testing.T) {
 	// After submit, we should be back in the column view.
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
-	// The injected prompt should be in the channel.
-	tm.Send(FinishedMsg{})
-	tm.Send(keyMsg("q")) // quit to get final model
-	fm := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second))
-	if fm == nil {
-		t.Fatal("expected final model, got nil")
-	}
-	model := fm.(Model)
+	// The prompt should have been handed to SubmitPrompt.
 	select {
-	case injected := <-model.PromptInjectCh:
+	case injected := <-submitted:
 		if injected != "fix the bug" {
 			t.Errorf("expected injected prompt 'fix the bug', got %q", injected)
 		}
-	default:
-		t.Error("expected prompt to be injected into PromptInjectCh")
+	case <-time.After(3 * time.Second):
+		t.Error("expected prompt to be passed to SubmitPrompt")
 	}
 }
 

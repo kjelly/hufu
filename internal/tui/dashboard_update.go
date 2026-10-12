@@ -55,6 +55,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		if !m.finished || m.IsChat {
 			m.inPromptInput = true
+			m.promptNotice = ""
 			m.promptInput.SetValue("")
 			m.promptInput.Focus()
 			return m, m.blinkCmd()
@@ -343,27 +344,47 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// promptSubmittedMsg reports whether SubmitPrompt accepted a prompt.
+type promptSubmittedMsg struct {
+	Prompt string
+	OK     bool
+}
+
+// submitPromptCmd keeps the runtime hand-off out of Update: the command runs
+// SubmitPrompt and reports the outcome back as a message.
+func submitPromptCmd(submit func(string) bool, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		return promptSubmittedMsg{Prompt: prompt, OK: submit(prompt)}
+	}
+}
+
 func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		prompt := strings.TrimSpace(m.promptInput.Value())
-		m.inPromptInput = false
-		m.promptInput.SetValue("")
-		m.promptInput.Blur()
-		if prompt != "" {
-			if m.IsChat {
-				m.finished = false
-				m.result = ""
-				m.statusText = "Waiting for coordinator..."
-			}
-			select {
-			case m.PromptInjectCh <- prompt:
-			default:
-			}
+		if m.promptSubmitting {
+			return m, nil
 		}
-		return m, nil
+		prompt := strings.TrimSpace(m.promptInput.Value())
+		if prompt == "" {
+			m.inPromptInput = false
+			m.promptInput.SetValue("")
+			m.promptInput.Blur()
+			return m, nil
+		}
+		if m.SubmitPrompt == nil {
+			m.promptNotice = "prompt injection is unavailable; prompt was not sent"
+			m.statusText = m.styles.errorIcon.Render("✗ " + m.promptNotice)
+			return m, nil
+		}
+		// Keep the draft until the runtime reports acceptance.
+		m.promptSubmitting = true
+		return m, submitPromptCmd(m.SubmitPrompt, prompt)
 	case "esc", "ctrl+c":
+		if m.promptSubmitting {
+			return m, nil
+		}
 		m.inPromptInput = false
+		m.promptNotice = ""
 		m.promptInput.SetValue("")
 		m.promptInput.Blur()
 		return m, nil
@@ -372,6 +393,25 @@ func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promptInput, cmd = m.promptInput.Update(msg)
 		return m, cmd
 	}
+}
+
+func (m Model) handlePromptSubmitted(msg promptSubmittedMsg) (tea.Model, tea.Cmd) {
+	m.promptSubmitting = false
+	if !msg.OK {
+		m.promptNotice = "prompt queue is full; prompt was not sent — press enter to retry"
+		m.statusText = m.styles.errorIcon.Render("✗ " + m.promptNotice)
+		return m, nil
+	}
+	m.promptNotice = ""
+	m.inPromptInput = false
+	m.promptInput.SetValue("")
+	m.promptInput.Blur()
+	if m.IsChat {
+		m.finished = false
+		m.result = ""
+		m.statusText = "Waiting for coordinator..."
+	}
+	return m, nil
 }
 
 func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -222,7 +222,7 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
 		boldStyle.Render("💬"), teamStyle.Render(teamName),
 		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
-	turn := 0
+	var turns chatTurnSequencer
 	for {
 		line, err := readChatLine(pr)
 		if err != nil {
@@ -244,7 +244,8 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 				continue
 			}
 			oldTC := tc
-			tc, teamName, turn = newTc, newTc.teamName, 0
+			tc, teamName = newTc, newTc.teamName
+			turns.reset()
 			if err := oldTC.Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
 			}
@@ -256,7 +257,7 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 			return nil
 		case "/reset":
 			tc.coordinator.ResetConversation()
-			turn = 0
+			turns.reset()
 			fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
 			continue
 		case "/help", "help", "?":
@@ -274,7 +275,7 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 			oldTC := tc
 			tc = newTc
 			teamName = newName
-			turn = 0
+			turns.reset()
 			if err := oldTC.Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
 			}
@@ -307,61 +308,30 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 			continue
 		}
 
-		// Inject file/project contexts
-		promptToRun, _ := injectFileContexts(line)
-		cfg := config.LoadConfig()
-		if opts.projectContext || cfg.ProjectContext || tc.session.Config.ProjectContext {
-			promptToRun = injectProjectContext(promptToRun)
-		}
-
 		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
 		// returns to the prompt rather than exiting the REPL.
 		turnInvocationID := team.NewInvocationID()
-		opts.invocationID = turnInvocationID
-		tc.coordinator.SetInvocationID(turnInvocationID)
-		turnRunCounts := snapshotExecutionRunCounts(map[string]*teamContext{teamName: tc})
 		stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval)
 		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
 		disp := newCoordDisplay(tc)
-		var result string
-		if turn == 0 {
-			result, err = tc.coordinator.Run(turnCtx, promptToRun)
-		} else {
-			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, promptToRun)
-		}
-		result, err = presentExploratoryDelivery(tc, result, err)
+		outcome := runChatTurn(turnCtx, newChatTurnDeps(tc, teamName), &turns, turnInvocationID, line)
 		disp.stopTimer()
 		cancel()
 		stopIdentityHeartbeat()
-		turnRunIdentities := collectExecutionRunIdentities(map[string]*teamContext{teamName: tc}, turnRunCounts)
 
-		if err != nil {
-			if turnCtx.Err() == context.Canceled {
-				fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
-				emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-				// A cancelled first turn still established history inside the
-				// coordinator, so next turn must use ContinueWithPrompt.
-				turn++
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "%s Error executing: %v\n\n", errStyle.Render("✗"), err)
-			emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-			continue
+		switch {
+		case outcome.Cancelled:
+			fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
+			emitExecutionIdentity(os.Stderr, turnInvocationID, outcome.RunIdentities)
+		case outcome.Err != nil:
+			fmt.Fprintf(os.Stderr, "%s Error executing: %v\n\n", errStyle.Render("✗"), outcome.Err)
+			emitExecutionIdentity(os.Stderr, turnInvocationID, outcome.RunIdentities)
+		default:
+			disp.finalizeTasks()
+			fmt.Println(outcome.Answer)
+			emitExecutionIdentity(os.Stderr, turnInvocationID, outcome.RunIdentities)
+			fmt.Fprintln(os.Stderr)
 		}
-
-		disp.finalizeTasks()
-		fmt.Println(result)
-		emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-		fmt.Fprintln(os.Stderr)
-		turn++
-
-		if line != "" {
-			go savePromptToHistory(context.Background(), line, opts.providerURL)
-		}
-
-		// Persist after every turn so the session survives a crash mid-chat.
-		_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
-		_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
 	}
 }
 

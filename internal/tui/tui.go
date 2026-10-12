@@ -217,9 +217,14 @@ type Model struct {
 	inAskUser bool
 	ask       askState
 
-	inPromptInput  bool
-	promptInput    textinput.Model
-	PromptInjectCh chan string
+	inPromptInput    bool
+	promptInput      textinput.Model
+	promptSubmitting bool
+	promptNotice     string
+	// SubmitPrompt offers an additional prompt to the runtime. It must not
+	// block and reports false when the prompt was not accepted. Nil means
+	// prompt injection is unavailable for this model.
+	SubmitPrompt func(string) bool
 
 	inSearch      bool
 	searchInput   textinput.Model
@@ -301,7 +306,6 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 		promptInput:       ti,
 		searchInput:       si,
 		detailSearchInput: dsi,
-		PromptInjectCh:    make(chan string, 16),
 		WrapUpCh:          make(chan struct{}, 2),
 		ReportCh:          make(chan struct{}, 1),
 		teamInfo:          teamInfo,
@@ -504,6 +508,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResultMsg:
 		m.result = sanitizeTerminalText(msg.Text)
+
+	case promptSubmittedMsg:
+		return m.handlePromptSubmitted(msg)
 
 	case TeamInfoMsg:
 		m.teamInfo = msg.Info

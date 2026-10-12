@@ -1938,6 +1938,10 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	if opts.isChatTUI {
 		model.IsChat = true
 	}
+	// Model is copied into the program, so the submit hook must be set first.
+	if injector != nil {
+		model.SubmitPrompt = injector.enqueue
+	}
 	programOptions := []tea.ProgramOption{tea.WithAltScreen(), tea.WithoutSignalHandler()}
 	if presentationOptions.DisplayPreset == tuipkg.DisplayEpaper {
 		programOptions = append(programOptions, tea.WithFPS(1))
@@ -1946,16 +1950,6 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 
 	deactivateTUI := activateTUIProgram(p)
 	defer deactivateTUI()
-
-	if injector != nil {
-		promptCh := model.PromptInjectCh
-		go func() {
-			for prompt := range promptCh {
-				injector.enqueue(prompt)
-			}
-		}()
-		defer close(promptCh)
-	}
 
 	finished := make(chan struct{})
 	var wrapUpCount int
