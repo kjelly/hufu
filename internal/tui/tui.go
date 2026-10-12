@@ -177,22 +177,26 @@ type Model struct {
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes 2=force
 
-	width                    int
-	height                   int
-	finished                 bool
-	IsChat                   bool
-	runResult                *team.RunResult
-	statusText               string // current status shown in the status bar
-	copyNotice               string
-	quitHint                 bool
-	spinnerFrame             int
-	spinnerEnabled           bool
-	forceCompact             bool
-	themeMode                ThemeMode
-	effectiveTheme           ThemeMode
-	displayPreset            DisplayPreset
-	noColor                  bool
-	owner                    bool
+	width          int
+	height         int
+	finished       bool
+	IsChat         bool
+	runResult      *team.RunResult
+	statusText     string // current status shown in the status bar
+	copyNotice     string
+	quitHint       bool
+	spinnerFrame   int
+	spinnerEnabled bool
+	forceCompact   bool
+	themeMode      ThemeMode
+	effectiveTheme ThemeMode
+	displayPreset  DisplayPreset
+	noColor        bool
+	owner          bool
+	// embedded marks a dashboard hosted inside the chat view: its exit,
+	// compose, and Ctrl+C paths hand control back to the host instead of
+	// quitting the program.
+	embedded                 bool
 	themeContext             context.Context
 	themeDetector            func(context.Context) ThemeMode
 	themePoll                time.Duration

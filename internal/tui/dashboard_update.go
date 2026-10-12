@@ -33,6 +33,9 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchIdx = 0
 			return m, nil
 		}
+		if m.embedded {
+			return m, embeddedMsgCmd(embeddedExitMsg{})
+		}
 		if !m.owner {
 			return m, tea.Quit
 		}
@@ -40,6 +43,9 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmChoice = 0
 		return m, nil
 	case "q":
+		if m.embedded {
+			return m, embeddedMsgCmd(embeddedExitMsg{})
+		}
 		if m.finished || !m.owner {
 			return m, tea.Quit
 		}
@@ -53,6 +59,9 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.handleReportKey()
 	case "c":
+		if m.embedded {
+			return m, embeddedMsgCmd(embeddedComposeMsg{})
+		}
 		if !m.finished || m.IsChat {
 			m.inPromptInput = true
 			m.promptNotice = ""
@@ -289,6 +298,10 @@ func (m Model) handleReportKey() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
+	if m.embedded {
+		// The chat view owns Ctrl+C semantics (cancel turn / confirm exit).
+		return m, embeddedMsgCmd(embeddedCtrlCMsg{})
+	}
 	if !m.owner {
 		return m, tea.Quit
 	}

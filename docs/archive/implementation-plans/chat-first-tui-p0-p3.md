@@ -412,7 +412,7 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 
 #### WP-12｜Composer（`internal/tui/chat_composer.go`）
 
-- 使用 `charm.land/bubbles/v2/textarea`。`Enter` 送出；`Ctrl+J`、`Alt+Enter` 一律插入換行；`View()` 另外請求 keyboard enhancements，終端支援時 `Shift+Enter` 也插入換行。貼上（`tea.PasteMsg`）的內容（多行、Unicode）原樣保留。
+- 使用 `charm.land/bubbles/v2/textarea`，以內建 `DynamicHeight` 依內容自動長高（上限隨終端高度 6／3／1 列）。`Enter` 送出；`Ctrl+J`、`Alt+Enter` 一律插入換行；`View()` 另外請求 keyboard enhancements，終端支援時 `Shift+Enter` 也插入換行。貼上（`tea.PasteMsg`）的內容（多行、Unicode）原樣保留。
 - 位元組上限與 Controller 的 `MaxPromptBytes` 相同。接近或超過上限時顯示 `n / 256 KiB`；超過上限時 Enter 不送出，並顯示原因。
 - 送出流程：Enter → 回傳呼叫 `Controller.Submit` 的 `tea.Cmd` → 收到 `ackMsg`。
   - `accepted`／`queued`：清空草稿，在 transcript 加入 User item（queued 時標註 `queued #n`）。
@@ -428,8 +428,8 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 #### WP-13｜Transcript 與進度卡片（`internal/tui/chat_transcript.go`、`chat_progress.go`）
 
 - Item 種類：`user`、`assistant`（最終回答）、`progress`（每輪一張）、`notice`（系統訊息，例如 context cleared、dropped）、`error`。
-- 所有文字都先經過 `sanitizeTerminalText`，再依 cell 寬度換行（`wrapCells` 或 `ansi.Hardwrap`）。code fence 的內容原樣保留，只做硬換行。**不做 Markdown 渲染**。
-- 每個 item 依 `(id, width, theme)` 快取 render 結果；resize 或切換 theme 時清除快取。只 render 視窗附近的 items。
+- 所有文字都先經過 `sanitizeTerminalText`，再依 cell 寬度換行（`ansi.Wrap`；code fence 內只做 `ansi.Hardwrap`）。**不做 Markdown 渲染**。
+- 每個 item 依 `(width, theme, version)` 快取 render 結果；resize 或切換 theme 時重算。捲動與可視範圍交給 bubbles v2 `viewport`（`SetContentLines`、`AtBottom`、`GotoBottom`）。
 - 捲動：在最底部時自動跟隨新內容；使用者往上捲後停止跟隨，並顯示 `↓ new` 提示；`G` 回到底部並恢復跟隨。
 - 進度卡片：
   - `TurnStarted` 時記錄 baseline（當下最後一份 `TasksUpdatedMsg` 中各 task 的 `ID→Status`）。
@@ -544,11 +544,11 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 | 狀態／位置 | 按鍵 | 動作 |
 |---|---|---|
 | Composer | `Enter` | 送出（依 §5.1）；ACK 為 accepted／queued 時才清空 |
-| Composer | `Ctrl+J`、`Alt+Enter` | 換行 |
+| Composer | `Ctrl+J`、`Alt+Enter`、`Shift+Enter`（終端支援 key disambiguation 時；Bubble Tea v2 預設會請求） | 換行 |
 | Composer | `Tab` | 補全 `/cmd`、`@name`；沒有候選時不做任何事 |
 | Composer | `Esc` | focus 移到 transcript（草稿保留） |
 | Composer | `PgUp`／`PgDn` | 捲動 transcript |
-| Transcript | `j`／`k`／`↑`／`↓`、`PgUp`／`PgDn`、`g`／`G` | 捲動，或移動進度卡片的選取（WP-20） |
+| Transcript | `g`／`G`；其餘捲動鍵（`j`／`k`／`↑`／`↓`／`PgUp`／`PgDn`／`Ctrl+U`／`Ctrl+D` 等）沿用 bubbles `viewport` 的 key map | 捲動，或移動進度卡片的選取（WP-20） |
 | Transcript | `i`、`a` | focus 回到 composer |
 | Transcript | `Enter` | 有選取的卡片列時開啟 detail（WP-20）；否則 focus 回到 composer |
 | Transcript | `T` | 切換主題 |
