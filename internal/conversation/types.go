@@ -6,6 +6,7 @@ package conversation
 
 import (
 	"context"
+	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -58,6 +59,8 @@ type TurnResult struct {
 	Err       error
 	Cancelled bool
 	RunIDs    []string
+	// Elapsed is the wall time from TurnStarted to settlement.
+	Elapsed time.Duration
 }
 
 // RuntimePort is the narrow runtime surface the controller drives. RunTurn
@@ -77,6 +80,7 @@ type TurnStarted struct {
 	TurnID    string
 	CommandID string
 	Prompt    string
+	StartedAt time.Time
 }
 
 // TurnSettled carries the runtime's result for one turn.
@@ -124,6 +128,8 @@ type Config struct {
 	MaxPromptBytes int
 	DedupeWindow   int
 	NewTurnID      func() string
+	// Now is the clock for turn timing; it defaults to time.Now.
+	Now func() time.Time
 }
 
 func (c Config) normalized() Config {
@@ -139,6 +145,9 @@ func (c Config) normalized() Config {
 	}
 	if c.NewTurnID == nil {
 		c.NewTurnID = team.NewInvocationID
+	}
+	if c.Now == nil {
+		c.Now = time.Now
 	}
 	return c
 }

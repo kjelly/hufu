@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 
 	"github.com/charmbracelet/x/term"
@@ -157,13 +158,7 @@ func buildChatTeamInfo(tc *teamContext, registry *team.TeamRegistry) tuipkg.Team
 	info.Workspace = tc.session.Workspace
 	info.TeamDir = tc.session.Dir
 	info.DefaultModel = tc.session.Config.Generation.Model
-	for _, ag := range sortedAgents(tc.session.Agents) {
-		model := ag.Generation.Model
-		if model == "" {
-			model = tc.session.Config.Generation.Model
-		}
-		info.Agents = append(info.Agents, tuipkg.AgentInfoEntry{Name: ag.Name, Role: ag.Role, Model: model})
-	}
+	info.Agents = chatAgentEntries(tc)
 	for _, skill := range tc.session.Skills {
 		info.Skills = append(info.Skills, skill.Name)
 	}
@@ -179,6 +174,29 @@ func buildChatTeamInfo(tc *teamContext, registry *team.TeamRegistry) tuipkg.Team
 	info.Decisions = team.RedactedDecisionIndexEntries(info.Decisions)
 	info.IsChat = true
 	return info
+}
+
+// chatAgentEntries lists the team's agents with the model each one actually
+// uses, in the runtime's precedence: the coordinator runs on the resolved
+// coordinator target; a worker on its own model, else the team route, else
+// the resolved worker default.
+func chatAgentEntries(tc *teamContext) []tuipkg.AgentInfoEntry {
+	cfg := tc.session.Config
+	workerDefault := firstNonEmpty(cfg.WorkerModel, cfg.Generation.Model)
+	for _, source := range tc.roleSources {
+		if source.Role == "Worker" && source.Route != "" {
+			workerDefault = source.Display()
+		}
+	}
+	var entries []tuipkg.AgentInfoEntry
+	for _, ag := range sortedAgents(tc.session.Agents) {
+		model := firstNonEmpty(ag.Generation.Model, workerDefault)
+		if strings.EqualFold(ag.Role, "coordinator") || strings.EqualFold(ag.Role, "orchestrator") {
+			model = firstNonEmpty(cfg.CoordinatorModel, model)
+		}
+		entries = append(entries, tuipkg.AgentInfoEntry{Name: ag.Name, Role: ag.Role, Model: model})
+	}
+	return entries
 }
 
 // runDashboard runs the legacy task dashboard with prompt injection.

@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestSelectChatUIMode(t *testing.T) {
@@ -54,5 +57,57 @@ func TestChatCommandRegistersDisplayFlags(t *testing.T) {
 	}
 	if got := replCmd.Flags().Lookup("ui").DefValue; got != "plain" {
 		t.Fatalf("--ui default = %q, want plain", got)
+	}
+}
+
+func TestChatAgentEntriesUseResolvedModels(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      agent.TeamConfig
+		roleSources []roleModelSource
+		agents      []*agent.AgentDef
+		want        map[string]string
+	}{
+		{
+			name:   "resolved coordinator and worker defaults",
+			config: agent.TeamConfig{CoordinatorModel: "ollama/coord", WorkerModel: "ollama/worker"},
+			agents: []*agent.AgentDef{
+				{Name: "coordinator", Role: "coordinator"},
+				{Name: "reviewer", Role: "worker"},
+				{Name: "critic", Role: "worker", Generation: agent.GenerationParams{Model: "codex/gpt"}},
+			},
+			want: map[string]string{"coordinator": "ollama/coord", "reviewer": "ollama/worker", "critic": "codex/gpt"},
+		},
+		{
+			name:   "coordinator target wins over the agent file, as at runtime",
+			config: agent.TeamConfig{CoordinatorModel: "ollama/coord", WorkerModel: "ollama/worker"},
+			agents: []*agent.AgentDef{{Name: "lead", Role: "coordinator", Generation: agent.GenerationParams{Model: "ollama/other"}}},
+			want:   map[string]string{"lead": "ollama/coord"},
+		},
+		{
+			name:        "team route is the worker default",
+			config:      agent.TeamConfig{CoordinatorModel: "ollama/coord", ExecutionRoute: "fast"},
+			roleSources: []roleModelSource{{Role: "Worker", Route: "fast", Candidates: []string{"ollama/a", "ollama/b"}}},
+			agents:      []*agent.AgentDef{{Name: "helper", Role: "worker"}},
+			want:        map[string]string{"helper": "route fast → ollama/a, ollama/b"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agents := map[string]*agent.AgentDef{}
+			for _, def := range tt.agents {
+				agents[def.Name] = def
+			}
+			tc := &teamContext{session: &team.TeamSession{Config: tt.config, Agents: agents}, roleSources: tt.roleSources}
+			got := map[string]string{}
+			for _, entry := range chatAgentEntries(tc) {
+				got[entry.Name] = entry.Model
+			}
+			for name, model := range tt.want {
+				if got[name] != model {
+					t.Fatalf("%s model = %q, want %q (all: %v)", name, got[name], model, got)
+				}
+			}
+		})
 	}
 }

@@ -156,6 +156,27 @@ func TestSubmitSinglePromptRunsOnce(t *testing.T) { // C01
 	}
 }
 
+func TestTurnTimingUsesInjectedClock(t *testing.T) {
+	start := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	calls := 0
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return start.Add(time.Duration(calls-1) * 90 * time.Second)
+	}
+	ctrl, _ := newTestController(t, newFakePort(false), Config{Now: clock})
+	ctrl.Submit(prompt("c1", "hello"))
+	events := collect(t, ctrl, 2)
+	if got := events[0].(TurnStarted).StartedAt; !got.Equal(start) {
+		t.Fatalf("StartedAt = %v, want %v", got, start)
+	}
+	if got := events[1].(TurnSettled).Result.Elapsed; got != 90*time.Second {
+		t.Fatalf("Elapsed = %v, want 1m30s", got)
+	}
+}
+
 func TestSubmitDuplicateIDReturnsOriginalAck(t *testing.T) { // C02
 	port := newFakePort(true)
 	ctrl, _ := newTestController(t, port, Config{})

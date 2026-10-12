@@ -147,7 +147,7 @@ func (m ChatModel) headerText() string {
 	if info.Workspace != "" {
 		parts = append(parts, "ws:"+sanitizeTerminalText(filepath.Base(info.Workspace)))
 	}
-	parts = append(parts, m.phaseName())
+	parts = append(parts, m.headerPhase())
 	return " " + strings.Join(parts, " · ")
 }
 
@@ -185,6 +185,9 @@ func (m ChatModel) statusText() string {
 		fmt.Sprintf("queued:%d", m.queued),
 		"last: " + last,
 		"theme:" + string(m.dash.themeMode),
+	}
+	if activity := m.activityText(); activity != "" {
+		parts = append([]string{"⟳ " + activity}, parts...)
 	}
 	if m.transcript.unseen {
 		parts = append([]string{"↓ new"}, parts...)

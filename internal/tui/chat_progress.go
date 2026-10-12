@@ -19,11 +19,15 @@ type progressCard struct {
 	frozen   bool
 	baseline map[string]team.TaskStatus
 	rows     []progressRow
+	// rowOffsets is the line of each row within the last render, so a
+	// selected row can be scrolled into view.
+	rowOffsets []int
 }
 
 type progressRow struct {
 	id     string
 	agent  string
+	desc   string
 	status team.TaskStatus
 	target string
 	last   string
@@ -53,7 +57,7 @@ func (c *progressCard) refresh(tasks []*team.TodoItem, logs map[string][]string)
 		if status, seen := c.baseline[task.ID]; seen && status == task.Status {
 			continue
 		}
-		row := progressRow{id: task.ID, agent: task.Agent, status: task.Status}
+		row := progressRow{id: task.ID, agent: task.Agent, desc: task.Desc, status: task.Status}
 		if !task.ExecutionTarget.IsZero() {
 			row.target = task.ExecutionTarget.String()
 		}
@@ -99,6 +103,8 @@ func (c *progressCard) rowStatus(id string) (team.TaskStatus, bool) {
 	return "", false
 }
 
+// renderProgressCard draws one row per task: agent, status, execution target,
+// and task ID; then the task description; then its latest activity.
 func renderProgressCard(c *progressCard, selected string, width int, s styleSet) []string {
 	if c == nil {
 		return nil
@@ -114,26 +120,37 @@ func renderProgressCard(c *progressCard, selected string, width int, s styleSet)
 		statusWidth = max(statusWidth, len(string(row.status)))
 	}
 	agentWidth = min(agentWidth, 18)
+	c.rowOffsets = c.rowOffsets[:0]
 	for _, row := range c.rows {
+		c.rowOffsets = append(c.rowOffsets, len(lines))
 		fields := []string{padRight(truncateCells(sanitizeTerminalText(row.agent), agentWidth), agentWidth), padRight(string(row.status), statusWidth)}
 		if row.target != "" && width >= 60 {
 			fields = append(fields, sanitizeTerminalText(row.target))
 		}
-		if row.last != "" && width >= 60 {
-			fields = append(fields, strings.ReplaceAll(row.last, "\n", " "))
-		}
+		fields = append(fields, "#"+oneLine(row.id))
 		marker := "│ "
 		if row.id == selected {
 			marker = "│›"
 		}
-		line := truncateCells(marker+strings.Join(fields, "  "), width)
+		head := truncateCells(marker+strings.Join(fields, "  "), width)
 		if row.id == selected {
-			lines = append(lines, s.selectedFG.Render(line))
-			continue
+			lines = append(lines, s.selectedFG.Render(head))
+		} else {
+			lines = append(lines, progressStatusStyle(row.status, s).Render(head))
 		}
-		lines = append(lines, progressStatusStyle(row.status, s).Render(line))
+		if desc := oneLine(row.desc); desc != "" {
+			lines = append(lines, truncateCells("│   "+desc, width))
+		}
+		if last := oneLine(row.last); last != "" && width >= 60 {
+			lines = append(lines, s.dim.Render(truncateCells("│   "+last, width)))
+		}
 	}
 	return append(lines, s.dim.Render(truncateCells("└"+strings.Repeat("─", max(min(width-1, 40), 0)), width)))
+}
+
+// oneLine flattens untrusted text to a single sanitized line.
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(sanitizeTerminalText(text)), " ")
 }
 
 func padRight(value string, width int) string {

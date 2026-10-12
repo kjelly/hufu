@@ -218,9 +218,11 @@ func (c *Controller) execute(w *work) Event {
 	switch w.cmd.Kind {
 	case CommandSubmitPrompt:
 		defer w.cancel()
-		c.emit(TurnStarted{TurnID: w.turnID, CommandID: w.cmd.ID, Prompt: w.cmd.Text})
+		started := c.cfg.Now()
+		c.emit(TurnStarted{TurnID: w.turnID, CommandID: w.cmd.ID, Prompt: w.cmd.Text, StartedAt: started})
 		result := c.port.RunTurn(w.ctx, w.turnID, w.cmd.Text)
 		result.TurnID = w.turnID
+		result.Elapsed = c.cfg.Now().Sub(started)
 		return TurnSettled{Result: result}
 	case CommandResetContext:
 		err := c.port.ResetContext(c.sessionCtx)

@@ -77,8 +77,8 @@ func (m *ChatModel) revealSelection() {
 	}
 	card := m.transcript.items[m.selection.item].card
 	for i, row := range card.rows {
-		if row.id == m.selection.task {
-			line += 1 + i // the card title precedes the rows
+		if row.id == m.selection.task && i < len(card.rowOffsets) {
+			line += card.rowOffsets[i]
 			break
 		}
 	}

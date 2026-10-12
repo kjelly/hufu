@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -62,18 +63,20 @@ type ChatModel struct {
 	overlayBody  string
 	overlayLines int // scroll offset inside a text overlay
 
-	transcript  chatTranscript
-	activeTurn  string
-	turnCount   int
-	queued      int
-	submitting  string // ID of the prompt command awaiting its Ack
-	notice      string
-	lastResult  *team.RunResult
-	lastTurnID  string
-	lastRunIDs  []string
-	selection   *cardSelection
-	palette     paletteState
-	closeReport *conversation.CloseReport
+	transcript    chatTranscript
+	activeTurn    string
+	turnCount     int
+	queued        int
+	submitting    string // ID of the prompt command awaiting its Ack
+	notice        string
+	lastResult    *team.RunResult
+	lastTurnID    string
+	lastRunIDs    []string
+	selection     *cardSelection
+	turnStartedAt time.Time
+	now           time.Time
+	palette       paletteState
+	closeReport   *conversation.CloseReport
 
 	width  int
 	height int
@@ -137,7 +140,12 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ChatEventMsg:
 		m = m.handleEvent(msg.Event)
 		m.rerender()
+		if started, ok := msg.Event.(conversation.TurnStarted); ok {
+			return m, m.tickCmd(started.TurnID)
+		}
 		return m, nil
+	case chatTickMsg:
+		return m.handleTick(msg)
 	case chatAckMsg:
 		m = m.handleAck(msg)
 		m.rerender()
@@ -318,6 +326,8 @@ func (m ChatModel) handleEvent(ev conversation.Event) ChatModel {
 	case conversation.TurnStarted:
 		m.phase = phaseRunning
 		m.activeTurn = ev.TurnID
+		m.turnStartedAt, m.now = ev.StartedAt, ev.StartedAt
+		m.dash.statusText = "" // activity from an earlier turn is stale
 		if i := m.transcript.findTurnItem(itemUser, ev.TurnID); i >= 0 && m.transcript.items[i].tag != "" {
 			m.transcript.items[i].tag = ""
 			m.transcript.items[i].version++
@@ -353,7 +363,11 @@ func (m ChatModel) settleTurn(result conversation.TurnResult) ChatModel {
 		card.freeze(label)
 		m.transcript.items[i].version++
 	}
-	item := chatItem{kind: itemAssistant, turnID: result.TurnID, title: "Coordinator · " + label, body: result.Answer}
+	title := "Coordinator · " + label
+	if result.Elapsed > 0 {
+		title += " · " + formatElapsed(result.Elapsed)
+	}
+	item := chatItem{kind: itemAssistant, turnID: result.TurnID, title: title, body: result.Answer}
 	if result.Result != nil {
 		item.subtitle = team.FormatCanonicalStatus(result.Result)
 	}
