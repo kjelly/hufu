@@ -163,9 +163,8 @@ func TestInteractiveWaitTotalNeverDecreasesDuringPromptTransitions(t *testing.T)
 			SetAskUserActive(false)
 		}
 	}()
-	// Readers must see completed wait and the active start as one snapshot.
-	// A backwards jump
-	// can make a compensated deadline expire as a prompt resolves.
+	// Readers must see completed wait and the active start as one snapshot;
+	// a backwards jump can expire a compensated deadline as a prompt resolves.
 	var previous time.Duration
 	var decreased bool
 	for {

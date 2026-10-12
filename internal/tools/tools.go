@@ -131,10 +131,13 @@ func IsAskUserActive() bool {
 	return askUserActive.Load() == 1
 }
 
-// Completed wait and the active prompt start form one snapshot. Updating or
-// reading them independently can temporarily lose a whole prompt's wait and
-// expire a compensated deadline. Prompts are serialized on StdinMu.
-// time.Time preserves the monotonic clock for elapsed wait accounting.
+// interactiveWait accumulates time this process has spent blocked on
+// interactive prompts (ask_user, path consent). total is the completed wait
+// and start is the in-flight prompt's start, or zero when none is active;
+// prompts are serialized on StdinMu so at most one runs at a time. The mutex
+// keeps both fields one snapshot: reading them independently could briefly
+// drop a finished prompt's wait and expire a compensated deadline. time.Time
+// keeps the monotonic clock reading, so wall-clock jumps do not skew it.
 var interactiveWait struct {
 	mu    sync.Mutex
 	start time.Time
