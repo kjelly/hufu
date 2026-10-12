@@ -94,19 +94,21 @@ func (p Profile) apply(call *fantasy.AgentCall, model fantasy.LanguageModel) {
 }
 
 type Sidecar struct {
-	mu                       sync.Mutex
-	agent                    fantasy.Agent
-	languageModel            fantasy.LanguageModel
-	provider                 *agent.OpenAICompatibleProvider
-	modelID                  string
-	usageObserver            func(*fantasy.AgentResult)
-	errorObserver            func(context.Context, error)
-	promptPreparer           func(context.Context, string, string) (string, error)
-	projectionPromptPreparer func(context.Context, string, string) (string, error)
-	requestPreparer          func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)
-	invocationBinder         func(context.Context, string) (context.Context, agent.ProviderAdmissionContext, error)
-	requestAdmission         agent.RequestAdmission
-	admissionContext         agent.ProviderAdmissionContext
+	mu                           sync.Mutex
+	agent                        fantasy.Agent
+	languageModel                fantasy.LanguageModel
+	provider                     *agent.OpenAICompatibleProvider
+	modelID                      string
+	usageObserver                func(*fantasy.AgentResult)
+	errorObserver                func(context.Context, error)
+	promptPreparer               func(context.Context, string, string) (string, error)
+	invocationPromptPreparer     func(context.Context, string, string) (context.Context, string, error)
+	projectionInvocationPreparer func(context.Context, string, string) (context.Context, string, error)
+	projectionPromptPreparer     func(context.Context, string, string) (string, error)
+	requestPreparer              func(context.Context, string, []fantasy.Message, []fantasy.AgentTool, int) (context.Context, fantasy.PrepareStepResult, error)
+	invocationBinder             func(context.Context, string) (context.Context, agent.ProviderAdmissionContext, error)
+	requestAdmission             agent.RequestAdmission
+	admissionContext             agent.ProviderAdmissionContext
 }
 
 type modelIDContextKey struct{}
@@ -191,6 +193,7 @@ func (s *Sidecar) SetPromptPreparer(preparer func(context.Context, string, strin
 	}
 	s.mu.Lock()
 	s.promptPreparer = preparer
+	s.invocationPromptPreparer = nil
 	s.mu.Unlock()
 }
 
@@ -203,6 +206,19 @@ func (s *Sidecar) SetProjectionPromptPreparer(preparer func(context.Context, str
 	}
 	s.mu.Lock()
 	s.projectionPromptPreparer = preparer
+	s.projectionInvocationPreparer = nil
+	s.mu.Unlock()
+}
+
+// SetInvocationPromptPreparers supports invocation-local diagnostic metadata
+// from compilation without sharing a mutable buffer between model calls.
+// Explicit legacy setter calls subsequently replace the corresponding hook.
+func (s *Sidecar) SetInvocationPromptPreparers(durable, projection func(context.Context, string, string) (context.Context, string, error)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.invocationPromptPreparer, s.projectionInvocationPreparer = durable, projection
 	s.mu.Unlock()
 }
 
@@ -351,7 +367,9 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	s.mu.Lock()
 	a := s.agent
 	preparer := s.promptPreparer
+	invocationPreparer := s.invocationPromptPreparer
 	projectionPreparer := s.projectionPromptPreparer
+	projectionInvocationPreparer := s.projectionInvocationPreparer
 	requestPreparer := s.requestPreparer
 	binder := s.invocationBinder
 	languageModel := s.languageModel
@@ -372,15 +390,22 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	}
 	if options.preparationMode == sidecarProjectionPreparation {
 		preparer = projectionPreparer
+		invocationPreparer = projectionInvocationPreparer
 	}
-	if options.preparationMode == sidecarProjectionPreparation && preparer == nil {
+	if options.preparationMode == sidecarProjectionPreparation && preparer == nil && invocationPreparer == nil {
 		return "", fmt.Errorf("sidecar projection prompt preparer is not configured")
 	}
 	purpose, _ := ctx.Value(purposeContextKey{}).(string)
 	if purpose == "" {
 		purpose = profilePurpose(profile)
 	}
-	if preparer != nil {
+	if invocationPreparer != nil {
+		var err error
+		ctx, prompt, err = invocationPreparer(ctx, purpose, prompt)
+		if err != nil {
+			return "", fmt.Errorf("prepare sidecar context: %w", err)
+		}
+	} else if preparer != nil {
 		var err error
 		prompt, err = preparer(ctx, purpose, prompt)
 		if err != nil {

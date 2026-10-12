@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,22 @@ func TestEvalListDefaultsToRepositoryEvalRoot(t *testing.T) {
 		t.Fatalf("runEvalList: %v", err)
 	}
 	lines := strings.Fields(output.String())
-	if len(lines) != 33 {
-		t.Fatalf("listed %d cases, want 33: %s", len(lines), output.String())
+	suites, err := loadEvalSuites("evals")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCases := 0
+	for _, suite := range suites {
+		wantCases += len(suite.Cases)
+		for _, fixture := range suite.Cases {
+			id := suite.Name + "/" + fixture.ID
+			if !slices.Contains(lines, id) {
+				t.Errorf("default listing omitted %s", id)
+			}
+		}
+	}
+	if len(lines) != wantCases {
+		t.Fatalf("listed %d cases, want %d: %s", len(lines), wantCases, output.String())
 	}
 	if !strings.Contains(output.String(), "core-lifecycle/single-task-unverified") {
 		t.Fatalf("default eval listing omitted core lifecycle case: %s", output.String())

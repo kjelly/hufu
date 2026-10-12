@@ -72,15 +72,54 @@ type CaseFixture struct {
 	// project/team scoping so fixtures cannot accidentally seed an item that the
 	// real runtime would never be allowed to retrieve.
 	ContextItems []ContextItemFixture `yaml:"context-items,omitempty"`
+	// EvaluationTime fixes canonical memory eligibility for offline replay.
+	EvaluationTime *time.Time `yaml:"evaluation-time,omitempty"`
 }
 
 // ContextItemFixture is the minimal stable surface needed to arrange a
 // deterministic canonical-memory retrieval. Runtime-owned defaults supply
 // kind, authority, trust, priority, confidence, lifecycle, and scope.
 type ContextItemFixture struct {
-	ID       string `yaml:"id"`
-	Content  string `yaml:"content"`
-	MustKeep bool   `yaml:"must-keep,omitempty"`
+	ID           string                    `yaml:"id"`
+	Content      string                    `yaml:"content"`
+	MustKeep     bool                      `yaml:"must-keep,omitempty"`
+	Kind         string                    `yaml:"kind,omitempty"`
+	Lifecycle    string                    `yaml:"lifecycle,omitempty"`
+	Scope        string                    `yaml:"scope,omitempty"`
+	Agent        string                    `yaml:"agent,omitempty"`
+	Branch       string                    `yaml:"branch,omitempty"`
+	Priority     *int                      `yaml:"priority,omitempty"`
+	Confidence   *float64                  `yaml:"confidence,omitempty"`
+	ValidFrom    *time.Time                `yaml:"valid-from,omitempty"`
+	ValidUntil   *time.Time                `yaml:"valid-until,omitempty"`
+	ExpiresAt    *time.Time                `yaml:"expires-at,omitempty"`
+	SupersededBy string                    `yaml:"superseded-by,omitempty"`
+	Activation   *ContextActivationFixture `yaml:"activation,omitempty"`
+}
+
+type ContextActivationFixture struct {
+	Phases       []string `yaml:"phases,omitempty"`
+	Triggers     []string `yaml:"triggers,omitempty"`
+	Roles        []string `yaml:"roles,omitempty"`
+	Capabilities []string `yaml:"capabilities,omitempty"`
+	Tools        []string `yaml:"tools,omitempty"`
+	ErrorClasses []string `yaml:"error-classes,omitempty"`
+	Environment  []string `yaml:"environment,omitempty"`
+}
+
+// ContextDeliveryExpect targets a runtime invocation rather than HTTP arrival
+// order. Include/exclude use canonical item IDs; required fragments also name
+// a sentinel so an empty marker cannot satisfy delivery.
+type ContextDeliveryExpect struct {
+	Agent             string            `yaml:"agent"`
+	TaskIndex         *int              `yaml:"task-index,omitempty"`
+	Attempt           int               `yaml:"attempt,omitempty"`
+	Step              int               `yaml:"step,omitempty"`
+	Purpose           string            `yaml:"purpose,omitempty"`
+	Include           []string          `yaml:"include,omitempty"`
+	Exclude           []string          `yaml:"exclude,omitempty"`
+	Relevant          []string          `yaml:"optional-relevant,omitempty"`
+	RequiredFragments map[string]string `yaml:"required-fragments,omitempty"`
 }
 
 // ExpectSpec is the subset of RunResult dimensions a case asserts on. A zero
@@ -116,7 +155,10 @@ type ExpectSpec struct {
 	NoUnauthorizedFallback *bool `yaml:"no-unauthorized-fallback,omitempty"`
 	// Evidence checks the sealed manifest and its artifact/evidence membership
 	// against the case workspace's canonical artifact store.
-	Evidence *EvidenceExpect `yaml:"evidence,omitempty"`
+	Evidence          *EvidenceExpect         `yaml:"evidence,omitempty"`
+	ContextDelivery   []ContextDeliveryExpect `yaml:"context-delivery,omitempty"`
+	ProviderCallCount *int                    `yaml:"provider-call-count,omitempty"`
+	ForbiddenContext  []string                `yaml:"forbidden-context,omitempty"`
 }
 
 type EvidenceExpect struct {
@@ -283,7 +325,8 @@ type EvalMetrics struct {
 	Duration time.Duration
 	// RunID is the completed run's RunID with its opaque timestamp+random
 	// suffix redacted (see normalizeOpaqueID).
-	RunID string
+	RunID           string
+	ContextDelivery *ContextDeliveryMetrics `json:"ContextDelivery,omitempty"`
 }
 
 // EvalCaseResult is the canonical per-case result (§6 of the plan).

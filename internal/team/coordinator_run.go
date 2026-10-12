@@ -718,7 +718,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
 	workerInput.ReportMemoryUses = memoryLearningEnabled(c.session.Config.MemoryLearning)
 	// WP-3: recall per-worker private memory before direct-agent dispatch.
-	if memBundle := c.recallWorkerMemory(taskCtx, agentDef, retrievalQuery); memBundle != nil {
+	if memBundle := c.recallWorkerMemory(withContextQueryIdentity(taskCtx, request), agentDef, retrievalQuery); memBundle != nil {
 		workerInput.WorkerMemory = memBundle
 	}
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
@@ -758,7 +758,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", buildManifestErr)}, nil
 	}
-	if manifestErr := c.persistContextManifest(&contextManifest); manifestErr != nil {
+	if manifestErr := c.persistContextManifest(&contextManifest, taskCtx); manifestErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
 	}
@@ -1325,6 +1325,7 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	}
 	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
+	orchCtx = c.withCoordinatorDiagnosticIdentity(orchCtx)
 	provider, providerErr := gatedBackend.AgentProvider(orchCtx, executionTarget)
 	if providerErr != nil {
 		return "", nil, fmt.Errorf("admit coordinator provider access: %w", providerErr)
@@ -2134,7 +2135,7 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	if strings.TrimSpace(compiled.Prompt) == "" {
 		return "", fmt.Errorf("coordinator context preflight failed: compiled prompt is empty")
 	}
-	contextManifest, err := c.buildAndPersistContextManifest(contextRequest, compiled, routeDecisions, "coordinator", time.Now().UTC())
+	contextManifest, err := c.buildAndPersistContextManifest(contextRequest, compiled, routeDecisions, "coordinator", time.Now().UTC(), ctx)
 	if err != nil {
 		return "", fmt.Errorf("coordinator context manifest preflight failed: %w", err)
 	}

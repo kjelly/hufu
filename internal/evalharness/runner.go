@@ -87,6 +87,17 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	// Scripted evals have no operator. Honor explicit tool grants without
 	// depending on the invoking terminal or changing process-wide permissions.
 	ctx = context.WithValue(ctx, tools.UnattendedKey, true)
+	if c.EvaluationTime != nil {
+		ctx = contextstore.WithEvaluationTime(ctx, *c.EvaluationTime)
+	}
+	var delivery *contextDeliveryCapture
+	if len(c.Expect.ContextDelivery) > 0 || len(c.Expect.ForbiddenContext) > 0 || c.Expect.ProviderCallCount != nil {
+		delivery = newContextDeliveryCapture()
+		ctx = agent.WithProviderTransportObserver(ctx, delivery.observe)
+		ctx = contextstore.WithQueryWorkObserver(ctx, delivery.observeQuery)
+		ctx = team.WithContextSelectionObserver(ctx, delivery.observeSelection)
+		handler = delivery.handler(handler)
+	}
 
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -112,7 +123,11 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("bind eval workspace scope: %w", err)
 	}
-	if err := seedCanonicalContext(context.WithoutCancel(ctx), workspace, projectDir, session.Config.Name, c.ContextItems, c.SeedMemoryPolicy, session.Config.MemoryLearning); err != nil {
+	workers := make(map[string]string, len(session.Agents))
+	for name, def := range session.Agents {
+		workers[name] = def.MemoryID
+	}
+	if err := seedCanonicalContextWithWorkers(context.WithoutCancel(ctx), workspace, projectDir, session.Config.Name, c.ContextItems, c.SeedMemoryPolicy, session.Config.MemoryLearning, workers); err != nil {
 		return EvalCaseResult{}, err
 	}
 
@@ -240,6 +255,16 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	if scriptFindings != nil {
 		findings = append(findings, scriptFindings()...)
 	}
+	var deliveryMetrics *ContextDeliveryMetrics
+	if delivery != nil {
+		var coordinatorManifests []team.ContextInjectionManifest
+		if data := coordinator.SessionStore().SessionData(); data != nil {
+			coordinatorManifests = data.CoordinatorContextManifests
+		}
+		deliveryFindings, metrics := delivery.evaluate(c.Expect, c.ContextItems, tasks, coordinatorManifests)
+		findings = append(findings, deliveryFindings...)
+		deliveryMetrics = metrics
+	}
 
 	outcome := ""
 	normalizedRunID := ""
@@ -252,7 +277,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 		Passed:     len(findings) == 0,
 		RunOutcome: outcome,
 		Findings:   findings,
-		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: normalizedRunID},
+		Metrics:    EvalMetrics{Duration: time.Since(started), RunID: normalizedRunID, ContextDelivery: deliveryMetrics},
 	}, nil
 }
 
@@ -368,8 +393,15 @@ func bindEvalCaseWorkspace(session *team.TeamSession, workspace string) (string,
 }
 
 func seedCanonicalContext(ctx context.Context, workspace, projectDir, teamID string, fixtures []ContextItemFixture, seedMemoryPolicy bool, policy agent.MemoryLearningPolicy) (returnErr error) {
+	return seedCanonicalContextWithWorkers(ctx, workspace, projectDir, teamID, fixtures, seedMemoryPolicy, policy, nil)
+}
+
+func seedCanonicalContextWithWorkers(ctx context.Context, workspace, projectDir, teamID string, fixtures []ContextItemFixture, seedMemoryPolicy bool, policy agent.MemoryLearningPolicy, workers map[string]string) (returnErr error) {
 	if len(fixtures) == 0 && !seedMemoryPolicy {
 		return nil
+	}
+	if err := validateContextFixtures(fixtures); err != nil {
+		return err
 	}
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -403,24 +435,34 @@ func seedCanonicalContext(ctx context.Context, workspace, projectDir, teamID str
 	}
 
 	items := make([]contextstore.ContextItem, 0, len(fixtures))
+	baseScope := contextstore.Scope{ProjectID: projectDir, TeamID: teamID, SessionID: filepath.Base(workspace)}
+	if restored := team.LoadSession(workspace); restored != nil && restored.CreatedAt != "" {
+		baseScope.SessionID = restored.CreatedAt
+	}
 	for _, fixture := range fixtures {
-		items = append(items, contextstore.ContextItem{
-			ID:         fixture.ID,
-			Kind:       contextstore.ContextPattern,
-			Content:    fixture.Content,
-			Scope:      contextstore.Scope{ProjectID: projectDir, TeamID: teamID},
-			Authority:  contextstore.AuthorityRepository,
-			TrustLevel: contextstore.TrustTrusted,
-			Priority:   contextstore.PriorityHigh,
-			MustKeep:   fixture.MustKeep,
-			Confidence: 1,
-			Source:     contextstore.SourceRef{Type: "eval_fixture", Ref: fixture.ID},
-			Lifecycle:  contextstore.LifecycleConfirmed,
-		})
+		scope, scopeErr := fixtureScope(fixture, baseScope, workers)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if fixture.Branch != "" {
+			branchID, branchErr := validateFixtureBranch(workspace, fixture)
+			if branchErr != nil {
+				return branchErr
+			}
+			scope.BranchID = branchID
+		}
+		items = append(items, contextFixtureItem(ctx, fixture, scope))
 	}
 	if len(items) > 0 {
 		if err := repo.Append(ctx, items...); err != nil {
 			return fmt.Errorf("seed context items: %w", err)
+		}
+	}
+	for _, fixture := range fixtures {
+		if fixture.SupersededBy != "" {
+			if err := repo.MarkSuperseded(ctx, []string{fixture.ID}, fixture.SupersededBy); err != nil {
+				return fmt.Errorf("seed supersession: %w", err)
+			}
 		}
 	}
 	return nil

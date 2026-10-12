@@ -30,7 +30,8 @@ func TestExecuteTaskFailsClosedWhenWorkerContextPreflightFails(t *testing.T) {
 		taskCache:           newDefaultTaskCache(taskCacheDependencies{}),
 		workerAgentOverride: &countingEmptyAgent{calls: &calls},
 	}
-	c.SetContextCompiler(&mockContextCompiler{compileWorkerErr: errors.New("normative conflict")})
+	_, _, budgetErr := BudgetContextItems([]ContextItem{{ID: "required", Kind: "constraints", Content: "required sentinel", Required: true, TokenCount: 100}}, ContextBudget{Available: 1})
+	c.SetContextCompiler(&mockContextCompiler{compileWorkerErr: budgetErr})
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "must not dispatch"}})[0]
 	_, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "must not dispatch"}, item.ID)
 	if err == nil || !strings.Contains(err.Error(), "worker context preflight failed") {
@@ -38,6 +39,9 @@ func TestExecuteTaskFailsClosedWhenWorkerContextPreflightFails(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("worker calls = %d, want zero before failed context preflight", calls)
+	}
+	if _, ok := errors.AsType[*RequiredContextBudgetError](err); !ok {
+		t.Fatalf("dispatch lost typed preflight failure: %v", err)
 	}
 }
 
@@ -467,6 +471,9 @@ func TestContextCompiler_RequiredItemOverflow(t *testing.T) {
 	_, overBudget, err := BudgetContextItems(items, budget)
 	if err == nil {
 		t.Fatal("expected budget overflow error when non-compressible required item exceeds budget, got nil")
+	}
+	if typed, ok := errors.AsType[*RequiredContextBudgetError](err); !ok || typed.RequiredTokens <= typed.AvailableTokens {
+		t.Fatalf("required budget rejection is not typed: %v", err)
 	}
 	if !overBudget {
 		t.Error("expected overBudget to be true on overflow")

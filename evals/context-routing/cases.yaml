@@ -16,3 +16,53 @@ cases:
       tasks:
         - agent: worker
           status: done
+
+  - id: provider-visible-scope-lifecycle
+    prompt: "inspect router"
+    evaluation-time: "2000-01-01T00:00:00Z"
+    provider-fixture: fixtures/provider-visible-scope-lifecycle.json
+    context-items:
+      - id: relevant-router
+        content: "router knowledge sentinel"
+      - id: expired-router
+        content: "router expired sentinel"
+        expires-at: "1999-01-01T00:00:00Z"
+      - id: future-router
+        content: "router future sentinel"
+        valid-from: "2001-01-01T00:00:00Z"
+      - id: rejected-router
+        content: "router rejected sentinel"
+        lifecycle: rejected
+      - id: superseded-router
+        content: "router obsolete sentinel"
+        superseded-by: replacement
+      - id: replacement
+        content: "replacement unrelated sentinel"
+      - id: wrong-phase-router
+        content: "router wrong phase sentinel"
+        activation:
+          phases: [prepare]
+      - id: wrong-team-router
+        content: "router wrong team sentinel"
+        scope: other_team
+      - id: wrong-worker-router
+        content: "router wrong worker sentinel"
+        scope: other_worker
+    expect:
+      run-outcome: unverified
+      task-count: 1
+      provider-call-count: 3
+      forbidden-context: [expired-router, future-router, rejected-router, superseded-router, wrong-team-router, wrong-worker-router]
+      tasks:
+        - agent: worker
+          status: done
+      context-delivery:
+        - agent: worker
+          task-index: 0
+          attempt: 1
+          step: 1
+          include: [relevant-router]
+          exclude: [expired-router, future-router, rejected-router, superseded-router, wrong-phase-router, wrong-team-router, wrong-worker-router]
+          optional-relevant: [relevant-router]
+          required-fragments:
+            current_task: "inspect router"

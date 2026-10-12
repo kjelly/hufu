@@ -307,6 +307,10 @@ func NormalizeContent(content string) string {
 }
 
 func normalize(item *ContextItem) error {
+	return normalizeAt(item, time.Now().UTC())
+}
+
+func normalizeAt(item *ContextItem, now time.Time) error {
 	item.Content = NormalizeContent(item.Content)
 	if item.Content == "" || item.Scope.ProjectID == "" {
 		return errors.New("context item content and project scope are required")
@@ -344,7 +348,6 @@ func normalize(item *ContextItem) error {
 	if item.Lifecycle == "" {
 		item.Lifecycle = LifecycleConfirmed
 	}
-	now := time.Now().UTC()
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = now
 	}
@@ -388,7 +391,7 @@ func (r *SQLiteRepository) UpsertCandidate(ctx context.Context, item ContextItem
 	}
 	var stored ContextItem
 	err := r.withBusyRetry(ctx, func() error {
-		if err := normalize(&item); err != nil {
+		if err := normalizeAt(&item, EvaluationTime(ctx)); err != nil {
 			return err
 		}
 		tx, err := r.db.BeginTx(ctx, nil)
@@ -450,7 +453,7 @@ func (r *SQLiteRepository) appendOnce(ctx context.Context, items ...ContextItem)
 	}
 	defer tx.Rollback()
 	for i := range items {
-		if err = normalize(&items[i]); err != nil {
+		if err = normalizeAt(&items[i], EvaluationTime(ctx)); err != nil {
 			return err
 		}
 		it := items[i]
@@ -501,7 +504,7 @@ func (r *SQLiteRepository) appendReducerOnce(ctx context.Context, items ...Conte
 	}
 	defer tx.Rollback()
 	for i := range items {
-		if err = normalize(&items[i]); err != nil {
+		if err = normalizeAt(&items[i], EvaluationTime(ctx)); err != nil {
 			return err
 		}
 		it := items[i]
@@ -767,7 +770,7 @@ func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args
 }
 
 func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]ContextItem, error) {
-	where, args, err := compileRepositoryPredicates(q, time.Now().UnixMilli())
+	where, args, err := compileRepositoryPredicates(q, EvaluationTime(ctx).UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -918,7 +921,7 @@ func (r *SQLiteRepository) Iterate(ctx context.Context, q RepositoryQuery, visit
 	if visit == nil {
 		return errors.New("repository iteration requires a visitor")
 	}
-	where, args, err := compileRepositoryPredicates(q, time.Now().UnixMilli())
+	where, args, err := compileRepositoryPredicates(q, EvaluationTime(ctx).UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -1254,7 +1257,7 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	}
 	args := []any{needle}
 	where := scopeAuthorize("", req.Scope, req.Visibility, &args)
-	now := time.Now().UnixMilli()
+	now := EvaluationTime(ctx).UnixMilli()
 	where = append(where, "superseded_by IS NULL", "(expires_at IS NULL OR expires_at>?)", "(valid_from IS NULL OR valid_from<=?)", "(valid_until IS NULL OR valid_until>?)")
 	if !req.IncludeCandidates {
 		where = append(where, "lifecycle='confirmed'")
@@ -1298,7 +1301,7 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	// filtered by project_id).
 	args := []any{match}
 	where := append([]string{}, scopeAuthorize("c.", req.Scope, req.Visibility, &args)...)
-	now := time.Now().UnixMilli()
+	now := EvaluationTime(ctx).UnixMilli()
 	where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
 	if !req.IncludeCandidates {
 		where = append(where, "c.lifecycle='confirmed'")

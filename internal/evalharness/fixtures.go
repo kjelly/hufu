@@ -60,6 +60,12 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 		if strings.TrimSpace(c.Prompt) == "" {
 			return nil, fmt.Errorf("suite fixture %s: case %q: prompt is required", path, c.ID)
 		}
+		if err := validateContextFixtures(c.ContextItems); err != nil {
+			return nil, fmt.Errorf("suite fixture %s: case %q: %w", path, c.ID, err)
+		}
+		if c.EvaluationTime != nil && c.EvaluationTime.IsZero() {
+			return nil, fmt.Errorf("suite fixture %s: case %q: evaluation-time must be non-zero", path, c.ID)
+		}
 		if err := validateExpectSpec(c.Expect); err != nil {
 			return nil, fmt.Errorf("suite fixture %s: case %q: %w", path, c.ID, err)
 		}
@@ -88,6 +94,9 @@ func (s *SuiteFixture) BenchmarkFixture() improve.BenchmarkFixture {
 }
 
 func validateExpectSpec(expect ExpectSpec) error {
+	if err := validateContextDeliveryExpect(expect); err != nil {
+		return err
+	}
 	switch expect.AuditVerdict {
 	case "", "pass", "fail", "incomplete":
 	default:

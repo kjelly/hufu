@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "oracle_source": "synthetic_contract",
+  "cases": [
+    {"id": "constraint-miss", "signal": "constraints", "hint": "appendonlyledger", "content": "appendonlyledger convention sentinel", "legacy_expected_ids": [], "candidate_expected_ids": ["constraint-miss"]},
+    {"id": "verification-miss", "signal": "verification", "hint": "auditchecktoken", "content": "auditchecktoken command convention sentinel", "legacy_expected_ids": [], "candidate_expected_ids": ["verification-miss"]},
+    {"id": "bound-path-miss", "signal": "paths", "hint": "ledger/CanonicalState.go", "content": "ledger/CanonicalState.go ownership sentinel", "legacy_expected_ids": [], "candidate_expected_ids": ["bound-path-miss"]},
+    {"id": "accepted-dependency-miss", "signal": "dependency", "hint": "snapshotreconciliation", "content": "snapshotreconciliation invariant sentinel", "legacy_expected_ids": [], "candidate_expected_ids": ["accepted-dependency-miss"]}
+  ]
+}

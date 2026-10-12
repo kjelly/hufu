@@ -192,7 +192,7 @@ func (pr *planReviewer) review(ctx context.Context, planText string) (string, bo
 	// worker context may inherit the worker's receipt marker, so force direct
 	// no-progress token accounting for this auxiliary LLM stream.
 	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
-	preparedPrompt, err := c.prepareAuxiliaryPrompt(ctx, "plan_reviewer", prompt)
+	ctx, preparedPrompt, err := c.prepareAuxiliaryInvocation(ctx, "plan_reviewer", prompt)
 	if err != nil {
 		return "", false, nil, err
 	}

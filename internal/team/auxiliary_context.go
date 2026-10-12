@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -25,15 +26,44 @@ func (c *Coordinator) prepareAuxiliaryProjectionPrompt(ctx context.Context, purp
 }
 
 func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context, purpose, rawPrompt string, persist bool) (string, error) {
+	prompt, _, err := c.compileAuxiliaryPrompt(ctx, purpose, rawPrompt, persist)
+	return prompt, err
+}
+
+// prepareAuxiliaryInvocation binds the exact compiled manifest to transient
+// diagnostics. It leaves authorization, accounting and persisted fields alone.
+func (c *Coordinator) prepareAuxiliaryInvocation(ctx context.Context, purpose, rawPrompt string) (context.Context, string, error) {
+	return c.prepareAuxiliaryInvocationWithPersistence(ctx, purpose, rawPrompt, true)
+}
+
+func (c *Coordinator) prepareAuxiliaryProjectionInvocation(ctx context.Context, purpose, rawPrompt string) (context.Context, string, error) {
+	return c.prepareAuxiliaryInvocationWithPersistence(ctx, purpose, rawPrompt, false)
+}
+
+func (c *Coordinator) prepareAuxiliaryInvocationWithPersistence(ctx context.Context, purpose, rawPrompt string, persist bool) (context.Context, string, error) {
+	prompt, manifest, err := c.compileAuxiliaryPrompt(ctx, purpose, rawPrompt, persist)
+	if err == nil && manifest != nil && agent.ProviderTransportObserverEnabled(ctx) {
+		metadata := &InvocationMetadata{
+			RunID: manifest.RunID, TaskID: manifest.TaskID, Attempt: manifest.Attempt,
+			AgentName: manifest.Agent, AgentRole: manifest.AgentRole, ModelExecutionID: manifest.ModelExecutionID,
+			Phase: manifest.Phase, Trigger: manifest.Trigger, Purpose: manifest.Purpose,
+			ParentRequestID: manifest.RequestID, ParentManifestFingerprint: manifest.Fingerprint,
+		}
+		ctx = context.WithValue(ctx, contextAuxiliaryDiagnosticInvocationKey{}, metadata)
+	}
+	return ctx, prompt, err
+}
+
+func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPrompt string, persist bool) (string, *ContextInjectionManifest, error) {
 	purpose = strings.ToLower(strings.TrimSpace(purpose))
 	if _, err := contextPurposePolicy(purpose); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	// A decision primitive's prompt is its request. The decision may depend
 	// only on context the caller put in that request (decision-primitive.md
 	// §7.2), so it reaches the model exactly as the backend built it.
 	if purpose == decisionPrimitivePurpose {
-		return rawPrompt, nil
+		return rawPrompt, nil, nil
 	}
 	todoID, _ := ctx.Value(todoIDKey{}).(string)
 	attempt, _ := ctx.Value(executionAttemptKey{}).(int)
@@ -83,9 +113,9 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 	invocation, hasBound := providerBoundInvocationContextFromContext(ctx, sidecarModelID)
 	if !hasBound || !invocation.AdmissionContext.IsBound() {
 		if sidecarModelID != "" {
-			return "", fmt.Errorf("provider-bound context unavailable for sidecar model %q", sidecarModelID)
+			return "", nil, fmt.Errorf("provider-bound context unavailable for sidecar model %q", sidecarModelID)
 		}
-		return "", fmt.Errorf("provider-bound context unavailable for auxiliary purpose %q", purpose)
+		return "", nil, fmt.Errorf("provider-bound context unavailable for auxiliary purpose %q", purpose)
 	}
 	modelSpec := invocation.ModelContext
 	input := WorkerContextInput{Request: request, Goal: request.Goal, DisableMemory: true, DisableCanonicalMemory: true, ModelContext: modelSpec}
@@ -99,35 +129,38 @@ func (c *Coordinator) prepareAuxiliaryPromptWithPersistence(ctx context.Context,
 			input.RuntimeContext = "Admitted task goal:\n" + input.TaskDef.Goal + "\n" + c.taskFinalizationBinding(todoID, false)
 			ref, compiledContract, err := c.boundResultContract(todoID)
 			if err != nil {
-				return "", err
+				return "", nil, err
 			}
 			input.RuntimeContext += resultContractPromptSection(ref, compiledContract, false)
 			input.DependencyResults = c.dependencyResultsForTask(todoID)
 			if len(input.DependencyResults) != len(resultDependencyIDs(item)) {
-				return "", fmt.Errorf("result repair for task %s lacks completed dependency results", todoID)
+				return "", nil, fmt.Errorf("result repair for task %s lacks completed dependency results", todoID)
 			}
 			if err := c.validateDependencyPayloads(input.DependencyResults); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
 	}
 	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	if persist {
+	if persist || agent.ProviderTransportObserverEnabled(ctx) {
 		manifest, err := BuildContextInjectionManifest(request, compiled, nil, purpose, time.Now().UTC(), c.session.Config.MemoryLearning)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
-		if err := c.persistContextManifest(&manifest); err != nil {
-			return "", err
+		if persist {
+			if err := c.persistContextManifest(&manifest, ctx); err != nil {
+				return "", nil, err
+			}
 		}
+		return compiled.Prompt, &manifest, nil
 	}
-	return compiled.Prompt, nil
+	return compiled.Prompt, nil, nil
 }
 
 // newAuxiliaryContextRequest turns the sidecar's lightweight purpose label

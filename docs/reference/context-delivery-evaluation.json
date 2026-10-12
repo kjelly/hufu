@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "oracle_source": "synthetic_contract",
+  "base_commit": "2f4c652177f19ee7251b1e1fd254eb41c257ff0d",
+  "source_digest": {
+    "algorithm": "sha256_sorted_relative_paths_nul_bytes_nul",
+    "sha256": "03bf2c5cd2e2a6199e7efac925757c162286a3bf9b72e187495e27eb8039da0d",
+    "file_count": 1911
+  },
+  "fixture_digests": {
+    "context-routing": "cf11aa485e099da110d00e9554e8d5ddde159e53090d46d381b6c26529e0679f",
+    "memory-learning": "82ac7c40ada23398a1c12826b2610dbe87086d2c5fe54533669b60d59789f746",
+    "retry-recovery": "8ca9d3e1e39796b038f6b0c505f740a5c1ed0b4c78d34e741e5e606e8087ac1a"
+  },
+  "query_policy": "legacy",
+  "learning_policy": {
+    "context-routing": "off",
+    "memory-learning": "observe:memory-policy-v1",
+    "retry-recovery": "off"
+  },
+  "clock": {
+    "scope_lifecycle_case": "2000-01-01T00:00:00Z",
+    "production_override": false
+  },
+  "token_estimator": "rune_estimate",
+  "suites": [
+    {
+      "SuiteName": "context-routing",
+      "BenchmarkRevision": "72e63f68b1d6c3f6a687c7921f3dc0f9df4765fd9b845b3d4871987d6ec5f237",
+      "Cases": [
+        {
+          "CaseID": "cjk-goal-dispatch",
+          "Passed": true,
+          "RunOutcome": "unverified",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        },
+        {
+          "CaseID": "provider-visible-scope-lifecycle",
+          "Passed": true,
+          "RunOutcome": "unverified",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>",
+            "ContextDelivery": {
+              "schema_version": 1,
+              "oracle_source": "synthetic_contract",
+              "provider_calls": 3,
+              "requests": [
+                {
+                  "agent": "worker",
+                  "model_id": "eval-harness-model",
+                  "task_index": 0,
+                  "attempt": 1,
+                  "step": 1,
+                  "purpose": "task_execution",
+                  "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+                  "delivered_ids": [
+                    "agent_instructions",
+                    "current_task",
+                    "relevant-router"
+                  ],
+                  "omitted_ids": [
+                    "replacement",
+                    "wrong-phase-router"
+                  ],
+                  "omitted_reasons": {
+                    "replacement": "below_relevance",
+                    "wrong-phase-router": "phase_mismatch"
+                  },
+                  "required_delivery_recall": 1,
+                  "delivery_recall": 1,
+                  "delivery_precision": 1,
+                  "retrieval_recall_at_k": 1,
+                  "retrieval_precision_at_k": 1,
+                  "retrieved_ids": [
+                    "relevant-router"
+                  ],
+                  "retrieval_calls": {
+                    "exact": 0,
+                    "lexical": 1,
+                    "vector": 0,
+                    "candidate_rows": 2
+                  },
+                  "embedding_calls": null,
+                  "retrieval_latency_ms": null,
+                  "selection_latency_ms": null,
+                  "metric_reasons": {
+                    "embedding_calls": "backend_not_observed",
+                    "retrieval_latency_ms": "timing_omitted",
+                    "selection_latency_ms": "timing_omitted"
+                  },
+                  "forbidden_delivery_count": 0,
+                  "irrelevant_optional_tokens": 0,
+                  "token_estimator": "rune_estimate",
+                  "manifest_matched": true
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "SuiteName": "memory-learning",
+      "BenchmarkRevision": "7af1fa37e2b904f32d1399e45515242c598f17192fd8cddec4a8944647545da3",
+      "Cases": [
+        {
+          "CaseID": "retrieved-only-memory-gets-zero-credit",
+          "Passed": true,
+          "RunOutcome": "unverified",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        },
+        {
+          "CaseID": "applied-memory-earns-verified-credit",
+          "Passed": true,
+          "RunOutcome": "unverified",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        },
+        {
+          "CaseID": "team-config-enables-learning-without-adoption",
+          "Passed": true,
+          "RunOutcome": "unverified",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        }
+      ]
+    },
+    {
+      "SuiteName": "retry-recovery",
+      "BenchmarkRevision": "a8da1b38d29fe21d3c49ecd4cdda5b2c8bb1c3a02630a96906a9496078f3b5c8",
+      "Cases": [
+        {
+          "CaseID": "verifier-failure-retry",
+          "Passed": true,
+          "RunOutcome": "partial",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        },
+        {
+          "CaseID": "replan-repeating-failed-strategy-is-flagged",
+          "Passed": true,
+          "RunOutcome": "partial",
+          "Findings": null,
+          "Metrics": {
+            "Duration": 0,
+            "RunID": "<run-id>"
+          }
+        }
+      ]
+    }
+  ],
+  "primary_signal_baselines": [
+    {
+      "case_id": "constraint-miss",
+      "signal": "constraints",
+      "legacy_expected_ids": [],
+      "candidate_expected_ids": [
+        "constraint-miss"
+      ],
+      "legacy_recall": 0,
+      "signal_query_positive_control": true,
+      "runtime_hint_authorization_proven": false
+    },
+    {
+      "case_id": "verification-miss",
+      "signal": "verification",
+      "legacy_expected_ids": [],
+      "candidate_expected_ids": [
+        "verification-miss"
+      ],
+      "legacy_recall": 0,
+      "signal_query_positive_control": true,
+      "runtime_hint_authorization_proven": false
+    },
+    {
+      "case_id": "bound-path-miss",
+      "signal": "paths",
+      "legacy_expected_ids": [],
+      "candidate_expected_ids": [
+        "bound-path-miss"
+      ],
+      "legacy_recall": 0,
+      "signal_query_positive_control": true,
+      "runtime_hint_authorization_proven": false
+    },
+    {
+      "case_id": "accepted-dependency-miss",
+      "signal": "dependency",
+      "legacy_expected_ids": [],
+      "candidate_expected_ids": [
+        "accepted-dependency-miss"
+      ],
+      "legacy_recall": 0,
+      "signal_query_positive_control": true,
+      "runtime_hint_authorization_proven": false
+    }
+  ],
+  "known_blockers": [
+    {
+      "case_id": "parallel-extra-provider-context",
+      "baseline_commit": "f3ca1ba6",
+      "probe": "TestContextDeliveryPreChangeExtraModelBlocker",
+      "current_characterization": "TestContextDeliveryExtraModelBaselineRejectsBeforeWorkerProvider",
+      "worker_provider_calls": 0,
+      "coordinator_provider_calls": 2,
+      "worker_required_delivery_recall": null,
+      "metric_reason": "preflight_rejected",
+      "policy_gate": "startup_configuration_drift",
+      "dual_write": "mismatch",
+      "fix_required_before": "pr02_active_integration"
+    }
+  ],
+  "measured_baseline": {
+    "case_id": "provider-visible-scope-lifecycle",
+    "canonical_seed_rows": 9,
+    "repetitions": 10,
+    "selection_latency_ms": {
+      "p50": 5.3977,
+      "p95": 9.003987
+    },
+    "stage_latency_ms": {
+      "compilation": {
+        "p50": 0.205041,
+        "p95": 0.295822
+      },
+      "manifest": {
+        "p50": 2.394647,
+        "p95": 3.934636
+      },
+      "private_retrieval": {
+        "p50": 0.003815,
+        "p95": 0.006258
+      },
+      "routing": {
+        "p50": 3.320597,
+        "p95": 4.79945
+      }
+    },
+    "worker_retrieval_calls_per_run": 1.0,
+    "worker_source_rows_per_run": 2.0,
+    "embedding_calls": null,
+    "embedding_reason": "backend_not_observed",
+    "harness_ns_per_op": 312747988.0,
+    "harness_bytes_per_op": 48773044,
+    "harness_allocations_per_op": 526336,
+    "allocation_scope": "fake_provider_and_sqlite_harness_including_setup_teardown",
+    "host": "linux_amd64_intel_core_i7_6700k",
+    "claim": "baseline_measurement_only"
+  },
+  "not_proven": [
+    "candidate_quality",
+    "active_runtime_compatibility",
+    "supplemental_lane_scaling",
+    "real_workload_success_rate"
+  ]
+}

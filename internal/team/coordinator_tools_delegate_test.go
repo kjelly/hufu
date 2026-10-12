@@ -115,6 +115,7 @@ func TestRequestAgentToolUsesTypedResultWorkerSurface(t *testing.T) {
 	}
 
 	requests := capture.providerRequests()
+	assertWorkerProviderRequiredContext(t, capture, "perform delegated work")
 	if len(requests) == 0 {
 		t.Fatal("nested worker made no provider request")
 	}

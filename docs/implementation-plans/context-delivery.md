@@ -5,7 +5,7 @@
 > Verified-Commit: `7312757e0187d471f16347656e887207b9db96ef`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: implementation-ready — 可開始 PR-00；各階段有可由 Coding Agent 執行的驗收條件，尚未實作
+> Execution-Status: PR-00 診斷與 baseline 已交付，完整 test/vet/lint、受影響路徑 race 與三組 eval 通過；PR-01/02 尚未實作；既有 extra-model blocker 必須在 active 整合驗收前修復
 > Type: bounded implementation plan / offline evaluation / explicit opt-in
 > Repository: kjelly/hufu
 > Reviewed baseline: `7312757e0187d471f16347656e887207b9db96ef`（2026-10-12；開工時重新確認 HEAD）
@@ -193,6 +193,15 @@ legacy/candidate 使用相同 fixture、scope、time、canonical snapshot、expe
 先完成 §5.2 的版本化 query metadata、manifest builder/validator 和 composite hash 純 helper，供 candidate fake-provider run 使用；production legacy 不使用新欄位。保留舊 schema/JSON round-trip 測試。PR-02 再把這些 helper 接入正式 config、snapshot 與所有 runtime 路徑。
 
 ## 5. PR-02 — Active opt-in、持久化契約與整合
+
+### 5.0 已確認的 runtime baseline 前置修正
+
+PR-00 的離線 extra-model case 在 worker provider call 前被既有 frozen policy gate 擋下，並出現 legacy/event-store dual-write mismatch；不可把它算成成功的平行送達。詳見 [PR-00 coverage 與 blocker](../reference/context-delivery-evaluation.md)。此修正可由 Coding Agent 在 repository 內完成，不需真實模型、費用預算或外部部署。
+
+- 以 parent frozen policy 與 indexed admitted target 為 authority，修正 isolated leaf definition、canonical worker attempt 的 model/target assertion 與 retry model pinning；不得跳過 admission 或用重新 freeze 掩蓋 drift。
+- 確認 leaf 不重複寫入 parent task lifecycle；receipt/context manifests 以既有 parent-owned API 合併，模型呼叫前的 persistence 仍 fail closed。
+- 新增 successful extra-model concurrent provider assertions，同時保留 genuine policy/target drift 零呼叫的反例；以正向案例取代目前的 blocked-baseline characterization。
+- 重播 parallel、extra-model、retry、resume 與 mixed-backend 既有測試；先完成此安全前置修正，再驗收 active query 的 extra-model 路徑。
 
 ### 5.1 唯一新增設定
 

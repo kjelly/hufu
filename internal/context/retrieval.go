@@ -167,6 +167,14 @@ func HybridRetrieveWithOptions(
 	req SearchRequest,
 	options HybridRetrievalOptions,
 ) ([]SearchResult, RetrievalTrace, error) {
+	work := QueryWork{}
+	if QueryWorkObserverEnabled(ctx) {
+		started := time.Now()
+		defer func() {
+			work.Elapsed = time.Since(started)
+			observeQueryWork(ctx, work)
+		}()
+	}
 	if err := validateHybridRetrievalOptions(options); err != nil {
 		return nil, RetrievalTrace{}, err
 	}
@@ -181,14 +189,18 @@ func HybridRetrieveWithOptions(
 	for _, exact := range exactTerms {
 		exactReq := req
 		exactReq.Query = exact
+		work.ExactCalls++
 		found, err := repo.SearchExact(ctx, exactReq)
+		work.CandidateRows += len(found)
 		if err != nil {
 			return nil, trace, err
 		}
 		trace.ExactResults = mergeResults(trace.ExactResults, filterSearchResults(found, req))
 	}
 	obs.recordPath("exact", len(exactTerms) > 0, "", trace.ExactResults)
+	work.LexicalCalls++
 	lexical, err := repo.SearchLexical(ctx, req)
+	work.CandidateRows += len(lexical)
 	if err != nil {
 		return nil, trace, err
 	}
@@ -208,7 +220,9 @@ func HybridRetrieveWithOptions(
 		default:
 			semanticRequest := req
 			semanticRequest.Query = remainder
+			work.VectorCalls++
 			vectorResults, vectorErr := options.Vector.SearchVector(ctx, semanticRequest)
+			work.CandidateRows += len(vectorResults)
 			if vectorErr != nil {
 				if errors.Is(vectorErr, context.Canceled) || errors.Is(vectorErr, context.DeadlineExceeded) {
 					return nil, trace, vectorErr

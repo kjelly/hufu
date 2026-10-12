@@ -475,6 +475,7 @@ func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Si
 		})
 		s.SetPromptPreparer(c.prepareAuxiliaryPrompt)
 		s.SetProjectionPromptPreparer(c.prepareAuxiliaryProjectionPrompt)
+		s.SetInvocationPromptPreparers(c.prepareAuxiliaryInvocation, c.prepareAuxiliaryProjectionInvocation)
 		s.SetRequestPreparer(func(ctx context.Context, purpose string, messages []fantasy.Message, tools []fantasy.AgentTool, reserved int) (context.Context, fantasy.PrepareStepResult, error) {
 			ctx = withProviderCostContext(ctx, providerCostContext{Agent: purpose, Role: "auxiliary", Purpose: providerCostPurpose(purpose)})
 			modelID := s.ModelID()

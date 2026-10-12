@@ -153,12 +153,12 @@ func validInvariantVerificationSeverity(severity InvariantSeverity) bool {
 	return severity == InvariantSeverityError || severity == InvariantSeverityWarning || severity == InvariantSeverityInfo
 }
 
-func (c *Coordinator) buildAndPersistContextManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time) (ContextInjectionManifest, error) {
+func (c *Coordinator) buildAndPersistContextManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time, diagnosticContexts ...context.Context) (ContextInjectionManifest, error) {
 	manifest, err := BuildContextInjectionManifest(request, compiled, decisions, agentName, createdAt, c.session.Config.MemoryLearning)
 	if err != nil {
 		return ContextInjectionManifest{}, err
 	}
-	if err := c.persistContextManifest(&manifest); err != nil {
+	if err := c.persistContextManifest(&manifest, diagnosticContexts...); err != nil {
 		return ContextInjectionManifest{}, err
 	}
 	return manifest, nil
@@ -317,9 +317,14 @@ func sortContextInjectionManifests(manifests []ContextInjectionManifest) {
 // sessionMu: the mutation happens under the write lock, an independent
 // snapshot is taken under the read lock, and SaveSession/emitEvent run outside
 // the lock so the read lock SessionStore acquires cannot deadlock.
-func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest) error {
+func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest, diagnosticContexts ...context.Context) error {
 	if manifest == nil {
 		return nil
+	}
+	if len(diagnosticContexts) > 0 {
+		if finish := startContextStage(diagnosticContexts[0], manifest.RequestID, manifest.ModelExecutionID, "manifest"); finish != nil {
+			defer finish()
+		}
 	}
 	if c == nil || c.session == nil {
 		return fmt.Errorf("persist context manifest: coordinator session is unavailable")

@@ -197,7 +197,7 @@ func (s *VectorStore) hydrateVectorResults(ctx context.Context, results []chrome
 		if err != nil {
 			return nil, fmt.Errorf("hydrating vector result %q from canonical store: %w", result.ID, err)
 		}
-		if !isRetrievable(item, req, time.Now()) {
+		if !isRetrievable(item, req, EvaluationTime(ctx)) {
 			continue
 		}
 		out = append(out, SearchResult{Item: item, Score: float64(result.Similarity)})

@@ -24,6 +24,7 @@ import (
 type workerProviderSurfaceCapture struct {
 	mu           sync.Mutex
 	requests     [][]string
+	contexts     []string
 	mode         string
 	submitted    bool
 	planReviewed bool
@@ -31,6 +32,10 @@ type workerProviderSurfaceCapture struct {
 
 func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var request struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
 		Tools []struct {
 			Function struct {
 				Name string `json:"name"`
@@ -47,6 +52,14 @@ func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.
 	}
 	p.mu.Lock()
 	p.requests = append(p.requests, slices.Clone(names))
+	var visible strings.Builder
+	for _, message := range request.Messages {
+		if message.Role == "system" || message.Role == "user" || message.Role == "developer" {
+			visible.WriteString(message.Content)
+			visible.WriteByte('\n')
+		}
+	}
+	p.contexts = append(p.contexts, visible.String())
 	mode := p.mode
 	shouldSubmit := (mode == "direct" || mode == "sub-agent") && slices.Contains(names, submitResultToolName) && !p.submitted
 	if shouldSubmit {
@@ -72,6 +85,22 @@ func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.
 		fmt.Fprint(w, "data: {\"id\":\"sub-agent\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"worker\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"sub-agent provider result\"},\"finish_reason\":\"stop\"}]}\n\n")
 	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func assertWorkerProviderRequiredContext(t *testing.T, capture *workerProviderSurfaceCapture, goal string) {
+	t.Helper()
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if len(capture.contexts) == 0 {
+		t.Fatal("no actual provider context received")
+	}
+	for index, text := range capture.contexts {
+		for _, required := range []string{"id=current_task", goal, "id=agent_instructions"} {
+			if !strings.Contains(text, required) {
+				t.Fatalf("provider request %d lost required fragment %q", index, required)
+			}
+		}
+	}
 }
 
 func (p *workerProviderSurfaceCapture) providerRequests() [][]string {
@@ -126,6 +155,7 @@ func TestRunDirectAgentUsesWorkerSurfaceAfterInheritedCoordinatorPreflight(t *te
 		t.Fatalf("RunDirectAgent result=%#v err=%v", result, err)
 	}
 	requests := capture.providerRequests()
+	assertWorkerProviderRequiredContext(t, capture, "perform direct work")
 	if len(requests) == 0 {
 		t.Fatal("direct agent made no provider request")
 	}

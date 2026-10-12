@@ -1044,6 +1044,11 @@ func shouldRecallWorkerMemory(agentDef *agent.AgentDef, profile ExecutionProfile
 // recallWorkerMemory is the shared helper used by both the DAG and direct
 // paths. It builds the request, calls the service, and returns the bundle.
 func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.AgentDef, taskGoal string) *WorkerMemoryBundle {
+	if identity, ok := ContextQueryIdentitySnapshot(ctx); ok {
+		if finish := startContextStage(ctx, identity.ParentRequestID, identity.ModelExecutionID, "private_retrieval"); finish != nil {
+			defer finish()
+		}
+	}
 	if c.workerMemorySvc == nil || !shouldRecallWorkerMemory(agentDef, c.ExecutionProfile()) {
 		return nil
 	}
@@ -1063,9 +1068,11 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 		return nil
 	}
 	if len(bundle.Items) == 0 {
+		observeWorkerContextSelection(ctx, bundle.Items)
 		return nil
 	}
 	c.rerankWorkerMemory(ctx, &bundle, taskGoal)
+	observeWorkerContextSelection(ctx, bundle.Items)
 	if len(bundle.Items) == 0 {
 		return nil
 	}

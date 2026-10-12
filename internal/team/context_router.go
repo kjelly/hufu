@@ -241,6 +241,10 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if err := request.Validate(); err != nil {
 		return ContextRoute{}, err
 	}
+	ctx = withContextQueryIdentity(ctx, request)
+	if finish := startContextStage(ctx, request.RequestID, request.ModelExecutionID, "routing"); finish != nil {
+		defer finish()
+	}
 	c := router.coordinator
 	if c == nil || c.session == nil {
 		return ContextRoute{Request: request}, nil
@@ -289,7 +293,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if err != nil {
 		return ContextRoute{}, err
 	}
-	now := time.Now().UTC()
+	now := contextstore.EvaluationTime(ctx)
 	eligibleSession := make([]contextstore.ContextItem, 0, len(sessionItems))
 	for _, item := range sessionItems {
 		item, err = activationItemFromRepository(ctx, c.contextRepo, item)
@@ -369,5 +373,6 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	route.Bundle.SharedPersistentFinalScores = finalScores
 	route.Bundle.SharedPersistentAggregates = aggregates
 	route.Bundle.SharedPersistentConflicts = c.openConflictsForItems(ctx, selected)
+	observeContextSelection(ctx, request, selected)
 	return route, nil
 }

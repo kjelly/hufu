@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 )
 
 // WriteTextReport writes a human-readable pass/fail report, one line per
@@ -26,6 +28,16 @@ func WriteTextReport(w io.Writer, suites []EvalSuiteResult) {
 // WriteJSONReport writes the full suite results as a stable, indented JSON
 // array (`hufu eval run ... --format json`).
 func WriteJSONReport(w io.Writer, suites []EvalSuiteResult) error {
+	return writeJSONReport(w, suites, false)
+}
+
+// WriteMeasuredJSONReport preserves real diagnostic timing for benchmark
+// artifacts. Selection-only CI reports use WriteJSONReport for stable bytes.
+func WriteMeasuredJSONReport(w io.Writer, suites []EvalSuiteResult) error {
+	return writeJSONReport(w, suites, true)
+}
+
+func writeJSONReport(w io.Writer, suites []EvalSuiteResult, measured bool) error {
 	stable := make([]EvalSuiteResult, len(suites))
 	for suiteIndex, suite := range suites {
 		stable[suiteIndex] = suite
@@ -33,6 +45,21 @@ func WriteJSONReport(w io.Writer, suites []EvalSuiteResult) error {
 		for caseIndex, result := range suite.Cases {
 			stable[suiteIndex].Cases[caseIndex] = result
 			stable[suiteIndex].Cases[caseIndex].Metrics.Duration = 0
+			if delivery := result.Metrics.ContextDelivery; delivery != nil && !measured {
+				copyDelivery := *delivery
+				copyDelivery.Requests = slices.Clone(delivery.Requests)
+				for index := range copyDelivery.Requests {
+					request := &copyDelivery.Requests[index]
+					request.RetrievalLatencyMS, request.SelectionLatencyMS, request.StageLatencyMS = nil, nil, nil
+					request.MetricReasons = maps.Clone(request.MetricReasons)
+					if request.MetricReasons == nil {
+						request.MetricReasons = make(map[string]string)
+					}
+					request.MetricReasons["retrieval_latency_ms"] = "timing_omitted"
+					request.MetricReasons["selection_latency_ms"] = "timing_omitted"
+				}
+				stable[suiteIndex].Cases[caseIndex].Metrics.ContextDelivery = &copyDelivery
+			}
 		}
 	}
 	enc := json.NewEncoder(w)

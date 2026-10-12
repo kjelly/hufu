@@ -322,6 +322,7 @@ func admittedStream[T any](ctx context.Context, stream iter.Seq[T], state *provi
 }
 
 func (m *admittedLanguageModel) streamContext(ctx context.Context, request ProviderRequest, state *providerStreamState, release func()) (context.Context, context.CancelFunc, func(ProviderInvocationResult), func() bool) {
+	ctx = withProviderTransportIdentity(ctx, request)
 	streamCtx, cancel := context.WithCancel(ctx)
 	var once sync.Once
 	finalize := func(result ProviderInvocationResult) {
@@ -416,6 +417,7 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
+	ctx = withProviderTransportIdentity(ctx, request)
 	response, providerErr := m.inner.Generate(ctx, call)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {
@@ -474,6 +476,7 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
+	ctx = withProviderTransportIdentity(ctx, request)
 	response, providerErr := m.inner.GenerateObject(ctx, call)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {

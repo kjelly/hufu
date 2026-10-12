@@ -964,7 +964,7 @@ retryLoop:
 			attemptInput.CanonicalMemory = bundle
 			routeDecisions = decisions
 		}
-		attemptInput.WorkerMemory = c.recallWorkerMemory(attemptCtx, agentDef, retrievalQuery)
+		attemptInput.WorkerMemory = c.recallWorkerMemory(withContextQueryIdentity(attemptCtx, request), agentDef, retrievalQuery)
 		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
 		if compileErr == nil {
 			compileErr = validateRequiredEvidenceContext(attemptInput, compiled)
@@ -983,7 +983,7 @@ retryLoop:
 			closeTranscript()
 			return "", fmt.Errorf("worker context manifest preflight failed: %w", buildManifestErr)
 		}
-		if err := c.persistContextManifest(&contextManifest); err != nil {
+		if err := c.persistContextManifest(&contextManifest, attemptCtx); err != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker context manifest preflight failed: %w", err)
 		}

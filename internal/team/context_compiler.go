@@ -214,8 +214,11 @@ type CompiledContext struct {
 }
 
 func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool) []ContextItem {
+	return canonicalCompilerItemsAt(records, priority, source, workerSTMOnly, includeCandidates, time.Now().UTC())
+}
+
+func canonicalCompilerItemsAt(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool, now time.Time) []ContextItem {
 	items := make([]ContextItem, 0, len(records))
-	now := time.Now().UTC()
 	for _, record := range records {
 		// Shared session STM may carry the current run's candidates (visible to
 		// the run's own prompts); persistent LTM never does. The coordinator
@@ -270,7 +273,11 @@ func canonicalCompilerItems(records []contextstore.ContextItem, priority int, so
 }
 
 func canonicalCompilerItemsScored(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, scores map[string]MemoryScoreParts, finalScores map[string]float64, aggregates map[string]*contextstore.ExperienceAggregate, conflicts map[string][]string) []ContextItem {
-	items := canonicalCompilerItems(records, priority, source, workerSTMOnly, false)
+	return canonicalCompilerItemsScoredAt(records, priority, source, workerSTMOnly, scores, finalScores, aggregates, conflicts, time.Now().UTC())
+}
+
+func canonicalCompilerItemsScoredAt(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, scores map[string]MemoryScoreParts, finalScores map[string]float64, aggregates map[string]*contextstore.ExperienceAggregate, conflicts map[string][]string, now time.Time) []ContextItem {
+	items := canonicalCompilerItemsAt(records, priority, source, workerSTMOnly, false, now)
 	for i := range items {
 		id := strings.TrimPrefix(items[i].ID, "context:")
 		if aggregate := aggregates[id]; aggregate != nil {
@@ -433,6 +440,19 @@ func reinforcedRankingItem(item ContextItem) bool {
 	return item.Authority == ContextAuthorityHistorical && item.ScoreParts.Applicability > 0
 }
 
+// RequiredContextBudgetError proves compilation failed before model dispatch.
+// It contains identity and counts, never required context text.
+type RequiredContextBudgetError struct {
+	ItemID          string
+	Kind            string
+	RequiredTokens  int
+	AvailableTokens int
+}
+
+func (e *RequiredContextBudgetError) Error() string {
+	return fmt.Sprintf("required context item %q (kind: %s) exceeds available token budget (%d > %d)", e.ItemID, e.Kind, e.RequiredTokens, e.AvailableTokens)
+}
+
 // BudgetContextItems fits context items into the budget.
 // Required items are preserved or fail closed when they cannot fit. Priority
 // only controls ordering; optional items at any priority may be omitted.
@@ -476,7 +496,7 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 			}
 
 			if item.Required {
-				return selected, true, fmt.Errorf("required context item %q (kind: %s) exceeds available token budget (%d > %d)", item.ID, item.Kind, usedTokens+cost, maxTokens)
+				return selected, true, &RequiredContextBudgetError{ItemID: item.ID, Kind: item.Kind, RequiredTokens: usedTokens + cost, AvailableTokens: maxTokens}
 			}
 		}
 	}
@@ -487,7 +507,7 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 // AssembleContextItemsPipeline executes the full context pipeline:
 // Validate Required → Deduplicate → Rank → Budget → Emit
 func AssembleContextItemsPipeline(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error) {
-	if err := ValidateContextItems(items, time.Now().UTC()); err != nil {
+	if err := ValidateContextItems(items, contextstore.EvaluationTime(ctx)); err != nil {
 		return "", false, err
 	}
 
@@ -513,8 +533,8 @@ func renderContextItems(items []ContextItem) string {
 	return sb.String()
 }
 
-func compiledResult(items []ContextItem, budget ContextBudget) (CompiledContext, error) {
-	if err := ValidateContextItems(items, time.Now().UTC()); err != nil {
+func compiledResultAt(items []ContextItem, budget ContextBudget, now time.Time) (CompiledContext, error) {
+	if err := ValidateContextItems(items, now); err != nil {
 		return CompiledContext{}, err
 	}
 	deduplicated := DeduplicateContextItems(items)
@@ -690,6 +710,9 @@ func opaqueArtifactID(id string) string {
 
 // CompileCoordinatorContext collects all coordinator context sources and executes the pipeline.
 func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
+		defer finish()
+	}
 	if input.Request.SchemaVersion != 0 {
 		if err := input.Request.Validate(); err != nil {
 			return CompiledContext{}, err
@@ -736,7 +759,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	}
 
 	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
-		items = append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false, true)...)
+		items = append(items, canonicalCompilerItemsAt(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", false, true, contextstore.EvaluationTime(ctx))...)
 	} else if input.RawSTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawSTM)
 		role := input.Role
@@ -763,7 +786,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	}
 
 	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
-		items = append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts)...)
+		items = append(items, canonicalCompilerItemsScoredAt(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts, contextstore.EvaluationTime(ctx))...)
 	} else if input.RawLTM != "" && !input.DisableMemory {
 		sections := ParseSTMSections(input.RawLTM)
 		if len(sections) > 0 {
@@ -811,7 +834,7 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	items = append(items, input.LockedResourceItems...)
 
 	assignTokenCounts(input.ModelContext, items)
-	compiled, err := compiledResult(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens))
+	compiled, err := compiledResultAt(items, CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens), contextstore.EvaluationTime(ctx))
 	if err != nil {
 		return CompiledContext{}, err
 	}
@@ -856,6 +879,9 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
+		defer finish()
+	}
 	if input.Request.SchemaVersion != 0 {
 		if err := input.Request.Validate(); err != nil {
 			return CompiledContext{}, err
@@ -877,7 +903,7 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 
 	budget := CalculateContextBudget(input.ModelContext, input.SystemTokens, input.ToolsTokens)
 	assignTokenCounts(input.ModelContext, items)
-	compiled, err := compiledResult(items, budget)
+	compiled, err := compiledResultAt(items, budget, contextstore.EvaluationTime(ctx))
 	if err != nil {
 		return CompiledContext{}, err
 	}
@@ -940,7 +966,7 @@ func workerProjectAndDependencyItems(input WorkerContextInput) []ContextItem {
 
 func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput, items []ContextItem) []ContextItem {
 	verifyOnly := input.Request.Phase == PhaseVerify
-	items = appendWorkerSessionContext(input, items, verifyOnly)
+	items = appendWorkerSessionContext(ctx, input, items, verifyOnly)
 	if input.ConcurrentTasks != "" && !verifyOnly {
 		items = append(items, ContextItem{ID: "concurrent_tasks", Kind: "concurrent_tasks", Content: input.ConcurrentTasks, Priority: PriorityConcurrentTaskSummary, DedupKey: hashContentKey(input.ConcurrentTasks)})
 	}
@@ -965,9 +991,9 @@ func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput
 	return items
 }
 
-func appendWorkerSessionContext(input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
+func appendWorkerSessionContext(ctx context.Context, input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
 	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
-		return append(items, canonicalCompilerItems(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true, true)...)
+		return append(items, canonicalCompilerItemsAt(input.CanonicalMemory.SharedSession, PriorityRecentSTM, "shared_session", true, true, contextstore.EvaluationTime(ctx))...)
 	}
 	if input.RawSTM == "" || input.DisableMemory || verifyOnly {
 		return items
@@ -991,7 +1017,7 @@ func appendWorkerSessionContext(input WorkerContextInput, items []ContextItem, v
 
 func appendWorkerPersistentContext(ctx context.Context, input WorkerContextInput, items []ContextItem, verifyOnly bool) []ContextItem {
 	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
-		return append(items, canonicalCompilerItemsScored(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts)...)
+		return append(items, canonicalCompilerItemsScoredAt(input.CanonicalMemory.SharedPersistent, PriorityRelevantLTM, "shared_persistent", false, input.CanonicalMemory.SharedPersistentScores, input.CanonicalMemory.SharedPersistentFinalScores, input.CanonicalMemory.SharedPersistentAggregates, input.CanonicalMemory.SharedPersistentConflicts, contextstore.EvaluationTime(ctx))...)
 	}
 	if input.DisableMemory || verifyOnly {
 		return items
