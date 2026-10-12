@@ -41,7 +41,7 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 		var projection *TaskResultAssertion
 		for i := range task.VerifySpec.TaskResultAssertions {
 			assertion := &task.VerifySpec.TaskResultAssertions[i]
-			if assertion.Op == "equals_projection" {
+			if assertion.Op == "equals_projection" && assertion.Pointer == "/findings" {
 				projection = assertion
 			}
 		}
@@ -55,7 +55,7 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 		contract := taskResultSubmissionContractForTask(task)
 		candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
 			Findings:          []Finding{{Summary: "gap", Detail: "cannot verify implementation", Severity: "info"}},
-			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[]}}`)},
+			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[],"invariant_assessments":[]}}`)},
 		}
 		if err := contract.validateFinalizableResult(candidate); err == nil || !strings.Contains(err.Error(), "exactly 0 items") {
 			t.Fatalf("%s accepts unmirrored outer info finding: %v", task.ID, err)
@@ -67,6 +67,58 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 	}
 	if checked != 3 {
 		t.Fatalf("checked %d source review contracts, want 3", checked)
+	}
+}
+
+// TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff pins the per-task
+// check that the record repeats the attested invariant claims verbatim. The
+// handoff inventory enforces the same equality, but only after reviewers can
+// no longer be redispatched, so a reworded summary must be rejected here
+// while submit_result can still be corrected.
+func TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	var task *TaskDef
+	for i := range session.ContractTasks {
+		if session.ContractTasks[i].ID == "review-primary-workset" {
+			task = &session.ContractTasks[i]
+		}
+	}
+	if task == nil || task.VerifySpec == nil {
+		t.Fatal("review-primary-workset has no objective verification")
+	}
+	contract := taskResultSubmissionContractForTask(*task)
+	attested := &InvariantVerificationResult{Assessments: []InvariantAssessment{
+		{InvariantID: "inv-a", Status: InvariantPreserved, Summary: "callers (bash.go, ssh.go) route through the same package symbols"},
+		{InvariantID: "inv-b", Status: InvariantUnknown, Summary: "destination file not in the snapshot", MissingEvidence: []string{"path.go"}},
+	}}
+	tests := []struct {
+		name    string
+		record  string
+		wantErr string
+	}{
+		{name: "verbatim copy", record: `[{"invariant_id":"inv-a","status":"preserved","summary":"callers (bash.go, ssh.go) route through the same package symbols"},{"invariant_id":"inv-b","status":"unknown","summary":"destination file not in the snapshot","missing_evidence":["path.go"]}]`},
+		{name: "reworded summary", record: `[{"invariant_id":"inv-a","status":"preserved","summary":"callers route through the same package symbols"},{"invariant_id":"inv-b","status":"unknown","summary":"destination file not in the snapshot"}]`, wantErr: `field "summary"`},
+		{name: "changed status", record: `[{"invariant_id":"inv-a","status":"unknown","summary":"callers (bash.go, ssh.go) route through the same package symbols"},{"invariant_id":"inv-b","status":"unknown","summary":"destination file not in the snapshot"}]`, wantErr: `field "status"`},
+		{name: "claim order instead of attested order", record: `[{"invariant_id":"inv-b","status":"unknown","summary":"destination file not in the snapshot"},{"invariant_id":"inv-a","status":"preserved","summary":"callers (bash.go, ssh.go) route through the same package symbols"}]`, wantErr: `field "invariant_id"`},
+		{name: "omitted claim", record: `[{"invariant_id":"inv-a","status":"preserved","summary":"callers (bash.go, ssh.go) route through the same package symbols"}]`, wantErr: "exactly 1 items"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
+				InvariantVerification: attested,
+				StructuredPayload:     &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[],"invariant_assessments":` + tt.record + `}}`)},
+			}
+			err := contract.validateFinalizableResult(candidate)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("verbatim invariant copy rejected: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

@@ -57,7 +57,11 @@ without weakening the whole-run gates.
 The workflow uses PREPARE → VERIFY. PREPARE actions bind the frozen review
 scope, produce the immutable manifests, and execute snapshot-pinned tests.
 VERIFY keeps repository invariant assessments on the primary children, then
-critiques and synthesizes accepted results. The final report audit is a static
+critiques and synthesizes accepted results. Each primary review's
+`verify-spec` checks that `record.invariant_assessments` repeats the attested
+claims (`invariant_id`, `status`, `summary`, in ascending ID order) while
+`submit_result` can still be corrected; the handoff inventory repeats the full
+comparison later, when reviewers can no longer be redispatched. The final report audit is a static
 `side_effect: none` VERIFY action, bound to that same scope snapshot. Its typed
 runtime output is objectively checked for `passed: true` before the action can
 be marked done; blocking acceptance cannot pass until this contract succeeds.

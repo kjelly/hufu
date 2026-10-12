@@ -140,8 +140,11 @@ The static workset contract also requires `structured_payload.record`:
   `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;
-- `invariant_assessments`: copy the submitted invariant claims exactly, in
-  the same order; use an explicit empty array when none apply. An `unknown`
+- `invariant_assessments`: copy the submitted invariant claims exactly —
+  identical `invariant_id`, `status`, `summary`, `finding_index`, and
+  `missing_evidence`, never a shortened or reworded summary — ordered by
+  ascending `invariant_id` (the order the runtime attests them); use an
+  explicit empty array when none apply. An `unknown`
   invariant also requires a concrete entry in gaps and completed_with_gaps;
 - `gaps`: each local limitation or open question, with `description` and
   `missing_evidence`. These describe this assigned boundary; do not claim the
