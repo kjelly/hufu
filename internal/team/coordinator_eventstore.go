@@ -816,10 +816,14 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 //
 // Verification, receipts, and typed results should be installed on TodoList
 // before a terminal call so their values are carried by the same transition.
+// Lifecycle snapshots and action observations share a lock through durable
+// append and live publication, so neither can overwrite the other's projection.
 func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, expected, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task transition: task tracker is unavailable")
 	}
+	c.taskProjectionMu.Lock()
+	defer c.taskProjectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
@@ -1034,6 +1038,8 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task reset for retry: task tracker is unavailable")
 	}
+	c.taskProjectionMu.Lock()
+	defer c.taskProjectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit task reset for retry: task %s not found", taskID)
@@ -1132,6 +1138,8 @@ func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID s
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit stale gate verifier reset: task tracker is unavailable")
 	}
+	c.taskProjectionMu.Lock()
+	defer c.taskProjectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit stale gate verifier reset: task %s not found", taskID)

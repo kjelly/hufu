@@ -1230,6 +1230,8 @@ func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskI
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("prepare interrupted task resume: task tracker is unavailable")
 	}
+	c.taskProjectionMu.Lock()
+	defer c.taskProjectionMu.Unlock()
 	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if item == nil {
 		return fmt.Errorf("prepare interrupted task resume: task %s not found", taskID)

@@ -610,7 +610,7 @@ type Coordinator struct {
 	capabilityCacheMu      sync.Mutex
 	capabilityInflight     map[string]chan CapabilityResult
 	journal                *taskJournal // persistent task-result journal (nil when disabled)
-	actionProgressMu       sync.Mutex
+	taskProjectionMu       sync.Mutex   // serializes lifecycle snapshots and action observations
 	noJournal              bool
 	eventStore             *EventStore // append-only session event store
 	experienceLineage      experienceLineageCache

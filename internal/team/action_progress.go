@@ -112,8 +112,8 @@ func (c *Coordinator) recordActionProgress(task TaskDef, todoID, actionID string
 	if value, valid = normalizedActionProgress(value); !valid {
 		return
 	}
-	c.actionProgressMu.Lock()
-	defer c.actionProgressMu.Unlock()
+	c.taskProjectionMu.Lock()
+	defer c.taskProjectionMu.Unlock()
 	item := c.todoItemByID(todoID)
 	if item == nil || item.Status != TaskInProgress || c.currentTaskAttempt(todoID) != attempt {
 		return
