@@ -116,6 +116,11 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
+- `implementation-plans/` contains active, versioned delivery plans. Plans are
+  reference material subordinate to code, tests, and normative contracts;
+  completed or superseded plans belong in `archive/implementation-plans/`.
+- [Context delivery implementation plan](implementation-plans/context-delivery.md)
+  — offline delivery assertions, bounded query hints, and explicit opt-in rollout.
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
 
