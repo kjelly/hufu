@@ -40,6 +40,7 @@ const (
 	overlayNone chatOverlay = iota
 	overlayText
 	overlayConfirmExit
+	overlayPalette
 )
 
 // ChatModel is the chat-first view. It renders the conversation, owns the
@@ -71,6 +72,7 @@ type ChatModel struct {
 	lastTurnID  string
 	lastRunIDs  []string
 	selection   *cardSelection
+	palette     paletteState
 	closeReport *conversation.CloseReport
 
 	width  int
@@ -162,6 +164,10 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A question for the user always surfaces in the chat view.
 		m.view = viewChat
 		return m.forward(msg)
+	case ChatNoticeMsg:
+		m.transcript.add(chatItem{kind: itemNotice, body: msg.Text})
+		m.rerender()
+		return m, nil
 	case FinishedMsg, ResultMsg:
 		// The dashboard's session-end messages do not apply to chat turns.
 		return m, nil

@@ -1,9 +1,9 @@
 # hufu Chat-first TUI：P0～P3 實作規格（可執行修訂版）
 
-> Status: active implementation plan（實作中，branch `feat/chat-first-tui`）
-> Authority: reference — code + tests 優先；完成後以 `docs/architecture/chat-tui.md` 為準
+> Status: implemented — P0、PM、P1、P2、P3 已在 branch `feat/chat-first-tui` 完成，每個 Phase 一個 commit
+> Authority: reference — code + tests 優先；穩定契約以 `docs/architecture/chat-tui.md` 為準
 > Verified-Commit: `f077b622`（§1 的所有程式位置都以此版本查核過）
-> Superseded-By: [`docs/architecture/chat-tui.md`](../../architecture/chat-tui.md)（WP-32 建立後）
+> Superseded-By: [`docs/architecture/chat-tui.md`](../../architecture/chat-tui.md)
 
 > **文件類型**：Coding Agent 可直接執行的實作規格／工作拆解／驗收契約
 > **專案**：`kjelly/hufu`（Go module `github.com/kjelly/hufu`）

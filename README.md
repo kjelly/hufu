@@ -136,6 +136,7 @@ hufu list              # show all discoverable teams and their agents
 hufu list my-team      # show one team in detail
 hufu chat --agent-team my-team  # interactive REPL with that team
 hufu chat --default    # interactive REPL with the built-in team
+hufu chat --agent-team my-team --ui chat  # full-screen chat-first TUI
 hufu workspace path                            # print the active managed control root
 hufu inspect run run-123                       # inspect persisted run facts
 hufu inspect cost run-123                      # inspect generation-cost projection
@@ -1638,6 +1639,30 @@ The TUI displays:
 - **Wrap-up indicator** — Visual cue when the coordinator is finishing
 
 > **Note**: `--tui` and `--steps` cannot be used together.
+
+### Chat-first TUI
+
+`hufu chat --ui chat` opens a full-screen conversation that keeps one team
+loaded. Every message is one turn of the same coordinator conversation; each
+turn shows its own progress card, final answer, and canonical outcome, and the
+composer stays available afterwards.
+
+```bash
+hufu chat --agent-team dev-team --ui chat
+hufu chat --default --ui chat --theme light --display-preset epaper
+```
+
+- `Enter` sends; `Ctrl+J` / `Alt+Enter` insert a newline; `Tab` completes
+  `/commands` and `@names`.
+- `Ctrl+C` cancels the running turn (the session stays open); when idle it
+  clears the draft, then asks to quit.
+- `Ctrl+T` switches to the task dashboard; `Ctrl+P` opens the command palette.
+- Commands: `/help`, `/status`, `/cost`, `/save <path>`, `/reset`,
+  `/team [name]`, `/cancel`, `/wrap`, `/theme [mode]`, `/exit`.
+
+`--ui plain` (the default) keeps the line REPL and `--ui dashboard` (or
+`--tui`) the task dashboard. See
+[docs/architecture/chat-tui.md](docs/architecture/chat-tui.md).
 
 ### Interactive PTY takeover (experimental)
 

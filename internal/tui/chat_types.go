@@ -22,6 +22,10 @@ type ChatActions struct {
 // ChatEventMsg delivers one conversation controller event to the chat view.
 type ChatEventMsg struct{ Event conversation.Event }
 
+// ChatNoticeMsg adds a system notice to the transcript (for example a
+// non-fatal warning from the runtime adapter).
+type ChatNoticeMsg struct{ Text string }
+
 // ChatCloseRequestMsg closes the session without confirmation, for example
 // when the process receives SIGTERM.
 type ChatCloseRequestMsg struct{}

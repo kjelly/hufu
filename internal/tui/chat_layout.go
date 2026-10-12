@@ -92,6 +92,8 @@ func (m ChatModel) render() string {
 		return m.textOverlayView()
 	case overlayConfirmExit:
 		return m.confirmExitView()
+	case overlayPalette:
+		return m.paletteView()
 	}
 	return m.chatView()
 }

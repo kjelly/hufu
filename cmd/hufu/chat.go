@@ -28,8 +28,12 @@ the coordinator keeps full conversation context between turns.
 Pick the team with --agent-team, --default, or interactively. Commands inside the
 REPL: /exit (or /quit) to leave, /reset to clear conversation context.
 
+Choose the interface with --ui: plain (default line REPL), dashboard (the
+task dashboard, also --tui), or chat (full-screen chat-first TUI).
+
 Examples:
   hufu chat --agent-team dev-team
+  hufu chat --agent-team dev-team --ui chat
   hufu chat --default --helper-tools bash`,
 	RunE: runChat,
 }
@@ -170,7 +174,8 @@ Tips:
   - Type your message and press Enter to send it
   - Each turn is independently cancellable with Ctrl+C
   - Use ↑/↓ to recall previous prompts
-  - Run with --tui for a 6-column dashboard
+  - Run with --ui chat for the full-screen chat interface,
+    or --ui dashboard (--tui) for the task dashboard
 
 `,
 		boldStyle.Render("💬"), teamStyle.Render(teamName))

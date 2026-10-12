@@ -18,12 +18,17 @@ func (m ChatModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.phase == phaseClosing {
 		return m, nil
 	}
+	if m.overlay == overlayPalette {
+		return m.updatePaletteKey(msg)
+	}
 	if m.overlay != overlayNone {
 		return m.updateOverlayKey(msg)
 	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m.handleCtrlC()
+	case "ctrl+p":
+		return m.openPalette()
 	case "ctrl+t":
 		if m.view == viewTasks {
 			m.view = viewChat
