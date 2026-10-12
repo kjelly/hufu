@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
-	"github.com/muesli/termenv"
 
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -34,29 +34,34 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
+// CLI styles. They are always built from tuipkg.NewCLIStyleSet so that
+// output without color support (no TTY, NO_COLOR) carries no ANSI codes.
 var (
-	boldStyle    = lipgloss.NewStyle().Bold(true)
-	dimStyle     = lipgloss.NewStyle().Faint(true)
-	agentStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	toolStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	resultStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("7"))
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	stepStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("8"))
-	doneStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
-	textStyle    = lipgloss.NewStyle().Faint(true)
-	thinkStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-	pendingIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	progressIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	pausedIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	doneIcon     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	errorIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	skipTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("3"))
-	doneTagStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2"))
-	errTagStyle  = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("9"))
-	teamStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
-	wrapUpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
+	boldStyle, dimStyle, agentStyle, toolStyle, resultStyle, errStyle lipgloss.Style
+	stepStyle, doneStyle, textStyle, thinkStyle, headerStyle          lipgloss.Style
+	pendingIcon, progressIcon, pausedIcon, doneIcon, errorIcon        lipgloss.Style
+	skipTagStyle, doneTagStyle, errTagStyle, teamStyle, wrapUpStyle   lipgloss.Style
 )
+
+func init() {
+	applyCLIStyles(tuipkg.NewCLIStyleSet(tuipkg.ThemeAuto, false, cliColorProfile()))
+}
+
+// cliColorProfile detects stdout's color support, as the Lip Gloss v1
+// default renderer did.
+func cliColorProfile() colorprofile.Profile {
+	return colorprofile.Detect(os.Stdout, os.Environ())
+}
+
+func applyCLIStyles(styles tuipkg.CLIStyleSet) {
+	boldStyle, dimStyle, agentStyle, toolStyle = styles.Bold, styles.Dim, styles.Agent, styles.Tool
+	resultStyle, errStyle, stepStyle, doneStyle = styles.Result, styles.Error, styles.Step, styles.Done
+	textStyle, thinkStyle, headerStyle = styles.Text, styles.Think, styles.Header
+	pendingIcon, progressIcon, pausedIcon = styles.PendingIcon, styles.ProgressIcon, styles.PausedIcon
+	doneIcon, errorIcon = styles.DoneIcon, styles.ErrorIcon
+	skipTagStyle, doneTagStyle, errTagStyle = styles.SkipTag, styles.DoneTag, styles.ErrorTag
+	teamStyle, wrapUpStyle = styles.Team, styles.WrapUp
+}
 
 var activeStatusFlusher struct {
 	mu        sync.Mutex
@@ -684,9 +689,6 @@ func (d *taskDisplay) clear() {
 
 func configureOutputRendering() {
 	noColor := shouldDisableColor(opts.noColorMode, opts.outputFormat, os.Getenv("NO_COLOR")) || opts.displayMode == "plain"
-	if noColor {
-		lipgloss.SetColorProfile(termenv.Ascii)
-	}
 	themeValue := opts.themeMode
 	if themeValue == "" {
 		themeValue = config.LoadConfig().Presentation.Theme
@@ -698,14 +700,7 @@ func configureOutputRendering() {
 	if err != nil {
 		theme = tuipkg.ThemeAuto
 	}
-	styles := tuipkg.NewCLIStyleSet(theme, noColor)
-	boldStyle, dimStyle, agentStyle, toolStyle = styles.Bold, styles.Dim, styles.Agent, styles.Tool
-	resultStyle, errStyle, stepStyle, doneStyle = styles.Result, styles.Error, styles.Step, styles.Done
-	textStyle, thinkStyle, headerStyle = styles.Text, styles.Think, styles.Header
-	pendingIcon, progressIcon, pausedIcon = styles.PendingIcon, styles.ProgressIcon, styles.PausedIcon
-	doneIcon, errorIcon = styles.DoneIcon, styles.ErrorIcon
-	skipTagStyle, doneTagStyle, errTagStyle = styles.SkipTag, styles.DoneTag, styles.ErrorTag
-	teamStyle, wrapUpStyle = styles.Team, styles.WrapUp
+	applyCLIStyles(tuipkg.NewCLIStyleSet(theme, noColor, cliColorProfile()))
 }
 
 func shouldDisableColor(noColor bool, format, noColorEnv string) bool {
@@ -1942,7 +1937,8 @@ func runWithTUI(ctx context.Context, cancel context.CancelFunc, prompt string, s
 	if injector != nil {
 		model.SubmitPrompt = injector.enqueue
 	}
-	programOptions := []tea.ProgramOption{tea.WithAltScreen(), tea.WithoutSignalHandler()}
+	// The alternate screen is declared by the model's View.
+	programOptions := []tea.ProgramOption{tea.WithoutSignalHandler()}
 	if presentationOptions.DisplayPreset == tuipkg.DisplayEpaper {
 		programOptions = append(programOptions, tea.WithFPS(1))
 	}

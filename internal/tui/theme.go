@@ -3,15 +3,17 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // ThemeMode selects semantic colors without changing runtime behavior.
@@ -110,40 +112,47 @@ func effectiveTheme(mode ThemeMode) ThemeMode {
 }
 
 type semanticPalette struct {
-	foreground lipgloss.AdaptiveColor
-	muted      lipgloss.AdaptiveColor
-	focus      lipgloss.AdaptiveColor
-	accent     lipgloss.AdaptiveColor
-	skill      lipgloss.AdaptiveColor
-	success    lipgloss.AdaptiveColor
-	warning    lipgloss.AdaptiveColor
-	error      lipgloss.AdaptiveColor
-	border     lipgloss.AdaptiveColor
-	selection  lipgloss.AdaptiveColor
-	match      lipgloss.AdaptiveColor
-	visual     lipgloss.AdaptiveColor
+	foreground themeColor
+	muted      themeColor
+	focus      themeColor
+	accent     themeColor
+	skill      themeColor
+	success    themeColor
+	warning    themeColor
+	error      themeColor
+	border     themeColor
+	selection  themeColor
+	match      themeColor
+	visual     themeColor
 }
 
 var defaultSemanticPalette = semanticPalette{
-	foreground: lipgloss.AdaptiveColor{Light: "0", Dark: "15"},
-	muted:      lipgloss.AdaptiveColor{Light: "8", Dark: "8"},
-	focus:      lipgloss.AdaptiveColor{Light: "5", Dark: "13"},
-	accent:     lipgloss.AdaptiveColor{Light: "4", Dark: "12"},
-	skill:      lipgloss.AdaptiveColor{Light: "6", Dark: "6"},
-	success:    lipgloss.AdaptiveColor{Light: "2", Dark: "2"},
-	warning:    lipgloss.AdaptiveColor{Light: "3", Dark: "11"},
-	error:      lipgloss.AdaptiveColor{Light: "1", Dark: "9"},
-	border:     lipgloss.AdaptiveColor{Light: "4", Dark: "14"},
-	selection:  lipgloss.AdaptiveColor{Light: "254", Dark: "237"},
-	match:      lipgloss.AdaptiveColor{Light: "225", Dark: "55"},
-	visual:     lipgloss.AdaptiveColor{Light: "252", Dark: "236"},
+	foreground: themeColor{Light: "0", Dark: "15"},
+	muted:      themeColor{Light: "8", Dark: "8"},
+	focus:      themeColor{Light: "5", Dark: "13"},
+	accent:     themeColor{Light: "4", Dark: "12"},
+	skill:      themeColor{Light: "6", Dark: "6"},
+	success:    themeColor{Light: "2", Dark: "2"},
+	warning:    themeColor{Light: "3", Dark: "11"},
+	error:      themeColor{Light: "1", Dark: "9"},
+	border:     themeColor{Light: "4", Dark: "14"},
+	selection:  themeColor{Light: "254", Dark: "237"},
+	match:      themeColor{Light: "225", Dark: "55"},
+	visual:     themeColor{Light: "252", Dark: "236"},
 }
 
-func resolveColor(color lipgloss.AdaptiveColor, theme ThemeMode) lipgloss.TerminalColor {
+// themeColor is one semantic color as ANSI palette indexes for light and
+// dark backgrounds. hufu picks the variant from its own theme detection.
+type themeColor struct {
+	Light string
+	Dark  string
+}
+
+func resolveColor(c themeColor, theme ThemeMode) color.Color {
 	if theme == ThemeLight {
-		return lipgloss.Color(color.Light)
+		return lipgloss.Color(c.Light)
 	}
-	return lipgloss.Color(color.Dark)
+	return lipgloss.Color(c.Dark)
 }
 
 type styleSet struct {
@@ -181,8 +190,21 @@ type CLIStyleSet struct {
 }
 
 // NewCLIStyleSet resolves CLI styles from the same semantic tokens as the TUI.
-func NewCLIStyleSet(mode ThemeMode, noColor bool) CLIStyleSet {
-	s := newStyleSet(mode, noColor)
+// Lip Gloss v2 always renders full ANSI, so the caller passes the color
+// profile of the output: colors are converted to it, and an output without
+// color support (no TTY, ASCII) or noColor gets plain, ANSI-free styles.
+func NewCLIStyleSet(mode ThemeMode, noColor bool, profile colorprofile.Profile) CLIStyleSet {
+	if noColor || profile < colorprofile.ANSI {
+		plain := lipgloss.NewStyle()
+		return CLIStyleSet{
+			Bold: plain, Dim: plain, Agent: plain, Tool: plain, Result: plain, Error: plain,
+			Step: plain, Done: plain, Text: plain, Think: plain, Header: plain,
+			PendingIcon: plain, ProgressIcon: plain, PausedIcon: plain, DoneIcon: plain,
+			ErrorIcon: plain, SkipTag: plain, DoneTag: plain, ErrorTag: plain,
+			Team: plain, WrapUp: plain,
+		}
+	}
+	s := newStyleSetFor(mode, false, profile.Convert)
 	return CLIStyleSet{
 		Bold: s.bold, Dim: s.dim, Agent: s.agent, Tool: s.toolCall,
 		Result: s.toolResult, Error: s.errorIcon.Bold(true), Step: s.stepHeader,
@@ -199,22 +221,35 @@ func (s styleSet) warningBadge(text string) string {
 }
 
 func newStyleSet(mode ThemeMode, noColor bool) styleSet {
+	return newStyleSetFor(mode, noColor, nil)
+}
+
+// newStyleSetFor builds the style set; convert, when set, maps each color to
+// the output's color profile.
+func newStyleSetFor(mode ThemeMode, noColor bool, convert func(color.Color) color.Color) styleSet {
 	effective := effectiveTheme(mode)
 	if effective == ThemeMono || noColor {
 		return monoStyleSet()
 	}
+	resolve := func(c themeColor, theme ThemeMode) color.Color {
+		resolved := resolveColor(c, theme)
+		if convert != nil {
+			resolved = convert(resolved)
+		}
+		return resolved
+	}
 	p := defaultSemanticPalette
-	fg := resolveColor(p.foreground, effective)
-	focus := resolveColor(p.focus, effective)
-	accent := resolveColor(p.accent, effective)
-	skill := resolveColor(p.skill, effective)
-	success := resolveColor(p.success, effective)
-	warning := resolveColor(p.warning, effective)
-	errColor := resolveColor(p.error, effective)
-	border := resolveColor(p.border, effective)
-	selection := resolveColor(p.selection, effective)
-	match := resolveColor(p.match, effective)
-	visual := resolveColor(p.visual, effective)
+	fg := resolve(p.foreground, effective)
+	focus := resolve(p.focus, effective)
+	accent := resolve(p.accent, effective)
+	skill := resolve(p.skill, effective)
+	success := resolve(p.success, effective)
+	warning := resolve(p.warning, effective)
+	errColor := resolve(p.error, effective)
+	border := resolve(p.border, effective)
+	selection := resolve(p.selection, effective)
+	match := resolve(p.match, effective)
+	visual := resolve(p.visual, effective)
 
 	return styleSet{
 		prompt: lipgloss.NewStyle().Bold(true).Foreground(focus),
@@ -227,12 +262,12 @@ func newStyleSet(mode ThemeMode, noColor bool) styleSet {
 		footer:       lipgloss.NewStyle().Faint(true),
 		selectedFG:   lipgloss.NewStyle().Bold(true).Foreground(fg),
 		selectedBG:   lipgloss.NewStyle().Background(selection),
-		pendingIcon:  lipgloss.NewStyle().Foreground(resolveColor(p.muted, effective)),
+		pendingIcon:  lipgloss.NewStyle().Foreground(resolve(p.muted, effective)),
 		progressIcon: lipgloss.NewStyle().Foreground(warning),
 		pausedIcon:   lipgloss.NewStyle().Foreground(skill),
 		doneIcon:     lipgloss.NewStyle().Foreground(success),
 		errorIcon:    lipgloss.NewStyle().Foreground(errColor),
-		skippedIcon:  lipgloss.NewStyle().Faint(true).Foreground(resolveColor(p.muted, effective)),
+		skippedIcon:  lipgloss.NewStyle().Faint(true).Foreground(resolve(p.muted, effective)),
 		match:        lipgloss.NewStyle().Background(match).Foreground(fg),
 		wrapUp:       lipgloss.NewStyle().Bold(true).Foreground(warning),
 		visual:       lipgloss.NewStyle().Background(visual).Foreground(fg),
@@ -240,7 +275,7 @@ func newStyleSet(mode ThemeMode, noColor bool) styleSet {
 		cursor:       lipgloss.NewStyle().Bold(true).Foreground(focus),
 		toolCall:     lipgloss.NewStyle().Foreground(success),
 		toolResult:   lipgloss.NewStyle().Faint(true),
-		stepHeader:   lipgloss.NewStyle().Faint(true).Foreground(resolveColor(p.muted, effective)),
+		stepHeader:   lipgloss.NewStyle().Faint(true).Foreground(resolve(p.muted, effective)),
 		textLog:      lipgloss.NewStyle().Faint(true),
 		confirmBox: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(errColor).Padding(1, 3),

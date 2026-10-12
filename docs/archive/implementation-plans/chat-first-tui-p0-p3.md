@@ -7,7 +7,8 @@
 
 > **文件類型**：Coding Agent 可直接執行的實作規格／工作拆解／驗收契約
 > **專案**：`kjelly/hufu`（Go module `github.com/kjelly/hufu`）
-> **範圍**：P0（Controller 與每輪生命週期）、P1（Chat 介面）、P2（任務工作台與 ask_user）、P3（歷史還原與命令）
+> **範圍**：P0（Controller 與每輪生命週期）、PM（Bubble Tea v2 遷移）、P1（Chat 介面）、P2（任務工作台與 ask_user）、P3（歷史還原與命令）
+> **順序**：P0 → PM → P1 → P2 → P3。PM 是使用者在 P0 完成後追加的階段，P1 起的 TUI 程式一律以 v2 API 撰寫。
 > **文件位置**：`docs/archive/implementation-plans/chat-first-tui-p0-p3.md`（由 `docs/tmp/` 移入並納入版本控制）。實作完成後的穩定架構說明寫到 `docs/architecture/chat-tui.md`（WP-32）。
 > **規格優先順序**：既有 Runtime invariants／安全與恢復契約 > `AGENTS.md`／`CLAUDE.md`／`internal/tui/CONSTITUTION.md` > 本規格 > UI 細節。
 
@@ -16,7 +17,7 @@
 ## 0. Coding Agent 執行規則（先讀）
 
 1. 開工前先讀 `AGENTS.md`、`CLAUDE.md`、`internal/tui/CONSTITUTION.md`、`docs/architecture/execution-runtime.md`。逐條核對 §1 的程式位置在當前 HEAD 是否仍成立；若不成立，**先修改本文件 §1 與受影響的工作包**，再開始實作。
-2. 在本地 branch `feat/chat-first-tui` 上實作。**每個 Phase（P0／P1／P2／P3）完成並通過 Gate 後 commit 一次**。**不得 push、不得開 PR、不得 merge**。
+2. 在本地 branch `feat/chat-first-tui` 上實作。**每個 Phase（P0／PM／P1／P2／P3）完成並通過 Gate 後 commit 一次**。**不得 push、不得開 PR、不得 merge**。
 3. 每個 Phase 的 Gate 全部通過後，以 §10 的格式記錄結果（寫在 commit message body），接著繼續下一個 Phase；全部 Phase 完成後再一併回報使用者。
 4. 每個 WP 的流程：先寫會失敗的測試 → 做最小修改 → 該 package 測試與 `go vet ./...` 通過 → 進行下一個 WP（Phase 結束時才 commit）。
 5. **所有驗收都是自動化測試**（unit、table-driven、`teatest`、`creack/pty` E2E 搭配假 provider）。本規格沒有任何人工驗收步驟；無法自動化驗證的條件不是需求。
@@ -36,7 +37,7 @@
 | durable 的 command admission event（`conversation_turn_admitted`）、跨 crash 的 `command_id` 去重 | 單一 process 內沒有會重送同一個 `command_id` 的 client；成本是改動 EventStore 的 type、reducer、replay、hash chain |
 | Event cursor／`resync_required`／原子 snapshot＋subscribe 協定 | 這是遠端重連 client 才需要的；process 內只有一個訂閱者 |
 | 最終回答逐 token 串流（`assistant_answer_delta`） | 需要修改 Coordinator 產生回答的邊界。採用「即時進度＋完整最終回答」 |
-| Markdown 渲染（glamour） | 已決議只顯示純文字，不新增依賴 |
+| Markdown 渲染（glamour） | 已決議只顯示純文字；除了 PM 的 Charm v2 套件以外不新增依賴 |
 | `chat_*` metrics | repo 沒有 metrics 框架 |
 | `/model`、`/diff`、`/compact`、`/history`、`/sessions`、在 UI 內 checkout branch | 凍結的 policy 會讓 `/model` 幾乎都被拒絕；沒有「本輪 diff」來源；`/compact` 沒有安全的入口；branch 操作和 `hufu session` CLI 重疊 |
 | `--continue`、`--workspace-exact` 旗標 | `hufu chat` 預設已經會還原既有 session（`resumeOrStartSession`）；`--workspace` 沿用現有語意 |
@@ -69,7 +70,8 @@
 | `internal/team/run_result.go:21-27` | RunOutcome：`completed unverified partial blocked failed cancelled stalled`；`FormatCanonicalStatus(*RunResult)` | P1 |
 | `internal/tui/theme.go` | `styleSet`、`cycleTheme`、`canSwitchTheme`、`watchThemeCmd`、`probeThemeCmd` 都是 `package tui` 內未匯出的成員 | Chat 程式放在 `package tui` |
 | `internal/tui/sanitize.go` | `sanitizeTerminalText`、`wrapCells`（以 cell 寬度換行） | 重用 |
-| `go.mod` | bubbletea v1.3.10、bubbles v1.0.0（內含 `textarea`）、`teatest`、`creack/pty` v1.1.24 | 不新增依賴 |
+| `go.mod` | bubbletea v1.3.10、bubbles v1.0.0（內含 `textarea`）、lipgloss v1.1.0、`teatest`、`creack/pty` v1.1.24 | PM 升級到 `charm.land/bubbletea/v2` v2.1.0、`charm.land/bubbles/v2` v2.2.1、`charm.land/lipgloss/v2` v2.0.6、`teatest/v2` |
+| `cmd/hufu/display.go:685-709` | CLI 樣式來自 `tuipkg.NewCLIStyleSet`；no-color 時以 `lipgloss.SetColorProfile(termenv.Ascii)` 讓 v1 renderer 輸出零 ANSI；stdout 不是 TTY 時 v1 renderer 也自動不輸出 ANSI | PM 必須在 v2（`Render()` 一律輸出完整 ANSI）下保留這個行為 |
 | `cmd/hufu/process_exit_contract_test.go` | 已經有假的 OpenAI-compatible `/v1/chat/completions` server 測試寫法 | WP-15 E2E |
 | `internal/inspect/cost.go:16`、`cmd/hufu/inspectcmd.go:584` | `inspectpkg.InspectCost`、`renderInspectCostText` | `/cost` |
 | `internal/tui/dashboard_update.go:160,237` | dashboard 已經用 Tab／Shift+Tab 切換欄位 | Chat↔Tasks 切換改用 `Ctrl+T` |
@@ -355,6 +357,38 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 
 ---
 
+### Phase M — Bubble Tea v2 遷移
+
+目標：把整個 repo 從 Charm v1 套件換成 v2，作為 P1 的基礎。**功能不變；畫面允許些許差異**（使用者決定）。**能用 v2 現成功能就用現成的**：宣告式 `tea.View`（AltScreen、MouseMode、KeyboardEnhancements、Cursor）、`colorprofile` 的偵測與色彩轉換、bubbles v2 元件（`viewport`、`textarea`、`textinput`）的內建行為，不要為了保留 v1 外觀而自行重寫。
+
+#### WP-M1｜依賴與 import
+
+- `go get charm.land/bubbletea/v2@v2.1.0 charm.land/bubbles/v2@v2.2.1 charm.land/lipgloss/v2@v2.0.6 github.com/charmbracelet/x/exp/teatest/v2@latest`，改寫所有 import，`go mod tidy` 後 `go.mod` 不再直接依賴 `github.com/charmbracelet/{bubbletea,bubbles,lipgloss}` 與 v1 `teatest`。
+- 驗收：`grep -rE '"github.com/charmbracelet/(bubbletea|bubbles|lipgloss)' --include=*.go .` 沒有結果。
+
+#### WP-M2｜TUI（`internal/tui`）
+
+- `Model.View()` 改回傳 `tea.View`：原本的字串渲染改名為 `render() string`；`View()` 設定 `AltScreen = true`，`MouseMode` 由 `mouseEnabled` 決定（取代 `tea.WithAltScreen()`、`tea.EnableMouseCellMotion`／`tea.DisableMouse` 命令）。
+- 按鍵：`tea.KeyMsg` → `tea.KeyPressMsg`；`" "` → `"space"`。滑鼠：改用 `MouseClickMsg`／`MouseReleaseMsg`／`MouseMotionMsg`／`MouseWheelMsg` 與 `msg.Mouse()`。
+- bubbles：`viewport`／`textinput` 的 `Width`／`Height`／`YOffset` 欄位改用 getter／setter；`textinput` 樣式改用 `SetStyles`；epaper 下游標不閃爍。
+- 色彩：`lipgloss.AdaptiveColor` 改成 hufu 自己的 light／dark 字串對，由既有 `resolveColor` 依 `ThemeMode` 選擇；主題偵測（`detectRuntimeTheme`、tmux 背景切換）邏輯不變。
+- `--no-color`／`NO_COLOR` 時 TUI 使用 mono 樣式（不出現任何色碼）。
+
+#### WP-M3｜CLI 與 program 啟動（`cmd/hufu`）
+
+- `tea.NewProgram` 移除 `tea.WithAltScreen()`（改由 View 宣告）；保留 `tea.WithoutSignalHandler()`、epaper 的 `tea.WithFPS(1)`。
+- CLI 樣式：以 `colorprofile.Detect(os.Stdout, os.Environ())`（與 v1 renderer 相同以 stdout 判斷）取得 profile，色彩以 `profile.Convert` 降階；profile 為 `NoTTY`／`Ascii`，或 `--no-color`、`NO_COLOR`、`--display-mode plain`、`--output json` 時，`NewCLIStyleSet` 回傳不輸出任何 ANSI 的純文字樣式；移除 `termenv` 的直接使用。
+- `ReleaseTerminal`／`RestoreTerminal`（path consent）、`tea.ExecProcess`（PTY attach）、`p.Send` 等行為不變。
+
+#### WP-M4｜測試
+
+- 既有測試做機械式遷移（按鍵建構方式、`teatest/v2`、bubbles getter）。行為類斷言不放寬；只有因 v2 現成元件造成的外觀差異（例如游標、viewport 換行、space 的字串名稱）可以調整對應斷言，並在 commit body 中逐一列出。
+- 新增測試：stdout 非 TTY 時 CLI 樣式輸出不含 ESC；`View()` 的 `AltScreen` 與 `MouseMode` 依狀態正確；epaper 下 `Init`／`Focus` 不排程閃爍。
+
+**PM Gate**：§0-12 的驗收命令全部通過；`go test ./...` 的結果與 P0 相同（沒有新的失敗）；WP-M1 的 grep 驗收通過。
+
+---
+
 ### Phase 1 — Chat 介面
 
 #### WP-10｜CLI 選擇器與旗標（`cmd/hufu/chat.go`、`cli_metadata.go`）
@@ -371,14 +405,14 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 
 - `ChatModel` 持有：內嵌的 dashboard `Model`（以 `NewWithOptions` 建立，並新增 `embedded bool` 欄位）、composer、transcript、focus（`composer`／`transcript`）、view（`chat`／`tasks`）、目前輪次狀態、佇列計數、overlay 堆疊。
 - `internal/tui` 不能 import `cmd/hufu`，因此 cmd 端的功能一律透過注入的 `ChatActions` 結構（函式欄位：`Submit func(conversation.Command) conversation.Ack`，P3 再加 `Cost`、`Save`）存取，且只在 `tea.Cmd` 中呼叫。`internal/tui` 可以 import `internal/conversation`（反向不行）。
-- `embedded` 時 dashboard 的所有離開路徑（`q`、`Esc` 在最上層、`handleCtrlC`）改成送出 `embeddedExitMsg{}`，不回傳 `tea.Quit`；`i`（prompt input）改成送出 `embeddedComposeMsg{}`。非 embedded 時行為不變。
+- `embedded` 時 dashboard 的所有離開路徑（`q`、`Esc` 在最上層、`handleCtrlC`）改成送出 `embeddedExitMsg{}`，不回傳 `tea.Quit`；`c`（dashboard 的 prompt input 鍵；`i` 是 info panel，維持原樣）改成送出 `embeddedComposeMsg{}`。非 embedded 時行為不變。
 - 所有 dashboard 的訊息（`TasksUpdatedMsg`、`TaskLogMsg`、`StatusBarMsg`、`OperatorSnapshotMsg`、`TerminalSessionMsg`、`AskUserMsg`、`AskUserCancelMsg`、`TeamInfoMsg`、theme 訊息等）一律轉給內嵌的 `Model`；ChatModel 只從中讀取進度卡片需要的資料。
 - 按鍵依 §7 分派。`View()` 在寬度或高度為 0、或尚未收到 `WindowSizeMsg` 時，回傳安全的 placeholder。
 - **測試**：teatest 驗證 `Ctrl+T` 進出 Tasks view 後草稿與捲動位置保留；embedded dashboard 的 `q`／`Esc` 不會讓程式結束；寬度 0 不 panic。
 
 #### WP-12｜Composer（`internal/tui/chat_composer.go`）
 
-- 使用 `bubbles/textarea`。`Enter` 送出；`Ctrl+J` 與 `Alt+Enter` **兩者都**插入換行（不需要另外跨終端決定）。貼上的內容（多行、Unicode）原樣保留。
+- 使用 `charm.land/bubbles/v2/textarea`。`Enter` 送出；`Ctrl+J`、`Alt+Enter` 一律插入換行；`View()` 另外請求 keyboard enhancements，終端支援時 `Shift+Enter` 也插入換行。貼上（`tea.PasteMsg`）的內容（多行、Unicode）原樣保留。
 - 位元組上限與 Controller 的 `MaxPromptBytes` 相同。接近或超過上限時顯示 `n / 256 KiB`；超過上限時 Enter 不送出，並顯示原因。
 - 送出流程：Enter → 回傳呼叫 `Controller.Submit` 的 `tea.Cmd` → 收到 `ackMsg`。
   - `accepted`／`queued`：清空草稿，在 transcript 加入 User item（queued 時標註 `queued #n`）。
@@ -527,7 +561,7 @@ func runChatTurn(ctx context.Context, rt chatTurnRuntime, seq *chatTurnSequencer
 | cancelling | `Ctrl+C` | 跳出離開確認（警告會強制結束）→ §5.3 |
 | 任何 overlay | `Esc` | 關閉最上層的 overlay，沒有其他副作用 |
 | ask_user overlay | 既有的按鍵 | 所有按鍵都交給 ask 對話框 |
-| Tasks view | dashboard 既有的按鍵 | 但 `q`／`Ctrl+C`／最上層的 `Esc`／`i` 依 WP-11 被攔截 |
+| Tasks view | dashboard 既有的按鍵 | 但 `q`／`Ctrl+C`／最上層的 `Esc`／`c` 依 WP-11 被攔截 |
 
 ---
 

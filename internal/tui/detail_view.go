@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/kjelly/hufu/internal/team"
 )

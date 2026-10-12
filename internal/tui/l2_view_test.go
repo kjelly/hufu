@@ -29,7 +29,7 @@ func TestView_HelpContent(t *testing.T) {
 	m.height = 30
 	m.inHelp = true
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"keyboard reference",
 		"switch column",
@@ -52,8 +52,8 @@ func TestView_InfoIncludesDecisionStateProjection(t *testing.T) {
 	m.width = 100
 	m.height = 30
 	m.inInfo = true
-	if !containsView(m.View(), "dec-1 (stale; coordinator/coordinator/override)") {
-		t.Fatalf("info view missing decision projection:\n%s", m.View())
+	if !containsView(m.render(), "dec-1 (stale; coordinator/coordinator/override)") {
+		t.Fatalf("info view missing decision projection:\n%s", m.render())
 	}
 }
 
@@ -62,7 +62,7 @@ func TestView_InfoRedactsFinalizationProjection(t *testing.T) {
 		DecisionID: "dec-1", FinalizationMode: "api_key=stage4-tui-secret", FinalizationIdentity: "coordinator", FinalizationOutcome: "selected",
 	}}})
 	m.width, m.height, m.inInfo = 100, 30, true
-	view := m.View()
+	view := m.render()
 	if strings.Contains(view, "stage4-tui-secret") {
 		t.Fatalf("TUI exposed finalization secret: %s", view)
 	}
@@ -101,7 +101,7 @@ func TestView_InfoPanelContent(t *testing.T) {
 	m.height = 30
 	m.inInfo = true
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"my-team",
 		"researcher",
@@ -126,7 +126,7 @@ func TestView_SearchContent(t *testing.T) {
 	m.inSearch = true
 	m.searchInput.SetValue("query text")
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Search",
 		"query text",
@@ -148,7 +148,7 @@ func TestView_PromptInputContent(t *testing.T) {
 	m.inPromptInput = true
 	m.promptInput.SetValue("fix the bug")
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Additional Prompt",
 		"fix the bug",
@@ -169,7 +169,7 @@ func TestView_ConfirmContent(t *testing.T) {
 	m.height = 30
 	m.inConfirm = true
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Quit hufu?",
 		"No",
@@ -193,7 +193,7 @@ func TestView_ConfirmChoiceHighlight(t *testing.T) {
 
 	for i, choice := range choices {
 		m.confirmChoice = choice
-		view := m.View()
+		view := m.render()
 		if !containsView(view, labels[i]) {
 			t.Errorf("confirm view with choice %d missing %q", choice, labels[i])
 		}
@@ -214,7 +214,7 @@ func TestView_ActivityLogContent(t *testing.T) {
 	}
 	m.initActivityVP()
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"ACTIVITY LOG",
 		"Step 1 started",
@@ -234,7 +234,7 @@ func TestView_ActivityLogEmpty(t *testing.T) {
 	m.inActivityLog = true
 	m.initActivityVP()
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "No activity") {
 		t.Errorf("empty activity log should show placeholder, got: %s", stripViewANSI(view)[:200])
 	}
@@ -250,11 +250,11 @@ func TestView_ResultContent(t *testing.T) {
 	m.result = "The final answer is 42."
 	m.inResult = true
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	m.vp.SetContent(m.result)
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Result",
 		"The final answer is 42.",
@@ -275,7 +275,7 @@ func TestView_MemoryContent(t *testing.T) {
 	m.inMemory = true
 	m.loadMemoryContent()
 
-	view := m.View()
+	view := m.render()
 	// With empty workspace, should show "Short-term memory is empty"
 	if !containsView(view, "Memory") {
 		t.Errorf("memory view should contain 'Memory', got: %s", stripViewANSI(view)[:200])
@@ -305,7 +305,7 @@ func TestView_MemoryWithWorkspace(t *testing.T) {
 	m.inMemory = true
 	m.loadMemoryContent()
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Short-term Memory",
 		"Context",
@@ -332,11 +332,11 @@ func TestView_DetailContent(t *testing.T) {
 	m.detailID = "t1"
 	m.logs["t1"] = []string{"Starting research...", "Found 3 papers"}
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	m.vp.SetContent(m.buildDetailContent())
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Task",
 		"researcher",
@@ -367,8 +367,8 @@ func TestView_DetailShowsNonLocalProviderIdentity(t *testing.T) {
 	}
 	m.inDetail = true
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 
 	m.detailID = "t1"
 	view := m.renderDetailHeader(m.tasks[0])
@@ -393,11 +393,11 @@ func TestView_DetailEmptyLogs(t *testing.T) {
 	m.inDetail = true
 	m.detailID = "t1"
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	m.vp.SetContent(m.buildDetailContent())
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "no output yet") {
 		t.Errorf("detail view with empty logs should show 'no output yet', got: %s", stripViewANSI(view)[:200])
 	}
@@ -413,11 +413,11 @@ func TestView_DetailSkippedTask(t *testing.T) {
 	m.inDetail = true
 	m.detailID = "t1"
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	m.vp.SetContent(m.buildDetailContent())
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "not executed") {
 		t.Errorf("detail view for skipped task should show 'not executed', got: %s", stripViewANSI(view)[:200])
 	}
@@ -439,7 +439,7 @@ func TestView_AskUserFreeText(t *testing.T) {
 	}
 	m.ask.ti.SetValue("Alice")
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Enter your name",
 		"Alice",
@@ -471,7 +471,7 @@ func TestView_AskUserSingleChoice(t *testing.T) {
 		},
 	}
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Pick one",
 		"Option A",
@@ -503,7 +503,7 @@ func TestView_AskUserMultipleChoice(t *testing.T) {
 		selected: make([]bool, 2),
 	}
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Pick any",
 		"toggle",
@@ -523,7 +523,7 @@ func TestView_ColumnTitles(t *testing.T) {
 	m.height = 40
 	m.tasks = sampleTasks()
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"PENDING",
 		"PLANNED",
@@ -544,7 +544,7 @@ func TestView_EmptyState(t *testing.T) {
 	m.height = 40
 	m.tasks = nil
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"waiting for tasks",
 		"PENDING",
@@ -558,7 +558,7 @@ func TestView_EmptyState(t *testing.T) {
 func TestView_Initialising(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	// width=0 simulates pre-WindowSizeMsg
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "Initialising") {
 		t.Errorf("expected 'Initialising' when width=0, got %q", view)
 	}
@@ -572,7 +572,7 @@ func TestView_FooterNotFinished(t *testing.T) {
 	m.height = 40
 	m.tasks = sampleTasks()
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "help") {
 		t.Errorf("footer when not finished should contain 'help'")
 	}
@@ -588,7 +588,7 @@ func TestView_FooterFinished(t *testing.T) {
 	m.tasks = sampleTasks()
 	m.finished = true
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "report") {
 		t.Errorf("footer when finished should contain 'report'")
 	}
@@ -605,7 +605,7 @@ func TestView_FooterWithSearchResults(t *testing.T) {
 	m.searchResults = []*team.TodoItem{{ID: "t1"}}
 	m.searchIdx = 0
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "next/prev") {
 		t.Errorf("footer with search results should contain 'next/prev'")
 	}
@@ -625,10 +625,10 @@ func TestView_DetailFooterVisualMode(t *testing.T) {
 	m.visualStart = 0
 	m.visualEnd = 1
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"VISUAL",
 		"selected",
@@ -651,7 +651,7 @@ func TestView_StatusAreaResultBox(t *testing.T) {
 	m.finished = true
 	m.result = "The final answer is 42.\nLine 2.\nLine 3."
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Result",
 		"The final answer is 42.",
@@ -677,7 +677,7 @@ func TestView_StatusAreaResultTruncation(t *testing.T) {
 	}
 	m.result = strings.Join(lines, "\n")
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "more lines") {
 		t.Errorf("truncated result should show 'more lines' indicator")
 	}
@@ -694,7 +694,7 @@ func TestView_ProgressBarHiddenForFewTasks(t *testing.T) {
 		{ID: "2", Status: team.TaskPending, Desc: "Task 2", Agent: "B"},
 	}
 
-	view := m.View()
+	view := m.render()
 	// Progress bar only shows when len(tasks) >= 3
 	// So with 2 tasks, no progress bar
 	if containsView(view, "tasks") && containsView(view, "errors") {
@@ -715,7 +715,7 @@ func TestView_ProgressBarVisible(t *testing.T) {
 	m.height = 40
 	m.tasks = sampleTasks() // 7 tasks
 
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "tasks") {
 		t.Error("progress bar should be visible with >= 3 tasks")
 	}
@@ -731,7 +731,7 @@ func TestView_ChatModePromptInputOnStart(t *testing.T) {
 	if !m.inPromptInput {
 		t.Error("expected inPromptInput=true in chat mode with empty prompt")
 	}
-	view := m.View()
+	view := m.render()
 	if !containsView(view, "Additional Prompt") {
 		t.Error("chat mode with empty prompt should show prompt input")
 	}
@@ -745,7 +745,7 @@ func TestView_CompactModeTitles(t *testing.T) {
 	m.height = 30
 	m.tasks = sampleTasks()
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{
 		"Queued",
 		"Active",

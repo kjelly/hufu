@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -202,16 +202,16 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if !m.mouseEnabled {
 				m.mouseEnabled = true
-				return m, enableMouseCmd()
+				return m, nil
 			}
 		}
 	case "m":
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
 		m.mouseEnabled = m.mouseManuallyEnabled
 		if m.mouseEnabled {
-			return m, enableMouseCmd()
+			return m, nil
 		}
-		return m, disableMouseCmd()
+		return m, nil
 	case "M":
 		m.inMemory = true
 		m.loadMemoryContent()
@@ -489,19 +489,19 @@ func (m Model) updateActivityLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "j", "down":
 		if m.vpReady {
-			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyDown})
+			m.vp.ScrollDown(1)
 		}
 	case "k", "up":
 		if m.vpReady {
-			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyUp})
+			m.vp.ScrollUp(1)
 		}
-	case " ":
+	case "space":
 		if m.vpReady {
-			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+			m.vp.PageDown()
 		}
 	case "b":
 		if m.vpReady {
-			m.vp, _ = m.vp.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+			m.vp.PageUp()
 		}
 	}
 	return m, nil
@@ -550,7 +550,7 @@ func (m *Model) initActivityVP() {
 	if h < 3 {
 		h = 3
 	}
-	m.vp = viewport.New(w, h)
+	m.vp = viewport.New(viewport.WithWidth(w), viewport.WithHeight(h))
 	m.vp.SetContent(m.formatActivityLogContent())
 	m.vp.GotoBottom()
 	m.vpReady = true

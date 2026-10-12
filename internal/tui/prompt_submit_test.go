@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestPromptInputSubmitKeepsDraftUntilAccepted(t *testing.T) {
@@ -31,11 +31,11 @@ func TestPromptInputSubmitKeepsDraftUntilAccepted(t *testing.T) {
 					return tt.submit(prompt)
 				}
 			}
-			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+			next, _ := m.Update(keyPress("c"))
 			m = next.(Model)
 			m.promptInput.SetValue("fix it")
 
-			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			m = next.(Model)
 			if calls != 0 {
 				t.Fatalf("Update called SubmitPrompt directly (%d calls); it must run in a command", calls)
@@ -74,12 +74,12 @@ func TestPromptInputIgnoresEnterWhileSubmitting(t *testing.T) {
 	m.SubmitPrompt = func(string) bool { return true }
 	m.inPromptInput = true
 	m.promptInput.SetValue("first")
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected submit command")
 	}
 	m = next.(Model)
-	_, second := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, second := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if second != nil {
 		t.Error("second enter while submitting must not submit again")
 	}

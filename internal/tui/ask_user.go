@@ -5,10 +5,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ func initAskUser(msg AskUserMsg, screenW int) (askState, tea.Cmd) {
 	ti := textinput.New()
 	ti.Prompt = "" // The dialog renders its own "> " prefix.
 	ti.Placeholder = "type your answer…"
-	ti.Width = askTIWidth(screenW)
+	ti.SetWidth(askTIWidth(screenW))
 	st := askState{
 		req:      &msg,
 		ti:       ti,
@@ -140,7 +140,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown", "ctrl+d":
 		st.viewOffset += max(m.height/2, 1)
 		st.manualScroll = true
-	case " ":
+	case "space":
 		if req.Type == "multiple_choice" && st.cursor < len(opts) {
 			st.selected[st.cursor] = !st.selected[st.cursor]
 		}
@@ -281,7 +281,7 @@ func (m Model) askUserView() string {
 	}
 	lines := strings.Split(content, "\n")
 	offset = max(0, min(offset, max(len(lines)-viewHeight, 0)))
-	vp := viewport.New(contentW, viewHeight)
+	vp := viewport.New(viewport.WithWidth(contentW), viewport.WithHeight(viewHeight))
 	vp.SetContent(strings.Join(lines[offset:min(offset+viewHeight, len(lines))], "\n"))
 	box := m.styles.askBox.Width(innerW).Render(vp.View() + "\n" + m.styles.askHint.Render(truncateLineCells(hint, contentW)))
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -25,21 +25,21 @@ func TestSpeckit_Navigation(t *testing.T) {
 	m := setupSpeckitModel()
 
 	// 1. Test Horizontal (l: Right)
-	m1, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m1, _ := m.Update(keyPress("l"))
 	curr := m1.(Model)
 	if curr.col != 1 {
 		t.Errorf("Expected col 1 after 'l', got %d", curr.col)
 	}
 
 	// 2. Test Horizontal (h: Left)
-	m2, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m2, _ := curr.Update(keyPress("h"))
 	curr = m2.(Model)
 	if curr.col != 0 {
 		t.Errorf("Expected col 0 after 'h', got %d", curr.col)
 	}
 
 	// 3. Test Boundary (h at col 0)
-	m3, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m3, _ := curr.Update(keyPress("h"))
 	curr = m3.(Model)
 	if curr.col != 0 {
 		t.Errorf("Expected col 0 (clamped) after 'h', got %d", curr.col)
@@ -51,7 +51,7 @@ func TestSpeckit_ViewSwitching(t *testing.T) {
 
 	// 1. Enter Detail View
 	// Current cursor is col 0, row 0 (Pending Task "t1")
-	m1, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m1, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	curr := m1.(Model)
 	if !curr.inDetail {
 		t.Error("Expected to be in Detail View after 'Enter'")
@@ -61,14 +61,14 @@ func TestSpeckit_ViewSwitching(t *testing.T) {
 	}
 
 	// 2. Exit Detail View
-	m2, _ := curr.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := curr.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	curr = m2.(Model)
 	if curr.inDetail {
 		t.Error("Expected to exit Detail View after 'Esc'")
 	}
 
 	// 3. Toggle Activity Log
-	m3, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m3, _ := curr.Update(keyPress("a"))
 	curr = m3.(Model)
 	if !curr.inActivityLog {
 		t.Error("Expected inActivityLog to be true after 'a'")
@@ -79,7 +79,7 @@ func TestSpeckit_Search(t *testing.T) {
 	m := setupSpeckitModel()
 
 	// 1. Activate Search
-	m1, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m1, _ := m.Update(keyPress("/"))
 	curr := m1.(Model)
 	if !curr.inSearch {
 		t.Error("Expected inSearch to be true after '/'")
@@ -87,7 +87,7 @@ func TestSpeckit_Search(t *testing.T) {
 
 	// 2. Execute Search for "Finished"
 	curr.searchInput.SetValue("Finished")
-	m2, _ := curr.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, _ := curr.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	final := m2.(Model)
 
 	if final.searchQuery != "Finished" {
@@ -99,7 +99,7 @@ func TestSpeckit_Search(t *testing.T) {
 		t.Errorf("Expected search to jump to DONE column (3), got col %d", final.col)
 	}
 
-	view := final.View()
+	view := final.render()
 	if !strings.Contains(view, "Finished Task") {
 		t.Error("View should contain the searched task")
 	}

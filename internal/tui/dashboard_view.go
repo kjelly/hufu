@@ -5,15 +5,26 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func (m Model) View() string {
+// View declares the terminal state for the dashboard: it always runs on the
+// alternate screen, and mouse reporting follows the user's toggle.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	if m.mouseEnabled {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
+}
+
+func (m Model) render() string {
 	if m.width == 0 {
 		return "Initialising…"
 	}

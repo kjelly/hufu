@@ -2,11 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -30,8 +30,10 @@ func TestAttemptsRenderAsPlainTextInEpaper(t *testing.T) {
 		{TaskID: "8", Attempt: 1, Target: "other-task", Activity: "running"},
 	})
 	header := m.renderDetailHeader(item)
-	if header != ansi.Strip(header) {
-		t.Fatalf("no-color e-paper header contains escape sequences: %q", header)
+	// Lip Gloss v2 keeps text attributes (bold, faint) in mono styles; the
+	// no-color contract is that no color is ever emitted.
+	if hasColorSGR(header) {
+		t.Fatalf("no-color e-paper header contains color sequences: %q", header)
 	}
 	for _, want := range []string{
 		"─── Attempts ───",
@@ -70,3 +72,21 @@ func TestTaskWithoutAttemptsHasNoAttemptsBlock(t *testing.T) {
 		t.Fatal("a task without attempts rendered an Attempts block")
 	}
 }
+
+// hasColorSGR reports whether s sets a foreground or background color.
+func hasColorSGR(s string) bool {
+	for _, match := range sgrPattern.FindAllStringSubmatch(s, -1) {
+		for _, param := range strings.Split(match[1], ";") {
+			code, err := strconv.Atoi(param)
+			if err != nil {
+				continue
+			}
+			if (code >= 30 && code <= 49) || (code >= 90 && code <= 107) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var sgrPattern = regexp.MustCompile(`\x1b\[([0-9;]*)m`)

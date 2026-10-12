@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -16,7 +14,7 @@ func TestDetailTerminalAttachStartsProcessCommand(t *testing.T) {
 	m.detailID = "task-1"
 	m.terminals["task-1"] = "term-1"
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	updated, cmd := m.Update(keyPress("t"))
 	model := updated.(Model)
 	if cmd == nil {
 		t.Fatal("attach key did not return a process command")
@@ -31,7 +29,7 @@ func TestDetailTerminalAttachExplainsMissingSession(t *testing.T) {
 	m.tasks = []*team.TodoItem{{ID: "task-1", Status: team.TaskInProgress}}
 	m.inDetail = true
 	m.detailID = "task-1"
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	updated, cmd := m.Update(keyPress("t"))
 	if cmd != nil {
 		t.Fatal("attach should not start without a PTY session")
 	}

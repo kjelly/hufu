@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/kjelly/hufu/internal/operator"
@@ -77,7 +76,7 @@ func TestThemeSwitchIsInstanceScopedAndPreservesInteractionState(t *testing.T) {
 	light.terminals["task-1"] = "pty-1"
 	darkBefore := dark.styles.prompt.GetForeground()
 
-	updated, cmd := light.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("T")})
+	updated, cmd := light.Update(keyPress("T"))
 	got := updated.(Model)
 	if cmd == nil || got.themeMode != ThemeDark {
 		t.Fatalf("theme switch = (%q, %v), want dark with redraw", got.themeMode, cmd)
@@ -100,7 +99,7 @@ func TestNoColorAndEpaperDisableColorAndMotion(t *testing.T) {
 	if m.spinnerEnabled || m.spinnerTickCmd() != nil {
 		t.Fatal("epaper must disable spinner animation")
 	}
-	if m.promptInput.Cursor.Mode() != cursor.CursorStatic || m.searchInput.Cursor.Mode() != cursor.CursorStatic {
+	if m.promptInput.Styles().Cursor.Blink || m.searchInput.Styles().Cursor.Blink {
 		t.Fatal("epaper text inputs must use a static cursor")
 	}
 }
@@ -210,7 +209,7 @@ func TestOperatorSnapshotGenerationRejectsLateOldScope(t *testing.T) {
 
 func TestPassiveQuitDoesNotRequestOwnerWrapUp(t *testing.T) {
 	m := NewWithOptions("prompt", TeamInfo{}, Options{Theme: ThemeMono, Spinner: false, Owner: false})
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	updated, cmd := m.Update(keyPress("q"))
 	if cmd == nil {
 		t.Fatal("passive q did not close the view")
 	}
@@ -219,7 +218,7 @@ func TestPassiveQuitDoesNotRequestOwnerWrapUp(t *testing.T) {
 	}
 
 	owner := New("prompt", TeamInfo{})
-	_, ownerCmd := owner.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	_, ownerCmd := owner.Update(keyPress("q"))
 	if ownerCmd != nil {
 		t.Fatal("active owner q must not claim a detach or terminate the runtime")
 	}
@@ -243,7 +242,7 @@ func TestEightyColumnLayoutUsesReadableCompactGroups(t *testing.T) {
 	if !m.isCompact() {
 		t.Fatal("80-column terminal must use compact task groups")
 	}
-	view := ansi.Strip(m.View())
+	view := ansi.Strip(m.render())
 	for _, label := range []string{"State:", "What:", "Next:", "Queued", "Active", "Finished"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("80-column view missing %q:\n%s", label, view)
@@ -255,7 +254,7 @@ func TestSmallTerminalLayoutsKeepStateWhatNextPath(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{60, 20}, {40, 12}} {
 		m := New("檢查任務", TeamInfo{})
 		m.width, m.height = size.width, size.height
-		view := ansi.Strip(m.View())
+		view := ansi.Strip(m.render())
 		for _, label := range []string{"State:", "What:", "Next:"} {
 			if !strings.Contains(view, label) {
 				t.Fatalf("%dx%d view missing %q:\n%s", size.width, size.height, label, view)

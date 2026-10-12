@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -19,28 +19,28 @@ func TestUpdate_Navigation(t *testing.T) {
 	}
 
 	// 1. Test 'j' (Down)
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m2, _ := m.Update(keyPress("j"))
 	model2 := m2.(Model)
 	if model2.row != 1 {
 		t.Errorf("expected row 1 after 'j', got %d", model2.row)
 	}
 
 	// 2. Test 'k' (Up)
-	m3, _ := model2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m3, _ := model2.Update(keyPress("k"))
 	model3 := m3.(Model)
 	if model3.row != 0 {
 		t.Errorf("expected row 0 after 'k', got %d", model3.row)
 	}
 
 	// 3. Test 'l' (Right - recently fixed)
-	m4, _ := model3.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m4, _ := model3.Update(keyPress("l"))
 	model4 := m4.(Model)
 	if model4.col != 1 {
 		t.Errorf("expected col 1 after 'l', got %d", model4.col)
 	}
 
 	// 4. Test 'h' (Left)
-	m5, _ := model4.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m5, _ := model4.Update(keyPress("h"))
 	model5 := m5.(Model)
 	if model5.col != 0 {
 		t.Errorf("expected col 0 after 'h', got %d", model5.col)
@@ -57,10 +57,10 @@ func TestView_Rendering(t *testing.T) {
 
 	// Mocking viewport ready to ensure View() attempts to render body
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 30
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(30)
 
-	view := m.View()
+	view := m.render()
 	t.Logf("DEBUG VIEW:\n%s", view)
 
 	// Check for key elements
@@ -189,7 +189,7 @@ func TestView_UsesCompactColumnsOnNarrowTerminal(t *testing.T) {
 		{ID: "3", Status: team.TaskDone, Desc: "finished task", Agent: "worker"},
 	}
 
-	view := m.View()
+	view := m.render()
 	for _, want := range []string{"Queued", "Active", "Finished"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("compact view missing %q: %q", want, view)
@@ -202,7 +202,7 @@ func TestView_ShowsNarrowTerminalWarning(t *testing.T) {
 	m.width = 59
 	m.height = 20
 
-	if view := m.View(); !strings.Contains(view, "Terminal too narrow") {
+	if view := m.render(); !strings.Contains(view, "Terminal too narrow") {
 		t.Errorf("expected narrow terminal warning, got %q", view)
 	}
 }
@@ -233,7 +233,7 @@ func TestRenderProgressBar(t *testing.T) {
 func TestEnterOpensResultView(t *testing.T) {
 	m := New("prompt", TeamInfo{})
 	m.finished, m.result = true, "full result"
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !updated.(Model).inResult {
 		t.Error("enter should open result view")
 	}

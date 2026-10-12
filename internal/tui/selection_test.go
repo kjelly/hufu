@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestVisualSelection_StartPoint(t *testing.T) {
@@ -22,7 +22,7 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 	m.width = 100
 	m.height = 40
 	m.vpReady = true
-	m.vp.Height = 20
+	m.vp.SetHeight(20)
 
 	// 2. Initial state check
 	if m.cursorLine != 0 {
@@ -30,15 +30,15 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 	}
 
 	// 3. Move cursor down to Line 3 (index 2)
-	m1, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m2, _ := m1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m1, _ := m.Update(keyPress("j"))
+	m2, _ := m1.Update(keyPress("j"))
 	curr := m2.(Model)
 	if curr.cursorLine != 2 {
 		t.Errorf("Expected cursorLine 2 after two 'j' presses, got %d", curr.cursorLine)
 	}
 
 	// 4. Enter VISUAL mode (v)
-	m3, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	m3, _ := curr.Update(keyPress("v"))
 	curr = m3.(Model)
 	if !curr.inVisual {
 		t.Error("Expected to be in Visual mode after 'v'")
@@ -48,7 +48,7 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 	}
 
 	// 5. Move down one more line (Line 4, index 3)
-	m4, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m4, _ := curr.Update(keyPress("j"))
 	curr = m4.(Model)
 	if curr.visualEnd != 3 {
 		t.Errorf("Expected visualEnd 3 after 'j' in visual mode, got %d", curr.visualEnd)
@@ -60,7 +60,7 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 	}
 
 	// 7. Test Yank (y)
-	m5, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m5, _ := curr.Update(keyPress("y"))
 	curr = m5.(Model)
 	if curr.inVisual {
 		t.Error("Expected to exit Visual mode after 'y'")
@@ -68,12 +68,12 @@ func TestVisualSelection_StartPoint(t *testing.T) {
 
 	// 8. Test Cancellation (Esc)
 	// Enter visual mode again
-	m6, _ := curr.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	m6, _ := curr.Update(keyPress("v"))
 	curr = m6.(Model)
 	if !curr.inVisual {
 		t.Error("Expected to re-enter Visual mode")
 	}
-	m7, _ := curr.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m7, _ := curr.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	curr = m7.(Model)
 	if curr.inVisual {
 		t.Error("Expected to exit Visual mode after 'Esc'")
