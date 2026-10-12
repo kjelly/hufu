@@ -183,9 +183,6 @@ linters:
         path: internal/tools/view\.go
       - linters:
           - errcheck
-        path: internal/tools/tools\.go
-      - linters:
-          - errcheck
           - gofmt
           - goimports
         path: internal/context/sqlite_repository\.go
@@ -230,7 +227,6 @@ formatters:
       - internal/tools/math\.go
       - internal/tools/scp\.go
       - internal/tools/ssh\.go
-      - internal/tools/tools\.go
       - internal/tools/types\.go
       - internal/utils/preview\.go
       - internal/skill/discovery\.go

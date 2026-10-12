@@ -2268,6 +2268,8 @@ internal/audit/audit.go
 internal/tools/bash.go
 internal/tools/bash_policy.go
 internal/tools/tools.go
+internal/tools/core_tool.go
+internal/tools/tool_permission.go
 internal/tools/ask_user.go
 
 cmd/hufu/team_loader.go
