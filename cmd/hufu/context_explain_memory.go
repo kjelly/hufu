@@ -29,9 +29,25 @@ func runContextExplainMemory(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("policy-version") {
 		policyVersion = contextPolicyVersion
 	}
+	var replay *team.SemanticReplay
+	if contextMemoryRetrievalID == "" {
+		settings, err := contextSemanticSettings(contextTeam, cmd.ErrOrStderr())
+		if err != nil {
+			return err
+		}
+		mode, err := parseContextSemanticMode("semantic-mode", contextSemanticMode, settings.Mode)
+		if err != nil {
+			return err
+		}
+		if replay, err = openContextSemanticReplay(cmd.Context(), settings, repo, contextProject, mode); err != nil {
+			return err
+		}
+		defer replay.Close()
+	}
 	explanation, err := team.ExplainPersistentMemory(cmd.Context(), repo, team.MemoryExplainInput{
 		Workspace: getContextWorkspace(), ItemID: args[0], ProjectID: contextProject, TeamID: contextTeam,
 		Query: contextMemoryQuery, RetrievalID: contextMemoryRetrievalID, PolicyVersion: policyVersion, Now: time.Now().UTC(),
+		Semantic: replay,
 	})
 	if err != nil {
 		return err
@@ -91,6 +107,11 @@ func writeMemoryExplanation(out io.Writer, e team.MemoryExplanation) error {
 			line += " unavailable_reason=" + string(path.UnavailableReason)
 		}
 		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
+	if s := e.Semantic; s != nil {
+		if _, err := fmt.Fprintf(out, "semantic: %s route=%s route_share=%.2f fallback=%s\n", formatContextSemanticView(s.SemanticReplayView), valueOrUnavailable(s.Route), s.RouteShare, valueOrUnavailable(string(s.FallbackReason))); err != nil {
 			return err
 		}
 	}

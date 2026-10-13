@@ -88,3 +88,14 @@ func (c *Coordinator) rankSharedPersistentMemoryForRequest(ctx context.Context, 
 	selected, scores, finalScores, aggregates, semanticIdentity, err := c.rankSharedPersistentMemoryWithLane(ctx, request.RetrievalQuery(), request.Goal, base, allowed, lane)
 	return sharedPersistentRanking{Selected: selected, Scores: scores, FinalScores: finalScores, Aggregates: aggregates, Semantic: semanticIdentity}, err
 }
+
+// TeamSemanticRetrievalConfig reads the semantic-retrieval block of the team
+// in teamDir, for operator commands that replay a team's retrieval without
+// loading the team.
+func TeamSemanticRetrievalConfig(teamDir string) (semantic.Config, error) {
+	cfg, err := parseTeamYML(teamDir, nil)
+	if err != nil {
+		return semantic.Config{}, fmt.Errorf("read team semantic-retrieval: %w", err)
+	}
+	return cfg.SemanticRetrieval.Clone(), nil
+}

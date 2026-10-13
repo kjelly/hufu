@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/semantic"
 )
 
 // RankingReplayQuery is one query to replay and where it came from
@@ -30,6 +31,26 @@ type RankingReplayInput struct {
 	// the default.
 	CandidateCarriedWeight float64
 	Now                    time.Time
+	// Semantic, when set, replays the semantic lane and auto routing.
+	// BaselineSemanticMode defaults to its settings' mode and
+	// CandidateSemanticMode to the baseline's. An empty CandidateFusion keeps
+	// the baseline fusions, which is valid only when the semantic modes
+	// differ; a set CandidateFusion also replaces the semantic lane's fusion.
+	Semantic              *SemanticReplay
+	BaselineSemanticMode  semantic.Mode
+	CandidateSemanticMode semantic.Mode
+}
+
+// RankingReplaySemantic summarizes the replayed semantic lane: the modes,
+// the encoder state, and per-side route and fallback counts.
+type RankingReplaySemantic struct {
+	SemanticReplayView
+	CandidateMode      semantic.Mode           `json:"candidate_mode"`
+	CandidateFusion    contextstore.FusionMode `json:"candidate_fusion"`
+	BaselineRoutes     map[string]int          `json:"baseline_routes,omitempty"`
+	CandidateRoutes    map[string]int          `json:"candidate_routes,omitempty"`
+	BaselineFallbacks  map[string]int          `json:"baseline_fallbacks,omitempty"`
+	CandidateFallbacks map[string]int          `json:"candidate_fallbacks,omitempty"`
 }
 
 // RankingReplayOutcome summarizes the experience evidence of selected items.
@@ -59,10 +80,15 @@ type RankingReplayComparison struct {
 }
 
 type RankingReplayQueryResult struct {
-	QueryHash  string                  `json:"query_hash"`
-	Source     string                  `json:"source"`
-	Relevance  RankingReplayComparison `json:"relevance"`
-	Reinforced RankingReplayComparison `json:"reinforced"`
+	QueryHash string `json:"query_hash"`
+	Source    string `json:"source"`
+	// Routes and fallbacks of the semantic lane, when replayed.
+	BaselineRoute     string                              `json:"baseline_route,omitempty"`
+	CandidateRoute    string                              `json:"candidate_route,omitempty"`
+	BaselineFallback  contextstore.SemanticFallbackReason `json:"baseline_fallback,omitempty"`
+	CandidateFallback contextstore.SemanticFallbackReason `json:"candidate_fallback,omitempty"`
+	Relevance         RankingReplayComparison             `json:"relevance"`
+	Reinforced        RankingReplayComparison             `json:"reinforced"`
 }
 
 type RankingReplayRankerSummary struct {
@@ -92,6 +118,7 @@ type RankingReplayReport struct {
 	Relevance               RankingReplayRankerSummary `json:"relevance"`
 	Reinforced              RankingReplayRankerSummary `json:"reinforced"`
 	Queries                 []RankingReplayQueryResult `json:"queries"`
+	Semantic                *RankingReplaySemantic     `json:"semantic,omitempty"`
 }
 
 // ReplayPersistentRanking reruns the shared-persistent ranking for each
@@ -103,8 +130,12 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	if scope.ProjectID == "" || scope.TeamID == "" {
 		return RankingReplayReport{}, errors.New("project and team are required")
 	}
-	if in.CandidateFusion == "" || !contextstore.ValidFusionMode(in.CandidateFusion) {
+	baselineMode, candidateMode := replaySemanticModes(in)
+	if !contextstore.ValidFusionMode(in.CandidateFusion) {
 		return RankingReplayReport{}, fmt.Errorf("unknown candidate fusion %q", in.CandidateFusion)
+	}
+	if in.CandidateFusion == "" && baselineMode == candidateMode {
+		return RankingReplayReport{}, errors.New("the candidate needs a fusion or a semantic mode that differs from the baseline")
 	}
 	if !contextstore.ValidFusionCarriedWeight(in.CandidateCarriedWeight) {
 		return RankingReplayReport{}, fmt.Errorf("candidate carried weight %v is outside [0,1]", in.CandidateCarriedWeight)
@@ -132,7 +163,11 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	}
 	baseline := effectiveRankingPolicy(runtimePolicy)
 	candidate := baseline
-	candidate.Fusion, candidate.FusionCarriedWeight = in.CandidateFusion, in.CandidateCarriedWeight
+	if in.CandidateFusion != "" {
+		candidate.Fusion, candidate.FusionCarriedWeight = in.CandidateFusion, in.CandidateCarriedWeight
+	}
+	baselineLane := in.Semantic.lane(baselineMode, semanticReplayFusion(in.Semantic, ""))
+	candidateLane := in.Semantic.lane(candidateMode, semanticReplayFusion(in.Semantic, in.CandidateFusion))
 	eligible, allowed, err := eligiblePersistentMemory(ctx, repo, scope, now)
 	if err != nil {
 		return RankingReplayReport{}, err
@@ -151,7 +186,7 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 	report := RankingReplayReport{
 		SchemaVersion: 1, Scope: scope, PolicyVersion: learning.PolicyVersion, ModeSource: modeSource,
 		BaselineFusion: effectiveFusion(baseline.Fusion), BaselineCarriedWeight: effectiveCarriedWeight(baseline.Fusion, baseline.FusionCarriedWeight),
-		CandidateFusion: in.CandidateFusion, CandidateCarriedWeight: effectiveCarriedWeight(candidate.Fusion, candidate.FusionCarriedWeight),
+		CandidateFusion: effectiveFusion(candidate.Fusion), CandidateCarriedWeight: effectiveCarriedWeight(candidate.Fusion, candidate.FusionCarriedWeight),
 		EligibleItems: len(eligible), ItemsWithAggregates: len(aggregates), OutcomeMetricsAvailable: len(aggregates) > 0,
 		QueryCount: len(queries), Queries: make([]RankingReplayQueryResult, 0, len(queries)),
 	}
@@ -170,23 +205,29 @@ func ReplayPersistentRanking(ctx context.Context, repo *contextstore.SQLiteRepos
 		}{{agent.MemoryLearningObserve, &result.Relevance}, {agent.MemoryLearningActive, &result.Reinforced}} {
 			rankerLearning := learning
 			rankerLearning.Mode = ranker.mode
-			run := func(policy MemoryRuntimeRankingPolicy) (persistentRankingResult, error) {
+			run := func(policy MemoryRuntimeRankingPolicy, lane *persistentSemanticLane) (persistentRankingResult, error) {
 				return rankPersistentMemory(ctx, repo, repo, persistentRankingInput{
 					Query: query.Text, RequestScope: scope, Base: eligible, Allowed: allowed, Learning: rankerLearning, Ranking: policy,
+					Semantic: lane,
 				})
 			}
-			base, err := run(baseline)
+			base, err := run(baseline, baselineLane)
 			if err != nil {
 				return RankingReplayReport{}, fmt.Errorf("replay baseline ranking: %w", err)
 			}
-			cand, err := run(candidate)
+			cand, err := run(candidate, candidateLane)
 			if err != nil {
 				return RankingReplayReport{}, fmt.Errorf("replay candidate ranking: %w", err)
 			}
+			result.BaselineRoute, result.BaselineFallback = base.Route, base.SemanticFallback
+			result.CandidateRoute, result.CandidateFallback = cand.Route, cand.SemanticFallback
 			*ranker.out = compareReplaySelections(base, cand)
 			ranker.out.BaselineOutcome, ranker.out.CandidateOutcome = outcome(ranker.out.BaselineSelected), outcome(ranker.out.CandidateSelected)
 		}
 		report.Queries = append(report.Queries, result)
+	}
+	if in.Semantic != nil {
+		report.Semantic = summarizeReplaySemantic(in.Semantic, baselineMode, candidateMode, semanticReplayFusion(in.Semantic, in.CandidateFusion), report.Queries)
 	}
 	report.Relevance = summarizeReplay(report.Queries, func(r RankingReplayQueryResult) RankingReplayComparison { return r.Relevance }, report.OutcomeMetricsAvailable)
 	report.Reinforced = summarizeReplay(report.Queries, func(r RankingReplayQueryResult) RankingReplayComparison { return r.Reinforced }, report.OutcomeMetricsAvailable)
@@ -336,4 +377,48 @@ func SessionReplayQueries(workspace string) []RankingReplayQuery {
 		}
 	}
 	return queries
+}
+
+// replaySemanticModes resolves the baseline and candidate semantic modes;
+// both are off without a semantic lane.
+func replaySemanticModes(in RankingReplayInput) (semantic.Mode, semantic.Mode) {
+	if in.Semantic == nil {
+		return semantic.ModeOff, semantic.ModeOff
+	}
+	baseline := in.BaselineSemanticMode
+	if baseline == "" {
+		baseline = in.Semantic.settings.Mode
+	}
+	candidate := in.CandidateSemanticMode
+	if candidate == "" {
+		candidate = baseline
+	}
+	return baseline, candidate
+}
+
+func summarizeReplaySemantic(replay *SemanticReplay, baselineMode, candidateMode semantic.Mode, candidateFusion contextstore.FusionMode, queries []RankingReplayQueryResult) *RankingReplaySemantic {
+	out := &RankingReplaySemantic{
+		SemanticReplayView: replay.view(baselineMode, semanticReplayFusion(replay, "")),
+		CandidateMode:      candidateMode, CandidateFusion: candidateFusion,
+	}
+	count := func(counts *map[string]int, key string) {
+		if key == "" {
+			return
+		}
+		if *counts == nil {
+			*counts = map[string]int{}
+		}
+		(*counts)[key]++
+	}
+	for _, query := range queries {
+		count(&out.BaselineRoutes, query.BaselineRoute)
+		count(&out.CandidateRoutes, query.CandidateRoute)
+		if query.BaselineFallback != contextstore.SemanticFallbackNone {
+			count(&out.BaselineFallbacks, string(query.BaselineFallback))
+		}
+		if query.CandidateFallback != contextstore.SemanticFallbackNone {
+			count(&out.CandidateFallbacks, string(query.CandidateFallback))
+		}
+	}
+	return out
 }

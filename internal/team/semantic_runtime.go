@@ -48,6 +48,9 @@ type SemanticRetrievalRuntime struct {
 	client    *embedding.OllamaClient
 	slot      chan struct{}
 	pollEvery time.Duration
+	// readOnly runtimes (explain and replay) only load the encoder and read
+	// the active generation: no builder, no refresher, no writes.
+	readOnly bool
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -97,6 +100,10 @@ func newSemanticRetrievalRuntime(settings semantic.Settings, repo contextstore.R
 // newSemanticRetrievalRuntimeWithPoll lets tests disable revision polling so
 // only incomplete queries trigger a refresh.
 func newSemanticRetrievalRuntimeWithPoll(settings semantic.Settings, repo contextstore.Repository, projectID string, noNet bool, pollEvery time.Duration) (*SemanticRetrievalRuntime, error) {
+	return newSemanticRuntime(settings, repo, projectID, noNet, pollEvery, false)
+}
+
+func newSemanticRuntime(settings semantic.Settings, repo contextstore.Repository, projectID string, noNet bool, pollEvery time.Duration, readOnly bool) (*SemanticRetrievalRuntime, error) {
 	if !settings.Enabled() {
 		return nil, nil
 	}
@@ -121,14 +128,17 @@ func newSemanticRetrievalRuntimeWithPoll(settings semantic.Settings, repo contex
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &SemanticRetrievalRuntime{
 		settings: settings, mode: mode, repo: store, projectID: projectID, client: client,
-		slot: make(chan struct{}, settings.MaxConcurrent), pollEvery: pollEvery,
+		slot: make(chan struct{}, settings.MaxConcurrent), pollEvery: pollEvery, readOnly: readOnly,
 		ctx: ctx, cancel: cancel, warmCh: make(chan struct{}, 1), refreshCh: make(chan struct{}, 1),
 		state: semanticStateCold,
 		stats: SemanticRuntimeStatus{Mode: string(settings.Mode), Model: settings.Model, Endpoint: embedding.RedactEndpoint(settings.Endpoint)},
 	}
-	r.wg.Add(2)
+	r.wg.Add(1)
 	go r.warmLoop()
-	go r.refreshLoop()
+	if !readOnly {
+		r.wg.Add(1)
+		go r.refreshLoop()
+	}
 	return r, nil
 }
 
@@ -308,7 +318,7 @@ func (r *SemanticRetrievalRuntime) warm() bool {
 		index, err = contextstore.NewSemanticIndexWithOptions(r.repo, r.repo, gated, contextstore.SemanticIndexOptions{
 			InventoryPolicy: contextstore.InventoryPolicyRetrievable, OnIncomplete: r.nudgeRefresh,
 		})
-		if err == nil {
+		if err == nil && !r.readOnly {
 			builder, err = contextstore.NewSemanticBuilder(r.repo, gated, contextstore.SemanticBuilderOptions{
 				InventoryPolicy: contextstore.InventoryPolicyRetrievable, BatchSize: r.settings.IndexBatchSize,
 			})

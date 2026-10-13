@@ -56,12 +56,13 @@ type persistentSemanticLane struct {
 }
 
 // requestLane routes one ranking request: it returns the lane to use (nil for
-// lexical only) and the fusion. It runs once per request so auto mode counts
-// one decision even when the goal fallback retrieves twice.
-func (in persistentRankingInput) requestLane() (*persistentSemanticLane, contextstore.FusionMode) {
+// lexical only), the fusion, and the route ("" without a lane). It runs once
+// per request so auto mode counts one decision even when the goal fallback
+// retrieves twice.
+func (in persistentRankingInput) requestLane() (*persistentSemanticLane, contextstore.FusionMode, string) {
 	lane := in.Semantic
 	if lane == nil || lane.Vector == nil {
-		return nil, in.Ranking.Fusion
+		return nil, in.Ranking.Fusion, ""
 	}
 	text := in.SemanticQuery
 	if strings.TrimSpace(text) == "" {
@@ -70,12 +71,12 @@ func (in persistentRankingInput) requestLane() (*persistentSemanticLane, context
 	route := resolveSemanticRoute(lane.Mode, lane.Router, lane.Fusion, in.Ranking.Fusion, text)
 	if route.Mode == contextstore.RetrievalOff {
 		writeLexicalRouteTrace(lane.TraceHasher, lane.TraceSink, lane.Attribution, in.Query, text)
-		return nil, route.Fusion
+		return nil, route.Fusion, contextstore.SemanticRouteLexical
 	}
 	routed := *lane
 	routed.Mode = route.Mode
 	routed.TraceSink = attributedTraceSink(lane.TraceSink, lane.Attribution, text)
-	return &routed, route.Fusion
+	return &routed, route.Fusion, contextstore.SemanticRouteSemantic
 }
 
 type persistentRankingResult struct {
@@ -94,6 +95,13 @@ type persistentRankingResult struct {
 	// Semantic is the active semantic lane's identity and fallback reason
 	// for the manifest; nil when the lane is off or shadow.
 	Semantic *SemanticRetrievalIdentity
+	// Route is how the request was routed: semantic, lexical (auto kept it
+	// lexical), or empty without a semantic lane. Fusion is the fusion the
+	// retrieval used. SemanticFallback is the lane's reason in shadow and
+	// active alike; empty when the lane did not run.
+	Route            string
+	Fusion           contextstore.FusionMode
+	SemanticFallback contextstore.SemanticFallbackReason
 }
 
 // memoryReinforcementError marks a failure while reading experience
@@ -138,7 +146,8 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	if in.Allowed != nil && len(in.Base) > candidateLimit {
 		candidateLimit = len(in.Base)
 	}
-	lane, fusion := in.requestLane()
+	lane, fusion, route := in.requestLane()
+	out.Route, out.Fusion = route, fusion
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
 		req := contextstore.SearchRequest{Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit}
 		options := contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight}
@@ -154,7 +163,8 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 		}
 		results, _, err := contextstore.HybridRetrieveWithOptions(ctx, repo, req, options)
 		if err == nil && tracker != nil {
-			out.Semantic = semanticRetrievalIdentity(lane.Mode, lane.Vector, trackedSemanticFallback(req, tracker))
+			out.SemanticFallback = trackedSemanticFallback(req, tracker)
+			out.Semantic = semanticRetrievalIdentity(lane.Mode, lane.Vector, out.SemanticFallback)
 		}
 		return results, err
 	}

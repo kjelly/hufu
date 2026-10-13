@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/embedding"
 )
 
 // MemoryExplainReason is a fixed code for why a memory was or was not
@@ -55,6 +56,18 @@ type MemoryExplainInput struct {
 	RetrievalID   string
 	PolicyVersion string
 	Now           time.Time
+	// Semantic, when set, recomputes the semantic lane and auto routing
+	// with its settings' mode, as the runtime would; nil is lexical only.
+	Semantic *SemanticReplay
+}
+
+// MemoryExplainSemantic is the semantic lane's part of an explanation:
+// the route the query took, its non-ASCII share, and the lane's fallback.
+type MemoryExplainSemantic struct {
+	SemanticReplayView
+	Route          string                              `json:"route"`
+	RouteShare     float64                             `json:"route_share"`
+	FallbackReason contextstore.SemanticFallbackReason `json:"fallback_reason,omitempty"`
 }
 
 type MemoryExplainRetrieval struct {
@@ -96,6 +109,8 @@ type MemoryExplanation struct {
 	NotEvaluated        []string                 `json:"not_evaluated"`
 	QueryPolicy         *ContextQueryAttribution `json:"context_query,omitempty"`
 	QueryStatus         string                   `json:"query_status,omitempty"`
+	// Semantic is set when the semantic lane was recomputed.
+	Semantic *MemoryExplainSemantic `json:"semantic,omitempty"`
 }
 
 // ExplainPersistentMemory reruns the runtime shared-persistent ranking without
@@ -138,9 +153,13 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 		return MemoryExplanation{}, err
 	}
 	observation := &contextstore.RetrievalObservation{}
+	var lane *persistentSemanticLane
+	if in.Semantic != nil {
+		lane = in.Semantic.lane(in.Semantic.settings.Mode, semanticReplayFusion(in.Semantic, ""))
+	}
 	ranked, err := rankPersistentMemory(ctx, repo, repo, persistentRankingInput{
 		Query: in.Query, RequestScope: scope, Base: eligible, Allowed: allowed,
-		Learning: learning, Ranking: ranking, Observer: observation,
+		Learning: learning, Ranking: ranking, Observer: observation, Semantic: lane,
 	})
 	if err != nil {
 		return MemoryExplanation{}, fmt.Errorf("recompute memory ranking: %w", err)
@@ -154,13 +173,20 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 		}
 	}
 	out := MemoryExplanation{
-		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource, Fusion: effectiveFusion(ranking.Fusion), FusionCarriedWeight: effectiveCarriedWeight(ranking.Fusion, ranking.FusionCarriedWeight),
+		SchemaVersion: 2, Recomputed: true, Scope: scope, Mode: learning.Mode, ModeSource: modeSource, Fusion: effectiveFusion(ranked.Fusion), FusionCarriedWeight: effectiveCarriedWeight(ranked.Fusion, ranking.FusionCarriedWeight),
 		QueryHash: QueryHash(in.Query), UsedGoalFallback: ranked.UsedGoalFallback,
 		Retrieval:    MemoryExplainRetrieval{Paths: observation.Paths, ObservedCandidateCount: len(observation.Candidates)},
 		NotEvaluated: []string{memoryExplainNotEvaluatedGates, memoryExplainNotEvaluatedBudget},
 	}
 	if candidate, ok := observation.Candidate(item.ID); ok {
 		out.Retrieval.Candidate = &candidate
+	}
+	if in.Semantic != nil {
+		out.Semantic = &MemoryExplainSemantic{
+			SemanticReplayView: in.Semantic.view(in.Semantic.settings.Mode, semanticReplayFusion(in.Semantic, "")),
+			Route:              ranked.Route, RouteShare: roundRouteShare(embedding.LexicalDropShare(in.Query)),
+			FallbackReason: ranked.SemanticFallback,
+		}
 	}
 	relevanceEntry, inRelevance := memoryRankingEntry(ranked.RelevanceEntries, item.ID)
 	reinforcedEntry, inReinforced := memoryRankingEntry(reinforced, item.ID)

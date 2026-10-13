@@ -467,6 +467,8 @@ hufu context doctor --learning
 
 `explain-memory` 需要 `--project`、`--team`，並選擇互斥的 `--query` 或 `--retrieval-id`。`--query` 以目前資料、指定 scope／query／policy 重算 legacy shared persistent 排序：與 coordinator 共用同一個無副作用的排序核心（同一組候選上限、分數正規化、goal-line fallback、eligible set 與 mode），因此 `base_relevance` 是 runtime 正規化後的值，`ranking.selected` 與 runtime 選取一致。輸出另含 `schema_version: 2`、`recomputed: true`、`mode`／`mode_source`、各檢索途徑（exact／lexical／vector）的名次與分數、RRF 貢獻、`carried_score`、MMR 前後名次與 penalty、file-path boost、固定 enum 的 `reasons`（例如 `selected`、`inject_limit`、`candidate_limit`、`duplicate_content`、`outside_observed_candidates`），以及無法在 CLI 評估的 `not_evaluated`（`activation`、`token_budget`）。`outside_observed_candidates` 表示沒有任何檢索途徑在上限內回傳該項，不代表不相關。只有在 durable manifest 相符時才回報 `retrieval_id`；其餘都是重算結果，不是歷史執行紀錄。越權與不存在的 item 回同一個錯誤；輸出不含 query 原文與記憶內容，也不寫入任何紀錄。
 
+設定了 semantic retrieval 時，`--query` 也重算語意 lane 與 auto 路由（設定為 hufu.yaml 加上該 team 的 `semantic-retrieval` 區塊；`--semantic-mode` 可覆寫），輸出多一個 `semantic` 區塊（mode、fusion、encoder 狀態、模型、generation、query 的路由與比例、fallback），頂層 `fusion` 為實際使用的 fusion。重算只讀現有的 active generation、不 refresh 也不寫 trace，見 [Semantic memory retrieval](../reference/semantic-retrieval.md#explaining-and-replaying)。
+
 `--retrieval-id` 讀取該 item 的持久化 active-query manifest，不重查候選、不重排、不需要 query 明文。輸出 `schema_version: 3`、`recomputed: false`、`context_query` 的 policy／各 source effective mode／fallback、composite query hash 與 `query_status: query_plan_required`。顯示的是該次選入時的 score；manifest 未保存的 aggregate counters 在 JSON 顯示 null／`counter_status: unavailable`，文字顯示 unavailable。不把目前的 aggregate 或單一 `--query` 重算結果冒充歷史 selection。讀取前仍檢查 canonical item scope，並驗證 query attribution 與 composite hash；舊 manifest 缺少版本化 plan 時，須使用 `--query` 做明確標記的 legacy 重算。
 
 ### 有界 query hints（獨立 opt-in）
@@ -500,6 +502,8 @@ hufu context ranking-replay --workspace <w> --project <p> --team <t> \
   [--candidate-fusion rrf_normalized|score_normalized] [--candidate-carried-weight <w>] \
   [--policy-version <v>] [--json]
 ```
+
+設定了 semantic retrieval 時，baseline 與 candidate 都重放語意 lane 與 auto 路由；`--semantic-mode` 覆寫 baseline 的模式，`--candidate-semantic-mode` 設定 candidate 的模式（只給它而不給 `--candidate-fusion` 時，candidate 沿用 baseline 的 fusion，用來單獨比較語意 lane 的效果）。每個 query 在一次 replay 中只嵌入一次。
 
 它以 `mode=ro`／`query_only` 開啟 store、不寫 trace，對每個查詢分別以 relevance ranker（off／observe／shadow）與 reinforced ranker（active），比較現行與候選 fusion 的選取結果：新增、移除、順序、Jaccard、最大 base relevance。有 experience aggregate 時，另比較 verified support、causal failure、negative weight 的筆數與平均 utility。`--from-session` 以 session 內 task 的 goal 近似重建 dispatch 查詢（manifest 只存 query hash）。輸出只含 ID、query hash、數值與 enum。
 

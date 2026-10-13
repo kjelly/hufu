@@ -68,6 +68,7 @@ func init() {
 	contextExplainMemoryCmd.Flags().StringVar(&contextTeam, "team", "", "Canonical team ID (required)")
 	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryQuery, "query", "", "Goal/query for current legacy ranking recomputation")
 	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryRetrievalID, "retrieval-id", "", "Read a historical active-query manifest without reranking (mutually exclusive with --query)")
+	contextExplainMemoryCmd.Flags().StringVar(&contextSemanticMode, "semantic-mode", "", contextSemanticModeUsage)
 	contextLearningDoctorCmd.Flags().BoolVar(&contextLearningCheck, "learning", false, "Check outcome-driven memory learning state")
 }
 

@@ -62,13 +62,16 @@ func TestPersistentRankingRoutesOnSemanticQuery(t *testing.T) {
 	router := &stubSemanticRouter{}
 	lane := &persistentSemanticLane{Vector: &trackingVectorSearcher{}, Mode: contextstore.RetrievalActive, Router: router, Fusion: contextstore.FusionScoreNormalized}
 	in := persistentRankingInput{Query: "goal\nphase: execute", SemanticQuery: "goal", Semantic: lane, Ranking: MemoryRuntimeRankingPolicy{Fusion: contextstore.FusionLegacy}}
-	if got, fusion := in.requestLane(); got != nil || fusion != contextstore.FusionLegacy {
-		t.Fatalf("lexical route = %+v %q", got, fusion)
+	if got, fusion, route := in.requestLane(); got != nil || fusion != contextstore.FusionLegacy || route != contextstore.SemanticRouteLexical {
+		t.Fatalf("lexical route = %+v %q %q", got, fusion, route)
 	}
 	router.semantic = true
-	got, fusion := in.requestLane()
-	if got == nil || got.Mode != contextstore.RetrievalActive || fusion != contextstore.FusionScoreNormalized {
-		t.Fatalf("semantic route = %+v %q", got, fusion)
+	got, fusion, route := in.requestLane()
+	if got == nil || got.Mode != contextstore.RetrievalActive || fusion != contextstore.FusionScoreNormalized || route != contextstore.SemanticRouteSemantic {
+		t.Fatalf("semantic route = %+v %q %q", got, fusion, route)
+	}
+	if _, fusion, route := (persistentRankingInput{Ranking: MemoryRuntimeRankingPolicy{Fusion: contextstore.FusionLegacy}}).requestLane(); fusion != contextstore.FusionLegacy || route != "" {
+		t.Fatalf("no lane = %q %q", fusion, route)
 	}
 	if !slices.Equal(router.texts, []string{"goal", "goal"}) {
 		t.Fatalf("routed texts = %q, want the semantic query", router.texts)

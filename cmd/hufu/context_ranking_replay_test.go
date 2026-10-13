@@ -41,6 +41,7 @@ func rankingReplayWorkspace(t *testing.T) string {
 
 func runRankingReplayCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	isolateContextSemanticConfig(t)
 	contextWorkspace, contextProject, contextTeam, contextQueryJSON, contextPolicyVersion = "", "", "", false, "memory-policy-v1"
 	rankingReplayQueries, rankingReplayQueriesFile, rankingReplayFromSession, rankingReplayFusion, rankingReplayWeight = nil, "", false, string(contextstore.FusionRRFNormalized), 0
 	contextRankingReplayCmd.Flags().Lookup("policy-version").Changed = false

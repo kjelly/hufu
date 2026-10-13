@@ -102,6 +102,7 @@ func TestResolveContextLearningTargetReportsMissingManagedWorkspace(t *testing.T
 // score computed with the adopted runtime policy (not the default weights) and
 // must include the retrieval ID from the durable injection manifest.
 func TestContextExplainMemoryUsesAdoptedPolicyAndRetrievalID(t *testing.T) {
+	isolateContextSemanticConfig(t)
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -195,6 +196,7 @@ func TestContextExplainMemoryUsesAdoptedPolicyAndRetrievalID(t *testing.T) {
 // snapshot and weights, and the retrieval ID must come only from a manifest
 // matching the exact policy version and query being explained.
 func TestContextExplainMemoryBindsPolicyAndRetrievalID(t *testing.T) {
+	isolateContextSemanticConfig(t)
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -325,6 +327,7 @@ func TestContextExplainMemoryBindsPolicyAndRetrievalID(t *testing.T) {
 }
 
 func TestContextExplainMemoryRequiresTeamAndReportsRecomputation(t *testing.T) {
+	isolateContextSemanticConfig(t)
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
