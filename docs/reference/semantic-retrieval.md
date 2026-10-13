@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: — (working-tree implementation; tests are authoritative)
+> Verified-Commit: `3ea2749c`
 > Supersedes: —
 > Superseded-By: —
 
@@ -293,4 +293,7 @@ hufu context ranking-replay --project <p> --team <t> --query <goal> \
   `score_normalized`); on 54 Chinese research tasks it did (0.472 without it,
   0.694 with `score_normalized`). The Chinese set promoted session memories to
   shared ones for the replay. This is why `auto` keeps English requests on
-  the lexical lane.
+  the lexical lane. Methods and the CPU benchmark are in the
+  [evaluation](../archive/analyses/semantic-embedding-evaluation-2026-10-13.md);
+  the design history is in the
+  [implementation record](../archive/implementation-plans/semantic-retrieval-runtime.md).

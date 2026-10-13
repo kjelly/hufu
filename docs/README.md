@@ -150,6 +150,7 @@ to re-create an abstraction that already exists in the runtime.
   the [DecisionPrimitive System One backend implementation record](archive/implementation-plans/decision-primitive-systemone-backend.md),
   the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
   the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md),
+  the [semantic retrieval runtime record](archive/implementation-plans/semantic-retrieval-runtime.md),
   and the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
