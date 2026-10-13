@@ -25,8 +25,8 @@ func newInspectSemanticRetrievalCommand(options *inspectCLIOptions) *cobra.Comma
 		Short: "Summarize semantic memory retrieval: routes, fallbacks, latency, and the runtime state",
 		Long: `Summarize the workspace's content-free semantic retrieval traces
 (semantic-retrieval-traces.jsonl) for every run, one run, or one task: how
-many requests each memory ranking (shared_persistent, worker_private) sent to
-the semantic lane or kept lexical in auto mode, how many the lane served
+many retrievals each memory ranking (shared_persistent, worker_private) sent
+to the semantic lane or kept lexical in auto mode, how many the lane served
 without a fallback, the fallback reasons, truncated queries, and latency,
 queue-wait, and embedding percentiles. It also shows the runtime status
 recorded when the run finished: warm state, model, generation, and that
@@ -80,13 +80,13 @@ func renderInspectSemanticRetrievalText(writer io.Writer, query inspectpkg.Inspe
 		return err
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "SOURCE\tROUTE\tMODE\tREQUESTS\tSERVED\tFALLBACKS\tTRUNCATED\tP50/P95 MS\tP95 QUEUE MS\tP50/P95 EMBED MS"); err != nil {
+	if _, err := fmt.Fprintln(table, "SOURCE\tROUTE\tMODE\tRETRIEVALS\tSERVED\tFALLBACKS\tTRUNCATED\tP50/P95 MS\tP95 QUEUE MS\tP50/P95 EMBED MS"); err != nil {
 		return err
 	}
 	for _, route := range summary.Routes {
 		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d/%d\t%d\t%d/%d\n",
 			safeOverviewValue(valueOrUnavailable(route.Source)), safeOverviewValue(route.Route), safeOverviewValue(route.Mode),
-			route.Requests, route.Served, route.Fallbacks, route.Truncated, route.P50LatencyMS, route.P95LatencyMS,
+			route.Retrievals, route.Served, route.Fallbacks, route.Truncated, route.P50LatencyMS, route.P95LatencyMS,
 			route.P95QueueWaitMS, route.P50EmbedMS, route.P95EmbedMS); err != nil {
 			return err
 		}
@@ -141,7 +141,7 @@ func renderSemanticTasksText(writer io.Writer, tasks []team.SemanticTaskSummary)
 		shown = shown[len(shown)-inspectSemanticTaskRows:]
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "RUN\tTASK\tATTEMPT\tPHASE\tAGENT\tSOURCE\tROUTE\tSHARE\tREQUESTS\tSERVED\tFALLBACKS"); err != nil {
+	if _, err := fmt.Fprintln(table, "RUN\tTASK\tATTEMPT\tPHASE\tAGENT\tSOURCE\tROUTE\tSHARE\tRETRIEVALS\tSERVED\tFALLBACKS"); err != nil {
 		return err
 	}
 	for _, task := range shown {
@@ -149,7 +149,7 @@ func renderSemanticTasksText(writer io.Writer, tasks []team.SemanticTaskSummary)
 			safeOverviewValue(valueOrUnavailable(task.RunID)), safeOverviewValue(valueOrUnavailable(task.TaskID)), task.Attempt,
 			safeOverviewValue(valueOrUnavailable(task.Phase)), safeOverviewValue(valueOrUnavailable(task.Agent)),
 			safeOverviewValue(valueOrUnavailable(task.Source)), safeOverviewValue(task.Route), task.Share,
-			task.Requests, task.Served, formatSemanticCounts(task.Fallbacks)); err != nil {
+			task.Retrievals, task.Served, formatSemanticCounts(task.Fallbacks)); err != nil {
 			return err
 		}
 	}

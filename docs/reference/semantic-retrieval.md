@@ -197,10 +197,12 @@ hufu inspect semantic-retrieval [run-id] [--task <task-id>] [--format json]
 ```
 
 Shows the runtime status recorded when the run (or the latest run) finished, a table
-per source, route, and mode (requests, served without fallback, fallbacks,
+per source, route, and mode (retrievals, served without fallback, fallbacks,
 truncated queries, p50/p95 latency, p95 queue wait, p50/p95 embedding time),
 the fallback reasons, and one row per task attempt with its route and route
-share. Text output lists the latest 40 task rows; JSON lists all. The run
+share. Each trace is one retrieval: a ranking request whose full query finds
+nothing retries with its goal line and counts twice. Text output lists the
+latest 40 task rows; JSON lists all. The run
 report adds the same runtime status and route table as **Semantic Retrieval
 Runtime**.
 

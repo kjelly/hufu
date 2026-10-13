@@ -145,10 +145,10 @@ func TestSummarizeSemanticRetrievalTraces(t *testing.T) {
 		t.Fatalf("summary counts = %+v", summary)
 	}
 	wantRoutes := []SemanticRouteSummary{
-		{Source: shared, Route: sem, Mode: "active", Requests: 3, Served: 2, Fallbacks: 1, Truncated: 1, P50LatencyMS: 100, P95LatencyMS: 300, P95QueueWaitMS: 50, P50EmbedMS: 90, P95EmbedMS: 250},
-		{Source: shared, Route: lex, Mode: "off", Requests: 1},
-		{Source: private, Route: sem, Mode: "active", Requests: 1, Fallbacks: 1, P50LatencyMS: 2, P95LatencyMS: 2},
-		{Source: "", Route: sem, Mode: "shadow", Requests: 1, Served: 1, P50LatencyMS: 5, P95LatencyMS: 5},
+		{Source: shared, Route: sem, Mode: "active", Retrievals: 3, Served: 2, Fallbacks: 1, Truncated: 1, P50LatencyMS: 100, P95LatencyMS: 300, P95QueueWaitMS: 50, P50EmbedMS: 90, P95EmbedMS: 250},
+		{Source: shared, Route: lex, Mode: "off", Retrievals: 1},
+		{Source: private, Route: sem, Mode: "active", Retrievals: 1, Fallbacks: 1, P50LatencyMS: 2, P95LatencyMS: 2},
+		{Source: "", Route: sem, Mode: "shadow", Retrievals: 1, Served: 1, P50LatencyMS: 5, P95LatencyMS: 5},
 	}
 	if !slices.Equal(summary.Routes, wantRoutes) {
 		t.Fatalf("routes =\n%+v\nwant\n%+v", summary.Routes, wantRoutes)
@@ -156,7 +156,7 @@ func TestSummarizeSemanticRetrievalTraces(t *testing.T) {
 	if summary.Fallbacks["embedding_warming"] != 1 || summary.Fallbacks["projection_incomplete"] != 1 || len(summary.Fallbacks) != 2 {
 		t.Fatalf("fallbacks = %v", summary.Fallbacks)
 	}
-	if len(summary.Tasks) != 5 || summary.Tasks[0].TaskID != "t1" || summary.Tasks[0].Requests != 2 || summary.Tasks[0].Served != 2 ||
+	if len(summary.Tasks) != 5 || summary.Tasks[0].TaskID != "t1" || summary.Tasks[0].Retrievals != 2 || summary.Tasks[0].Served != 2 ||
 		summary.Tasks[1].Fallbacks["embedding_warming"] != 1 || summary.Tasks[2].Route != lex {
 		t.Fatalf("tasks = %+v", summary.Tasks)
 	}

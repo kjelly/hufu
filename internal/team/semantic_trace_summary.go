@@ -146,12 +146,14 @@ type SemanticRetrievalSummary struct {
 }
 
 // SemanticRouteSummary covers the traces of one source, route, and mode.
-// Served counts requests the semantic lane answered without a fallback.
+// Each trace is one retrieval: a ranking request whose full query finds
+// nothing retries with its goal line, so it can count twice. Served counts
+// retrievals the semantic lane answered without a fallback.
 type SemanticRouteSummary struct {
 	Source         string `json:"source"`
 	Route          string `json:"route"`
 	Mode           string `json:"mode"`
-	Requests       int    `json:"requests"`
+	Retrievals     int    `json:"retrievals"`
 	Served         int    `json:"served"`
 	Fallbacks      int    `json:"fallbacks"`
 	Truncated      int    `json:"truncated"`
@@ -164,17 +166,17 @@ type SemanticRouteSummary struct {
 
 // SemanticTaskSummary covers one task attempt's traces from one source.
 type SemanticTaskSummary struct {
-	RunID     string         `json:"run_id,omitempty"`
-	TaskID    string         `json:"task_id,omitempty"`
-	Attempt   int            `json:"attempt,omitempty"`
-	Phase     string         `json:"phase,omitempty"`
-	Agent     string         `json:"agent,omitempty"`
-	Source    string         `json:"source,omitempty"`
-	Route     string         `json:"route,omitempty"`
-	Share     float64        `json:"route_share"`
-	Requests  int            `json:"requests"`
-	Served    int            `json:"served"`
-	Fallbacks map[string]int `json:"fallbacks,omitempty"`
+	RunID      string         `json:"run_id,omitempty"`
+	TaskID     string         `json:"task_id,omitempty"`
+	Attempt    int            `json:"attempt,omitempty"`
+	Phase      string         `json:"phase,omitempty"`
+	Agent      string         `json:"agent,omitempty"`
+	Source     string         `json:"source,omitempty"`
+	Route      string         `json:"route,omitempty"`
+	Share      float64        `json:"route_share"`
+	Retrievals int            `json:"retrievals"`
+	Served     int            `json:"served"`
+	Fallbacks  map[string]int `json:"fallbacks,omitempty"`
 }
 
 // SummarizeSemanticRetrievalTraces groups traces by source, route, and mode,
@@ -209,7 +211,7 @@ func SummarizeSemanticRetrievalTraces(traces []contextstore.SemanticRetrievalTra
 			summary.Routes = append(summary.Routes, SemanticRouteSummary{Source: rk.source, Route: rk.route, Mode: rk.mode})
 		}
 		group := &summary.Routes[ri]
-		group.Requests++
+		group.Retrievals++
 		if served {
 			group.Served++
 		}
@@ -242,7 +244,7 @@ func SummarizeSemanticRetrievalTraces(traces []contextstore.SemanticRetrievalTra
 			})
 		}
 		task := &summary.Tasks[ti]
-		task.Requests++
+		task.Retrievals++
 		if served {
 			task.Served++
 		}

@@ -29,12 +29,12 @@ func writeSemanticRetrievalRuntimeReport(b *strings.Builder, data *team.Semantic
 	b.WriteString("\n\n")
 	summary := data.Summary
 	if len(summary.Routes) > 0 {
-		b.WriteString("| Source | Route | Mode | Requests | Served | Fallbacks | Truncated | p50 / p95 (ms) | p95 queue (ms) | p50 / p95 embed (ms) |\n")
+		b.WriteString("| Source | Route | Mode | Retrievals | Served | Fallbacks | Truncated | p50 / p95 (ms) | p95 queue (ms) | p50 / p95 embed (ms) |\n")
 		b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, route := range summary.Routes {
 			fmt.Fprintf(b, "| %s | %s | %s | %d | %d | %d | %d | %d / %d | %d | %d / %d |\n",
 				reportSafeMetadata(valueOrUnavailable(route.Source), 40), reportSafeMetadata(route.Route, 20), reportSafeMetadata(route.Mode, 20),
-				route.Requests, route.Served, route.Fallbacks, route.Truncated, route.P50LatencyMS, route.P95LatencyMS,
+				route.Retrievals, route.Served, route.Fallbacks, route.Truncated, route.P50LatencyMS, route.P95LatencyMS,
 				route.P95QueueWaitMS, route.P50EmbedMS, route.P95EmbedMS)
 		}
 		b.WriteString("\n")

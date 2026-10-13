@@ -81,7 +81,7 @@ func TestWriteSemanticRetrievalRuntimeReport(t *testing.T) {
 		Status:  team.SemanticRuntimeStatus{Mode: "auto", State: "ready", Model: "embeddinggemma:latest", Queries: 3, SemanticResults: 2, RoutedSemantic: 3, RoutedLexical: 4},
 		Summary: team.SummarizeSemanticRetrievalTraces(nil),
 	}
-	data.Summary.Routes = []team.SemanticRouteSummary{{Source: "shared_persistent", Route: "semantic", Mode: "active", Requests: 3, Served: 2, Fallbacks: 1, P50LatencyMS: 90, P95LatencyMS: 200}}
+	data.Summary.Routes = []team.SemanticRouteSummary{{Source: "shared_persistent", Route: "semantic", Mode: "active", Retrievals: 3, Served: 2, Fallbacks: 1, P50LatencyMS: 90, P95LatencyMS: 200}}
 	data.Summary.Fallbacks = map[string]int{"embedding_busy": 1}
 	var b strings.Builder
 	writeSemanticRetrievalRuntimeReport(&b, data)
