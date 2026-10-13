@@ -136,6 +136,7 @@ func TestReplayPersistentRankingComparesSemanticModes(t *testing.T) {
 	semanticSummary := report.Semantic
 	if semanticSummary == nil || semanticSummary.Mode != semantic.ModeOff || semanticSummary.CandidateMode != semantic.ModeActive ||
 		semanticSummary.CandidateRoutes[contextstore.SemanticRouteSemantic] != 1 || len(semanticSummary.BaselineRoutes) != 0 ||
+		semanticSummary.Fusion != "" || semanticSummary.CandidateFusion != contextstore.FusionScoreNormalized ||
 		report.CandidateFusion != report.BaselineFusion {
 		t.Fatalf("semantic summary = %+v report fusions %q/%q", semanticSummary, report.BaselineFusion, report.CandidateFusion)
 	}

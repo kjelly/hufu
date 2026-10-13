@@ -155,7 +155,7 @@ func writeRankingReplay(out io.Writer, report team.RankingReplayReport) error {
 	}
 	if s := report.Semantic; s != nil {
 		if _, err := fmt.Fprintf(out, "semantic: %s candidate_mode=%s candidate_fusion=%s baseline_routes=%s candidate_routes=%s baseline_fallbacks=%s candidate_fallbacks=%s\n",
-			formatContextSemanticView(s.SemanticReplayView), s.CandidateMode, s.CandidateFusion, formatContextCounts(s.BaselineRoutes), formatContextCounts(s.CandidateRoutes),
+			formatContextSemanticView(s.SemanticReplayView), s.CandidateMode, valueOrDash(string(s.CandidateFusion)), formatContextCounts(s.BaselineRoutes), formatContextCounts(s.CandidateRoutes),
 			formatContextCounts(s.BaselineFallbacks), formatContextCounts(s.CandidateFallbacks)); err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func writeRankingReplay(out io.Writer, report team.RankingReplayReport) error {
 			query.QueryHash, query.Source, query.Relevance.Jaccard, strings.Join(query.Relevance.Added, ","), strings.Join(query.Relevance.Removed, ","),
 			query.Reinforced.Jaccard, strings.Join(query.Reinforced.Added, ","), strings.Join(query.Reinforced.Removed, ","))
 		if query.BaselineRoute != "" || query.CandidateRoute != "" {
-			line += fmt.Sprintf(" route=%s->%s", valueOrUnavailable(query.BaselineRoute), valueOrUnavailable(query.CandidateRoute))
+			line += fmt.Sprintf(" route=%s->%s", replayRouteLabel(query.BaselineRoute), replayRouteLabel(query.CandidateRoute))
 		}
 		if _, err := fmt.Fprintln(out, line); err != nil {
 			return err

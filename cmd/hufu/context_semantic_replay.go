@@ -71,7 +71,7 @@ func openContextSemanticReplay(ctx context.Context, settings semantic.Settings, 
 
 // formatContextSemanticView is the text form of a replayed lane.
 func formatContextSemanticView(view team.SemanticReplayView) string {
-	line := fmt.Sprintf("mode=%s fusion=%s state=%s model=%s generation=%s", view.Mode, view.Fusion, view.State, view.Model, valueOrUnavailable(view.GenerationID))
+	line := fmt.Sprintf("mode=%s fusion=%s state=%s model=%s generation=%s", view.Mode, valueOrDash(string(view.Fusion)), view.State, view.Model, valueOrUnavailable(view.GenerationID))
 	if view.Failure != "" {
 		line += " failure=" + view.Failure
 	}
@@ -88,4 +88,19 @@ func formatContextCounts(counts map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
 	}
 	return strings.Join(parts, ",")
+}
+
+// replayRouteLabel names a replayed route; a side without the lane is "off".
+func replayRouteLabel(route string) string {
+	if route == "" {
+		return "off"
+	}
+	return route
+}
+
+func valueOrDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }

@@ -401,6 +401,13 @@ func summarizeReplaySemantic(replay *SemanticReplay, baselineMode, candidateMode
 		SemanticReplayView: replay.view(baselineMode, semanticReplayFusion(replay, "")),
 		CandidateMode:      candidateMode, CandidateFusion: candidateFusion,
 	}
+	// A side without the lane has no lane fusion.
+	if baselineMode == semantic.ModeOff {
+		out.Fusion = ""
+	}
+	if candidateMode == semantic.ModeOff {
+		out.CandidateFusion = ""
+	}
 	count := func(counts *map[string]int, key string) {
 		if key == "" {
 			return
