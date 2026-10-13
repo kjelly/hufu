@@ -60,6 +60,9 @@ func LoadSuiteFixture(path string) (*SuiteFixture, error) {
 		if strings.TrimSpace(c.Prompt) == "" {
 			return nil, fmt.Errorf("suite fixture %s: case %q: prompt is required", path, c.ID)
 		}
+		if c.QueryProfileOverride != "" && c.QueryProfileOverride != "legacy" && c.QueryProfileOverride != "candidate" {
+			return nil, fmt.Errorf("suite fixture %s: case %q: query-profile-override must be legacy or candidate", path, c.ID)
+		}
 		if err := validateContextFixtures(c.ContextItems); err != nil {
 			return nil, fmt.Errorf("suite fixture %s: case %q: %w", path, c.ID, err)
 		}

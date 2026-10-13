@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type ContextInjectionManifest struct {
 	FailureClass              string                     `json:"failure_class,omitempty"`
 	Items                     []ContextManifestItem      `json:"items"`
 	Semantic                  *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
+	Query                     *ContextQueryAttribution   `json:"query_attribution,omitempty"`
 	Fingerprint               string                     `json:"fingerprint"`
 	CreatedAt                 time.Time                  `json:"created_at"`
 }
@@ -85,6 +87,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		if decision.Reason != "" && included == decision.Included {
 			reason = decision.Reason
 		}
+		decision = queryCompilerManifestScores(compiled, item, decision)
 		manifestItem := ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)}
 		if item.Kind == "dependency_result" {
 			manifestItem.ContentHash = hashContentKey(item.Content)
@@ -122,6 +125,9 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		if seen[id] {
 			continue
 		}
+		if compiled.Query != nil && decision.Included && decision.Kind != string(contextstore.ContextInvariant) {
+			decision.Included, decision.Reason = false, ContextOmittedInjectLimit
+		}
 		manifestItem := ContextManifestItem{ID: id, Kind: decision.Kind, Source: decision.Source, Included: decision.Included, Reason: decision.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore}
 		if manifestItem.Kind == "" {
 			manifestItem.Kind = "canonical_memory"
@@ -146,11 +152,21 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 	}
 	manifest.Fingerprint = contextManifestFingerprint(manifest)
+	if compiled.Query != nil {
+		return WithContextQueryAttribution(manifest, *compiled.Query)
+	}
 	return manifest, nil
 }
 
 func validInvariantVerificationSeverity(severity InvariantSeverity) bool {
 	return severity == InvariantSeverityError || severity == InvariantSeverityWarning || severity == InvariantSeverityInfo
+}
+
+func queryCompilerManifestScores(compiled CompiledContext, item ContextItem, decision ContextRouteDecision) ContextRouteDecision {
+	if compiled.Query != nil && strings.HasPrefix(item.ID, "context:") {
+		decision.BaseScore, decision.FinalScore = item.BaseScore, item.FinalScore
+	}
+	return decision
 }
 
 func (c *Coordinator) buildAndPersistContextManifest(request ContextRequest, compiled CompiledContext, decisions []ContextRouteDecision, agentName string, createdAt time.Time, diagnosticContexts ...context.Context) (ContextInjectionManifest, error) {
@@ -255,6 +271,11 @@ func cloneContextInjectionManifest(manifest *ContextInjectionManifest) *ContextI
 	copyManifest := *manifest
 	copyManifest.Items = append([]ContextManifestItem(nil), manifest.Items...)
 	copyManifest.Semantic = cloneSemanticRetrievalIdentity(manifest.Semantic)
+	if manifest.Query != nil {
+		query := *manifest.Query
+		query.Sources = slices.Clone(manifest.Query.Sources)
+		copyManifest.Query = &query
+	}
 	return &copyManifest
 }
 

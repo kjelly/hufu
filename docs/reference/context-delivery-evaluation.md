@@ -43,6 +43,8 @@ Test names below are reproducible case identifiers. Existing tests remain the au
 
 ## Known runtime baseline blocker
 
+PR-01 now has a [source-bound offline evaluation](context-query-offline-progress.md): four actual provider pairs repair the authored signal misses, with unchanged delivery budgets and required/forbidden gates. Retrieval metrics now observe candidates before injection rather than route-selected IDs; historical PR-00 metrics remain bound to their original source revision. Default production routing remains legacy. The extra-model blocker below is still a PR-02 prerequisite; its harness status-event collector is now synchronized so the characterization itself passes race.
+
 `TestContextDeliveryExtraModelBaselineRejectsBeforeWorkerProvider` records a failing extra-model evaluation rather than labeling it successful delivery. Frozen startup policy rejects the changed isolated leaf definitions before any worker provider request. The same run also exposes a legacy/event-store dual-write mismatch. The two actual requests belong to the coordinator; worker delivery metrics are unavailable.
 
 Before PR-02 can pass its extra-model gate, a coding agent must correct the leaf's relationship to the frozen parent policy, preserve indexed admitted targets across canonical attempt validation, and verify parent-owned lifecycle/receipt/context-manifest merging. It must then replace the negative characterization with successful concurrent provider assertions, and prove genuine policy/target drift still fails before a provider call. This is repository work, with no live models or operator architecture choice required. The existing lineage retrieval architecture remains outside scope.

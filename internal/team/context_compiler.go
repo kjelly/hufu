@@ -159,6 +159,7 @@ type WorkerContextInput struct {
 // vector records, preserving stable IDs and lifecycle-filtered provenance
 // through ranking, trace, and token-budget decisions.
 type CanonicalContextBundle struct {
+	querySnapshot          *contextQuerySharedSnapshot
 	RepositoryInvariants   []contextstore.ContextItem
 	SharedSession          []contextstore.ContextItem
 	SharedPersistent       []contextstore.ContextItem
@@ -203,6 +204,7 @@ func repositoryInvariantCompilerItems(records []contextstore.ContextItem) ([]Con
 }
 
 type CompiledContext struct {
+	Query            *ContextQueryAttribution
 	Prompt           string
 	CompactedSummary *StructuredSummary
 	IncludedItems    []ContextItem

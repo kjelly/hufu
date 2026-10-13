@@ -1,0 +1,1404 @@
+{
+  "schema_version": 1,
+  "stage": "PR-01",
+  "stage_status": "validated_pending_commit",
+  "oracle_source": "synthetic_contract",
+  "baseline_commit": "d237124e719b6db4c040a424490104acbab1558b",
+  "source_state": "validated_worktree",
+  "source_sha256": {
+    "evals/context-routing/fixtures/query-signals-baseline.json": "c68d6235784eee373c391043ecc46aed1c96f5876b7ae5fd66e54de57a4f2986",
+    "internal/context/activation_batch.go": "a8bc1e0e274de4400a1c6d612eceb59ec11af6b4b4f5ca84036b557a3294ef56",
+    "internal/context/activation_batch_test.go": "deed1133638bc55f2574dd7dcf35220558d4c6f2990dd1a1dfbc75016a914f3e",
+    "internal/context/activation_iteration.go": "f6df74f0d9f5d594f02fb35337047fa9ccda32a2610199b9698b43100f1bf8bd",
+    "internal/context/activation_iteration_test.go": "396c02f1d428ca147b83d95d6eaaff9b3f5fb1ce1cd2f5e06d178d9a3482f3d3",
+    "internal/context/retrieval.go": "3407907a20dee0f1e6dd805a19606ffd6541d5585a9c78422c9c050f366a97f8",
+    "internal/context/sqlite_repository.go": "844d7e9d7eb0bf1a1412ba77b1db0ef730139d6d7d377d0fda3616b0c9b0bf10",
+    "internal/context/supplemental_lexical_test.go": "dc2ab31071a4b146fd20fa4c2608bd4acec7d4bb5f22dc5a71bea69cb393849a",
+    "internal/context/supplemental_retrieval.go": "e9e09c38882db658e523991c57556b5a073078d75ef23727faeb53a24f48f34f",
+    "internal/context/supplemental_retrieval_test.go": "a1f7c2581a858dafe78a56c3b3d0aeda1f1a7361f60e78dbf7106afb944b4e9d",
+    "internal/evalharness/context_delivery.go": "190ace7b3279d00c793f3ce6e8a93207b733ec80a282ecad3e5514adbe84c8d5",
+    "internal/evalharness/context_query_baseline_test.go": "a7654aa070f89023f7aaa87bfc658aed169e3d8dc055f38dcab1722eb1500270",
+    "internal/evalharness/context_query_control_test.go": "ede840bf2977b9342d83bd0913eee075b4528fab1875681218108aabcb321122",
+    "internal/evalharness/context_query_harness_bench_test.go": "3e21a43029ac44952c520270ef40f1d8994c436db1ecc08970be49693273cea9",
+    "internal/evalharness/context_query_paired_test.go": "9d65025f08f0b89cdfc1bb918a25346fa8288998c7249248352e5034108c0063",
+    "internal/evalharness/context_query_private_paired_test.go": "c0ec567db3da79a4506814276d383097b1c0eb777e2e8f32f4027d5179b974ee",
+    "internal/evalharness/fixtures.go": "96c6a67791ce7c827ddb4f335d2c2c1f9f71c3c0f91717fe7e968eeca6fe412b",
+    "internal/evalharness/runner.go": "8ef7e3aee133956438226ec8109e7d3b6a54dae5e9d8cce0af11d945c4b84a06",
+    "internal/evalharness/types.go": "0b60f05cda80fb1d49a50f983b819c518a63d676e96e04e0727448422faceaca",
+    "internal/team/context_compiler.go": "a199faf21ebc3ad0c6fa7de7352e8414aef049a94ff0666a3da2faab1a7abeac",
+    "internal/team/context_manifest.go": "d7cb646a259ef11f3a984a606e90fe6791ba226b03de7bd2f7e824ecb5e9d0db",
+    "internal/team/context_query_bench_test.go": "3f0e835aad25384aa4ffe9585856b0a830364812564f72880278d1a0486795f4",
+    "internal/team/context_query_comparison.go": "7dd7ab8add469c08cbe4b46fd79c7f2733af8f004db0de914146ab71f74e71e9",
+    "internal/team/context_query_compile_bench_test.go": "43ff31d49facac2e2db9ae2d83266f10a821597b3b58481a8092157709c0de5d",
+    "internal/team/context_query_evaluation.go": "284377195afe62147657a7fbb2caf8b727aecb6f786f31965a6a2805021b865d",
+    "internal/team/context_query_manifest.go": "6f959bdd0a4681331fd0c355b937d0ec24ddfbd525ab23bc2038270e11b16cce",
+    "internal/team/context_query_manifest_test.go": "7340abb4b5e9cee984ce3ff7da98cf8a1e1eb1d541e899eb3a3384e7d5822a1c",
+    "internal/team/context_query_plan.go": "9b298c5cc5a45a7b132d6c2810aef625a86925e01571537a45708265a5f0c113",
+    "internal/team/context_query_plan_test.go": "790e4b1af1143df57b9b6d6763af3e26e52c66f200b1c79a591b18ad3bd74647",
+    "internal/team/context_query_private.go": "019759d048f194bc928db3e50ae072403dfbe1e8dff56859080dfbfbf4ea55c1",
+    "internal/team/context_query_quality_test.go": "d24344ebbcf0c765e9ebf671fc994a5355fc7232d84a1d4e6d60b907b528fc40",
+    "internal/team/context_query_resolver_test.go": "c664b7598a70f87f26201b0c204cdba2020892f94ea91e1fcf82fdd0ae52856f",
+    "internal/team/context_query_runtime_test.go": "cfe816a750b74f5d05e102b7b176bb70a2d1bb95a0c3bf5cc2c3141fc1348276",
+    "internal/team/context_query_selection.go": "534aace94e20fc44c8f57d60b1e3a03cc59dec27eb8a8cd68b776e148a28b009",
+    "internal/team/context_query_selection_test.go": "52c349c5b46c8904ef317824c6f998e38489220ed200b4800a2dec8e95dc376c",
+    "internal/team/context_router.go": "5b7e524d1f66cdbdb6cfa319090f3a36a552f8dc41e62e5cc2233a12b6ac3fa5",
+    "internal/team/context_selection_observer.go": "05c7876725206ae7e0b8a4d6a03bd55bc9244ffe9e24d37cf415acf2faec6b80",
+    "internal/team/invariant_attestation.go": "c101507a4dc084d7c390d0681d025c880a5f9275f1fe7327a523b33e668dd20c",
+    "internal/team/invariant_completion.go": "faee90baaee27698ad9e5d821355fcec396c916431a2cdf56d64c69c596fc6bd",
+    "internal/team/memory_learning.go": "38dd21eb225acb8366e33fbdaf6c8709596a14b655804fc90772d9ecca96eda5",
+    "internal/team/memory_ranking_core.go": "750710c4b8a37d503431b0a3dca675bfbf5b9947325112f2369fd01370691a80",
+    "internal/team/services.go": "1fdf40657850a07bb469cd4825ed953a97027eb83c9b7f079cc0bf5aee915b2e",
+    "internal/team/task_evidence_delivery.go": "fea3c77c1f946d11f28f4ce68fd7bfcbbf0c67eacb8da9cd28246f7397e51134",
+    "internal/team/worker_memory.go": "b82e7b30dbc4f0b122e322766ccb1bc3ce22ad4b90ec70e45ff76dc25b402276"
+  },
+  "query_policy": "context-query-v2.1",
+  "evaluation_time": "2000-01-01T00:00:00Z",
+  "environment": {
+    "goos": "linux",
+    "goarch": "amd64",
+    "cpu": "Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz",
+    "concurrent_validation": false
+  },
+  "limits": {
+    "supplemental_exact_calls_per_scope": 8,
+    "supplemental_lexical_calls_per_scope": 1,
+    "supplemental_source_rows_per_scope": 64,
+    "scopes_per_invocation": 3,
+    "shared_deadline_ms": 100,
+    "candidate_top_k": 20,
+    "inject_top_k": 4
+  },
+  "measurement_scope": {
+    "ranking": "primary ranking plus candidate comparison snapshot hashing and supplemental ranking; seed/store setup excluded",
+    "supplemental": "Staged three-source selector with precomputed eligible universe; setup/seed excluded. Runtime private eligibility is verified separately.",
+    "allocations": "include the benchmark sample buffer and content-free report hash work where applicable; not provider/harness allocations",
+    "source_rows": "actual API-returned rows before filtering/fusion; not database rows scanned",
+    "full_harness": "Scope/lifecycle fixture with fresh fake-provider/SQLite setup and teardown; candidate profile has no hints, so this measures attribution overhead, not active-query improvement.",
+    "provider_pairs": "Actual receiver measurements from final full test run; concurrent validation was present, so these timings are evidence, not isolated latency benchmarks."
+  },
+  "benchmarks": [
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 1331988.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 1.159,
+        "p95-ms": 2.074,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 105912.0,
+        "allocs/op": 844.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 3329546.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 2.0,
+        "p50-ms": 3.185,
+        "p95-ms": 4.416,
+        "source-rows/op": 9.0,
+        "vector/op": 0.0,
+        "B/op": 253104.0,
+        "allocs/op": 1330.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-1000/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 2411750.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 2.322,
+        "p95-ms": 2.819,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 159452.0,
+        "allocs/op": 847.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-1000/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 14437976.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 2.0,
+        "p50-ms": 14.28,
+        "p95-ms": 20.71,
+        "source-rows/op": 9.0,
+        "vector/op": 0.0,
+        "B/op": 5212175.0,
+        "allocs/op": 3336.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10000/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 3517155.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 3.091,
+        "p95-ms": 4.854,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 545956.0,
+        "allocs/op": 876.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10000/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 185391260.0,
+        "active/op": 0.3,
+        "exact/op": 0.0,
+        "fallback/op": 0.7,
+        "lexical/op": 2.0,
+        "p50-ms": 176.2,
+        "p95-ms": 216.9,
+        "source-rows/op": 8.5,
+        "vector/op": 0.0,
+        "B/op": 51153708.0,
+        "allocs/op": 21325.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-10-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 2424299.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 3.0,
+        "p50-ms": 2.233,
+        "p95-ms": 3.968,
+        "source-rows/op": 10.0,
+        "vector/op": 0.0,
+        "B/op": 175022.0,
+        "allocs/op": 1430.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-1000-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 100906930.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 2.0,
+        "p50-ms": 100.8,
+        "p95-ms": 103.0,
+        "source-rows/op": 121.6,
+        "vector/op": 0.0,
+        "B/op": 10371016.0,
+        "allocs/op": 119099.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-10000-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 102243540.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 1.1,
+        "p50-ms": 100.4,
+        "p95-ms": 109.8,
+        "source-rows/op": 57.6,
+        "vector/op": 0.0,
+        "B/op": 4520532.0,
+        "allocs/op": 45631.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/shared-deadline-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 100721983.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 2.0,
+        "p50-ms": 100.6,
+        "p95-ms": 101.2,
+        "source-rows/op": 1.0,
+        "vector/op": 0.0,
+        "B/op": 30364.0,
+        "allocs/op": 151.0
+      }
+    }
+  ],
+  "pure_quality_evidence": {
+    "test": "TestContextQueryQualityFixesFourSignalMissesAtSameBudget",
+    "signals": [
+      "constraints",
+      "verification",
+      "paths",
+      "dependency"
+    ],
+    "legacy_recall_each": 0,
+    "candidate_recall_each": 1,
+    "irrelevant_optional_tokens_each": {
+      "legacy": 28,
+      "candidate": 21
+    },
+    "boundary": "Pure ranking/compiler comparison. Actual receiver evidence is recorded separately in provider_pairs."
+  },
+  "limitations": [
+    "Synthetic fixture recall/precision and contract correctness do not establish real-task success or production cost acceptance.",
+    "Ranking comparison includes full canonical snapshot hashing; its latency is not isolated production selector latency.",
+    "At 10000 canonical rows, ranking candidate samples were active3/10 and fallback7/10. Strong-distractor three-source samples at1000 and10000 rows all fell back; they are not successful improvement samples.",
+    "Existing all-matching legacy primary MMR cost was not measured to completion or fixed; lineage/vector redesign remains excluded.",
+    "Race/checkptr instrumentation is not a production latency SLA. Active three-source orchestration uses frozen canonical fixture rows; actual SQLite must fully commit or fully roll back on the fixed deadline. Actual fake-provider quality pairs still require improvement.",
+    "No production opt-in, true-model experiment, refresh trigger, vector backend change or large-lineage redesign is delivered in PR01.",
+    "Full-harness fixture has no query hints; it measures candidate attribution overhead. Private/shared eligible-universe setup is excluded from the standalone selector benchmark."
+  ],
+  "validation": {
+    "full_test": {
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go test ./...",
+      "exit_code": 0
+    },
+    "vet": {
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go vet ./...",
+      "exit_code": 0
+    },
+    "lint": {
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp GOLANGCI_LINT_CACHE=/tmp/hufu-context-delivery/lint-cache golangci-lint run",
+      "exit_code": 0,
+      "issues": 0
+    },
+    "affected_race": {
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go test -race -p 1 ./internal/context ./internal/team ./internal/evalharness -run 'ContextQuery|Supplemental|Activation|PersistentRankingBehaviourIsLocked|ContextManifest|MemoryInjection|ContextDelivery|MMR' -count=1",
+      "exit_code": 0,
+      "extra_model_baseline_case_included": true
+    },
+    "runtime_contract_race": {
+      "repetitions": 10,
+      "exit_code": 0,
+      "note": "Five original runtime contract cases; final affected race also includes the added candidate-cap regression."
+    },
+    "existing_offline_evals": {
+      "context-routing": "2/2 passing",
+      "memory-learning": "3/3 passing",
+      "retry-recovery": "2/2 passing"
+    },
+    "benchmark": {
+      "repetitions": 10,
+      "retrieval_cases": 10,
+      "compiler_manifest_cases": 4,
+      "full_harness_cases": 2,
+      "exit_code": 0,
+      "concurrent_validation": false
+    },
+    "delivery_gate": "passed: four actual fake-provider miss repairs at unchanged delivery K/token budget, required1, forbidden0"
+  },
+  "provider_pairs": [
+    {
+      "case_id": "constraint-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "task_constraints"
+        ],
+        "omitted_ids": [
+          "constraint-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "constraint-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 35.211,
+        "selection_latency_ms": 63.967307,
+        "stage_latency_ms": {
+          "compilation": 0.328855,
+          "manifest": 18.452207,
+          "private_retrieval": 0.005085,
+          "routing": 45.18116
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "constraint-miss",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "task_constraints"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "constraint-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 7.093,
+        "selection_latency_ms": 32.418299,
+        "stage_latency_ms": {
+          "compilation": 2.690414,
+          "manifest": 17.973088,
+          "private_retrieval": 0.004595,
+          "routing": 11.750202
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "0ad86db1ed0b7d7eac305467e8d978ce08b37bdf680abce3520c4bb9395a8dfa",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "4047ae27f68704d69c35bbb1d631af7e94ea19448ca372de3b69197b2a3cdfc3"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "verification-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "verification_criteria"
+        ],
+        "omitted_ids": [
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7",
+          "verification-miss"
+        ],
+        "omitted_reasons": {
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit",
+          "verification-miss": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 13.961,
+        "selection_latency_ms": 64.524847,
+        "stage_latency_ms": {
+          "compilation": 0.339301,
+          "manifest": 34.731959,
+          "private_retrieval": 0.004693,
+          "routing": 29.448894
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "verification-miss",
+          "verification_criteria"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7",
+          "verification-miss"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 4.744,
+        "selection_latency_ms": 18.119365,
+        "stage_latency_ms": {
+          "compilation": 0.804493,
+          "manifest": 9.044352,
+          "private_retrieval": 0.045763,
+          "routing": 8.224757
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "21941f4ae225ce34c95157df234d2d1888255970f705206abe50d9d59b22470c",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "85e4468421f52ef8519305ab5b5b0b7144de582800f0574c36a18bcf6365de32"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "bound-path-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "ctx-55e15cda25efca82fd87557b",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "runtime_context"
+        ],
+        "omitted_ids": [
+          "bound-path-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "bound-path-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 3.103,
+        "selection_latency_ms": 76.705635,
+        "stage_latency_ms": {
+          "compilation": 0.441958,
+          "manifest": 61.824513,
+          "private_retrieval": 0.007502,
+          "routing": 14.431662
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 31,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "bound-path-miss",
+          "ctx-a0e4dd783f2a2d1b9927bb13",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "runtime_context"
+        ],
+        "omitted_ids": [
+          "ctx-abf7a16d4c8cef9fa76a600b",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-abf7a16d4c8cef9fa76a600b": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.2,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "bound-path-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 1,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 10
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 26.376,
+        "selection_latency_ms": 106.7488,
+        "stage_latency_ms": {
+          "compilation": 0.351415,
+          "manifest": 86.141092,
+          "private_retrieval": 0.005604,
+          "routing": 20.250689
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 24,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "4804c1db712842d5e95dd0f49948ae73c0a351c12389a16cd6cb36f84bae036b",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "a8fa4b25c695093edb1889ff5e2e462ce37608eac47cfed106ff92cb74e06b19"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "accepted-dependency-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "dependency_results",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3"
+        ],
+        "omitted_ids": [
+          "accepted-dependency-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "accepted-dependency-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.629,
+        "selection_latency_ms": 53.167456,
+        "stage_latency_ms": {
+          "compilation": 0.322071,
+          "manifest": 23.766331,
+          "private_retrieval": 0.005949,
+          "routing": 29.073105
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "accepted-dependency-miss",
+          "agent_instructions",
+          "current_task",
+          "dependency_results",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2"
+        ],
+        "omitted_ids": [
+          "ctx-7c6b5c7de8b10422825b10cd",
+          "ctx-a2009faaa45edf0f0eac9948",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-7c6b5c7de8b10422825b10cd": "inject_limit",
+          "ctx-a2009faaa45edf0f0eac9948": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "accepted-dependency-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 5.818,
+        "selection_latency_ms": 81.151572,
+        "stage_latency_ms": {
+          "compilation": 0.317769,
+          "manifest": 64.001014,
+          "private_retrieval": 0.004295,
+          "routing": 16.828494
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "9a8cfa82f56d2456d03dd8a09589c225ad1e74728fa0e6522bb452fb50c057dc",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "e08435482b1b6d656cfa04f8a72f5f58a46a8dac818b1c7a1e8bded70c0944fa"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    }
+  ],
+  "provider_pair_validation": {
+    "required_delivery_recall": 1,
+    "forbidden_delivery_count": 0,
+    "same_k_and_token_budget": true,
+    "same_model_call_counts": true,
+    "oracle_source": "synthetic_contract",
+    "private_owner_case": "TestContextQueryPairedProviderRecallsPrivatePersistentOnlyForOwner",
+    "no_hints_positive_control": "TestContextQueryPairedNoHintsPreservesProviderDeliveryAndCalls"
+  },
+  "compiler_manifest_benchmarks": [
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/legacy/compiler-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 87652.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.05337,
+        "p95-ms": 0.298,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 24364.0,
+        "allocs/op": 86.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/legacy/manifest-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 58082.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.03249,
+        "p95-ms": 0.2571,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 9696.0,
+        "allocs/op": 42.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/candidate/compiler-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 118136.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.06685,
+        "p95-ms": 0.4375,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 24588.0,
+        "allocs/op": 88.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/candidate/manifest-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 64854.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.05438,
+        "p95-ms": 0.1028,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 20366.0,
+        "allocs/op": 34.0
+      }
+    }
+  ],
+  "full_harness_benchmarks": [
+    {
+      "case": "BenchmarkContextQueryPairedHarness/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 297508641.0,
+        "B/op": 48825900.0,
+        "allocs/op": 526692.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryPairedHarness/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 308139820.0,
+        "B/op": 53146237.0,
+        "allocs/op": 619400.0
+      }
+    }
+  ],
+  "worktree_source_audit": {
+    "all_recorded_sources_match": true,
+    "changed_sources": {},
+    "interpretation": "Final validation and measurements bind these source hashes. Earlier source measurements retained under historical_measurements."
+  },
+  "historical_measurements": {
+    "source_sha256": {
+      "evals/context-routing/fixtures/query-signals-baseline.json": "c68d6235784eee373c391043ecc46aed1c96f5876b7ae5fd66e54de57a4f2986",
+      "internal/context/retrieval.go": "3407907a20dee0f1e6dd805a19606ffd6541d5585a9c78422c9c050f366a97f8",
+      "internal/context/supplemental_retrieval.go": "66df7e6812c597a47901f74c181a360b61e83f59b075c4f5e41a6ddff6fce24b",
+      "internal/context/supplemental_retrieval_test.go": "a1f7c2581a858dafe78a56c3b3d0aeda1f1a7361f60e78dbf7106afb944b4e9d",
+      "internal/evalharness/context_delivery.go": "ee1c499703ae3031945b6eb090b3dfd298d4577d4ce9b6b9a1c154be34729237",
+      "internal/evalharness/context_query_baseline_test.go": "a7654aa070f89023f7aaa87bfc658aed169e3d8dc055f38dcab1722eb1500270",
+      "internal/evalharness/context_query_control_test.go": "ede840bf2977b9342d83bd0913eee075b4528fab1875681218108aabcb321122",
+      "internal/evalharness/context_query_harness_bench_test.go": "3e21a43029ac44952c520270ef40f1d8994c436db1ecc08970be49693273cea9",
+      "internal/evalharness/context_query_paired_test.go": "192b6144283792fd9ed5924bd26be4e6dc0077f5900b899aa480e594a7e62cdd",
+      "internal/evalharness/context_query_private_paired_test.go": "c0ec567db3da79a4506814276d383097b1c0eb777e2e8f32f4027d5179b974ee",
+      "internal/evalharness/fixtures.go": "96c6a67791ce7c827ddb4f335d2c2c1f9f71c3c0f91717fe7e968eeca6fe412b",
+      "internal/evalharness/runner.go": "4a00fbe8d6dba24a57f43102a335ce3a80658fa8f3d3e00584be57c9ba1ddaaa",
+      "internal/evalharness/types.go": "0b60f05cda80fb1d49a50f983b819c518a63d676e96e04e0727448422faceaca",
+      "internal/team/context_compiler.go": "a199faf21ebc3ad0c6fa7de7352e8414aef049a94ff0666a3da2faab1a7abeac",
+      "internal/team/context_manifest.go": "d7cb646a259ef11f3a984a606e90fe6791ba226b03de7bd2f7e824ecb5e9d0db",
+      "internal/team/context_query_bench_test.go": "3f0e835aad25384aa4ffe9585856b0a830364812564f72880278d1a0486795f4",
+      "internal/team/context_query_comparison.go": "7dd7ab8add469c08cbe4b46fd79c7f2733af8f004db0de914146ab71f74e71e9",
+      "internal/team/context_query_compile_bench_test.go": "43ff31d49facac2e2db9ae2d83266f10a821597b3b58481a8092157709c0de5d",
+      "internal/team/context_query_evaluation.go": "f7ec95fa57bfbcd1c14ec67eeba6d3f394726fbe3f76f55207e9aee83646f5a6",
+      "internal/team/context_query_manifest.go": "6f959bdd0a4681331fd0c355b937d0ec24ddfbd525ab23bc2038270e11b16cce",
+      "internal/team/context_query_manifest_test.go": "7340abb4b5e9cee984ce3ff7da98cf8a1e1eb1d541e899eb3a3384e7d5822a1c",
+      "internal/team/context_query_plan.go": "9b298c5cc5a45a7b132d6c2810aef625a86925e01571537a45708265a5f0c113",
+      "internal/team/context_query_plan_test.go": "790e4b1af1143df57b9b6d6763af3e26e52c66f200b1c79a591b18ad3bd74647",
+      "internal/team/context_query_private.go": "4249cdd1bab7f438c0a627d7c90705da62b83f72354634e203e8e98830f045ed",
+      "internal/team/context_query_quality_test.go": "d24344ebbcf0c765e9ebf671fc994a5355fc7232d84a1d4e6d60b907b528fc40",
+      "internal/team/context_query_resolver_test.go": "c664b7598a70f87f26201b0c204cdba2020892f94ea91e1fcf82fdd0ae52856f",
+      "internal/team/context_query_runtime_test.go": "d475cacd893eeabc854b7d50573c315da2ee5d1d5187f46d0f640c4f41bf01ae",
+      "internal/team/context_query_selection.go": "534aace94e20fc44c8f57d60b1e3a03cc59dec27eb8a8cd68b776e148a28b009",
+      "internal/team/context_query_selection_test.go": "52c349c5b46c8904ef317824c6f998e38489220ed200b4800a2dec8e95dc376c",
+      "internal/team/context_router.go": "5b7e524d1f66cdbdb6cfa319090f3a36a552f8dc41e62e5cc2233a12b6ac3fa5",
+      "internal/team/context_selection_observer.go": "afaa3e2c0eeeaa9000fecffdd2b1f9be4e813c24b3ab65137191d87a96b19679",
+      "internal/team/invariant_attestation.go": "c101507a4dc084d7c390d0681d025c880a5f9275f1fe7327a523b33e668dd20c",
+      "internal/team/invariant_completion.go": "faee90baaee27698ad9e5d821355fcec396c916431a2cdf56d64c69c596fc6bd",
+      "internal/team/memory_learning.go": "38dd21eb225acb8366e33fbdaf6c8709596a14b655804fc90772d9ecca96eda5",
+      "internal/team/memory_ranking_core.go": "77667a65dffe03180acf82001fd8d15b180a088b797ef7091fdacd3e2110a7d0",
+      "internal/team/services.go": "1fdf40657850a07bb469cd4825ed953a97027eb83c9b7f079cc0bf5aee915b2e",
+      "internal/team/task_evidence_delivery.go": "fea3c77c1f946d11f28f4ce68fd7bfcbbf0c67eacb8da9cd28246f7397e51134",
+      "internal/team/worker_memory.go": "a2c030fe4d5855b971af4a784ac1fbba9acf484034f6aa16cb158f58f13b5c2c",
+      "internal/context/activation_batch.go": "a8bc1e0e274de4400a1c6d612eceb59ec11af6b4b4f5ca84036b557a3294ef56",
+      "internal/context/activation_batch_test.go": "deed1133638bc55f2574dd7dcf35220558d4c6f2990dd1a1dfbc75016a914f3e"
+    },
+    "benchmarks": [
+      {
+        "case": "BenchmarkContextQueryRanking/rows-10/legacy-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 1675814.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 1.0,
+          "p50-ms": 1.769,
+          "p95-ms": 2.07,
+          "source-rows/op": 8.0,
+          "vector/op": 0.0,
+          "B/op": 106565.0,
+          "allocs/op": 841.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryRanking/rows-10/candidate-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 4518386.0,
+          "active/op": 1.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 2.0,
+          "p50-ms": 3.85,
+          "p95-ms": 6.772,
+          "source-rows/op": 9.0,
+          "vector/op": 0.0,
+          "B/op": 261885.0,
+          "allocs/op": 1317.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryRanking/rows-1000/legacy-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 2556126.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 1.0,
+          "p50-ms": 2.366,
+          "p95-ms": 3.298,
+          "source-rows/op": 8.0,
+          "vector/op": 0.0,
+          "B/op": 159210.0,
+          "allocs/op": 842.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryRanking/rows-1000/candidate-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 26018664.0,
+          "active/op": 1.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 2.0,
+          "p50-ms": 23.41,
+          "p95-ms": 39.01,
+          "source-rows/op": 9.0,
+          "vector/op": 0.0,
+          "B/op": 4698846.0,
+          "allocs/op": 3310.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryRanking/rows-10000/legacy-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 3498831.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 1.0,
+          "p50-ms": 3.545,
+          "p95-ms": 3.924,
+          "source-rows/op": 8.0,
+          "vector/op": 0.0,
+          "B/op": 541976.0,
+          "allocs/op": 870.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryRanking/rows-10000/candidate-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 219434338.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 1.0,
+          "lexical/op": 2.0,
+          "p50-ms": 217.2,
+          "p95-ms": 263.1,
+          "source-rows/op": 8.0,
+          "vector/op": 0.0,
+          "B/op": 51149300.0,
+          "allocs/op": 21250.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQuerySupplementalScopes/rows-10-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 7190603.0,
+          "active/op": 1.0,
+          "exact/op": 0.0,
+          "fallback/op": 0.0,
+          "lexical/op": 3.0,
+          "p50-ms": 4.327,
+          "p95-ms": 33.53,
+          "source-rows/op": 10.0,
+          "vector/op": 0.0,
+          "B/op": 169809.0,
+          "allocs/op": 1397.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQuerySupplementalScopes/rows-1000-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 101317902.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 1.0,
+          "lexical/op": 2.2,
+          "p50-ms": 100.8,
+          "p95-ms": 103.1,
+          "source-rows/op": 128.0,
+          "vector/op": 0.0,
+          "B/op": 13031084.0,
+          "allocs/op": 151038.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQuerySupplementalScopes/rows-10000-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 102303173.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 1.0,
+          "lexical/op": 1.1,
+          "p50-ms": 101.0,
+          "p95-ms": 108.8,
+          "source-rows/op": 51.2,
+          "vector/op": 0.0,
+          "B/op": 4745844.0,
+          "allocs/op": 48599.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQuerySupplementalScopes/shared-deadline-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 100627804.0,
+          "active/op": 0.0,
+          "exact/op": 0.0,
+          "fallback/op": 1.0,
+          "lexical/op": 2.0,
+          "p50-ms": 100.6,
+          "p95-ms": 101.1,
+          "source-rows/op": 1.0,
+          "vector/op": 0.0,
+          "B/op": 30363.0,
+          "allocs/op": 151.0
+        }
+      }
+    ],
+    "compiler_manifest_benchmarks": [
+      {
+        "case": "BenchmarkContextQueryCompilerAndManifest/legacy/compiler-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 85581.0,
+          "exact/op": 0.0,
+          "lexical/op": 0.0,
+          "p50-ms": 0.06508,
+          "p95-ms": 0.2545,
+          "source-rows/op": 0.0,
+          "vector/op": 0.0,
+          "B/op": 24364.0,
+          "allocs/op": 86.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryCompilerAndManifest/legacy/manifest-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 52666.0,
+          "exact/op": 0.0,
+          "lexical/op": 0.0,
+          "p50-ms": 0.02542,
+          "p95-ms": 0.2135,
+          "source-rows/op": 0.0,
+          "vector/op": 0.0,
+          "B/op": 9696.0,
+          "allocs/op": 42.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryCompilerAndManifest/candidate/compiler-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 74578.0,
+          "exact/op": 0.0,
+          "lexical/op": 0.0,
+          "p50-ms": 0.05949,
+          "p95-ms": 0.1756,
+          "source-rows/op": 0.0,
+          "vector/op": 0.0,
+          "B/op": 24588.0,
+          "allocs/op": 88.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryCompilerAndManifest/candidate/manifest-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 43996.0,
+          "exact/op": 0.0,
+          "lexical/op": 0.0,
+          "p50-ms": 0.03802,
+          "p95-ms": 0.07256,
+          "source-rows/op": 0.0,
+          "vector/op": 0.0,
+          "B/op": 20366.0,
+          "allocs/op": 34.0
+        }
+      }
+    ],
+    "full_harness_benchmarks": [
+      {
+        "case": "BenchmarkContextQueryPairedHarness/legacy-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 449105418.0,
+          "B/op": 48859857.0,
+          "allocs/op": 526540.0
+        }
+      },
+      {
+        "case": "BenchmarkContextQueryPairedHarness/candidate-6",
+        "samples": 10,
+        "metrics": {
+          "ns/op": 433881479.0,
+          "B/op": 53317673.0,
+          "allocs/op": 619350.0
+        }
+      }
+    ],
+    "note": "Earlier source revision; historical retrieval IDs used post-injection selection. Current reports use pre-injection candidates."
+  }
+}

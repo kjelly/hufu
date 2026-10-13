@@ -731,6 +731,10 @@ func (r *SQLiteRepository) GetMany(ctx context.Context, ids []string) ([]Context
 //
 // prefix is a table alias (e.g. "c.") for queries that join context_items.
 func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args *[]any) []string {
+	return scopeAuthorizationPredicates(prefix, scope, visibility, args, false)
+}
+
+func scopeAuthorizationPredicates(prefix string, scope Scope, visibility ScopeVisibility, args *[]any, lookup bool) []string {
 	if visibility == "" {
 		visibility = VisibilityAncestors
 	}
@@ -744,10 +748,16 @@ func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args
 		{"task_id", scope.TaskID},
 		{"attempt_id", scope.AttemptID},
 	} {
+		ancestor := "(" + prefix + p.n + " IS NULL OR " + prefix + p.n + "=?)"
+		if lookup {
+			// With a primary-key lookup there is no scope index to select.
+			// This equivalent nullable equality avoids OR-index enumeration.
+			ancestor = "coalesce(" + prefix + p.n + "=?,1)"
+		}
 		switch visibility {
 		case VisibilitySubtree:
 			if p.v != "" {
-				where = append(where, "("+prefix+p.n+" IS NULL OR "+prefix+p.n+"=?)")
+				where = append(where, ancestor)
 				*args = append(*args, p.v)
 			}
 		case VisibilityExact:
@@ -759,7 +769,7 @@ func scopeAuthorize(prefix string, scope Scope, visibility ScopeVisibility, args
 			}
 		default: // VisibilityAncestors
 			if p.v != "" {
-				where = append(where, "("+prefix+p.n+" IS NULL OR "+prefix+p.n+"=?)")
+				where = append(where, ancestor)
 				*args = append(*args, p.v)
 			} else {
 				where = append(where, prefix+p.n+" IS NULL")
@@ -1281,6 +1291,22 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	return out, rows.Err()
 }
 func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	return r.searchLexical(ctx, req, false)
+}
+
+// SearchSupplementalLexical uses the FTS cursor as the outer loop and looks up
+// each canonical row through its primary key. This avoids enumerating scope
+// OR-index alternatives when preparing a bounded supplemental query.
+// It retains the same SQL authorization, BM25 score, ordering and row limit.
+// Legacy SearchLexical lets SQLite choose its original join order.
+func (r *SQLiteRepository) SearchSupplementalLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	if req.Limit <= 0 || req.Limit > SupplementalMaxSourceRows || req.AllowedItemIDs == nil {
+		return nil, errors.New("supplemental lexical search requires a bounded limit and explicit allow-set")
+	}
+	return r.searchLexical(ctx, req, true)
+}
+
+func (r *SQLiteRepository) searchLexical(ctx context.Context, req SearchRequest, fixedJoin bool) ([]SearchResult, error) {
 	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
@@ -1300,16 +1326,26 @@ func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest)
 	// surface another team/session/agent/task's context (it previously only
 	// filtered by project_id).
 	args := []any{match}
-	where := append([]string{}, scopeAuthorize("c.", req.Scope, req.Visibility, &args)...)
+	where := append([]string{}, scopeAuthorizationPredicates("c.", req.Scope, req.Visibility, &args, fixedJoin)...)
 	now := EvaluationTime(ctx).UnixMilli()
-	where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
+	if fixedJoin {
+		where = append(where, "c.superseded_by IS NULL", "coalesce(c.expires_at>?,1)", "coalesce(c.valid_from<=?,1)", "coalesce(c.valid_until>?,1)")
+	} else {
+		where = append(where, "c.superseded_by IS NULL", "(c.expires_at IS NULL OR c.expires_at>?)", "(c.valid_from IS NULL OR c.valid_from<=?)", "(c.valid_until IS NULL OR c.valid_until>?)")
+	}
 	if !req.IncludeCandidates {
 		where = append(where, "c.lifecycle='confirmed'")
 	}
 	args = append(args, now, now, now)
 	appendSearchFilters("c.", &where, &args, req)
 	args = append(args, limit)
-	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts JOIN context_items c ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
+	join := "JOIN"
+	canonicalTable := "context_items c"
+	if fixedJoin {
+		join = "CROSS JOIN"
+		canonicalTable += " INDEXED BY sqlite_autoindex_context_items_1"
+	}
+	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts "+join+" "+canonicalTable+" ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
 	if e != nil {
 		return nil, e
 	}

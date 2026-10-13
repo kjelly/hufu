@@ -505,21 +505,37 @@ func applyMMR(candidates []SearchResult, lambda float64) []SearchResult {
 // applyMMRObserved is applyMMR that also reports each candidate's rank before
 // and after selection with its penalty and MMR score; the result is identical.
 func applyMMRObserved(obs *RetrievalObservation, candidates []SearchResult, lambda float64) []SearchResult {
+	results, _ := applyMMRObservedContext(context.Background(), obs, candidates, lambda)
+	return results
+}
+
+// applyMMRObservedContext preserves the same ranking, but allows bounded
+// supplemental work to stop during CPU ranking as well as repository I/O.
+func applyMMRObservedContext(ctx context.Context, obs *RetrievalObservation, candidates []SearchResult, lambda float64) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	obs.recordPreMMR(candidates)
 	if len(candidates) < 2 {
 		for i, c := range candidates {
 			obs.recordMMR(c.Item.ID, i+1, 0, lambda*c.Score)
 		}
-		return candidates
+		return candidates, nil
 	}
 	remaining := append([]SearchResult(nil), candidates...)
 	selected := []SearchResult{remaining[0]}
 	obs.recordMMR(remaining[0].Item.ID, 1, 0, lambda*remaining[0].Score)
 	remaining = remaining[1:]
 	for len(remaining) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		best := 0
 		bestScore, bestPenalty := -1.0, 0.0
 		for i, c := range remaining {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			penalty := 0.0
 			for _, s := range selected {
 				if sim := contentSimilarity(c.Item.Content, s.Item.Content); sim > penalty {
@@ -535,7 +551,7 @@ func applyMMRObserved(obs *RetrievalObservation, candidates []SearchResult, lamb
 		obs.recordMMR(remaining[best].Item.ID, len(selected), bestPenalty, bestScore)
 		remaining = append(remaining[:best], remaining[best+1:]...)
 	}
-	return selected
+	return selected, nil
 }
 func contentSimilarity(a, b string) float64 {
 	tokens := func(s string) map[string]bool {

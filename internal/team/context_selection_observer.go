@@ -86,3 +86,66 @@ func observeWorkerContextSelection(ctx context.Context, items []WorkerMemoryItem
 	}
 	observer(ContextSelectionObservation{RequestID: identity.ParentRequestID, ModelExecutionID: identity.ModelExecutionID, Source: "worker_memory", SelectedIDs: ids})
 }
+
+// The staged query transaction supersedes earlier primary observations for
+// this invocation, including IDs displaced by supplemental ranking.
+func observeEffectiveQuerySelection(ctx context.Context, input WorkerContextInput) {
+	observer, ok := ctx.Value(contextSelectionObserverKey{}).(func(ContextSelectionObservation))
+	if !ok || observer == nil {
+		return
+	}
+	var ids []string
+	if input.CanonicalMemory != nil {
+		for _, item := range input.CanonicalMemory.SharedPersistent {
+			if !item.MustKeep {
+				ids = append(ids, item.ID)
+			}
+		}
+	}
+	if input.WorkerMemory != nil {
+		for _, item := range input.WorkerMemory.Items {
+			if !item.MustKeep {
+				ids = append(ids, item.ID)
+			}
+		}
+	}
+	observer(ContextSelectionObservation{RequestID: input.Request.RequestID, ModelExecutionID: input.Request.ModelExecutionID, Source: "query_effective", SelectedIDs: ids})
+}
+
+// Candidate observations precede injection/dedup/token budgeting. Post-budget
+// selection observations must not be labelled retrieval recall/precision.
+func observeRetrievalCandidates(ctx context.Context, results []contextstore.SearchResult, replace bool) {
+	observer, ok := ctx.Value(contextSelectionObserverKey{}).(func(ContextSelectionObservation))
+	if !ok || observer == nil {
+		return
+	}
+	identity, ok := ContextQueryIdentitySnapshot(ctx)
+	if !ok {
+		return
+	}
+	ids := make([]string, 0, len(results))
+	for _, row := range results {
+		if !row.Item.MustKeep {
+			ids = append(ids, row.Item.ID)
+		}
+	}
+	source := "primary_candidates"
+	if replace {
+		source = "query_candidates"
+	}
+	observer(ContextSelectionObservation{RequestID: identity.ParentRequestID, ModelExecutionID: identity.ModelExecutionID, Source: source, SelectedIDs: ids})
+}
+
+func observeWorkerRetrievalCandidates(ctx context.Context, rows []rankedMemory) {
+	if observer, ok := ctx.Value(contextSelectionObserverKey{}).(func(ContextSelectionObservation)); !ok || observer == nil {
+		return
+	}
+	if _, ok := ContextQueryIdentitySnapshot(ctx); !ok {
+		return
+	}
+	candidates := make([]contextstore.SearchResult, len(rows))
+	for index, row := range rows {
+		candidates[index] = contextstore.SearchResult{Item: row.item, Score: row.score}
+	}
+	observeRetrievalCandidates(ctx, candidates, false)
+}

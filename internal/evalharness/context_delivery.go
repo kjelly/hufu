@@ -36,32 +36,34 @@ type ContextDeliveryMetrics struct {
 }
 
 type ContextRequestMetrics struct {
-	Agent                    string             `json:"agent"`
-	ModelID                  string             `json:"model_id"`
-	TaskIndex                *int               `json:"task_index,omitzero"`
-	Attempt                  int                `json:"attempt"`
-	Step                     int                `json:"step"`
-	Purpose                  string             `json:"purpose"`
-	ModelExecutionID         string             `json:"model_execution_id,omitempty"`
-	DeliveredIDs             []string           `json:"delivered_ids,omitempty"`
-	OmittedIDs               []string           `json:"omitted_ids,omitempty"`
-	OmittedReasons           map[string]string  `json:"omitted_reasons,omitempty"`
-	RequiredDeliveryRecall   *float64           `json:"required_delivery_recall"`
-	DeliveryRecall           *float64           `json:"delivery_recall"`
-	DeliveryPrecision        *float64           `json:"delivery_precision"`
-	RetrievalRecallAtK       *float64           `json:"retrieval_recall_at_k"`
-	RetrievalPrecisionAtK    *float64           `json:"retrieval_precision_at_k"`
-	RetrievedIDs             []string           `json:"retrieved_ids,omitempty"`
-	RetrievalCalls           *ContextQueryCalls `json:"retrieval_calls"`
-	EmbeddingCalls           *int               `json:"embedding_calls"`
-	RetrievalLatencyMS       *float64           `json:"retrieval_latency_ms"`
-	SelectionLatencyMS       *float64           `json:"selection_latency_ms"`
-	StageLatencyMS           map[string]float64 `json:"stage_latency_ms,omitempty"`
-	MetricReasons            map[string]string  `json:"metric_reasons,omitempty"`
-	ForbiddenDeliveryCount   int                `json:"forbidden_delivery_count"`
-	IrrelevantOptionalTokens int                `json:"irrelevant_optional_tokens"`
-	TokenEstimator           string             `json:"token_estimator"`
-	ManifestMatched          bool               `json:"manifest_matched"`
+	Agent                    string                        `json:"agent"`
+	ModelID                  string                        `json:"model_id"`
+	TaskIndex                *int                          `json:"task_index,omitzero"`
+	Attempt                  int                           `json:"attempt"`
+	Step                     int                           `json:"step"`
+	Purpose                  string                        `json:"purpose"`
+	ModelExecutionID         string                        `json:"model_execution_id,omitempty"`
+	DeliveredIDs             []string                      `json:"delivered_ids,omitempty"`
+	OmittedIDs               []string                      `json:"omitted_ids,omitempty"`
+	OmittedReasons           map[string]string             `json:"omitted_reasons,omitempty"`
+	RequiredDeliveryRecall   *float64                      `json:"required_delivery_recall"`
+	DeliveryRecall           *float64                      `json:"delivery_recall"`
+	DeliveryPrecision        *float64                      `json:"delivery_precision"`
+	RetrievalRecallAtK       *float64                      `json:"retrieval_recall_at_k"`
+	RetrievalPrecisionAtK    *float64                      `json:"retrieval_precision_at_k"`
+	RetrievedIDs             []string                      `json:"retrieved_ids,omitempty"`
+	RetrievalCalls           *ContextQueryCalls            `json:"retrieval_calls"`
+	EmbeddingCalls           *int                          `json:"embedding_calls"`
+	RetrievalLatencyMS       *float64                      `json:"retrieval_latency_ms"`
+	SelectionLatencyMS       *float64                      `json:"selection_latency_ms"`
+	StageLatencyMS           map[string]float64            `json:"stage_latency_ms,omitempty"`
+	MetricReasons            map[string]string             `json:"metric_reasons,omitempty"`
+	ForbiddenDeliveryCount   int                           `json:"forbidden_delivery_count"`
+	IrrelevantOptionalTokens int                           `json:"irrelevant_optional_tokens"`
+	TokenEstimator           string                        `json:"token_estimator"`
+	ManifestMatched          bool                          `json:"manifest_matched"`
+	QueryAttribution         *team.ContextQueryAttribution `json:"query_attribution,omitempty"`
+	ManifestSchema           int                           `json:"manifest_schema,omitzero"`
 }
 
 type capturedContextRequest struct {
@@ -130,6 +132,15 @@ func (c *contextDeliveryCapture) observeSelection(selection team.ContextSelectio
 			c.stages[key] = make(map[string]time.Duration)
 		}
 		c.stages[key][selection.Source] += selection.Elapsed
+		return
+	}
+	if selection.Source != "primary_candidates" && selection.Source != "query_candidates" {
+		return
+	}
+	if selection.Source == "query_candidates" {
+		ids := slices.Clone(selection.SelectedIDs)
+		slices.Sort(ids)
+		c.selections[key] = slices.Compact(ids)
 		return
 	}
 	ids := append(slices.Clone(c.selections[key]), selection.SelectedIDs...)
@@ -454,6 +465,17 @@ func evaluateContextRequest(want ContextDeliveryExpect, observed capturedContext
 		findings = append(findings, EvalFinding{Dimension: "manifest", Expected: "matching durable manifest", Actual: "missing"})
 	} else {
 		metrics.ManifestMatched = true
+		// Read attribution from the exact durable manifest of the received
+		// request rather than replaying selection against current memory.
+		if manifest.Query != nil {
+			query := *manifest.Query
+			query.Sources = slices.Clone(query.Sources)
+			metrics.QueryAttribution = &query
+			metrics.ManifestSchema = manifest.SchemaVersion
+			if err := team.ValidateContextQueryManifest(*manifest); err != nil {
+				findings = append(findings, EvalFinding{Dimension: "manifest", Expected: "valid query fingerprint", Actual: "invalid_query_attribution"})
+			}
+		}
 		for _, item := range manifest.Items {
 			if !item.Included {
 				metrics.OmittedIDs = append(metrics.OmittedIDs, item.ID)

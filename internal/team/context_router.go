@@ -222,6 +222,10 @@ func activationItemFromRepository(ctx context.Context, repo contextstore.Reposit
 	if err != nil {
 		return item, err
 	}
+	return itemWithContextActivation(item, record), nil
+}
+
+func itemWithContextActivation(item contextstore.ContextItem, record contextstore.ActivationRecord) contextstore.ContextItem {
 	metadata := make(map[string]string, len(item.Metadata)+7)
 	for key, value := range item.Metadata {
 		metadata[key] = value
@@ -234,7 +238,7 @@ func activationItemFromRepository(ctx context.Context, repo contextstore.Reposit
 		}
 	}
 	item.Metadata = metadata
-	return item, nil
+	return item
 }
 
 func (router coordinatorContextRouter) Route(ctx context.Context, request ContextRequest) (ContextRoute, error) {
@@ -283,6 +287,8 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		sort.SliceStable(route.Decisions, func(i, j int) bool { return route.Decisions[i].ContextItemID < route.Decisions[j].ContextItemID })
 		return route, nil
 	}
+	ctx, querySnapshot := c.beginSharedQuerySnapshot(ctx)
+	route.Bundle.querySnapshot = querySnapshot
 	scope := c.contextScope()
 	sessionItems, err := c.sharedSessionPromptItems(ctx, scope)
 	if err != nil {

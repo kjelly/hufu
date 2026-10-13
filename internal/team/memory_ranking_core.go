@@ -54,8 +54,15 @@ func (e memoryReinforcementError) Unwrap() error { return e.err }
 
 // rankPersistentMemory is the shared-persistent memory ranking used for prompt
 // selection. It performs no writes.
-func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalRepository, experience contextstore.ExperienceRepository, in persistentRankingInput) (persistentRankingResult, error) {
-	var out persistentRankingResult
+func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalRepository, experience contextstore.ExperienceRepository, in persistentRankingInput) (out persistentRankingResult, err error) {
+	defer func() {
+		if err == nil {
+			captureContextQueryPrimary(ctx, in, out)
+			if strings.TrimSpace(in.Query) != "" {
+				observeRetrievalCandidates(ctx, out.Results, false)
+			}
+		}
+	}()
 	if strings.TrimSpace(in.Query) == "" {
 		mustKeep := make([]contextstore.ContextItem, 0)
 		pinned := make([]contextstore.ContextItem, 0)
@@ -118,6 +125,12 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 		}
 	}
 	normalizeFusedRelevance(results, in.Ranking.Fusion)
+	return finishPersistentRanking(ctx, experience, in, out, results)
+}
+
+// finishPersistentRanking reconnects already-normalized candidates to the
+// existing reinforcement and injection policy without executing retrieval.
+func finishPersistentRanking(ctx context.Context, experience contextstore.ExperienceRepository, in persistentRankingInput, out persistentRankingResult, results []contextstore.SearchResult) (persistentRankingResult, error) {
 	out.Results = results
 	relevanceEntries, relevanceScores, relevanceFinal := relevanceMemoryEntries(results, in.Ranking)
 	out.RelevanceEntries = relevanceEntries

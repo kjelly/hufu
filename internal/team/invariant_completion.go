@@ -96,13 +96,13 @@ func findInvariantVerificationManifest(manifests []ContextInjectionManifest, fin
 }
 
 func validateInvariantManifestIdentity(todo *TodoItem, result *TaskResult, manifest *ContextInjectionManifest, runID string) string {
-	if manifest.SchemaVersion != ContextManifestSchemaVersion {
+	if manifest.SchemaVersion != ContextManifestSchemaVersion && manifest.SchemaVersion != ContextQueryManifestSchemaVersion {
 		return "manifest_version"
 	}
 	if strings.TrimSpace(runID) == "" || manifest.RunID != runID {
 		return "run_mismatch"
 	}
-	if contextManifestFingerprint(*manifest) != manifest.Fingerprint || manifest.TaskID != todo.ID || result.TaskID != todo.ID ||
+	if ValidateContextQueryManifest(*manifest) != nil || manifest.TaskID != todo.ID || result.TaskID != todo.ID ||
 		manifest.Attempt < 1 || result.Attempt != manifest.Attempt || strings.TrimSpace(manifest.ModelExecutionID) == "" || !manifest.ModelCalled ||
 		result.Agent != manifest.Agent {
 		return "identity_mismatch"

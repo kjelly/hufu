@@ -404,12 +404,17 @@ func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, g
 		semanticJSON, _ := json.Marshal(semantic)
 		identity += "\x1fsemantic_retrieval\x1f" + string(semanticJSON)
 	}
+	queryHash := hashContentKey(query)
+	if general != nil && general.Query != nil {
+		queryHash = hashQueryAttribution(*general.Query)
+		identity += "\x1fcontext_query\x1f" + queryHash
+	}
 	sum := sha256.Sum256([]byte(identity))
 	fingerprint := hex.EncodeToString(sum[:])
 	return &MemoryInjectionManifest{
 		RetrievalID: "retrieval-" + fingerprint[:20], RunID: runID, TaskID: taskID,
 		Attempt: attempt, Agent: agentName, PolicyVersion: policy.PolicyVersion,
-		QueryHash: hashContentKey(query), Items: items, Semantic: semantic,
+		QueryHash: queryHash, Items: items, Semantic: semantic,
 		Fingerprint: fingerprint, CreatedAt: time.Now().UTC(),
 	}
 }

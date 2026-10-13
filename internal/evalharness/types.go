@@ -74,6 +74,8 @@ type CaseFixture struct {
 	ContextItems []ContextItemFixture `yaml:"context-items,omitempty"`
 	// EvaluationTime fixes canonical memory eligibility for offline replay.
 	EvaluationTime *time.Time `yaml:"evaluation-time,omitempty"`
+	// QueryProfileOverride is offline only, never a production flag.
+	QueryProfileOverride string `yaml:"query-profile-override,omitempty"`
 }
 
 // ContextItemFixture is the minimal stable surface needed to arrange a

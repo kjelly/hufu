@@ -643,7 +643,17 @@ func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, inpu
 			input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, forAgent)
 		}
 	}
-	return CompileWorkerContext(ctx, input)
+	var query *ContextQueryAttribution
+	if cc.c != nil {
+		var err error
+		input, query, err = cc.c.evaluateWorkerContextQueries(ctx, input)
+		if err != nil {
+			return CompiledContext{}, err
+		}
+	}
+	compiled, err := CompileWorkerContext(ctx, input)
+	compiled.Query = query
+	return compiled, err
 }
 
 type defaultAgentPool struct {

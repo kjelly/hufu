@@ -71,9 +71,10 @@ type WorkerMemoryItem struct {
 // WorkerMemoryBundle is the output of recall: a ranked, deduped, budgeted
 // set of memory items plus a trace for observability.
 type WorkerMemoryBundle struct {
-	Items    []WorkerMemoryItem
-	Trace    WorkerMemoryTrace
-	Semantic *SemanticRetrievalIdentity
+	querySnapshot *contextQueryPrivateSnapshot
+	Items         []WorkerMemoryItem
+	Trace         WorkerMemoryTrace
+	Semantic      *SemanticRetrievalIdentity
 }
 
 // WorkerMemoryReport is a content-free execution-report summary. It is an
@@ -254,6 +255,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		return WorkerMemoryBundle{Trace: WorkerMemoryTrace{WorkerID: req.WorkerID, Skipped: true, SkipReason: "empty query"}}, nil
 	}
 
+	querySnapshot := s.beginPrivateQuerySnapshot(ctx, req, maxItems, maxTokens)
 	var allResults []rankedMemory
 	var semanticIdentity *SemanticRetrievalIdentity
 	lineage := req.SessionLineage
@@ -319,6 +321,16 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		}
 	}
 
+	if querySnapshot != nil {
+		querySnapshot.capturePrimary(allResults)
+	}
+	observeWorkerRetrievalCandidates(ctx, allResults)
+	bundle := selectWorkerMemoryRows(allResults, maxItems, maxTokens, req.WorkerID, query, semanticIdentity)
+	bundle.querySnapshot = querySnapshot
+	return bundle, nil
+}
+
+func selectWorkerMemoryRows(allResults []rankedMemory, maxItems, maxTokens int, workerID, query string, semanticIdentity *SemanticRetrievalIdentity) WorkerMemoryBundle {
 	// Rank: private session > private persistent > shared.
 	sort.SliceStable(allResults, func(i, j int) bool {
 		ri, rj := tierRank(allResults[i].tier), tierRank(allResults[j].tier)
@@ -368,15 +380,16 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	}
 
 	return WorkerMemoryBundle{
+
 		Items:    items,
 		Semantic: cloneSemanticRetrievalIdentity(semanticIdentity),
 		Trace: WorkerMemoryTrace{
-			WorkerID: req.WorkerID,
+			WorkerID: workerID,
 			Query:    query,
 			ItemIDs:  ids,
 			Tokens:   totalTokens,
 		},
-	}, nil
+	}
 }
 
 type trackingVectorSearcher struct {
@@ -1067,13 +1080,13 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 	if err != nil {
 		return nil
 	}
-	if len(bundle.Items) == 0 {
+	if len(bundle.Items) == 0 && bundle.querySnapshot == nil {
 		observeWorkerContextSelection(ctx, bundle.Items)
 		return nil
 	}
 	c.rerankWorkerMemory(ctx, &bundle, taskGoal)
 	observeWorkerContextSelection(ctx, bundle.Items)
-	if len(bundle.Items) == 0 {
+	if len(bundle.Items) == 0 && bundle.querySnapshot == nil {
 		return nil
 	}
 	return &bundle

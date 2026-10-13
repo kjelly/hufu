@@ -186,10 +186,10 @@ func (c *Coordinator) invariantContextManifest(todo *TodoItem, attempt int, mode
 	if err != nil {
 		return nil, err
 	}
-	if matched.SchemaVersion != ContextManifestSchemaVersion {
+	if matched.SchemaVersion != ContextManifestSchemaVersion && matched.SchemaVersion != ContextQueryManifestSchemaVersion {
 		return nil, fmt.Errorf("context manifest for task %q uses schema version %d; version %d is required for invariant attestation", todo.ID, matched.SchemaVersion, ContextManifestSchemaVersion)
 	}
-	if matched.Fingerprint == "" || contextManifestFingerprint(*matched) != matched.Fingerprint {
+	if matched.Fingerprint == "" || ValidateContextQueryManifest(*matched) != nil {
 		return nil, fmt.Errorf("context manifest for task %q has an invalid fingerprint", todo.ID)
 	}
 	return matched, nil

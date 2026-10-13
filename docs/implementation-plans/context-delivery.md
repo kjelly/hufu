@@ -5,12 +5,13 @@
 > Verified-Commit: `7312757e0187d471f16347656e887207b9db96ef`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR-00 診斷與 baseline 已交付，完整 test/vet/lint、受影響路徑 race 與三組 eval 通過；PR-01/02 尚未實作；既有 extra-model blocker 必須在 active 整合驗收前修復
+> Execution-Status: PR-00 已提交（`d237124e`）；PR-01 離線實作與完整 gates 已驗收，隨本階段提交；PR-02 尚未實作
+> Implementation-Readiness: 可開始／繼續實作；範圍與驗收條件已定義，無待使用者決策的前置工作；不代表未提交程式已驗收
 > Type: bounded implementation plan / offline evaluation / explicit opt-in
 > Repository: kjelly/hufu
 > Reviewed baseline: `7312757e0187d471f16347656e887207b9db96ef`（2026-10-12；開工時重新確認 HEAD）
 > Scope: context query selection、既有 eval harness、相容性與 attribution；共三個工作包
-> Location: `docs/implementation-plans/context-delivery.md`；依使用者授權移至永久位置並提交
+> Location: `docs/implementation-plans/context-delivery.md`；本次文件修訂維持現址，不搬移文件
 > Completion claim: contract correctness / synthetic fixture retrieval quality；不宣稱真實任務成功率提升
 
 ## 0. 執行範圍與順序
@@ -18,6 +19,26 @@
 Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實作、測試、故障注入與可重現報告，不依賴人工標註真實工作負載、外部模型帳號或 production 環境。PR-02 的前置條件是 PR-01 的機器可判定 gate 通過；無須另外向使用者索取任務、模型或預算。
 
 本計畫的產品需求：在既有模型呼叫邊界，把已授權的 constraints、verification 與 workset/dependency metadata 用於記憶檢索，減少 goal-only 檢索的漏召回；預設行為保持 legacy，改善以離線配對評估證明後才提供 active opt-in。
+
+### 適合實作的項目與效益
+
+| 保留項目 | 預期效益 | 可由 Coding Agent 取得的證據 |
+|---|---|---|
+| Provider 邊界檢查與 baseline（PR-00） | 分清楚「檢索到」「編譯納入」「真正送達」，定位漏送與越權問題 | fake provider 實際收到的 messages、對應 manifest、required/forbidden assertions |
+| 授權 hints 與 bounded supplemental retrieval（PR-01） | 找回只出現在 constraints、Verify、已接受依賴或 workset paths 的相關記憶 | 四類 synthetic legacy miss 在相同 K/token budget 的 paired quality tests |
+| 排序、fallback 與成本量測（PR-01） | 保留原有強化學習排序與預算，讓額外檢索遇到故障時回到 legacy | reinforcement/penalty 回歸、cancel/revision 故障注入、三種資料規模 benchmark |
+| Explicit opt-in 與 attribution（PR-02） | 讓改善可逐次啟用，並能追查各 source 實際使用的策略與 fallback | default parity、snapshot/resume drift tests、schema 2/3 compatibility、實際 request 對照 |
+| Extra-model baseline 修正（PR-02 前置） | 讓已允許的額外模型執行通過既有 admission，避免 lifecycle 重複寫入 | successful concurrent fake-provider assertions，加上 genuine drift 零呼叫反例 |
+
+這些效益是待驗證的交付目標；PR-00 已有離線證據，其餘不能以 helper 單元測試或未提交的程式碼宣稱完成。真實任務成功率、使用者滿意度與 production 成本不在本次效益證明範圍。
+
+### 本次移除的工作
+
+以下項目已從實作工作包及驗收前置條件移除，不留下 Coding Agent 自行完成的待辦：
+
+- **真實模型 A/B**：需要使用者選定代表任務、模型與費用預算。依使用者選擇，本次只做離線驗證；後續另案先整理離線結果，再提出任務、模型、預算及停止條件供使用者決定。
+- **Lineage 大型檢索修正**：vector 授權過濾與成本策略尚無核准架構。依使用者選擇，本次移除；後續另案比較方案與 benchmark，再決定架構。不得把 draft 架構當成本案授權，也不得為通過本案 gate 改 vector backend 或移除 overfetch guard。
+- **執行中 refresh／背景 trigger 與實驗平台**：不是本案改善 goal-only 檢索的必要工作，移除；沒有另案執行或部署待辦。
 
 ### 包含
 
@@ -46,6 +67,17 @@ Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實�
 
 記錄 HEAD、Go/toolchain 版本和受影響檔案。若現況已實作某一工作，不重建；以回歸測試確認後把該項標為已存在。其他人的變更不可覆寫。修改 Go 時使用 Modern Go Guidelines skill；修改 runtime 時使用 `harden-hufu-runtime` skill，依其規則追蹤執行路徑與契約。
 
+PR-01 最終 source 已通過完整 test/vet/lint、受影響 race、三組離線 eval、四類實際 provider 品質配對與十次 benchmark。報告綁定 44 個 source hashes；production 仍是 legacy。原本把 race instrumentation 下每次在 100ms 內完成改善當作必要條件的測試，已拆成 active 整合與真實 SQLite 的整批 deadline rollback 驗證；§6 的四類 provider 品質 gate 保持不變。下一個工作包為 PR-02，不能以此階段結果宣稱整份計畫完成。詳見 [離線驗證報告](../reference/context-query-offline-progress.md)。`docs/tmp/` 為空目錄，本次不搬移任何文件。
+
+### 下一批可直接執行的工作
+
+1. 核對已驗收 PR-01 的 source hashes 與報告，保留現有功能；最終預設仍須是 legacy。
+2. 修正 §5.0 extra-model 的 canonical admission、indexed target、retry pinning 及 parent-owned lifecycle／receipt／manifest；改用成功送達的正向案例，保留 genuine drift 零呼叫反例。
+3. 完成 §5.1～5.2 的正式 opt-in、frozen policy／舊 snapshot／resume 相容，以及歷史 query attribution／explain；不自動啟用既有 teams。
+4. 重跑 §7 各路徑矩陣與 §8 完整 gates，更新對應文件與帶 source hashes 的報告，再提交 PR-02。維持 100ms、oracle、delivery budget 與授權，沒有另訂 race instrumentation 的 production latency SLA。
+
+以上工作只需要 repository、synthetic fixtures、本機 SQLite、fake provider/embedder 和既有工具；不需要使用者提供模型帳號、費用預算、production 環境或核准大型檢索架構。
+
 | 實作位置 | 已存在能力／限制 | 本案使用方式 |
 |---|---|---|
 | `internal/team/context_request.go` | v1 request identity；`RetrievalQuery()` 使用 goal、phase、trigger、role、capabilities、failure | 保留 legacy 方法、序列化與 fingerprint 算法 |
@@ -57,7 +89,7 @@ Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實�
 | `internal/context/model.go`、`sqlite_repository.go` | SearchRequest 有 AllowedItemIDs；exact/lexical SQL 支援 allow-set predicate | shared 補充查詢重用 allow-set-before-LIMIT；不另造 SQL 授權 |
 | `internal/context/retrieval.go` | exact/lexical/vector、fusion、MMR、file boost、source observation | 重用 bounded supplemental helper；既有 primary 行為不變 |
 | `internal/team/context_compiler.go`、`context_manifest.go` | required context、budget、content-free manifest schema 2 | 沿用編譯與 preflight；版本化新增 query attribution |
-| `internal/evalharness/types.go`、`provider_fake.go` | minimal context seed、scripted provider；substring match 不等於完整 prompt assertion | 擴充 seed 與逐 request 的 model-visible message 檢查 |
+| `internal/evalharness/types.go`、`provider_fake.go` | PR-00 typed seeds、實際 receiver、manifest assertions；PR-01 已驗收 candidate paired delivery tests/report | 重用已驗收邊界，增加正式 opt-in 與各 runtime 路徑覆蓋 |
 | `internal/context/sqlite_repository.go::ftsQuery` | 只保留 ASCII 詞；中文不拋 syntax error，但不保證中文語意召回 | 分開測 syntax safety、identifier recall 與 fake-vector recall |
 
 現有 tool-failure recovery、`context_query`／`context_get`、skill disclosure、knowledge-state diagnostic 都直接沿用。現有 `ranking-replay` 比較 fusion policy，並不支援本計畫的 query-plan 比較；本案的配對報告放在 eval harness，不新增 CLI query-profile 功能。
@@ -169,13 +201,14 @@ Supplemental text 順序固定為 constraints → verification → dependency su
 
 ### 4.3 範圍、成本與失敗
 
-- 每 invocation 最多三個 supplemental scopes：shared persistent、active private session、private persistent；未啟用的 memory scope 不查詢。最多新增 27 次 exact/lexical 呼叫、192 個補充授權候選；candidate buffer 有界。
+- 每 invocation 最多三個 supplemental scopes：shared persistent、active private session、private persistent；未啟用的 memory scope 不查詢。最多新增 27 次 exact/lexical 呼叫、192 個 source rows；同一 ID 被不同查詢回傳時每次都計數，不能只計 dedup 後的候選。每 scope 的 64-row allowance 由 exact/lexical 共用，每次查詢 Limit 不得超過剩餘 allowance；candidate buffer 有界。
 - coordinator 只使用 admitted goal 與已有明確 constraints；不能自行拆解使用者 prose。direct agent 缺少 task hints 時保持 legacy；不偽造它沒有的 workset/dependency。
 - **private recall 若包含 restricted ancestor，整個 private bundle 使用 legacy**，記 `restricted_lineage_legacy`；shared persistent 的改善可獨立使用。不是 lineage 完整性修正。
 - 新 supplemental I/O 以 invocation context 和總共 100ms 子 deadline 控制，循序執行、不另開背景 goroutine、不重試。三個 scope 共用 invocation-local budget 和 staged selection，不各自重設 100ms；保留每個 source 的 immutable legacy bundle。超時／搜尋失敗／source revision 在擴充期間變動則丟棄全部 supplemental 結果，以保留的 legacy bundles 編譯，並在實際受影響的 sources 記固定 fallback enum。
 - 100ms 只限制新工作；不得聲稱已限制 legacy overfetch 或所有 DB 掃描。bench 同時報 legacy 成本與新增成本；取消必須傳到底層搜尋。
 - 外層 invocation 已取消時傳回 cancellation，不用 legacy fallback 繼續呼叫模型。授權、必需證據、compiler required fit 或實際 manifest persistence 失敗仍依原契約 fail closed。
 - 補充項目在編譯前做 canonical scope/lifecycle/activation recheck；revision 檢查不取代 authorization，也不自動重跑檢索。
+- primary snapshot、eligible rows 與 revision 必須對應同一來源狀態；在 primary 讀取前取得 revision，在 supplemental 前後檢查。repo 不提供可靠 revision 時直接 legacy fallback，記 `hint_source_unavailable`，不可把未檢查的來源記成 active。shared/private 的 rollback 由同一 invocation-local selection transaction 管理，不能各自提交後再合併。
 
 ### 4.4 離線配對評估
 
@@ -187,6 +220,8 @@ legacy/candidate 使用相同 fixture、scope、time、canonical snapshot、expe
 - 純 ranking comparison 共用一次 primary；end-to-end 配對則是兩個隔離 integration runs，每個 run 各做正常 primary 呼叫，candidate 不得比同一條 baseline 路徑增加 embedding 呼叫。兩 arm 各經 compiler、真正 fake provider request boundary 和各自 manifest；candidate arm 是離線測試執行，不是 production shadow exposure。
 - offline 配對期間不讓某 arm 的學習事件更新另一 arm 的 aggregates；報告只有 ID/hash/count/reason。
 - 重跑同一 arm 能得到相同選入順序、plan hash、semantic fingerprints；run/time identity 在 comparison report 單獨表示，不改寫 durable receipt。
+- report 分開輸出 pure ranking 與 provider delivery 結果；四類品質 gate 使用實際 fake-provider paired runs。paths/dependency cases 必須經 resolver 從有效 workset binding／已接受結果取得 hints，不以直接傳入 synthetic hints 取代授權證據。單純 compiler inclusion 不足以通過 delivery gate。
+- deterministic comparison 排除 wall-clock timing 與不同 run identity；保留這些欄位供成本量測和證據追蹤，不要求完整 measured report byte-for-byte 相同。
 
 ### 4.5 PR-01 的 attribution seam
 
@@ -236,7 +271,7 @@ PR-01 必須通過下列第 1～4、6～7 項才進入 PR-02。第 5 項的 snap
 4. 每個 paired quality case 的 irrelevant optional token count 不增加，aggregate retrieval/delivery recall 不下降，aggregate delivery precision 不下降；不以擴大 K/budget 通過。
 5. 相同 fixture 重播結果 deterministic；resume、parallel、extra-model 不串 identity、不重複 credit。
 6. supplemental 增加的 embedding/model/tool calls 都為 0；搜尋數和候選數不超 §4.3 上限；deadline/cancel/revision-change 故障測試通過。
-7. benchmark 使用至少 10／1,000／10,000 個 canonical rows 的 synthetic stores，包含 private/shared、強干擾資料、超時案例；報 p50/p95、allocations、queries/candidates。沒有實測數字不能寫「成本可接受」。
+7. benchmark 使用至少 10／1,000／10,000 個 canonical rows 的 synthetic stores，包含 private/shared、強干擾資料、超時案例；各組至少量測 10 次，報 p50/p95、allocations、queries/source rows。setup/seed 不計入 selector 的量測，另列完整 harness 成本；legacy、supplemental 與 compile 成本分開。必須通過固定呼叫數、source-row 上限、共用 deadline/cancel 與無額外 embedding/model/tool calls 的 gate；latency 數字是報告，沒有另訂 production SLA，也不能寫成真實成本已被接受。
 8. 若品質 gate 失敗，修正實作/版本後重跑；不得改 oracle relevant/forbidden labels 來配合輸出。新算法仍無法通過時，交付 PR-00/01 的 failing report，保持 production legacy，不交付 active 為已驗收。
 
 ## 7. 回歸與品質矩陣
@@ -273,6 +308,8 @@ PR-01 必須通過下列第 1～4、6～7 項才進入 PR-02。第 5 項的 snap
 每一程式碼工作包執行：
 
 ```bash
+export TMPDIR=/tmp
+export GOTMPDIR=/tmp
 git status --short
 git rev-parse HEAD
 go test ./internal/context/... ./internal/team/... ./internal/evalharness/... ./cmd/hufu/...
@@ -284,8 +321,10 @@ go vet ./...
 golangci-lint run
 ```
 
-涉及 invocation state、clock、provider capture、shared buffers 的改動另執行受影響 package 的 `go test -race`。本機 socket 沙箱阻擋 httptest 時，依環境工具權限流程執行本機 fake-provider 測試，不能以外部真模型替代。實際 benchmark 命令和輸出隨工作包提供。
+涉及 invocation state、clock、provider capture、shared buffers 的改動另執行受影響 package 的 `go test -race`。race 檢查 concurrency／contract correctness，不作 production latency SLA：固定 snapshot 的 active 路徑和真實 SQLite 的 deadline rollback 分別驗證；品質改善仍以 §4.4 的真實 fake-provider 配對結果為 gate，不能跳過或改 oracle。本機 socket 沙箱阻擋 httptest 時，依環境工具權限流程執行本機 fake-provider 測試，不能以外部真模型替代。實際 benchmark 命令和輸出隨工作包提供。
 
 修改程式後更新對應現行 reference/architecture 中的已實作行為，並在本計畫記錄每一階段的實作與驗證狀態；每階段驗收後分別 commit。不得因本計畫改寫尚未核准的 lineage 架構文件。
+
+文件修訂單獨執行 `bin/check-docs` 和 `git diff --check -- docs/implementation-plans/context-delivery.md`；不藉此提交或修改其他未驗收的程式碼。`docs/tmp/` 維持 scratch-space 規則，本次不新增、搬移或 staging 該目錄的文件。
 
 完成報告分開列出：已實作工作包、passing/failing gates、fixture 品質差異、fallback 頻率、成本數據、尚未證明的真實成效。允許 truthful 的部分交付；不能把程式編譯成功或 fake provider 回答成功宣稱為真實任務效益。

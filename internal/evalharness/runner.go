@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -89,6 +90,11 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	ctx = context.WithValue(ctx, tools.UnattendedKey, true)
 	if c.EvaluationTime != nil {
 		ctx = contextstore.WithEvaluationTime(ctx, *c.EvaluationTime)
+	}
+	var profileErr error
+	ctx, profileErr = team.WithContextQueryEvaluationProfile(ctx, c.QueryProfileOverride)
+	if profileErr != nil {
+		return EvalCaseResult{}, profileErr
 	}
 	var delivery *contextDeliveryCapture
 	if len(c.Expect.ContextDelivery) > 0 || len(c.Expect.ForbiddenContext) > 0 || c.Expect.ProviderCallCount != nil {
@@ -195,7 +201,10 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	}
 
 	var events []team.StatusEvent
+	var eventsMu sync.Mutex
 	coordinator.SetStatusReporter(func(e team.StatusEvent) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
 		events = append(events, e)
 	})
 
@@ -205,7 +214,10 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 	runResult := coordinator.LastRunResult()
 	tasks := coordinator.TaskTracker().TodoList().Items()
 
-	findings := assertRun(c.Expect, runResult, coordinator.TerminalLifecycleConfirmed(), events, tasks)
+	eventsMu.Lock()
+	observedEvents := slices.Clone(events)
+	eventsMu.Unlock()
+	findings := assertRun(c.Expect, runResult, coordinator.TerminalLifecycleConfirmed(), observedEvents, tasks)
 	durableEvents, durableEventsErr := coordinator.EventJournal().ReadEvents(context.WithoutCancel(caseCtx))
 	if durableEventsErr != nil {
 		findings = append(findings, EvalFinding{

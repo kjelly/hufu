@@ -121,7 +121,7 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 			(manifest.Trigger != ContextTriggerRetry || manifest.Purpose != contextPurposeForTrigger(ContextTriggerRetry)) {
 			continue
 		}
-		if manifest.SchemaVersion != ContextManifestSchemaVersion || !strings.EqualFold(manifest.Agent, strings.TrimSpace(item.Agent)) || manifest.Fingerprint != contextManifestFingerprint(manifest) {
+		if !supportedDeliveryContextManifest(manifest) || !strings.EqualFold(manifest.Agent, strings.TrimSpace(item.Agent)) {
 			return fmt.Errorf("required evidence delivery manifest identity is invalid")
 		}
 		// Every model in a fanout must receive the same full evidence. Repair
