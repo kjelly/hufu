@@ -54,6 +54,8 @@ The command must complete successfully with no errors before the task is conside
 | `readline` | `internal/readline/` | `github.com/ergochat/readline` wrapper for interactive prompts |
 | `config` | `internal/config/` | YAML config loader (`~/.config/hufu/hufu.yaml`, `./hufu.yaml`) |
 | `memory` | `internal/memory/` | Long-term memory (RAG) with chromem-go vector store |
+| `embedding` | `internal/embedding/` | Embedding encoders: verified static tables and the Ollama `/api/embed` adapter (encoder profile, query budget) |
+| `semantic` | `internal/semantic/` | `semantic-retrieval` configuration (mode, model, endpoint, budgets) shared by hufu.yaml, team.yaml and the runtime |
 | `hooks` | `internal/hooks/` | Hook registry for tool lifecycle events |
 | `notify` | `internal/notify/` | External notification system (webhooks) |
 | `audit` | `internal/audit/` | Tool call audit logging |
@@ -235,6 +237,7 @@ In addition to `hufu [prompt]`, the CLI exposes helper subcommands so users can 
 | `hufu context consolidate [--apply-proposal --source <ids> (--proposal-text <text> \| --draft)]` | Dry run lists deterministic consolidation clusters (and members with unresolved memory conflicts). `--apply-proposal` persists a candidate derived from the sources, with operator text or, with `--draft`, strict-JSON text from the team sidecar model; either way the sources must be current, supported, and conflict-free, and `hufu context consolidation approve` is still required. |
 | `hufu context conflicts <scan\|list\|show\|dismiss>` | Offline memory-conflict review. `scan` pairs confirmed persistent memories in the same scope by token overlap and shared file-path evidence (plus Ollama embedding neighbors with `--vector`, which needs a local embedding model) and asks the team sidecar model for a strict-JSON verdict, at most `--max-pairs` calls per scan; judged pairs are cached. `list`/`show` are read-only and content-free by default. Resolve an open conflict with `hufu context supersede <old> --with <new>` or `dismiss --reason`; nothing is superseded or dismissed automatically. |
 | `hufu context retire <id...> --reason <text>` | Withdraws current confirmed records an operator found wrong or stale when no confirmed replacement exists. The record expires at once, so it leaves prompts, promotion, and consolidation sources, and consolidations derived from it are demoted in the same transaction; the record and the redacted reason stay for audit. Candidates, superseded or expired records, and consolidated candidates are refused; use `supersede` when a replacement exists. |
+| `hufu context semantic <status\|build\|verify>` | Operates the semantic memory index (`semantic-retrieval` in hufu.yaml). `status` and `build --dry-run` are offline; `build` embeds only new or edited items through the local Ollama encoder (never pulls a model); `verify` checks vector integrity, per-item coverage (`--strict` fails on uncovered items), and, unless `--offline`, that the active generation matches the encoder's current digest and profile. See `docs/reference/semantic-retrieval.md`. |
 
 ### Profiles
 

@@ -437,6 +437,26 @@ path. Check the evidence with `hufu inspect control-decisions` or the report's
 Control Decisions section before switching a point to `active`. See
 [Runtime control decisions](docs/reference/control-decisions.md).
 
+### Semantic memory retrieval
+
+Exact and FTS5 retrieval only match ASCII terms, so a Chinese goal cannot
+reach a Chinese memory. Add a `semantic-retrieval:` block to hufu.yaml or
+team.yaml to embed canonical memory with a local Ollama model:
+
+```yaml
+semantic-retrieval:
+  mode: shadow                     # off (default) | shadow | active
+  model: ollama/embeddinggemma:latest
+```
+
+`shadow` embeds and writes content-free traces without changing which
+memories are selected; `active` fuses the semantic lane into shared and worker
+memory ranking. The model loads in the background, so a run never waits for
+it, and any encoder failure falls back to exact and lexical retrieval. hufu
+never pulls the model (`ollama pull embeddinggemma` first). Operate the index
+with `hufu context semantic status|build|verify`. See
+[Semantic memory retrieval](docs/reference/semantic-retrieval.md).
+
 ---
 
 ## CLI Flags Reference
@@ -938,6 +958,12 @@ plan-reviewer-model: qwen3:8b   # Model for plan review tasks
 control-decisions:
   model: nimble                  # endpoint defaults to http://127.0.0.1:11434/v1/systemone
   mode: shadow                   # off (default) | shadow | active, per point under points:
+
+# === Semantic memory retrieval (Ollama embeddings) ===
+semantic-retrieval:
+  mode: off                      # off (default) | shadow | active
+  model: ollama/embeddinggemma:latest   # or qwen3-embedding:0.6b
+  # endpoint: http://127.0.0.1:11434  # non-loopback needs allow-remote-endpoint: true
 
 # === Model-call timeouts ===
 # A category applies to every call in it; leave one out to keep each call's

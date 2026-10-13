@@ -254,6 +254,24 @@ control-decisions:
 改成 `active` 前，先用 `hufu inspect control-decisions` 或 report 的 Control Decisions
 區段檢查資料。詳見 [Runtime control decisions](docs/reference/control-decisions.md)。
 
+### 語意記憶檢索
+
+Exact 與 FTS5 檢索只比對 ASCII 詞，中文 goal 找不到中文記憶。在 hufu.yaml 或 team.yaml
+加上 `semantic-retrieval:`，用本機 Ollama embedding 模型嵌入 canonical 記憶：
+
+```yaml
+semantic-retrieval:
+  mode: shadow                     # off（預設）| shadow | active
+  model: ollama/embeddinggemma:latest
+```
+
+- `shadow`：嵌入並寫入不含內容的 trace，不改變選入哪些記憶。
+- `active`：把語意結果融合進 shared 與 worker 記憶的排序。
+
+模型在背景載入，run 不會等模型；encoder 任何失敗都會退回 exact 與 lexical。hufu 不會自動
+pull 模型（請先 `ollama pull embeddinggemma`）。索引用 `hufu context semantic status|build|verify`
+操作。詳見 [Semantic memory retrieval](docs/reference/semantic-retrieval.md)。
+
 ---
 
 ## CLI Flags 參考

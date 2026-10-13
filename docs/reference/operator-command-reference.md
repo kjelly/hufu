@@ -95,6 +95,18 @@ hufu context promotion review --workspace ./workspace/dev-team --project project
 hufu context conflicts list --workspace ./workspace/dev-team --project project-id --team dev-team
 ```
 
+### Semantic memory index
+
+```sh
+hufu context semantic status --workspace ./workspace/dev-team
+hufu context semantic build --workspace ./workspace/dev-team --dry-run
+hufu context semantic verify --workspace ./workspace/dev-team --strict
+```
+
+`status` and `build --dry-run` never contact the encoder; `verify` checks the
+encoder profile unless `--offline`. See
+[Semantic memory retrieval](semantic-retrieval.md).
+
 ### Automation
 
 ```sh

@@ -94,6 +94,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Action providers](reference/action-providers.md) — team-owned command,
   embedded Go, and MCP tool adapters for structured runtime actions.
 - [Canonical context SQLite schema](reference/context-sqlite-schema.md)
+- [Semantic memory retrieval](reference/semantic-retrieval.md) — off, shadow, and
+  active Ollama embedding lane for canonical memory, per-item freshness, and
+  the `hufu context semantic` commands.
 - [Context delivery baseline](reference/context-delivery-baseline.md) — pre-change
   full-suite results and the Unix socket temporary-path requirement.
 - [Context delivery evaluation](reference/context-delivery-evaluation.md) — provider
