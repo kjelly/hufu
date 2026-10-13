@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/embedding"
 	"github.com/kjelly/hufu/internal/semantic"
@@ -21,10 +20,12 @@ import (
 type contextSemanticOptions struct {
 	workspace string
 	project   string
+	team      string
 	json      bool
 	dryRun    bool
 	strict    bool
 	offline   bool
+	warn      io.Writer
 }
 
 func init() {
@@ -36,8 +37,10 @@ func newContextSemanticCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "semantic",
 		Short: "Inspect, build, and verify the semantic memory index",
-		Long: "Operate the disposable semantic projection of canonical memory. Settings come from the " +
-			"semantic-retrieval block of hufu.yaml (team.yaml overrides apply only inside a run).",
+		Long: "Operate the disposable semantic projection of canonical memory. Settings are the ones a run " +
+			"of the team uses: the semantic-retrieval block of hufu.yaml merged with the team's own block. " +
+			"The team is --team, else the only team with memories in the project.",
+		PersistentPreRun: func(command *cobra.Command, _ []string) { opts.warn = command.ErrOrStderr() },
 	}
 	status := &cobra.Command{
 		Use:   "status",
@@ -66,6 +69,7 @@ func newContextSemanticCommand() *cobra.Command {
 	for _, sub := range []*cobra.Command{status, build, verify} {
 		sub.Flags().StringVarP(&opts.workspace, "workspace", "w", "", "Workspace directory containing context.sqlite (default: active managed workspace)")
 		sub.Flags().StringVar(&opts.project, "project", "", "Canonical project ID (default: the only project in the store)")
+		sub.Flags().StringVar(&opts.team, "team", "", "Team whose semantic-retrieval block overrides hufu.yaml (default: the only team in the project)")
 		sub.Flags().BoolVar(&opts.json, "json", false, "Emit JSON")
 	}
 	build.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Report what would change without contacting the encoder or writing")
@@ -77,8 +81,12 @@ func newContextSemanticCommand() *cobra.Command {
 
 // semanticReport is the content-free status/verify view.
 type semanticReport struct {
-	Workspace       string                     `json:"workspace"`
-	ProjectID       string                     `json:"project_id"`
+	Workspace string `json:"workspace"`
+	ProjectID string `json:"project_id"`
+	// Team is the team whose block was considered; SettingsSource names the
+	// layers the settings came from.
+	Team            string                     `json:"team,omitempty"`
+	SettingsSource  string                     `json:"settings_source"`
 	Settings        semantic.Settings          `json:"settings"`
 	InventoryPolicy string                     `json:"inventory_policy"`
 	InventoryItems  int                        `json:"inventory_items"`
@@ -174,8 +182,11 @@ func activeSemanticGeneration(ctx context.Context, store *contextstore.SQLiteRep
 	return active, others, nil
 }
 
-func buildSemanticReport(ctx context.Context, store *contextstore.SQLiteRepository, workspace, projectID string, settings semantic.Settings) (semanticReport, *contextstore.Generation, error) {
-	report := semanticReport{Workspace: workspace, ProjectID: projectID, Settings: settings, InventoryPolicy: contextstore.InventoryPolicyRetrievable}
+func buildSemanticReport(ctx context.Context, store *contextstore.SQLiteRepository, workspace, projectID string, settings semantic.Settings, source semanticSource) (semanticReport, *contextstore.Generation, error) {
+	report := semanticReport{
+		Workspace: workspace, ProjectID: projectID, Team: source.team, SettingsSource: source.label,
+		Settings: settings, InventoryPolicy: contextstore.InventoryPolicyRetrievable,
+	}
 	report.Settings.Endpoint = embedding.RedactEndpoint(settings.Endpoint)
 	active, others, err := activeSemanticGeneration(ctx, store, projectID, settings.Model)
 	if err != nil {
@@ -204,12 +215,47 @@ func buildSemanticReport(ctx context.Context, store *contextstore.SQLiteReposito
 	return report, active, nil
 }
 
-func semanticSettings() (semantic.Settings, error) {
-	settings, err := config.LoadConfig().SemanticRetrieval.Resolve()
-	if err != nil {
-		return semantic.Settings{}, fmt.Errorf("resolve semantic-retrieval: %w", err)
+// semanticSource is where the settings of one command came from.
+type semanticSource struct {
+	team  string
+	label string
+}
+
+// resolveSettings resolves the settings a run of the project's team uses:
+// hufu.yaml merged with the team's semantic-retrieval block. The team is
+// --team, which must be in the team search path, else the only team with
+// memories in the project; an inferred team that is not found keeps
+// hufu.yaml.
+func (o *contextSemanticOptions) resolveSettings(ctx context.Context, store *contextstore.SQLiteRepository, projectID string) (semantic.Settings, semanticSource, error) {
+	teamName := strings.TrimSpace(o.team)
+	explicit := teamName != ""
+	if !explicit {
+		ids, err := store.TeamIDs(ctx, projectID)
+		if err != nil {
+			return semantic.Settings{}, semanticSource{}, fmt.Errorf("list canonical teams: %w", err)
+		}
+		if len(ids) == 1 {
+			teamName = ids[0]
+		}
 	}
-	return settings, nil
+	warn := o.warn
+	if warn == nil {
+		warn = io.Discard
+	}
+	settings, found, overridden, err := semanticSettingsForTeam(teamName, warn)
+	if err != nil {
+		return semantic.Settings{}, semanticSource{}, err
+	}
+	switch {
+	case explicit && !found:
+		return semantic.Settings{}, semanticSource{}, fmt.Errorf("team %q is not in the team search path", teamName)
+	case !found:
+		return settings, semanticSource{label: "hufu.yaml"}, nil
+	case overridden:
+		return settings, semanticSource{team: teamName, label: "hufu.yaml + team " + teamName}, nil
+	default:
+		return settings, semanticSource{team: teamName, label: "hufu.yaml (team " + teamName + " has no override)"}, nil
+	}
 }
 
 func runContextSemanticStatus(ctx context.Context, out io.Writer, opts *contextSemanticOptions) error {
@@ -221,10 +267,6 @@ func runContextSemanticStatus(ctx context.Context, out io.Writer, opts *contextS
 }
 
 func loadSemanticReport(ctx context.Context, opts *contextSemanticOptions) (semanticReport, *contextstore.Generation, error) {
-	settings, err := semanticSettings()
-	if err != nil {
-		return semanticReport{}, nil, err
-	}
 	workspace, err := opts.workspacePath()
 	if err != nil {
 		return semanticReport{}, nil, err
@@ -238,7 +280,11 @@ func loadSemanticReport(ctx context.Context, opts *contextSemanticOptions) (sema
 	if err != nil {
 		return semanticReport{}, nil, err
 	}
-	return buildSemanticReport(ctx, store, workspace, projectID, settings)
+	settings, source, err := opts.resolveSettings(ctx, store, projectID)
+	if err != nil {
+		return semanticReport{}, nil, err
+	}
+	return buildSemanticReport(ctx, store, workspace, projectID, settings, source)
 }
 
 func runContextSemanticBuild(ctx context.Context, out io.Writer, opts *contextSemanticOptions) error {
@@ -255,10 +301,6 @@ func runContextSemanticBuild(ctx context.Context, out io.Writer, opts *contextSe
 			report.InventoryItems, report.Covered, report.Uncovered, report.Dropped)
 		return err
 	}
-	settings, err := semanticSettings()
-	if err != nil {
-		return err
-	}
 	workspace, err := opts.workspacePath()
 	if err != nil {
 		return err
@@ -269,6 +311,10 @@ func runContextSemanticBuild(ctx context.Context, out io.Writer, opts *contextSe
 	}
 	defer func() { _ = store.Close() }()
 	projectID, err := opts.resolveProject(ctx, store)
+	if err != nil {
+		return err
+	}
+	settings, _, err := opts.resolveSettings(ctx, store, projectID)
 	if err != nil {
 		return err
 	}
@@ -332,10 +378,6 @@ func openSemanticEncoder(ctx context.Context, settings semantic.Settings, preloa
 }
 
 func runContextSemanticVerify(ctx context.Context, out io.Writer, opts *contextSemanticOptions) error {
-	settings, err := semanticSettings()
-	if err != nil {
-		return err
-	}
 	workspace, err := opts.workspacePath()
 	if err != nil {
 		return err
@@ -349,7 +391,11 @@ func runContextSemanticVerify(ctx context.Context, out io.Writer, opts *contextS
 	if err != nil {
 		return err
 	}
-	report, active, err := buildSemanticReport(ctx, store, workspace, projectID, settings)
+	settings, source, err := opts.resolveSettings(ctx, store, projectID)
+	if err != nil {
+		return err
+	}
+	report, active, err := buildSemanticReport(ctx, store, workspace, projectID, settings, source)
 	if err != nil {
 		return err
 	}
@@ -401,7 +447,7 @@ func writeSemanticReport(out io.Writer, report semanticReport, asJSON bool) erro
 	}
 	var b strings.Builder
 	s := report.Settings
-	fmt.Fprintf(&b, "Semantic retrieval (hufu.yaml): mode=%s model=%s endpoint=%s\n", s.Mode, s.Model, s.Endpoint)
+	fmt.Fprintf(&b, "Semantic retrieval (%s): mode=%s model=%s endpoint=%s\n", report.SettingsSource, s.Mode, s.Model, s.Endpoint)
 	fmt.Fprintf(&b, "  query budget %d tokens, input limit %d tokens, query timeout %s, load timeout %s\n", s.QueryMaxTokens, s.MaxInputTokens, s.QueryTimeout, s.LoadTimeout)
 	fmt.Fprintf(&b, "Project %s, inventory %s: %d items\n", report.ProjectID, report.InventoryPolicy, report.InventoryItems)
 	if a := report.Active; a != nil {

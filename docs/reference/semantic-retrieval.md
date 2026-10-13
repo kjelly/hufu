@@ -152,9 +152,9 @@ Manifests, receipts, and traces record one content-free reason:
 ## Operator commands
 
 ```bash
-hufu context semantic status  -w <workspace> [--project <id>] [--json]
-hufu context semantic build   -w <workspace> [--project <id>] [--dry-run]
-hufu context semantic verify  -w <workspace> [--project <id>] [--strict] [--offline]
+hufu context semantic status  -w <workspace> [--project <id>] [--team <name>] [--json]
+hufu context semantic build   -w <workspace> [--project <id>] [--team <name>] [--dry-run]
+hufu context semantic verify  -w <workspace> [--project <id>] [--team <name>] [--strict] [--offline]
 ```
 
 - `status` is read-only and offline: settings, the active generation, and
@@ -165,7 +165,13 @@ hufu context semantic verify  -w <workspace> [--project <id>] [--strict] [--offl
   whether the active generation still matches the encoder's current profile
   and digest. Uncovered items are a warning unless `--strict`.
 
-`--project` may be omitted when the store holds one project.
+`--project` may be omitted when the store holds one project. The settings are
+the ones a run of the team uses: hufu.yaml merged with the team's own
+`semantic-retrieval` block. The team is `--team` (it must be in the team
+search path), else the only team with memories in the project; an inferred
+team that is not found, or a project with several teams, uses hufu.yaml
+alone. `status` and `verify` print the source, for example
+`hufu.yaml + team web-research`, and JSON adds `team` and `settings_source`.
 
 ## Traces
 

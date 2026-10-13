@@ -25,23 +25,32 @@ const contextSemanticModeUsage = "Semantic retrieval mode to replay: off, shadow
 // team is discoverable. A team that cannot be read keeps hufu.yaml and is
 // reported on warn.
 func contextSemanticSettings(teamName string, warn io.Writer) (semantic.Settings, error) {
+	settings, _, _, err := semanticSettingsForTeam(teamName, warn)
+	return settings, err
+}
+
+// semanticSettingsForTeam is contextSemanticSettings that also reports
+// whether the team was found in the search path and whether its block
+// changed anything.
+func semanticSettingsForTeam(teamName string, warn io.Writer) (settings semantic.Settings, found, overridden bool, err error) {
 	cfg := config.LoadConfig().SemanticRetrieval
 	registry := team.NewTeamRegistry(resolveSearchPaths())
-	if err := registry.Discover(); err == nil {
-		if dir, err := registry.Resolve(teamName); err == nil {
+	if discoverErr := registry.Discover(); discoverErr == nil && strings.TrimSpace(teamName) != "" {
+		if dir, resolveErr := registry.Resolve(teamName); resolveErr == nil {
+			found = true
 			block, blockErr := team.TeamSemanticRetrievalConfig(dir)
 			if blockErr != nil {
 				_, _ = fmt.Fprintf(warn, "warning: %v; using hufu.yaml semantic-retrieval only\n", blockErr)
-			} else {
-				cfg = semantic.Merge(cfg, block)
+			} else if block != (semantic.Config{}) {
+				cfg, overridden = semantic.Merge(cfg, block), true
 			}
 		}
 	}
-	settings, err := cfg.Resolve()
+	settings, err = cfg.Resolve()
 	if err != nil {
-		return semantic.Settings{}, fmt.Errorf("resolve semantic-retrieval: %w", err)
+		return semantic.Settings{}, found, overridden, fmt.Errorf("resolve semantic-retrieval: %w", err)
 	}
-	return settings, nil
+	return settings, found, overridden, nil
 }
 
 // parseContextSemanticMode validates a --semantic-mode style flag; empty

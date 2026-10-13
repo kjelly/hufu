@@ -319,6 +319,25 @@ func (r *SQLiteRepository) ProjectIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// TeamIDs lists the distinct non-empty team IDs with canonical items in
+// projectID.
+func (r *SQLiteRepository) TeamIDs(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT DISTINCT team_id FROM context_items WHERE project_id = ? AND team_id <> '' ORDER BY team_id", projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // SchemaVersion is the newest applied migration of the open store.
 func (r *SQLiteRepository) SchemaVersion() int { return r.schemaVersion }
 

@@ -154,3 +154,63 @@ func TestContextSemanticCommandsLifecycle(t *testing.T) {
 		t.Fatalf("verify after digest drift = %q, %v", output, err)
 	}
 }
+
+func TestContextSemanticCommandsUseTheTeamBlock(t *testing.T) {
+	workspace, _ := setupSemanticCommandWorkspace(t)
+	teams := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(teams, "team"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teams, "team", "team.yaml"), []byte("name: team\nsemantic-retrieval:\n  mode: active\n  fusion: legacy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(teams, "plain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(teams, "plain", "team.yaml"), []byte("name: plain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldSearchPath := opts.agentTeamSearchPath
+	opts.agentTeamSearchPath = teams
+	t.Cleanup(func() { opts.agentTeamSearchPath = oldSearchPath })
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantMode   string
+		wantFusion string
+		wantTeam   string
+		wantSource string
+	}{
+		{name: "inferred team overrides", args: nil, wantMode: "active", wantFusion: "legacy", wantTeam: "team", wantSource: "hufu.yaml + team team"},
+		{name: "explicit team without block", args: []string{"--team", "plain"}, wantMode: "shadow", wantFusion: "score_normalized", wantTeam: "plain", wantSource: "hufu.yaml (team plain has no override)"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := semanticJSONReport(t, append([]string{"status", "-w", workspace}, tc.args...)...)
+			if string(report.Settings.Mode) != tc.wantMode || string(report.Settings.Fusion) != tc.wantFusion || report.Team != tc.wantTeam || report.SettingsSource != tc.wantSource {
+				t.Fatalf("status = mode %q fusion %q team %q source %q", report.Settings.Mode, report.Settings.Fusion, report.Team, report.SettingsSource)
+			}
+		})
+	}
+	if output, err := runSemanticCommand(t, "status", "-w", workspace, "--team", "missing"); err == nil || !strings.Contains(output+err.Error(), "not in the team search path") {
+		t.Fatalf("missing team = %q, %v", output, err)
+	}
+	text, err := runSemanticCommand(t, "status", "-w", workspace)
+	if err != nil || !strings.Contains(text, "Semantic retrieval (hufu.yaml + team team): mode=active") {
+		t.Fatalf("status text = %q, %v", text, err)
+	}
+
+	// With two teams in the project nothing is inferred.
+	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Append(t.Context(), contextstore.ContextItem{ID: "x", Kind: contextstore.ContextDecision, Content: "other team", Scope: contextstore.Scope{ProjectID: "p", TeamID: "plain"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = repo.Close()
+	if report := semanticJSONReport(t, "status", "-w", workspace); report.Team != "" || report.SettingsSource != "hufu.yaml" || report.Settings.Mode != "shadow" {
+		t.Fatalf("two-team status = team %q source %q mode %q", report.Team, report.SettingsSource, report.Settings.Mode)
+	}
+}
