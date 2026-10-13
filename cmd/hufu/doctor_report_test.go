@@ -303,6 +303,7 @@ func TestDoctorProviderResponseDiagnostics(t *testing.T) {
 			defer server.Close()
 			previous := opts
 			defer func() { opts = previous }()
+			t.Setenv("HOME", t.TempDir())
 			opts.workspace, opts.agentTeamSearchPath, opts.providerURL = t.TempDir(), t.TempDir(), server.URL+"/private?token=secret"
 			report := collectDoctorReport(t.Context())
 			check := doctorCheckByID(t, report, "provider.reachable")

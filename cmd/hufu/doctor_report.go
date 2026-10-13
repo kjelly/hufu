@@ -16,6 +16,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -141,7 +142,8 @@ func collectDoctorReport(ctx context.Context) doctorReport {
 	}
 	collectDoctorModels(&report, cfg, models)
 	collectDoctorWorkspace(ctx, &report, getWorkspace())
-	collectDoctorTeams(&report, cfg)
+	teamSemantic := collectDoctorTeams(&report, cfg)
+	collectDoctorSemantic(ctx, &report, cfg, teamSemantic)
 	report.finish()
 	return report
 }
@@ -170,21 +172,24 @@ func collectDoctorModels(report *doctorReport, cfg *config.Config, available []s
 	}
 }
 
-func collectDoctorTeams(report *doctorReport, cfg *config.Config) {
+// collectDoctorTeams checks every discovered team and returns the
+// semantic-retrieval blocks of the teams that set one.
+func collectDoctorTeams(report *doctorReport, cfg *config.Config) map[string]semantic.Config {
+	semanticBlocks := map[string]semantic.Config{}
 	registry := team.NewTeamRegistry(resolveSearchPaths())
 	if err := registry.Discover(); err != nil {
 		report.add("teams.discovery", "", "warning", "team discovery did not complete")
-		return
+		return semanticBlocks
 	}
 	if registry.TeamCount() == 0 {
 		report.add("teams.discovery", "", "warning", "no teams found; use --default or hufu init")
-		return
+		return semanticBlocks
 	}
 	report.add("teams.discovery", "", "pass", fmt.Sprintf("%d team(s) found", registry.TeamCount()))
 	projectDir, projectErr := os.Getwd()
 	if projectErr != nil {
 		report.add("teams.contract", "", "fail", "runtime project directory is unavailable")
-		return
+		return semanticBlocks
 	}
 	findings := 0
 	for _, name := range registry.ListTeams() {
@@ -199,6 +204,9 @@ func collectDoctorTeams(report *doctorReport, cfg *config.Config) {
 			report.add("teams.contract", name, "fail", "team contract could not be loaded")
 			findings++
 			continue
+		}
+		if block := session.Config.SemanticRetrieval; block != (semantic.Config{}) {
+			semanticBlocks[name] = block
 		}
 		if team.HasAuthoredLegacyLocalExecutionBackend(session) {
 			report.add("teams.contract", name, "warning", "legacy local execution backend alias is in use")
@@ -221,6 +229,7 @@ func collectDoctorTeams(report *doctorReport, cfg *config.Config) {
 	if findings == 0 {
 		report.add("teams.contract", "", "pass", "all team verifier contracts are valid and asserting")
 	}
+	return semanticBlocks
 }
 
 func collectDoctorWorkspace(ctx context.Context, report *doctorReport, workspace string) {

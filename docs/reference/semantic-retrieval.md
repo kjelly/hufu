@@ -211,11 +211,50 @@ Runtime**.
 Set `mode: off` and start a new session. Canonical memory and generations are
 untouched; `off` sends no request and changes nothing in prompts.
 
+## Explaining and replaying
+
+`hufu context explain-memory` and `hufu context ranking-replay` recompute the
+semantic lane and auto routing as a run of the team would: the settings are
+hufu.yaml merged with the team's own `semantic-retrieval` block (found by
+`--team` in the team search path). They load the encoder and read the active
+generation, but never refresh the index or write traces, so memories added
+since the last refresh report `projection_incomplete` until a run or
+`hufu context semantic build` embeds them.
+
+```bash
+hufu context explain-memory <id> --project <p> --team <t> --query <goal> [--semantic-mode off|shadow|active|auto]
+hufu context ranking-replay --project <p> --team <t> --query <goal> \
+  [--semantic-mode <mode>] [--candidate-semantic-mode <mode>] [--candidate-fusion <fusion>]
+```
+
+- `--semantic-mode` overrides the configured mode; `off` gives the lexical
+  ranking alone.
+- explain-memory adds a `semantic` block: mode, fusion, encoder state, model,
+  generation, the query's route and route share, and the lane's fallback.
+  `fusion` at the top level is the fusion the ranking actually used.
+- ranking-replay compares the baseline with a candidate that may differ in
+  semantic mode, fusion, or both. With `--candidate-semantic-mode` and no
+  `--candidate-fusion`, the candidate keeps the baseline fusions, which
+  isolates the effect of the lane; a `--candidate-fusion` replaces the lane's
+  fusion too. The report adds per-query routes and fallbacks and their counts.
+  Each query is embedded once per replay and every ranking of it sees the
+  same lane result.
+
+## Doctor
+
+`hufu doctor` checks semantic retrieval without loading or pulling a model:
+
+- `semantic.config`: the resolved settings of hufu.yaml and of each team
+  that overrides them; an invalid block fails.
+- `semantic.encoder`: for each distinct enabled encoder, that Ollama serves
+  the model and its context fits the input limit, with the digest prefix and
+  dimensions. An unreachable endpoint or a model that is not pulled is a
+  warning, because retrieval then falls back to lexical.
+- `semantic.legacy-embedding-model`: the legacy `embedding-model`, which does
+  not affect semantic retrieval.
+
 ## Known limits
 
-- `hufu context explain-memory` and `hufu context ranking-replay` reproduce
-  exact and lexical ranking only; in `active` mode they do not replay the
-  semantic lane.
 - Quality (2026-10-13, embeddinggemma, offline replay judged by an LLM;
   useful@4 is the share of injected memories judged directly useful): on 200
   English review tasks the lane did not help (0.352 without it, 0.336 with
