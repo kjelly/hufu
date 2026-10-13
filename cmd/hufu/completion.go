@@ -366,6 +366,9 @@ export extern "hufu context conflicts scan" [
 export extern "hufu context conflicts list" [--workspace(-w): string --project: string --team: string --json --all]
 export extern "hufu context conflicts show" [conflict_id: string --workspace(-w): string --project: string --team: string --json --show-content]
 export extern "hufu context conflicts dismiss" [conflict_id: string --workspace(-w): string --project: string --team: string --json --reason: string]
+export extern "hufu context semantic status" [--workspace(-w): string --project: string --json]
+export extern "hufu context semantic build" [--workspace(-w): string --project: string --json --dry-run]
+export extern "hufu context semantic verify" [--workspace(-w): string --project: string --json --strict --offline]
 
 export extern "hufu team create" [
   name: string
