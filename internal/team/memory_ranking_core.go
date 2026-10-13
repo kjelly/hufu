@@ -41,10 +41,37 @@ type persistentRankingInput struct {
 // fuses the vector results and narrows every lane to the authorized IDs
 // before the candidate limit (spec §7.3).
 type persistentSemanticLane struct {
-	Vector      contextstore.VectorSearcher
-	Mode        contextstore.RetrievalMode
+	Vector contextstore.VectorSearcher
+	Mode   contextstore.RetrievalMode
+	// Router is set in auto mode: a request it routes lexical runs without
+	// the lane, exactly as mode off.
+	Router semanticRouter
+	// Fusion replaces the ranking policy's fusion for active requests;
+	// empty keeps the policy's.
+	Fusion      contextstore.FusionMode
 	TraceHasher contextstore.TraceHasher
 	TraceSink   func(contextstore.SemanticRetrievalTrace)
+}
+
+// requestLane routes one ranking request: it returns the lane to use (nil for
+// lexical only) and the fusion. It runs once per request so auto mode counts
+// one decision even when the goal fallback retrieves twice.
+func (in persistentRankingInput) requestLane() (*persistentSemanticLane, contextstore.FusionMode) {
+	lane := in.Semantic
+	if lane == nil || lane.Vector == nil {
+		return nil, in.Ranking.Fusion
+	}
+	text := in.SemanticQuery
+	if strings.TrimSpace(text) == "" {
+		text = in.Query
+	}
+	route := resolveSemanticRoute(lane.Mode, lane.Router, lane.Fusion, in.Ranking.Fusion, text)
+	if route.Mode == contextstore.RetrievalOff {
+		return nil, route.Fusion
+	}
+	routed := *lane
+	routed.Mode = route.Mode
+	return &routed, route.Fusion
 }
 
 type persistentRankingResult struct {
@@ -107,10 +134,10 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	if in.Allowed != nil && len(in.Base) > candidateLimit {
 		candidateLimit = len(in.Base)
 	}
+	lane, fusion := in.requestLane()
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
 		req := contextstore.SearchRequest{Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit}
-		options := contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight}
-		lane := in.Semantic
+		options := contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight}
 		var tracker *trackingVectorSearcher
 		if lane != nil && lane.Vector != nil {
 			tracker = &trackingVectorSearcher{delegate: lane.Vector}
@@ -158,7 +185,7 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 			results = results[:in.Ranking.CandidateTopK]
 		}
 	}
-	normalizeFusedRelevance(results, in.Ranking.Fusion)
+	normalizeFusedRelevance(results, fusion)
 	return finishPersistentRanking(ctx, experience, in, out, results)
 }
 

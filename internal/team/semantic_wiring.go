@@ -34,7 +34,8 @@ func (c *Coordinator) initSemanticRetrieval(repo contextstore.Repository, noNet 
 	c.semanticRuntime, c.ownsSemanticRuntime = runtime, true
 	c.semanticTraceHasher, c.semanticTraceSink = hasher, sink
 	c.workerMemorySvc = NewWorkerMemoryServiceWithOptions(repo, WorkerMemoryOptions{
-		Semantic: runtime, Mode: runtime.Mode(), TraceHasher: hasher, TraceSink: sink,
+		Semantic: runtime, Mode: runtime.Mode(), Router: runtime.router(), Fusion: runtime.Fusion(),
+		TraceHasher: hasher, TraceSink: sink,
 	})
 	return nil
 }
@@ -47,6 +48,7 @@ func (c *Coordinator) persistentSemanticLane() *persistentSemanticLane {
 	}
 	return &persistentSemanticLane{
 		Vector: c.semanticRuntime, Mode: c.semanticRuntime.Mode(),
+		Router: c.semanticRuntime.router(), Fusion: c.semanticRuntime.Fusion(),
 		TraceHasher: c.semanticTraceHasher, TraceSink: c.semanticTraceSink,
 	}
 }

@@ -181,8 +181,13 @@ type defaultWorkerMemoryService struct {
 }
 
 type WorkerMemoryOptions struct {
-	Semantic          contextstore.VectorSearcher
-	Mode              contextstore.RetrievalMode
+	Semantic contextstore.VectorSearcher
+	Mode     contextstore.RetrievalMode
+	// Router is set in auto mode; a recall it routes lexical runs without
+	// the semantic lane, exactly as mode off.
+	Router semanticRouter
+	// Fusion fuses the semantic lane in active recalls; empty is legacy.
+	Fusion            contextstore.FusionMode
 	UnavailableReason contextstore.SemanticFallbackReason
 	TraceHasher       contextstore.TraceHasher
 	TraceSink         func(contextstore.SemanticRetrievalTrace)
@@ -256,6 +261,8 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	}
 
 	querySnapshot := s.beginPrivateQuerySnapshot(ctx, req, maxItems, maxTokens)
+	// Route once per recall so auto mode counts one decision for all scopes.
+	route := resolveSemanticRoute(s.options.Mode, s.options.Router, s.options.Fusion, "", query)
 	var allResults []rankedMemory
 	var semanticIdentity *SemanticRetrievalIdentity
 	lineage := req.SessionLineage
@@ -272,7 +279,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		// scope-authorized (exact, FTS, and vector). Fetching all eligible
 		// branch records prevents post-fork matches from crowding out a valid
 		// pre-fork parent record before the provenance filter is applied.
-		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, contextstore.SearchRequest{
+		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, route, contextstore.SearchRequest{
 			Query: query, Scope: sessionScope, Limit: 100000,
 		})
 		if err != nil {
@@ -303,7 +310,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			TeamID:    req.Scope.TeamID,
 			AgentID:   req.Scope.AgentID,
 		}
-		persistentResults, _, retrievedSemantic, pErr := s.retrieve(ctx, contextstore.SearchRequest{
+		persistentResults, _, retrievedSemantic, pErr := s.retrieve(ctx, route, contextstore.SearchRequest{
 			Query: query,
 			Scope: persistentScope,
 			Limit: maxItems * 3,
@@ -414,9 +421,14 @@ func (s *trackingVectorSearcher) SemanticTraceIdentity() (embedding.ModelIdentit
 
 func (s *defaultWorkerMemoryService) retrieve(
 	ctx context.Context,
+	route semanticRequestRoute,
 	req contextstore.SearchRequest,
 ) ([]contextstore.SearchResult, contextstore.RetrievalTrace, *SemanticRetrievalIdentity, error) {
 	options := s.options
+	options.Mode = route.Mode
+	if route.Mode == contextstore.RetrievalOff {
+		options.Semantic = nil
+	}
 	var tracker *trackingVectorSearcher
 	if options.Semantic != nil {
 		tracker = &trackingVectorSearcher{delegate: options.Semantic}
@@ -427,7 +439,7 @@ func (s *defaultWorkerMemoryService) retrieve(
 	}
 	results, trace, err := contextstore.HybridRetrieveWithOptions(ctx, s.repo, req, contextstore.HybridRetrievalOptions{
 		Vector: vector, Mode: options.Mode, UnavailableReason: options.UnavailableReason,
-		TraceHasher: options.TraceHasher, TraceSink: options.TraceSink,
+		Fusion: route.Fusion, TraceHasher: options.TraceHasher, TraceSink: options.TraceSink,
 	})
 	if err != nil {
 		return nil, trace, nil, err

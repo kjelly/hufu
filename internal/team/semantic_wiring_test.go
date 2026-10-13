@@ -54,9 +54,11 @@ func attachSemanticRuntime(t *testing.T, c *Coordinator, repo *contextstore.SQLi
 	return runtime
 }
 
-func semanticRouteRequest() ContextRequest {
+const semanticRouteGoal = "avoid duplicate side effect after coordinator resume"
+
+func semanticRouteRequest(goal string) ContextRequest {
 	request := validTestContextRequest()
-	request.Goal = "avoid duplicate side effect after coordinator resume"
+	request.Goal = goal
 	request.Phase = PhaseExecute
 	request.Trigger = ContextTriggerTaskDispatch
 	request.AssignRequestID()
@@ -65,7 +67,12 @@ func semanticRouteRequest() ContextRequest {
 
 func routeSharedIDs(t *testing.T, c *Coordinator) ([]string, *SemanticRetrievalIdentity) {
 	t.Helper()
-	route, err := c.contextRouter().Route(t.Context(), semanticRouteRequest())
+	return routeSharedIDsForGoal(t, c, semanticRouteGoal)
+}
+
+func routeSharedIDsForGoal(t *testing.T, c *Coordinator, goal string) ([]string, *SemanticRetrievalIdentity) {
+	t.Helper()
+	route, err := c.contextRouter().Route(t.Context(), semanticRouteRequest(goal))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +163,7 @@ func TestWorkerRecallUsesSemanticLaneForPrivateMemory(t *testing.T) {
 	}
 }
 
-func TestExecutionPolicySnapshotPinsOnlyActiveSemanticRetrieval(t *testing.T) {
+func TestExecutionPolicySnapshotPinsOnlySelectingSemanticRetrieval(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 4, 3)
@@ -171,7 +178,7 @@ func TestExecutionPolicySnapshotPinsOnlyActiveSemanticRetrieval(t *testing.T) {
 		mode    semantic.Mode
 		pinned  bool
 		changed bool
-	}{{semantic.ModeOff, false, false}, {semantic.ModeShadow, false, false}, {semantic.ModeActive, true, true}} {
+	}{{semantic.ModeOff, false, false}, {semantic.ModeShadow, false, false}, {semantic.ModeActive, true, true}, {semantic.ModeAuto, true, true}} {
 		settings, err := semantic.Config{Mode: tc.mode}.Resolve()
 		if err != nil {
 			t.Fatal(err)
@@ -227,7 +234,7 @@ func assertTracesContentFree(t *testing.T, workspace string) {
 }
 
 func TestSemanticRetrievalParsesInBothManifestForms(t *testing.T) {
-	block := "semantic-retrieval:\n  mode: shadow\n  query-max-tokens: 256\n"
+	block := "semantic-retrieval:\n  mode: auto\n  fusion: rrf_normalized\n  query-max-tokens: 256\n"
 	indented := "  " + strings.ReplaceAll(strings.TrimSuffix(block, "\n"), "\n", "\n  ") + "\n"
 	manifests := map[string]string{
 		"flat":     "name: semantic-team\n" + block,
@@ -241,13 +248,14 @@ func TestSemanticRetrievalParsesInBothManifestForms(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := cfg.SemanticRetrieval; got.Mode != semantic.ModeShadow || got.QueryMaxTokens != 256 {
+			if got := cfg.SemanticRetrieval; got.Mode != semantic.ModeAuto || got.Fusion != semantic.FusionRRFNormalized || got.QueryMaxTokens != 256 {
 				t.Fatalf("semantic-retrieval = %#v", got)
 			}
 		})
 	}
 	for name, invalid := range map[string]string{
-		"unknown mode":   "semantic-retrieval:\n  mode: auto\n",
+		"unknown mode":   "semantic-retrieval:\n  mode: always\n",
+		"unknown fusion": "semantic-retrieval:\n  fusion: bm25\n",
 		"unknown field":  "semantic-retrieval:\n  provider: ollama\n",
 		"remote no opt":  "semantic-retrieval:\n  endpoint: http://10.0.0.5:11434\n",
 		"unknown model":  "semantic-retrieval:\n  model: nomic-embed-text\n",

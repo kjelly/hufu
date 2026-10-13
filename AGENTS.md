@@ -55,7 +55,7 @@ The command must complete successfully with no errors before the task is conside
 | `config` | `internal/config/` | YAML config loader (`~/.config/hufu/hufu.yaml`, `./hufu.yaml`) |
 | `memory` | `internal/memory/` | Long-term memory (RAG) with chromem-go vector store |
 | `embedding` | `internal/embedding/` | Embedding encoders: verified static tables and the Ollama `/api/embed` adapter (encoder profile, query budget) |
-| `semantic` | `internal/semantic/` | `semantic-retrieval` configuration (mode, model, endpoint, budgets) shared by hufu.yaml, team.yaml and the runtime |
+| `semantic` | `internal/semantic/` | `semantic-retrieval` configuration (mode incl. per-request `auto` routing, fusion, model, endpoint, budgets) shared by hufu.yaml, team.yaml and the runtime |
 | `hooks` | `internal/hooks/` | Hook registry for tool lifecycle events |
 | `notify` | `internal/notify/` | External notification system (webhooks) |
 | `audit` | `internal/audit/` | Tool call audit logging |

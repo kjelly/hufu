@@ -25,7 +25,8 @@ field by field; the team block wins.
 
 ```yaml
 semantic-retrieval:
-  mode: shadow                     # off (default) | shadow | active
+  mode: shadow                     # off (default) | shadow | active | auto
+  # fusion: score_normalized       # how requests that use the lane fuse it
   model: ollama/embeddinggemma:latest
   endpoint: http://127.0.0.1:11434
   # allow-remote-endpoint: true    # required for a non-loopback endpoint
@@ -44,6 +45,14 @@ semantic-retrieval:
 | `off` | No request to the encoder, no goroutine, no prompt change. |
 | `shadow` | Embeds queries and writes content-free traces, but never changes which memories are selected. |
 | `active` | Fuses the semantic lane into ranking for shared persistent memory and worker private memory. |
+| `auto` | Decides per request: requests the lexical lane can read run exactly as `off`; the others run as `active`. See [Automatic routing](#automatic-routing). |
+
+`fusion` (`legacy`, `rrf_normalized`, or `score_normalized`; default
+`score_normalized`) applies only to requests that use the lane: `active`, and
+`auto` requests routed to it. Requests without the lane, and `shadow`, keep the
+memory policy's fusion so their selection is unchanged. `legacy` fusion carries
+raw BM25 scores that outrank every vector-only candidate: in the 2026-10-13
+replays it left the semantic lane with no effect on selection.
 
 Only measured models are accepted:
 
@@ -67,9 +76,30 @@ The legacy `embedding-model` setting is separate: it names the chromem index
 used by `hufu context query` and `hufu context rebuild --vector`. Its default
 is the same `ollama/embeddinggemma:latest`.
 
+## Automatic routing
+
+FTS keeps ASCII terms only, so it cannot read Chinese, Japanese, Korean,
+Cyrillic, or other non-Latin text. `auto` measures the share of the request
+goal (worker recall: its query) that the lexical lane drops: non-ASCII letters
+and digits, weighted by the token estimate below (CJK × 1.3, other × 0.4).
+At 0.15 or more the request uses the semantic lane with `fusion`; below it the
+request runs exactly as `off`, with no embedding request. Each shared ranking
+or worker recall is routed once.
+
+The rule reads only the script of each character; it never interprets words.
+Latin-script languages with few accents, such as German, stay on the lexical
+lane, which still reads their ASCII words. The threshold comes from hufu
+history: all 200 English review goals scored below 0.15 (198 below 0.01), and
+49 of 54 Chinese research goals scored 0.15 or more.
+
+The runtime still loads the model and keeps the index fresh in `auto`, so a
+routed request does not wait. A request routed to the lane writes a trace line
+and records a `semantic_retrieval` identity (mode `active`) in its manifest; a
+request routed lexical records neither, exactly like `off`.
+
 ## Runtime behavior
 
-- **Cold start.** With `shadow` or `active`, the coordinator loads the model
+- **Cold start.** With `shadow`, `active`, or `auto`, the coordinator loads the model
   in the background (`/api/embed` with an empty input) and checks `/api/ps`
   for the pinned digest and context length. Until that finishes, retrieval
   falls back to exact and lexical (`embedding_warming`); a query never waits
@@ -99,15 +129,16 @@ is the same `ollama/embeddinggemma:latest`.
   and embeds only new or edited items, polling every two seconds. The index
   covers candidate and confirmed items of every scope that are not
   superseded (inventory policy `retrievable-v1`).
-- **Authorization before top-K.** In `active` mode the shared persistent
+- **Authorization before top-K.** For requests that use the lane, the shared persistent
   ranking passes the authorized item IDs to every lane before the candidate
   limit.
 - **Cancellation.** The caller's own cancellation and canonical store
   failures propagate; only encoder-side failures fall back.
 
-Only `active` settings are pinned in the execution policy snapshot, so turning
-`shadow` on or off never blocks a resume. Changing `active` settings blocks a
-resume like any other policy change; start a new session instead.
+Only `active` and `auto` settings are pinned in the execution policy snapshot,
+so turning `shadow` on or off never blocks a resume. Switching to or from
+`active` or `auto`, or changing their settings, blocks a resume like any other
+policy change; start a new session (`--new`) instead.
 
 ## Fallback reasons
 
@@ -138,7 +169,7 @@ hufu context semantic verify  -w <workspace> [--project <id>] [--strict] [--offl
 
 ## Traces
 
-In `shadow` and `active`, every semantic query appends one line to
+In `shadow`, `active`, and `auto`, every semantic query appends one line to
 `<workspace>/semantic-retrieval-traces.jsonl`: mode, model and generation
 identity, result counts, the overlap with lexical results, latency, the
 fallback reason, and HMAC hashes of the query and the top result IDs. Query
@@ -155,6 +186,10 @@ untouched; `off` sends no request and changes nothing in prompts.
 - `hufu context explain-memory` and `hufu context ranking-replay` reproduce
   exact and lexical ranking only; in `active` mode they do not replay the
   semantic lane.
-- Quality is measured on a 16-pair sample only: both models recalled Chinese
-  task results that ASCII lexical retrieval missed, while lexical retrieval
-  was better on English. Keep `shadow` until traces show the lane helps.
+- Quality (2026-10-13, embeddinggemma, offline replay judged by an LLM;
+  useful@4 is the share of injected memories judged directly useful): on 200
+  English review tasks the lane did not help (0.352 without it, 0.336 with
+  `score_normalized`); on 54 Chinese research tasks it did (0.472 without it,
+  0.694 with `score_normalized`). The Chinese set promoted session memories to
+  shared ones for the replay. This is why `auto` keeps English requests on
+  the lexical lane.

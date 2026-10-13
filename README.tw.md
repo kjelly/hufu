@@ -261,12 +261,16 @@ Exact 與 FTS5 檢索只比對 ASCII 詞，中文 goal 找不到中文記憶。�
 
 ```yaml
 semantic-retrieval:
-  mode: shadow                     # off（預設）| shadow | active
+  mode: auto                       # off（預設）| shadow | active | auto
   model: ollama/embeddinggemma:latest
 ```
 
 - `shadow`：嵌入並寫入不含內容的 trace，不改變選入哪些記憶。
 - `active`：把語意結果融合進 shared 與 worker 記憶的排序。
+- `auto`：每個請求各自判斷。goal 中 lexical 讀不到的文字（中文、日文、韓文、西里爾字母等）
+  比例達 0.15 時使用語意排序，英文請求維持原本的 lexical 排序，不送 embedding 請求。
+
+使用語意結果的請求預設以 `fusion: score_normalized` 融合；`legacy` 會讓語意結果幾乎不影響選取。
 
 模型在背景載入，run 不會等模型；encoder 任何失敗都會退回 exact 與 lexical。hufu 不會自動
 pull 模型（請先 `ollama pull embeddinggemma`）。索引用 `hufu context semantic status|build|verify`

@@ -35,19 +35,46 @@ const (
 
 // Mode is the rollout state. Off sends no request and adds no prompt text;
 // shadow embeds and traces but never changes selection; active fuses the
-// semantic lane into ranking.
+// semantic lane into ranking; auto decides per request: it runs active when
+// the lexical lane cannot read enough of the query (RoutesSemantic) and the
+// lexical-only retrieval of mode off otherwise.
 type Mode string
 
 const (
 	ModeOff    Mode = "off"
 	ModeShadow Mode = "shadow"
 	ModeActive Mode = "active"
+	ModeAuto   Mode = "auto"
 )
+
+// Fusion names how a request that uses the semantic lane fuses it with the
+// lexical lane. The values mirror the context package's FusionMode, which
+// this package cannot import.
+type Fusion string
+
+const (
+	FusionLegacy          Fusion = "legacy"
+	FusionRRFNormalized   Fusion = "rrf_normalized"
+	FusionScoreNormalized Fusion = "score_normalized"
+
+	// DefaultFusion is score_normalized: legacy fusion carries raw BM25
+	// scores that outrank every vector-only candidate, so the semantic lane
+	// changed no selection in the 2026-10-13 replays.
+	DefaultFusion = FusionScoreNormalized
+)
+
+// AutoRouteMinShare is the share of a query's estimated tokens that the
+// lexical lane drops (non-ASCII letters and digits; FTS keeps ASCII terms
+// only) at which auto mode uses the semantic lane. Calibrated on hufu history:
+// all 200 English review goals score below 0.15 (198 below 0.01), and 49 of 54
+// Chinese research goals score 0.15 or more.
+const AutoRouteMinShare = 0.15
 
 // Config is the semantic-retrieval block of hufu.yaml or team.yaml. Zero
 // values inherit; Merge applies a later layer field by field.
 type Config struct {
 	Mode                Mode          `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Fusion              Fusion        `yaml:"fusion,omitempty" json:"fusion,omitempty"`
 	Model               string        `yaml:"model,omitempty" json:"model,omitempty"`
 	Endpoint            string        `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	AllowRemoteEndpoint *bool         `yaml:"allow-remote-endpoint,omitempty" json:"allow_remote_endpoint,omitempty"`
@@ -66,6 +93,9 @@ func Merge(base, override Config) Config {
 	merged := base.Clone()
 	if override.Mode != "" {
 		merged.Mode = override.Mode
+	}
+	if override.Fusion != "" {
+		merged.Fusion = override.Fusion
 	}
 	if override.Model != "" {
 		merged.Model = override.Model
@@ -114,6 +144,7 @@ func (c Config) Validate() error {
 // Settings is the fully resolved configuration.
 type Settings struct {
 	Mode                Mode          `json:"mode"`
+	Fusion              Fusion        `json:"fusion"`
 	Model               string        `json:"model"`
 	Endpoint            string        `json:"endpoint"`
 	AllowRemoteEndpoint bool          `json:"allow_remote_endpoint"`
@@ -131,7 +162,7 @@ type Settings struct {
 // zero come from the model preset.
 func (c Config) Resolve() (Settings, error) {
 	s := Settings{
-		Mode: c.Mode, Model: embedding.NormalizeOllamaModelName(c.Model), Endpoint: strings.TrimSpace(c.Endpoint),
+		Mode: c.Mode, Fusion: c.Fusion, Model: embedding.NormalizeOllamaModelName(c.Model), Endpoint: strings.TrimSpace(c.Endpoint),
 		MaxInputTokens: c.MaxInputTokens, QueryMaxTokens: c.QueryMaxTokens,
 		QueryTimeout: c.QueryTimeout, LoadTimeout: c.LoadTimeout, IndexTimeout: c.IndexTimeout, KeepAlive: c.KeepAlive,
 		MaxConcurrent: c.MaxConcurrent, IndexBatchSize: c.IndexBatchSize,
@@ -142,9 +173,16 @@ func (c Config) Resolve() (Settings, error) {
 	switch s.Mode {
 	case "":
 		s.Mode = ModeOff
-	case ModeOff, ModeShadow, ModeActive:
+	case ModeOff, ModeShadow, ModeActive, ModeAuto:
 	default:
-		return Settings{}, fmt.Errorf("semantic-retrieval.mode must be off, shadow, or active, got %q", c.Mode)
+		return Settings{}, fmt.Errorf("semantic-retrieval.mode must be off, shadow, active, or auto, got %q", c.Mode)
+	}
+	switch s.Fusion {
+	case "":
+		s.Fusion = DefaultFusion
+	case FusionLegacy, FusionRRFNormalized, FusionScoreNormalized:
+	default:
+		return Settings{}, fmt.Errorf("semantic-retrieval.fusion must be legacy, rrf_normalized, or score_normalized, got %q", c.Fusion)
 	}
 	if s.Model == "" {
 		s.Model = embedding.NormalizeOllamaModelName(DefaultModel)
@@ -215,7 +253,18 @@ func (c Config) Resolve() (Settings, error) {
 }
 
 // Enabled reports whether any embedding request may be sent.
-func (s Settings) Enabled() bool { return s.Mode == ModeShadow || s.Mode == ModeActive }
+func (s Settings) Enabled() bool { return s.Mode != ModeOff && s.Mode != "" }
+
+// ChangesSelection reports whether the semantic lane may change which
+// memories are selected (active, or auto when a request routes to it).
+func (s Settings) ChangesSelection() bool { return s.Mode == ModeActive || s.Mode == ModeAuto }
+
+// RoutesSemantic is auto mode's per-request decision: whether the share of
+// text the lexical lane drops reaches AutoRouteMinShare. It only reads the
+// script of each character and never interprets the words.
+func RoutesSemantic(text string) bool {
+	return embedding.LexicalDropShare(text) >= AutoRouteMinShare
+}
 
 // Hash pins the effective settings in the execution policy snapshot, so a
 // resumed session cannot silently switch encoder, endpoint or mode.

@@ -170,6 +170,27 @@ func EstimateTokens(text string) int {
 	return int(math.Ceil(cost))
 }
 
+// LexicalDropShare is the share of text's estimated letter and digit tokens
+// in non-ASCII characters, the part an ASCII-term lexical index drops. Text
+// without letters or digits has share 0.
+func LexicalDropShare(text string) float64 {
+	var dropped, total float64
+	for _, r := range text {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			continue
+		}
+		cost := runeTokenCost(r)
+		total += cost
+		if r > unicode.MaxASCII {
+			dropped += cost
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return dropped / total
+}
+
 func runeTokenCost(r rune) float64 {
 	if isWideRune(r) {
 		return 1.3

@@ -445,13 +445,16 @@ team.yaml to embed canonical memory with a local Ollama model:
 
 ```yaml
 semantic-retrieval:
-  mode: shadow                     # off (default) | shadow | active
+  mode: auto                       # off (default) | shadow | active | auto
   model: ollama/embeddinggemma:latest
 ```
 
 `shadow` embeds and writes content-free traces without changing which
 memories are selected; `active` fuses the semantic lane into shared and worker
-memory ranking. The model loads in the background, so a run never waits for
+memory ranking; `auto` uses the lane only for requests whose goal is mostly
+text the lexical lane cannot read (Chinese, Japanese, Korean, Cyrillic, …) and
+keeps English requests on the original lexical ranking. Requests that use the
+lane fuse it with `fusion: score_normalized` by default. The model loads in the background, so a run never waits for
 it, and any encoder failure falls back to exact and lexical retrieval. hufu
 never pulls the model (`ollama pull embeddinggemma` first). Operate the index
 with `hufu context semantic status|build|verify`. See
@@ -961,7 +964,8 @@ control-decisions:
 
 # === Semantic memory retrieval (Ollama embeddings) ===
 semantic-retrieval:
-  mode: off                      # off (default) | shadow | active
+  mode: off                      # off (default) | shadow | active | auto
+  # fusion: score_normalized     # legacy | rrf_normalized | score_normalized, for requests that use the lane
   model: ollama/embeddinggemma:latest   # or qwen3-embedding:0.6b
   # endpoint: http://127.0.0.1:11434  # non-loopback needs allow-remote-endpoint: true
 

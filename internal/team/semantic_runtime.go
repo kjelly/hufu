@@ -75,6 +75,8 @@ type SemanticRuntimeStatus struct {
 	ArtifactDigest     string         `json:"artifact_digest,omitempty"`
 	QueryPolicy        string         `json:"query_policy,omitempty"`
 	Queries            int            `json:"queries"`
+	RoutedSemantic     int            `json:"routed_semantic,omitempty"`
+	RoutedLexical      int            `json:"routed_lexical,omitempty"`
 	SemanticResults    int            `json:"semantic_results"`
 	TruncatedQueries   int            `json:"truncated_queries"`
 	Fallbacks          map[string]int `json:"fallbacks,omitempty"`
@@ -113,7 +115,7 @@ func newSemanticRetrievalRuntimeWithPoll(settings semantic.Settings, repo contex
 		return nil, err
 	}
 	mode := contextstore.RetrievalShadow
-	if settings.Mode == semantic.ModeActive {
+	if settings.ChangesSelection() {
 		mode = contextstore.RetrievalActive
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,7 +132,8 @@ func newSemanticRetrievalRuntimeWithPoll(settings semantic.Settings, repo contex
 	return r, nil
 }
 
-// Mode is the retrieval mode the runtime serves (shadow or active).
+// Mode is the retrieval mode the runtime serves (shadow or active); auto
+// serves active for the requests it routes to the semantic lane.
 func (r *SemanticRetrievalRuntime) Mode() contextstore.RetrievalMode { return r.mode }
 
 // Close stops background work; queries afterwards report warming.

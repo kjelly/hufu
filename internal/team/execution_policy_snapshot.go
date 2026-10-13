@@ -964,10 +964,10 @@ func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapsh
 	return executionPolicySnapshotFromEvents(FilterEventsForBranch(events, tree, branch))
 }
 
-// activeSemanticRetrievalHash pins semantic settings only in active mode;
-// off and shadow never change selection, so they never affect resume.
+// activeSemanticRetrievalHash pins semantic settings only in active and auto
+// mode; off and shadow never change selection, so they never affect resume.
 func activeSemanticRetrievalHash(settings semantic.Settings) string {
-	if settings.Mode != semantic.ModeActive {
+	if !settings.ChangesSelection() {
 		return ""
 	}
 	return settings.Hash()
