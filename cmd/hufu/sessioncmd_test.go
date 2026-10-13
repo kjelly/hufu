@@ -139,6 +139,12 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	expSession := &team.SessionData{}
 	expSession.AddEntry("user", "hello exp")
 	expSession.Tasks = []*team.TodoItem{{ID: "3", Desc: "exp task three", Status: team.TaskDone}}
+	// Branch state exp's session.json holds that main's lineage never had,
+	// and workspace state every branch shares.
+	expSession.PendingWrapUp = &team.PendingWrapUp{RunID: "run-exp", BranchID: "exp", RequestedAt: "2026-10-13T00:00:00Z"}
+	expSession.RecoveryRequired, expSession.RecoveryReason = true, "exp needs recovery"
+	expSession.WorkflowState = team.PhaseDone
+	expSession.Rounds = 9
 	if err := team.SaveSession(tempDir, expSession); err != nil {
 		t.Fatalf("SaveSession failed: %v", err)
 	}
@@ -160,6 +166,51 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	}
 	if len(sd.Tasks[0].ContextManifests) != 1 || sd.Tasks[0].ContextManifests[0].RequestID != contextManifest.RequestID || sd.Tasks[0].ContextManifests[0].Fingerprint != contextManifest.Fingerprint {
 		t.Fatalf("checkout changed or lost context manifest identity: %#v", sd.Tasks[0].ContextManifests)
+	}
+	if sd.PendingWrapUp != nil || sd.RecoveryRequired || sd.WorkflowState != "" {
+		t.Errorf("checkout kept exp's branch state: wrapUp=%+v recovery=%v workflow=%q", sd.PendingWrapUp, sd.RecoveryRequired, sd.WorkflowState)
+	}
+	if sd.Rounds != 9 {
+		t.Errorf("checkout dropped workspace state: rounds=%d, want 9", sd.Rounds)
+	}
+}
+
+func TestCLISession_CheckoutRefusesUnconfirmedTerminalCommit(t *testing.T) {
+	tempDir := t.TempDir()
+	es, err := team.NewEventStore(tempDir, "run-1", "session-1")
+	if err != nil {
+		t.Fatalf("NewEventStore failed: %v", err)
+	}
+	_ = es.Append(team.RunEvent{ID: "evt-1", BranchID: "main", Type: "user_message_added", Payload: mustMarshal(map[string]string{"role": "user", "content": "hello main"})})
+	_ = es.Close()
+	root := newRootCommand()
+	root.SetOut(new(bytes.Buffer))
+	root.SetArgs([]string{"session", "fork", "main", "--name", "exp", "--workspace", tempDir})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("fork exp failed: %v", err)
+	}
+	live := &team.SessionData{}
+	live.AddEntry("user", "hello exp")
+	live.PendingTerminalCommit = &team.PendingTerminalCommit{RunID: "run-exp", BranchID: "exp", IdempotencyKey: "terminal:run-exp"}
+	if err := team.SaveSession(tempDir, live); err != nil {
+		t.Fatalf("SaveSession failed: %v", err)
+	}
+
+	root = newRootCommand()
+	root.SetOut(new(bytes.Buffer))
+	root.SetArgs([]string{"session", "checkout", "main", "--workspace", tempDir})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "hufu resume") {
+		t.Fatalf("checkout error = %v, want a refusal naming hufu resume", err)
+	}
+	tree, err := team.LoadSessionTree(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active := tree.GetBranch(tree.ActiveBranch); active == nil || active.Name != "exp" {
+		t.Fatalf("refused checkout switched the active branch to %+v", active)
+	}
+	if sd := team.LoadSession(tempDir); sd.PendingTerminalCommit == nil || len(sd.Entries) != 1 || sd.Entries[0].Content != "hello exp" {
+		t.Fatalf("refused checkout changed session.json: %+v", sd)
 	}
 }
 

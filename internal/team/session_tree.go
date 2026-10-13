@@ -882,60 +882,6 @@ func SnapshotBranchState(workspace string, st *SessionTree, branchID string) {
 	}
 }
 
-// RebuildSessionForBranch rewrites workspace/session.json from the branch's
-// event lineage (tasks + conversation), so the next run resumes the checked-out
-// branch's state. When the lineage has no task events it falls back to the
-// branch's stored TaskPlan snapshot. A branch with neither events nor snapshot
-// leaves session.json untouched.
-func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, branchID string) error {
-	if st == nil {
-		return fmt.Errorf("rebuild session: session tree is nil")
-	}
-	b := st.GetBranch(branchID)
-	if b == nil {
-		return fmt.Errorf("rebuild session: branch %q not found", branchID)
-	}
-
-	var events []RunEvent
-	if es != nil {
-		events, _ = es.ReadEvents()
-	}
-	lineage := FilterEventsForBranch(events, st, b.ID)
-
-	tasks, err := ReplayTodoList(lineage)
-	if err != nil {
-		return fmt.Errorf("rebuild session: replay execution identity: %w", err)
-	}
-	if len(tasks) == 0 && len(b.State.TaskPlan) > 0 {
-		tasks = make([]*TodoItem, len(b.State.TaskPlan))
-		for i, t := range b.State.TaskPlan {
-			tasks[i] = cloneTodoItem(t)
-		}
-	}
-	replayed := ReduceToSessionData(lineage)
-	entries := replayed.Entries
-
-	// Nothing to rebuild from: leave the live session untouched.
-	if len(tasks) == 0 && len(entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil {
-		return nil
-	}
-
-	sd := LoadSession(workspace)
-	if sd == nil {
-		sd = NewSession()
-	}
-	sd.Tasks = tasks
-	sd.Entries = entries
-	sd.CriterionResults = replayed.CriterionResults
-	sd.CriterionCheckpoints = replayed.CriterionCheckpoints
-	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
-	sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayed.ExecutionPolicySnapshot)
-	if err := SaveSession(workspace, sd); err != nil {
-		return fmt.Errorf("rebuild session for branch %q: %w", b.ID, err)
-	}
-	return nil
-}
-
 func copyBranchState(orig BranchState) BranchState {
 	clone := orig
 	if len(orig.ActiveTools) > 0 {

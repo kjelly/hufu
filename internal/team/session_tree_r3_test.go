@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -163,7 +164,9 @@ func TestRebuildSessionForBranch(t *testing.T) {
 }
 
 // A branch with no events and no snapshot must leave session.json untouched.
-func TestRebuildSessionForBranch_NoDataNoop(t *testing.T) {
+// A branch with no lineage owns no session state: switching to it must not
+// keep the previous branch's conversation, only workspace-level state.
+func TestRebuildSessionForBranch_EmptyBranchStartsFresh(t *testing.T) {
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 	b, err := st.CreateBranch("empty", "", nil)
@@ -172,7 +175,9 @@ func TestRebuildSessionForBranch_NoDataNoop(t *testing.T) {
 	}
 
 	live := NewSession()
-	live.AddEntry("user", "keep me")
+	live.AddEntry("user", "previous branch")
+	live.Rounds = 7
+	live.RuntimeWorkspace = filepath.Join(tempDir, "runtime")
 	if err := SaveSession(tempDir, live); err != nil {
 		t.Fatalf("SaveSession failed: %v", err)
 	}
@@ -181,7 +186,30 @@ func TestRebuildSessionForBranch_NoDataNoop(t *testing.T) {
 		t.Fatalf("RebuildSessionForBranch failed: %v", err)
 	}
 	sd := LoadSession(tempDir)
+	if len(sd.Entries) != 0 {
+		t.Errorf("switching to an empty branch kept the previous conversation: %+v", sd.Entries)
+	}
+	if sd.Rounds != 7 || sd.RuntimeWorkspace != live.RuntimeWorkspace {
+		t.Errorf("workspace state was not carried: rounds=%d runtime=%q", sd.Rounds, sd.RuntimeWorkspace)
+	}
+}
+
+// Refreshing the active branch's projection with nothing to project leaves
+// the branch's live session as it is.
+func TestRefreshActiveBranchProjection_NoDataNoop(t *testing.T) {
+	tempDir := t.TempDir()
+	st := NewSessionTree()
+
+	live := NewSession()
+	live.AddEntry("user", "keep me")
+	if err := SaveSession(tempDir, live); err != nil {
+		t.Fatalf("SaveSession failed: %v", err)
+	}
+	if err := RefreshActiveBranchProjection(tempDir, st, nil); err != nil {
+		t.Fatalf("RefreshActiveBranchProjection failed: %v", err)
+	}
+	sd := LoadSession(tempDir)
 	if len(sd.Entries) != 1 || sd.Entries[0].Content != "keep me" {
-		t.Errorf("session.json must be untouched for dataless branch, got %+v", sd.Entries)
+		t.Errorf("session.json must be untouched for a dataless branch, got %+v", sd.Entries)
 	}
 }

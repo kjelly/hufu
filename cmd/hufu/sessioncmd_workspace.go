@@ -140,6 +140,9 @@ func runSessionFork(cmd *cobra.Command, args []string) error {
 // forkMetadataOnly is the pre-versioning fork: session lineage only.
 func forkMetadataOnly(vs *versionedSession, st *team.SessionTree, es *team.EventStore, name, target string) error {
 	ws := vs.workspace
+	if err := team.RefuseBranchSwitchWithPendingTerminalCommit(ws, ""); err != nil {
+		return err
+	}
 	team.SnapshotBranchState(ws, st, st.ActiveBranch)
 	b, err := st.CreateBranch(name, target, es)
 	if err != nil {
@@ -230,6 +233,13 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 // only, the filesystem is untouched.
 func checkoutMetadataOnly(vs *versionedSession, st *team.SessionTree, es *team.EventStore, target string) error {
 	ws := vs.workspace
+	resolved, err := st.ResolveCheckoutBranch(target, es)
+	if err != nil {
+		return err
+	}
+	if err := team.RefuseBranchSwitchWithPendingTerminalCommit(ws, resolved.ID); err != nil {
+		return err
+	}
 	previous := st.ActiveBranch
 	// Snapshot current branch's live state before switching.
 	team.SnapshotBranchState(ws, st, st.ActiveBranch)

@@ -167,7 +167,7 @@ func applyExecutionCompatibility(ctx context.Context, workspace, requestedBranch
 	// The canonical append is now durable. Projection failure intentionally
 	// leaves those events in place and returns an error so retry can rebuild
 	// without duplicating the chain entries.
-	if err := RebuildSessionForBranch(workspace, tree, store, tree.ActiveBranch); err != nil {
+	if err := RefreshActiveBranchProjection(workspace, tree, store); err != nil {
 		return nil, fmt.Errorf("apply execution compatibility rebuild active projection: %w", err)
 	}
 	result.ProjectionRebuilt = true

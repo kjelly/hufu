@@ -201,6 +201,9 @@ func (o *WorkspaceSessionOps) Fork(ctx context.Context, name, target string) (Wo
 	if err = refuseWhileRecovering(state); err != nil {
 		return WorkspaceForkResult{}, err
 	}
+	if err = RefuseBranchSwitchWithPendingTerminalCommit(o.Workspace, ""); err != nil {
+		return WorkspaceForkResult{}, err
+	}
 	active := o.Tree.ActiveBranch
 	reason := versionstore.SnapshotExternalDrift
 	if target != "" {
@@ -302,6 +305,9 @@ func (o *WorkspaceSessionOps) Checkout(ctx context.Context, target string) (Work
 	}
 	branch, err := o.Tree.ResolveCheckoutBranch(target, o.Events)
 	if err != nil {
+		return WorkspaceCheckoutResult{}, err
+	}
+	if err = RefuseBranchSwitchWithPendingTerminalCommit(o.Workspace, branch.ID); err != nil {
 		return WorkspaceCheckoutResult{}, err
 	}
 	previous := o.Tree.ActiveBranch

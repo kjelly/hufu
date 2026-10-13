@@ -432,6 +432,10 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	}
 	_ = c.mutateSessionData(func(sd *SessionData) error {
 		sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayedSD.ExecutionPolicySnapshot)
+		// Run inputs are compared by the shadow check, so a repair must
+		// replace them too or every start reports the same mismatch again.
+		sd.RunInputSnapshots = append([]RunInputSnapshot(nil), replayedSD.RunInputSnapshots...)
+		sd.ActiveRunInputSnapshotID = replayedSD.ActiveRunInputSnapshotID
 		sd.Entries = replayedSD.Entries
 		sd.Tasks = replayedTasks
 		sd.WorksetReceipts = append([]WorksetExpansionReceipt(nil), replayedSD.WorksetReceipts...)
