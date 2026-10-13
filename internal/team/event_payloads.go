@@ -97,6 +97,8 @@ func validateCurrentEventPayload(event RunEvent) error {
 		return validateStrategyChangeEvent(event)
 	case EventWrapUpPhase, EventRunCancellationRequested:
 		return validateRunLifecycleControlPayload(event)
+	case EventWorkflowStateChanged:
+		return validateWorkflowStateChangedPayload(event)
 	case EventUserMessageAdded, EventAssistantMessageAdded:
 		var payload SessionMessageEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {

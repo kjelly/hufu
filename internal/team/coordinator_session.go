@@ -795,6 +795,22 @@ func (c *Coordinator) saveCheckpoint() {
 	// Hold sessionMu across the mutate and SaveSession so the marshal cannot
 	// race a concurrent writer.
 	store := c.SessionStore()
+	// Like task state, the workflow snapshot is published as a canonical
+	// event before session.json may advertise it. One lock orders the
+	// append and the write, so replay keeps the snapshot the checkpoint has.
+	c.workflowCheckpointMu.Lock()
+	defer c.workflowCheckpointMu.Unlock()
+	var workflowState Phase
+	var phaseResults map[Phase]PhaseResult
+	var runtimeWorkspace string
+	var retryState *RetryState
+	if c.phaseWorkflow != nil {
+		workflowState, phaseResults, runtimeWorkspace, retryState = c.phaseWorkflow.snapshot()
+		if err := c.emitWorkflowStateChange(newWorkflowStateChangedPayload(workflowState, phaseResults, retryState)); err != nil {
+			log.Printf("warning: checkpoint deferred until the workflow state event is durable: %v", err)
+			return
+		}
+	}
 	c.sessionMu.Lock()
 	c.sessionData.Tasks = tasks
 	worksetReceipts, receiptErr := c.worksetReceiptsFromTasks(tasks)
@@ -807,7 +823,7 @@ func (c *Coordinator) saveCheckpoint() {
 	}
 	c.sessionData.WorksetStates = c.WorksetGroupStates()
 	if c.phaseWorkflow != nil {
-		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = c.phaseWorkflow.snapshot()
+		c.sessionData.WorkflowState, c.sessionData.PhaseResults, c.sessionData.RuntimeWorkspace, c.sessionData.RetryState = workflowState, phaseResults, runtimeWorkspace, retryState
 	}
 	_ = store.SaveSession(c.session.Workspace, c.sessionData)
 	c.sessionMu.Unlock()

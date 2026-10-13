@@ -761,8 +761,13 @@ type Coordinator struct {
 	// Run/Continue invocation.
 	executionEventsMu sync.RWMutex
 	executionRunID    string
-	invocationIDMu    sync.RWMutex
-	invocationID      string
+	// workflowCheckpointMu orders checkpoints' workflow_state_changed
+	// appends with their session.json writes; workflowEventFingerprint is the
+	// last snapshot appended.
+	workflowCheckpointMu     sync.Mutex
+	workflowEventFingerprint string
+	invocationIDMu           sync.RWMutex
+	invocationID             string
 	// executionRunHistory retains every run identity allocated by this
 	// coordinator instance, including a run whose terminal projection later
 	// fails. CLI callers snapshot the length before dispatch and publish the
