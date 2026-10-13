@@ -14,7 +14,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -219,16 +218,42 @@ func normalizeMemoryIDs(ids []string) []string {
 	return out
 }
 
-// canonicalMemoryQueryTool deliberately bypasses the legacy chromem memory
-// store when SQLite context is available.  It keeps the public memory_query
-// shape while retrieving only canonical, scope-filtered records.
+// canonicalMemoryQueryTool keeps the public memory_query shape while
+// retrieving only canonical, scope-filtered records from SQLite context.
 type canonicalMemoryQueryTool struct {
 	coordinator *Coordinator
 	pOpts       fantasy.ProviderOptions
 }
 
 func (t *canonicalMemoryQueryTool) Info() fantasy.ToolInfo {
-	return memory.NewMemoryQueryTool(nil).Info()
+	return fantasy.ToolInfo{
+		Name:        "memory_query",
+		Description: "Search long-term memory for knowledge relevant to a query. Returns the most semantically and contextually relevant memories. Use this to recall past discoveries, decisions, or knowledge before starting work.",
+		Parameters: map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "The search query describing what knowledge you're looking for",
+			},
+			"n": map[string]any{
+				"type":        "number",
+				"description": "Number of results to return (default: 5, max: 20)",
+			},
+			"category": map[string]any{
+				"type":        "string",
+				"description": "Optional category filter to narrow results",
+			},
+			"min_confidence": map[string]any{
+				"type":        "number",
+				"description": "Optional minimum confidence score threshold (e.g., 0.5)",
+			},
+			"file_paths": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Optional file paths to boost relevance for matching memories",
+			},
+		},
+		Required: []string{"query"},
+	}
 }
 func (t *canonicalMemoryQueryTool) ProviderOptions() fantasy.ProviderOptions        { return t.pOpts }
 func (t *canonicalMemoryQueryTool) SetProviderOptions(opts fantasy.ProviderOptions) { t.pOpts = opts }

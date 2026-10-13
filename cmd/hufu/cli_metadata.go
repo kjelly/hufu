@@ -63,7 +63,7 @@ var cliFlagGroups = map[string][]string{
 	"security":   {"rbash", "no-net", "force-mcp", "allow-path", "direnv"},
 	"unattended": {"unattended", "max-duration", "max-total-tokens", "auto-approve"},
 	"display":    {"ui", "tui", "tui-compact", "display-mode", "theme", "display-preset", "no-color", "no-spinner", "no-summary"},
-	"advanced":   {"provider-url", "provider-api-key", "profile", "var", "var-file", "memory", "template"},
+	"advanced":   {"provider-url", "provider-api-key", "profile", "var", "var-file", "template"},
 }
 
 // flagGroups is retained as the characterized package seam; both names point

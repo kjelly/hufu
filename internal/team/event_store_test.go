@@ -504,7 +504,7 @@ func TestCoordinatorStartupUsesSingleStrictEventStoreScan(t *testing.T) {
 	c, err := NewCoordinator(&TeamSession{
 		Workspace: workspace,
 		Config:    agent.TeamConfig{Name: "named-team"},
-	}, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	}, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestCoordinatorStartupMarksCorruptEventStoreForRecovery(t *testing.T) {
 	c, err := NewCoordinator(&TeamSession{
 		Workspace: workspace,
 		Config:    agent.TeamConfig{Name: "named-team"},
-	}, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	}, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

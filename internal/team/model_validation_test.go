@@ -118,7 +118,7 @@ func TestValidateConfiguredModelsConfirmsModelsMissingFromTheList(t *testing.T) 
 			if err := session.SetCompatibilityWorkspaceScope(t.TempDir()); err != nil {
 				t.Fatal(err)
 			}
-			c, err := NewCoordinator(session, server.URL+"/v1", "", nil, nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+			c, err := NewCoordinator(session, server.URL+"/v1", "", nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 			if err != nil {
 				t.Fatal(err)
 			}

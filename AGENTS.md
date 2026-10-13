@@ -53,7 +53,7 @@ The command must complete successfully with no errors before the task is conside
 | `tui` | `internal/tui/` | Bubble Tea TUI: task tracking, detail views, search, clipboard, ask_user |
 | `readline` | `internal/readline/` | `github.com/ergochat/readline` wrapper for interactive prompts |
 | `config` | `internal/config/` | YAML config loader (`~/.config/hufu/hufu.yaml`, `./hufu.yaml`) |
-| `memory` | `internal/memory/` | Long-term memory (RAG) with chromem-go vector store |
+| `memory` | `internal/memory/` | Deprecated legacy chromem store, read only by `hufu context migrate-memory` ([deprecation](docs/deprecations/legacy-memory-store.md)) |
 | `embedding` | `internal/embedding/` | Embedding encoders: verified static tables and the Ollama `/api/embed` adapter (encoder profile, query budget) |
 | `semantic` | `internal/semantic/` | `semantic-retrieval` configuration (mode incl. per-request `auto` routing, fusion, model, endpoint, budgets) shared by hufu.yaml, team.yaml and the runtime |
 | `hooks` | `internal/hooks/` | Hook registry for tool lifecycle events |
@@ -164,8 +164,8 @@ Results joined and printed to stdout
 | `--steps` | `-s` | `false` | Pause for user confirmation before each batch of worker tasks |
 | `--agent-team` | — | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
-| `--memory` | — | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `""` | Embedding model for memory (default: `ollama/embeddinggemma:latest`) |
+| `--memory` | — | `false` | Deprecated, no effect: runs always use canonical context memory |
+| `--memory-model` | — | `""` | Deprecated, no effect: the semantic lane uses the `semantic-retrieval` settings |
 | `--archive-memory` | — | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `false` | Show previous session history on resume |
 | `--dry-run` | — | `false` | LLM-free preview of skill matching and available agents (does not call the model, does not execute agents) |

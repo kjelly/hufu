@@ -9,7 +9,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 )
 
 func learningPolicy(mode agent.MemoryLearningMode) agent.MemoryLearningPolicy {
@@ -382,7 +381,7 @@ func TestFreshSessionWithholdsPriorSessionArchiveSummary(t *testing.T) {
 			t.Cleanup(func() { _ = repo.Close() })
 			c := freshKnowledgeCoordinator(workspace, repo, agent.MemoryLearningObserve, "run-2", "session-2")
 			c.SetFreshSession(tt.fresh)
-			if _, err := c.ArchiveSessionSummary(ctx, []memory.SessionSummaryEntry{{Role: "assistant", Timestamp: "t1", Content: "prior-session-archive-marker: the previous session already wrote the build marker file"}}); err != nil {
+			if _, err := c.ArchiveSessionSummary(ctx, []SessionEntry{{Role: "assistant", Timestamp: "t1", Content: "prior-session-archive-marker: the previous session already wrote the build marker file"}}); err != nil {
 				t.Fatal(err)
 			}
 			if err := c.appendCanonicalContext(ctx, contextstore.ContextDecision, "current-session-marker: storage uses SQLite", "test", nil); err != nil {

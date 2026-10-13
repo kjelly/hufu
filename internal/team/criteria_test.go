@@ -366,7 +366,7 @@ func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
 	}
 	defaultSession.Config.Acceptance = ""
 	defaultSession.Config.AcceptanceSpec = nil
-	defaultCoordinator, err := NewCoordinator(defaultSession, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	defaultCoordinator, err := NewCoordinator(defaultSession, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("default-profile coordinator without acceptance should construct: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestDefaultTeamWithoutAcceptanceGateIsUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam failed: %v", err)
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestSetAcceptance_RejectedEmptyUpdateAudited(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "audit-test", GoalMode: "outcome", AcceptanceSpec: &agent.AcceptanceSpec{Commands: []string{"test -f valid.txt"}}},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

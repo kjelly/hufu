@@ -71,14 +71,12 @@ func withRunOptions(t *testing.T, next runOptions) {
 }
 
 // TestEffectiveMemoryLearningModeBanner covers the banner contract: the
-// disabled branch prints `Memory index: disabled`, the enabled branch prints
-// `Memory index: enabled (model: …)`, and the optional `Memory learning: …`
-// line is emitted only when the effective mode differs from the off sentinel.
-// The effective mode matches `hufu context learning`: adopted snapshots win
-// over team configuration, and an unadopted `active` is downgraded to
-// `shadow`.
+// `Memory learning: …` line is emitted only when the effective mode differs
+// from the off sentinel. The effective mode matches `hufu context learning`:
+// adopted snapshots win over team configuration, and an unadopted `active`
+// is downgraded to `shadow`.
 func TestEffectiveMemoryLearningModeBanner(t *testing.T) {
-	withRunOptions(t, runOptions{memoryEnabled: true, memoryModel: "ollama/nomic-embed-text:latest"})
+	withRunOptions(t, runOptions{})
 
 	cases := []struct {
 		name       string
@@ -139,18 +137,8 @@ func TestEffectiveMemoryLearningModeBanner(t *testing.T) {
 				tc.configure(t, session, workspace)
 			}
 
-			out := captureBannerOutput(t, func() {
-				if buildMemoryStore("", session) != nil {
-					t.Fatalf("buildMemoryStore returned a non-nil store; legacy path should be a no-op seam")
-				}
-			})
+			out := captureBannerOutput(t, func() { reportMemoryLearning(session) })
 
-			if !strings.Contains(out, "Memory index: enabled (model: ollama/nomic-embed-text:latest)") {
-				t.Fatalf("enabled banner = %q, want the canonical-context-index line", out)
-			}
-			if strings.Contains(out, "Memory: canonical context index enabled") || strings.Contains(out, "Memory: disabled") {
-				t.Fatalf("banner reused legacy wording: %q", out)
-			}
 			if tc.wantLine != "" && !strings.Contains(out, tc.wantLine) {
 				t.Fatalf("banner = %q, want substring %q", out, tc.wantLine)
 			}
@@ -161,11 +149,10 @@ func TestEffectiveMemoryLearningModeBanner(t *testing.T) {
 	}
 }
 
-// TestMemoryLearningBannerDoesNotDependOnTheIndex pins the case the banner
-// fix is for: a team learning in observe mode without --memory must still
-// say so. The index line keeps its old conditions, including printing
-// nothing when a --temp workspace overrides --memory.
-func TestMemoryLearningBannerDoesNotDependOnTheIndex(t *testing.T) {
+// TestMemoryBannerHasNoIndexLine pins that the deprecated --memory flag no
+// longer claims a memory index: runs always use canonical context memory, and
+// only the learning line depends on the team.
+func TestMemoryBannerHasNoIndexLine(t *testing.T) {
 	cases := []struct {
 		name      string
 		options   runOptions
@@ -174,21 +161,20 @@ func TestMemoryLearningBannerDoesNotDependOnTheIndex(t *testing.T) {
 		forbidden []string
 	}{
 		{
-			name:      "index off, learning observe",
+			name:      "no flag, learning observe",
 			options:   runOptions{},
 			mode:      agent.MemoryLearningObserve,
-			want:      []string{"Memory index: disabled", "Memory learning: observe"},
-			forbidden: []string{"Memory: disabled"},
+			want:      []string{"Memory learning: observe"},
+			forbidden: []string{"Memory index:"},
 		},
 		{
-			name:      "index off, learning off",
-			options:   runOptions{},
+			name:      "deprecated --memory, learning off",
+			options:   runOptions{memoryEnabled: true, memoryModel: "ollama/nomic-embed-text:latest"},
 			mode:      agent.MemoryLearningOff,
-			want:      []string{"Memory index: disabled"},
-			forbidden: []string{"Memory learning:"},
+			forbidden: []string{"Memory index:", "Memory learning:"},
 		},
 		{
-			name:      "temp workspace overrides the index, learning observe",
+			name:      "deprecated --memory in a temp workspace, learning observe",
 			options:   runOptions{memoryEnabled: true, tempWorkspace: true},
 			mode:      agent.MemoryLearningObserve,
 			want:      []string{"Memory learning: observe"},
@@ -202,11 +188,7 @@ func TestMemoryLearningBannerDoesNotDependOnTheIndex(t *testing.T) {
 				Config:    agent.TeamConfig{Name: "hufu-banner-test", MemoryLearning: agent.MemoryLearningPolicy{Mode: tc.mode, PolicyVersion: "memory-policy-v1"}},
 				Workspace: t.TempDir(),
 			}
-			out := captureBannerOutput(t, func() {
-				if buildMemoryStore("", session) != nil {
-					t.Fatalf("buildMemoryStore returned a non-nil store")
-				}
-			})
+			out := captureBannerOutput(t, func() { reportMemoryLearning(session) })
 			for _, want := range tc.want {
 				if !strings.Contains(out, want) {
 					t.Fatalf("banner = %q, want %q", out, want)

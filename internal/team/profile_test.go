@@ -153,7 +153,7 @@ func TestProfile_FreshVerificationIsolation(t *testing.T) {
 		t.Fatalf("SaveLTM failed: %v", err)
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestProfile_AcceptanceModeBlocking(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", Acceptance: "exit 1"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestProfile_TeamAcceptanceModeOverridesFreshSession(t *testing.T) {
 			AcceptanceMode: string(AcceptanceBlocking),
 		},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestProfile_RequireEvidenceManifest(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestProfile_RequireClosedTerminals(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestProfile_PolicyFailClosed(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c1, err := NewCoordinator(sessionProjRoot, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c1, err := NewCoordinator(sessionProjRoot, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c2, err := NewCoordinator(sessionSubdir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c2, err := NewCoordinator(sessionSubdir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -500,7 +500,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c3, err := NewCoordinator(sessionControlDir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c3, err := NewCoordinator(sessionControlDir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c4, err := NewCoordinator(sessionIsolated, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c4, err := NewCoordinator(sessionIsolated, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       projDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c5, err := NewCoordinator(sessionDefaultRoot, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c5, err := NewCoordinator(sessionDefaultRoot, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       subDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c6, err := NewCoordinator(sessionDefaultSubdir, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c6, err := NewCoordinator(sessionDefaultSubdir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       isolatedDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c7, err := NewCoordinator(sessionDefaultIsolated, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c7, err := NewCoordinator(sessionDefaultIsolated, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -584,7 +584,7 @@ func TestProfile_RequireLockedResources(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestProfile_RequireEvidenceManifest_ManifestGateAndAcknowledge(t *testing.T
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestProfile_RequireEvidenceManifest_ManifestGateAndAcknowledge(t *testing.T
 func TestFreshProfile_DoesNotInheritRounds(t *testing.T) {
 	tmpDir := t.TempDir()
 	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir, Config: agent.TeamConfig{GoalMode: "exploratory"}}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -744,7 +744,7 @@ func TestFreshProfile_ClearsPersistedConversationHistory(t *testing.T) {
 		t.Fatalf("SaveConversationHistory failed: %v", err)
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

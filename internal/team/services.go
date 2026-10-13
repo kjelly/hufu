@@ -9,7 +9,6 @@ import (
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
 	internaltools "github.com/kjelly/hufu/internal/tools"
 )
@@ -90,7 +89,6 @@ type ContextCompiler interface {
 	BuildMemorySuffix(agentRole string) string
 	BuildTaskSTMContext() string
 	BuildLTMContext() string
-	AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error)
 	AssembleContextWithinBudget(parts []string, budget int) string
 	AssembleContextItems(ctx context.Context, items []ContextItem, budget ContextBudget) (string, bool, error)
 	CompactProjectContext(ctx context.Context, sidecarCompacter SidecarCompacter, messages []fantasy.Message, prevSummary *StructuredSummary, originalGoal string) (*StructuredSummary, error)
@@ -609,13 +607,6 @@ func (cc *defaultContextCompiler) BuildLTMContext() string {
 		return ""
 	}
 	return cc.c.buildLTMContextImpl()
-}
-
-func (cc *defaultContextCompiler) AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error) {
-	if store == nil {
-		return "", nil
-	}
-	return memory.AutoQuery(ctx, store, prompt, compact)
 }
 
 func (cc *defaultContextCompiler) AssembleContextWithinBudget(parts []string, budget int) string {

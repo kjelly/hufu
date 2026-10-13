@@ -271,7 +271,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 			err = errors.Join(err, closeTeamMCPManager(mcpManager))
 		}
 	}()
-	memStore := buildMemoryStore(resolvedProviderURL, session)
+	reportMemoryLearning(session)
 
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
 
@@ -317,14 +317,14 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, memStore, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
 	if err := startTeamCoordinator(ctx, coordinator, session, cfg, execProfile, startsFresh, sessionData, models); err != nil {
 		return nil, errors.Join(err, coordinator.Close())
 	}
-	archiveToMemory(ctx, memStore, coordinator, session, oldSessionEntries)
+	archiveToMemory(ctx, coordinator, oldSessionEntries)
 	displayResolvedConfig(session, resolvedModelList, roleSources, resolvedMaxConcurrent, execProfile)
 	notifierInst := buildNotifier(cfg, session)
 

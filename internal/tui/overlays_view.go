@@ -166,15 +166,6 @@ func (m Model) infoPanelView() string {
 		b.WriteString("\n")
 	}
 
-	if info.MemoryEnabled {
-		b.WriteString(m.styles.done.Render("✓") + " " + m.styles.bold.Render("Memory: "))
-		b.WriteString("enabled")
-		if info.MemoryModel != "" {
-			fmt.Fprintf(&b, " (model: %s)", info.MemoryModel)
-		}
-		b.WriteString("\n")
-	}
-
 	if len(info.Skills) > 0 {
 		b.WriteString(m.styles.bold.Render("Skills: "))
 		b.WriteString(strings.Join(info.Skills, ", "))

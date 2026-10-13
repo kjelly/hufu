@@ -54,11 +54,12 @@ func collectDoctorSemantic(ctx context.Context, report *doctorReport, cfg *confi
 	for _, name := range slices.Sorted(maps.Keys(teamBlocks)) {
 		check("team "+name, semantic.Merge(cfg.SemanticRetrieval, teamBlocks[name]))
 	}
-	legacy := cfg.EmbeddingModel
-	if legacy == "" {
-		legacy = config.DefaultEmbeddingModel
+	if legacy := strings.TrimSpace(cfg.EmbeddingModel); legacy != "" {
+		report.Checks = append(report.Checks, doctorCheck{
+			ID: "semantic.legacy-embedding-model", Status: "warning", ReasonCode: "legacy_embedding_model_set",
+			Message: fmt.Sprintf("embedding-model %s is deprecated and has no effect; remove it from hufu.yaml (semantic memory retrieval uses semantic-retrieval)", legacy),
+		})
 	}
-	report.add("semantic.legacy-embedding-model", "", "pass", fmt.Sprintf("embedding-model %s applies only to the legacy long-term memory store; it does not affect semantic-retrieval, which context query, rebuild --vector, and conflicts scan --vector use", legacy))
 	for _, key := range slices.Sorted(maps.Keys(encoders)) {
 		doctorCheckSemanticEncoder(ctx, report, encoders[key])
 	}

@@ -748,7 +748,7 @@ func TestContextCompiler_DependencyFiltering_ResolvedTodoIDs(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -812,7 +812,7 @@ func TestWorker_MemoryInjectedExactlyOnce(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -863,7 +863,7 @@ func TestContextCompiler_CoordinatorIntegration(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

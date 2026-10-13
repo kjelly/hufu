@@ -54,7 +54,7 @@
 
 - 🤖 **多 Agent 協作** — Coordinator 分配任務給 Worker，自動協調多輪對話
 - 🔄 **多團隊切換** — 單一 prompt 中可切換不同團隊或直接呼叫特定 Agent
-- 🧠 **長期記憶 (RAG)** — 透過 chromem-go 向量搜尋，自動注入相關記憶到系統提示
+- 🧠 **長期記憶** — Canonical SQLite 記憶經精確與 FTS5 檢索（可選 Ollama 語意通道）取出，在 context 預算內編入 Agent 提示
 - 🛠️ **18 種 Worker Tools** — 涵蓋 bash、檔案操作、遠端執行、程式碼直譯器、亂數、數學運算等
 - 🔌 **MCP 整合** — 支援 local 與 remote MCP server，擴充 Agent 能力
 - 📋 **Skills 系統** — 可重用的技能定義，跨團隊共享，支援自動技能偵測
@@ -292,8 +292,8 @@ Semantic Retrieval Runtime 區段查看。詳見 [Semantic memory retrieval](doc
 | `--steps` | `-s` | `bool` | `false` | 在執行每批 Worker 任務前暫停並要求確認 |
 | `--agent-team` | — | `string` | `""` | 要載入的 Agent 團隊名稱 |
 | `--agent-team-search-path` | — | `string` | `""` | 團隊搜尋路徑（逗號分隔），預設為 `.agent-teams/,~/.agent-teams/` |
-| `--memory` | — | `bool` | `false` | 啟用長期記憶（RAG 向量搜尋） |
-| `--memory-model` | — | `string` | `""` | Memory 使用的 embedding model（預設：`ollama/embeddinggemma:latest`） |
+| `--memory` | — | `bool` | `false` | 已棄用、沒有作用：每次執行都使用 canonical 記憶（[棄用紀錄](docs/deprecations/legacy-memory-store.md)） |
+| `--memory-model` | — | `string` | `""` | 已棄用、沒有作用：請在 `semantic-retrieval` 區塊設定 encoder |
 | `--archive-memory` | — | `bool` | `false` | 將 session 摘要封存至 memory 後退出 |
 | `--show-history` | — | `bool` | `false` | 恢復時顯示先前的 session 歷史 |
 | `--dry-run` | — | `bool` | `false` | 不呼叫 LLM 的預覽，列出技能比對與可用 agents（不執行 agent） |
@@ -342,12 +342,6 @@ go run ./cmd/hufu -t "快速測試"
 
 # 指定團隊與搜尋路徑
 go run ./cmd/hufu --agent-team dev-team --agent-team-search-path "./teams,~/teams" "開發功能"
-
-# 啟用 memory
-go run ./cmd/hufu --memory "需要記憶的任務"
-
-# 指定 embedding model
-go run ./cmd/hufu --memory-model mxbai-embed-large "分析文件"
 
 # 封存 session 記憶後退出
 go run ./cmd/hufu --archive-memory
@@ -483,14 +477,13 @@ go run ./cmd/hufu --agent-team dev-team "Implement complex feature"
 
 ### 6. 具備記憶的開發 (Memory-Augmented)
 
-在不同 session 之間保留學習到的經驗：
+學到的經驗會保存在 canonical 記憶中，跨 session 延續；每次執行都會使用：
 
 ```bash
-# 啟用 memory 以搜尋過去的 session
-go run ./cmd/hufu --memory "Refactor the API layer"
+go run ./cmd/hufu "Refactor the API layer"
 
-# 之後的 session 可以查詢相關記憶
-go run ./cmd/hufu --memory "How did we handle auth errors previously?"
+# 查看之後的 session 會想起什麼
+hufu context query --project <project> "How did we handle auth errors previously?"
 ```
 
 ### 7. 無人值守的批次處理 (Unattended)
@@ -880,38 +873,26 @@ workspace/
 
 ---
 
-## Memory 系統 (RAG)
+## Memory 系統
 
-`hufu` 內建長期記憶系統，使用 RAG（Retrieval-Augmented Generation）技術，讓 Agent 能夠跨 session 保留和查詢重要資訊。
+`hufu` 把長期記憶存放在每個 workspace 的 canonical context store，讓 Agent 能跨 session 保留和查詢重要資訊。每次執行都會使用，不需要另外啟用。
 
 ### 架構
 
 | 元件 | 說明 |
 |------|------|
-| **Vector Store** | chromem-go（程序內、檔案型） |
-| **Embedding** | Ollama embeddings |
-| **儲存位置** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **預設 Embedding Model** | `ollama/embeddinggemma:latest` |
+| **Canonical store** | `<workspace>/context.sqlite`，唯一的 source of truth |
+| **檢索** | 精確識別字與 FTS5 lexical 檢索，加上可選的語意通道 |
+| **語意通道** | Ollama embedding 以可重建的 generation 存在 `context.sqlite`；預設關閉，見 [semantic retrieval](docs/reference/semantic-retrieval.md) |
 
 ### 運作機制
 
-- **自動查詢**：相關的記憶會自動注入到 Agent 的系統提示中
-- **封存**：Session 摘要會在結束時儲存至 memory
+- **組裝提示**：相關的 canonical 記憶會在 context 預算內編入 Agent 提示
+- **封存**：Session 結束時，摘要會存成 canonical context item
 
 ### Memory Tools
 
-Agent 可使用以下兩個 memory 工具：
-
-#### `memory_save`
-
-儲存知識到長期記憶，供後續查詢使用。
-
-```
-memory_save(
-  content: "重要的發現或決策",    # 必要
-  category: "architecture"        # 選填，用於分類
-)
-```
+模型可用的記憶工具預設為唯讀。Worker 透過型別化的 `TaskResult` 回報發現、決策、待解問題、驗證與產出物；runtime 會把這些證據整理進 canonical session context，並在符合條件時提出 persistent 候選記憶。
 
 #### `memory_query`
 
@@ -927,23 +908,22 @@ memory_query(
 
 ### 配置優先順序
 
-Memory 相關配置的優先順序：
+語意通道由 `semantic-retrieval` 區塊設定：
 
 ```
-CLI flag > hufu.yaml > 預設值
+team.yaml > ./hufu.yaml > ~/.config/hufu/hufu.yaml > 預設值
 ```
+
+`--memory`、`--memory-model` 與 `embedding-model` 設定已棄用、沒有作用（[棄用紀錄](docs/deprecations/legacy-memory-store.md)）。
 
 ### 使用範例
 
 ```bash
-# 啟用 memory
-go run ./cmd/hufu --memory "分析程式碼架構"
+# 以執行時的方式搜尋 canonical 記憶
+hufu context query --project <project> "API 設計決策"
 
-# 停用 memory
-go run ./cmd/hufu --memory=false "一次性任務"
-
-# 指定 embedding model
-go run ./cmd/hufu --memory-model mxbai-embed-large "分析文件"
+# 為語意通道嵌入新增或修改過的記憶
+hufu context semantic build
 
 # 封存 session 記憶後退出
 go run ./cmd/hufu --archive-memory
@@ -1314,7 +1294,6 @@ go run ./cmd/hufu --report "重構模組"
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: ollama/embeddinggemma:latest
 ```
 
 ### 配置優先順序
@@ -1336,7 +1315,7 @@ CLI flag > hufu.yaml > 預設值
 | 設定 | 預設值 | 來源 |
 |------|--------|------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `ollama/embeddinggemma:latest` | `config.go` |
+| 語意檢索 encoder | `ollama/embeddinggemma:latest`，mode `off`（`semantic-retrieval` 區塊） | `internal/semantic/config.go` |
 
 ### Agent 設定
 
@@ -1429,8 +1408,8 @@ go run ./cmd/hufu "@developer 修復 login.go 的記憶體洩漏"
 ### 使用記憶系統
 
 ```bash
-# 啟用記憶並指定 embedding model
-go run ./cmd/hufu --memory --memory-model mxbai-embed-large "分析專案架構"
+# Canonical 記憶一律啟用；查看執行時會想起什麼
+hufu context query --project <project> "專案架構"
 
 # 封存 session 記憶
 go run ./cmd/hufu --archive-memory

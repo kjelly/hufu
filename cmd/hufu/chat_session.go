@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -164,10 +163,6 @@ func buildChatTeamInfo(tc *teamContext, registry *team.TeamRegistry) tuipkg.Team
 	}
 	info.SidecarModel = tc.session.Config.SidecarModel
 	info.GuardModel = tc.session.Config.GuardModel
-	info.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
-	if info.MemoryEnabled {
-		info.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
-	}
 	info.PTYEnabled = opts.enablePTYTerminal
 	info.HufuBinary, _ = os.Executable()
 	info.Decisions, _ = tc.coordinator.DecisionIndexEntries()

@@ -69,7 +69,7 @@ func newResourceOrderCoordinator(t *testing.T, maxConcurrent, retries int) *Coor
 			"worker": {Name: "worker", Role: "worker", MaxRetries: retries, Generation: agent.GenerationParams{Model: "test-model"}},
 		},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, maxConcurrent, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, maxConcurrent, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

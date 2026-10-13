@@ -14,7 +14,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
@@ -47,7 +46,7 @@ func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			session := &team.TeamSession{Dir: t.TempDir(), Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "warm-local"}}
-			coordinator, err := team.NewCoordinator(session, endpoint, "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+			coordinator, err := team.NewCoordinator(session, endpoint, "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 			if err != nil {
 				t.Fatalf("NewCoordinator failed: %v", err)
 			}
@@ -59,7 +58,7 @@ func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
 	}
 
 	session := &team.TeamSession{Dir: t.TempDir(), Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "warm-remote"}}
-	coordinator, err := team.NewCoordinator(session, "https://provider.example/v1", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(session, "https://provider.example/v1", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("remote NewCoordinator failed: %v", err)
 	}
@@ -503,7 +502,7 @@ func TestArchiveToMemory_SkipsWhenDisableHistoricalMemory(t *testing.T) {
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
 
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -512,10 +511,10 @@ func TestArchiveToMemory_SkipsWhenDisableHistoricalMemory(t *testing.T) {
 	c.SetExecutionProfile(freshProf)
 
 	// Provide non-empty old session entries
-	oldEntries := []memory.SessionSummaryEntry{
+	oldEntries := []team.SessionEntry{
 		{Role: "user", Content: "hello"},
 	}
 
 	// archiveToMemory should return early without attempting store operations when DisableHistoricalMemory is true
-	archiveToMemory(context.Background(), nil, c, session, oldEntries)
+	archiveToMemory(context.Background(), c, oldEntries)
 }

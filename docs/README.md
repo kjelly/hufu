@@ -124,6 +124,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Execution compatibility sunset](deprecations/execution-compatibility.md)
 - [Workset path fan-out deprecation](deprecations/workset-path-fanout.md)
 - [Review scope template-variable bridge](deprecations/review-scope-template-var.md)
+- [Legacy chromem memory store](deprecations/legacy-memory-store.md)
 - [Accepted runtime-integrity ADR](adr/0001-runtime-integrity-improvements.md)
 
 ### Planning

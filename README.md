@@ -54,7 +54,7 @@
 
 - 🤖 **Multi-Agent Collaboration** — Coordinator delegates tasks to workers, automatically orchestrating multi-round conversations
 - 🔄 **Multi-Team Switching** — Switch between different teams or invoke specific agents in a single prompt
-- 🧠 **Long-Term Memory (RAG)** — Vector search via chromem-go automatically injects relevant memories into system prompts
+- 🧠 **Long-Term Memory** — Canonical SQLite memory, retrieved by exact and FTS5 search plus an optional Ollama semantic lane, is compiled into agent prompts within the context budget
 - 🛠️ **18 Worker Tools** — Covering bash, file operations, remote execution, code interpreters, random, math, and more
 - 🔌 **MCP Integration** — Supports local and remote MCP servers to extend agent capabilities
 - 📋 **Skills System** — Reusable skill definitions, shareable across teams, with automatic skill detection
@@ -478,8 +478,8 @@ Semantic Retrieval Runtime section. See
 | `--steps` | `-s` | `bool` | `false` | Pause for user confirmation before each batch of worker tasks |
 | `--agent-team` | — | `string` | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
-| `--memory` | — | `bool` | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `ollama/embeddinggemma:latest`) |
+| `--memory` | — | `bool` | `false` | Deprecated, no effect: runs always use canonical memory ([record](docs/deprecations/legacy-memory-store.md)) |
+| `--memory-model` | — | `string` | `""` | Deprecated, no effect: configure the encoder in the `semantic-retrieval` block |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
@@ -643,12 +643,6 @@ go run ./cmd/hufu -t "Quick test"
 # Specify team and search paths
 go run ./cmd/hufu --agent-team dev-team --agent-team-search-path "./teams,~/teams" "Develop feature"
 
-# Enable memory
-go run ./cmd/hufu --memory "Task that needs memory"
-
-# Specify embedding model
-go run ./cmd/hufu --memory-model mxbai-embed-large "Analyze documents"
-
 # Archive session memory and exit
 go run ./cmd/hufu --archive-memory
 
@@ -806,14 +800,13 @@ go run ./cmd/hufu --agent-team dev-team "Implement complex feature"
 
 ### 7. Memory-Augmented Development
 
-Persist learnings across sessions:
+Learnings persist across sessions in canonical memory; every run uses it:
 
 ```bash
-# Enable memory to search past sessions
-go run ./cmd/hufu --memory "Refactor the API layer"
+go run ./cmd/hufu "Refactor the API layer"
 
-# Later sessions can query relevant memories
-go run ./cmd/hufu --memory "How did we handle auth errors previously?"
+# Inspect what later sessions will recall
+hufu context query --project <project> "How did we handle auth errors previously?"
 ```
 
 ### 8. Unattended Batch Processing
@@ -1319,23 +1312,22 @@ eval "$(hufu workspace shell-init bash)"      # defines hcd and hproj
 
 ---
 
-## Memory System (RAG)
+## Memory System
 
-`hufu` includes a built-in long-term memory system using RAG (Retrieval-Augmented Generation), enabling agents to retain and query important information across sessions.
+`hufu` keeps long-term memory in each workspace's canonical context store, so agents retain and query important information across sessions. Every run uses it; there is nothing to enable.
 
 ### Architecture
 
 | Component | Description |
 |-----------|-------------|
-| **Vector Store** | chromem-go (in-process, file-based) |
-| **Embedding** | Ollama embeddings |
-| **Storage Location** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **Default Embedding Model** | `ollama/embeddinggemma:latest` |
+| **Canonical store** | `<workspace>/context.sqlite`, the only source of truth |
+| **Retrieval** | Exact identifiers and FTS5 lexical search, plus an optional semantic lane |
+| **Semantic lane** | Ollama embeddings kept as rebuildable generations in `context.sqlite`; off by default, see [semantic retrieval](docs/reference/semantic-retrieval.md) |
 
 ### How It Works
 
-- **Automatic Querying**: Relevant memories are automatically injected into agent system prompts
-- **Archiving**: Session summaries are stored to memory when a session ends
+- **Prompt assembly**: Relevant canonical memories are compiled into agent prompts within the context budget
+- **Archiving**: Session summaries are stored as canonical context items when a session ends
 
 ### Memory Tools
 
@@ -1358,23 +1350,23 @@ memory_query(
 
 ### Configuration Priority
 
-Memory-related configuration priority:
+The semantic lane is configured by the `semantic-retrieval` block:
 
 ```
-CLI flag > hufu.yaml > Defaults
+team.yaml > ./hufu.yaml > ~/.config/hufu/hufu.yaml > Defaults
 ```
+
+`--memory`, `--memory-model`, and the `embedding-model` setting are deprecated
+and have no effect ([deprecation record](docs/deprecations/legacy-memory-store.md)).
 
 ### Usage Examples
 
 ```bash
-# Enable memory (enabled by default)
-go run ./cmd/hufu --memory "Analyze code architecture"
+# Search canonical memory as a run would
+hufu context query --project <project> "API design decisions"
 
-# Disable memory
-go run ./cmd/hufu --memory=false "One-off task"
-
-# Specify embedding model
-go run ./cmd/hufu --memory-model mxbai-embed-large "Analyze documents"
+# Embed new or edited memories for the semantic lane
+hufu context semantic build
 
 # Archive session memory and exit
 go run ./cmd/hufu --archive-memory
@@ -1870,7 +1862,6 @@ The report includes:
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: ollama/embeddinggemma:latest
 presentation:
   theme: auto
   display-preset: default
@@ -1895,7 +1886,7 @@ Complete reference for all default values, including their source files:
 | Setting | Default | Source |
 |---------|---------|--------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `ollama/embeddinggemma:latest` (legacy long-term memory store only; canonical context retrieval uses the `semantic-retrieval` settings) | `config.go` |
+| Semantic retrieval encoder | `ollama/embeddinggemma:latest`, mode `off` (`semantic-retrieval` block) | `internal/semantic/config.go` |
 
 ### Agent Settings
 
@@ -1970,8 +1961,8 @@ go run ./cmd/hufu "@developer Fix the memory leak in login.go"
 ### Using the Memory System
 
 ```bash
-# Enable memory and specify embedding model
-go run ./cmd/hufu --memory --memory-model mxbai-embed-large "Analyze the project architecture"
+# Canonical memory is always on; inspect what a run would recall
+hufu context query --project <project> "project architecture"
 
 # Archive session memory
 go run ./cmd/hufu --archive-memory

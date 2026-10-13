@@ -113,7 +113,7 @@ func TestNewCoordinatorUsesSessionSubjectRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coordinator, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	coordinator, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

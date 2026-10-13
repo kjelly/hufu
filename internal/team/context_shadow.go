@@ -9,7 +9,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -143,10 +142,9 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 
 // coordinatorMemorySources is the memory a coordinator prompt draws on:
 // canonical context when it is allowed and available, otherwise the legacy
-// archive files and vector store when the archive is allowed.
+// archive files when the archive is allowed.
 type coordinatorMemorySources struct {
 	rawSTM, rawLTM string
-	store          *memory.MemoryStore
 	canonical      *CanonicalContextBundle
 	routeDecisions []ContextRouteDecision
 }
@@ -165,7 +163,6 @@ func (c *Coordinator) coordinatorMemorySources(ctx context.Context, request Cont
 	} else if allowArchive {
 		sources.rawSTM = utils.RedactSecrets(LoadSTM(c.session.Workspace))
 		sources.rawLTM = utils.RedactSecrets(LoadLTM(c.session.Workspace, c.session.Config.Name))
-		sources.store = c.memoryStore
 	}
 	return sources, nil
 }

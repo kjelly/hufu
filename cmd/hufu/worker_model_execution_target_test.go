@@ -32,7 +32,7 @@ func admitWorkerTaskTarget(t *testing.T, coderProvider string, overrides ModelCL
 	if err := applyCLIGenerationOverridesToAgents(session, overrides); err != nil {
 		t.Fatal(err)
 	}
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

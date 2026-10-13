@@ -114,7 +114,7 @@ func newDoneWorkflowCoordinator(t *testing.T) *Coordinator {
 	t.Helper()
 	tmpDir := t.TempDir()
 	session := &TeamSession{Workspace: tmpDir, Dir: tmpDir, Config: agent.TeamConfig{Name: "review-team", Acceptance: "exit 1"}}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

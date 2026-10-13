@@ -13,7 +13,6 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -77,7 +76,7 @@ func canonicalRuntimePath(path string) string {
 // On success, it returns the SessionData to attach to the coordinator
 // and the (possibly empty) list of old session entries to archive to
 // memory.
-func prepareSessionLifecycle(session *team.TeamSession, forceFresh bool) (*team.SessionData, []memory.SessionSummaryEntry, error) {
+func prepareSessionLifecycle(session *team.TeamSession, forceFresh bool) (*team.SessionData, []team.SessionEntry, error) {
 	if opts.newSession || forceFresh {
 		oldSessionEntries := loadOldSessionEntries(session.Workspace)
 		if err := archivePreviousSession(session); err != nil {
@@ -105,22 +104,14 @@ func prepareSessionLifecycle(session *team.TeamSession, forceFresh bool) (*team.
 	return sessionData, nil, err
 }
 
-// loadOldSessionEntries reads the previous session.json (if any) and
-// converts it into SessionSummaryEntry records for memory archiving.
-func loadOldSessionEntries(workspacePath string) []memory.SessionSummaryEntry {
+// loadOldSessionEntries reads the previous session.json (if any) for memory
+// archiving.
+func loadOldSessionEntries(workspacePath string) []team.SessionEntry {
 	oldSession := team.LoadSession(workspacePath)
 	if oldSession == nil {
 		return nil
 	}
-	entries := make([]memory.SessionSummaryEntry, 0, len(oldSession.Entries))
-	for _, e := range oldSession.Entries {
-		entries = append(entries, memory.SessionSummaryEntry{
-			Role:      e.Role,
-			Content:   e.Content,
-			Timestamp: e.Timestamp,
-		})
-	}
-	return entries
+	return oldSession.Entries
 }
 
 // archivePreviousSession implements the newSession archive flow:
@@ -282,28 +273,14 @@ func buildMCPManager(ctx context.Context, session *team.TeamSession, cfg *config
 	return manager
 }
 
-// buildMemoryStore is retained as a compatibility seam while legacy stores
-// are migrated. New runs use context.sqlite plus its rebuildable canonical
-// vector index; they must not create a second MemoryRecord source of truth.
-//
-// The banner line names the canonical context index path so it is not confused
-// with the team's memory-learning policy; the effective learning mode is
-// printed on its own line when it differs from the off sentinel, using the
-// same precedence `hufu context learning` applies at runtime.
-func buildMemoryStore(resolvedProviderURL string, session *team.TeamSession) *memory.MemoryStore {
-	_ = resolvedProviderURL
-	switch {
-	case !opts.memoryEnabled:
-		stderrLog("%s Memory index: disabled\n", dimStyle.Render("○"))
-	case !opts.tempWorkspace:
-		stderrLog("%s Memory index: enabled (model: %s)\n", doneStyle.Render("✓"), config.ResolveEmbeddingModel(opts.memoryModel))
-	}
-	// Learning does not depend on the index, so its line prints whether or
-	// not --memory was given.
+// reportMemoryLearning prints the team's effective memory-learning mode when
+// it differs from the off sentinel, using the same precedence `hufu context
+// learning` applies at runtime. Runs always use canonical context memory, so
+// there is no separate memory index to report.
+func reportMemoryLearning(session *team.TeamSession) {
 	if mode := effectiveMemoryLearningMode(context.Background(), session); mode != "" && mode != agent.MemoryLearningOff {
 		stderrLog("%s Memory learning: %s\n", doneStyle.Render("✓"), mode)
 	}
-	return nil
 }
 
 // effectiveMemoryLearningMode reports the runtime-effective memory-learning
@@ -484,9 +461,7 @@ func buildNotifier(cfg *config.Config, session *team.TeamSession) *notify.Notifi
 }
 
 // archiveToMemory stores old session entries in canonical long-term context.
-// memStore remains in the signature temporarily for caller compatibility; it
-// is deliberately never used as a runtime source of truth.
-func archiveToMemory(ctx context.Context, memStore *memory.MemoryStore, coordinator *team.Coordinator, session *team.TeamSession, oldSessionEntries []memory.SessionSummaryEntry) {
+func archiveToMemory(ctx context.Context, coordinator *team.Coordinator, oldSessionEntries []team.SessionEntry) {
 	if len(oldSessionEntries) == 0 {
 		return
 	}
@@ -501,7 +476,5 @@ func archiveToMemory(ctx context.Context, memStore *memory.MemoryStore, coordina
 			return
 		}
 	}
-	_ = memStore
-	_ = session
 	stderrLog("%s Session archive skipped: canonical context is not configured.\n", errStyle.Render("⚠"))
 }

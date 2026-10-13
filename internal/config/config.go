@@ -454,24 +454,6 @@ func ResolveProviderAPIKey(cliFlag string, teamCfgAPIKey string) string {
 	return ""
 }
 
-// OllamaEmbeddingModelName strips a leading "ollama/" provider prefix so the
-// name is valid for the Ollama embeddings API, which rejects the prefixed
-// form DefaultEmbeddingModel uses. Other values are returned unchanged.
-func OllamaEmbeddingModelName(model string) string {
-	return strings.TrimPrefix(model, "ollama/")
-}
-
-func ResolveEmbeddingModel(cliFlag string) string {
-	if cliFlag != "" {
-		return cliFlag
-	}
-	cfg := LoadConfig()
-	if cfg.EmbeddingModel != "" {
-		return cfg.EmbeddingModel
-	}
-	return DefaultEmbeddingModel
-}
-
 func (c *Config) ResolveModelList(teamList []ModelEntry) []ModelEntry {
 	if len(teamList) > 0 {
 		return teamList

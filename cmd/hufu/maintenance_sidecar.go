@@ -68,7 +68,7 @@ func newMaintenanceTextGenerator(ctx context.Context, options maintenanceGenerat
 	if err := session.SetCompatibilityWorkspaceScope(runtimeSubjectRoot()); err != nil {
 		return nil, "", nil, fmt.Errorf("bind %s workspace scope: %w", options.Purpose, err)
 	}
-	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(session, url, key, nil, nil, team.RoleModels{Sidecar: model}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil, "", nil, err
 	}

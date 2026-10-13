@@ -26,7 +26,6 @@ import (
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/mcp"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -599,7 +598,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	rawSTM, rawLTM := "", ""
-	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	canonical := task.InvariantVerification != ""
 	request := c.newTaskContextRequest(task, todoID, 1, ContextTriggerTaskDispatch, agentName, agentDef.Role, nil)
@@ -607,7 +605,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		canonical = true
 	}
 	if !c.historicalMemoryDisabled() && !canonical {
-		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
+		rawSTM, rawLTM = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name)
 	}
 	workerInput := buildWorkerContextInput(request, task, agentDef, approvedPlan, instructions, verificationCriteria, runtimeContext, skillContext)
 	workerInput.RawSTM = rawSTM
@@ -615,7 +613,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.ContextFiles = contextFiles
 	workerInput.ConcurrentTasks = c.buildConcurrentTasksContext(todoID)
 	workerInput.DependencyResults = depResults
-	workerInput.MemoryStore = memoryStore
 	workerInput.CanonicalMemory = canonicalMemory
 	workerInput.MaxAuxChars = maxWorkerAuxContextChars
 	workerInput.DisableMemory = c.historicalMemoryDisabled()

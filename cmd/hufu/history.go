@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -21,11 +20,7 @@ func archiveCurrentSessionToMemory(ctx context.Context, tc *teamContext) {
 		return
 	}
 
-	var entries []memory.SessionSummaryEntry
-	for _, e := range tc.sessionData.Entries {
-		entries = append(entries, memory.SessionSummaryEntry{Role: e.Role, Content: e.Content, Timestamp: e.Timestamp})
-	}
-	if handled, err := tc.coordinator.ArchiveSessionSummary(ctx, entries); handled {
+	if handled, err := tc.coordinator.ArchiveSessionSummary(ctx, tc.sessionData.Entries); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Failed to archive session to canonical context: %v\n", errStyle.Render("⚠"), err)
 			return

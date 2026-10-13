@@ -40,7 +40,7 @@ func newTestCoordinatorWithAcceptance(t *testing.T, workerCount int, withAccepta
 		Config:    config,
 		Agents:    agents,
 	}
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 func TestControlDecisionJSONAndReportProjection(t *testing.T) {
 	workspace := t.TempDir()
 	session := &team.TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "control-json"}}
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

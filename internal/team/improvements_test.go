@@ -583,7 +583,7 @@ func TestNewCoordinatorRestoresConversationHistorySourceState(t *testing.T) {
 		Workspace: ws,
 		Dir:       ws,
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, []string(nil), false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, []string(nil), false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

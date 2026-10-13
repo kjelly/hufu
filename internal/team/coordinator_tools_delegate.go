@@ -385,7 +385,6 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		} else if !workerInput.DisableMemory {
 			workerInput.RawSTM = LoadSTM(c.session.Workspace)
 			workerInput.RawLTM = LoadLTM(c.session.Workspace, c.session.Config.Name)
-			workerInput.MemoryStore = c.memoryStore
 		}
 	}
 	workerInput.WorkerMemory = c.recallWorkerMemory(ctx, agentDef, request)

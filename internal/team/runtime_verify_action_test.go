@@ -66,7 +66,7 @@ func TestCoordinatorRunsBoundPrepareAndReadOnlyVerifyActions(t *testing.T) {
 			if err := session.SetCompatibilityWorkspaceScope(t.TempDir()); err != nil {
 				t.Fatal(err)
 			}
-			c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+			c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 			if err != nil {
 				t.Fatal(err)
 			}

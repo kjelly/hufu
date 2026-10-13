@@ -23,7 +23,7 @@ func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
 	if err := SaveSessionTree(workspace, tree); err != nil {
 		t.Fatal(err)
 	}
-	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight"}}, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight"}}, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

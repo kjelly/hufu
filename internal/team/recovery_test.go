@@ -505,7 +505,7 @@ func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
 			GoalMode: "exploratory",
 		},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("failed to create coordinator: %v", err)
 	}
