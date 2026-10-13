@@ -135,6 +135,7 @@ type runOptions struct {
 	// Runtime state (not a flag): set by the chat command so the injection
 	// loop knows it drives a TUI conversation instead of a one-shot run.
 	isChatTUI bool
+	chatUI    string
 }
 
 // opts is the process-wide flag state for the root command and its helpers.

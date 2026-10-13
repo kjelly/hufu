@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/exp/teatest"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -151,8 +151,8 @@ func sampleTeamInfo() TeamInfo {
 	}
 }
 
-func keyMsg(s string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+func keyMsg(s string) tea.KeyPressMsg {
+	return keyPress(s)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -219,22 +219,22 @@ func TestIntegration_Navigation_Tab(t *testing.T) {
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// Tab from PENDING (0) → PLANNED (1) — planner.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	// Tab → IN PROGRESS (2) — builder.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	// Tab → DONE (3) — devops.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	// Tab → SKIP (4) — writer.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	// Tab → ERROR (5) — devops.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	// Tab → wraps back to PENDING (0) — researcher.
-	tm.Send(tea.KeyMsg{Type: tea.KeyTab})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 	model := finalTUIModel(t, tm)
 	if model.col != 0 || model.row != 0 {
 		t.Errorf("cursor after six tabs = col %d row %d, want col 0 row 0", model.col, model.row)
@@ -274,12 +274,12 @@ func TestIntegration_DetailView_OpenClose(t *testing.T) {
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// Enter detail view for the first pending task.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	// Detail view footer says "esc back".
 	tm.waitForText(t, "esc back", 3*time.Second)
 
 	// Esc returns to columns.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -294,12 +294,12 @@ func TestIntegration_DetailView_ShowsLogs(t *testing.T) {
 	tm.Send(TaskLogMsg{TodoID: "t1", Line: "Found 3 relevant papers"})
 
 	// Enter detail view for t1 (first pending task, currently selected).
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	tm.waitForText(t, "Starting research", 3*time.Second)
 	tm.waitForText(t, "Found 3 relevant papers", 3*time.Second)
 
 	// Esc returns to columns.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -314,7 +314,7 @@ func TestIntegration_HelpPanel(t *testing.T) {
 	tm.waitForText(t, "keyboard reference", 3*time.Second)
 
 	// Esc closes help.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -332,7 +332,7 @@ func TestIntegration_InfoPanel(t *testing.T) {
 	tm.waitForText(t, "code-review", 3*time.Second)
 
 	// Esc closes info.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -347,13 +347,13 @@ func TestIntegration_Search(t *testing.T) {
 
 	// Type query — "deploy" matches the error task "Failed deploy".
 	tm.Type("deploy")
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Should jump to the ERROR column and show the matched task's agent.
 	tm.waitForText(t, "devops", 3*time.Second)
 
 	// Esc clears search and returns to normal view.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -363,7 +363,7 @@ func TestIntegration_QuitConfirm(t *testing.T) {
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// Esc opens quit confirmation.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "Quit hufu?", 3*time.Second)
 
 	// 'n' cancels.
@@ -378,7 +378,7 @@ func TestIntegration_QuitConfirm_ForceQuit(t *testing.T) {
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// Esc opens quit confirmation.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "Quit hufu?", 3*time.Second)
 
 	// 'f' forces quit.
@@ -398,11 +398,11 @@ func TestIntegration_CtrlC_WrapUp(t *testing.T) {
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// Ctrl+C triggers wrap-up.
-	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	tm.waitForText(t, "Finishing", 3*time.Second)
 
 	// Second Ctrl+C quits.
-	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
@@ -497,49 +497,52 @@ func TestIntegration_ResultMsg(t *testing.T) {
 	tm.waitForText(t, "The final answer is 42.", 3*time.Second)
 
 	// Enter should open the full result view.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	tm.waitForText(t, "The final answer is 42.", 3*time.Second)
 
 	// Esc closes the result view.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
 // TestIntegration_PromptInput verifies that 'c' opens the prompt injection
 // dialog, typing works, and Enter submits.
 func TestIntegration_PromptInput(t *testing.T) {
-	tm := newTestModelWithTasks(t, "test", sampleTeamInfo(), sampleTasks(), 120, 40)
+	t.Setenv("NO_SPINNER", "1")
+	submitted := make(chan string, 1)
+	m := New("test", sampleTeamInfo())
+	m.tasks = sampleTasks()
+	m.SubmitPrompt = func(prompt string) bool {
+		submitted <- prompt
+		return true
+	}
+	tm := &tuiTestModel{tm: teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 40))}
+	t.Cleanup(func() { _ = tm.tm.Quit() })
 	tm.waitForText(t, "PENDING", 5*time.Second)
 
 	// 'c' opens prompt input.
 	tm.Send(keyMsg("c"))
 	tm.waitForText(t, "Additional Prompt", 3*time.Second)
 
-	// Type a prompt.
+	// Type a prompt. Bubble Tea v2 renders only changed cells, so typed text
+	// is not guaranteed to appear contiguously in the output stream; the
+	// submitted prompt below is the authoritative check.
 	tm.Type("fix the bug")
-	tm.waitForText(t, "fix the bug", 3*time.Second)
 
 	// Enter submits — the dialog should close.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// After submit, we should be back in the column view.
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
-	// The injected prompt should be in the channel.
-	tm.Send(FinishedMsg{})
-	tm.Send(keyMsg("q")) // quit to get final model
-	fm := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second))
-	if fm == nil {
-		t.Fatal("expected final model, got nil")
-	}
-	model := fm.(Model)
+	// The prompt should have been handed to SubmitPrompt.
 	select {
-	case injected := <-model.PromptInjectCh:
+	case injected := <-submitted:
 		if injected != "fix the bug" {
 			t.Errorf("expected injected prompt 'fix the bug', got %q", injected)
 		}
-	default:
-		t.Error("expected prompt to be injected into PromptInjectCh")
+	case <-time.After(3 * time.Second):
+		t.Error("expected prompt to be passed to SubmitPrompt")
 	}
 }
 
@@ -552,7 +555,7 @@ func TestIntegration_PromptInput_Cancel(t *testing.T) {
 	tm.Send(keyMsg("c"))
 	tm.waitForText(t, "Additional Prompt", 3*time.Second)
 
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -571,7 +574,7 @@ func TestIntegration_ActivityLog(t *testing.T) {
 	tm.waitForText(t, "ACTIVITY LOG", 3*time.Second)
 
 	// Esc closes activity log.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -653,7 +656,7 @@ func TestIntegration_EnterResultWhenFinished(t *testing.T) {
 	// When finished with a result, the status area shows the result box.
 	tm.waitForText(t, "Result text here.", 3*time.Second)
 
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	tm.waitForText(t, "Result text here.", 3*time.Second)
 }
 
@@ -669,7 +672,7 @@ func TestIntegration_DetailView_VisualMode(t *testing.T) {
 	tm.Send(TaskLogMsg{TodoID: "t1", Line: "Line three"})
 
 	// Enter detail view.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	tm.waitForText(t, "Line one", 3*time.Second)
 
 	// Enter visual mode.
@@ -681,7 +684,7 @@ func TestIntegration_DetailView_VisualMode(t *testing.T) {
 	tm.waitForNotText(t, "VISUAL", 3*time.Second)
 
 	// Esc returns to columns.
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 }
 
@@ -788,31 +791,31 @@ func TestIntegration_MultipleOverlays(t *testing.T) {
 	// Open help, close it.
 	tm.Send(keyMsg("?"))
 	tm.waitForText(t, "keyboard reference", 3*time.Second)
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
 	// Open info, close it.
 	tm.Send(keyMsg("i"))
 	tm.waitForText(t, "test-team", 3*time.Second)
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
 	// Open search, cancel it.
 	tm.Send(keyMsg("/"))
 	tm.waitForText(t, "Search", 3*time.Second)
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
 	// Open prompt input, cancel it.
 	tm.Send(keyMsg("c"))
 	tm.waitForText(t, "Additional Prompt", 3*time.Second)
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
 	// Open activity log, close it.
 	tm.Send(keyMsg("a"))
 	tm.waitForText(t, "ACTIVITY LOG", 3*time.Second)
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	tm.waitForText(t, "PENDING", 3*time.Second)
 
 	// Navigation should still work after all overlay cycling.

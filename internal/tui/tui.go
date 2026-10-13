@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -179,22 +177,26 @@ type Model struct {
 	inConfirm     bool // showing quit confirmation dialog
 	confirmChoice int  // 0=no 1=yes 2=force
 
-	width                    int
-	height                   int
-	finished                 bool
-	IsChat                   bool
-	runResult                *team.RunResult
-	statusText               string // current status shown in the status bar
-	copyNotice               string
-	quitHint                 bool
-	spinnerFrame             int
-	spinnerEnabled           bool
-	forceCompact             bool
-	themeMode                ThemeMode
-	effectiveTheme           ThemeMode
-	displayPreset            DisplayPreset
-	noColor                  bool
-	owner                    bool
+	width          int
+	height         int
+	finished       bool
+	IsChat         bool
+	runResult      *team.RunResult
+	statusText     string // current status shown in the status bar
+	copyNotice     string
+	quitHint       bool
+	spinnerFrame   int
+	spinnerEnabled bool
+	forceCompact   bool
+	themeMode      ThemeMode
+	effectiveTheme ThemeMode
+	displayPreset  DisplayPreset
+	noColor        bool
+	owner          bool
+	// embedded marks a dashboard hosted inside the chat view: its exit,
+	// compose, and Ctrl+C paths hand control back to the host instead of
+	// quitting the program.
+	embedded                 bool
 	themeContext             context.Context
 	themeDetector            func(context.Context) ThemeMode
 	themePoll                time.Duration
@@ -217,9 +219,14 @@ type Model struct {
 	inAskUser bool
 	ask       askState
 
-	inPromptInput  bool
-	promptInput    textinput.Model
-	PromptInjectCh chan string
+	inPromptInput    bool
+	promptInput      textinput.Model
+	promptSubmitting bool
+	promptNotice     string
+	// SubmitPrompt offers an additional prompt to the runtime. It must not
+	// block and reports false when the prompt was not accepted. Nil means
+	// prompt injection is unavailable for this model.
+	SubmitPrompt func(string) bool
 
 	inSearch      bool
 	searchInput   textinput.Model
@@ -250,12 +257,11 @@ type Model struct {
 	terminals   map[string]string // todoID → current PTY session ID
 }
 
-func enableMouseCmd() tea.Cmd {
-	return func() tea.Msg { return tea.EnableMouseCellMotion() }
-}
-
-func disableMouseCmd() tea.Cmd {
-	return func() tea.Msg { return tea.DisableMouse() }
+// staticCursor stops a text input's cursor from blinking (e-paper mode).
+func staticCursor(input *textinput.Model) {
+	styles := input.Styles()
+	styles.Cursor.Blink = false
+	input.SetStyles(styles)
 }
 
 // New creates a fresh model with the user's original prompt shown at the top.
@@ -286,9 +292,9 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 	dsi.Placeholder = "Search task log..."
 	dsi.CharLimit = 200
 	if options.DisplayPreset == DisplayEpaper {
-		_ = ti.Cursor.SetMode(cursor.CursorStatic)
-		_ = si.Cursor.SetMode(cursor.CursorStatic)
-		_ = dsi.Cursor.SetMode(cursor.CursorStatic)
+		staticCursor(&ti)
+		staticCursor(&si)
+		staticCursor(&dsi)
 	}
 
 	m := Model{
@@ -301,7 +307,6 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 		promptInput:       ti,
 		searchInput:       si,
 		detailSearchInput: dsi,
-		PromptInjectCh:    make(chan string, 16),
 		WrapUpCh:          make(chan struct{}, 2),
 		ReportCh:          make(chan struct{}, 1),
 		teamInfo:          teamInfo,
@@ -346,7 +351,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.ask, cmd = initAskUser(msg, m.width)
 		if m.displayPreset == DisplayEpaper {
-			cmd = m.ask.ti.Cursor.SetMode(cursor.CursorStatic)
+			staticCursor(&m.ask.ti)
+			cmd = nil
 		}
 		m.inAskUser = true
 		return m, cmd
@@ -354,23 +360,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.detailSearchInput.Width = max(msg.Width-30, 10)
+		m.detailSearchInput.SetWidth(max(msg.Width-30, 10))
 		if m.inAskUser {
-			m.ask.ti.Width = askTIWidth(msg.Width)
+			m.ask.ti.SetWidth(askTIWidth(msg.Width))
 		}
 		if m.vpReady {
-			m.vp.Width = msg.Width
+			m.vp.SetWidth(msg.Width)
 			if m.inActivityLog {
-				m.vp.Height = msg.Height - 4
+				m.vp.SetHeight(msg.Height - 4)
 			} else {
-				m.vp.Height = m.vpHeight()
+				m.vp.SetHeight(m.vpHeight())
 			}
 		} else {
 			h := m.vpHeight()
 			if m.inActivityLog {
 				h = msg.Height - 4
 			}
-			m.vp = viewport.New(msg.Width, h)
+			m.vp = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(h))
 			m.vpReady = true
 		}
 		if m.inDetail {
@@ -383,10 +389,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.SetContent(m.formatActivityLogContent())
 		}
 		if m.operatorReady {
-			m.operatorVP.Width = max(msg.Width-4, 10)
-			m.operatorVP.Height = max(msg.Height-2, 3)
+			m.operatorVP.SetWidth(max(msg.Width-4, 10))
+			m.operatorVP.SetHeight(max(msg.Height-2, 3))
 			if m.inOperator {
-				offset := m.operatorVP.YOffset
+				offset := m.operatorVP.YOffset()
 				m.operatorVP.SetContent(m.buildOperatorContent())
 				m.operatorVP.SetYOffset(offset)
 			}
@@ -505,6 +511,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ResultMsg:
 		m.result = sanitizeTerminalText(msg.Text)
 
+	case promptSubmittedMsg:
+		return m.handlePromptSubmitted(msg)
+
 	case TeamInfoMsg:
 		m.teamInfo = msg.Info
 		m.teamInfo.Decisions = team.RedactedDecisionIndexEntries(m.teamInfo.Decisions)
@@ -521,7 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operatorSnapshot = msg.Snapshot
 		m.hasOperatorSummary = true
 		if m.inOperator && m.operatorReady {
-			offset := m.operatorVP.YOffset
+			offset := m.operatorVP.YOffset()
 			m.operatorVP.SetContent(m.buildOperatorContent())
 			m.operatorVP.SetYOffset(offset)
 		}
@@ -537,7 +546,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operatorPromotionLimited = msg.PromotionLimited
 		m.operatorAttempts = slices.Clone(msg.Attempts)
 		if m.inOperator && m.operatorReady {
-			offset := m.operatorVP.YOffset
+			offset := m.operatorVP.YOffset()
 			m.operatorVP.SetContent(m.buildOperatorContent())
 			m.operatorVP.SetYOffset(offset)
 		}
@@ -598,93 +607,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if m.inDetail {
-			var cmd tea.Cmd
-			m.vp, cmd = m.vp.Update(msg)
+		return m.updateMouse(msg)
 
-			item := m.findTask(m.detailID)
-			if item != nil {
-				header := m.renderDetailHeader(item)
-				headerLines := len(strings.Split(header, "\n"))
-				clickY := msg.Y - headerLines
-
-				if clickY >= 0 && clickY < m.vp.Height {
-					lines, ok := m.logs[m.detailID]
-					if ok && len(lines) > 0 {
-						width := m.vp.Width
-						if width < 20 {
-							width = 20
-						}
-						logIndex := m.mapRenderedLineToLogIndex(m.vp.YOffset+clickY, width)
-						if logIndex >= 0 && logIndex < len(lines) {
-							if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-								m.inVisual = true
-								m.cursorLine = logIndex
-								m.visualStart = logIndex
-								m.visualEnd = logIndex
-								m.vp.SetContent(m.buildDetailContent())
-							} else if msg.Action == tea.MouseActionMotion && m.inVisual && msg.Button == tea.MouseButtonLeft {
-								m.cursorLine = logIndex
-								m.visualEnd = logIndex
-								m.vp.SetContent(m.buildDetailContent())
-							}
-						}
-					}
-				}
-			}
-
-			if msg.Action == tea.MouseActionRelease && m.inVisual && msg.Button == tea.MouseButtonLeft {
-				if m.visualStart != m.visualEnd {
-					text := m.getVisualSelection()
-					m.inVisual = false
-					m.visualStart = 0
-					m.visualEnd = 0
-					if m.vpReady {
-						m.vp.SetContent(m.buildDetailContent())
-					}
-					if text != "" {
-						return m, copyToClipboard(text)
-					}
-				}
-			}
-
-			return m, cmd
-		}
-		if !m.mouseEnabled {
-			return m, nil
-		}
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			item, col, row := m.dashboardItemAt(msg.X, msg.Y)
-			if item == nil {
-				return m, nil
-			}
-			m.col, m.row = col, row
-			m.detailID = item.ID
-			m.expandedLogIndex = -1
-			delete(m.unread, item.ID)
-			m.inDetail = true
-			m.cursorLine = max(len(m.logs[item.ID])-1, 0)
-			if m.vpReady {
-				m.vp.SetContent(m.buildDetailContent())
-				m.vp.GotoBottom()
-			}
-			return m, nil
-		}
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			if m.row > 0 {
-				m.row--
-				m.scrollCursorIntoView()
-			}
-		case tea.MouseButtonWheelDown:
-			col := m.colItems(m.col)
-			if m.row < len(col)-1 {
-				m.row++
-				m.scrollCursorIntoView()
-			}
-		}
-
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if msg.String() == "T" && m.canSwitchTheme() {
 			var theme string
 			m, theme = m.cycleTheme()

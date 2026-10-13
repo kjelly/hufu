@@ -1201,6 +1201,26 @@ TUI 顯示：
 
 > **注意**：`--tui` 與 `--steps` 不可同時使用。
 
+### Chat-first TUI
+
+`hufu chat --ui chat` 開啟全螢幕對話介面，整個 session 保持同一個 team 載入。
+每則訊息都是同一段 coordinator 對話中的一輪；每輪各自顯示進度卡片、最終回答與
+canonical outcome，結束後輸入框立即可以再使用。
+
+```bash
+hufu chat --agent-team dev-team --ui chat
+hufu chat --default --ui chat --theme light --display-preset epaper
+```
+
+- `Enter` 送出；`Ctrl+J`／`Alt+Enter` 換行；`Tab` 補全 `/命令` 與 `@名稱`。
+- `Ctrl+C` 取消進行中的這一輪（session 不會結束）；閒置時先清空草稿，再詢問是否離開。
+- `Ctrl+T` 切換到任務 dashboard；`Ctrl+P` 開啟命令面板。
+- 命令：`/help`、`/status`、`/cost`、`/save <path>`、`/reset`、`/team [name]`、
+  `/cancel`、`/wrap`、`/theme [mode]`、`/exit`。
+
+`--ui plain`（預設）維持原本的逐行 REPL，`--ui dashboard`（或 `--tui`）是任務
+dashboard。詳見 [docs/architecture/chat-tui.md](docs/architecture/chat-tui.md)。
+
 ---
 
 ## Dry Run 模式

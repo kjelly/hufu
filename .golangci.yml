@@ -46,9 +46,6 @@ linters:
       # gocyclo debt from lowering min-complexity 95 -> 40: each entry below
       # names one function that predates the new threshold. Remove the entry
       # when that function is decomposed; do not add new ones.
-      - linters: # runChat: 50
-          - gocyclo
-        path: cmd/hufu/chat\.go
       - linters: # (*Coordinator).ExecuteTasks: 65
           - gocyclo
         path: internal/team/coordinator_execute\.go

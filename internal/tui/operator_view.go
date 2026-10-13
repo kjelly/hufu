@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/operator"
@@ -33,7 +33,7 @@ func (m *Model) acceptOperatorDetailsGeneration(generation uint64) bool {
 func (m *Model) loadOperatorContent() {
 	width := max(m.width-4, 10)
 	height := max(m.height-2, 3)
-	m.operatorVP = viewport.New(width, height)
+	m.operatorVP = viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
 	m.operatorVP.SetContent(m.buildOperatorContent())
 	m.operatorVP.GotoTop()
 	m.operatorReady = true

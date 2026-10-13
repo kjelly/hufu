@@ -6,20 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
 
-	ergoreadline "github.com/ergochat/readline"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
-	tuipkg "github.com/kjelly/hufu/internal/tui"
 )
 
 var replCmd = &cobra.Command{
@@ -33,8 +28,12 @@ the coordinator keeps full conversation context between turns.
 Pick the team with --agent-team, --default, or interactively. Commands inside the
 REPL: /exit (or /quit) to leave, /reset to clear conversation context.
 
+Choose the interface with --ui: plain (default line REPL), dashboard (the
+task dashboard, also --tui), or chat (full-screen chat-first TUI).
+
 Examples:
   hufu chat --agent-team dev-team
+  hufu chat --agent-team dev-team --ui chat
   hufu chat --default --helper-tools bash`,
 	RunE: runChat,
 }
@@ -68,7 +67,14 @@ func init() {
 	f.BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection")
 	f.BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
 	f.BoolVar(&opts.think, "think", false, "Show coordinator decision reasoning")
-	f.BoolVar(&opts.tuiMode, "tui", false, "Show a Bubble Tea TUI for real-time task tracking")
+	f.BoolVar(&opts.tuiMode, "tui", false, "Show the task dashboard TUI (alias for --ui dashboard)")
+	f.StringVar(&opts.chatUI, "ui", string(chatUIPlain), "Chat interface: plain, dashboard, or chat")
+	f.StringVar(&opts.themeMode, "theme", "", "Display theme: auto, light, dark, or mono (default: config or auto)")
+	f.StringVar(&opts.displayPreset, "display-preset", "", "Display preset: default or epaper (default: config or default)")
+	f.BoolVar(&opts.noSpinner, "no-spinner", false, "Disable the TUI waiting spinner (also honors NO_SPINNER)")
+	registerStaticFlagCompletion(replCmd, "ui", []string{string(chatUIPlain), string(chatUIDashboard), string(chatUIChat)})
+	registerStaticFlagCompletion(replCmd, "theme", []string{"auto", "light", "dark", "mono"})
+	registerStaticFlagCompletion(replCmd, "display-preset", []string{"default", "epaper"})
 	f.Int64Var(&opts.timeoutOverride, "timeout", 0, "Override agent/coordinator timeout in seconds")
 	f.IntVar(&opts.maxRoundsOverride, "max-rounds", 0, "Override team.yaml max-rounds. 0 = use team default.")
 	f.IntVar(&opts.maxConcurrentOverride, "max-concurrent", 0, "Override team.yaml max-concurrent. 0 = use team default.")
@@ -88,280 +94,27 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 		return err
 	}
 	configureOutputRendering()
+	mode, err := selectChatUIMode(cmd.Flags().Changed("ui"))
+	if err != nil {
+		return err
+	}
 	if opts.defaultTeam && opts.agentTeamName != "" {
 		return fmt.Errorf("cannot use --default with --agent-team; pick one")
 	}
-
-	pr, err := readline.NewPromptReader(defaultHistoryPath())
-	if err != nil {
-		pr = nil
-	}
-	globalPromptReader.Store(pr)
-	defer func() {
-		if pr != nil {
-			_ = pr.Close()
-		}
-	}()
-
-	vars, err := buildVars()
+	session, err := openChatSession()
 	if err != nil {
 		return err
 	}
-
-	pathConsent := newPathConsent()
-	rootCtx := context.Background()
-
-	// Resolve which team to load.
-	var tc *teamContext
-	var teamName string
-	var registry *team.TeamRegistry
-	if opts.defaultTeam {
-		teamName = "default"
-		tc, err = loadDefaultTeam(rootCtx, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
-	} else {
-		teamName, registry, err = pickChatTeam(pr)
-		if err != nil {
-			return err
-		}
-		tc, err = loadTeamByName(rootCtx, teamName, registry, opts.providerURL, opts.providerAPIKey, pathConsent, vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to load team %q: %w", teamName, err)
-	}
-	if err := configureRunInputAssignments(map[string]*teamContext{teamName: tc}); err != nil {
-		return err
-	}
 	defer func() {
-		runErr = errors.Join(runErr, tc.Close())
+		runErr = errors.Join(runErr, session.close())
 	}()
-
-	// Recreate the prompt reader with a team-aware tab completer. The
-	// first reader (line 71) had no completer because we did not yet
-	// know the team. Recreating is cheaper than supporting mutable
-	// completer state in the underlying readline library.
-	if pr != nil {
-		_ = pr.Close()
-		var agentNames []string
-		for name := range tc.session.Agents {
-			agentNames = append(agentNames, name)
-		}
-		newPr, perr := readline.NewPromptReaderWithCompleter(
-			defaultHistoryPath(),
-			newChatCompleter(teamName, []string{teamName}, agentNames),
-		)
-		if perr == nil {
-			pr = newPr
-			globalPromptReader.Store(pr)
-			defer func() { _ = pr.Close() }()
-		}
-	}
-
-	if opts.tuiMode {
-		opts.isChatTUI = true
-		var teamInfo tuipkg.TeamInfo
-		if registry != nil {
-			teamInfo.AvailableTeams = registry.ListTeams()
-		}
-		teamInfo.TeamName = tc.session.Config.Name
-		teamInfo.Workspace = tc.session.Workspace
-		teamInfo.TeamDir = tc.session.Dir
-		teamInfo.DefaultModel = tc.session.Config.Generation.Model
-		for _, ag := range sortedAgents(tc.session.Agents) {
-			model := ag.Generation.Model
-			if model == "" {
-				model = tc.session.Config.Generation.Model
-			}
-			teamInfo.Agents = append(teamInfo.Agents, tuipkg.AgentInfoEntry{
-				Name:  ag.Name,
-				Role:  ag.Role,
-				Model: model,
-			})
-		}
-		for _, s := range tc.session.Skills {
-			teamInfo.Skills = append(teamInfo.Skills, s.Name)
-		}
-		if sc := tc.session.Config.SidecarModel; sc != "" {
-			teamInfo.SidecarModel = sc
-		}
-		if gm := tc.session.Config.GuardModel; gm != "" {
-			teamInfo.GuardModel = gm
-		}
-		teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
-		if teamInfo.MemoryEnabled {
-			teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
-		}
-		teamInfo.SSHSessions = 0
-		teamInfo.PTYEnabled = opts.enablePTYTerminal
-		teamInfo.HufuBinary, _ = os.Executable()
-		teamInfo.Decisions, _ = tc.coordinator.DecisionIndexEntries()
-		teamInfo.Decisions = team.RedactedDecisionIndexEntries(teamInfo.Decisions)
-		teamInfo.IsChat = true
-
-		segments := []team.PromptSegment{
-			{
-				Type:    team.SegmentSwitchTeam,
-				Name:    teamName,
-				Content: "",
-			},
-		}
-
-		injector := newPromptInjector(nil)
-		activeCoord := new(atomic.Pointer[team.Coordinator])
-
-		loadedTeams := map[string]*teamContext{
-			teamName: tc,
-		}
-
-		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
-		defer cancel()
-
-		_, runErr := runWithTUI(turnCtx, cancel, "", segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, teamInfo, RouteDecision{Route: RouteTeam, Team: teamName})
-		return runErr
-	}
-
-	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
-		boldStyle.Render("💬"), teamStyle.Render(teamName),
-		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
-	turn := 0
-	for {
-		line, err := readChatLine(pr)
-		if err != nil {
-			if err == io.EOF || err == ergoreadline.ErrInterrupt {
-				fmt.Fprintln(os.Stderr)
-				return nil
-			}
-			return err
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		command, commandArg := splitChatCommand(line)
-		if command == "/team" && commandArg != "" {
-			newTc, terr := switchChatTeamByName(rootCtx, commandArg, registry)
-			if terr != nil {
-				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), terr)
-				continue
-			}
-			oldTC := tc
-			tc, teamName, turn = newTc, newTc.teamName, 0
-			if err := oldTC.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
-			}
-			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n", doneStyle.Render("✓"), teamStyle.Render(teamName))
-			continue
-		}
-		switch command {
-		case "/exit", "/quit", ":q", "exit", "quit":
-			return nil
-		case "/reset":
-			tc.coordinator.ResetConversation()
-			turn = 0
-			fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
-			continue
-		case "/help", "help", "?":
-			fmt.Fprint(os.Stderr, chatHelpText(tc.teamName))
-			continue
-		case "/team":
-			newTc, newName, terr := switchChatTeam(rootCtx, pr, tc, registry)
-			if terr != nil {
-				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), terr)
-				continue
-			}
-			if newTc == nil {
-				continue
-			}
-			oldTC := tc
-			tc = newTc
-			teamName = newName
-			turn = 0
-			if err := oldTC.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
-			}
-			fmt.Fprintf(os.Stderr, "%s Switched to team %s. Conversation context cleared.\n\n",
-				doneStyle.Render("✓"), teamStyle.Render(teamName))
-			continue
-		case "/agents":
-			printChatAgents(tc)
-			continue
-		case "/skills":
-			printChatSkills(tc)
-			continue
-		case "/config":
-			fmt.Fprintf(os.Stderr, "Team: %s\nWorkspace: %s\nModel: %s\n\n", tc.session.Config.Name, tc.session.Workspace, tc.session.Config.Generation.Model)
-			continue
-		case "/save":
-			if commandArg == "" {
-				fmt.Fprintln(os.Stderr, "usage: /save <path>")
-				continue
-			}
-			if err := os.MkdirAll(filepath.Dir(commandArg), 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), err)
-				continue
-			}
-			if err := os.WriteFile(commandArg, []byte(team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name)), 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "%s %v\n", errStyle.Render("✗"), err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "%s Saved conversation to %s\n\n", doneStyle.Render("✓"), commandArg)
-			continue
-		}
-
-		// Inject file/project contexts
-		promptToRun, _ := injectFileContexts(line)
-		cfg := config.LoadConfig()
-		if opts.projectContext || cfg.ProjectContext || tc.session.Config.ProjectContext {
-			promptToRun = injectProjectContext(promptToRun)
-		}
-
-		// Each turn is independently cancellable with Ctrl+C; cancelling a turn
-		// returns to the prompt rather than exiting the REPL.
-		turnInvocationID := team.NewInvocationID()
-		opts.invocationID = turnInvocationID
-		tc.coordinator.SetInvocationID(turnInvocationID)
-		turnRunCounts := snapshotExecutionRunCounts(map[string]*teamContext{teamName: tc})
-		stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval)
-		turnCtx, cancel := signal.NotifyContext(rootCtx, os.Interrupt)
-		disp := newCoordDisplay(tc)
-		var result string
-		if turn == 0 {
-			result, err = tc.coordinator.Run(turnCtx, promptToRun)
-		} else {
-			result, err = tc.coordinator.ContinueWithPrompt(turnCtx, promptToRun)
-		}
-		result, err = presentExploratoryDelivery(tc, result, err)
-		disp.stopTimer()
-		cancel()
-		stopIdentityHeartbeat()
-		turnRunIdentities := collectExecutionRunIdentities(map[string]*teamContext{teamName: tc}, turnRunCounts)
-
-		if err != nil {
-			if turnCtx.Err() == context.Canceled {
-				fmt.Fprintf(os.Stderr, "\n%s Turn cancelled.\n\n", errStyle.Render("⚠"))
-				emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-				// A cancelled first turn still established history inside the
-				// coordinator, so next turn must use ContinueWithPrompt.
-				turn++
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "%s Error executing: %v\n\n", errStyle.Render("✗"), err)
-			emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-			continue
-		}
-
-		disp.finalizeTasks()
-		fmt.Println(result)
-		emitExecutionIdentity(os.Stderr, turnInvocationID, turnRunIdentities)
-		fmt.Fprintln(os.Stderr)
-		turn++
-
-		if line != "" {
-			go savePromptToHistory(context.Background(), line, opts.providerURL)
-		}
-
-		// Persist after every turn so the session survives a crash mid-chat.
-		_ = team.SaveSession(tc.session.Workspace, tc.sessionData)
-		_ = team.SaveSessionMD(tc.session.Workspace, team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name))
+	switch mode {
+	case chatUIDashboard:
+		return session.runDashboard()
+	case chatUIChat:
+		return session.runChatUI()
+	default:
+		return session.runPlain()
 	}
 }
 
@@ -421,7 +174,8 @@ Tips:
   - Type your message and press Enter to send it
   - Each turn is independently cancellable with Ctrl+C
   - Use ↑/↓ to recall previous prompts
-  - Run with --tui for a 6-column dashboard
+  - Run with --ui chat for the full-screen chat interface,
+    or --ui dashboard (--tui) for the task dashboard
 
 `,
 		boldStyle.Render("💬"), teamStyle.Render(teamName))

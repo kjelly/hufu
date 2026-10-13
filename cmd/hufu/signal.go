@@ -128,10 +128,15 @@ func newPromptInjector(pr *readline.PromptReader) *promptInjector {
 	}
 }
 
-func (p *promptInjector) enqueue(prompt string) {
+// enqueue offers prompt to the injection queue without blocking. It reports
+// false when the queue is full so callers can tell the user the prompt was
+// not sent instead of dropping it silently.
+func (p *promptInjector) enqueue(prompt string) bool {
 	select {
 	case p.ch <- prompt:
+		return true
 	default:
+		return false
 	}
 }
 
@@ -167,6 +172,9 @@ func (p *promptInjector) promptAndEnqueue() {
 	if prompt == "" {
 		return
 	}
-	p.enqueue(prompt)
+	if !p.enqueue(prompt) {
+		stderrLog("%s Prompt queue is full (%d pending); prompt was not sent.\n", errStyle.Render("✗"), cap(p.ch))
+		return
+	}
 	stderrLog("%s Prompt enqueued, will be processed after current task completes.\n", doneStyle.Render("✓"))
 }

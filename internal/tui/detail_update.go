@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 //nolint:gocyclo // Keep the detail keymap in one switch so navigation precedence stays visible.
@@ -26,7 +26,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.visualEnd = 0
 		if !m.mouseManuallyEnabled {
 			m.mouseEnabled = false
-			return m, disableMouseCmd()
+			return m, nil
 		}
 		return m, nil
 	case "ctrl+c":
@@ -61,7 +61,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailSearchActive = true
 		m.detailSearchInput.SetValue(m.detailSearchQuery)
 		m.detailSearchInput.Focus()
-		return m, m.detailSearchInput.Cursor.BlinkCmd()
+		return m, m.blinkCmd()
 	case "j", "down":
 		contentLines := len(m.logs[m.detailID])
 		if contentLines > 0 && m.cursorLine < contentLines-1 {
@@ -82,7 +82,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+d", "J":
-		h := m.vp.Height
+		h := m.vp.Height()
 		if h <= 0 {
 			h = 10
 		}
@@ -90,13 +90,13 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if quarterPage < 1 {
 			quarterPage = 1
 		}
-		m.vp.SetYOffset(m.vp.YOffset + quarterPage)
+		m.vp.SetYOffset(m.vp.YOffset() + quarterPage)
 		if m.vpReady {
 			m.vp.SetContent(m.buildDetailContent())
 		}
 		return m, nil
 	case "ctrl+u", "K":
-		h := m.vp.Height
+		h := m.vp.Height()
 		if h <= 0 {
 			h = 10
 		}
@@ -104,7 +104,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if quarterPage < 1 {
 			quarterPage = 1
 		}
-		m.vp.SetYOffset(m.vp.YOffset - quarterPage)
+		m.vp.SetYOffset(m.vp.YOffset() - quarterPage)
 		if m.vpReady {
 			m.vp.SetContent(m.buildDetailContent())
 		}
@@ -141,9 +141,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mouseManuallyEnabled = !m.mouseManuallyEnabled
 		m.mouseEnabled = m.mouseManuallyEnabled
 		if m.mouseEnabled {
-			return m, enableMouseCmd()
+			return m, nil
 		}
-		return m, disableMouseCmd()
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
@@ -216,14 +216,14 @@ func (m Model) attachTerminal() (tea.Model, tea.Cmd) {
 }
 
 // followCursor updates the viewport YOffset to keep the cursor visible.
-// Thread Safety: This method directly modifies m.vp.YOffset, which is safe
+// Thread Safety: This method directly modifies the viewport offset, which is safe
 // because Bubble Tea's Update loop is single-threaded. DO NOT call this from
 // goroutines or outside the Update loop.
 func (m *Model) followCursor() {
 	if !m.vpReady {
 		return
 	}
-	h := m.vp.Height
+	h := m.vp.Height()
 	if h <= 0 {
 		return
 	}
@@ -265,17 +265,17 @@ func (m *Model) followCursor() {
 	}
 
 	// Adjust YOffset
-	if cursorYStart < m.vp.YOffset {
+	if cursorYStart < m.vp.YOffset() {
 		// Moving up: ensure start of entry is visible
-		m.vp.YOffset = cursorYStart
-	} else if cursorYEnd >= m.vp.YOffset+h {
+		m.vp.SetYOffset(cursorYStart)
+	} else if cursorYEnd >= m.vp.YOffset()+h {
 		// Moving down: ensure end of entry is visible
 		if cursorLineHeight <= h {
 			// Entire entry can fit, scroll to show its end
-			m.vp.YOffset = cursorYEnd - h + 1
+			m.vp.SetYOffset(cursorYEnd - h + 1)
 		} else {
 			// Entry is taller than screen, scroll to show its start (indicator)
-			m.vp.YOffset = cursorYStart
+			m.vp.SetYOffset(cursorYStart)
 		}
 	}
 }

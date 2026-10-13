@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -30,11 +30,11 @@ func TestAskUser_FreeText(t *testing.T) {
 	}
 
 	// Type some text
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Alice")})
+	m3, _ := model.Update(keyPress("Alice"))
 	model = m3.(Model)
 
 	// Submit with enter
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m4, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m4.(Model)
 	if model.inAskUser {
 		t.Error("expected inAskUser=false after enter submit")
@@ -72,14 +72,14 @@ func TestAskUser_SingleChoice(t *testing.T) {
 	}
 
 	// Move down to Option B (index 1)
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m3, _ := model.Update(keyPress("j"))
 	model = m3.(Model)
 	if model.ask.cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", model.ask.cursor)
 	}
 
 	// Select
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m4, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m4.(Model)
 	if model.inAskUser {
 		t.Error("expected inAskUser=false after enter")
@@ -114,13 +114,13 @@ func TestAskUser_MultipleChoice(t *testing.T) {
 	model := m2.(Model)
 
 	// Toggle option A (index 0)
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	model = m3.(Model)
 
 	// Move down to B and toggle
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m4, _ := model.Update(keyPress("j"))
 	model = m4.(Model)
-	m5, _ := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m5, _ := model.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	model = m5.(Model)
 
 	if !model.ask.selected[0] || !model.ask.selected[1] {
@@ -128,7 +128,7 @@ func TestAskUser_MultipleChoice(t *testing.T) {
 	}
 
 	// Confirm
-	m6, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m6, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m6.(Model)
 	if model.inAskUser {
 		t.Error("expected inAskUser=false after enter")
@@ -156,7 +156,7 @@ func TestAskUser_Cancel(t *testing.T) {
 	})
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = m3.(Model)
 	if model.inAskUser {
 		t.Error("expected inAskUser=false after ctrl+c")
@@ -188,14 +188,14 @@ func TestAskUser_BoundsCheck_SingleChoiceCursor(t *testing.T) {
 	model := m2.(Model)
 
 	// Cursor should be at 0 initially; move down to the "custom" option (index 1)
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m3, _ := model.Update(keyPress("j"))
 	model = m3.(Model)
 	if model.ask.cursor != 1 {
 		t.Fatalf("expected cursor 1 (custom), got %d", model.ask.cursor)
 	}
 
 	// Enter on custom should switch to free-text mode, not crash
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m4, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m4.(Model)
 	if !model.ask.freeMode {
 		t.Error("expected freeMode=true after entering custom option")
@@ -213,7 +213,7 @@ func TestConfirmDialog_Navigation(t *testing.T) {
 	m.height = 30
 
 	// Open confirm dialog
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 	if !model.inConfirm {
 		t.Fatal("expected inConfirm=true after esc")
@@ -223,35 +223,35 @@ func TestConfirmDialog_Navigation(t *testing.T) {
 	}
 
 	// Right to "Yes"
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := model.Update(keyPress("l"))
 	model = m3.(Model)
 	if model.confirmChoice != 1 {
 		t.Errorf("after 'l' = %d, want 1", model.confirmChoice)
 	}
 
 	// Right to "Force"
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m4, _ := model.Update(keyPress("l"))
 	model = m4.(Model)
 	if model.confirmChoice != 2 {
 		t.Errorf("after 'l' = %d, want 2", model.confirmChoice)
 	}
 
 	// Left back to "Yes"
-	m5, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m5, _ := model.Update(keyPress("h"))
 	model = m5.(Model)
 	if model.confirmChoice != 1 {
 		t.Errorf("after 'h' = %d, want 1", model.confirmChoice)
 	}
 
 	// Tab to "Force"
-	m6, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m6, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = m6.(Model)
 	if model.confirmChoice != 2 {
 		t.Errorf("after tab = %d, want 2", model.confirmChoice)
 	}
 
 	// Left to "Yes"
-	m7, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m7, _ := model.Update(keyPress("h"))
 	model = m7.(Model)
 	if model.confirmChoice != 1 {
 		t.Errorf("after 'h' = %d, want 1", model.confirmChoice)
@@ -263,10 +263,10 @@ func TestConfirmDialog_CancelWithN(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m3, _ := model.Update(keyPress("n"))
 	model = m3.(Model)
 	// Note: "f" returns tea.Quit without clearing inConfirm
 	if model.inConfirm {
@@ -279,10 +279,10 @@ func TestConfirmDialog_CancelWithEsc(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = m3.(Model)
 	// Note: "f" returns tea.Quit without clearing inConfirm
 	if model.inConfirm {
@@ -295,10 +295,10 @@ func TestConfirmDialog_YTriggersWrapUp(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m3, _ := model.Update(keyPress("y"))
 	model = m3.(Model)
 	// Note: "f" returns tea.Quit without clearing inConfirm
 	if model.inConfirm {
@@ -314,10 +314,10 @@ func TestConfirmDialog_ForceQuit(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 
-	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	_, cmd := model.Update(keyPress("f"))
 	// 'f' returns tea.Quit immediately; it does not clear inConfirm
 	if cmd == nil {
 		t.Error("expected tea.Quit command after 'f'")
@@ -335,23 +335,23 @@ func TestMouseToggle(t *testing.T) {
 	}
 
 	// 'm' toggles mouse on
-	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m2, _ := m.Update(keyPress("m"))
 	model := m2.(Model)
 	if !model.mouseEnabled || !model.mouseManuallyEnabled {
 		t.Error("expected mouseEnabled=true after 'm'")
 	}
-	if cmd == nil {
-		t.Error("expected enableMouseCmd after 'm'")
+	if model.View().MouseMode != tea.MouseModeCellMotion {
+		t.Error("expected the view to request cell-motion mouse reporting after 'm'")
 	}
 
 	// 'm' toggles mouse off
-	m3, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m3, _ := model.Update(keyPress("m"))
 	model = m3.(Model)
 	if model.mouseEnabled || model.mouseManuallyEnabled {
 		t.Error("expected mouseEnabled=false after second 'm'")
 	}
-	if cmd == nil {
-		t.Error("expected disableMouseCmd after second 'm'")
+	if model.View().MouseMode != tea.MouseModeNone {
+		t.Error("expected the view to disable mouse reporting after second 'm'")
 	}
 }
 
@@ -363,7 +363,7 @@ func TestMemoryView_OpenClose(t *testing.T) {
 	m.height = 30
 
 	// 'M' opens memory
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")})
+	m2, _ := m.Update(keyPress("M"))
 	model := m2.(Model)
 	if !model.inMemory {
 		t.Error("expected inMemory=true after 'M'")
@@ -373,7 +373,7 @@ func TestMemoryView_OpenClose(t *testing.T) {
 	}
 
 	// Esc closes
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = m3.(Model)
 	if model.inMemory {
 		t.Error("expected inMemory=false after esc")
@@ -389,18 +389,18 @@ func TestMemoryView_ScrollTopBottom(t *testing.T) {
 	m.height = 30
 
 	// Open memory
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")})
+	m2, _ := m.Update(keyPress("M"))
 	model := m2.(Model)
 
 	// 'g' goes to top
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m3, _ := model.Update(keyPress("g"))
 	model = m3.(Model)
-	if model.memoryVP.YOffset != 0 {
-		t.Errorf("expected YOffset 0 after 'g', got %d", model.memoryVP.YOffset)
+	if model.memoryVP.YOffset() != 0 {
+		t.Errorf("expected YOffset 0 after 'g', got %d", model.memoryVP.YOffset())
 	}
 
 	// 'G' goes to bottom
-	m4, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	m4, _ := model.Update(keyPress("G"))
 	model = m4.(Model)
 	// Just verify no panic; YOffset should be at or near the end
 }
@@ -410,10 +410,10 @@ func TestMemoryView_CtrlC(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("M")})
+	m2, _ := m.Update(keyPress("M"))
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = m3.(Model)
 	if !model.wrapUpRequested {
 		t.Error("expected wrapUpRequested=true after ctrl+c in memory view")
@@ -434,14 +434,14 @@ func TestNavigation_CtrlD_CtrlU(t *testing.T) {
 	m.scrollOff = [6]int{}
 
 	// ctrl+d should jump down by quarter page
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 	model := m2.(Model)
 	if model.row == 0 {
 		t.Error("expected row > 0 after ctrl+d")
 	}
 
 	// ctrl+u should jump back up
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	model = m3.(Model)
 	if model.row != 0 {
 		t.Errorf("expected row 0 after ctrl+u, got %d", model.row)
@@ -456,31 +456,31 @@ func TestRapidKeysNoPanic(t *testing.T) {
 	m.height = 30
 	m.tasks = sampleTasks()
 
-	keys := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune("j")},
-		{Type: tea.KeyRunes, Runes: []rune("j")},
-		{Type: tea.KeyRunes, Runes: []rune("j")},
-		{Type: tea.KeyRunes, Runes: []rune("k")},
-		{Type: tea.KeyRunes, Runes: []rune("l")},
-		{Type: tea.KeyRunes, Runes: []rune("l")},
-		{Type: tea.KeyRunes, Runes: []rune("h")},
-		{Type: tea.KeyRunes, Runes: []rune("G")},
-		{Type: tea.KeyRunes, Runes: []rune("g")},
-		{Type: tea.KeyEnter},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune("?")},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune("i")},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune("/")},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune("a")},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyRunes, Runes: []rune("c")},
-		{Type: tea.KeyEsc},
-		{Type: tea.KeyTab},
-		{Type: tea.KeyTab},
-		{Type: tea.KeyTab},
+	keys := []tea.KeyPressMsg{
+		keyPress("j"),
+		keyPress("j"),
+		keyPress("j"),
+		keyPress("k"),
+		keyPress("l"),
+		keyPress("l"),
+		keyPress("h"),
+		keyPress("G"),
+		keyPress("g"),
+		{Code: tea.KeyEnter},
+		{Code: tea.KeyEscape},
+		keyPress("?"),
+		{Code: tea.KeyEscape},
+		keyPress("i"),
+		{Code: tea.KeyEscape},
+		keyPress("/"),
+		{Code: tea.KeyEscape},
+		keyPress("a"),
+		{Code: tea.KeyEscape},
+		keyPress("c"),
+		{Code: tea.KeyEscape},
+		{Code: tea.KeyTab},
+		{Code: tea.KeyTab},
+		{Code: tea.KeyTab},
 	}
 
 	model := m
@@ -490,7 +490,7 @@ func TestRapidKeysNoPanic(t *testing.T) {
 	}
 
 	// Should not have panicked — test passes if we reach here.
-	_ = model.View()
+	_ = model.render()
 }
 
 // ── L1: CoordStatusMsg ─────────────────────────────────────────────────────
@@ -545,8 +545,8 @@ func TestWindowSizeMsg_WithDetailOverlay(t *testing.T) {
 	m.inDetail = true
 	m.detailID = "t1"
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	model := m2.(Model)
@@ -592,20 +592,14 @@ func TestMouseWheelScroll(t *testing.T) {
 	}
 
 	// Wheel down
-	m2, _ := m.Update(tea.MouseMsg{
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonWheelDown,
-	})
+	m2, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	model := m2.(Model)
 	if model.row != 6 {
 		t.Errorf("expected row 6 after wheel down, got %d", model.row)
 	}
 
 	// Wheel up
-	m3, _ := model.Update(tea.MouseMsg{
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonWheelUp,
-	})
+	m3, _ := model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	model = m3.(Model)
 	if model.row != 5 {
 		t.Errorf("expected row 5 after wheel up, got %d", model.row)
@@ -623,7 +617,7 @@ func TestSearchCancelClearsResults(t *testing.T) {
 	m.searchResults = []*team.TodoItem{{ID: "t7"}}
 
 	// Esc should clear search results
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 	if model.searchQuery != "" {
 		t.Errorf("expected empty searchQuery after esc, got %q", model.searchQuery)
@@ -648,14 +642,14 @@ func TestSearchNextPrevMatch(t *testing.T) {
 	m.searchIdx = 0
 
 	// 'n' should advance to next match
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m2, _ := m.Update(keyPress("n"))
 	model := m2.(Model)
 	if model.searchIdx != 1 {
 		t.Errorf("expected searchIdx 1 after 'n', got %d", model.searchIdx)
 	}
 
 	// 'N' should go to previous match (wraps)
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	m3, _ := model.Update(keyPress("N"))
 	model = m3.(Model)
 	if model.searchIdx != 0 {
 		t.Errorf("expected searchIdx 0 after 'N', got %d", model.searchIdx)
@@ -695,11 +689,11 @@ func TestHelpPanel_CloseKeys(t *testing.T) {
 			var msg tea.KeyMsg
 			switch key {
 			case "esc":
-				msg = tea.KeyMsg{Type: tea.KeyEsc}
+				msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 			case "enter":
-				msg = tea.KeyMsg{Type: tea.KeyEnter}
+				msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 			default:
-				msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				msg = keyPress(key)
 			}
 
 			m2, _ := m.Update(msg)
@@ -725,11 +719,11 @@ func TestInfoPanel_CloseKeys(t *testing.T) {
 			var msg tea.KeyMsg
 			switch key {
 			case "esc":
-				msg = tea.KeyMsg{Type: tea.KeyEsc}
+				msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 			case "enter":
-				msg = tea.KeyMsg{Type: tea.KeyEnter}
+				msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 			default:
-				msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				msg = keyPress(key)
 			}
 
 			m2, _ := m.Update(msg)
@@ -755,11 +749,11 @@ func TestActivityLog_CloseKeys(t *testing.T) {
 			var msg tea.KeyMsg
 			switch key {
 			case "esc":
-				msg = tea.KeyMsg{Type: tea.KeyEsc}
+				msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 			case "enter":
-				msg = tea.KeyMsg{Type: tea.KeyEnter}
+				msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 			default:
-				msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				msg = keyPress(key)
 			}
 
 			m2, _ := m.Update(msg)
@@ -777,27 +771,30 @@ func TestPromptInput_SubmitEmpty(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	m.width = 100
 	m.height = 30
+	calls := 0
+	m.SubmitPrompt = func(string) bool {
+		calls++
+		return true
+	}
 
 	// Open prompt input
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m2, _ := m.Update(keyPress("c"))
 	model := m2.(Model)
 	if !model.inPromptInput {
 		t.Fatal("expected inPromptInput=true")
 	}
 
 	// Submit with empty text — should close but not inject
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m3.(Model)
 	if model.inPromptInput {
 		t.Error("expected inPromptInput=false after enter with empty text")
 	}
-
-	// No prompt should be in the channel
-	select {
-	case <-model.PromptInjectCh:
-		t.Error("expected no prompt injected for empty submit")
-	default:
-		// Good
+	if cmd != nil {
+		t.Error("expected no submit command for empty submit")
+	}
+	if calls != 0 {
+		t.Errorf("SubmitPrompt calls = %d, want 0 for empty submit", calls)
 	}
 }
 
@@ -806,10 +803,10 @@ func TestPromptInput_CancelWithCtrlC(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m2, _ := m.Update(keyPress("c"))
 	model := m2.(Model)
 
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m3, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = m3.(Model)
 	if model.inPromptInput {
 		t.Error("expected inPromptInput=false after ctrl+c")
@@ -826,11 +823,11 @@ func TestResultView_OpenClose(t *testing.T) {
 	m.result = "Result text"
 	m.inResult = true
 	m.vpReady = true
-	m.vp.Width = 100
-	m.vp.Height = 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 
 	// Esc closes
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model := m2.(Model)
 	if model.inResult {
 		t.Error("expected inResult=false after esc")
@@ -838,7 +835,7 @@ func TestResultView_OpenClose(t *testing.T) {
 
 	// Enter also closes
 	m.inResult = true
-	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = m3.(Model)
 	if model.inResult {
 		t.Error("expected inResult=false after enter")
@@ -853,7 +850,7 @@ func TestResultView_QuitWhenFinished(t *testing.T) {
 	m.result = "Result text"
 	m.inResult = true
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	_, cmd := m.Update(keyPress("q"))
 	// 'q' returns tea.Quit immediately; it does not clear inResult
 	if cmd == nil {
 		t.Error("expected tea.Quit when 'q' pressed while finished")

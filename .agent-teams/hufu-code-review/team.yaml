@@ -342,6 +342,16 @@ spec:
               pointer: /structured_payload/value/record/findings
               fields: [summary, detail, severity]
               allow_missing: true
+          # The handoff inventory rejects a record whose invariant claims differ
+          # from the attested ones, after reviewers can no longer be
+          # redispatched. Check the copy here, where submit_result can still be
+          # corrected. Optional fields are compared by the inventory only.
+          - pointer: /invariant_verification/assessments
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/invariant_assessments
+              fields: [invariant_id, status, summary]
+              allow_missing: true
 
     - id: review-documentation-workset
       kind: outcome

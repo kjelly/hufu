@@ -48,6 +48,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Automation", Argv: `hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"`},
 	{Section: "Automation", Argv: `hufu run --team ops-team --unattended -- "check service health"`},
 	{Section: "Display", Argv: `hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor a long task"`},
+	{Section: "Display", Argv: "hufu chat --agent-team dev-team --ui chat"},
 }
 
 var cliFlagGroups = map[string][]string{
@@ -57,7 +58,7 @@ var cliFlagGroups = map[string][]string{
 	"safety":     {"rbash", "no-net", "force-mcp", "allow-path", "unattended", "auto-approve"},
 	"security":   {"rbash", "no-net", "force-mcp", "allow-path", "direnv"},
 	"unattended": {"unattended", "max-duration", "max-total-tokens", "auto-approve"},
-	"display":    {"tui", "tui-compact", "display-mode", "theme", "display-preset", "no-color", "no-spinner", "no-summary"},
+	"display":    {"ui", "tui", "tui-compact", "display-mode", "theme", "display-preset", "no-color", "no-spinner", "no-summary"},
 	"advanced":   {"provider-url", "provider-api-key", "profile", "var", "var-file", "memory", "template"},
 }
 

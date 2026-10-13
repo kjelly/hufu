@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/operator"
@@ -156,12 +156,12 @@ func TestOperatorPanelUsesVerifiedDetailsAndSeparatedLearningSignals(t *testing.
 		PromotionTotal:  1,
 	})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	updated, _ = m.Update(keyPress("L"))
 	m = updated.(Model)
 	if !m.inOperator || m.currentOverlay() != OverlayOperator {
 		t.Fatalf("L did not open operator panel: overlay=%s", m.currentOverlay())
 	}
-	view := sanitizeTerminalText(m.View())
+	view := sanitizeTerminalText(m.render())
 	for _, want := range []string{
 		"Evidence", "verdict=verified", "raw claims remain claims", "Context", "task=task-1",
 		"exposed=7 consulted=5", "applied=3", "verified=2", "approved", "context promotion review",
@@ -172,7 +172,7 @@ func TestOperatorPanelUsesVerifiedDetailsAndSeparatedLearningSignals(t *testing.
 			t.Fatalf("operator panel missing %q:\n%s", want, view)
 		}
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(Model)
 	if m.inOperator {
 		t.Fatal("escape did not close operator panel")

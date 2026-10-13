@@ -55,6 +55,8 @@ to re-create an abstraction that already exists in the runtime.
 - [Cost governance and portable team packages](architecture/cost-governance-and-portable-team-packages.md)
   — implementation-ready generation-cost admission, replayable projections,
   deterministic team packaging, inspection, and atomic local installation.
+- [Chat-first TUI](architecture/chat-tui.md) — `hufu chat --ui chat`: turn
+  controller, data authority, keys, and commands.
 - [Workset](architecture/workset.md) — artifact-backed fan-out, immutable
   expansion receipts, typed results, and group verification.
 - [Memory learning](architecture/memory-learning.md) — outcome attribution,

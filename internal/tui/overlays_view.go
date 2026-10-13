@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -118,16 +118,19 @@ func (m Model) confirmView() string {
 }
 
 func (m Model) promptInputView() string {
-	m.promptInput.Width = max(m.width-8, 20)
+	m.promptInput.SetWidth(max(m.width-8, 20))
 	content := m.styles.prompt.Render("─── Additional Prompt ───") + "\n\n" +
-		m.promptInput.View() + "\n\n" +
-		m.styles.dim.Render("enter submit · esc cancel")
+		m.promptInput.View() + "\n\n"
+	if m.promptNotice != "" {
+		content += m.styles.errorIcon.Render("✗ "+m.promptNotice) + "\n"
+	}
+	content += m.styles.dim.Render("enter submit · esc cancel")
 	dialog := m.styles.promptInputBox.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func (m Model) searchView() string {
-	m.searchInput.Width = max(m.width-8, 20)
+	m.searchInput.SetWidth(max(m.width-8, 20))
 	content := m.styles.prompt.Render("─── Search ───") + "\n\n" +
 		m.searchInput.View() + "\n\n" +
 		m.styles.dim.Render("enter search · esc cancel")
@@ -292,7 +295,7 @@ func (m *Model) loadMemoryContent() {
 	if h < 3 {
 		h = 3
 	}
-	m.memoryVP = viewport.New(w, h)
+	m.memoryVP = viewport.New(viewport.WithWidth(w), viewport.WithHeight(h))
 	m.memoryVP.SetContent(b.String())
 	m.memoryVP.GotoTop()
 	m.memoryReady = true

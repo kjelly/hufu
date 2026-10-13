@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kjelly/hufu/internal/team"
 )
 
 func uxKey(m Model, key string) Model {
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	next, _ := m.Update(keyPress(key))
 	return next.(Model)
 }
 
@@ -24,10 +24,11 @@ func TestDetailSearchStaysInCurrentTask(t *testing.T) {
 	m.logs["a"] = []string{"start", "needle first", "middle", "needle second"}
 	m.searchResults = []*team.TodoItem{{ID: "other"}}
 	m.vpReady = true
-	m.vp.Width, m.vp.Height = 100, 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	m = uxKey(m, "/")
 	m = uxKey(m, "needle")
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.inDetail || m.detailSearchActive || m.cursorLine != 1 {
 		t.Fatalf("search entered wrong task or line: detail=%t cursor=%d", m.inDetail, m.cursorLine)
@@ -42,7 +43,7 @@ func TestDetailSearchStaysInCurrentTask(t *testing.T) {
 	}
 	m = uxKey(m, "/")
 	m.detailSearchInput.SetValue("absent")
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.inDetail || m.cursorLine != 1 {
 		t.Fatalf("no-match search changed focus: detail=%t cursor=%d", m.inDetail, m.cursorLine)
@@ -63,16 +64,16 @@ func TestAskUserCustomEscapePreservesChoices(t *testing.T) {
 	next, _ := m.Update(AskUserMsg{Question: "Choose", Type: "multiple_choice", AllowAny: true,
 		Options: []AskUserOption{{Label: "first"}, {Label: "second"}}, ReplyCh: replies})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	m = next.(Model)
 	m = uxKey(m, "j")
 	m = uxKey(m, "j")
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.ask.freeMode {
 		t.Fatal("custom input did not open")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if !m.inAskUser || m.ask.freeMode || m.ask.cursor != 2 || !m.ask.selected[0] || len(replies) != 0 {
 		t.Fatalf("Esc did not preserve choice dialog: %+v", m.ask)
@@ -93,7 +94,7 @@ func TestDashboardSmallLayoutAndCompactNavigation(t *testing.T) {
 	if !m.isDashboardCollapsed() || m.colBodyHeight()-2 < 8 {
 		t.Fatalf("small dashboard has %d card lines", m.colBodyHeight()-2)
 	}
-	if h := lipgloss.Height(m.View()); h > m.height {
+	if h := lipgloss.Height(m.render()); h > m.height {
 		t.Fatalf("dashboard view height %d exceeds terminal %d", h, m.height)
 	}
 	m = uxKey(m, "j")
@@ -104,7 +105,7 @@ func TestDashboardSmallLayoutAndCompactNavigation(t *testing.T) {
 	if m.col != 2 {
 		t.Fatalf("compact right stayed in Queued: col=%d", m.col)
 	}
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = next.(Model)
 	if compactGroupForCol(m.col) != 0 {
 		t.Fatalf("shift+tab group=%d, want Queued", compactGroupForCol(m.col))
@@ -127,7 +128,8 @@ func TestDashboardMouseUsesRenderedCardCoordinates(t *testing.T) {
 		m.tasks = []*team.TodoItem{{ID: "p", Agent: "a", Desc: "pending", Status: team.TaskPending},
 			{ID: "d", Agent: "b", Desc: "done", Status: team.TaskDone}}
 		m.vpReady = true
-		m.vp.Width, m.vp.Height = width, 10
+		m.vp.SetWidth(width)
+		m.vp.SetHeight(10)
 		colW := (width - 5) / 6
 		visualCol := 3
 		if width == 80 {
@@ -136,7 +138,7 @@ func TestDashboardMouseUsesRenderedCardCoordinates(t *testing.T) {
 		}
 		x := visualCol * (colW + 1)
 		y := m.dashboardLayout().bodyY + 2
-		next, _ := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 		got := next.(Model)
 		if !got.inDetail || got.detailID != "d" {
 			t.Fatalf("width %d: clicked done card, opened %q", width, got.detailID)
@@ -168,7 +170,7 @@ func TestAskUserKeepsRightEdgeOfInputAndOptionsVisible(t *testing.T) {
 			m.width, m.height = width, 24
 			next, _ := m.Update(AskUserMsg{Question: "Answer", Type: "free_text", ReplyCh: make(chan string, 1)})
 			m = next.(Model)
-			m.ask.ti.SetValue(strings.Repeat("x", m.ask.ti.Width-4) + "TAIL")
+			m.ask.ti.SetValue(strings.Repeat("x", m.ask.ti.Width()-4) + "TAIL")
 			view := ansi.Strip(m.askUserView())
 			if !strings.Contains(view, "TAIL") {
 				t.Fatalf("free-text input lost its right edge at width %d:\n%s", width, view)
@@ -199,7 +201,7 @@ func TestRunningQuitHintIsVisible(t *testing.T) {
 	m.width, m.height = 80, 24
 	m.tasks = []*team.TodoItem{{ID: "1", Agent: "agent", Desc: "running", Status: team.TaskInProgress}}
 	m = uxKey(m, "q")
-	if !strings.Contains(ansi.Strip(m.View()), "Press Esc for quit options") {
+	if !strings.Contains(ansi.Strip(m.render()), "Press Esc for quit options") {
 		t.Fatal("q hint hidden by in-progress task")
 	}
 }
@@ -216,7 +218,8 @@ func TestToolOutputExpansionKeepsBoundedSource(t *testing.T) {
 	m.tasks = []*team.TodoItem{{ID: "task", Status: team.TaskInProgress}}
 	m.detailID, m.inDetail = "task", true
 	m.vpReady = true
-	m.vp.Width, m.vp.Height = 100, 20
+	m.vp.SetWidth(100)
+	m.vp.SetHeight(20)
 	next, _ := m.Update(TaskLogMsg{TodoID: "task", Line: preview, FullLine: full})
 	m = next.(Model)
 	if strings.Contains(m.buildDetailContent(), "suffix-after-preview") {
