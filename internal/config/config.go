@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/yamlutil"
 )
 
@@ -23,7 +24,10 @@ const DefaultLocalProviderURL = "http://127.0.0.1:11434/v1"
 
 // DefaultProviderURL is retained for compatibility with existing callers.
 const DefaultProviderURL = DefaultLocalProviderURL
-const DefaultEmbeddingModel = "ollama/embeddinggemma:latest"
+
+// DefaultEmbeddingModel is the legacy chromem index model; it shares the
+// semantic-retrieval default so the two never drift apart.
+const DefaultEmbeddingModel = semantic.DefaultModel
 const DefaultOllamaAPIURL = "http://127.0.0.1:11434/api"
 
 type ModelEntry struct {
@@ -176,6 +180,10 @@ type Config struct {
 	// Each field resolves ./hufu.yaml, then ~/.config/hufu/hufu.yaml; a team's
 	// own block overrides both, field by field.
 	ControlDecisions control.Config `yaml:"control-decisions"`
+	// SemanticRetrieval controls canonical semantic memory retrieval
+	// (default off). It resolves like ControlDecisions: ./hufu.yaml over
+	// ~/.config/hufu/hufu.yaml, and a team's own block overrides both.
+	SemanticRetrieval semantic.Config `yaml:"semantic-retrieval"`
 	// Timeouts groups model-call timeouts into decision, sidecar, review and
 	// provider categories; each field resolves like ControlDecisions.
 	Timeouts llmtimeout.Settings `yaml:"timeouts"`
@@ -252,6 +260,7 @@ func (c *Config) mergeFromFile(path string) {
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
 	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions)
+	c.SemanticRetrieval = semantic.Merge(c.SemanticRetrieval, fileCfg.SemanticRetrieval)
 	c.Timeouts = c.Timeouts.Merge(fileCfg.Timeouts)
 	c.Cost.merge(fileCfg.Cost)
 	c.mergeHooks(fileCfg.Hooks)

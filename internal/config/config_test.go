@@ -825,6 +825,30 @@ func TestControlDecisionsMergeFieldByField(t *testing.T) {
 	}
 }
 
+func TestSemanticRetrievalMergeFieldByField(t *testing.T) {
+	home := isolateHome(t)
+	homeConfig := filepath.Join(home, ".config", "hufu", "hufu.yaml")
+	if err := os.MkdirAll(filepath.Dir(homeConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(homeConfig, []byte("semantic-retrieval:\n  endpoint: http://192.168.11.117:11434\n  allow-remote-endpoint: true\n  query-timeout: 2s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte("semantic-retrieval:\n  mode: shadow\n  query-max-tokens: 256\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	settings, err := LoadConfig().SemanticRetrieval.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Mode != "shadow" || settings.Endpoint != "http://192.168.11.117:11434" || !settings.AllowRemoteEndpoint ||
+		settings.QueryTimeout != 2*time.Second || settings.QueryMaxTokens != 256 || settings.Model != "embeddinggemma:latest" {
+		t.Fatalf("semantic-retrieval = %#v", settings)
+	}
+}
+
 func TestConfigMergesTimeoutCategoriesFieldByField(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home.yaml")
