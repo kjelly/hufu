@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -81,5 +84,30 @@ func TestChatCostMatchesInspectCost(t *testing.T) {
 				t.Fatalf("/cost differs from hufu inspect cost:\nchat:\n%s\ninspect:\n%s", chatOutput, inspectOutput.String())
 			}
 		})
+	}
+}
+
+func TestChatSaveExportsCoordinatorSnapshot(t *testing.T) {
+	coordinator := newTestCoordinator(t, 0)
+	coordinator.SetSessionData(&team.SessionData{Entries: []team.SessionEntry{{Role: "user", Content: "locked coordinator entry"}}})
+	// /save can run during a turn, which keeps writing the session; the
+	// export must read the coordinator's locked snapshot, never the shared
+	// pointer directly.
+	tc := &teamContext{
+		teamName:    "alpha",
+		session:     &team.TeamSession{Config: agent.TeamConfig{Name: "alpha"}},
+		coordinator: coordinator,
+		sessionData: &team.SessionData{Entries: []team.SessionEntry{{Role: "user", Content: "unsynchronized entry"}}},
+	}
+	path := filepath.Join(t.TempDir(), "out", "chat.md")
+	if err := chatUIActions(newChatRuntimeAdapter(tc, "alpha"), nil, nil).Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading export: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "locked coordinator entry") || strings.Contains(got, "unsynchronized entry") {
+		t.Fatalf("export did not come from the coordinator snapshot:\n%s", got)
 	}
 }

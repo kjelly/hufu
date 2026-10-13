@@ -86,6 +86,7 @@ finalization.
 | Sidebar models | the runtime's precedence: the coordinator runs on the resolved coordinator target; a worker on its own model, else the team route, else the resolved worker default |
 | Tool activity | `TaskLogMsg` lines built from already-redacted `StatusEvent`s, sanitized again before rendering |
 | Restored history | `session.json` entries loaded by the normal resume path, marked `restored` |
+| `/save` export | the coordinator's locked session snapshot (`Coordinator.SessionData()`), so saving during a running turn never reads the session the turn is writing |
 
 The view never writes task state, never synthesizes "verified", and never runs
 recovery: an unresolved previous run is reported with a pointer to

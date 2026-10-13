@@ -130,12 +130,15 @@ func (s *chatSession) runPlainTurn(line string, turns *chatTurnSequencer) {
 }
 
 // saveChatTranscript exports the session conversation as Markdown; the
-// plain REPL and the chat TUI share it.
+// plain REPL and the chat TUI share it. The chat TUI may save while a turn
+// is running, so it reads the coordinator's locked snapshot instead of the
+// session the turn keeps writing.
 func saveChatTranscript(tc *teamContext, path string) error {
+	data := tc.coordinator.SessionData()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(team.GenerateSessionMD(tc.sessionData, tc.session.Config.Name)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(team.GenerateSessionMD(data, tc.session.Config.Name)), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
