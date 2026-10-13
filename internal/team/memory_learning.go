@@ -229,6 +229,9 @@ type MemoryLearningReport struct {
 	OutcomeCount      int                      `json:"outcome_count"`
 	PendingRepairGaps int                      `json:"pending_repair_gaps"`
 	ManualReviewGaps  int                      `json:"manual_review_gaps,omitzero"`
+	// UnrepairableGaps counts unresolved append failures that left no
+	// replayable event, so automatic repair can never resolve them.
+	UnrepairableGaps int `json:"unrepairable_gaps,omitzero"`
 	// EventCountsUnavailable distinguishes unreadable event data from true zero counts.
 	EventCountsUnavailable bool `json:"event_counts_unavailable,omitzero"`
 }
@@ -242,10 +245,14 @@ func (c *Coordinator) MemoryLearningReport() MemoryLearningReport {
 	report.PolicyVersion = c.session.Config.MemoryLearning.PolicyVersion
 	if c.sessionData != nil {
 		for _, gap := range c.sessionData.LearningGaps {
-			if isManualCreditReviewGap(gap) {
+			switch {
+			case isManualCreditReviewGap(gap):
 				report.ManualReviewGaps++
-			} else if gap.PendingRepair {
+			case !gap.PendingRepair:
+			case isAutoRepairableGap(gap):
 				report.PendingRepairGaps++
+			default:
+				report.UnrepairableGaps++
 			}
 		}
 	}

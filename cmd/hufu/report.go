@@ -1258,6 +1258,9 @@ func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningRep
 	if report.ManualReviewGaps > 0 {
 		fmt.Fprintf(b, "- **Manual memory-credit reviews:** %d (inspect `session.json` learning gaps; do not replay the worker)\n", report.ManualReviewGaps)
 	}
+	if report.UnrepairableGaps > 0 {
+		fmt.Fprintf(b, "- **Unrepairable event gaps:** %d (an append failed without a replayable event; inspect `session.json` learning gaps)\n", report.UnrepairableGaps)
+	}
 	b.WriteString("\n---\n\n")
 }
 

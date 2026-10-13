@@ -104,12 +104,15 @@ func TestReportDistinguishesUnavailableMemoryCountsFromZero(t *testing.T) {
 	if !strings.Contains(available, "Retrievals / exposures:** 0 / 0") || strings.Contains(available, "Event counts:** unavailable") {
 		t.Fatalf("available report did not render measured zero counts: %s", available)
 	}
+	if strings.Contains(available, "Unrepairable event gaps") {
+		t.Fatalf("report rendered unrepairable gaps without any: %s", available)
+	}
 
 	report := buildReportMD(&reportData{StartedAt: time.Now(), MemoryLearning: team.MemoryLearningReport{
-		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy", PendingRepairGaps: 1, ManualReviewGaps: 1,
+		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy", PendingRepairGaps: 1, ManualReviewGaps: 1, UnrepairableGaps: 2,
 		EventCountsUnavailable: true,
 	}}, "demo", "")
-	for _, want := range []string{"Outcome-driven Memory", "Event counts:** unavailable", "Pending automatic learning repairs:** 1", "Manual memory-credit reviews:** 1"} {
+	for _, want := range []string{"Outcome-driven Memory", "Event counts:** unavailable", "Pending automatic learning repairs:** 1", "Manual memory-credit reviews:** 1", "Unrepairable event gaps:** 2"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q: %s", want, report)
 		}

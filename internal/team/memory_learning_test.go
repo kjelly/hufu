@@ -111,13 +111,15 @@ func TestMemoryLearningReportCountsOnlyMemoryEventsAcrossRuns(t *testing.T) {
 		eventStore: store,
 		session:    &TeamSession{Config: agent.TeamConfig{MemoryLearning: policy}},
 		sessionData: &SessionData{LearningGaps: []LearningGap{
-			{PendingRepair: true}, {ManualReviewRequired: true}, {PendingRepair: false},
+			{EventType: "memory_retrieved", IdempotencyKey: "memory:retrieved:key", PendingRepair: true, RepairEvent: &RunEvent{Type: "memory_retrieved"}},
+			{ManualReviewRequired: true}, {PendingRepair: false},
 			{EventType: "memory_outcome_recorded", PendingRepair: true}, // legacy unreplayable credit gap
+			{EventType: "shared_working_memory_saved", PendingRepair: true},
 		}},
 	}
 	want := MemoryLearningReport{
 		Mode: agent.MemoryLearningObserve, PolicyVersion: "test-policy",
-		RetrievalCount: 1, ExposureCount: 3, AppliedCount: 1, OutcomeCount: 1, PendingRepairGaps: 1, ManualReviewGaps: 2,
+		RetrievalCount: 1, ExposureCount: 3, AppliedCount: 1, OutcomeCount: 1, PendingRepairGaps: 1, ManualReviewGaps: 2, UnrepairableGaps: 1,
 	}
 	if got := c.MemoryLearningReport(); got != want {
 		t.Fatalf("report = %+v, want %+v", got, want)
