@@ -269,7 +269,7 @@ type ExperienceAggregate struct {
 
 projection 以毫秒保存時間；reducer 也以毫秒計算，所以 `inspect replay` 的 in-memory 重算與 SQLite 一致（event timestamp 帶奈秒）。
 
-`experience_processed_events.idempotency_key` 是 reducer 防重依據。aggregate 必須能從 `event_store.jsonl` 清空後完整重建；不得依賴 `execution-events.jsonl`，後者只供 `hufu improve` 的 metadata report。
+`experience_processed_events.idempotency_key` 是 reducer 防重依據。aggregate 必須能從 `event_store.jsonl` 清空後完整重建；不得依賴 execution telemetry；`hufu improve` 的 metadata report 會在同一次讀取 event store 時另外推導 execution 列（`execution-events.jsonl` 已不再寫入）。
 
 run-end 的 AutoExtractLTM 把 session 記錄升級成 persistent 時，會建立一筆新 ID 的記錄，並以 `context_item` evidence 指回來源。evidence 以 task 看到的 ID 為 key，所以升級後的記錄會承接來源的 evidence（experience lineage）：
 

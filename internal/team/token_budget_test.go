@@ -474,7 +474,7 @@ func TestRunAgentCallbacklessWorkerResponseOnlyProjectsReceiptUsageOnce(t *testi
 	// The terminal execution event sees no Steps for this response-only call;
 	// replaying that projection must not charge the reconciled receipt usage a
 	// second time.
-	c.recordExecutionEvent(todoID, "worker", 1, "done", "model", 0, usageFromSteps(steps))
+	c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
 	if got := c.noProgressCounters().Tokens; got != 10 {
 		t.Fatalf("receipt-backed response-only usage after event replay = %d, want 10", got)
 	}
@@ -500,7 +500,7 @@ func TestRunAgentCallbackBackedWorkerResponseOnlyProjectsReceiptUsageOnce(t *tes
 
 	// The terminal event has no step usage for this callback-backed response;
 	// projecting it must not add a second 10-token receipt charge.
-	c.recordExecutionEvent(todoID, "worker", 1, "done", "model", 0, usageFromSteps(steps))
+	c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
 	if got := c.noProgressCounters().Tokens; got != 10 {
 		t.Fatalf("callback-backed response-only usage after event replay = %d, want 10", got)
 	}
@@ -556,7 +556,7 @@ func TestRunAgentCallbackBackedNilResultErrorProjectsReceiptUsageOnce(t *testing
 
 	// A terminal failure event carries no step usage for this callback-backed
 	// stream; projecting it must not charge the receipt usage a second time.
-	c.recordExecutionEvent(todoID, "worker", 1, "error", "model", 0, usageFromSteps(steps))
+	c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
 	if got := c.noProgressCounters().Tokens; got != 10 {
 		t.Fatalf("callback-backed nil-result usage after terminal failure = %d, want 10", got)
 	}

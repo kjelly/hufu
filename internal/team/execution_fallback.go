@@ -202,33 +202,6 @@ func budgetExceededNow(c *Coordinator) bool {
 	return exceeded
 }
 
-// setAttemptExecutionTarget records the target a task's current attempt runs
-// on, so the execution-event shadow reports it instead of the frozen primary.
-func (c *Coordinator) setAttemptExecutionTarget(taskID string, target execution.ExecutionTarget) {
-	if c == nil || taskID == "" || target.IsZero() {
-		return
-	}
-	c.attemptExecutionTargets.Store(taskID, target)
-}
-
-func (c *Coordinator) clearAttemptExecutionTarget(taskID string) {
-	if c != nil {
-		c.attemptExecutionTargets.Delete(taskID)
-	}
-}
-
-func (c *Coordinator) attemptExecutionTarget(taskID string) (execution.ExecutionTarget, bool) {
-	if c == nil {
-		return execution.ExecutionTarget{}, false
-	}
-	value, ok := c.attemptExecutionTargets.Load(taskID)
-	if !ok {
-		return execution.ExecutionTarget{}, false
-	}
-	target, ok := value.(execution.ExecutionTarget)
-	return target, ok
-}
-
 // accumulateExecutionFallbackMetrics counts the execution-route fallbacks of
 // this run from their durable events. Each invocation starts a new run ID, so
 // fallbacks from an earlier run are not counted.

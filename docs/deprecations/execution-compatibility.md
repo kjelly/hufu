@@ -26,7 +26,9 @@ read-compatible during the sunset window:
   `provider_binding` identity fields;
 - receipt `subagent_provider`;
 - v3 policy-route `legacy_provider`;
-- `provider_session_bound` event and `execution-events.jsonl` `provider`.
+- `provider_session_bound` event and the `provider` field of historical
+  `execution-events.jsonl` files (no longer written; execution telemetry is
+  projected from `event_store.jsonl`).
 
 New writers must not emit these fields. Existing workspaces are not rewritten:
 the later materializer appends a self-contained canonical migration event after

@@ -16,11 +16,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"charm.land/fantasy"
-	"github.com/kjelly/hufu/internal/execution"
 )
 
 const (
@@ -161,61 +159,6 @@ type LifecycleEventPayload struct {
 	BoundInputs                   map[string]string            `json:"bound_inputs,omitempty"`
 	RuntimeOutputsHash            string                       `json:"runtime_outputs_hash,omitempty"`
 	CatalogRuntimeFields
-}
-
-type executionEventLogger struct {
-	mu sync.Mutex
-	f  *os.File
-	// attempts holds the last attempt logged for each task in this run.
-	attempts map[string]int
-}
-
-func newExecutionEventLogger(workspace string) (*executionEventLogger, error) {
-	path := filepath.Join(workspace, logsDir, executionEventsFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create execution event directory: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("open execution events: %w", err)
-	}
-	return &executionEventLogger{f: f}, nil
-}
-
-func (l *executionEventLogger) append(event ExecutionEvent) error {
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.f == nil {
-		return nil
-	}
-	if event.TaskID != "" {
-		if l.attempts == nil {
-			l.attempts = make(map[string]int)
-		}
-		l.attempts[event.TaskID] = event.Attempt
-	}
-	_, err = l.f.Write(append(data, '\n'))
-	return err
-}
-
-// lastAttempt returns the attempt last logged for taskID, or 0.
-func (l *executionEventLogger) lastAttempt(taskID string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.attempts[taskID]
-}
-
-func (l *executionEventLogger) close() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.f != nil {
-		_ = l.f.Close()
-		l.f = nil
-	}
 }
 
 func newExecutionRunID() string {
@@ -365,7 +308,6 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	semanticBaseline, _ := c.SemanticRetrievalStatus()
 	c.executionEventsMu.Lock()
 	c.executionRunID = runID
-	c.executionTeamRevision = teamRevision
 	if c.taskTracker != nil {
 		// The restored TodoList run identity belongs to interrupted task
 		// occurrences. Do not replace it before ResumeInterruptedTasks has had
@@ -389,11 +331,6 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.terminalLifecycleMu.Unlock()
 	c.resetDecisionTerminalInvocation(runID)
 
-	workspace := ""
-	if c.session != nil {
-		workspace = c.session.Workspace
-	}
-
 	c.initEventStore()
 	// The compatibility scanner runs before runtime dispatch and never writes.
 	// Only after initEventStore has bound this invocation to a run and branch do
@@ -401,24 +338,6 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	// admission failure: tasks remain runnable and the dual-write counter makes
 	// the local telemetry gap observable.
 	c.flushExecutionCompatibilityObservation(invocationCtx)
-
-	var logger *executionEventLogger
-	if workspace != "" {
-		l, err := newExecutionEventLogger(workspace)
-		if err != nil {
-			log.Printf("warning: create execution event logger: %v", err)
-		} else {
-			logger = l
-		}
-	}
-
-	c.executionEventsMu.Lock()
-	previous := c.executionEvents
-	c.executionEvents = logger
-	c.executionEventsMu.Unlock()
-	if previous != nil {
-		previous.close()
-	}
 
 	teamName := ""
 	if c.session != nil {
@@ -429,17 +348,6 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 		Team: teamName, TeamRevision: teamRevision,
 	}); err == nil && runStartedDurable {
 		c.clearSupersededPendingWrapUp(runID)
-	}
-	if logger != nil {
-		_ = logger.append(ExecutionEvent{
-			Version:      executionEventSchemaVersion,
-			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
-			InvocationID: c.currentInvocationID(),
-			RunID:        runID,
-			Team:         teamName,
-			Status:       "run_started",
-			TeamRevision: teamRevision,
-		})
 	}
 
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
@@ -488,15 +396,8 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 				}
 			}
 		}
-		c.recordRunTelemetry(c.LastRunResult())
 		c.finishSemanticRun(runID, semanticBaseline)
-		var canonicalEvents []RunEvent
 		if c.eventStore != nil {
-			var readErr error
-			canonicalEvents, readErr = c.eventStore.ReadEvents()
-			if readErr != nil {
-				log.Printf("warning: read canonical events for execution-event export: %v", readErr)
-			}
 			// Snapshot the per-run deprecated-aggregate before closing the
 			// event store and clearing the active run ID. The deferred
 			// close runs after every Run / Continue / DryRun / RunDirectAgent
@@ -511,23 +412,12 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 			c.eventStore = nil
 		}
 		c.executionEventsMu.Lock()
-		if c.executionEvents == logger {
-			c.executionEvents = nil
+		if c.executionRunID == runID {
 			c.executionRunID = ""
-			c.executionTeamRevision = ""
 		}
 		c.executionEventsMu.Unlock()
-		if logger != nil {
-			logger.close()
-		}
-		if workspace != "" && canonicalEvents != nil {
-			if _, err := ExportAndVerifyExecutionEvents(workspace, runID, canonicalEvents); err != nil {
-				log.Printf("warning: execution-event shadow export parity: %v", err)
-				c.dualWriteFailures.Add(1)
-			}
-		}
-		// The invocation is no longer active once all terminal projections and
-		// shadow export work have completed. Clearing the active marker keeps
+		// The invocation is no longer active once all terminal projections
+		// have completed. Clearing the active marker keeps
 		// later compatibility callers from being mistaken for a second active
 		// terminal owner while preserving the confirmed result in memory/session.
 		c.terminalLifecycleMu.Lock()
@@ -631,45 +521,6 @@ func (c *Coordinator) persistRuntimeContextSnapshot(phase Phase) {
 	}
 }
 
-func (c *Coordinator) recordRunTelemetry(result *RunResult) {
-	if c == nil || result == nil {
-		return
-	}
-	// The normal finalizer already attached telemetry before committing the
-	// canonical snapshot. Deferred telemetry is a projection only: it must not
-	// replace LastRunResult with another clone or mutate the committed result.
-	telemetry := c.buildRunTelemetry(result)
-	c.terminalLifecycleMu.Lock()
-	committed := c.terminalLifecycleState == terminalLifecycleCommitted
-	c.terminalLifecycleMu.Unlock()
-	if !committed {
-		return
-	}
-	c.executionEventsMu.RLock()
-	logger, runID, revision := c.executionEvents, c.executionRunID, c.executionTeamRevision
-	c.executionEventsMu.RUnlock()
-	if logger == nil || runID == "" {
-		return
-	}
-	state := AcceptanceNotConfigured
-	if result.Acceptance != nil {
-		state = result.Acceptance.EffectiveState()
-	}
-	hash := ""
-	if result.EvidenceManifest != nil {
-		hash = result.EvidenceManifest.ManifestHash
-	}
-	_ = logger.append(ExecutionEvent{
-		Version: executionEventSchemaVersion, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), InvocationID: c.currentInvocationID(), RunID: runID,
-		Team: c.session.Config.Name, Status: "run_finished", TeamRevision: revision,
-		Outcome: result.Outcome, StopReason: result.StopReason, AcceptanceState: state,
-		EvidenceManifestHash: hash, RepairAttempts: telemetry.RepairCost.Attempts,
-		DecisionChain: telemetry.DecisionChain, PlanRevision: telemetry.PlanRevision,
-		RepairCost:     telemetry.RepairCost,
-		TerminalReason: string(result.StopReason),
-	})
-}
-
 func (c *Coordinator) buildRunTelemetry(result *RunResult) RunTelemetry {
 	telemetry := RunTelemetry{TerminalReason: string(result.StopReason)}
 	if result.EvidenceManifest != nil {
@@ -721,112 +572,16 @@ func evidenceState(result *RunResult) string {
 	return "incomplete"
 }
 
-func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
+// recordAttemptUsage charges an attempt's token usage to the run's
+// no-progress budget. It prefers the growth-only progress tokens when the
+// attempt reports them, since total usage resends the whole conversation.
+// Execution telemetry itself is projected from the canonical task events.
+func (c *Coordinator) recordAttemptUsage(taskID string, attempt int, usage ExecutionUsage) {
 	if progressTokens := usage.ProgressTokens; progressTokens > 0 {
 		c.recordReliabilityUsage(taskID, attempt, progressTokens)
 	} else if usage.TotalTokens > 0 {
 		c.recordReliabilityUsage(taskID, attempt, usage.TotalTokens)
 	}
-	if c.isModelFanoutLeaf(taskID) {
-		return
-	}
-	c.recordExecutionProjection(taskID, agent, attempt, status, model, duration, usage)
-}
-
-// recordExecutionProjection emits legacy telemetry without charging usage a
-// second time when a parent summarizes already-accounted fanout receipts.
-func (c *Coordinator) recordExecutionProjection(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
-	c.executionEventsMu.RLock()
-	logger, runID, teamRevision := c.executionEvents, c.executionRunID, c.executionTeamRevision
-	c.executionEventsMu.RUnlock()
-	if logger == nil || runID == "" || taskID == "" || attempt < 1 {
-		return
-	}
-	taskType, skills := c.taskTracker.TodoList().ExecutionMetadata(taskID)
-	contractID, contractHash, contractRevision := "", "", 0
-	var phase Phase
-	var target execution.ExecutionTarget
-	var backendKind execution.BackendKind
-	var artifactRefs []ArtifactRef
-	var failureSignature string
-
-	if c.phaseWorkflow != nil {
-		phase = c.phaseWorkflow.State()
-	}
-
-	if item := c.todoItemByID(taskID); item != nil {
-		target = item.ExecutionTarget
-	}
-	// A route fallback runs an attempt on another candidate than the frozen
-	// primary; report the target the attempt actually used.
-	if attemptTarget, ok := c.attemptExecutionTarget(taskID); ok {
-		target = attemptTarget
-	}
-
-	if item := c.todoItemByID(taskID); item != nil {
-		if !target.IsZero() {
-			if backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend); err == nil {
-				backendKind = backend.Kind()
-			}
-		}
-		contractID, contractHash, contractRevision = item.ContractID, item.ContractHash, item.ContractRevision
-		if item.TypedResult != nil {
-			artifactRefs = append([]ArtifactRef(nil), item.TypedResult.Artifacts...)
-		}
-		if len(item.FailureFingerprints) > 0 {
-			failureSignature = item.FailureFingerprints[len(item.FailureFingerprints)-1].Digest
-		}
-	}
-	// Also collect phase artifacts if available
-	if c.phaseWorkflow != nil {
-		if res, ok := c.phaseWorkflow.results[phase]; ok {
-			artifactRefs = append(artifactRefs, res.Evidence...)
-		}
-	}
-	_ = logger.append(ExecutionEvent{
-		Version:          executionEventSchemaVersion,
-		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
-		InvocationID:     c.currentInvocationID(),
-		RunID:            runID,
-		Team:             c.session.Config.Name,
-		TaskID:           taskID,
-		Agent:            agent,
-		Attempt:          attempt,
-		Status:           status,
-		Model:            model,
-		ExecutionTarget:  target.String(),
-		Backend:          target.Backend,
-		BackendKind:      string(backendKind),
-		TaskType:         taskType,
-		Skills:           skills,
-		TeamRevision:     teamRevision,
-		DurationMS:       duration.Milliseconds(),
-		Usage:            usage,
-		ContractID:       contractID,
-		ContractHash:     contractHash,
-		ContractRevision: contractRevision,
-		Phase:            phase,
-		ArtifactRefs:     artifactRefs,
-		FailureSignature: failureSignature,
-	})
-}
-
-// recordSkippedExecutionEvent logs a skipped task on the legacy stream, which
-// the exporter projects from task_skipped. A task already logged in this run
-// keeps its last attempt, as the export keeps the attempt its last dispatch
-// started; a task never logged takes the transition's attempt.
-func (c *Coordinator) recordSkippedExecutionEvent(item *TodoItem) {
-	c.executionEventsMu.RLock()
-	logger := c.executionEvents
-	c.executionEventsMu.RUnlock()
-	if logger == nil || item == nil {
-		return
-	}
-	attempt := logger.lastAttempt(item.ID)
-	if attempt < 1 {
-		attempt = item.Retries + 1
-	}
-	c.recordExecutionEvent(item.ID, item.Agent, attempt, string(TaskSkipped), "", 0, ExecutionUsage{})
 }
 
 // teamDefinitionRevision hashes only team configuration and agent definition

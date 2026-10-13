@@ -686,7 +686,6 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// route. A fallback attempt runs on the next candidate and does not use
 	// the retry budget, so the loop bound grows with every fallback taken.
 	fallback := newExecutionFallbackState(task.ExecutionRoute)
-	defer c.clearAttemptExecutionTarget(todoID)
 	// One service per call: a retry carries earlier tool messages, so its
 	// references must stay readable across attempts.
 	contextArtifacts := c.newContextArtifactService(todoID, task)
@@ -863,7 +862,6 @@ retryLoop:
 		// attemptTarget is the target this attempt runs on: the frozen primary,
 		// or the route candidate a fallback moved to.
 		attemptTarget := fallback.target(task.ResolvedExecutionTarget)
-		c.setAttemptExecutionTarget(todoID, attemptTarget)
 		attemptTools, resolveToolsErr := c.resolveAttemptWorkerTools(parentCtx, task, todoID, agentDef)
 		if resolveToolsErr != nil {
 			closeTranscript()
@@ -1005,7 +1003,6 @@ retryLoop:
 			closeTranscript()
 			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)
 		}
-		c.recordExecutionEvent(todoID, agentName, attempt, "in_progress", resolvedModel, 0, ExecutionUsage{})
 		// An empty unbound scope is still installed in the task context so
 		// artifact backing roots are denied, but it is not a separate execution
 		// attempt and must not create a placeholder receipt. Persist a scope
@@ -1415,7 +1412,7 @@ retryLoop:
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("step").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
 				c.report(c.newEvent("done").withAgent(agentName).withMessage("plan submitted").withTodoID(todoID))
-				c.recordExecutionEvent(todoID, agentName, attempt, "planned", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
+				c.recordAttemptUsage(todoID, attempt, usageWithProgressTokens(steps, attemptTokens))
 				if c.forcePlanFirst {
 					closeTranscript()
 					return "", nil
@@ -1894,7 +1891,6 @@ retryLoop:
 				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskVerifying, "running objective verification", "", nil); statusErr != nil {
 					err = fmt.Errorf("enter verifying state: %w", statusErr)
 				} else {
-					c.recordExecutionEvent(todoID, agentName, attempt, "verifying", resolvedModel, time.Since(attemptStarted), ExecutionUsage{})
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					vMsg := task.Verify
 					if vMsg == "" && task.VerifySpec != nil {
@@ -1975,7 +1971,7 @@ retryLoop:
 				c.updateTodoTiming(todoID, modelTime, toolTime)
 				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 				c.report(c.newEvent("done").withAgent(agentName).withOutput(coordinatorOutput).withMessage("completed").withModel(resolvedModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-				c.recordExecutionEvent(todoID, agentName, attempt, "done", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
+				c.recordAttemptUsage(todoID, attempt, usageWithProgressTokens(steps, attemptTokens))
 				if task.Summarize {
 					coordinatorOutput = c.summarizeOutput(parentCtx, coordinatorOutput)
 				}
@@ -2012,7 +2008,7 @@ retryLoop:
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			_ = c.setAttemptReceipt(todoID, &receipt)
 		}
-		c.recordExecutionEvent(todoID, agentName, attempt, "error", resolvedModel, time.Since(attemptStarted), usageWithProgressTokens(steps, attemptTokens))
+		c.recordAttemptUsage(todoID, attempt, usageWithProgressTokens(steps, attemptTokens))
 		// Classify the current attempt's failure using structured inputs
 		// (§5: the verify result supplies the exit code; environment findings
 		// supply command-not-found signals that take precedence over exit
@@ -2552,9 +2548,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			detail := c.FailureDetail(returnErr, FailureSourceError)
 			persistErr := c.PersistFailureWithClassAndStatusError(task.Agent, task.Goal, todoID, detail, RetryNone, classifyTaskFailure(returnErr), TaskError)
 			returnErr = errors.Join(returnErr, persistErr)
-			if persistErr == nil {
-				c.recordExecutionEvent(todoID, task.Agent, max(c.currentTaskAttempt(todoID), 1), "error", "", 0, ExecutionUsage{})
-			}
 		}
 	}()
 	if err := c.validateMaterializedActionIdentity(task); err != nil {
@@ -2582,13 +2575,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", blocked
 	}
 	attempt := c.currentTaskAttempt(todoID) + 1
-	defer func() {
-		status := "done"
-		if returnErr != nil {
-			status = "error"
-		}
-		c.recordExecutionEvent(todoID, task.Agent, attempt, status, "", time.Since(startedAt), ExecutionUsage{})
-	}()
 	c.emitRuntimeActionEvent("action_started", task, todoID, actionID, "started", startedAt, time.Time{}, "", nil)
 	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
@@ -2599,7 +2585,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		return "", fmt.Errorf("mark structured action in progress: %w", err)
 	}
 	c.setCurrentTaskAttempt(todoID, attempt)
-	c.recordExecutionEvent(todoID, task.Agent, attempt, "in_progress", "", 0, ExecutionUsage{})
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	actionEnv := ActionEnvironment{
 		Workspace: actionRoot, Repository: c.projectDir, RunID: coordinatorRuntimeRunID(c),
@@ -2649,7 +2634,6 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 			c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", err)
 			return "", fmt.Errorf("enter structured action verification: %w", err)
 		}
-		c.recordExecutionEvent(todoID, task.Agent, attempt, "verifying", "", time.Since(startedAt), ExecutionUsage{})
 		verification, verifyErr := c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, typedResult)
 		if verification != nil {
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -3576,13 +3560,9 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	// reaches the tool-less sidecar path while needing tools must fail here
 	// rather than have its prose recorded as a completed change.
 	if err := c.validateSidecarTaskContract(task); err != nil {
-		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, 0, ExecutionUsage{})
 		c.PersistFailureWithClassAndStatus(task.Agent, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureContract, TaskBlocked)
 		return "", err
 	}
-	attemptStarted := time.Now()
-	c.recordExecutionEvent(todoID, task.Agent, 1, "in_progress", c.sidecarModel, 0, ExecutionUsage{})
-
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return "", fmt.Errorf("mark sidecar task started: %w", err)
 	}
@@ -3610,22 +3590,18 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 
 	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "sidecar_task"), taskDesc)
 	if err != nil {
-		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
 		return "", fmt.Errorf("sidecar execution failed (model: %s): %w", c.sidecarModel, err)
 	}
 	if verr := validateTaskOutput(task, result); verr != nil {
-		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(verr, FailureSourceError), RetryNone, FailureProtocol)
 		return "", fmt.Errorf("task completion validation failed: %w", verr)
 	}
 	if task.Verify != "" || task.VerifySpec != nil {
 		if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskVerifying, "running objective verification", "", nil); err != nil {
-			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			return "", err
 		}
-		c.recordExecutionEvent(todoID, task.Agent, 1, "verifying", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		vMsg := task.Verify
 		if vMsg == "" && task.VerifySpec != nil {
 			vMsg = string(task.VerifySpec.Type)
@@ -3637,7 +3613,6 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
 		if verifyErr != nil {
-			c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 			c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(verifyErr, FailureSourceError), RetryNone, FailureVerify)
 			c.report(c.newEvent("verify_error").withAgent(task.Agent).withMessage(verifyErr.Error()).withTodoID(todoID))
 			return "", fmt.Errorf("deliverable verification failed: %w", verifyErr)
@@ -3646,7 +3621,6 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	}
 
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result, nil); err != nil {
-		c.recordExecutionEvent(todoID, task.Agent, 1, "error", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 		return "", err
 	}
 	c.recordTerminalTypedTaskResult(todoID)
@@ -3659,7 +3633,6 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(task.Agent).withOutput(result).withMessage("sidecar completed").withTodoID(todoID))
-	c.recordExecutionEvent(todoID, task.Agent, 1, "done", c.sidecarModel, time.Since(attemptStarted), ExecutionUsage{})
 	return result, nil
 }
 

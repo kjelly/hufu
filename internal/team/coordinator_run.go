@@ -572,7 +572,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 	}
 	attemptStarted := time.Now()
-	c.recordExecutionEvent(todoID, resolvedName, 1, "in_progress", directModel, 0, ExecutionUsage{})
 	if err := c.CommitTaskTransition(ctx, todoID, TaskPending, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return nil, fmt.Errorf("mark direct task started: %w", err)
 	}
@@ -842,7 +841,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 			directReceipt.ExitCode = new(1)
 		}
 		_ = c.setAttemptReceipt(todoID, &directReceipt)
-		c.recordExecutionEvent(todoID, resolvedName, 1, "error", directModel, time.Since(attemptStarted), usageFromSteps(steps))
+		c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
 		failureClass := classifyTaskFailure(err)
 		if terminalBlocked {
 			c.PersistFailureWithClassAndStatus(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), ReconcileOnly, failureClass, TaskBlocked)
@@ -879,7 +878,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	reconcileDirectStatus()
 	c.report(c.newEvent("done").withAgent(resolvedName).withOutput(output).withMessage("completed").withModel(directModel).withTiming(duration, modelTime, toolTime).withTodoID(todoID))
-	c.recordExecutionEvent(todoID, resolvedName, 1, "done", directModel, time.Since(attemptStarted), usageFromSteps(steps))
+	c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
 	// WP-4: ingest worker session memory on direct-agent success. The
 	// direct path has no explicit deliverable verification, so verified is
 	// false unless a terminal verifier reported success — making this a
@@ -1008,7 +1007,6 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	}
 	todoID := items[0].ID
 	c.recordNoProgressTasks(1)
-	c.recordExecutionEvent(todoID, agentName, 1, "error", model, 0, ExecutionUsage{})
 	detail := c.FailureDetail(cancellation, FailureSourceContextCanceled)
 	terminalizationErr := c.PersistFailureWithClassAndStatusError(agentName, task, todoID, detail, RetryNone, FailureCancelled, TaskError)
 	c.reconcileTaskStatusProjection()
@@ -1070,7 +1068,7 @@ func (c *Coordinator) finalizeDirectAgentTerminalFailure(ctx context.Context, in
 	if in.todoID != "" {
 		c.unregisterTerminalRound(in.todoID)
 	}
-	c.recordExecutionEvent(in.todoID, in.agent, 1, "error", in.directModel, time.Since(in.attemptStarted), usageFromSteps(in.steps))
+	c.recordAttemptUsage(in.todoID, 1, usageFromSteps(in.steps))
 	c.PersistFailureWithClass(in.agent, in.task, in.todoID, c.FailureDetail(in.err, FailureSourceDirectAgentFailed), RetryNone, FailureExecution)
 	c.recordVerificationFailure(ctx, VerificationFailureInput{
 		TodoID:      in.todoID,

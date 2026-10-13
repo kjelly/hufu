@@ -458,8 +458,8 @@ func TestMetricsTrackProgressTimestampAndPlanUsageWithoutDoubleCounting(t *testi
 	}}
 	// A plan submission consumes tokens. The final event for the same attempt
 	// is cumulative, so only the incremental five tokens may be added.
-	c.recordExecutionEvent("task", "worker", 1, "planned", "model", 0, ExecutionUsage{TotalTokens: 10})
-	c.recordExecutionEvent("task", "worker", 1, "done", "model", 0, ExecutionUsage{TotalTokens: 15})
+	c.recordAttemptUsage("task", 1, ExecutionUsage{TotalTokens: 10})
+	c.recordAttemptUsage("task", 1, ExecutionUsage{TotalTokens: 15})
 	m := c.Metrics()
 	if m.TokensSinceCriterionProgress != 15 {
 		t.Fatalf("tokens since progress = %d, want 15", m.TokensSinceCriterionProgress)

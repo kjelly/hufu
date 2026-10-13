@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -37,65 +38,59 @@ func (s *usageReportingServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
-// TestExecutionEventProjectionMatchesLegacyOnRealAttempts runs real task
-// attempts against a model server and requires the event-store projection to
-// match the legacy stream on every field telemetry aggregates.
-func TestExecutionEventProjectionMatchesLegacyOnRealAttempts(t *testing.T) {
+// TestExecutionEventProjectionOnRealAttempts runs real task attempts against
+// a model server and checks what the projection reports for them: the model
+// each attempt ran on and the usage the provider reported.
+func TestExecutionEventProjectionOnRealAttempts(t *testing.T) {
 	tests := []struct {
-		name       string
-		failures   map[string]int
-		candidates []string
+		name     string
+		failures map[string]int
+		// terminal maps each terminal row to the model it must report.
+		terminal []string
 	}{
-		{name: "primary succeeds", candidates: []string{"ollama/fb-primary", "remote/fb-remote"}},
-		{name: "fallback to another backend", failures: map[string]int{"fb-primary": http.StatusServiceUnavailable}, candidates: []string{"ollama/fb-primary", "remote/fb-remote"}},
+		{name: "primary succeeds", terminal: []string{"done/1/fb-primary"}},
+		{
+			name:     "fallback to another backend",
+			failures: map[string]int{"fb-primary": http.StatusServiceUnavailable},
+			terminal: []string{"error/1/fb-primary", "done/2/remote/fb-remote"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newIPv4TestServer(t, &usageReportingServer{failures: tt.failures})
 			t.Cleanup(server.Close)
-			f := newFallbackFixture(t, map[string]string{"ollama": server.URL, "remote": server.URL}, tt.candidates, allFallbackClasses, SideEffectNone)
-			logger, err := newExecutionEventLogger(f.c.session.Workspace)
-			if err != nil {
-				t.Fatal(err)
-			}
-			f.c.executionEvents = logger
-			// beginExecutionRun opens every run on both streams.
+			f := newFallbackFixture(t, map[string]string{"ollama": server.URL, "remote": server.URL}, []string{"ollama/fb-primary", "remote/fb-remote"}, allFallbackClasses, SideEffectNone)
 			team := f.c.session.Config.Name
 			if err := f.c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{Team: team}); err != nil {
-				t.Fatal(err)
-			}
-			if err := logger.append(ExecutionEvent{Status: "run_started", RunID: f.c.executionRunID, Team: team}); err != nil {
 				t.Fatal(err)
 			}
 			if err := f.run(t); err != nil {
 				t.Fatalf("executeTask: %v", err)
 			}
-			logger.close()
-
-			legacy, err := ReadExecutionEvents(filepath.Join(f.c.session.Workspace, logsDir, executionEventsFile))
-			if err != nil {
-				t.Fatal(err)
-			}
 			events, err := f.store.ReadEvents()
 			if err != nil {
 				t.Fatal(err)
 			}
-			projected := projectedExecutionEvents(events)
-			if err := CompareExecutionEventsParity(legacy, projected); err != nil {
-				t.Fatalf("projection differs from the legacy stream: %v\nlegacy=%+v\nprojected=%+v", err, legacy, projected)
-			}
-			// Guard against a vacuous comparison: the attempts must have
-			// reported usage and a model for the projection to match.
+			var terminal []string
 			var usage ExecutionUsage
-			model := ""
-			for _, row := range projected {
+			for _, row := range projectEvents(events) {
+				if row.TaskID == "" {
+					continue
+				}
+				if row.Team != team {
+					t.Fatalf("row %+v has team %q, want %q", row, row.Team, team)
+				}
 				usage = addExecutionUsage(usage, row.Usage)
-				if row.Model != "" {
-					model = row.Model
+				if isTerminalExecutionStatus(row.Status) {
+					terminal = append(terminal, fmt.Sprintf("%s/%d/%s", row.Status, row.Attempt, row.Model))
 				}
 			}
-			if usage.TotalTokens == 0 || model == "" {
-				t.Fatalf("projection has no usage or model to compare: usage=%+v model=%q", usage, model)
+			if !slices.Equal(terminal, tt.terminal) {
+				t.Fatalf("terminal rows = %v, want %v", terminal, tt.terminal)
+			}
+			// The server reports 11 prompt and 7 completion tokens per call.
+			if usage.InputTokens != 11 || usage.OutputTokens != 7 || usage.TotalTokens != 18 {
+				t.Fatalf("task usage = %+v, want the successful attempt's 11/7/18", usage)
 			}
 		})
 	}
@@ -126,12 +121,50 @@ func TestEmergencyFinalizedRunProjectsCancelledFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projected := projectedExecutionEvents(events)
+	projected := projectEvents(events)
 	if len(projected) == 0 {
 		t.Fatal("projection is empty")
 	}
 	last := projected[len(projected)-1]
 	if last.Status != "run_finished" || last.Outcome != RunOutcomeCancelled || last.Team != "alpha" || last.TeamRevision != "rev-1" {
 		t.Fatalf("last projected row = %+v, want a cancelled run_finished for team alpha at rev-1", last)
+	}
+}
+
+// projectEvents projects a complete event slice.
+func projectEvents(events []RunEvent) []ExecutionEvent {
+	projector := NewExecutionEventProjector()
+	for _, event := range events {
+		projector.Add(event)
+	}
+	return projector.Rows()
+}
+
+// workspaceExecutionRows projects workspace's validated event store.
+func workspaceExecutionRows(t *testing.T, workspace string) []ExecutionEvent {
+	t.Helper()
+	projector := NewExecutionEventProjector()
+	if err := StreamValidatedRunEvents(t.Context(), workspace, func(event RunEvent) error {
+		projector.Add(event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return projector.Rows()
+}
+
+// assertProjectedRows compares the row fields execution telemetry reads.
+func assertProjectedRows(t *testing.T, got, want []ExecutionEvent) {
+	t.Helper()
+	describe := func(rows []ExecutionEvent) []string {
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, fmt.Sprintf("%s run=%s task=%s agent=%s attempt=%d team=%s outcome=%s acceptance=%s evidence=%s",
+				row.Status, row.RunID, row.TaskID, row.Agent, row.Attempt, row.Team, row.Outcome, row.AcceptanceState, row.EvidenceManifestHash))
+		}
+		return out
+	}
+	if g, w := describe(got), describe(want); !slices.Equal(g, w) {
+		t.Fatalf("projected rows:\n%s\nwant:\n%s", strings.Join(g, "\n"), strings.Join(w, "\n"))
 	}
 }

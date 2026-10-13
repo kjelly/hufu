@@ -495,33 +495,22 @@ func TestFallbackAcrossBackendsUsesTheCandidateBackend(t *testing.T) {
 	t.Cleanup(primaryServer.Close)
 	t.Cleanup(remoteServer.Close)
 	f := newFallbackFixture(t, map[string]string{"ollama": primaryServer.URL, "remote": remoteServer.URL}, []string{"ollama/fb-primary", "remote/fb-remote"}, allFallbackClasses, SideEffectNone)
-	logger, err := newExecutionEventLogger(f.c.session.Workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.c.executionEvents = logger
-	t.Cleanup(logger.close)
 	if err := f.run(t); err != nil {
 		t.Fatalf("executeTask: %v", err)
 	}
-	// The execution-event shadow reports the target each attempt ran on.
-	shadow, err := os.ReadFile(filepath.Join(f.c.session.Workspace, logsDir, executionEventsFile))
+	// Execution telemetry reports the target each attempt ran on.
+	events, err := f.store.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetsByAttempt := map[int]map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(shadow)), "\n") {
-		var event ExecutionEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			t.Fatal(err)
+	modelsByAttempt := map[int]string{}
+	for _, row := range projectEvents(events) {
+		if row.TaskID != "" && isTerminalExecutionStatus(row.Status) {
+			modelsByAttempt[row.Attempt] = row.Model
 		}
-		if targetsByAttempt[event.Attempt] == nil {
-			targetsByAttempt[event.Attempt] = map[string]bool{}
-		}
-		targetsByAttempt[event.Attempt][event.ExecutionTarget+" "+event.Backend] = true
 	}
-	if !targetsByAttempt[1]["ollama/fb-primary ollama"] || !targetsByAttempt[2]["remote/fb-remote remote"] || len(targetsByAttempt[2]) != 1 {
-		t.Fatalf("execution-event targets by attempt = %v", targetsByAttempt)
+	if modelsByAttempt[1] != "fb-primary" || modelsByAttempt[2] != "remote/fb-remote" {
+		t.Fatalf("execution-event models by attempt = %v", modelsByAttempt)
 	}
 	if seen := remote.seen(); len(seen) != 1 || seen[0] != "fb-remote" {
 		t.Fatalf("remote backend models = %v, want the candidate's model", seen)

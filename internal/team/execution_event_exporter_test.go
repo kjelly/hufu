@@ -12,7 +12,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
+func TestExecutionEventProjectorMapsCanonicalRunEvents(t *testing.T) {
 	manifest := &EvidenceManifest{ManifestHash: "manifest-1"}
 	payload, err := json.Marshal(LifecycleEventPayload{Team: "team", Outcome: RunOutcomeCompleted, AcceptanceState: AcceptancePassed, EvidenceManifest: manifest})
 	if err != nil {
@@ -24,17 +24,9 @@ func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
 		{Type: string(EventTaskCompleted), InvocationID: "inv-1", RunID: "run-1", TaskID: "1", Actor: "worker", Timestamp: "2026-01-01T00:00:02Z", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
 		{Type: string(EventRunFinished), InvocationID: "inv-1", RunID: "run-1", Timestamp: "2026-01-01T00:00:03Z", Payload: payload},
 	}
-	workspace := t.TempDir()
-	if err := ExportExecutionEvents(workspace, events); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreExecutionEventsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 4 || !strings.Contains(lines[1], `"status":"in_progress"`) || !strings.Contains(lines[1], `"invocation_id":"inv-1"`) || !strings.Contains(lines[3], `"evidence_manifest_hash":"manifest-1"`) {
-		t.Fatalf("exported events = %s", data)
+	projected := projectEvents(events)
+	if len(projected) != 4 || projected[1].Status != "in_progress" || projected[1].InvocationID != "inv-1" || projected[1].Team != "team" || projected[3].EvidenceManifestHash != "manifest-1" {
+		t.Fatalf("projected events = %+v", projected)
 	}
 }
 
@@ -46,7 +38,7 @@ func TestExecutionEventExporterFallbackKeepsHistoricalAttemptAndAgent(t *testing
 		{Type: string(EventTaskStarted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":2}`)},
 		{Type: string(EventTaskCompleted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":2}`)},
 	}
-	projected := projectedExecutionEvents(events)
+	projected := projectEvents(events)
 	if len(projected) != 4 || projected[1].Agent != "worker" || projected[1].Status != "error" || projected[1].Attempt != 1 || projected[1].Model != "primary" || projected[2].Attempt != 2 || projected[3].Status != "done" {
 		t.Fatalf("fallback projection: %+v", projected)
 	}
@@ -62,7 +54,7 @@ func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing
 		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":1}`)},
 		{Type: string(EventTaskCompleted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":1}`)},
 	}
-	projected := projectedExecutionEvents(events)
+	projected := projectEvents(events)
 	if got, want := len(projected), 5; got != want {
 		t.Fatalf("projected event count = %d, want %d: %#v", got, want, projected)
 	}
@@ -78,27 +70,17 @@ func TestProtocolIncompleteCompatibilityExportUsesRepairOutcome(t *testing.T) {
 				return RunEvent{Type: string(kind), RunID: "run-repair", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","dispatch_attempt":1}`)}
 			}
 			events := []RunEvent{event(EventTaskStarted), event(EventTaskProtocolIncomplete), event(EventTaskProtocolIncomplete)}
-			legacy := []ExecutionEvent{{Status: "in_progress", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1}}
+			want := []ExecutionEvent{{Status: "in_progress", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1}}
 			if repaired {
 				events = append(events, event(EventTaskVerifying), event(EventTaskCompleted))
-				legacy = append(legacy,
+				want = append(want,
 					ExecutionEvent{Status: "verifying", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1},
 					ExecutionEvent{Status: "done", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1})
 			} else {
 				events = append(events, event(EventTaskBlocked))
-				legacy = append(legacy, ExecutionEvent{Status: "error", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1})
+				want = append(want, ExecutionEvent{Status: "error", RunID: "run-repair", TaskID: "1", Agent: "worker", Attempt: 1})
 			}
-			workspace := t.TempDir()
-			if err := ExportExecutionEvents(workspace, events); err != nil {
-				t.Fatal(err)
-			}
-			projected, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, eventStoreExecutionEventsFile))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := CompareExecutionEventsParity(legacy, projected); err != nil {
-				t.Fatalf("repair outcome parity: %v", err)
-			}
+			assertProjectedRows(t, projectEvents(events), want)
 			if _, mapped := ExecutionEventFromRunEvent(events[1]); mapped {
 				t.Fatal("recoverable checkpoint was projected as a legacy terminal event")
 			}
@@ -109,11 +91,10 @@ func TestProtocolIncompleteCompatibilityExportUsesRepairOutcome(t *testing.T) {
 	}
 }
 
-// The legacy logger numbers attempts with the in-dispatch counter that the
+// Execution telemetry numbers attempts with the in-dispatch counter that the
 // attempt-starting task_started event carries as dispatch_attempt, and records
-// a status again when the task re-enters it after another status. The
-// projection must do the same, or parity reports a mismatch for every retry
-// and every approved --plan execution.
+// a status again when the task re-enters it after another status (every retry
+// and every approved --plan execution).
 func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
 	ev := func(eventType, taskID, payload string) RunEvent {
 		return RunEvent{Type: eventType, RunID: "run-1", TaskID: taskID, Actor: "worker", Payload: []byte(payload)}
@@ -173,7 +154,7 @@ func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
-			for _, projected := range projectedExecutionEvents(tc.events) {
+			for _, projected := range projectEvents(tc.events) {
 				got = append(got, fmt.Sprintf("%s/%s/%d", projected.Status, projected.TaskID, projected.Attempt))
 			}
 			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
@@ -183,11 +164,11 @@ func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
 	}
 }
 
-func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
+func TestExecutionEventProjectorTerminalOutcomes(t *testing.T) {
 	cases := []struct {
-		name       string
-		runEvents  []RunEvent
-		legacyLogs []ExecutionEvent
+		name      string
+		runEvents []RunEvent
+		want      []ExecutionEvent
 	}{
 		{
 			name: "completed_run_with_passed_acceptance",
@@ -197,7 +178,7 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 				{Type: string(EventTaskCompleted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
 				{Type: string(EventRunFinished), RunID: "run-1", TaskID: "", Actor: "coordinator", Payload: []byte(`{"team":"alpha","outcome":"completed","acceptance_state":"passed","evidence_manifest":{"manifest_hash":"hash-123"}}`)},
 			},
-			legacyLogs: []ExecutionEvent{
+			want: []ExecutionEvent{
 				{Status: "run_started", RunID: "run-1", TaskID: "", Agent: "coordinator", Team: "alpha"},
 				{Status: "in_progress", RunID: "run-1", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
 				{Status: "done", RunID: "run-1", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
@@ -214,7 +195,7 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 				{Type: string(EventTaskBlocked), RunID: "run-2", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","attempt":2}`)},
 				{Type: string(EventRunFinished), RunID: "run-2", TaskID: "", Actor: "coordinator", Payload: []byte(`{"team":"alpha","outcome":"blocked"}`)},
 			},
-			legacyLogs: []ExecutionEvent{
+			want: []ExecutionEvent{
 				{Status: "run_started", RunID: "run-2", TaskID: "", Agent: "coordinator", Team: "alpha"},
 				{Status: "in_progress", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
 				{Status: "error", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
@@ -231,7 +212,7 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 				{Type: string(EventTaskCancelled), RunID: "run-3", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
 				{Type: string(EventRunFinished), RunID: "run-3", TaskID: "", Actor: "coordinator", Payload: []byte(`{"team":"alpha","outcome":"failed","acceptance_state":"failed"}`)},
 			},
-			legacyLogs: []ExecutionEvent{
+			want: []ExecutionEvent{
 				{Status: "run_started", RunID: "run-3", TaskID: "", Agent: "coordinator", Team: "alpha"},
 				{Status: "in_progress", RunID: "run-3", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
 				{Status: "error", RunID: "run-3", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
@@ -242,187 +223,15 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := CompareExecutionEventsParity(tc.legacyLogs, projectedExecutionEvents(tc.runEvents)); err != nil {
-				t.Fatalf("parity check failed for %s: %v", tc.name, err)
-			}
+			assertProjectedRows(t, projectEvents(tc.runEvents), tc.want)
 		})
 	}
 }
 
-func TestCompareExecutionEventsParityAllowsConcurrentTaskInterleaving(t *testing.T) {
-	event := func(status, taskID string) ExecutionEvent {
-		return ExecutionEvent{Status: status, RunID: "run-1", TaskID: taskID, Agent: "worker", Attempt: 1}
-	}
-	legacy := []ExecutionEvent{
-		{Status: "run_started", RunID: "run-1", Agent: "coordinator"},
-		event("in_progress", "3"),
-		event("in_progress", "4"),
-		event("in_progress", "2"),
-		event("verifying", "3"),
-		event("done", "3"),
-		event("verifying", "2"),
-		event("done", "2"),
-		event("verifying", "4"),
-		event("done", "4"),
-		{Status: "run_finished", RunID: "run-1", Agent: "coordinator", Outcome: RunOutcomeCompleted},
-	}
-	exported := []ExecutionEvent{
-		{Status: "run_started", RunID: "run-1", Agent: "coordinator"},
-		event("in_progress", "3"),
-		event("in_progress", "2"),
-		event("in_progress", "4"),
-		event("verifying", "3"),
-		event("done", "3"),
-		event("verifying", "4"),
-		event("done", "4"),
-		event("verifying", "2"),
-		event("done", "2"),
-		{Status: "run_finished", RunID: "run-1", Agent: "coordinator", Outcome: RunOutcomeCompleted},
-	}
-
-	if err := CompareExecutionEventsParity(legacy, exported); err != nil {
-		t.Fatalf("independent task interleaving should have parity: %v", err)
-	}
-}
-
-func TestCompareExecutionEventsParityRejectsTaskLifecycleDivergence(t *testing.T) {
-	event := func(status, taskID string, attempt int) ExecutionEvent {
-		return ExecutionEvent{Status: status, RunID: "run-1", TaskID: taskID, Agent: "worker", Attempt: attempt}
-	}
-	tests := []struct {
-		name     string
-		legacy   []ExecutionEvent
-		exported []ExecutionEvent
-		want     string
-	}{
-		{
-			name: "within-task status order",
-			legacy: []ExecutionEvent{
-				event("in_progress", "1", 1),
-				event("verifying", "1", 1),
-				event("done", "1", 1),
-			},
-			exported: []ExecutionEvent{
-				event("in_progress", "1", 1),
-				event("done", "1", 1),
-				event("verifying", "1", 1),
-			},
-			want: "status mismatch",
-		},
-		{
-			name: "retry order",
-			legacy: []ExecutionEvent{
-				event("in_progress", "1", 1),
-				event("error", "1", 1),
-				event("in_progress", "1", 2),
-			},
-			exported: []ExecutionEvent{
-				event("in_progress", "1", 2),
-				event("error", "1", 1),
-				event("in_progress", "1", 1),
-			},
-			want: "attempt mismatch",
-		},
-		{
-			name: "missing task replaced by duplicate",
-			legacy: []ExecutionEvent{
-				event("in_progress", "1", 1),
-				event("done", "1", 1),
-				event("in_progress", "2", 1),
-				event("done", "2", 1),
-			},
-			exported: []ExecutionEvent{
-				event("in_progress", "1", 1),
-				event("done", "1", 1),
-				event("in_progress", "1", 1),
-				event("done", "1", 1),
-			},
-			want: "task_id mismatch",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := CompareExecutionEventsParity(tt.legacy, tt.exported)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("CompareExecutionEventsParity() error = %v, want substring %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestCompareExecutionEventsParityRejectsRunBoundaryMovement(t *testing.T) {
-	legacy := []ExecutionEvent{
-		{Status: "run_started", RunID: "run-1"},
-		{Status: "in_progress", RunID: "run-1", TaskID: "1", Attempt: 1},
-		{Status: "run_finished", RunID: "run-1"},
-	}
-	exported := []ExecutionEvent{
-		{Status: "run_started", RunID: "run-1"},
-		{Status: "run_finished", RunID: "run-1"},
-		{Status: "in_progress", RunID: "run-1", TaskID: "1", Attempt: 1},
-	}
-
-	err := CompareExecutionEventsParity(legacy, exported)
-	if err == nil || !strings.Contains(err.Error(), "position mismatch") {
-		t.Fatalf("CompareExecutionEventsParity() error = %v, want run boundary position mismatch", err)
-	}
-}
-
-func TestExportAndVerifyExecutionEvents_EndToEndParityAndForcedMismatch(t *testing.T) {
-	workspace := t.TempDir()
-	runID := "run-test-123"
-
-	// 1. Create legacy execution event logger and write events
-	logger, err := newExecutionEventLogger(workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	logger.append(ExecutionEvent{Status: "run_started", RunID: runID, Team: "team-alpha", Agent: "coordinator"})
-	logger.append(ExecutionEvent{Status: "in_progress", RunID: runID, Team: "team-alpha", TaskID: "1", Agent: "worker", Attempt: 1})
-	logger.append(ExecutionEvent{Status: "done", RunID: runID, Team: "team-alpha", TaskID: "1", Agent: "worker", Attempt: 1})
-	logger.append(ExecutionEvent{Status: "run_finished", RunID: runID, Team: "team-alpha", Agent: "coordinator", Outcome: RunOutcomeCompleted, AcceptanceState: AcceptancePassed, EvidenceManifestHash: "ev-hash-1"})
-	logger.close()
-
-	// 2. Canonical events in EventStore
-	canonicalEvents := []RunEvent{
-		{Type: string(EventRunStarted), RunID: runID, Actor: "coordinator", Payload: []byte(`{"team":"team-alpha"}`)},
-		{Type: string(EventTaskStarted), RunID: runID, TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
-		{Type: string(EventTaskCompleted), RunID: runID, TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","attempt":1}`)},
-		{Type: string(EventRunFinished), RunID: runID, Actor: "coordinator", Payload: []byte(`{"team":"team-alpha","outcome":"completed","acceptance_state":"passed","evidence_manifest":{"manifest_hash":"ev-hash-1"}}`)},
-	}
-
-	// 3. Export and verify parity -> should succeed
-	parity, err := ExportAndVerifyExecutionEvents(workspace, runID, canonicalEvents)
-	if err != nil || !parity {
-		t.Fatalf("expected parity to succeed, got parity=%v, err=%v", parity, err)
-	}
-
-	// Verify exported shadow file was written
-	shadowPath := filepath.Join(workspace, logsDir, eventStoreExecutionEventsFile)
-	if _, err := os.Stat(shadowPath); err != nil {
-		t.Fatalf("shadow file was not written: %v", err)
-	}
-
-	// 4. Force mismatch: add divergent canonical event
-	divergentCanonical := append(canonicalEvents, RunEvent{
-		Type:    string(EventTaskCompleted),
-		RunID:   runID,
-		TaskID:  "extra-task",
-		Actor:   "worker",
-		Payload: []byte(`{"id":"extra-task","agent":"worker","attempt":1}`),
-	})
-
-	mismatchParity, mismatchErr := ExportAndVerifyExecutionEvents(workspace, runID, divergentCanonical)
-	if mismatchErr == nil || mismatchParity {
-		t.Fatalf("expected parity mismatch, got parity=%v, err=%v", mismatchParity, mismatchErr)
-	}
-	if !strings.Contains(mismatchErr.Error(), "length mismatch") {
-		t.Fatalf("unexpected mismatch error: %v", mismatchErr)
-	}
-}
-
-func TestExecutionEvents_ProductionBeginAndFinalizeParity(t *testing.T) {
+// TestExecutionRunLeavesNoExecutionEventFiles pins that a run records its
+// execution telemetry only as canonical events: no execution-event file is
+// written, and the run projects from the event store.
+func TestExecutionRunLeavesNoExecutionEventFiles(t *testing.T) {
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -434,25 +243,17 @@ func TestExecutionEvents_ProductionBeginAndFinalizeParity(t *testing.T) {
 	}
 
 	closer := c.beginExecutionRun()
-	if c.executionEvents == nil {
-		t.Fatal("expected legacy executionEvents logger to be non-nil")
-	}
 	if c.eventStore == nil {
 		t.Fatal("expected EventStore to be non-nil")
 	}
-
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task", Model: "model-1"}})
 	todoID := "1"
-	c.recordExecutionEvent(todoID, "worker", 1, "in_progress", "model-1", 0, ExecutionUsage{})
 	if err := c.CommitTaskTransition(context.Background(), todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
-
-	c.recordExecutionEvent(todoID, "worker", 1, "done", "model-1", 0, ExecutionUsage{})
 	if err := c.CommitTaskTransition(context.Background(), todoID, TaskInProgress, TaskDone, "task completed", "", nil); err != nil {
 		t.Fatal(err)
 	}
-
 	c.SetLastRunResult(&RunResult{
 		Outcome:       RunOutcomeCompleted,
 		GoalSatisfied: true,
@@ -460,18 +261,25 @@ func TestExecutionEvents_ProductionBeginAndFinalizeParity(t *testing.T) {
 	closer()
 
 	if c.dualWriteFailures.Load() > 0 {
-		t.Fatalf("expected 0 dual write failures, got %d", c.dualWriteFailures.Load())
+		t.Fatalf("expected 0 event append failures, got %d", c.dualWriteFailures.Load())
 	}
-	shadowPath := filepath.Join(workspace, logsDir, eventStoreExecutionEventsFile)
-	if _, err := os.Stat(shadowPath); err != nil {
-		t.Fatalf("shadow file not found: %v", err)
+	for _, name := range []string{executionEventsFile, "execution-events.event-store.jsonl"} {
+		if _, err := os.Stat(filepath.Join(workspace, logsDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s exists after the run (stat err = %v)", name, err)
+		}
+	}
+	var statuses []string
+	for _, row := range workspaceExecutionRows(t, workspace) {
+		statuses = append(statuses, row.Status+"/"+row.Team)
+	}
+	if got, want := strings.Join(statuses, " "), "run_started/test-team in_progress/test-team done/test-team run_finished/test-team"; got != want {
+		t.Fatalf("projected statuses = %q, want %q", got, want)
 	}
 }
 
-// TestSkippedTasksKeepExecutionEventParity pins the legacy stream to the
-// export for tasks that end skipped: the export projects task_skipped, so the
-// legacy logger must record the skip too, at the attempt the export reports.
-func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
+// TestSkippedTasksProjectAtTheirLastAttempt pins that a skipped task projects
+// one skip row, at the attempt its last dispatch started.
+func TestSkippedTasksProjectAtTheirLastAttempt(t *testing.T) {
 	tests := []struct {
 		name    string
 		attempt int // 0 leaves the task pending until it is skipped
@@ -492,11 +300,9 @@ func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
 			c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task", Model: "model-1"}})
 			ctx := context.Background()
 			if tt.attempt > 0 {
-				c.recordExecutionEvent("1", "worker", tt.attempt, "in_progress", "model-1", 0, ExecutionUsage{})
 				if err := c.CommitTaskTransition(ctx, "1", TaskPending, TaskInProgress, "", "", attemptStartMetadata(tt.attempt)); err != nil {
 					t.Fatal(err)
 				}
-				c.recordExecutionEvent("1", "worker", tt.attempt, "planned", "model-1", 0, ExecutionUsage{})
 				if err := c.CommitTaskTransition(ctx, "1", TaskInProgress, TaskPlanned, "", "", nil); err != nil {
 					t.Fatal(err)
 				}
@@ -508,21 +314,17 @@ func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
 			closer()
 
 			if failures := c.dualWriteFailures.Load(); failures != 0 {
-				t.Fatalf("dual-write failures = %d, want 0", failures)
-			}
-			legacy, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, executionEventsFile))
-			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("event append failures = %d, want 0", failures)
 			}
 			var skipped []ExecutionEvent
-			for _, event := range legacy {
+			for _, event := range workspaceExecutionRows(t, workspace) {
 				if event.Status == string(TaskSkipped) {
 					skipped = append(skipped, event)
 				}
 			}
 			wantAttempt := max(tt.attempt, 1)
 			if len(skipped) != 1 || skipped[0].TaskID != "1" || skipped[0].Attempt != wantAttempt {
-				t.Fatalf("legacy skipped events = %#v, want one for task 1 at attempt %d", skipped, wantAttempt)
+				t.Fatalf("projected skipped events = %#v, want one for task 1 at attempt %d", skipped, wantAttempt)
 			}
 		})
 	}
@@ -551,12 +353,9 @@ func TestSealedPartialRunDoesNotAppendLateTaskSkips(t *testing.T) {
 	}
 	closeRun()
 	if c.dualWriteFailures.Load() != 0 {
-		t.Fatal("terminal task cleanup broke execution-event parity")
+		t.Fatal("terminal task cleanup failed an event append")
 	}
-	canonical, err := ReadExecutionEvents(filepath.Join(workspace, logsDir, "execution-events.event-store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	canonical := workspaceExecutionRows(t, workspace)
 	if len(canonical) != 2 || canonical[0].Status != "run_started" || canonical[1].Status != "run_finished" {
 		t.Fatalf("canonical events=%+v", canonical)
 	}

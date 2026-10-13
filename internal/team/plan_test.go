@@ -251,13 +251,13 @@ func TestCloneCoordinatorCopiesInitialPromptEvenWhenLastSummaryNil(t *testing.T)
 
 func TestCloneCoordinatorPreservesContextRoutingRuntimeState(t *testing.T) {
 	orig := &Coordinator{
-		session: &TeamSession{}, executionRunID: "run-extra-model", executionTeamRevision: "team-rev",
+		session: &TeamSession{}, executionRunID: "run-extra-model",
 		memoryRankingPolicy: MemoryRuntimeRankingPolicy{CandidateTopK: 20, InjectTopK: 4, MinimumRelevance: .2},
 		executionProfile:    ExecutionProfile{Name: ProfileFreshVerification, DisableHistoricalMemory: true},
 		goalMode:            GoalModeOutcome,
 	}
 	cloned := cloneCoordinator(orig, orig.session)
-	if cloned.executionRunID != orig.executionRunID || cloned.executionTeamRevision != orig.executionTeamRevision {
+	if cloned.executionRunID != orig.executionRunID {
 		t.Fatalf("extra-model clone lost context run identity: %#v", cloned)
 	}
 	if cloned.memoryRankingPolicy != orig.memoryRankingPolicy || cloned.executionProfile != orig.executionProfile || cloned.goalMode != orig.goalMode {

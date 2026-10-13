@@ -788,11 +788,6 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("apply task transition after durable append: %w", err)
 	}
 	c.revokeTaskOccurrence(taskID)
-	// Execution sites log the other statuses themselves; a skip has no
-	// execution site, so the transition owner logs it.
-	if projected.Status == TaskSkipped {
-		c.recordSkippedExecutionEvent(&projected)
-	}
 	if !resetForResume {
 		c.recordCommittedMemoryOutcome(&projected)
 	}
@@ -1663,7 +1658,9 @@ func (c *Coordinator) EventStore() *EventStore {
 	return c.eventStore
 }
 
-// DualWriteFailures returns the count of failed dual-write event store appends.
+// DualWriteFailures returns the count of canonical event appends that failed
+// or left a learning gap. The name predates the retirement of the legacy
+// execution-event log that once shared the count.
 func (c *Coordinator) DualWriteFailures() int64 {
 	if c == nil {
 		return 0

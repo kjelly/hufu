@@ -66,16 +66,6 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		c.reconcileTaskStatusProjection()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
-	started := time.Now()
-	parentModel := c.executionModelIDForTarget(task.ResolvedExecutionTarget, task.Model)
-	c.recordExecutionEvent(todoID, agentName, c.taskAttempt(todoID), "in_progress", parentModel, 0, ExecutionUsage{})
-	defer func() {
-		status := "done"
-		if returnErr != nil {
-			status = "error"
-		}
-		c.recordExecutionProjection(todoID, agentName, c.taskAttempt(todoID), status, parentModel, time.Since(started), c.fanoutExecutionUsage(todoID))
-	}()
 	// Retries and resumes pass the recorded topology here and never re-expand
 	// live configuration.
 	if len(models) < 2 {
@@ -157,21 +147,6 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	return merged, nil
-}
-
-func (c *Coordinator) fanoutExecutionUsage(todoID string) ExecutionUsage {
-	var total ExecutionUsage
-	item := c.todoItemByID(todoID)
-	if item == nil {
-		return total
-	}
-	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != c.contextRunID() || receipt.Usage == nil {
-			continue
-		}
-		total = addExecutionUsage(total, *receipt.Usage)
-	}
-	return total
 }
 
 // executionTopologySelectors preserves backend qualification after a durable
@@ -726,7 +701,6 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		decisionStore:                      orig.decisionStoreSnapshot(),
 		decisionIndexProjection:            orig.decisionIndexProjectionSnapshot(),
 		executionRunID:                     orig.executionRunID,
-		executionTeamRevision:              orig.executionTeamRevision,
 		executionProfile:                   executionProfileCopy,
 		goalMode:                           goalModeCopy,
 		modelList:                          orig.modelList,

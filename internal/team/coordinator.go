@@ -689,10 +689,6 @@ type Coordinator struct {
 	// Extra-model coordinators share this pointer so reservations serialize
 	// across the complete in-process run.
 	costManager *CostManager
-	// attemptExecutionTargets maps an in-flight task to the target its
-	// current attempt runs on (a route fallback may differ from the frozen
-	// primary). It feeds telemetry only.
-	attemptExecutionTargets sync.Map
 	// providerSemState holds a lazily-created concurrency-limiting channel per
 	// canonical effective provider key, sized from ProviderManager's execution
 	// policy. It is shared with isolated extra-model clones.
@@ -761,14 +757,12 @@ type Coordinator struct {
 	toolPolicyVerdictsMu sync.Mutex
 	structuredStepRunner StructuredStepRunner
 
-	// executionEvents is initialized for each top-level Run/Continue call and
-	// receives attempt-level telemetry for `hufu improve`.
-	executionEventsMu     sync.RWMutex
-	executionEvents       *executionEventLogger
-	executionRunID        string
-	executionTeamRevision string
-	invocationIDMu        sync.RWMutex
-	invocationID          string
+	// executionRunID is the run identity of the active top-level
+	// Run/Continue invocation.
+	executionEventsMu sync.RWMutex
+	executionRunID    string
+	invocationIDMu    sync.RWMutex
+	invocationID      string
 	// executionRunHistory retains every run identity allocated by this
 	// coordinator instance, including a run whose terminal projection later
 	// fails. CLI callers snapshot the length before dispatch and publish the

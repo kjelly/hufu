@@ -48,7 +48,7 @@ run/task/trace/evidence/context/replay/storage payload、exit code 與 read-only
 | memory retrieval | `MemoryInjectionManifest`、`memory_*` events | task replay、memory event reducer | 以目前 policy 重新 retrieval |
 | memory aggregate | `context.sqlite` experience aggregate | event-derived in-memory aggregate | 直接修改或重建 SQLite |
 | terminal state | terminal lifecycle events + `terminal_sessions.json` | in-memory lifecycle reducer、read-only file read | 由 terminal 狀態推論 task 完成 |
-| legacy telemetry | `execution-events.jsonl` | 僅 diagnostic comparison | 把 legacy telemetry 升格為 canonical |
+| execution telemetry | `event_store.jsonl` 經 `team.ExecutionEventProjector` 推導（不再寫 `execution-events.jsonl`） | `hufu improve`、`hufu debug` bundle | 另寫一份 telemetry 檔或把推導結果升格為 canonical |
 
 目前 `audit explain` 已經提供 run witness、task attempt history，應由 inspector
 直接呼叫或共用其底層純函式；不得複製 evidence 判定邏輯。[auditcmd.go](../../cmd/hufu/auditcmd.go)、
@@ -480,8 +480,8 @@ projection，輸出見下一節。
 | memory | `memory_*` events | experience aggregate rows | 只建立 in-memory expected aggregate；不得寫 SQLite |
 | terminal | terminal lifecycle events | `terminal_sessions.json` | 比較 lifecycle identity/state；process completion 不轉換成 task status |
 
-`execution-events.jsonl`、TUI、STM/LTM Markdown 與 report 可列為 diagnostic-only，
-第一版 replay 不得以它們作 canonical comparison input。
+由 event store 推導的 execution telemetry、TUI、STM/LTM Markdown 與 report 可列為
+diagnostic-only，第一版 replay 不得以它們作 canonical comparison input。
 
 #### `session.json` applicability gate
 

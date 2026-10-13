@@ -237,14 +237,14 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 	} else {
 		findings = append(findings, assertDurableEvents(c.Expect.DurableEvents, durableEvents, tasks)...)
 	}
-	// Every run dual-writes its lifecycle to the event store and the legacy
-	// execution-event log, and verifies the two agree when it ends. A
-	// divergence is a runtime defect in any case, not a per-case expectation.
+	// A run records its lifecycle only as canonical events. A failed append
+	// leaves the run's history incomplete, which is a runtime defect in any
+	// case, not a per-case expectation.
 	if failures := coordinator.DualWriteFailures(); failures > 0 {
 		findings = append(findings, EvalFinding{
 			Dimension: "dual-write",
-			Expected:  "event store and legacy execution-event log agree",
-			Actual:    fmt.Sprintf("%d dual-write failure(s)", failures),
+			Expected:  "every canonical event append succeeds",
+			Actual:    fmt.Sprintf("%d failed event append(s)", failures),
 		})
 	}
 	findings = append(findings, assertEvidence(context.WithoutCancel(caseCtx), workspace, c.Expect.Evidence, runResult, tasks)...)
