@@ -342,6 +342,12 @@ func (c *Coordinator) persistContextManifest(manifest *ContextInjectionManifest,
 	if manifest == nil {
 		return nil
 	}
+	if c.isModelFanoutLeaf(manifest.TaskID) {
+		if err := c.modelFanout.parent.persistContextManifest(manifest, diagnosticContexts...); err != nil {
+			return err
+		}
+		return c.taskTracker.TodoList().SetContextManifest(manifest.TaskID, manifest)
+	}
 	if len(diagnosticContexts) > 0 {
 		if finish := startContextStage(diagnosticContexts[0], manifest.RequestID, manifest.ModelExecutionID, "manifest"); finish != nil {
 			defer finish()

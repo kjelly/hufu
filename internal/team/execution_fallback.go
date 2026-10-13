@@ -164,7 +164,7 @@ func (c *Coordinator) recordExecutionFallback(ctx context.Context, todoID, agent
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{
-		"task_id": todoID, "occurrence_attempt": c.taskAttempt(todoID), "from_attempt": fromAttempt,
+		"task_id": todoID, "agent": agentName, "occurrence_attempt": c.taskAttempt(todoID), "from_attempt": fromAttempt,
 		"from_target": s.from, "to_target": to, "candidate_index": s.index,
 		"failure_class": s.failureClass, "route": s.route.Name,
 	})

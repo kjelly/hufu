@@ -22,16 +22,19 @@ import (
 )
 
 type workerProviderSurfaceCapture struct {
-	mu           sync.Mutex
-	requests     [][]string
-	contexts     []string
-	mode         string
-	submitted    bool
-	planReviewed bool
+	mu             sync.Mutex
+	requests       [][]string
+	contexts       []string
+	models         []string
+	rateLimitModel string
+	mode           string
+	submitted      bool
+	planReviewed   bool
 }
 
 func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var request struct {
+		Model    string `json:"model"`
 		Messages []struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
@@ -52,6 +55,7 @@ func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.
 	}
 	p.mu.Lock()
 	p.requests = append(p.requests, slices.Clone(names))
+	p.models = append(p.models, request.Model)
 	var visible strings.Builder
 	for _, message := range request.Messages {
 		if message.Role == "system" || message.Role == "user" || message.Role == "developer" {
@@ -60,6 +64,13 @@ func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.
 		}
 	}
 	p.contexts = append(p.contexts, visible.String())
+	if request.Model == p.rateLimitModel && p.rateLimitModel != "" {
+		p.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"fixture rate limit","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)
+		return
+	}
 	mode := p.mode
 	shouldSubmit := (mode == "direct" || mode == "sub-agent") && slices.Contains(names, submitResultToolName) && !p.submitted
 	if shouldSubmit {

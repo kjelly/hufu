@@ -213,6 +213,7 @@ type teamManifestSpecFields struct {
 	WorkerWorkspace  *agent.WorkerWorkspaceSpec `yaml:"worker-workspace,omitempty"`
 	ExecutionRoute   string                     `yaml:"execution-route,omitempty"`
 	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
+	ContextRouting   agent.ContextRoutingPolicy `yaml:"context-routing,omitempty"`
 	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
 	ContextArtifacts *rawContextArtifactsPolicy `yaml:"context-artifacts,omitempty"`
 	Tasks            []TaskDef                  `yaml:"tasks,omitempty"`

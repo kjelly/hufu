@@ -32,7 +32,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	agentDef *agent.AgentDef,
 	task TaskDef,
 	todoID string,
-) (string, error) {
+) (output string, returnErr error) {
 	// A durable task owns this ordered topology. Resolve it before mutating the
 	// parent lifecycle so state-changing fanout cannot start after an unsafe
 	// mixed/external backend admission has already been accepted.
@@ -66,6 +66,16 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		c.reconcileTaskStatusProjection()
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	}
+	started := time.Now()
+	parentModel := c.executionModelIDForTarget(task.ResolvedExecutionTarget, task.Model)
+	c.recordExecutionEvent(todoID, agentName, c.taskAttempt(todoID), "in_progress", parentModel, 0, ExecutionUsage{})
+	defer func() {
+		status := "done"
+		if returnErr != nil {
+			status = "error"
+		}
+		c.recordExecutionProjection(todoID, agentName, c.taskAttempt(todoID), status, parentModel, time.Since(started), c.fanoutExecutionUsage(todoID))
+	}()
 	// Retries and resumes pass the recorded topology here and never re-expand
 	// live configuration.
 	if len(models) < 2 {
@@ -147,6 +157,27 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	c.reconcileTaskStatusProjection()
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	return merged, nil
+}
+
+func (c *Coordinator) fanoutExecutionUsage(todoID string) ExecutionUsage {
+	var total ExecutionUsage
+	item := c.todoItemByID(todoID)
+	if item == nil {
+		return total
+	}
+	for _, receipt := range item.ExecutionReceipts {
+		if receipt.RunID != c.contextRunID() || receipt.Usage == nil {
+			continue
+		}
+		usage := receipt.Usage
+		total.InputTokens += usage.InputTokens
+		total.OutputTokens += usage.OutputTokens
+		total.TotalTokens += usage.TotalTokens
+		total.ProgressTokens += usage.ProgressTokens
+		total.CacheReadTokens += usage.CacheReadTokens
+		total.CacheCreationTokens += usage.CacheCreationTokens
+	}
+	return total
 }
 
 // executionTopologySelectors preserves backend qualification after a durable
@@ -291,7 +322,21 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	if err != nil {
 		return "", err
 	}
+	if item := c.todoItemByID(todoID); item != nil {
+		admitted, err := admittedExecutionTargetAt(taskDefFromTodoItem(item), topologyIndex)
+		if err != nil {
+			return "", err
+		}
+		if admitted != leafTarget {
+			return "", fmt.Errorf("extra-model leaf target differs from parent admitted topology")
+		}
+	}
 	task.ResolvedExecutionTarget = leafTarget
+	// Validate the parent policy before profile discovery or constructing a
+	// disposable leaf. Admission is checked again at the actual provider edge.
+	if err := c.ensureExecutionPolicySnapshot(); err != nil {
+		return "", err
+	}
 
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	// Use unique token (timestamp + agentName) to prevent collision when multiple
@@ -320,24 +365,11 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// Direct mutation of c.session.Workspace is unsafe because multiple goroutines
 	// execute this function concurrently for different models.
 	isolatedSession := cloneSession(c.session, subWS)
-	// cloneSession intentionally shallow-copies the read-only team definition,
-	// but this leaf must not resolve the parent's live agent definition: doing
-	// so would restore ExtraModels and recursively fan out. Replace every alias
-	// of the selected agent with the explicit single-model definition.
-	if isolatedSession != nil && isolatedSession.Agents != nil {
-		agents := make(map[string]*agent.AgentDef, len(isolatedSession.Agents))
-		for key, def := range isolatedSession.Agents {
-			agents[key] = def
-			if def != nil && (strings.EqualFold(def.Name, agentDef.Name) || strings.EqualFold(key, agentName) || strings.EqualFold(key, agentDef.FileAlias)) {
-				agents[key] = cloneAgentDef(agentDef)
-				agents[key].ExtraModels = nil
-			}
-		}
-		isolatedSession.Agents = agents
-	}
+	// Keep the frozen parent definitions. The runtime-owned target binding and
+	// executionModelOverride make the leaf singleton without changing policy.
 	isolatedCoord := cloneCoordinator(c, isolatedSession)
 	// A leaf performs worker work only. Give it a private lifecycle projection
-	// and remove the event-journal transition sink; the parent owns the one
+	// while keeping the shared journal for admission; the parent owns the one
 	// durable task_created/status/decision lineage. Execution events and the
 	// leaf receipt are still produced and merged into the parent below.
 	if parentItem := c.todoItemByID(todoID); parentItem != nil {
@@ -352,7 +384,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		leafTracker.TodoList().SetRunID(c.contextRunID())
 		leafTracker.TodoList().AddReserved([]*TodoItem{leafItem})
 		isolatedCoord.taskTracker = leafTracker
-		isolatedCoord.eventJournal = nil
+		isolatedCoord.modelFanout = &modelFanoutBinding{parent: c, taskID: todoID, index: topologyIndex, target: leafTarget}
 	}
 	task.executionModelOverride = strings.TrimSpace(agentDef.Generation.Model)
 	// Every isolated leaf is explicitly singleton. The parent Todo retains the

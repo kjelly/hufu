@@ -1644,7 +1644,7 @@ func (tl *TodoList) SetMemoryManifest(id string, manifest *MemoryInjectionManife
 		copyManifest := cloneMemoryInjectionManifest(manifest)
 		replaced := false
 		for i := range item.MemoryManifests {
-			if item.MemoryManifests[i].RunID == manifest.RunID && item.MemoryManifests[i].Attempt == manifest.Attempt {
+			if item.MemoryManifests[i].RunID == manifest.RunID && item.MemoryManifests[i].Attempt == manifest.Attempt && item.MemoryManifests[i].ModelExecutionID == manifest.ModelExecutionID {
 				item.MemoryManifests[i] = *copyManifest
 				replaced = true
 				break

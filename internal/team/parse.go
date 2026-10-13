@@ -1041,6 +1041,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	}
 	cfg.WorkerWorkspace = yc.WorkerWorkspace.Clone()
 	cfg.ExecutionRoute = strings.TrimSpace(yc.ExecutionRoute)
+	cfg.ContextRouting = yc.ContextRouting
+	if err := cfg.ContextRouting.Validate(); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
 	cfg.MemoryLearning, err = resolveMemoryLearningPolicy(yc.MemoryLearning)
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid memory-learning config: %w", err)

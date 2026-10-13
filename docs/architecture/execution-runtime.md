@@ -157,6 +157,22 @@ and declared structured step. Current configuration may narrow a frozen
 capability or make it unavailable, but live resources and tools cannot widen
 an existing occurrence.
 
+An extra-model leaf retains the parent's frozen agent definitions and binds
+only its indexed admitted target. It cannot rewrite the parent topology or
+refreeze policy to admit another model. Parent policy validation precedes
+leaf profile discovery and actual provider admission checks it again. Each
+leaf has private task lifecycle state; the parent owns the single durable
+occurrence lifecycle, and receives each leaf's context/memory manifests before
+provider dispatch and receipts before completing the occurrence. Model
+execution identity separates parallel manifests and retries, while outcome
+credit remains capped across the parent occurrence. Provider token accounting
+charges each leaf once; parent lifecycle telemetry aggregates receipt usage
+without charging it again.
+
+Tool schema normalization also owns its input. Admission serialization and
+Fantasy receive fresh nested schema containers, preserving the raw tool
+definition used for authorization digests across parallel workers.
+
 - A tool added to an agent's `tools:` after admission is ignored for that
   occurrence.
 - A tool removed or newly denied is dropped.

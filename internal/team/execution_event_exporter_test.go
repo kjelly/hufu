@@ -38,6 +38,20 @@ func TestExecutionEventExporterMapsCanonicalRunEvents(t *testing.T) {
 	}
 }
 
+func TestExecutionEventExporterFallbackKeepsHistoricalAttemptAndAgent(t *testing.T) {
+	events := []RunEvent{
+		{Type: string(EventTaskStarted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":1}`)},
+		// Historical fallback events had only the control actor, not agent.
+		{Type: string(EventExecutionFallbackDecided), RunID: "run", TaskID: "task", Actor: "execution-route", Payload: []byte(`{"from_attempt":1,"from_target":{"backend":"ollama","model":"primary"}}`)},
+		{Type: string(EventTaskStarted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":2}`)},
+		{Type: string(EventTaskCompleted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":2}`)},
+	}
+	projected := projectedExecutionEvents(events)
+	if len(projected) != 4 || projected[1].Agent != "worker" || projected[1].Status != "error" || projected[1].Attempt != 1 || projected[1].Model != "primary" || projected[2].Attempt != 2 || projected[3].Status != "done" {
+		t.Fatalf("fallback projection: %+v", projected)
+	}
+}
+
 func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing.T) {
 	events := []RunEvent{
 		{Type: string(EventRunStarted), RunID: "run-1", Payload: []byte(`{"team":"team"}`)},

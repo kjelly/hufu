@@ -34,6 +34,7 @@ type executionPolicySnapshotCoordinatorOptions struct {
 	subjectRoot           string
 	costPolicy            cost.RunPolicy
 	costCatalog           cost.Catalog
+	contextRouting        agent.ContextRoutingPolicy
 }
 
 func defaultExecutionPolicyCodexConfig() agent.SubagentProviderConfig {
@@ -66,6 +67,7 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 			CoordinatorModel:  "remote/coordinator-model",
 			GuardModel:        "remote/config-guard-model",
 			CostPolicy:        options.costPolicy,
+			ContextRouting:    options.contextRouting,
 			Providers: map[string]config.ProviderConfig{
 				"ollama": {MaxConcurrent: 2},
 				"remote": {MaxConcurrent: remoteLimit},

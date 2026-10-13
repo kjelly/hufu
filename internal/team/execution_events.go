@@ -301,6 +301,7 @@ func hasInterruptedRecoveryRun(tracker *TaskTracker) bool {
 }
 
 func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Context, lease *invocationLease) (context.Context, func()) {
+	parent = c.withContextQueryPolicy(parent)
 	owner := newInvocationOwnerWithLease(c, parent, lease)
 	handoff := false
 	defer func() {
@@ -721,6 +722,15 @@ func (c *Coordinator) recordExecutionEvent(taskID, agent string, attempt int, st
 	} else if usage.TotalTokens > 0 {
 		c.recordReliabilityUsage(taskID, attempt, usage.TotalTokens)
 	}
+	if c.isModelFanoutLeaf(taskID) {
+		return
+	}
+	c.recordExecutionProjection(taskID, agent, attempt, status, model, duration, usage)
+}
+
+// recordExecutionProjection emits legacy telemetry without charging usage a
+// second time when a parent summarizes already-accounted fanout receipts.
+func (c *Coordinator) recordExecutionProjection(taskID, agent string, attempt int, status, model string, duration time.Duration, usage ExecutionUsage) {
 	c.executionEventsMu.RLock()
 	logger, runID, teamRevision := c.executionEvents, c.executionRunID, c.executionTeamRevision
 	c.executionEventsMu.RUnlock()

@@ -913,7 +913,7 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if eventTypeForTaskStatus(next) == "" {
 		return fmt.Errorf("commit task transition: unsupported task status %s", next)
 	}
-	if c.hasDurableEventJournal() {
+	if c.hasDurableEventJournal() && !c.isModelFanoutLeaf(taskID) {
 		if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
 			return err
 		}

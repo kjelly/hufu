@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 // eventStoreExecutionEventsFile is the Phase-5 shadow projection. The legacy
@@ -70,6 +72,27 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		out.Status = "error"
 	case string(EventTaskSkipped):
 		out.Status = "skipped"
+	case string(EventExecutionFallbackDecided):
+		// The failed provider attempt is real telemetry even though the
+		// occurrence continues on its admitted route instead of terminalizing.
+		var payload struct {
+			Agent       string                    `json:"agent"`
+			FromAttempt int                       `json:"from_attempt"`
+			FromTarget  execution.ExecutionTarget `json:"from_target"`
+		}
+		if json.Unmarshal(event.Payload, &payload) != nil || payload.FromAttempt < 1 || payload.FromTarget.Validate() != nil {
+			return ExecutionEvent{}, false
+		}
+		out.Status, out.Attempt = "error", payload.FromAttempt
+		out.ExecutionTarget, out.Backend = payload.FromTarget.String(), payload.FromTarget.Backend
+		out.Model = payload.FromTarget.String()
+		if execution.IsOllamaBackend(payload.FromTarget.Backend) {
+			out.Model = payload.FromTarget.Model
+		}
+		if payload.Agent != "" {
+			out.Agent = payload.Agent
+		}
+		return out, true
 	default:
 		return ExecutionEvent{}, false
 	}
@@ -133,6 +156,7 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 // logs without that counter fall back to the task's retry count.
 func projectedExecutionEvents(events []RunEvent) []ExecutionEvent {
 	type taskLifecycle struct {
+		agent           string
 		dispatchAttempt int
 		status          string
 		attempt         int
@@ -149,6 +173,12 @@ func projectedExecutionEvents(events []RunEvent) []ExecutionEvent {
 		if lifecycle == nil {
 			lifecycle = &taskLifecycle{}
 			lifecycles[key] = lifecycle
+		}
+		if event.Type == string(EventExecutionFallbackDecided) && mapped.Agent == "execution-route" && lifecycle.agent != "" {
+			mapped.Agent = lifecycle.agent
+		}
+		if mapped.Agent != "" {
+			lifecycle.agent = mapped.Agent
 		}
 		if attempt := eventDispatchAttempt(event); attempt > 0 {
 			lifecycle.dispatchAttempt = attempt

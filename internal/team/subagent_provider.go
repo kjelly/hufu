@@ -149,6 +149,14 @@ func (c *Coordinator) canonicalWorkerAttemptContextForID(taskID string) (*canoni
 		return nil, fmt.Errorf("canonical worker attempt context: agent for Todo %q is unavailable", taskID)
 	}
 	task := taskDefFromTodoItem(todo)
+	if c.isModelFanoutLeaf(taskID) {
+		target, err := c.modelFanoutTarget(taskID)
+		if err != nil {
+			return nil, err
+		}
+		task.ResolvedExecutionTarget = target
+		task.executionModelOverride = c.executionModelIDForTarget(target, task.Model)
+	}
 	return &canonicalWorkerAttemptContext{
 		Todo:  todo,
 		Task:  task,

@@ -410,6 +410,7 @@ type TeamConfig struct {
 	// that set neither their own route nor their own model.
 	ExecutionRoute string
 	MemoryLearning MemoryLearningPolicy
+	ContextRouting ContextRoutingPolicy
 	// Compaction controls coordinator history retention and deterministic
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.
@@ -1776,7 +1777,7 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),
-		fantasy.WithTools(agentTools...),
+		fantasy.WithTools(providerToolsWithOwnedSchemas(agentTools)...),
 		// Hufu owns retries at the task level so it can apply the configured
 		// attempt budget, recovery policy, escalation, and reporting. Fantasy
 		// 0.41 retries failed transports by default with multi-second backoff;

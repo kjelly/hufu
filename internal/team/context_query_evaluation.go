@@ -13,11 +13,12 @@ import (
 type contextQueryEvaluationKey struct{}
 
 // WithContextQueryEvaluationProfile is an offline harness seam. It has no CLI
-// or team setting; missing/default fixtures explicitly retain legacy behavior.
+// or CLI setting. An absent override uses the team's frozen policy.
 func WithContextQueryEvaluationProfile(ctx context.Context, profile string) (context.Context, error) {
 	switch profile {
-	case "", "legacy":
-		profile = "legacy"
+	case "":
+		return ctx, nil
+	case "legacy":
 	case "candidate":
 	default:
 		return nil, fmt.Errorf("query-profile-override must be legacy or candidate")

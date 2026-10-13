@@ -35,9 +35,10 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 		t.Fatal(err)
 	}
 	var report []struct {
-		CaseID    string                `json:"case_id"`
-		Legacy    ContextRequestMetrics `json:"legacy"`
-		Candidate ContextRequestMetrics `json:"candidate"`
+		CaseID     string                `json:"case_id"`
+		Legacy     ContextRequestMetrics `json:"legacy"`
+		Candidate  ContextRequestMetrics `json:"candidate"`
+		Production ContextRequestMetrics `json:"production"`
 	}
 	for _, signal := range fixture.Cases {
 		t.Run(signal.ID, func(t *testing.T) {
@@ -50,10 +51,22 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 			c.Expect.ForbiddenContext = []string{"foreign"}
 			c.Expect.ContextDelivery[0].Relevant = []string{signal.ID}
 			var metrics []ContextRequestMetrics
-			for _, profile := range []string{"legacy", "candidate"} {
+			for _, profile := range []string{"legacy", "candidate", "team_active"} {
 				c.QueryProfileOverride = profile
+				if profile == "team_active" {
+					c.QueryProfileOverride = ""
+					path := filepath.Join(suite.TeamDir(), "team.yaml")
+					config, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					config = append(config, []byte("context-routing:\n  query-mode: active\n")...)
+					if err := os.WriteFile(path, config, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				c.Expect.ContextDelivery[0].Include, c.Expect.ContextDelivery[0].Exclude = nil, nil
-				if profile == "candidate" {
+				if profile != "legacy" {
 					c.Expect.ContextDelivery[0].Include = []string{signal.ID}
 				} else {
 					c.Expect.ContextDelivery[0].Exclude = []string{signal.ID}
@@ -70,7 +83,7 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 				if !got.ManifestMatched || got.RequiredDeliveryRecall == nil || *got.RequiredDeliveryRecall != 1 || got.ForbiddenDeliveryCount != 0 {
 					t.Fatal("delivery contract failed")
 				}
-				if profile == "candidate" {
+				if profile != "legacy" {
 					if got.ManifestSchema != 3 || got.QueryAttribution == nil || got.QueryAttribution.Mode != team.QueryModeActive {
 						t.Fatalf("candidate did not bind actual query metadata: %+v", got.QueryAttribution)
 					}
@@ -85,6 +98,21 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 			if metrics[1].IrrelevantOptionalTokens > metrics[0].IrrelevantOptionalTokens {
 				t.Fatalf("optional cost grew: %d -> %d", metrics[0].IrrelevantOptionalTokens, metrics[1].IrrelevantOptionalTokens)
 			}
+			// Runtime-created workset context IDs include each isolated run's
+			// identity. Compare oracle seed IDs and actual token cost; required
+			// runtime fragments were independently checked at both receivers.
+			seedIDs := func(delivered []string) []string {
+				var ids []string
+				for _, id := range delivered {
+					if slices.ContainsFunc(c.ContextItems, func(item ContextItemFixture) bool { return item.ID == id }) {
+						ids = append(ids, id)
+					}
+				}
+				return ids
+			}
+			if !slices.Equal(seedIDs(metrics[1].DeliveredIDs), seedIDs(metrics[2].DeliveredIDs)) || metrics[2].QueryAttribution == nil || metrics[2].QueryAttribution.Mode != team.QueryModeActive || metrics[1].IrrelevantOptionalTokens != metrics[2].IrrelevantOptionalTokens {
+				t.Fatalf("production opt-in differs: offline IDs=%v tokens=%d; production IDs=%v tokens=%d query=%+v", metrics[1].DeliveredIDs, metrics[1].IrrelevantOptionalTokens, metrics[2].DeliveredIDs, metrics[2].IrrelevantOptionalTokens, metrics[2].QueryAttribution)
+			}
 			if metrics[0].RetrievalCalls == nil || metrics[1].RetrievalCalls == nil || metrics[1].RetrievalCalls.Vector != metrics[0].RetrievalCalls.Vector {
 				t.Fatal("candidate increased vector calls or lacks evidence")
 			}
@@ -98,10 +126,11 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 			}
 			t.Logf("delivery_recall=0->1 irrelevant_tokens=%d->%d legacy_calls=%+v candidate_calls=%+v", metrics[0].IrrelevantOptionalTokens, metrics[1].IrrelevantOptionalTokens, metrics[0].RetrievalCalls, metrics[1].RetrievalCalls)
 			report = append(report, struct {
-				CaseID    string                `json:"case_id"`
-				Legacy    ContextRequestMetrics `json:"legacy"`
-				Candidate ContextRequestMetrics `json:"candidate"`
-			}{signal.ID, metrics[0], metrics[1]})
+				CaseID     string                `json:"case_id"`
+				Legacy     ContextRequestMetrics `json:"legacy"`
+				Candidate  ContextRequestMetrics `json:"candidate"`
+				Production ContextRequestMetrics `json:"production"`
+			}{signal.ID, metrics[0], metrics[1], metrics[2]})
 		})
 	}
 	if path := os.Getenv("HUFU_CONTEXT_QUERY_PAIRED_REPORT"); path != "" {

@@ -1,10 +1,17 @@
 package evalharness
 
 import (
+	"bytes"
+	json "encoding/json/v2"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Reuse the canonical scripts instead of duplicating their task, verification,
@@ -53,34 +60,138 @@ func TestContextDeliveryExistingLifecycleSuites(t *testing.T) {
 	}
 }
 
-func TestContextDeliveryExtraModelBaselineRejectsBeforeWorkerProvider(t *testing.T) {
+func TestContextDeliveryExtraModelsUseAdmittedTargetsAndParentManifests(t *testing.T) {
+	for _, mode := range []string{"legacy", "active"} {
+		t.Run(mode, func(t *testing.T) { testExtraModelProviderDelivery(t, mode, false) })
+	}
+	t.Run("active_retry", func(t *testing.T) { testExtraModelProviderDelivery(t, "active", true) })
+}
+
+func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
+	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: eval-extra-context\nmodel: eval-harness-model\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: eval-extra-context\nmodel: eval-harness-model\nmemory-learning:\n  mode: observe\ncontext-routing:\n  query-mode: "+mode+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	worker := "---\nname: worker\nrole: worker\ntools: view\nmodel: qwen3:8b\nextra-models: [qwen3:14b]\n---\nComplete the assigned task and submit_result.\n"
+	worker := "---\nname: worker\nrole: worker\ntools: view\nmodel: qwen3:8b\nextra-models: [qwen3:14b]\nmax-retries: 1\nrecovery: retry\n---\nComplete the assigned task and submit_result.\n"
 	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte(worker), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fixture := &SuiteFixture{Version: 1, Name: "extra-context", Team: dir, Mode: "deterministic", Path: filepath.Join(dir, "cases.yaml")}
 	provider := newScriptedProvider(&ProviderFixture{Steps: []ProviderStep{
-		{ToolCall: &ToolCallStep{Name: "agent", Arguments: `{"tasks":[{"agent":"worker","goal":"inspect router"}]}`}},
-		{ToolCall: &ToolCallStep{Name: "finish", Arguments: `{"response":"baseline blocked","acknowledge_failed_tasks":true}`}},
+		{ToolCall: &ToolCallStep{Name: "agent", Arguments: `{"tasks":[{"agent":"worker","goal":"inspect router","constraints":"migration sentinel"}]}`}},
+		{ToolCall: &ToolCallStep{Name: "submit_result", Arguments: `{"status":"success","summary":"complete"}`}},
+		{ToolCall: &ToolCallStep{Name: "submit_result", Arguments: `{"status":"success","summary":"complete"}`}},
+		{Match: &StepMatch{Contains: "strict judge comparing candidate outputs"}, Content: `{"best_index":0,"reason":"both complete","grafts":[]}`},
+		{ToolCall: &ToolCallStep{Name: "finish", Arguments: `{"response":"done"}`}},
 	}})
-	c := CaseFixture{ID: "parallel-extra-provider-context", Prompt: "inspect router", Expect: ExpectSpec{RunOutcome: "partial", TaskCount: new(1), Tasks: []TaskExpect{{Agent: "worker", Status: "error"}}, ProviderCallCount: new(2), ContextDelivery: []ContextDeliveryExpect{{Agent: "worker", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "inspect router"}}}}}
-	result, err := runCaseWithHandler(t.Context(), fixture, c, provider, provider.scriptFindings)
+	c := CaseFixture{ID: "parallel-extra-provider-context", Prompt: "inspect router", Expect: ExpectSpec{RunOutcome: "unverified", TaskCount: new(1), Tasks: []TaskExpect{{Agent: "worker", Status: "done"}}, ProviderCallCount: new(5), ContextDelivery: []ContextDeliveryExpect{{Agent: "worker", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "inspect router"}}}}}
+	c.ContextItems = []ContextItemFixture{{ID: "extra-target", Content: "migration sentinel useful background"}, {ID: "foreign", Content: "migration sentinel forbidden", Scope: "other_worker"}}
+	for index := range 8 {
+		c.ContextItems = append(c.ContextItems, ContextItemFixture{ID: fmt.Sprintf("noise-%d", index), Content: fmt.Sprintf("inspect router noise %d", index)})
+	}
+	c.Expect.ForbiddenContext = []string{"foreign"}
+	if mode == "active" {
+		c.Expect.ContextDelivery[0].Include = append(c.Expect.ContextDelivery[0].Include, "extra-target")
+		c.Expect.MemoryAggregates = []MemoryAggregateExpect{{ContextItemID: "extra-target", PolicyVersion: "memory-policy-v1", MinExposureCount: new(2), AppliedCount: new(0), PositiveWeight: new(0.0)}}
+	} else {
+		c.Expect.ContextDelivery[0].Exclude = []string{"extra-target"}
+	}
+	var mu sync.Mutex
+	entered := 0
+	extraFailed := false
+	both := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var request struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if request.Model == "qwen3:8b" || request.Model == "qwen3:14b" {
+				mu.Lock()
+				fail := retry && request.Model == "qwen3:14b" && !extraFailed
+				if fail {
+					extraFailed = true
+				}
+				entered++
+				if entered == 2 {
+					close(both)
+				}
+				mu.Unlock()
+				select {
+				case <-both:
+				case <-time.After(3 * time.Second):
+					http.Error(w, "extra-model provider calls did not overlap", 500)
+					return
+				case <-r.Context().Done():
+					return
+				}
+				if fail {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = io.WriteString(w, `{"error":{"message":"temporary fixture outage","type":"server_error"}}`)
+					return
+				}
+			}
+		}
+		provider.ServeHTTP(w, r)
+	})
+	calls, workerCalls := 5, 2
+	if retry {
+		calls, workerCalls = 6, 3
+		c.Expect.ProviderCallCount = new(calls)
+	}
+	result, err := runCaseWithHandler(t.Context(), fixture, c, handler, provider.scriptFindings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Passed || !containsDimension(result.Findings, "dual-write") || !containsDimension(result.Findings, "context-delivery[0]") {
-		t.Fatalf("known extra-model baseline failure was hidden: %+v", result.Findings)
+	if !result.Passed {
+		t.Fatalf("admitted extra-model delivery failed: %+v", result.Findings)
 	}
-	if result.Metrics.ContextDelivery.ProviderCalls != 2 || len(result.Metrics.ContextDelivery.Requests) != 0 {
-		t.Fatalf("a rejected leaf was counted as delivered: %+v", result.Metrics.ContextDelivery)
+	if result.Metrics.ContextDelivery.ProviderCalls != calls || len(result.Metrics.ContextDelivery.Requests) != workerCalls {
+		t.Fatalf("missing extra-model receiver evidence: %+v", result.Metrics.ContextDelivery)
 	}
-	for _, finding := range result.Findings {
-		if finding.Dimension != "dual-write" && finding.Dimension != "context-delivery[0]" {
-			t.Fatalf("unexpected extra-model baseline failure: %+v", finding)
+	var left, right *ContextRequestMetrics
+	for index := range result.Metrics.ContextDelivery.Requests {
+		request := &result.Metrics.ContextDelivery.Requests[index]
+		if request.ModelID == "qwen3:8b" {
+			left = request
 		}
+		if request.ModelID == "qwen3:14b" {
+			right = request
+		}
+	}
+	if left == nil || right == nil || !left.ManifestMatched || !right.ManifestMatched || left.ModelID == right.ModelID || left.ModelExecutionID == right.ModelExecutionID {
+		t.Fatal("parallel leaf target/manifest identities collided")
+	}
+	if entered != workerCalls {
+		t.Fatal("two concurrent leaves did not execute")
+	}
+	if retry {
+		var initial, retried *ContextRequestMetrics
+		for index := range result.Metrics.ContextDelivery.Requests {
+			request := &result.Metrics.ContextDelivery.Requests[index]
+			if request.ModelID == "qwen3:14b" && request.Attempt == 1 {
+				initial = request
+			}
+			if request.ModelID == "qwen3:14b" && request.Attempt == 2 {
+				retried = request
+			}
+		}
+		if initial == nil || retried == nil || initial.ModelExecutionID != retried.ModelExecutionID || !retried.ManifestMatched {
+			t.Fatal("extra retry lost admitted target or model identity")
+		}
+	}
+	if mode == "active" && (left.ManifestSchema != 3 || right.ManifestSchema != 3 || left.QueryAttribution == nil || right.QueryAttribution == nil) {
+		t.Fatal("production active mode missing from extra-model requests")
 	}
 }

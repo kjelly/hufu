@@ -52,6 +52,7 @@ type MemoryExplainInput struct {
 	ProjectID     string
 	TeamID        string
 	Query         string
+	RetrievalID   string
 	PolicyVersion string
 	Now           time.Time
 }
@@ -86,13 +87,15 @@ type MemoryExplanation struct {
 	ModeSource string                   `json:"mode_source"`
 	Fusion     contextstore.FusionMode  `json:"fusion"`
 	// FusionCarriedWeight is set only for score_normalized fusion.
-	FusionCarriedWeight float64                `json:"fusion_carried_weight,omitempty"`
-	QueryHash           string                 `json:"query_hash"`
-	UsedGoalFallback    bool                   `json:"used_goal_fallback"`
-	Retrieval           MemoryExplainRetrieval `json:"retrieval"`
-	Ranking             MemoryExplainRanking   `json:"ranking"`
-	Reasons             []MemoryExplainReason  `json:"reasons"`
-	NotEvaluated        []string               `json:"not_evaluated"`
+	FusionCarriedWeight float64                  `json:"fusion_carried_weight,omitempty"`
+	QueryHash           string                   `json:"query_hash"`
+	UsedGoalFallback    bool                     `json:"used_goal_fallback"`
+	Retrieval           MemoryExplainRetrieval   `json:"retrieval"`
+	Ranking             MemoryExplainRanking     `json:"ranking"`
+	Reasons             []MemoryExplainReason    `json:"reasons"`
+	NotEvaluated        []string                 `json:"not_evaluated"`
+	QueryPolicy         *ContextQueryAttribution `json:"context_query,omitempty"`
+	QueryStatus         string                   `json:"query_status,omitempty"`
 }
 
 // ExplainPersistentMemory reruns the runtime shared-persistent ranking without
@@ -101,8 +104,11 @@ type MemoryExplanation struct {
 // evaluated and are listed in NotEvaluated.
 func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepository, in MemoryExplainInput) (MemoryExplanation, error) {
 	scope := contextstore.Scope{ProjectID: strings.TrimSpace(in.ProjectID), TeamID: strings.TrimSpace(in.TeamID)}
-	if scope.ProjectID == "" || scope.TeamID == "" || strings.TrimSpace(in.Query) == "" {
-		return MemoryExplanation{}, errors.New("project, team, and query are required")
+	if scope.ProjectID == "" || scope.TeamID == "" || (strings.TrimSpace(in.Query) == "" && in.RetrievalID == "") {
+		return MemoryExplanation{}, errors.New("project, team, and query or retrieval ID are required")
+	}
+	if in.Query != "" && in.RetrievalID != "" {
+		return MemoryExplanation{}, errors.New("query and retrieval ID are mutually exclusive")
 	}
 	now := in.Now
 	if now.IsZero() {
@@ -114,6 +120,9 @@ func ExplainPersistentMemory(ctx context.Context, repo *contextstore.SQLiteRepos
 	}
 	if err != nil {
 		return MemoryExplanation{}, fmt.Errorf("load context item: %w", err)
+	}
+	if in.RetrievalID != "" {
+		return explainHistoricalMemory(in, scope)
 	}
 	learning, runtimePolicy, err := LoadMemoryPolicy(ctx, repo, in.PolicyVersion)
 	if err != nil {

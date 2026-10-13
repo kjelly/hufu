@@ -233,6 +233,19 @@ func (c *Coordinator) recordMemoryOutcomeSignal(item *TodoItem, signal, directio
 	if c == nil || item == nil || item.TypedResult == nil || !memoryLearningEnabled(c.session.Config.MemoryLearning) {
 		return
 	}
+	if c.isModelFanoutLeaf(item.ID) {
+		parent := c.modelFanout.parent
+		owned := cloneTodoItem(item)
+		if occurrence := parent.todoItemByID(item.ID); occurrence != nil {
+			owned.MemoryManifests = cloneTodoItem(occurrence).MemoryManifests
+		}
+		parent.recordMemoryOutcomeSignal(owned, signal, direction, evidenceWeight, causalConfidence)
+		return
+	}
+	// Reading the occurrence cap and appending credit is one transaction at
+	// the owning coordinator, including concurrent fanout results.
+	c.memoryOutcomeMu.Lock()
+	defer c.memoryOutcomeMu.Unlock()
 	type attributedUse struct {
 		use      MemoryUseRef
 		manifest *MemoryInjectionManifest

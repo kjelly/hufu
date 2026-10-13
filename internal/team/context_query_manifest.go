@@ -9,6 +9,15 @@ import (
 
 const ContextQueryManifestSchemaVersion = 3
 
+func cloneContextQueryAttribution(query *ContextQueryAttribution) *ContextQueryAttribution {
+	if query == nil {
+		return nil
+	}
+	copy := *query
+	copy.Sources = slices.Clone(query.Sources)
+	return &copy
+}
+
 // WithContextQueryAttribution creates schema3 without recomputing the v1
 // request identity or applying a newer fingerprint to a legacy manifest.
 func WithContextQueryAttribution(manifest ContextInjectionManifest, attribution ContextQueryAttribution) (ContextInjectionManifest, error) {

@@ -1000,7 +1000,7 @@ retryLoop:
 		if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		attemptManifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, runID, todoID, attempt, agentName, retrievalQuery, c.session.Config.MemoryLearning)
+		attemptManifest := buildMemoryInjectionManifestFromContextManifest(compiled, &contextManifest, runID, todoID, attempt, agentName, retrievalQuery, c.session.Config.MemoryLearning, c.memoryFanoutModelExecutionID(todoID))
 		if err := c.persistMemoryManifest(attemptManifest); err != nil {
 			closeTranscript()
 			return "", fmt.Errorf("worker memory manifest preflight failed: %w", err)

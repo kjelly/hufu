@@ -198,6 +198,14 @@ func finishQueryPlan(plan ContextQueryPlan) ContextQueryPlan {
 // optional source produces no hint; required evidence still uses its own gate.
 func (c *Coordinator) resolveContextQueryHints(ctx context.Context, request ContextRequest) ContextQueryHints {
 	var hints ContextQueryHints
+	if c.isModelFanoutLeaf(request.TaskID) {
+		if _, err := c.modelFanoutTarget(request.TaskID); err != nil {
+			return ContextQueryHints{Unavailable: true}
+		}
+		// Dependencies and receipt-backed paths belong to the admitted parent
+		// occurrence; the leaf's private tracker holds only its own projection.
+		return c.modelFanout.parent.resolveContextQueryHints(ctx, request)
+	}
 	item := c.todoItemByID(request.TaskID)
 	if item == nil || !c.isDurableTaskOccurrence(item.ID) {
 		return hints

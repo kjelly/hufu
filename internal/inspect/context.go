@@ -22,32 +22,38 @@ type ContextOptions struct {
 }
 
 type ContextManifestItemData struct {
-	ContextItemID       string `json:"context_item_id"`
-	ManifestFingerprint string `json:"manifest_fingerprint"`
-	RequestID           string `json:"request_id"`
-	Agent               string `json:"agent,omitempty"`
-	Attempt             int    `json:"attempt"`
-	ModelExecutionID    string `json:"model_execution_id,omitempty"`
-	Kind                string `json:"kind,omitempty"`
-	Source              string `json:"source,omitempty"`
-	Included            bool   `json:"included"`
-	Tokens              int    `json:"tokens,omitzero"`
-	Reason              string `json:"reason"`
+	ContextItemID       string                        `json:"context_item_id"`
+	ManifestFingerprint string                        `json:"manifest_fingerprint"`
+	RequestID           string                        `json:"request_id"`
+	Agent               string                        `json:"agent,omitempty"`
+	Attempt             int                           `json:"attempt"`
+	ModelExecutionID    string                        `json:"model_execution_id,omitempty"`
+	Kind                string                        `json:"kind,omitempty"`
+	Source              string                        `json:"source,omitempty"`
+	Included            bool                          `json:"included"`
+	Tokens              int                           `json:"tokens,omitzero"`
+	Reason              string                        `json:"reason"`
+	Query               *team.ContextQueryAttribution `json:"context_query,omitempty"`
+	QueryStatus         string                        `json:"query_status,omitempty"`
 }
 
 type MemoryManifestItemData struct {
-	ContextItemID       string                `json:"context_item_id"`
-	RetrievalID         string                `json:"retrieval_id"`
-	ManifestFingerprint string                `json:"manifest_fingerprint"`
-	PolicyVersion       string                `json:"policy_version"`
-	Agent               string                `json:"agent,omitempty"`
-	Attempt             int                   `json:"attempt"`
-	Rank                int                   `json:"rank"`
-	Source              string                `json:"source,omitempty"`
-	TokenCount          int                   `json:"token_count,omitzero"`
-	BaseScore           float64               `json:"base_score"`
-	FinalScore          float64               `json:"final_score"`
-	ScoreParts          team.MemoryScoreParts `json:"score_parts"`
+	ModelExecutionID    string                        `json:"model_execution_id,omitempty"`
+	ContextItemID       string                        `json:"context_item_id"`
+	RetrievalID         string                        `json:"retrieval_id"`
+	ManifestFingerprint string                        `json:"manifest_fingerprint"`
+	PolicyVersion       string                        `json:"policy_version"`
+	Agent               string                        `json:"agent,omitempty"`
+	Attempt             int                           `json:"attempt"`
+	Rank                int                           `json:"rank"`
+	Source              string                        `json:"source,omitempty"`
+	TokenCount          int                           `json:"token_count,omitzero"`
+	BaseScore           float64                       `json:"base_score"`
+	FinalScore          float64                       `json:"final_score"`
+	ScoreParts          team.MemoryScoreParts         `json:"score_parts"`
+	QueryHash           string                        `json:"query_hash,omitempty"`
+	Query               *team.ContextQueryAttribution `json:"context_query,omitempty"`
+	QueryStatus         string                        `json:"query_status,omitempty"`
 }
 
 type ContextItemData struct {
@@ -140,6 +146,7 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 				Agent: manifest.Agent, Attempt: manifest.Attempt, ModelExecutionID: manifest.ModelExecutionID,
 				Kind: item.Kind, Source: contextstore.RedactSecrets(item.Source), Included: item.Included,
 				Tokens: item.Tokens, Reason: string(item.Reason),
+				Query: manifest.Query, QueryStatus: historicalQueryStatus(manifest.Query),
 			})
 		}
 	}
@@ -152,9 +159,11 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 			itemIDs[item.ContextItemID] = struct{}{}
 			data.MemoryManifests = append(data.MemoryManifests, MemoryManifestItemData{
 				ContextItemID: item.ContextItemID, RetrievalID: manifest.RetrievalID, ManifestFingerprint: manifest.Fingerprint,
-				PolicyVersion: manifest.PolicyVersion, Agent: manifest.Agent, Attempt: manifest.Attempt,
+				ModelExecutionID: manifest.ModelExecutionID,
+				PolicyVersion:    manifest.PolicyVersion, Agent: manifest.Agent, Attempt: manifest.Attempt,
 				Rank: item.Rank, Source: contextstore.RedactSecrets(item.Source), TokenCount: item.TokenCount, BaseScore: item.BaseScore,
 				FinalScore: item.FinalScore, ScoreParts: item.ScoreParts,
+				QueryHash: manifest.QueryHash, Query: manifest.Query, QueryStatus: historicalQueryStatus(manifest.Query),
 			})
 		}
 	}
@@ -167,6 +176,13 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 		return nil, err
 	}
 	return envelope(KindContext, query, lineage.BranchID, data), nil
+}
+
+func historicalQueryStatus(query *team.ContextQueryAttribution) string {
+	if query == nil {
+		return ""
+	}
+	return "query_plan_required"
 }
 
 func loadContextItems(ctx context.Context, query InspectQuery, options ContextOptions, ids map[string]struct{}, redactContent contextContentRedactor) ([]ContextItemData, error) {

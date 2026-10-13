@@ -3,6 +3,7 @@ package inspect
 import (
 	"encoding/json"
 	"errors"
+	"github.com/kjelly/hufu/internal/agent"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -495,7 +496,7 @@ type runFixture struct {
 	taskID    string
 }
 
-func buildRunFixture(t *testing.T) runFixture {
+func buildRunFixture(t *testing.T, query ...team.ContextQuerySelection) runFixture {
 	t.Helper()
 	workspace := t.TempDir()
 	runID := "run-inspect"
@@ -519,6 +520,18 @@ func buildRunFixture(t *testing.T) runFixture {
 	memoryManifest := team.MemoryInjectionManifest{
 		RetrievalID: "retrieval-1", RunID: runID, TaskID: taskID, Attempt: 1, Agent: "worker", PolicyVersion: "policy-v1", Fingerprint: "memory-fingerprint",
 		Items: []team.MemoryInjectionItem{{ContextItemID: "private-context", Rank: 1, TokenCount: 8, BaseScore: 0.8, FinalScore: 0.7}},
+	}
+	if len(query) > 0 {
+		request := team.ContextRequest{SchemaVersion: team.ContextRequestSchemaVersion, RunID: runID, TaskID: taskID, Attempt: 1, Goal: "inspect", AgentName: "worker", AgentRole: "worker", Phase: team.PhaseExecute, Trigger: team.ContextTriggerTaskDispatch, ModelExecutionID: "execution-1"}
+		request.AssignRequestID()
+		compiled := team.CompiledContext{Query: &query[0].Attribution, IncludedItems: []team.ContextItem{{ID: "context:private-context", Kind: "pattern", Content: "fixture private content", Source: "shared_persistent", TokenCount: 8}}}
+		contextManifest, err = team.BuildContextInjectionManifest(request, compiled, nil, "worker", time.Now(), agent.DefaultMemoryLearningPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		memoryManifest.Query = &query[0].Attribution
+		memoryManifest.QueryHash = query[0].CompositeHash
+		memoryManifest.ModelExecutionID = contextManifest.ModelExecutionID
 	}
 	appendEvent(team.RunEvent{Type: "run_started", Actor: "coordinator", Payload: jsonBytes(t, map[string]any{"goal": "inspect"})})
 	appendEvent(team.RunEvent{Type: "task_created", Actor: "coordinator", TaskID: taskID, Payload: jsonBytes(t, map[string]any{

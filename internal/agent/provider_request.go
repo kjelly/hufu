@@ -105,6 +105,7 @@ func requestCall(request ProviderRequest) (*fantasy.Call, error) {
 			}
 			info := tool.Info()
 			inputSchema := map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required}
+			inputSchema = cloneProviderSchemaValue(inputSchema).(map[string]any)
 			schema.Normalize(inputSchema)
 			call.Tools = append(call.Tools, fantasy.FunctionTool{
 				Name:        info.Name,

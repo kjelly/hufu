@@ -471,6 +471,16 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			intsOrNone(data.Attempts), len(data.Manifests), len(data.MemoryManifests)); err != nil {
 			return err
 		}
+		seenQueries := make(map[string]bool)
+		for _, manifest := range data.Manifests {
+			if manifest.Query == nil || seenQueries[manifest.RequestID] {
+				continue
+			}
+			seenQueries[manifest.RequestID] = true
+			if _, err := fmt.Fprintf(writer, "Query %s: policy=%s mode=%s status=%s\n", manifest.RequestID, manifest.Query.PolicyVersion, manifest.Query.Mode, manifest.QueryStatus); err != nil {
+				return err
+			}
+		}
 		for _, item := range data.Items {
 			if _, err := fmt.Fprintf(writer, "Context %s: available=%t kind=%s lifecycle=%s agent=%s\n",
 				item.ID, item.Available, item.Kind, item.Lifecycle, valueOrUnavailable(item.Scope.AgentID)); err != nil {

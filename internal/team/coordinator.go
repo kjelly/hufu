@@ -603,6 +603,8 @@ type Coordinator struct {
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
 	modelExecutionID       string
+	modelFanout            *modelFanoutBinding
+	memoryOutcomeMu        sync.Mutex
 	executionProfileMu     sync.RWMutex
 	goalMode               GoalMode
 	goalModeMu             sync.RWMutex

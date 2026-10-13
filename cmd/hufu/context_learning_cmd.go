@@ -17,6 +17,8 @@ import (
 )
 
 var contextMemoryQuery string
+
+var contextMemoryRetrievalID string
 var contextPolicyVersion string
 var contextLearningCheck bool
 var contextLearningSearchPath string
@@ -64,7 +66,8 @@ func init() {
 	}
 	contextExplainMemoryCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID (required)")
 	contextExplainMemoryCmd.Flags().StringVar(&contextTeam, "team", "", "Canonical team ID (required)")
-	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryQuery, "query", "", "Goal/query used to calculate base relevance (required)")
+	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryQuery, "query", "", "Goal/query for current legacy ranking recomputation")
+	contextExplainMemoryCmd.Flags().StringVar(&contextMemoryRetrievalID, "retrieval-id", "", "Read a historical active-query manifest without reranking (mutually exclusive with --query)")
 	contextLearningDoctorCmd.Flags().BoolVar(&contextLearningCheck, "learning", false, "Check outcome-driven memory learning state")
 }
 

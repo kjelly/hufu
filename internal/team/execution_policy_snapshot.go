@@ -66,6 +66,8 @@ type ExecutionPolicySnapshot struct {
 	// ContextArtifacts pins the opt-in tool-result offload limits. It is
 	// omitted when offload is disabled.
 	ContextArtifacts *ExecutionContextArtifactPolicySnapshot `json:"context_artifacts,omitempty"`
+	// ContextQuery is absent for legacy routing, preserving historical hashes.
+	ContextQuery *ExecutionContextQueryPolicySnapshot `json:"context_query,omitempty"`
 	// Cost pins explicit generation-price entries used by this team and the
 	// effective team policy. It is omitted when neither is configured.
 	Cost              *cost.PolicySnapshot `json:"cost,omitempty"`
@@ -265,6 +267,9 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	if !supportedExecutionPolicySnapshotVersion(version) {
 		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
 	}
+	if err := c.session.Config.ContextRouting.Validate(); err != nil {
+		return nil, err
+	}
 	defaultBackend := execution.OllamaBackendName
 	if configured := execution.CanonicalTargetBackendName(c.session.Config.DefaultLLMBackend); configured != "" {
 		defaultBackend = configured
@@ -298,6 +303,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		snapshot.MCPWorkerPolicies = executionPolicyMCPWorkerPolicies(c.session)
 		snapshot.ContextArtifacts = executionPolicyContextArtifacts(c.session)
 	}
+	snapshot.ContextQuery = contextQueryPolicyForMode(c.session.Config.ContextRouting.QueryMode)
 	state := &executionPolicyState{
 		snapshot:             snapshot,
 		backendByName:        make(map[string]ExecutionBackendPolicySnapshot),
@@ -583,6 +589,9 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
 	clone.MCPWorkerPolicies = slices.Clone(snapshot.MCPWorkerPolicies)
 	clone.ContextArtifacts = cloneExecutionContextArtifactPolicy(snapshot.ContextArtifacts)
+	if snapshot.ContextQuery != nil {
+		clone.ContextQuery = new(*snapshot.ContextQuery)
+	}
 	clone.Cost = cost.ClonePolicySnapshot(snapshot.Cost)
 	clone.ExecutionWorlds = make([]ExecutionWorldPolicySnapshot, len(snapshot.ExecutionWorlds))
 	for i := range snapshot.ExecutionWorlds {
@@ -632,6 +641,12 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if err := validateExecutionContextArtifactPolicy(snapshot.Version, snapshot.ContextArtifacts); err != nil {
 		return err
+	}
+	if err := validateContextQueryPolicy(snapshot.ContextQuery); err != nil {
+		return err
+	}
+	if snapshot.Version < executionPolicySnapshotVersion && snapshot.ContextQuery != nil {
+		return fmt.Errorf("historical execution policy snapshot cannot pin active context queries")
 	}
 	if snapshot.Version < executionPolicySnapshotVersion && snapshot.Cost != nil {
 		return fmt.Errorf("execution policy snapshot v%d cannot pin cost policy", snapshot.Version)

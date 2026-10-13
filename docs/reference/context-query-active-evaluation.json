@@ -1,0 +1,1558 @@
+{
+  "schema_version": 1,
+  "stage": "PR-02",
+  "stage_status": "validated_pending_commit",
+  "oracle_source": "synthetic_contract",
+  "baseline_commit": "0d6bfd74271d8c0c8720baa21b16d0af35a2fa30",
+  "source_sha256": {
+    "cmd/hufu/context_explain_memory.go": "8f1f37518f30c9af2ea45722e1e5e5c7ac461f422dc0d004ee368f39e822f3ba",
+    "cmd/hufu/context_learning_cmd.go": "b1a02b01a9e3e37f4c9761411e3f001b8f41bf54d56ff0908de4be8959df95e6",
+    "cmd/hufu/context_query_history_test.go": "e0ea59161b6ced633cd689bd8cf2db51a9f0fce72bb31e21fe008f9eb6465089",
+    "cmd/hufu/inspectcmd.go": "7e95886b38174ab27c51e7925c2337f9f7efd773408775b122413c585ea6d055",
+    "evals/context-routing/fixtures/query-signals-baseline.json": "c68d6235784eee373c391043ecc46aed1c96f5876b7ae5fd66e54de57a4f2986",
+    "internal/agent/agent.go": "609c02cce6deee7ab570cf6ef199bfe0c509fd7aee6f3d70f646e7303acd6fd6",
+    "internal/agent/context_routing.go": "126a7b78f002f71906b00d30ce1bd70a4397723979e544275678f5e6423fc662",
+    "internal/agent/provider_request.go": "9d207b86d525c2fb3ac42e190995a22b2352da5241a5ad38ab4c9e14dbbb51bb",
+    "internal/agent/provider_tool_schema.go": "8d6ce44eb1107be62065fb3d5ba580184fe59680345238e38c181b344f1a894d",
+    "internal/agent/provider_tool_schema_test.go": "cd4b35de0ea50d71d384ce791204f89b383ffb881cb0ee89257996317570e316",
+    "internal/context/activation_batch.go": "a8bc1e0e274de4400a1c6d612eceb59ec11af6b4b4f5ca84036b557a3294ef56",
+    "internal/context/activation_batch_test.go": "deed1133638bc55f2574dd7dcf35220558d4c6f2990dd1a1dfbc75016a914f3e",
+    "internal/context/activation_iteration.go": "f6df74f0d9f5d594f02fb35337047fa9ccda32a2610199b9698b43100f1bf8bd",
+    "internal/context/activation_iteration_test.go": "396c02f1d428ca147b83d95d6eaaff9b3f5fb1ce1cd2f5e06d178d9a3482f3d3",
+    "internal/context/retrieval.go": "3407907a20dee0f1e6dd805a19606ffd6541d5585a9c78422c9c050f366a97f8",
+    "internal/context/sqlite_repository.go": "844d7e9d7eb0bf1a1412ba77b1db0ef730139d6d7d377d0fda3616b0c9b0bf10",
+    "internal/context/supplemental_lexical_test.go": "dc2ab31071a4b146fd20fa4c2608bd4acec7d4bb5f22dc5a71bea69cb393849a",
+    "internal/context/supplemental_retrieval.go": "e9e09c38882db658e523991c57556b5a073078d75ef23727faeb53a24f48f34f",
+    "internal/context/supplemental_retrieval_test.go": "a1f7c2581a858dafe78a56c3b3d0aeda1f1a7361f60e78dbf7106afb944b4e9d",
+    "internal/evalharness/context_delivery.go": "190ace7b3279d00c793f3ce6e8a93207b733ec80a282ecad3e5514adbe84c8d5",
+    "internal/evalharness/context_delivery_integration_test.go": "580fa48efeeb7c88c4e7c11bee949a686844de5ec8541bf2a3767463ffed9e65",
+    "internal/evalharness/context_query_baseline_test.go": "a7654aa070f89023f7aaa87bfc658aed169e3d8dc055f38dcab1722eb1500270",
+    "internal/evalharness/context_query_control_test.go": "ede840bf2977b9342d83bd0913eee075b4528fab1875681218108aabcb321122",
+    "internal/evalharness/context_query_harness_bench_test.go": "1874ab6d3099ff2cf8016d4390fa694ade57db809c5554f7c9e0fd56df762ef1",
+    "internal/evalharness/context_query_paired_test.go": "3ef8f22891c2c290975896f6a811f8eb62c7f0dc6b8706d3b2ad1c91ed41b238",
+    "internal/evalharness/context_query_private_paired_test.go": "d900c2ff5803904c4736d479c47be3162a8dff4d7347636898de21edd08730f9",
+    "internal/evalharness/context_query_production_test.go": "4788885366c477df23b98ee91339a2eed60eb1de186ba4cb3fcece57ded5e608",
+    "internal/evalharness/fixtures.go": "96c6a67791ce7c827ddb4f335d2c2c1f9f71c3c0f91717fe7e968eeca6fe412b",
+    "internal/evalharness/runner.go": "02841207253dead37bfee4995a60a03ebb66faa2c97f97cb084e4ccfb4386fba",
+    "internal/evalharness/types.go": "0b60f05cda80fb1d49a50f983b819c518a63d676e96e04e0727448422faceaca",
+    "internal/inspect/context.go": "76ec9a2642c8896b664a8399d50ab266cf62249195e95b55ef4d30c4bba71f6f",
+    "internal/inspect/context_query_history_test.go": "add6d422a59434404ecee1defaa6b1858cf2b29415f69311f8fe4d209de7ba0e",
+    "internal/inspect/run_test.go": "34515c7ac756a6be8925a2b7279f06290108f964406d93ca8e51978bf8debc32",
+    "internal/team/context_compiler.go": "a199faf21ebc3ad0c6fa7de7352e8414aef049a94ff0666a3da2faab1a7abeac",
+    "internal/team/context_delivery_backend_test.go": "d1b2dc30e5d32d450539fbc994673f73e86c9b104c49a44ba7dcb1d2df21698d",
+    "internal/team/context_manifest.go": "de58b000d6621616aaa8b5d5552b61969195de7d278674bdaadf85bbb156010d",
+    "internal/team/context_query_bench_test.go": "3f0e835aad25384aa4ffe9585856b0a830364812564f72880278d1a0486795f4",
+    "internal/team/context_query_comparison.go": "7dd7ab8add469c08cbe4b46fd79c7f2733af8f004db0de914146ab71f74e71e9",
+    "internal/team/context_query_compile_bench_test.go": "43ff31d49facac2e2db9ae2d83266f10a821597b3b58481a8092157709c0de5d",
+    "internal/team/context_query_evaluation.go": "7b12519f1fcaba55b4d247b2722bdd61ee31c25b72a04a8fdf2bc32836f5559e",
+    "internal/team/context_query_manifest.go": "ad3bea2539e3cf3095c2de911eac0d688852ba74fbb9c030512f037fe64f477b",
+    "internal/team/context_query_manifest_test.go": "7340abb4b5e9cee984ce3ff7da98cf8a1e1eb1d541e899eb3a3384e7d5822a1c",
+    "internal/team/context_query_plan.go": "86e7d29a868725ed9130fe94f4c4816c10faea20c708946cbbdd1671a846106d",
+    "internal/team/context_query_plan_test.go": "790e4b1af1143df57b9b6d6763af3e26e52c66f200b1c79a591b18ad3bd74647",
+    "internal/team/context_query_policy.go": "ea9542bc2e871b639be25dc47a2db5917b4cac485de29c3a35f46b04ac4ba5bc",
+    "internal/team/context_query_policy_test.go": "3f82458ec7c562d1a691bb1aa2915487bb02eb79b43bfea4b5d195f0bfb90b06",
+    "internal/team/context_query_private.go": "019759d048f194bc928db3e50ae072403dfbe1e8dff56859080dfbfbf4ea55c1",
+    "internal/team/context_query_provider_paths_test.go": "1e5ab53e0362eccde4c46f9f31c5e7898dd4985252ac8e99d5f59641dc5995c4",
+    "internal/team/context_query_quality_test.go": "d24344ebbcf0c765e9ebf671fc994a5355fc7232d84a1d4e6d60b907b528fc40",
+    "internal/team/context_query_resolver_test.go": "c664b7598a70f87f26201b0c204cdba2020892f94ea91e1fcf82fdd0ae52856f",
+    "internal/team/context_query_runtime_test.go": "cfe816a750b74f5d05e102b7b176bb70a2d1bb95a0c3bf5cc2c3141fc1348276",
+    "internal/team/context_query_selection.go": "f33a7b59817f6baa37b1f4f9631c3957fd4c86c9703bd03e870053736732387f",
+    "internal/team/context_query_selection_test.go": "52c349c5b46c8904ef317824c6f998e38489220ed200b4800a2dec8e95dc376c",
+    "internal/team/context_router.go": "5e2bc987852558ff91dac3a33221541fc8bb67015d1fd9ff24e1807567997fac",
+    "internal/team/context_selection_observer.go": "05c7876725206ae7e0b8a4d6a03bd55bc9244ffe9e24d37cf415acf2faec6b80",
+    "internal/team/coordinator.go": "fce487c5f351591e00f5305e41b73fc6e5f2eece07182b9454d4fd5edd996977",
+    "internal/team/coordinator_eventstore.go": "c5bfe0ec519bb2f2bd025a53931bf9fbdf8e02fed77ce82612d9eb5148fcafb6",
+    "internal/team/coordinator_extra_models.go": "0b69efc39fd52248c0a262bceda41c1f8a2b649515bda83c970254511c1414b1",
+    "internal/team/coordinator_task_run.go": "6c040bb05553ca81c4663fe0399c4c5177db041cb498153bb27e3d07945c6f49",
+    "internal/team/coordinator_worker_preflight_surface_test.go": "ec28449738e1d2f457d787eb7a54fbce8d31ac3f0a8db44e042fa90b32d6e5e9",
+    "internal/team/execution_event_exporter.go": "580c756a093648cbb39a927a720224b0f0aa2e998fadc7feb3f8e14c9259ed7a",
+    "internal/team/execution_event_exporter_test.go": "b6a37087ecf8d54aa28d190e3cb22e423c30865f79e939c7f0dda5cf516e33a6",
+    "internal/team/execution_events.go": "0cffde25c88d6906d388956786e761ba7a4eb804a2f8804d3b22f4c431fd4746",
+    "internal/team/execution_fallback.go": "5040a520b54fcd439d0a2c84f26d67583b93b1c46213b33599341ed77f1f52e3",
+    "internal/team/execution_policy_snapshot.go": "150463d9fcf823603df9dcca3ac04fb2c77648bf03bdf47329496badac60146d",
+    "internal/team/execution_policy_snapshot_test.go": "5c800fd4ffa824e1a1d510299b7264a1bc89b4922db9786e62a8405013aaf501",
+    "internal/team/invariant_attestation.go": "c101507a4dc084d7c390d0681d025c880a5f9275f1fe7327a523b33e668dd20c",
+    "internal/team/invariant_completion.go": "faee90baaee27698ad9e5d821355fcec396c916431a2cdf56d64c69c596fc6bd",
+    "internal/team/memory_explain.go": "4f98506f1218ee6f5ad0b0f8024975218141b6f4e5a18eef1aa0f7581df15d54",
+    "internal/team/memory_explain_query.go": "61c28d1671a3c2f113f669c9428d9bb98ec0bdaf2a78ef1620b08ede59d26447",
+    "internal/team/memory_explain_query_test.go": "55d4815708db81a87ded63aeefdca3dea0038b0bd1a20e51fb523f256e36d148",
+    "internal/team/memory_learning.go": "4bf3e38f26fa3602ed122b8fa24b7882d943bf4e2f9aebc8a402c6d293ce45e0",
+    "internal/team/memory_outcome.go": "ec23b52d315c946efdb71ca67127876a5223a9190c718fad3f1a65a0202188a4",
+    "internal/team/memory_ranking_core.go": "750710c4b8a37d503431b0a3dca675bfbf5b9947325112f2369fd01370691a80",
+    "internal/team/model_fanout_binding.go": "92b1b8a35da08f4c85aa9c83b10ac4a71d0b1bf7495c3fedadb70311b5675771",
+    "internal/team/model_fanout_binding_test.go": "2c64a4d7760598842ddbcba83cd5511dba2b9724ffc85b65016195ea86347a0c",
+    "internal/team/parse.go": "10c779ae940e2c40a5e364abf11f198e86eefb3ea180875b6779b00c3b34fa4d",
+    "internal/team/services.go": "70f17e82aa31688acb9502def8c0d3ff013afc9c585166ab75fd34957011d345",
+    "internal/team/status.go": "ae475c4199be4473e57b8d758f0d54d10309c28f17db3240ad39aeeba13b0bb8",
+    "internal/team/subagent_provider.go": "f8c32e09739c74510d0949b2642dae75d7410ebf87fe9af866874383a7f79506",
+    "internal/team/task_evidence_delivery.go": "fea3c77c1f946d11f28f4ce68fd7bfcbbf0c67eacb8da9cd28246f7397e51134",
+    "internal/team/team_manifest.go": "ab65e39c94fba1dfd7ecfa7714b1660ec3eed4a5644b19200a7db4650bbdba05",
+    "internal/team/worker_memory.go": "0c5bf82fd8d001fcca0beefaf84d26a9f2d3b471e7c037d7194465d485358591"
+  },
+  "provider_pairs": [
+    {
+      "case_id": "constraint-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "task_constraints"
+        ],
+        "omitted_ids": [
+          "constraint-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "constraint-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.028,
+        "selection_latency_ms": 7.776221,
+        "stage_latency_ms": {
+          "compilation": 0.31204,
+          "manifest": 2.789795,
+          "private_retrieval": 0.002992,
+          "routing": 4.671394
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "constraint-miss",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "task_constraints"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "constraint-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.489,
+        "selection_latency_ms": 10.266381,
+        "stage_latency_ms": {
+          "compilation": 0.256389,
+          "manifest": 5.860435,
+          "private_retrieval": 0.002807,
+          "routing": 4.14675
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "0ad86db1ed0b7d7eac305467e8d978ce08b37bdf680abce3520c4bb9395a8dfa",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "4047ae27f68704d69c35bbb1d631af7e94ea19448ca372de3b69197b2a3cdfc3"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      },
+      "production": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "constraint-miss",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "task_constraints"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "constraint-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 1.591,
+        "selection_latency_ms": 6.300226,
+        "stage_latency_ms": {
+          "compilation": 0.228242,
+          "manifest": 3.416743,
+          "private_retrieval": 0.003567,
+          "routing": 2.651674
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "0ad86db1ed0b7d7eac305467e8d978ce08b37bdf680abce3520c4bb9395a8dfa",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "4047ae27f68704d69c35bbb1d631af7e94ea19448ca372de3b69197b2a3cdfc3"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "verification-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "verification_criteria"
+        ],
+        "omitted_ids": [
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7",
+          "verification-miss"
+        ],
+        "omitted_reasons": {
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit",
+          "verification-miss": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 1.484,
+        "selection_latency_ms": 7.829752,
+        "stage_latency_ms": {
+          "compilation": 0.3809,
+          "manifest": 2.974295,
+          "private_retrieval": 0.005341,
+          "routing": 4.469216
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "verification-miss",
+          "verification_criteria"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7",
+          "verification-miss"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 3.061,
+        "selection_latency_ms": 8.34561,
+        "stage_latency_ms": {
+          "compilation": 0.420397,
+          "manifest": 3.52347,
+          "private_retrieval": 0.004504,
+          "routing": 4.397239
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "21941f4ae225ce34c95157df234d2d1888255970f705206abe50d9d59b22470c",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "85e4468421f52ef8519305ab5b5b0b7144de582800f0574c36a18bcf6365de32"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      },
+      "production": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 0,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-dab9a79c66d8b1ffa3187e83093afd42",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "verification-miss",
+          "verification_criteria"
+        ],
+        "omitted_ids": [
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7",
+          "verification-miss"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.448,
+        "selection_latency_ms": 7.272779,
+        "stage_latency_ms": {
+          "compilation": 0.173532,
+          "manifest": 3.021012,
+          "private_retrieval": 0.003363,
+          "routing": 4.074872
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "21941f4ae225ce34c95157df234d2d1888255970f705206abe50d9d59b22470c",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "85e4468421f52ef8519305ab5b5b0b7144de582800f0574c36a18bcf6365de32"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "bound-path-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "ctx-9fc8c1cab61e77eff17fa3c1",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "runtime_context"
+        ],
+        "omitted_ids": [
+          "bound-path-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "bound-path-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.255,
+        "selection_latency_ms": 17.389457,
+        "stage_latency_ms": {
+          "compilation": 0.341472,
+          "manifest": 11.798716,
+          "private_retrieval": 0.00317,
+          "routing": 5.246099
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 31,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "bound-path-miss",
+          "ctx-00ec38f5f6bff43689b5a609",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "runtime_context"
+        ],
+        "omitted_ids": [
+          "ctx-15e7222ca03d3d57beeeb9e6",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-15e7222ca03d3d57beeeb9e6": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.2,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "bound-path-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 1,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 10
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.244,
+        "selection_latency_ms": 14.166174,
+        "stage_latency_ms": {
+          "compilation": 0.187904,
+          "manifest": 10.263302,
+          "private_retrieval": 0.002683,
+          "routing": 3.712285
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 24,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "4804c1db712842d5e95dd0f49948ae73c0a351c12389a16cd6cb36f84bae036b",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "a8fa4b25c695093edb1889ff5e2e462ce37608eac47cfed106ff92cb74e06b19"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      },
+      "production": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "bound-path-miss",
+          "ctx-054a14d2534246ddd3dff49f",
+          "current_task",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "runtime_context"
+        ],
+        "omitted_ids": [
+          "ctx-f127ef02fef1cd34a9c92230",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-f127ef02fef1cd34a9c92230": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.2,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "bound-path-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 1,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 10
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 4.208,
+        "selection_latency_ms": 18.820902,
+        "stage_latency_ms": {
+          "compilation": 0.343591,
+          "manifest": 13.426293,
+          "private_retrieval": 0.005266,
+          "routing": 5.045752
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 24,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "4804c1db712842d5e95dd0f49948ae73c0a351c12389a16cd6cb36f84bae036b",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "a8fa4b25c695093edb1889ff5e2e462ce37608eac47cfed106ff92cb74e06b19"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    },
+    {
+      "case_id": "accepted-dependency-miss",
+      "legacy": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "agent_instructions",
+          "current_task",
+          "dependency_results",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3"
+        ],
+        "omitted_ids": [
+          "accepted-dependency-miss",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "accepted-dependency-miss": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 0,
+        "delivery_precision": 0,
+        "retrieval_recall_at_k": 0,
+        "retrieval_precision_at_k": 0,
+        "retrieved_ids": [
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 1,
+          "vector": 0,
+          "candidate_rows": 8
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 1.166,
+        "selection_latency_ms": 8.674488,
+        "stage_latency_ms": {
+          "compilation": 0.1616,
+          "manifest": 5.628702,
+          "private_retrieval": 0.003841,
+          "routing": 2.880345
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 28,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true
+      },
+      "candidate": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "accepted-dependency-miss",
+          "agent_instructions",
+          "current_task",
+          "dependency_results",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2"
+        ],
+        "omitted_ids": [
+          "ctx-a101b99066df023660d43ea1",
+          "ctx-abeb7d0c18a72405b3944f1e",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-a101b99066df023660d43ea1": "inject_limit",
+          "ctx-abeb7d0c18a72405b3944f1e": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "accepted-dependency-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.275,
+        "selection_latency_ms": 14.668402,
+        "stage_latency_ms": {
+          "compilation": 0.289789,
+          "manifest": 10.529538,
+          "private_retrieval": 0.002202,
+          "routing": 3.846873
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "9a8cfa82f56d2456d03dd8a09589c225ad1e74728fa0e6522bb452fb50c057dc",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "e08435482b1b6d656cfa04f8a72f5f58a46a8dac818b1c7a1e8bded70c0944fa"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      },
+      "production": {
+        "agent": "worker",
+        "model_id": "eval-harness-model",
+        "task_index": 1,
+        "attempt": 1,
+        "step": 1,
+        "purpose": "task_execution",
+        "model_execution_id": "model-execution-4c69f262f89080a2faa0c9741da4d544",
+        "delivered_ids": [
+          "accepted-dependency-miss",
+          "agent_instructions",
+          "current_task",
+          "dependency_results",
+          "memory_use_reporting",
+          "noise-0",
+          "noise-1",
+          "noise-2"
+        ],
+        "omitted_ids": [
+          "ctx-535aff7a5de1c79357e92aa4",
+          "ctx-b17412cc90a15d2f77022e8b",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "omitted_reasons": {
+          "ctx-535aff7a5de1c79357e92aa4": "inject_limit",
+          "ctx-b17412cc90a15d2f77022e8b": "inject_limit",
+          "noise-3": "inject_limit",
+          "noise-4": "inject_limit",
+          "noise-5": "inject_limit",
+          "noise-6": "inject_limit",
+          "noise-7": "inject_limit"
+        },
+        "required_delivery_recall": 1,
+        "delivery_recall": 1,
+        "delivery_precision": 0.25,
+        "retrieval_recall_at_k": 1,
+        "retrieval_precision_at_k": 0.1111111111111111,
+        "retrieved_ids": [
+          "accepted-dependency-miss",
+          "noise-0",
+          "noise-1",
+          "noise-2",
+          "noise-3",
+          "noise-4",
+          "noise-5",
+          "noise-6",
+          "noise-7"
+        ],
+        "retrieval_calls": {
+          "exact": 0,
+          "lexical": 2,
+          "vector": 0,
+          "candidate_rows": 9
+        },
+        "embedding_calls": null,
+        "retrieval_latency_ms": 2.872,
+        "selection_latency_ms": 13.056943,
+        "stage_latency_ms": {
+          "compilation": 0.319984,
+          "manifest": 8.752299,
+          "private_retrieval": 0.003409,
+          "routing": 3.981251
+        },
+        "metric_reasons": {
+          "embedding_calls": "backend_not_observed"
+        },
+        "forbidden_delivery_count": 0,
+        "irrelevant_optional_tokens": 21,
+        "token_estimator": "rune_estimate",
+        "manifest_matched": true,
+        "query_attribution": {
+          "policy_version": "context-query-v2.1",
+          "plan_hash": "9a8cfa82f56d2456d03dd8a09589c225ad1e74728fa0e6522bb452fb50c057dc",
+          "mode": "active",
+          "sources": [
+            {
+              "source": "private_persistent",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "private_session",
+              "mode": "not_applicable",
+              "fallback": "memory_disabled",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241"
+            },
+            {
+              "source": "shared_persistent",
+              "mode": "active",
+              "fallback": "none",
+              "primary_hash": "49ea3d6927816f06f4cd7527c8cdca46d078854427211e693a2c640f560dd241",
+              "supplemental_hash": "e08435482b1b6d656cfa04f8a72f5f58a46a8dac818b1c7a1e8bded70c0944fa"
+            }
+          ]
+        },
+        "manifest_schema": 3
+      }
+    }
+  ],
+  "query_policy": "context-query-v2.1",
+  "default_mode": "legacy",
+  "limits": {
+    "scopes": 3,
+    "source_rows_per_scope": 64,
+    "source_rows_total": 192,
+    "exact_calls_per_scope": 8,
+    "lexical_calls_per_scope": 1,
+    "supplemental_deadline_ms": 100
+  },
+  "validation": {
+    "receiver_matrix": {
+      "exit_code": 0,
+      "coverage": [
+        "normal_dag",
+        "direct",
+        "nested",
+        "extra_models",
+        "extra_model_retry",
+        "coordinator_continuation",
+        "provider_fallback",
+        "worker_transient_compaction",
+        "fake_agent_backend",
+        "same_mode_resume",
+        "mode_drift",
+        "historical_cli",
+        "historical_inspect",
+        "foreign_private_scope",
+        "occurrence_credit_cap"
+      ]
+    },
+    "vet": {
+      "exit_code": 0,
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go vet ./..."
+    },
+    "lint": {
+      "exit_code": 0,
+      "issues": 0,
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp GOLANGCI_LINT_CACHE=/tmp/hufu-context-delivery/lint-cache golangci-lint run"
+    },
+    "affected_race": {
+      "exit_code": 0,
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go test -race -p 1 ./internal/agent ./internal/context ./internal/team ./internal/evalharness ./internal/inspect -run 'ProviderSchemaNormalization|ContextQuery|ModelFanout|ExtraModelsUseAdmitted|ExplainHistoricalQuery|MemoryInjection|ContextDelivery|ExecutionEventExporterFallback' -count=1"
+    },
+    "existing_offline_evals": {
+      "context-routing": {
+        "passed": 2,
+        "total": 2,
+        "exit_code": 0
+      },
+      "memory-learning": {
+        "passed": 3,
+        "total": 3,
+        "exit_code": 0
+      },
+      "retry-recovery": {
+        "passed": 2,
+        "total": 2,
+        "exit_code": 0
+      }
+    },
+    "full_test": {
+      "exit_code": 0,
+      "command": "TMPDIR=/tmp GOTMPDIR=/tmp go test -p 1 ./..."
+    },
+    "team_benchmarks": {
+      "exit_code": 0,
+      "cases": 14,
+      "samples_per_case": 10
+    },
+    "harness_benchmarks": {
+      "exit_code": 0,
+      "cases": 3,
+      "samples_per_case": 10
+    },
+    "source_audit": {
+      "matched": true,
+      "files": 83
+    },
+    "documentation": {
+      "exit_code": 0,
+      "command": "bin/check-docs",
+      "active_files": 60,
+      "total_files": 136,
+      "relative_links": 266,
+      "go_function_anchors": 14
+    },
+    "diff_check": {
+      "exit_code": 0,
+      "command": "git diff --check"
+    }
+  },
+  "limitations": [
+    "Synthetic fixture improvement does not establish real model task success or cost acceptance.",
+    "True-model A/B, live refresh and large-lineage/vector redesign remain excluded.",
+    "The fixed 100ms child budget permits complete legacy rollback; it does not bound original overfetch or total DB scans.",
+    "Pure comparison includes full snapshot hashing; full harness includes setup/seed/teardown and no-hints attribution.",
+    "Race instrumentation is not a production latency SLA; actual normal paired quality gates remain unchanged."
+  ],
+  "benchmarks": [
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 1737253.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 1.77,
+        "p95-ms": 1.897,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 102568.0,
+        "allocs/op": 845.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 3815346.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 2.0,
+        "p50-ms": 3.517,
+        "p95-ms": 5.524,
+        "source-rows/op": 9.0,
+        "vector/op": 0.0,
+        "B/op": 249700.0,
+        "allocs/op": 1331.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-1000/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 1522075.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 1.482,
+        "p95-ms": 1.961,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 159960.0,
+        "allocs/op": 847.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-1000/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 17113664.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 2.0,
+        "p50-ms": 16.96,
+        "p95-ms": 20.15,
+        "source-rows/op": 9.0,
+        "vector/op": 0.0,
+        "B/op": 5465836.0,
+        "allocs/op": 3339.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10000/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 4017136.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 1.0,
+        "p50-ms": 3.914,
+        "p95-ms": 4.719,
+        "source-rows/op": 8.0,
+        "vector/op": 0.0,
+        "B/op": 541696.0,
+        "allocs/op": 875.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryRanking/rows-10000/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 201440394.0,
+        "active/op": 0.1,
+        "exact/op": 0.0,
+        "fallback/op": 0.9,
+        "lexical/op": 2.0,
+        "p50-ms": 197.0,
+        "p95-ms": 246.1,
+        "source-rows/op": 8.2,
+        "vector/op": 0.0,
+        "B/op": 53795315.0,
+        "allocs/op": 21290.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-10-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 2618321.0,
+        "active/op": 1.0,
+        "exact/op": 0.0,
+        "fallback/op": 0.0,
+        "lexical/op": 3.0,
+        "p50-ms": 2.542,
+        "p95-ms": 3.256,
+        "source-rows/op": 10.0,
+        "vector/op": 0.0,
+        "B/op": 170672.0,
+        "allocs/op": 1427.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-1000-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 100564863.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 2.0,
+        "p50-ms": 100.6,
+        "p95-ms": 101.1,
+        "source-rows/op": 128.0,
+        "vector/op": 0.0,
+        "B/op": 11112320.0,
+        "allocs/op": 127874.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/rows-10000-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 101897673.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 1.0,
+        "p50-ms": 100.6,
+        "p95-ms": 106.5,
+        "source-rows/op": 44.8,
+        "vector/op": 0.0,
+        "B/op": 3597163.0,
+        "allocs/op": 35629.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQuerySupplementalScopes/shared-deadline-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 100695406.0,
+        "active/op": 0.0,
+        "exact/op": 0.0,
+        "fallback/op": 1.0,
+        "lexical/op": 2.0,
+        "p50-ms": 100.5,
+        "p95-ms": 101.5,
+        "source-rows/op": 1.0,
+        "vector/op": 0.0,
+        "B/op": 30363.0,
+        "allocs/op": 151.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/legacy/compiler-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 59341.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.04097,
+        "p95-ms": 0.2038,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 24364.0,
+        "allocs/op": 86.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/legacy/manifest-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 47034.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.0249,
+        "p95-ms": 0.2238,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 9696.0,
+        "allocs/op": 42.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/candidate/compiler-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 27802.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.02059,
+        "p95-ms": 0.08215,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 24588.0,
+        "allocs/op": 88.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryCompilerAndManifest/candidate/manifest-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 55976.0,
+        "exact/op": 0.0,
+        "lexical/op": 0.0,
+        "p50-ms": 0.03722,
+        "p95-ms": 0.09531,
+        "source-rows/op": 0.0,
+        "vector/op": 0.0,
+        "B/op": 20366.0,
+        "allocs/op": 34.0
+      }
+    }
+  ],
+  "full_harness_benchmarks": [
+    {
+      "case": "BenchmarkContextQueryPairedHarness/legacy-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 366557600.0,
+        "B/op": 49391387.0,
+        "allocs/op": 530286.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryPairedHarness/candidate-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 307919284.0,
+        "B/op": 54266005.0,
+        "allocs/op": 629803.0
+      }
+    },
+    {
+      "case": "BenchmarkContextQueryPairedHarness/production-6",
+      "samples": 10,
+      "metrics": {
+        "ns/op": 336354120.0,
+        "B/op": 59028602.0,
+        "allocs/op": 727269.0
+      }
+    }
+  ],
+  "source_state": "validated_worktree",
+  "measurement_scope": {
+    "standalone": "seed/store creation excluded; candidate ranking includes full snapshot hashing and primary ranking",
+    "supplemental_scopes": "precomputed eligibility; runtime eligibility checked separately",
+    "compiler_manifest": "retrieval and provider setup excluded",
+    "full_harness": "fresh provider/SQLite setup, seed and teardown included; no-hints attribution fixture"
+  },
+  "validation_history": [
+    "A genuine shared Fantasy schema normalization race and leaf policy/target/lifecycle/memory-identity defects were repaired at their owners with negative admission and concurrency tests.",
+    "Actual provider fallback coverage caught a missing failed-primary compatibility event; its canonical projection was fixed without terminalizing the continuing occurrence.",
+    "First full CLI run caught singleton flag test contamination; test resets/restores flags, and the final full suite passed.",
+    "Earlier strict improvement assertions could time out under race plus overlapping compilation. Final affected race ran after normal checks, with unchanged oracle labels, K, delivery budgets and 100ms deadline, and passed."
+  ]
+}

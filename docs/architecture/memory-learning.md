@@ -465,7 +465,22 @@ hufu context doctor --learning
 
 `explain-memory` 至少輸出 base relevance、scope/applicability、utility lower bound、freshness、trust、harm penalty、final score、support/failure counts、policy version 與 retrieval ID；預設不顯示原文。
 
-`explain-memory` 需要 `--project`、`--team`、`--query`。它以目前資料、指定 scope／query／policy 重算 runtime 的 shared persistent 排序：與 coordinator 共用同一個無副作用的排序核心（同一組候選上限、分數正規化、goal-line fallback、eligible set 與 mode），因此 `base_relevance` 是 runtime 正規化後的值，`ranking.selected` 與 runtime 選取一致。輸出另含 `schema_version: 2`、`recomputed: true`、`mode`／`mode_source`、各檢索途徑（exact／lexical／vector）的名次與分數、RRF 貢獻、`carried_score`、MMR 前後名次與 penalty、file-path boost、固定 enum 的 `reasons`（例如 `selected`、`inject_limit`、`candidate_limit`、`duplicate_content`、`outside_observed_candidates`），以及無法在 CLI 評估的 `not_evaluated`（`activation`、`token_budget`）。`outside_observed_candidates` 表示沒有任何檢索途徑在上限內回傳該項，不代表不相關。只有在 durable manifest 相符時才回報 `retrieval_id`；其餘都是重算結果，不是歷史執行紀錄。越權與不存在的 item 回同一個錯誤；輸出不含 query 原文與記憶內容，也不寫入任何紀錄。
+`explain-memory` 需要 `--project`、`--team`，並選擇互斥的 `--query` 或 `--retrieval-id`。`--query` 以目前資料、指定 scope／query／policy 重算 legacy shared persistent 排序：與 coordinator 共用同一個無副作用的排序核心（同一組候選上限、分數正規化、goal-line fallback、eligible set 與 mode），因此 `base_relevance` 是 runtime 正規化後的值，`ranking.selected` 與 runtime 選取一致。輸出另含 `schema_version: 2`、`recomputed: true`、`mode`／`mode_source`、各檢索途徑（exact／lexical／vector）的名次與分數、RRF 貢獻、`carried_score`、MMR 前後名次與 penalty、file-path boost、固定 enum 的 `reasons`（例如 `selected`、`inject_limit`、`candidate_limit`、`duplicate_content`、`outside_observed_candidates`），以及無法在 CLI 評估的 `not_evaluated`（`activation`、`token_budget`）。`outside_observed_candidates` 表示沒有任何檢索途徑在上限內回傳該項，不代表不相關。只有在 durable manifest 相符時才回報 `retrieval_id`；其餘都是重算結果，不是歷史執行紀錄。越權與不存在的 item 回同一個錯誤；輸出不含 query 原文與記憶內容，也不寫入任何紀錄。
+
+`--retrieval-id` 讀取該 item 的持久化 active-query manifest，不重查候選、不重排、不需要 query 明文。輸出 `schema_version: 3`、`recomputed: false`、`context_query` 的 policy／各 source effective mode／fallback、composite query hash 與 `query_status: query_plan_required`。顯示的是該次選入時的 score；manifest 未保存的 aggregate counters 在 JSON 顯示 null／`counter_status: unavailable`，文字顯示 unavailable。不把目前的 aggregate 或單一 `--query` 重算結果冒充歷史 selection。讀取前仍檢查 canonical item scope，並驗證 query attribution 與 composite hash；舊 manifest 缺少版本化 plan 時，須使用 `--query` 做明確標記的 legacy 重算。
+
+### 有界 query hints（獨立 opt-in）
+
+```yaml
+context-routing:
+  query-mode: active
+```
+
+`query-mode` 只接受 `legacy`、`active`，未設定為 legacy，與 `memory-learning.mode` 和 worker memory 的啟用相互獨立。這個設定不啟用 memory、不授予 scope 或工具權限，也不自動修改既有 team。Active policy 的版本、hints／source-row／deadline 上限與 fusion 權重／hash 隨 execution policy freeze；resume 更換模式或 policy 時拒絕，需要新的 run／workspace。舊 snapshot 缺少 query policy 時解讀為 legacy，default 的 configuration hash 與 schema 2 manifest 保留原契約。
+
+Active 保留原 primary query，只從 admitted constraints、literal Verify、accepted dependency summaries 和 receipt-bound workset paths 取得 hints。Supplemental exact／lexical 不使用 vector，最多三個 scopes、每 scope 64 個實際 API source rows、8 次 exact 與1次 lexical，共用100ms child deadline。候選先通過原 scope／lifecycle／activation／allowed-ID gate，再套既有 K、reinforcement 與 compiler budget。搜尋錯誤、timeout 或 revision drift 丟棄整批 supplemental，以原 legacy bundles 編譯；外層取消停止 invocation。Restricted ancestry 的整個 private bundle 保持 legacy。
+
+Active run 的 schema 3 manifest 記錄各 source 真正採用的 mode／fallback；memory query hash 是同一 attribution 的 composite hash。Active attempt 與 extra-model leaf 的 memory manifest 綁定 model execution identity，parent 保存各 leaf 的 manifest／receipt。曝光不等於 applied；各 leaf 的 outcome 仍共用 parent occurrence 的 signal credit cap，duplicate/replay 不增加 credit。算法、離線品質與成本限制見 [實作計畫](../implementation-plans/context-delivery.md) 及 [離線評估](../reference/context-query-offline-progress.md)。
 
 已知限制：預設的 `legacy` fusion 讓 `rrf` 以第一個清單（lexical）的原始分數為起點再加上 reciprocal rank，所以 lexical 命中時 fused score 由原始 BM25 主導（`FusedScore == CarriedScore + LexicalRRF + VectorRRF`）；runtime 的 ×61 正規化只處理小於 1 的分數，因此 base relevance 的尺度會依語料大小而不同。`explain-memory` 會如實揭露這一點，並輸出使用的 `fusion`。
 
@@ -606,7 +621,8 @@ controlled exploration 只允許 read-only、sandbox、無 SSH/sudo/deployment/i
 | direct-agent | 必須 | `TaskResult`，無 submit 時 unavailable | task/verify/run gate | shadow/active |
 | retry/resume | 還原或 deterministic 重建 | 綁定原 attempt | 不重複計分 | 同 policy revision |
 | fast-path upgrade | 以 run/task/attempt/retrieval key 防重 | 不跨 path 借用 claim | 不重複 outcome | 一致 |
-| extra-model/judge | exposure only（V1） | 不支援 | 不計 credit | base only |
+| extra-model worker | 各 model execution 分別曝光 | 與 normal 相同的 runtime-bound claim | parent occurrence 共用 signal cap | 同 normal |
+| judge | exposure only（V1） | 不支援 | 不計 credit | base only |
 | skeptic | 不採用 memory | 不支援 | 作客觀 outcome signal | 不適用 |
 | coordinator | exposure only（V1） | 不支援 | 不計 credit | shadow only |
 | unattended | 同 normal | 禁止 scope spoofing | acceptance/rollback 可作 signal | active 仍受 policy gate |

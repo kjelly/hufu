@@ -98,6 +98,10 @@ to re-create an abstraction that already exists in the runtime.
   full-suite results and the Unix socket temporary-path requirement.
 - [Context delivery evaluation](reference/context-delivery-evaluation.md) — provider
   diagnostics, offline coverage and the extra-model baseline blocker.
+- [Context query offline evaluation](reference/context-query-offline-progress.md) —
+  bounded hints, paired receiver quality and PR-01 source-bound measurements.
+- [Context query active evaluation](reference/context-query-active-evaluation.md) —
+  explicit opt-in, runtime compatibility, final validation and measured limits.
 - [Operator experience Phase 0 baseline](reference/operator-phase0-baseline.md)
   — preserved CLI contracts, deterministic journey corpus, and usability
   measurement entrypoint.

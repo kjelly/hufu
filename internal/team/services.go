@@ -262,6 +262,16 @@ type ModelRuntime interface {
 // model-list silently retarget a resumed or retried occurrence. Ephemeral
 // callers retain the normal model-resolution path.
 func (c *Coordinator) resolveTaskExecutionModel(def *agent.AgentDef, task TaskDef, todoID string) (string, error) {
+	if c.isModelFanoutLeaf(todoID) {
+		target, err := c.modelFanoutTarget(todoID)
+		if err != nil {
+			return "", err
+		}
+		if !task.ResolvedExecutionTarget.IsZero() && task.ResolvedExecutionTarget != target {
+			return "", fmt.Errorf("model fanout task target differs from admitted target")
+		}
+		return c.executionModelIDForTarget(target, target.Model), nil
+	}
 	if target := task.ResolvedExecutionTarget; !target.IsZero() {
 		// A canonical target is the durable authority. LLM profile/admission
 		// paths must retain its backend-qualified identity; external agent
@@ -333,6 +343,14 @@ func cloneModelTopology(topology []string) []string {
 }
 
 func (c *Coordinator) frozenTaskOccurrenceModel(todoID string) (string, bool) {
+	if c.isModelFanoutLeaf(todoID) {
+		if target, err := c.modelFanoutTarget(todoID); err == nil {
+			return c.executionModelIDForTarget(target, target.Model), true
+		}
+		// Never retarget an invalid binding to the parent's primary. The
+		// canonical attempt admission reports the error before provider access.
+		return "", true
+	}
 	if c == nil || !c.isDurableTaskOccurrence(todoID) {
 		return "", false
 	}
@@ -627,14 +645,24 @@ func (cc *defaultContextCompiler) FormatDependencyResults(dependencies []TaskRes
 const coordinatorAgentIdentity = "coordinator"
 
 func (cc *defaultContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	var query *ContextQueryAttribution
 	if cc.c != nil {
+		ctx = cc.c.withContextQueryPolicy(ctx)
 		input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, coordinatorAgentIdentity)
+		selected, attribution, err := cc.c.evaluateWorkerContextQueries(ctx, WorkerContextInput{Request: input.Request, CanonicalMemory: input.CanonicalMemory, DisableCanonicalMemory: input.DisableCanonicalMemory})
+		if err != nil {
+			return CompiledContext{}, err
+		}
+		input.CanonicalMemory, query = selected.CanonicalMemory, attribution
 	}
-	return CompileCoordinatorContext(ctx, input)
+	compiled, err := CompileCoordinatorContext(ctx, input)
+	compiled.Query = query
+	return compiled, err
 }
 
 func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
 	if cc.c != nil {
+		ctx = cc.c.withContextQueryPolicy(ctx)
 		forAgent := input.TaskDef.Agent
 		if input.AgentDef != nil && input.AgentDef.Name != "" {
 			forAgent = input.AgentDef.Name

@@ -253,6 +253,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if c == nil || c.session == nil {
 		return ContextRoute{Request: request}, nil
 	}
+	ctx = c.withContextQueryPolicy(ctx)
 	route := ContextRoute{Request: request}
 	mode := c.invariantVerificationModeForRequest(request)
 	if !validInvariantVerificationMode(mode) {

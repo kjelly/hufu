@@ -13,15 +13,39 @@ import (
 // Capture the actual fake app-server input, without an OpenAI proxy or a
 // diagnostic instruction in the model prompt.
 func TestContextDeliveryAgentBackendReceivesCompiledRequiredFragments(t *testing.T) {
+	for _, mode := range []string{"legacy", "active"} {
+		t.Run(mode, func(t *testing.T) { testContextDeliveryAgentBackend(t, mode) })
+	}
+}
+
+func testContextDeliveryAgentBackend(t *testing.T, mode string) {
+	t.Helper()
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", SideEffect: "workspace_write",
 		Generation: agent.GenerationParams{Model: "gpt-5-codex"},
 	}
-	c, item := newCodexEndToEndCoordinator(t, workspace, []fakeCodexStep{
+	c := newCodexE2ECoordinatorBase(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t), codexThreadStartStep(t, "context-thread", workspace),
 		fakeCodexTurnCompletedStep(t, "context-turn", validProposalJSON("")),
-	}, worker, nil)
+	}, worker)
+	if mode == "active" {
+		manager, err := agent.NewProviderManager("", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.providerManager = manager
+		c.session.Config.ContextRouting.QueryMode = "active"
+		state, err := newExecutionPolicyState(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.executionPolicy = state
+		if err := c.AdmitExecutionPolicy(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item := admitCodexE2ETask(t, c, worker, nil)
 	_, err := c.executeTask(t.Context(), TaskDef{Agent: "worker", Goal: "baseline worker task", Execution: ExecutionContract{RequiresResult: true}}, item.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -76,5 +100,10 @@ func TestContextDeliveryAgentBackendReceivesCompiledRequiredFragments(t *testing
 	}
 	if len(c.todoItemByID(item.ID).ContextManifests) == 0 {
 		t.Fatal("backend delivery has no durable manifest")
+	}
+	for _, manifest := range c.todoItemByID(item.ID).ContextManifests {
+		if mode == "active" && (manifest.SchemaVersion != 3 || manifest.Query == nil || !supportedDeliveryContextManifest(manifest)) {
+			t.Fatal("agent backend lost frozen active query attribution")
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 		taskAgent = task.Agent
 		for i := range task.MemoryManifests {
 			candidate := &task.MemoryManifests[i]
-			if candidate.RunID == c.executionRunID && candidate.Attempt == attempt {
+			if candidate.RunID == c.executionRunID && candidate.Attempt == attempt && (!c.isModelFanoutLeaf(taskID) || candidate.ModelExecutionID == c.modelExecutionID) {
 				manifest = candidate
 				break
 			}
@@ -199,18 +200,20 @@ type MemoryInjectionItem struct {
 }
 
 type MemoryInjectionManifest struct {
-	RetrievalID   string `json:"retrieval_id"`
-	RunID         string `json:"run_id"`
-	TaskID        string `json:"task_id"`
-	Attempt       int    `json:"attempt"`
-	Agent         string `json:"agent"`
-	PolicyVersion string `json:"policy_version"`
+	RetrievalID      string `json:"retrieval_id"`
+	RunID            string `json:"run_id"`
+	TaskID           string `json:"task_id"`
+	Attempt          int    `json:"attempt"`
+	Agent            string `json:"agent"`
+	ModelExecutionID string `json:"model_execution_id,omitempty"`
+	PolicyVersion    string `json:"policy_version"`
 	// QueryHash is the privacy-safe identity of the retrieval query that
 	// selected the injected items. It binds the retrieval ID to the exact
 	// policy/query that produced the prompt, so explain-memory can return a
 	// retrieval ID only when it matches the request being explained (spec §5.1,
 	// §7 HF-MEM4-005). Older manifests omit it.
 	QueryHash   string                     `json:"query_hash,omitempty"`
+	Query       *ContextQueryAttribution   `json:"context_query,omitempty"`
 	Items       []MemoryInjectionItem      `json:"items"`
 	Semantic    *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	Fingerprint string                     `json:"fingerprint"`
@@ -333,7 +336,7 @@ func buildMemoryInjectionManifest(compiled CompiledContext, runID, taskID string
 // learning/outcome contract while making the general manifest the sole owner
 // of selection and ordering. Compiled items only enrich the selected IDs with
 // score parts required by existing attribution; they cannot add an item.
-func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, general *ContextInjectionManifest, runID, taskID string, attempt int, agentName, query string, policy agent.MemoryLearningPolicy) *MemoryInjectionManifest {
+func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, general *ContextInjectionManifest, runID, taskID string, attempt int, agentName, query string, policy agent.MemoryLearningPolicy, fanoutModel ...string) *MemoryInjectionManifest {
 	if !memoryLearningEnabled(policy) {
 		return nil
 	}
@@ -405,18 +408,35 @@ func buildMemoryInjectionManifestFromContextManifest(compiled CompiledContext, g
 		identity += "\x1fsemantic_retrieval\x1f" + string(semanticJSON)
 	}
 	queryHash := hashContentKey(query)
+	modelExecutionID := ""
+	if len(fanoutModel) > 0 {
+		modelExecutionID = fanoutModel[0]
+	}
+	var queryAttribution *ContextQueryAttribution
 	if general != nil && general.Query != nil {
 		queryHash = hashQueryAttribution(*general.Query)
+		queryAttribution = cloneContextQueryAttribution(general.Query)
 		identity += "\x1fcontext_query\x1f" + queryHash
+		modelExecutionID = general.ModelExecutionID
+	}
+	if modelExecutionID != "" {
+		identity += "\x1fmodel_execution\x1f" + modelExecutionID + "\x1f" + strconv.Itoa(attempt)
 	}
 	sum := sha256.Sum256([]byte(identity))
 	fingerprint := hex.EncodeToString(sum[:])
 	return &MemoryInjectionManifest{
 		RetrievalID: "retrieval-" + fingerprint[:20], RunID: runID, TaskID: taskID,
-		Attempt: attempt, Agent: agentName, PolicyVersion: policy.PolicyVersion,
-		QueryHash: queryHash, Items: items, Semantic: semantic,
+		Attempt: attempt, Agent: agentName, ModelExecutionID: modelExecutionID, PolicyVersion: policy.PolicyVersion,
+		QueryHash: queryHash, Query: queryAttribution, Items: items, Semantic: semantic,
 		Fingerprint: fingerprint, CreatedAt: time.Now().UTC(),
 	}
+}
+
+func (c *Coordinator) memoryFanoutModelExecutionID(taskID string) string {
+	if c.isModelFanoutLeaf(taskID) {
+		return c.modelExecutionID
+	}
+	return ""
 }
 
 func memorySignalKey(signal string, manifest *MemoryInjectionManifest, contextItemID string) string {
@@ -430,14 +450,25 @@ func (c *Coordinator) persistMemoryManifest(manifest *MemoryInjectionManifest) e
 	if manifest == nil {
 		return nil
 	}
+	if c.isModelFanoutLeaf(manifest.TaskID) {
+		if err := c.modelFanout.parent.persistMemoryManifest(manifest); err != nil {
+			return err
+		}
+		return c.taskTracker.TodoList().SetMemoryManifest(manifest.TaskID, manifest)
+	}
 	if c == nil || c.taskTracker == nil || c.sessionData == nil || c.session == nil {
 		return fmt.Errorf("persist memory manifest: coordinator session is unavailable")
 	}
 	if err := c.taskTracker.TodoList().SetMemoryManifest(manifest.TaskID, manifest); err != nil {
 		return err
 	}
-	c.sessionData.Tasks = c.taskTracker.TodoList().Items()
-	if err := c.SessionStore().SaveSession(c.session.Workspace, c.sessionData); err != nil {
+	if err := c.mutateSessionData(func(sd *SessionData) error {
+		sd.Tasks = c.taskTracker.TodoList().Items()
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := c.persistSession("persist memory manifest checkpoint"); err != nil {
 		return fmt.Errorf("persist memory manifest checkpoint: %w", err)
 	}
 	c.emitMemoryRetrievalEvents(manifest)
@@ -500,5 +531,6 @@ func cloneMemoryInjectionManifest(src *MemoryInjectionManifest) *MemoryInjection
 	clone := *src
 	clone.Items = append([]MemoryInjectionItem(nil), src.Items...)
 	clone.Semantic = cloneSemanticRetrievalIdentity(src.Semantic)
+	clone.Query = cloneContextQueryAttribution(src.Query)
 	return &clone
 }

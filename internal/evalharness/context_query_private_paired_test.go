@@ -20,10 +20,14 @@ func TestContextQueryPairedProviderRecallsPrivatePersistentOnlyForOwner(t *testi
 	}
 	c.Expect.ForbiddenContext = []string{"foreign"}
 	c.Expect.ContextDelivery[0].Relevant = []string{"private-target"}
-	for _, profile := range []string{"legacy", "candidate"} {
+	for _, profile := range []string{"legacy", "candidate", "team_active"} {
 		c.QueryProfileOverride = profile
+		if profile == "team_active" {
+			activateFixtureContextQuery(t, suite)
+			c.QueryProfileOverride = ""
+		}
 		c.Expect.ContextDelivery[0].Include, c.Expect.ContextDelivery[0].Exclude = nil, nil
-		if profile == "candidate" {
+		if profile != "legacy" {
 			c.Expect.ContextDelivery[0].Include = []string{"private-target"}
 		} else {
 			c.Expect.ContextDelivery[0].Exclude = []string{"private-target"}
@@ -33,7 +37,7 @@ func TestContextQueryPairedProviderRecallsPrivatePersistentOnlyForOwner(t *testi
 		if err != nil || !result.Passed {
 			t.Fatalf("%s: err=%v findings=%+v", profile, err, result.Findings)
 		}
-		if profile == "candidate" {
+		if profile != "legacy" {
 			metrics := result.Metrics.ContextDelivery.Requests[0]
 			if metrics.QueryAttribution == nil || metrics.QueryAttribution.Mode != team.QueryModeMixed || metrics.DeliveryRecall == nil || *metrics.DeliveryRecall != 1 {
 				t.Fatal("private candidate was not delivered with effective mixed attribution")

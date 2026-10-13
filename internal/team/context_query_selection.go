@@ -17,6 +17,13 @@ import (
 
 const contextQuerySupplementalTimeout = 100 * time.Millisecond
 
+const (
+	contextQueryPrimaryWeight      = 0.6
+	contextQuerySupplementalWeight = 0.4
+	contextQueryRankConstant       = 4
+	contextQueryScoreScale         = 5
+)
+
 type ContextQuerySourceKind string
 
 const (
@@ -248,9 +255,9 @@ func MergeContextQueryLanes(primary, supplemental []contextstore.SearchResult, s
 	laneLimit := min(topK, contextstore.SupplementalMaxSourceRows)
 	merged := make(map[string]contextstore.SearchResult)
 	for lane, results := range [][]contextstore.SearchResult{contextstore.CloneSearchResults(primary), contextstore.CloneSearchResults(supplemental)} {
-		weight := .6
+		weight := contextQueryPrimaryWeight
 		if lane == 1 {
-			weight = .4
+			weight = contextQuerySupplementalWeight
 		}
 		if len(results) > laneLimit {
 			results = results[:laneLimit]
@@ -261,7 +268,7 @@ func MergeContextQueryLanes(primary, supplemental []contextstore.SearchResult, s
 				current = result
 				current.Score = 0
 			}
-			current.Score += 5 * weight / float64(5+rank)
+			current.Score += contextQueryScoreScale * weight / float64(contextQueryRankConstant+1+rank)
 			merged[result.Item.ID] = current
 		}
 	}

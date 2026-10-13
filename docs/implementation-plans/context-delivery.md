@@ -5,8 +5,8 @@
 > Verified-Commit: `7312757e0187d471f16347656e887207b9db96ef`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR-00 已提交（`d237124e`）；PR-01 離線實作與完整 gates 已驗收，隨本階段提交；PR-02 尚未實作
-> Implementation-Readiness: 可開始／繼續實作；範圍與驗收條件已定義，無待使用者決策的前置工作；不代表未提交程式已驗收
+> Execution-Status: PR-00 已提交（`d237124e`）；PR-01 已提交（`0d6bfd74`）；PR-02 實作、最終回歸、eval 與 benchmark 全部通過；本次階段提交交付
+> Implementation-Readiness: 三個工作包已完成驗證；保留原始範圍與驗收契約供回歸查核
 > Type: bounded implementation plan / offline evaluation / explicit opt-in
 > Repository: kjelly/hufu
 > Reviewed baseline: `7312757e0187d471f16347656e887207b9db96ef`（2026-10-12；開工時重新確認 HEAD）
@@ -30,7 +30,7 @@ Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實�
 | Explicit opt-in 與 attribution（PR-02） | 讓改善可逐次啟用，並能追查各 source 實際使用的策略與 fallback | default parity、snapshot/resume drift tests、schema 2/3 compatibility、實際 request 對照 |
 | Extra-model baseline 修正（PR-02 前置） | 讓已允許的額外模型執行通過既有 admission，避免 lifecycle 重複寫入 | successful concurrent fake-provider assertions，加上 genuine drift 零呼叫反例 |
 
-這些效益是待驗證的交付目標；PR-00 已有離線證據，其餘不能以 helper 單元測試或未提交的程式碼宣稱完成。真實任務成功率、使用者滿意度與 production 成本不在本次效益證明範圍。
+PR-00、PR-01 已提交且有 source-bound 離線證據；PR-02 的正式 opt-in 與接收端路徑已通過完整 gates，由本次階段提交交付。不能以 helper 單元測試取代真正接收端證據。真實任務成功率、使用者滿意度與 production 成本不在本次效益證明範圍。
 
 ### 本次移除的工作
 
@@ -67,16 +67,22 @@ Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實�
 
 記錄 HEAD、Go/toolchain 版本和受影響檔案。若現況已實作某一工作，不重建；以回歸測試確認後把該項標為已存在。其他人的變更不可覆寫。修改 Go 時使用 Modern Go Guidelines skill；修改 runtime 時使用 `harden-hufu-runtime` skill，依其規則追蹤執行路徑與契約。
 
-PR-01 最終 source 已通過完整 test/vet/lint、受影響 race、三組離線 eval、四類實際 provider 品質配對與十次 benchmark。報告綁定 44 個 source hashes；production 仍是 legacy。原本把 race instrumentation 下每次在 100ms 內完成改善當作必要條件的測試，已拆成 active 整合與真實 SQLite 的整批 deadline rollback 驗證；§6 的四類 provider 品質 gate 保持不變。下一個工作包為 PR-02，不能以此階段結果宣稱整份計畫完成。詳見 [離線驗證報告](../reference/context-query-offline-progress.md)。`docs/tmp/` 為空目錄，本次不搬移任何文件。
+三個工作包的實作及程式驗證已完成。PR-01 報告保留原先 44 個 source hashes 與離線證據，見 [離線驗證報告](../reference/context-query-offline-progress.md)。PR-02 的 [active 驗證報告](../reference/context-query-active-evaluation.md) 與 [機器可讀報告](../reference/context-query-active-evaluation.json) 綁定最終 83 個 source hashes；既有 teams 未自動啟用 active。`docs/tmp/` 為空，本次收尾沒有搬移文件。
 
-### 下一批可直接執行的工作
+### 完成查核
 
-1. 核對已驗收 PR-01 的 source hashes 與報告，保留現有功能；最終預設仍須是 legacy。
-2. 修正 §5.0 extra-model 的 canonical admission、indexed target、retry pinning 及 parent-owned lifecycle／receipt／manifest；改用成功送達的正向案例，保留 genuine drift 零呼叫反例。
-3. 完成 §5.1～5.2 的正式 opt-in、frozen policy／舊 snapshot／resume 相容，以及歷史 query attribution／explain；不自動啟用既有 teams。
-4. 重跑 §7 各路徑矩陣與 §8 完整 gates，更新對應文件與帶 source hashes 的報告，再提交 PR-02。維持 100ms、oracle、delivery budget 與授權，沒有另訂 race instrumentation 的 production latency SLA。
+| 原定交付／gate | 最終結果與證據 |
+|---|---|
+| PR-00 provider 邊界與 baseline | 已提交 `d237124e`；[baseline](../reference/context-delivery-baseline.md) 與 [receiver coverage](../reference/context-delivery-evaluation.md) 保留歷史結果 |
+| PR-01 hints、授權、bounded retrieval 與離線品質 | 已提交 `0d6bfd74`；固定 oracle、K/token budget、100ms deadline 與 scope 限制維持不變 |
+| PR-02 opt-in、snapshot、schema 2/3、resume、歷史 attribution | strict flat/versioned 設定、default parity、同模式 resume、drift 零 provider access、歷史讀取不重新檢索均通過 |
+| §5.0 fanout baseline 修正 | 實際 parallel／retry 接收成功；parent-owned policy、indexed target、lifecycle、manifest 與 occurrence cap 通過，保留 fail-closed 反例 |
+| §6 品質 gate | 四類 legacy miss 的 delivery recall 0 → 1；required recall 1、forbidden 0；irrelevant optional tokens 降低，無額外 embedding/model/tool 呼叫 |
+| §7 接收端與失敗矩陣 | DAG、direct、nested、extra-model／retry、continuation、fallback、worker compaction、fake backend、歷史 CLI／inspect 及八組 active lifecycle fixtures 通過；其他隔離與 recovery 由完整回歸保留 |
+| §8 程式驗證 | 最終 source 的完整 `go test -p 1 ./...`、受影響 race、`go vet ./...`、`golangci-lint run`（0 issues）全部通過 |
+| §8 離線 eval 與成本報告 | context-routing 2/2、memory-learning 3/3、retry-recovery 2/2；14 組 standalone 與 3 組完整 harness benchmark，每組 10 次，數值與 scope 收錄於報告 |
 
-以上工作只需要 repository、synthetic fixtures、本機 SQLite、fake provider/embedder 和既有工具；不需要使用者提供模型帳號、費用預算、production 環境或核准大型檢索架構。
+大型強干擾資料在共用 deadline 下經常退回 legacy：這證明 rollback 有界，不能當作品質改善。純中文無 embedding、真實任務成功率與 production 成本仍未證明；真實模型 A/B、refresh 與大型 lineage/vector 改造沒有剩餘實作待辦。尚無使用者／外部環境前置工作。
 
 | 實作位置 | 已存在能力／限制 | 本案使用方式 |
 |---|---|---|

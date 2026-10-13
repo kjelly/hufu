@@ -84,6 +84,15 @@ func runCase(ctx context.Context, fixture *SuiteFixture, c CaseFixture) (EvalCas
 // tests can substitute a handler with different failure behavior --
 // see TestEvalTimeout, which needs a handler that never responds.
 func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding) (EvalCaseResult, error) {
+	return runCaseWithExecution(ctx, fixture, c, handler, scriptFindings, func(ctx context.Context, coordinator *team.Coordinator, prompt string) error {
+		_, err := coordinator.Run(ctx, prompt)
+		return err
+	})
+}
+
+// Keep one setup, receiver, persistence and assertion boundary for tests that
+// exercise public entry points other than a single Run.
+func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding, execute func(context.Context, *team.Coordinator, string) error) (EvalCaseResult, error) {
 	started := time.Now()
 	// Scripted evals have no operator. Honor explicit tool grants without
 	// depending on the invoking terminal or changing process-wide permissions.
@@ -210,7 +219,7 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 
 	caseCtx, cancel := context.WithTimeout(ctx, defaultCaseTimeout)
 	defer cancel()
-	_, runErr := coordinator.Run(caseCtx, c.Prompt)
+	runErr := execute(caseCtx, coordinator, c.Prompt)
 	runResult := coordinator.LastRunResult()
 	tasks := coordinator.TaskTracker().TodoList().Items()
 

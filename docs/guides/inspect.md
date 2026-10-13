@@ -122,7 +122,11 @@ remain available and retain their specialized semantics:
 - `hufu audit explain` and `hufu audit verify` provide detailed evidence and
   audit workflows.
 - `hufu context explain` and `hufu context explain-memory` provide context
-  compiler and memory-ranking details.
+  compiler and memory-ranking details. For historical active-query selections,
+  use `hufu context explain-memory <id> --retrieval-id <retrieval> --project
+  <project> --team <team>`; it reports the frozen query policy and
+  `query_plan_required` without plaintext query or reranking. `hufu inspect
+  context` also projects this metadata and model execution identity.
 - `hufu decision explain` provides decision-runtime details.
 
 Use `hufu inspect` when one safe, correlated operator view is needed; use the
